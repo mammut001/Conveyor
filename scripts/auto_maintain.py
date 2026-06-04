@@ -56,7 +56,7 @@ async def run_maintenance(env_file: str, service_name: str, clean_threshold: int
             worktree_count = _count_from_detail(result.detail)
 
     actions: list[str] = []
-    actions.append(compress_if_needed(settings))
+    actions.append(await compress_if_needed(settings))
     backfilled = backfill_job_metadata(settings, force=False)
     actions.append(f"Backfilled {backfilled} missing job metadata files.")
     security_results = run_security_audit(env_file, service_name, "1 hour ago")
