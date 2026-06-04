@@ -89,6 +89,14 @@ at a glance.
 - **Hermes-agent-style parsed tool-call routing** - current design is
   "runner CLI via shell + injected tool-registry"; not a parsed
   function-call surface
+- **Maintain-failure alerting** - on 2026-06-04 13:25 UTC the hourly
+  `codex-telegram-maintain.service` exited 1 (unawaited
+  `compress_if_needed` coroutine; "sequence item 1: expected str
+  instance, coroutine found") and stayed failed ~57 min before the
+  14:22 run recovered on its own. Fix is in `2a81056`; the gap is
+  the silent window: no `OnFailure=` notify path, no failed-run
+  counter, the next hourly tick is what surfaces the recovery
+
 
 ## Commit timeline (all 15, newest first)
 
