@@ -305,17 +305,59 @@ async def main() -> int:
             "apply_patch" in fix_text
             and "unsupported call" in fix_text
             and "python -m runner memorize" in fix_text
+            and "$CODEX_RUNNER_HOME" in fix_text
+            and ".venv/bin/python -m runner memorize" in fix_text
         )
         run_clean = "apply_patch" not in run_text
-        ok = fix_warns and run_clean
+        fix_clean = (
+            "$CODEX_RUNNER_HOME" not in run_text
+            and "python -m runner memorize" not in run_text
+        )
+        runner_home_token = "$CODEX_RUNNER_HOME"
+        venv_invocation = ".venv/bin/python -m runner memorize"
+        ok = fix_warns and run_clean and fix_clean
         detail = (f"fix_warns_apply_patch={fix_warns} ("
                   f"apply_patch={'apply_patch' in fix_text}, "
                   f"unsupported_call={'unsupported call' in fix_text}, "
-                  f"memorize_invocation={'python -m runner memorize' in fix_text}), "
-                  f"run_clean={run_clean} (apply_patch_in_run={'apply_patch' in run_text})")
+                  f"memorize_invocation={'python -m runner memorize' in fix_text}, "
+                  f"runner_home_env={runner_home_token in fix_text}, "
+                  f"venv_python={venv_invocation in fix_text}), "
+                  f"run_clean={run_clean} (apply_patch_in_run={'apply_patch' in run_text}), "
+                  f"fix_clean={fix_clean} (runner_home_in_run={runner_home_token in run_text}, "
+                  f"memorize_in_run={'python -m runner memorize' in run_text})")
         results.append(CheckResult("tool-registry warns apply_patch unavailable", ok, detail))
     except Exception as exc:
         results.append(CheckResult("tool-registry warns apply_patch unavailable", False, f"raised {type(exc).__name__}: {exc}"))
+
+    # 18. codex subprocess plumbing: the runner home must be passed into
+    #     the sandbox as both --add-dir (so the shell can `cd` there) and
+    #     the CODEX_RUNNER_HOME env var (so the tool-registry's
+    #     `cd "$CODEX_RUNNER_HOME" && .venv/bin/python -m runner memorize`
+    #     template resolves to a real path). Without these, the model's
+    #     only "memorize" fallback is to rewrite MEMORY.md by hand, which
+    #     was the root cause of the 08:34 /fix bypass.
+    try:
+        from runner import RUNNER_HOME as runner_home_const
+        job = Job(
+            id="smoke-test-plumbing",
+            mode=JobMode.FIX,
+            prompt="x",
+            sandbox="workspace-write",
+        )
+        command = runner._codex_command(job)
+        env = runner._child_env()
+        ok = (
+            "--add-dir" in command
+            and str(runner_home_const) in command
+            and env.get("CODEX_RUNNER_HOME") == str(runner_home_const)
+        )
+        detail = (f"--add-dir={'--add-dir' in command}, "
+                  f"runner_home_in_cmd={str(runner_home_const) in command} "
+                  f"(runner_home={runner_home_const!r}), "
+                  f"env_runner_home={env.get('CODEX_RUNNER_HOME')!r}")
+        results.append(CheckResult("runner home plumbed into codex sandbox", ok, detail))
+    except Exception as exc:
+        results.append(CheckResult("runner home plumbed into codex sandbox", False, f"raised {type(exc).__name__}: {exc}"))
 
     ok = print_results(results)
     if ok:

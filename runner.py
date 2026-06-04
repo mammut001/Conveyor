@@ -21,6 +21,15 @@ from redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 
 
+# The runner module is the bot itself, not a package inside the workspace.
+# The codex sandbox's primary cwd is the worktree under
+# CODEX_WORKSPACE_ROOT, so the model cannot `python -m runner ...` from
+# there. We surface this absolute path to the sandbox via --add-dir and
+# the CODEX_RUNNER_HOME env var, and tell the model to use it in the
+# tool-registry text below.
+RUNNER_HOME = Path(__file__).resolve().parent
+
+
 ProgressCallback = Callable[[str], Awaitable[None]]
 
 
@@ -536,6 +545,8 @@ class CodexRunner:
             job.sandbox,
             "--cd",
             str(job.worktree_path),
+            "--add-dir",
+            str(RUNNER_HOME),
             "--output-last-message",
             str(job.final_message_path),
             "-",
@@ -629,7 +640,10 @@ class CodexRunner:
             "the router accepts for memory edits.\n\n"
             "Available tools (cd \"$CODEX_WORKSPACE_ROOT\" first to land in the project root):\n\n"
             "  memorize: write a single categorized entry into today's MEMORY.md.\n"
-            '    Use: python -m runner memorize [--category <cat>] [--quiet] "<content>"\n'
+            "    The runner CLI is NOT in $CODEX_WORKSPACE_ROOT — it lives at\n"
+            "    $CODEX_RUNNER_HOME (the bot's own project root). The sandbox\n"
+            "    has that dir mounted as an extra writable path via --add-dir, so:\n"
+            "      cd \"$CODEX_RUNNER_HOME\" && .venv/bin/python -m runner memorize [--category <cat>] [--quiet] \"<content>\"\n"
             "    Categories: fact | preference | convention | tool-quirk | unfiled\n"
             "    Omit --category to let the runner's classifier pick one. Default\n"
             '    auto-timestamp is on for "fact" only. Pass --quiet to suppress the\n'
@@ -1171,6 +1185,7 @@ class CodexRunner:
             if key in keep or key.startswith(allowed_prefixes):
                 env[key] = value
         env["CODEX_TELEGRAM_JOB"] = "1"
+        env["CODEX_RUNNER_HOME"] = str(RUNNER_HOME)
         return env
 
     def _new_job_id(self) -> str:
