@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local virtualenv (VPS uses its own; the local one is just for memo_smoke et al)
+.venv/
+venv/
+
+# Local env files. The VPS .env is never in the repo (deploy.sh excludes it).
+# .env.test is also excluded because it has host-specific paths.
+.env
+.env.*
+!.env.example
+
+# Per-day worktrees (their MEMORY.md is generated at runtime; never tracked).
+worktrees/
+
+# Bot runtime artefacts
+logs/
+snapshots/
+JOURNAL/
+state/
+MEMORY.md
+MEMORY.md.archived-*

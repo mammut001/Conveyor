@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Telegram Codex runner maintenance hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

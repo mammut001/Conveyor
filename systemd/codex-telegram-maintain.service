@@ -1,0 +1,18 @@
+[Unit]
+Description=Telegram Codex runner maintenance
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/codex-telegram-runner
+EnvironmentFile=/opt/codex-telegram-runner/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/codex-telegram-runner/.venv/bin/python /opt/codex-telegram-runner/scripts/auto_maintain.py --clean-threshold 100 --keep 50
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/codex-telegram-runner /srv /home/ubuntu
