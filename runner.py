@@ -30,6 +30,55 @@ from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 RUNNER_HOME = Path(__file__).resolve().parent
 
 
+# ---- Memo dedup helpers ----------------------------------------------------
+# `append_memo` is the single entry point for MEMORY.md writes. It inserts
+# into one section, but a model can call it N times and historically we ended
+# up with the same line in 3 sections ("4x TSLA" in today's archive was the
+# worst example). Normalize reduces "- [YYYY-MM-DD HH:MM] foo  bar" to
+# "foo bar" so cross-section equality is robust to timestamp and whitespace
+# drift. The check is intentionally case-insensitive and collapses internal
+# whitespace — exact-match dedup would still let trivial reformulations slip
+# through.
+_DEDUP_TIMESTAMP_PREFIX_RE = re.compile(r"^\s*\[[^\]]*\]\s*")
+
+
+def _normalize_for_dedup(line: str) -> str:
+    """Reduce a memo bullet line to a comparable form.
+
+    Strips the leading bullet ("- " / "* "), the optional
+    "[YYYY-MM-DD HH:MM] " timestamp prefix, then lowercases and collapses
+    internal whitespace. Returns "" for empty / bullet-only input.
+    """
+    if not line:
+        return ""
+    s = line.strip()
+    if s.startswith(("- ", "* ")):
+        s = s[2:]
+    elif s in ("-", "*"):
+        return ""
+    s = _DEDUP_TIMESTAMP_PREFIX_RE.sub("", s)
+    s = s.lower()
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _find_duplicate_line(existing_text: str, normalized_new: str) -> str | None:
+    """Return the first existing bullet line in `existing_text` whose
+    normalized form equals `normalized_new`. Scans all sections, not just
+    the target one — that is the whole point. Returns None if no
+    duplicate is found.
+    """
+    if not normalized_new:
+        return None
+    for line in existing_text.splitlines():
+        if not line.lstrip().startswith("-"):
+            continue
+        if _normalize_for_dedup(line) == normalized_new:
+            return line
+    return None
+
+
+
 ProgressCallback = Callable[[str], Awaitable[None]]
 
 
@@ -797,6 +846,14 @@ class CodexRunner:
         line = f"- {content}"
         if auto_timestamp and category == "fact":
             line = f"- [{self._now_local_str()}] {content}"
+        # Dedup across sections: skip if a normalized version of this
+        # content already lives anywhere in MEMORY.md. Catches the
+        # "model re-memorizes the same thing N times" failure mode that
+        # produced today's messy file (4x TSLA, 3x smoke, etc.).
+        existing_duplicate = _find_duplicate_line(existing, _normalize_for_dedup(line))
+        if existing_duplicate is not None:
+            preview = truncate(content, 60)
+            return f"已存在: {category} · {preview} (跳过重复)"
         new_text = self._insert_line_in_section(existing, category, line)
         tmp_path = memory_path.with_name(memory_path.name + ".tmp")
         tmp_path.write_text(new_text, encoding="utf-8")

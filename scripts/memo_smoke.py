@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -37,14 +38,20 @@ async def main() -> int:
     # 1. Tagged preference append (no timestamp).
     try:
         s1 = await runner.append_memo("preference", "smoke-from-memo-smoke.py", auto_timestamp=False)
-        results.append(CheckResult("preference append", s1.startswith("记下了: preference"), s1))
+        # Idempotency contract: the entry is in MEMORY.md. Either this call
+        # wrote it ("记下了: ...") or the runner's cross-section dedup
+        # noticed it was already there from a prior run ("已存在: ...").
+        ok = s1.startswith(("记下了", "已存在"))
+        results.append(CheckResult("preference append", ok, s1))
     except Exception as exc:
         results.append(CheckResult("preference append", False, f"raised {type(exc).__name__}: {exc}"))
 
     # 2. Fact append with auto timestamp.
     try:
         s2 = await runner.append_memo("fact", "TSLA close $248", auto_timestamp=True)
-        body_ok = "TSLA close $248" in s2 and s2.startswith("记下了: fact")
+        # Same idempotency contract as test 1; timestamped fact lines also
+        # dedup against their own prior selves.
+        body_ok = "TSLA close $248" in s2 and s2.startswith(("记下了", "已存在"))
         results.append(CheckResult("fact append (auto-ts)", body_ok, s2))
     except Exception as exc:
         results.append(CheckResult("fact append (auto-ts)", False, f"raised {type(exc).__name__}: {exc}"))
@@ -84,7 +91,11 @@ async def main() -> int:
     #    exercises the LLM-failure -> unfiled fallback path.
     try:
         s7 = await runner.append_memo("unfiled", "悬而未决的备忘条目", auto_timestamp=False)
-        results.append(CheckResult("unfiled seed", s7.startswith("记下了: unfiled"), s7))
+        # Idempotency: this marker was seeded multiple times before dedup
+        # landed (3 copies still on disk as evidence). The contract is
+        # "unfiled section contains the entry", not "this call wrote it".
+        ok = s7.startswith(("记下了: unfiled", "已存在: unfiled"))
+        results.append(CheckResult("unfiled seed", ok, s7))
     except Exception as exc:
         results.append(CheckResult("unfiled seed", False, f"raised {type(exc).__name__}: {exc}"))
 
@@ -211,8 +222,12 @@ async def main() -> int:
             timeout=30,
         )
         stdout = proc.stdout or ""
+        # Idempotency: the marker is in MEMORY.md from prior smoke runs;
+        # the CLI subprocess will dedup-skip on a second append. Accept
+        # either "记下了" (fresh) or "已存在" (skip) — rc must still be 0
+        # and the entry must be findable via read_memory.
         ok = (proc.returncode == 0
-              and stdout.startswith("记下了: ")
+              and stdout.startswith(("记下了: ", "已存在: "))
               and "smoke-from-cli-subprocess" in runner.read_memory())
         detail = (f"rc={proc.returncode} stdout={_truncate(stdout, 80)!r} "
                   f"stderr={_truncate(proc.stderr or '', 80)!r}")
@@ -358,6 +373,26 @@ async def main() -> int:
         results.append(CheckResult("runner home plumbed into codex sandbox", ok, detail))
     except Exception as exc:
         results.append(CheckResult("runner home plumbed into codex sandbox", False, f"raised {type(exc).__name__}: {exc}"))
+
+    # 19. Cross-section dedup: appending the same content to two different
+    #     categories must not double-write. This is the guard against the
+    #     "4x TSLA" failure mode from today's MEMORY.md archive. The marker
+    #     uses a uuid suffix so the test is re-runnable without self-
+    #     colliding on subsequent runs (the entry is left behind, but a
+    #     fresh uuid each run keeps count == 1 for THIS test's marker).
+    try:
+        marker = f"dedup-smoke-{uuid4().hex[:10]}"
+        s1 = await runner.append_memo("fact", marker, auto_timestamp=True)
+        s2 = await runner.append_memo("tool-quirk", marker, auto_timestamp=False)
+        full = runner.read_memory()
+        count = sum(1 for ln in full.splitlines() if marker in ln)
+        first_added = s1.startswith("记下了")
+        second_skipped = s2.startswith("已存在")
+        ok = count == 1 and first_added and second_skipped
+        detail = f"count={count} (want 1), first={s1!r}, second={s2!r}"
+        results.append(CheckResult("memorize dedup cross-section", ok, detail))
+    except Exception as exc:
+        results.append(CheckResult("memorize dedup cross-section", False, f"raised {type(exc).__name__}: {exc}"))
 
     ok = print_results(results)
     if ok:
