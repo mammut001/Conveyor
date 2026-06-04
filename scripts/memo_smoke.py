@@ -283,6 +283,40 @@ async def main() -> int:
     except Exception as exc:
         results.append(CheckResult("tool-registry payload (FIX + RUN)", False, f"raised {type(exc).__name__}: {exc}"))
 
+    # 17. tool-registry must warn that apply_patch is unavailable. The model
+    #     otherwise defaults to codex's built-in apply_patch for MEMORY.md
+    #     edits and codex_core::tools::router rejects it as "unsupported
+    #     call". The warning must appear in the FIX variant and not leak
+    #     into the read-only RUN variant.
+    try:
+        fix_text = runner._prefetch_memory(Job(
+            id="smoke-test-fix-apply-patch",
+            mode=JobMode.FIX,
+            prompt="x",
+            sandbox="workspace-write",
+        ))
+        run_text = runner._prefetch_memory(Job(
+            id="smoke-test-run-apply-patch",
+            mode=JobMode.RUN,
+            prompt="x",
+            sandbox="read-only",
+        ))
+        fix_warns = (
+            "apply_patch" in fix_text
+            and "unsupported call" in fix_text
+            and "python -m runner memorize" in fix_text
+        )
+        run_clean = "apply_patch" not in run_text
+        ok = fix_warns and run_clean
+        detail = (f"fix_warns_apply_patch={fix_warns} ("
+                  f"apply_patch={'apply_patch' in fix_text}, "
+                  f"unsupported_call={'unsupported call' in fix_text}, "
+                  f"memorize_invocation={'python -m runner memorize' in fix_text}), "
+                  f"run_clean={run_clean} (apply_patch_in_run={'apply_patch' in run_text})")
+        results.append(CheckResult("tool-registry warns apply_patch unavailable", ok, detail))
+    except Exception as exc:
+        results.append(CheckResult("tool-registry warns apply_patch unavailable", False, f"raised {type(exc).__name__}: {exc}"))
+
     ok = print_results(results)
     if ok:
         print("memo smoke ok")

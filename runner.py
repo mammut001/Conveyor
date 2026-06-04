@@ -621,6 +621,12 @@ class CodexRunner:
             "This sandbox is workspace-write: you CAN run shell, modify files, and\n"
             "invoke the runner CLI. The bot's keyword fast path already handles bare\n"
             "记 x / /memo requests, so you only see this block when the user is in /fix.\n\n"
+            "DO NOT use codex's built-in apply_patch / edit_file / write_file tools\n"
+            "to modify MEMORY.md or any other file. codex_core::tools::router rejects\n"
+            "them as \"unsupported call\" in this sandbox config. For ALL writes to\n"
+            "MEMORY.md or any other file, you MUST invoke `python -m runner memorize`\n"
+            "(or another shell command) via the shell tool — that is the only path\n"
+            "the router accepts for memory edits.\n\n"
             "Available tools (cd \"$CODEX_WORKSPACE_ROOT\" first to land in the project root):\n\n"
             "  memorize: write a single categorized entry into today's MEMORY.md.\n"
             '    Use: python -m runner memorize [--category <cat>] [--quiet] "<content>"\n'
