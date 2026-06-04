@@ -10,13 +10,15 @@ Prints one [ok]/[fail] line per assertion and exits non-zero on any failure.
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import load_settings
-from runner import CodexRunner
+from runner import CodexRunner, Job, JobMode
 from scripts.harness_common import CheckResult, print_results
 
 
@@ -191,6 +193,95 @@ async def main() -> int:
         ))
     except Exception as exc:
         results.append(CheckResult("reclassify_unfiled round-trip", False, f"raised {type(exc).__name__}: {exc}"))
+
+    # 14. CLI `memorize` subprocess. Spawns `python -m runner memorize` in a
+    #     child process, asserts rc + stdout prefix, and confirms the line
+    #     landed in MEMORY.md. Uses --env-file to make env discovery
+    #     deterministic independent of the parent shell.
+    project_root = Path(__file__).resolve().parents[1]
+    py_bin = str(project_root / ".venv" / "bin" / "python")
+    try:
+        proc = subprocess.run(
+            [py_bin, "-m", "runner", "memorize", "--env-file", ".env.test",
+             "smoke-from-cli-subprocess"],
+            cwd=project_root,
+            env=os.environ.copy(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        stdout = proc.stdout or ""
+        ok = (proc.returncode == 0
+              and stdout.startswith("记下了: ")
+              and "smoke-from-cli-subprocess" in runner.read_memory())
+        detail = (f"rc={proc.returncode} stdout={_truncate(stdout, 80)!r} "
+                  f"stderr={_truncate(proc.stderr or '', 80)!r}")
+        results.append(CheckResult("CLI memorize subprocess", ok, detail))
+    except Exception as exc:
+        results.append(CheckResult("CLI memorize subprocess", False, f"raised {type(exc).__name__}: {exc}"))
+
+    # 15. CLI `recall-journal` for a non-existent date returns rc=0 and
+    #     empty stdout. Verifies the CLI subcommand handles the empty
+    #     archive case without crashing.
+    try:
+        proc = subprocess.run(
+            [py_bin, "-m", "runner", "recall-journal", "--env-file", ".env.test",
+             "1999-01-01"],
+            cwd=project_root,
+            env=os.environ.copy(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        ok = proc.returncode == 0 and (proc.stdout or "") == ""
+        detail = (f"rc={proc.returncode} stdout={proc.stdout!r} "
+                  f"stderr={_truncate(proc.stderr or '', 80)!r}")
+        results.append(CheckResult("CLI recall-journal empty", ok, detail))
+    except Exception as exc:
+        results.append(CheckResult("CLI recall-journal empty", False, f"raised {type(exc).__name__}: {exc}"))
+
+    # 16. tool-registry payload: build Job objects for both modes, call
+    #     _prefetch_memory, and verify the right block is emitted.
+    #     FIX -> workspace-write variant (lists tools, includes
+    #     CODEX_WORKSPACE_ROOT and memorize policy). RUN -> read-only
+    #     variant (lists tools as not available, tells model to re-send
+    #     as /fix).
+    try:
+        job_fix = Job(
+            id="smoke-test-fix",
+            mode=JobMode.FIX,
+            prompt="x",
+            sandbox="workspace-write",
+        )
+        fix_text = runner._prefetch_memory(job_fix)
+        fix_ok = (
+            "<tool-registry" in fix_text
+            and "memorize" in fix_text
+            and 'policy="' in fix_text
+            and "CODEX_WORKSPACE_ROOT" in fix_text
+            and "workspace-write" in fix_text
+        )
+        job_run = Job(
+            id="smoke-test-run",
+            mode=JobMode.RUN,
+            prompt="x",
+            sandbox="read-only",
+        )
+        run_text = runner._prefetch_memory(job_run)
+        run_ok = (
+            "read-only" in run_text
+            and "no-shell-no-write" in run_text
+            and "not available" in run_text
+        )
+        ok = fix_ok and run_ok
+        detail = (f"fix_present={'<tool-registry' in fix_text}/"
+                  f"memorize={('memorize' in fix_text)}/"
+                  f"workspace_write={('workspace-write' in fix_text)}, "
+                  f"run_readonly={('read-only' in run_text)}/"
+                  f"unavailable={('not available' in run_text)}")
+        results.append(CheckResult("tool-registry payload (FIX + RUN)", ok, detail))
+    except Exception as exc:
+        results.append(CheckResult("tool-registry payload (FIX + RUN)", False, f"raised {type(exc).__name__}: {exc}"))
 
     ok = print_results(results)
     if ok:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
 import re
 import shutil
+import sys
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -14,7 +16,7 @@ from zoneinfo import ZoneInfo
 from typing import Awaitable, Callable
 from uuid import uuid4
 
-from config import Settings
+from config import Settings, load_settings
 from redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 
@@ -565,7 +567,7 @@ class CodexRunner:
     def _memory_path(self, worktree_path: Path) -> Path:
         return worktree_path / self.MEMORY_FILENAME
 
-    def _prefetch_memory(self, job: Job) -> str:
+    def _memory_context_text(self, job: Job) -> str:
         if not job.worktree_path:
             return ""
         memory = self._memory_path(job.worktree_path)
@@ -593,6 +595,64 @@ class CodexRunner:
             f"block.\n{content}\n"
             "</memory-context>\n\n"
         )
+
+    def _tool_registry_text(self, job: Job) -> str:
+        if job.mode is JobMode.RUN:
+            return (
+                '<tool-registry sandbox="read-only" policy="no-shell-no-write">\n'
+                "This sandbox is read-only: NO shell, NO writes, you cannot\n"
+                "invoke the runner CLI or modify MEMORY.md. The tools below\n"
+                "are documented for awareness only.\n\n"
+                "  memorize: not available here. If the user wants to memorize,\n"
+                '            ask them to send "记 xxx" or /memo, or re-send the\n'
+                "            request as /fix.\n"
+                "  recall_memory / recall_journal: not available. Ask the user\n"
+                "            to use /memory [category] or /memory <YYYY-MM-DD>.\n"
+                "  shell / git_status: not available.\n\n"
+                "If the user's request needs writes or shell, ask them to\n"
+                "re-send as /fix.\n"
+                "</tool-registry>\n\n"
+            )
+        # FIX: workspace-write variant. The bot's keyword fast path already
+        # handles bare 记 x / /memo, so codex only sees this block for memo
+        # requests embedded inside /fix prompts.
+        return (
+            '<tool-registry sandbox="workspace-write" policy="fact-auto-user-explicit-otherwise">\n'
+            "This sandbox is workspace-write: you CAN run shell, modify files, and\n"
+            "invoke the runner CLI. The bot's keyword fast path already handles bare\n"
+            "记 x / /memo requests, so you only see this block when the user is in /fix.\n\n"
+            "Available tools (cd \"$CODEX_WORKSPACE_ROOT\" first to land in the project root):\n\n"
+            "  memorize: write a single categorized entry into today's MEMORY.md.\n"
+            '    Use: python -m runner memorize [--category <cat>] [--quiet] "<content>"\n'
+            "    Categories: fact | preference | convention | tool-quirk | unfiled\n"
+            "    Omit --category to let the runner's classifier pick one. Default\n"
+            '    auto-timestamp is on for "fact" only. Pass --quiet to suppress the\n'
+            '    "记下了: ..." confirmation line.\n\n'
+            "  memorize policy (three-tier):\n"
+            "    - fact: you MAY auto-invoke when something is objectively true and\n"
+            "      verifiable (e.g. a close price, a server IP, a tool's behavior).\n"
+            "    - preference / convention / tool-quirk: only invoke when the user\n"
+            "      EXPLICITLY asked (e.g. '记住...', '/memo ...', or said they want\n"
+            "      a preference recorded). Do not infer from casual conversation.\n"
+            "    - unfiled: safe landing when the category is unclear. The 12pm\n"
+            "      cron will reclassify unfiled entries via the runner's classifier.\n\n"
+            "  recall_memory: read today's MEMORY.md (or one section).\n"
+            '    Use: python -m runner recall-memory [category]\n'
+            "    Output: section markdown to stdout, empty on miss, rc=0.\n\n"
+            "  recall_journal: read a past day's archived journal.\n"
+            '    Use: python -m runner recall-journal <YYYY-MM-DD> [category]\n'
+            "    Output: section markdown to stdout, empty on miss, rc=0.\n\n"
+            "  shell: run any shell command. `cd \"$CODEX_WORKSPACE_ROOT\" && <cmd>`\n"
+            "    first to land in the project root (worktree-relative paths won't\n"
+            "    resolve from codex's cwd).\n\n"
+            "  git_status: not a separate tool; use `git status` via shell.\n\n"
+            "SECRETS: never write API keys, tokens, or passwords into MEMORY.md or\n"
+            "any committed file. The runner has a redaction layer; don't rely on it.\n"
+            "</tool-registry>\n\n"
+        )
+
+    def _prefetch_memory(self, job: Job) -> str:
+        return self._memory_context_text(job) + self._tool_registry_text(job)
 
     def today_memory_text(self) -> str:
         path = self._memory_path(self._today_worktree_path())
@@ -645,6 +705,41 @@ class CodexRunner:
                 break
         return "\n".join(lines[start:end]).strip()
 
+    def _insert_line_in_section(self, text: str, heading: str, line: str) -> str:
+        """Append a markdown list line at the end of section `## heading`.
+
+        Preserves the existing blank line that separates this section from
+        the next `## ` heading. If `heading` is missing, returns text
+        unchanged (callers should call _ensure_section first). Insertion
+        goes at the *end of the section*, not at the end of the file, so
+        a new fact lands under `## fact` even when later sections exist.
+        """
+        marker = f"## {heading}"
+        lines = text.splitlines()
+        if marker not in lines:
+            return text
+        start = lines.index(marker) + 1
+        end = len(lines)
+        for idx in range(start, len(lines)):
+            if lines[idx].startswith("## "):
+                end = idx
+                break
+        body = lines[start:end]
+        # Drop trailing blank lines so the new line slots in flush after
+        # the last existing entry; we'll re-emit one blank to keep the
+        # section separator intact.
+        while body and not body[-1].strip():
+            body.pop()
+        body.append(line)
+        if end < len(lines):
+            # Mid-file section: keep the blank-line separator before the
+            # next heading.
+            new_lines = lines[:start] + body + [""] + lines[end:]
+        else:
+            # Last section: no separator needed.
+            new_lines = lines[:start] + body
+        return "\n".join(new_lines) + "\n"
+
     async def _ensure_today_worktree(self) -> Path:
         # Memo writes need a worktree to live in. Reuse today's per-day
         # worktree the same way job runs do; creating it is idempotent.
@@ -682,7 +777,7 @@ class CodexRunner:
         line = f"- {content}"
         if auto_timestamp and category == "fact":
             line = f"- [{self._now_local_str()}] {content}"
-        new_text = existing.rstrip() + "\n" + line + "\n"
+        new_text = self._insert_line_in_section(existing, category, line)
         tmp_path = memory_path.with_name(memory_path.name + ".tmp")
         tmp_path.write_text(new_text, encoding="utf-8")
         tmp_path.replace(memory_path)
@@ -1086,3 +1181,157 @@ class CodexRunner:
         if not job.worktree_path:
             return
         await self._remove_worktree(job.worktree_path)
+
+
+# ---- CLI: expose memorize / recall-memory / recall-journal as commands ----
+# The bot's keyword fast path and /fix (via codex) both use these as their
+# single source of truth. The model is told about them in the <tool-registry>
+# block; humans can call them directly from a shell.
+MEMO_ENV_SKIP_DIRS = (".venv", "venv", "env", "node_modules", "__pycache__")
+
+
+def _find_env_file(start: Path | None = None) -> Path | None:
+    """Walk up from `start` (or cwd) looking for the first .env file.
+
+    Skips virtualenv / build / cache directories. Used by the CLI subcommands
+    when they're not given --env-file explicitly. Returns None if not found.
+    """
+    cur = (start or Path.cwd()).resolve()
+    while True:
+        env = cur / ".env"
+        if env.is_file():
+            return env
+        if cur.parent == cur:
+            return None
+        if cur.name in MEMO_ENV_SKIP_DIRS:
+            return None
+        cur = cur.parent
+
+
+def _cli_load_runner(env_file: Path) -> CodexRunner:
+    """Load settings from .env and construct a CodexRunner. Raises on missing env."""
+    settings = load_settings(str(env_file))  # raises RuntimeError if required env missing
+    return CodexRunner(settings)
+
+
+async def _classify_and_append(runner: CodexRunner, content: str) -> str:
+    category = await runner.classify_memo(content)
+    auto_ts = category == "fact"
+    return await runner.append_memo(category, content, auto_timestamp=auto_ts)
+
+
+def _cli_memorize(args: argparse.Namespace) -> int:
+    """memorize subcommand: append a categorized entry to today's MEMORY.md."""
+    env_file = Path(args.env_file) if args.env_file else _find_env_file()
+    if env_file is None:
+        print("error: could not locate .env (pass --env-file)", file=sys.stderr)
+        return 1
+    try:
+        runner = _cli_load_runner(env_file)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        if args.category:
+            result = asyncio.run(
+                runner.append_memo(
+                    args.category,
+                    args.content,
+                    auto_timestamp=(args.category == "fact"),
+                )
+            )
+        else:
+            # No --category: classify first, then append.
+            result = asyncio.run(_classify_and_append(runner, args.content))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not args.quiet:
+        print(result)
+    return 0
+
+
+def _cli_recall_memory(args: argparse.Namespace) -> int:
+    env_file = Path(args.env_file) if args.env_file else _find_env_file()
+    if env_file is None:
+        print("error: could not locate .env (pass --env-file)", file=sys.stderr)
+        return 1
+    try:
+        runner = _cli_load_runner(env_file)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(runner.read_memory(args.category), end="")
+    return 0
+
+
+def _cli_recall_journal(args: argparse.Namespace) -> int:
+    env_file = Path(args.env_file) if args.env_file else _find_env_file()
+    if env_file is None:
+        print("error: could not locate .env (pass --env-file)", file=sys.stderr)
+        return 1
+    try:
+        runner = _cli_load_runner(env_file)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(runner.read_journal(args.date, args.category), end="")
+    return 0
+
+
+def _build_cli_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m runner",
+        description="telegram-codex-runner CLI (memorize / recall-memory / recall-journal)",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_mem = sub.add_parser("memorize", help="append a categorized entry to today's MEMORY.md")
+    p_mem.add_argument("content", help="the content to memorize")
+    p_mem.add_argument(
+        "--category",
+        choices=("preference", "fact", "tool-quirk", "convention", "unfiled"),
+        help="explicit category; default = let runner.classify_memo pick",
+    )
+    p_mem.add_argument(
+        "--quiet",
+        action="store_true",
+        help="suppress the '记下了: ...' confirmation line",
+    )
+    p_mem.add_argument("--env-file", help="path to .env (default: walk up from cwd)")
+    p_mem.set_defaults(func=_cli_memorize)
+
+    p_rm = sub.add_parser("recall-memory", help="read today's MEMORY.md (or one category)")
+    p_rm.add_argument(
+        "category",
+        nargs="?",
+        default=None,
+        choices=("preference", "fact", "tool-quirk", "convention", "unfiled"),
+        help="optional category; default = full file",
+    )
+    p_rm.add_argument("--env-file", help="path to .env")
+    p_rm.set_defaults(func=_cli_recall_memory)
+
+    p_rj = sub.add_parser("recall-journal", help="read a past day's archived journal")
+    p_rj.add_argument("date", help="YYYY-MM-DD")
+    p_rj.add_argument(
+        "category",
+        nargs="?",
+        default=None,
+        choices=("preference", "fact", "tool-quirk", "convention", "unfiled"),
+        help="optional category; default = full archive",
+    )
+    p_rj.add_argument("--env-file", help="path to .env")
+    p_rj.set_defaults(func=_cli_recall_journal)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_cli_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
