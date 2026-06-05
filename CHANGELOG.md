@@ -1,8 +1,54 @@
 # CHANGELOG
 
-Trajectory snapshot at HEAD `ddd468a` (35 commits). README.md owns the
+# Trajectory snapshot at HEAD `edd2750` (37 commits). README.md owns the
 file/command reference; this file is the change history and current state
 at a glance.
+
+## [unreleased] - chat-feel polish round 8
+
+Round 8 plugs the last chat-feel gap that rounds 5/6/7 left visible:
+after the bot's sub-second placeholder landed, the first prose edit
+had to wait 3 seconds (= `telegram_progress_seconds` default) before
+passing the `now - last_sent >= telegram_progress_seconds` cooldown
+shared by all 3 gates in `_read_jsonl_stdout` (thinking indicator,
+prose, tool-pulse). The placeholder sat at "⏳ Got it, working on
+it..." for 3s before the first edit, so the chat looked frozen vs
+Hermes-style "first prose appears immediately". Round 8 seeds
+`last_sent` at `-telegram_progress_seconds` instead of `0.0`, so
+the first event passes the cooldown (`now - (-3.0) >= 3.0` is
+always true for `now >= 0`). After the first send, `last_sent` is
+updated to `now`, so the normal cooldown applies for the rest of
+the stream. This is a one-shot bypass, not a permanent lowering of
+the cooldown. The thinking indicator still fires after
+`THINKING_THRESHOLD_SECONDS` (1s) of sustained reasoning, and the
+tool-pulse still arms at `TOOL_PULSE_THRESHOLD_SECONDS` (4s) and
+re-fires at `TOOL_PULSE_INTERVAL_SECONDS` (4s) — same as before.
+
+- `edd2750` - runner: bypass progress cooldown for the first event after the placeholder
+  - `runner.py` - `last_sent` in `_read_jsonl_stdout` now initialized
+    to `-self.settings.telegram_progress_seconds` instead of `0.0`.
+    The 3-gate chain (thinking indicator at `:871`, prose at `:881`,
+    tool-pulse at `:890`) all gate by `now - last_sent >=
+    telegram_progress_seconds`, so the first event had to wait 3s
+    after the loop started (= 3s after `_start_job` called
+    `runner.start`) before passing the cooldown. The placeholder
+    appeared at T+0 sub-second but the first edit landed at T+3s,
+    making the chat look frozen vs Hermes-style "first prose
+    appears immediately". After the first send, `last_sent` is
+    updated to `now` so normal cooldown applies for the rest of
+    the stream. This is a one-shot bypass, not a permanent
+    lowering of the cooldown. All 3 gates benefit automatically
+    (they share the same `last_sent` cooldown)
+  - `scripts/progress_smoke.py` - 3 new contract cases
+    (`_test_first_prose_fires_immediately_after_placeholder`,
+    `_test_subsequent_prose_respects_cooldown`,
+    `_test_subsequent_prose_fires_after_cooldown`); 36 -> 39 cases.
+    The first test pins the bypass at the production-like 3.0s
+    cooldown (not zeroed, so the bypass is real, not just that the
+    constant is wired in); the second pins that the bypass is
+    one-shot (a 2nd event microseconds after the 1st is gated by
+    the cooldown); the third pins that normal cooldown applies to
+    2nd+ events (a 2nd event 3.1s after the 1st passes)
 
 ## [unreleased] - chat-feel polish rounds 6+7
 
@@ -297,7 +343,16 @@ This batch is governance, docs, and CI only; the runtime surface
   lifetime; skips no-op placeholder edits (round 7; the 2nd identical
   `progress()` short-circuits before the wire so `BadRequest: Message
   is not modified` cannot trip the edit-broken latch); latches to
-  send-message if Telegram rate-limits edits
+  send-message if Telegram rate-limits edits; the first prose edit
+  lands immediately after the placeholder (round 8; `last_sent` in
+  `_read_jsonl_stdout` is seeded at `-telegram_progress_seconds`
+  instead of `0.0`, so the first event passes the shared cooldown
+  without waiting 3s; after the first send, `last_sent` is updated
+  to `now` so the normal cooldown applies for the rest of the
+  stream; this is a one-shot bypass, not a permanent lowering of
+  the cooldown, and all 3 gates (thinking indicator, prose,
+  tool-pulse) benefit automatically since they share the same
+  `last_sent`)
 
 ### Codex CLI bridge (runner.py)
 - `CodexRunner.start(mode, prompt, on_progress)` is the single spawn point
@@ -359,7 +414,7 @@ This batch is governance, docs, and CI only; the runtime surface
 - Maintain is a separate unit from the bot - a maintain failure does not
   take the bot down
 
-### Smokes (8 scripts, 83 cases)
+### Smokes (8 scripts, 86 cases)
 - `make smoke` is the local pre-deploy gate
 - VPS deploy gate is per-script `python scripts/*_smoke.py`; the Makefile
   is intentionally NOT in `scripts/deploy.sh`'s rsync list
@@ -392,9 +447,10 @@ This batch is governance, docs, and CI only; the runtime surface
   counter, the next hourly tick is what surfaces the recovery
 
 
-## Commit timeline (all 35, newest first)
+## Commit timeline (all 37, newest first)
 
 ```
+edd2750 runner: bypass progress cooldown for the first event after the placeholder
 ddd468a runner: surface periodic tool-call pulse while a tool call is in flight
 57fd8aa bot: skip no-op placeholder edits to prevent edit-broken latch storm
 6f1d9ea runner: surface sustained-reasoning thinking indicator after 1s threshold
@@ -429,5 +485,5 @@ e786a65 runner: plumb RUNNER_HOME into codex sandbox via --add-dir and CODEX_RUN
 2df91f7 cleanup JobMode.MEMO; reuse classify_memo in compress_day.py for unfiled reclass
 ```
 
-VPS `main` is at the same HEAD; bot unit `active`; full chain 83/83
+VPS `main` is at the same HEAD; bot unit `active`; full chain 86/86
 green locally across 8 env-free smoke scripts.

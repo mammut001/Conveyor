@@ -5,12 +5,12 @@ quickstart; **CHANGELOG.md** is the change history and current surface at a
 glance; this file is the design + deploy + invariants + open-items brief a
 new session needs to be useful fast.
 
-Snapshot at HEAD `ddd468a` (2026-06-05, America/Toronto). 35 commits on
-`main`. No git remote configured. Working tree is clean. 83/83 smokes
+Snapshot at HEAD `edd2750` (2026-06-05, America/Toronto). 37 commits on
+`main`. No git remote configured. Working tree is clean. 86/86 smokes
 green (progress_smoke 19 -> 23 cases after chat-feel round 2; 23 -> 26
 cases after chat-feel round 4; 26 -> 30 cases after chat-feel round
 5; 30 -> 32 cases after chat-feel round 7; 32 -> 36 cases after
-chat-feel round 6). Round 2's `command_execution` indicator said
+chat-feel round 6; 36 -> 39 cases after chat-feel round 8). Round 2's
 `"shell"`; round 3 extracts the actual binary name and surfaces
 `🔧 curl...` / `🔧 python...` etc. (falling back to `🔧 shell...` for
 empty / unparseable commands); round 4 adds a per-item growing gate
@@ -22,7 +22,12 @@ round 6 surfaces a periodic `🔧 name (Ns)...` tool-pulse every 4s
 while a tool call is in flight so a long-running tool call does not
 look frozen; round 7 short-circuits identical `progress()` payloads
 before the wire so `BadRequest: Message is not modified` cannot
-trip the bot's edit-broken latch.
+trip the bot's edit-broken latch; round 8 seeds `_read_jsonl_stdout`'s
+`last_sent` at `-telegram_progress_seconds` so the first prose edit
+lands immediately after the placeholder (T+0) instead of waiting 3s
+for the shared cooldown to elapse, after which the normal 3s cooldown
+applies for the rest of the stream (one-shot bypass, not a permanent
+lowering of the cooldown).
 
 ---
 
@@ -403,6 +408,7 @@ the 13:25-14:22 silent window is recorded in CHANGELOG "Honest gaps".
 ---
 
 ## 8. Smokes (83 cases, 8 scripts)
+## 8. Smokes (86 cases, 8 scripts)
 
 Local pre-deploy gate:
 
@@ -427,6 +433,7 @@ Makefile declares them:
    `a6e0b09` round 2; 23 -> 26 cases after `c70de25` round 4;
    26 -> 30 cases after `6f1d9ea` round 5; 30 -> 32 cases after
    `57fd8aa` round 7; 32 -> 36 cases after `ddd468a` round 6;
+   36 -> 39 cases after `edd2750` round 8;
    4 round-2 cases pin `command_execution` shell indicator,
    lifecycle suppression, no-event-type-prefix, and consecutive-
    same-text dedup). Round 3 (`0d76a15`) updates two of those cases
@@ -447,6 +454,14 @@ Makefile declares them:
    call is in flight (4 behavior cases pinning the pulse firing
    after threshold, clearing on completion, skipping for short
    calls, and respecting the re-fire interval)
+   Round 8 (`edd2750`) adds a first-event cooldown bypass (3
+   behavior cases pinning the first prose firing immediately at
+   the production-like 3.0s cooldown, the second event within
+   the cooldown being gated, and the second event after the
+   cooldown elapsing firing normally — the bypass is a one-shot
+   seed of `_read_jsonl_stdout`'s `last_sent` at
+   `-telegram_progress_seconds` so the first edit lands at T+0
+   instead of waiting 3s for the shared cooldown to elapse)
 
 `memo_smoke.py` is the full integration smoke and needs a populated `.env`
 — it is gated behind `make smoke-all` precisely so the env-free chain is
@@ -716,4 +731,4 @@ ssh $REMOTE \
 
 ---
 
-*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `ddd468a`.*
+*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `edd2750`.*
