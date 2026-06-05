@@ -2050,6 +2050,252 @@ def _test_tool_pulse_respects_interval() -> CheckResult:
             runner_mod.TOOL_PULSE_INTERVAL_SECONDS = original_interval
 
 
+# ---- chat-feel round-8: first-event cooldown bypass ---------------------
+# Round-8: the first event in the stream must pass the
+# ``telegram_progress_seconds`` cooldown immediately, not wait 3s
+# after the loop starts. The bypass is a one-shot seed of ``last_sent``
+# at ``-telegram_progress_seconds`` in ``_read_jsonl_stdout`` (runner.py:731).
+# All 3 gates (thinking indicator, prose, tool-pulse) share the same
+# ``last_sent`` cooldown, so the bypass benefits all three. The 3 tests
+# pin the contract: the first event fires (bypass works), the second
+# event within the cooldown is gated (bypass is one-shot), and the
+# second event after the cooldown fires (normal cooldown still applies
+# for the rest of the stream).
+#
+# Test override pattern: ``object.__setattr__(settings,
+# "telegram_progress_seconds", 3.0)`` to bypass the frozen-Settings
+# guard with a non-zero value (mirrors the round-5/6 pattern). The
+# 3.0s cooldown is intentional — it proves the bypass is real, not just
+# that the constant is wired in.
+
+def _test_first_prose_fires_immediately_after_placeholder() -> CheckResult:
+    """Round-8 first-event cooldown bypass. With
+    ``telegram_progress_seconds=3.0`` (the production default), the
+    first prose event in the stream must pass the cooldown
+    immediately, not wait 3s. With the old code (``last_sent = 0.0``)
+    the first event would be gated because ``now - 0.0 < 3.0``. With
+    the round-8 fix (``last_sent = -3.0``) the first event passes
+    because ``now - (-3.0) >= 3.0``. This pins the new contract that
+    the chat shows the first prose as soon as it arrives, not after a
+    3-second gap."""
+    name = "behavior: _read_jsonl_stdout fires the first prose immediately after the placeholder (round 8)"
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        # Test override hook: re-binding the module-level constants
+        # is the only way to bypass the frozen-Settings guard. This
+        # mirrors the THINKING_THRESHOLD_SECONDS pattern.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                # Production-like cooldown: 3.0s. NOT zeroed.
+                # Bypass the frozen __setattr__ guard.
+                object.__setattr__(settings, "telegram_progress_seconds", 3.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                lines = [
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello"}}),
+                ]
+                encoded = [ln.encode("utf-8") + b"\n" for ln in lines]
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes]) -> None:
+                        self._chunks = list(chunks)
+
+                    async def readline(self) -> bytes:
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout(encoded))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                if progress_calls != ["Hello"]:
+                    return CheckResult(
+                        name, False,
+                        f"expected ['Hello'] (first prose fires immediately at 3.0s cooldown); got {progress_calls!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"first prose fires immediately at 3.0s cooldown: {progress_calls!r}",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_subsequent_prose_respects_cooldown() -> CheckResult:
+    """Round-8 first-event cooldown bypass must be a one-shot bypass.
+    With ``telegram_progress_seconds=3.0``, two events emitted microseconds
+    apart must produce only one progress call: the first fires (bypass),
+    the second is gated (normal cooldown applies after the first send
+    updates ``last_sent`` to ``now``). This pins the round-8 contract
+    that the bypass does not lower the cooldown for the rest of the
+    stream."""
+    name = "behavior: _read_jsonl_stdout gates the second prose within the cooldown after the first (round 8)"
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                object.__setattr__(settings, "telegram_progress_seconds", 3.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                # Two agent_message events microseconds apart. The
+                # first passes via the round-8 bypass; the second is
+                # gated by the 3.0s cooldown. Note the second event's
+                # text is strictly longer (growing_ok) and different
+                # from the first (last_sent_text dedup), so only the
+                # cooldown gate can suppress it.
+                lines = [
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello"}}),
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello world"}}),
+                ]
+                encoded = [ln.encode("utf-8") + b"\n" for ln in lines]
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes]) -> None:
+                        self._chunks = list(chunks)
+
+                    async def readline(self) -> bytes:
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout(encoded))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                if progress_calls != ["Hello"]:
+                    return CheckResult(
+                        name, False,
+                        f"expected ['Hello'] (2nd gated by 3.0s cooldown); got {progress_calls!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"bypass is one-shot: 1st fires via bypass, 2nd gated by cooldown: {progress_calls!r}",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_subsequent_prose_fires_after_cooldown() -> CheckResult:
+    """Round-8 first-event cooldown bypass must not lower the cooldown
+    for the rest of the stream. With ``telegram_progress_seconds=3.0``,
+    two events separated by >3s must produce two progress calls: the
+    first fires (bypass), the second fires after the cooldown elapses
+    (normal cooldown). This pins the round-8 contract that the bypass
+    is exactly one-shot and the normal cooldown still applies to 2nd+
+    events. The _FakeStdout sleeps 3.1s before the 2nd chunk to
+    advance the wall clock past the cooldown; total test time ~3.1s."""
+    name = "behavior: _read_jsonl_stdout fires the second prose after the cooldown elapses (round 8)"
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                object.__setattr__(settings, "telegram_progress_seconds", 3.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                # Two agent_message events. The 2nd read sleeps 3.1s
+                # so the wall clock advances past the 3.0s cooldown.
+                lines = [
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello"}}),
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello world"}}),
+                ]
+                encoded = [ln.encode("utf-8") + b"\n" for ln in lines]
+                # delays[i] is the sleep BEFORE returning chunks[i].
+                # chunks[-1] is the b"" EOF sentinel; only the first
+                # len(chunks)-1 delays matter for the events.
+                delays = [0.0, 3.1]
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes], chunk_delays: list[float]) -> None:
+                        self._chunks = list(chunks)
+                        self._delays = list(chunk_delays) + [0.0] * (len(chunks) - len(chunk_delays))
+
+                    async def readline(self) -> bytes:
+                        if self._delays:
+                            await asyncio.sleep(self._delays.pop(0))
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout(encoded, delays))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                if progress_calls != ["Hello", "Hello world"]:
+                    return CheckResult(
+                        name, False,
+                        f"expected ['Hello', 'Hello world'] (2nd fires after 3.1s sleep past 3.0s cooldown); got {progress_calls!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"normal cooldown applies to 2nd+: 1st via bypass, 2nd after 3.1s: {progress_calls!r}",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
 
 
 def main() -> int:
@@ -2097,6 +2343,10 @@ def main() -> int:
         _test_tool_pulse_clears_on_completion,
         _test_tool_pulse_skipped_for_short_call,
         _test_tool_pulse_respects_interval,
+        # Chat-feel round-8 contracts
+        _test_first_prose_fires_immediately_after_placeholder,
+        _test_subsequent_prose_respects_cooldown,
+        _test_subsequent_prose_fires_after_cooldown,
     ]
     results = [t() for t in tests]
     print_results(results)

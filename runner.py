@@ -713,7 +713,22 @@ class CodexRunner:
     ) -> None:
         assert process.stdout is not None
         assert job.log_path is not None
-        last_sent = 0.0
+        # Round-8 first-event cooldown bypass. The 3-gate chain below
+        # (thinking indicator, prose, tool-pulse) all gate sends on
+        # ``now - last_sent >= telegram_progress_seconds`` (3s default).
+        # Initializing ``last_sent`` to 0.0 would force the very first
+        # event in the stream to wait 3s after the loop started (= 3s
+        # after ``_start_job`` called ``runner.start``) before passing
+        # the cooldown, even though the placeholder already appeared at
+        # T+0 sub-second. That 3-second gap made the chat look frozen
+        # vs Hermes-style "first prose appears immediately". Seeding
+        # ``last_sent`` at -telegram_progress_seconds makes the first
+        # event pass the cooldown (``now - (-3.0) >= 3.0`` is always
+        # true for ``now >= 0``). After the first send, ``last_sent``
+        # is updated to ``now``, so the normal cooldown applies for
+        # the rest of the stream. This is a one-shot bypass, not a
+        # permanent lowering of the cooldown.
+        last_sent = -self.settings.telegram_progress_seconds
         # Consecutive-same-text dedup: when codex emits
         # ``item.started`` + ``item.completed`` for the same tool call in
         # quick succession (typical for a short shell command), the
