@@ -44,13 +44,23 @@ at a glance.
 ### Tool-registry gate (runner.py `_tool_registry_text`)
 - `<tool-registry>` block is injected into the codex prompt so the model
   sees exactly which runner-CLI tools this sandbox exposes
-- RUN sandbox: "no shell, no writes, no runner CLI; ask the user to
-  re-send as /fix"
+- RUN sandbox: "no shell, no writes, no runner CLI; web tools
+  (search/fetch) ARE available so plain chat can answer current-info
+  questions (prices, docs, news) without forcing /fix; ask the user
+  to re-send as /fix only when writes or shell are needed"
 - FIX sandbox: full `memorize` / `recall_memory` / `recall_journal` /
   `shell` surface with the three-tier auto-add policy spelled out
 - Warns codex that `apply_patch` / `edit_file` / `write_file` are
   rejected by the router in this sandbox; all writes go through
   `python -m runner memorize`
+- design (2026-06-05): /run mode now allows web tools (search/fetch) by
+  default in natural-language chat. The codex CLI's read-only sandbox
+  already permits web tools — the old "no network" wording in the
+  prompt was the only thing blocking them. This is a 2-line prompt
+  change (JobMode.stdin_prefix + _tool_registry_text RUN branch);
+  writes and shell remain gated to /fix so the security boundary is
+  preserved. New smoke assertion in `scripts/memo_smoke.py` pins the
+  contract.
 
 ### Maintain pipeline (hourly systemd timer)
 - `scripts/auto_maintain.py` runs every hour; GC fires when either the
@@ -98,9 +108,13 @@ at a glance.
   counter, the next hourly tick is what surfaces the recovery
 
 
-## Commit timeline (all 15, newest first)
+## Commit timeline (all 19, newest first)
 
 ```
+<pending> runner + smoke: allow web tools (search/fetch) in /run mode by default
+7193602 docs: fix worktree root path in §3.1 and §6.2
+7d55769 docs: note 13:25 maintain-failure alerting gap in Honest gaps
+dbc718a docs: add CHANGELOG.md with current surface and 15-commit timeline
 408f3b2 smoke: add memo_fastpath_smoke pinning _handle_memo_fast_path routing
 e4f59ad smoke: add memo_flow_smoke pinning append_memo + reclassify_unfiled contracts
 f3ae4a4 smoke: add classify_memo_smoke pinning never-raise + return contract

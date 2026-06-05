@@ -298,6 +298,29 @@ async def main() -> int:
     except Exception as exc:
         results.append(CheckResult("tool-registry payload (FIX + RUN)", False, f"raised {type(exc).__name__}: {exc}"))
 
+    # 16b. /run must allow web tools (search/fetch) by default. The
+    #      codex CLI's read-only sandbox already permits them; the
+    #      previous "no network" wording in the prompt was the only
+    #      thing blocking them. This pins the new contract: the RUN
+    #      tool-registry block must name web tools as available AND
+    #      must NOT carry the old "no network" clause.
+    try:
+        run_web_job = Job(
+            id="smoke-test-run-web",
+            mode=JobMode.RUN,
+            prompt="x",
+            sandbox="read-only",
+        )
+        run_web_text = runner._prefetch_memory(run_web_job)
+        web_mentioned = "Web tools" in run_web_text and "search/fetch" in run_web_text
+        no_network_clause = "no network" in run_web_text
+        ok = web_mentioned and not no_network_clause
+        detail = (f"web_mentioned={web_mentioned}/"
+                  f"no_network_clause={no_network_clause}")
+        results.append(CheckResult("RUN mode web tools by default", ok, detail))
+    except Exception as exc:
+        results.append(CheckResult("RUN mode web tools by default", False, f"raised {type(exc).__name__}: {exc}"))
+
     # 17. tool-registry must warn that apply_patch is unavailable. The model
     #     otherwise defaults to codex's built-in apply_patch for MEMORY.md
     #     edits and codex_core::tools::router rejects it as "unsupported
