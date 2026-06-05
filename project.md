@@ -5,18 +5,24 @@ quickstart; **CHANGELOG.md** is the change history and current surface at a
 glance; this file is the design + deploy + invariants + open-items brief a
 new session needs to be useful fast.
 
-Snapshot at HEAD `6f1d9ea` (2026-06-05, America/Toronto). 33 commits on
-`main`. No git remote configured. Working tree is clean. 77/77 smokes
+Snapshot at HEAD `ddd468a` (2026-06-05, America/Toronto). 35 commits on
+`main`. No git remote configured. Working tree is clean. 83/83 smokes
 green (progress_smoke 19 -> 23 cases after chat-feel round 2; 23 -> 26
 cases after chat-feel round 4; 26 -> 30 cases after chat-feel round
-5). Round 2's `command_execution` indicator said `"shell"`; round 3
-extracts the actual binary name and surfaces `🔧 curl...` /
-`🔧 python...` etc. (falling back to `🔧 shell...` for empty /
-unparseable commands); round 4 adds a per-item growing gate on prose
-events so a mid-stream paragraph rewrite no longer re-edits the
-placeholder to a shorter string; round 5 surfaces a "💭 thinking..."
-indicator after >1.0s of sustained reasoning so a hard think (math,
-multi-step planning, debugging) does not look frozen.
+5; 30 -> 32 cases after chat-feel round 7; 32 -> 36 cases after
+chat-feel round 6). Round 2's `command_execution` indicator said
+`"shell"`; round 3 extracts the actual binary name and surfaces
+`🔧 curl...` / `🔧 python...` etc. (falling back to `🔧 shell...` for
+empty / unparseable commands); round 4 adds a per-item growing gate
+on prose events so a mid-stream paragraph rewrite no longer re-edits
+the placeholder to a shorter string; round 5 surfaces a "💭
+thinking..." indicator after >1.0s of sustained reasoning so a hard
+think (math, multi-step planning, debugging) does not look frozen;
+round 6 surfaces a periodic `🔧 name (Ns)...` tool-pulse every 4s
+while a tool call is in flight so a long-running tool call does not
+look frozen; round 7 short-circuits identical `progress()` payloads
+before the wire so `BadRequest: Message is not modified` cannot
+trip the bot's edit-broken latch.
 
 ---
 
@@ -396,7 +402,7 @@ the 13:25-14:22 silent window is recorded in CHANGELOG "Honest gaps".
 
 ---
 
-## 8. Smokes (77 cases, 8 scripts)
+## 8. Smokes (83 cases, 8 scripts)
 
 Local pre-deploy gate:
 
@@ -419,20 +425,28 @@ Makefile declares them:
 7. `memo_fastpath_smoke` — `_handle_memo_fast_path` routing contract
 8. `progress_smoke` — chat-feel contract (19 -> 23 cases after
    `a6e0b09` round 2; 23 -> 26 cases after `c70de25` round 4;
-   26 -> 30 cases after `6f1d9ea` round 5; 4 round-2 cases pin
-   `command_execution` shell indicator, lifecycle suppression,
-   no-event-type-prefix, and consecutive-same-text dedup). Round 3
-   (`0d76a15`) updates two of those cases to pin the binary-name
-   extraction (`🔧 curl...` / `🔧 true...` instead of `🔧 shell...`);
-   the `🔧 shell` fallback for empty / unparseable commands is
-   asserted in the same case as a regression guard. Round 4
-   (`c70de25`) adds a per-item growing gate on prose events (1 AST
-   + 2 behavior cases pinning `_is_prose_event` classification and
-   the mid-stream shrink suppression). Round 5 (`6f1d9ea`) adds a
-   per-chain "💭 thinking..." indicator for sustained reasoning
-   (4 behavior cases pinning the indicator firing after threshold,
-   clearing on prose, clearing on tool call, and skipping for
-   short-reasoning chains below the threshold)
+   26 -> 30 cases after `6f1d9ea` round 5; 30 -> 32 cases after
+   `57fd8aa` round 7; 32 -> 36 cases after `ddd468a` round 6;
+   4 round-2 cases pin `command_execution` shell indicator,
+   lifecycle suppression, no-event-type-prefix, and consecutive-
+   same-text dedup). Round 3 (`0d76a15`) updates two of those cases
+   to pin the binary-name extraction (`🔧 curl...` / `🔧 true...`
+   instead of `🔧 shell...`); the `🔧 shell` fallback for empty /
+   unparseable commands is asserted in the same case as a regression
+   guard. Round 4 (`c70de25`) adds a per-item growing gate on prose
+   events (1 AST + 2 behavior cases pinning `_is_prose_event`
+   classification and the mid-stream shrink suppression). Round 5
+   (`6f1d9ea`) adds a per-chain "💭 thinking..." indicator for
+   sustained reasoning (4 behavior cases pinning the indicator
+   firing after threshold, clearing on prose, clearing on tool
+   call, and skipping for short-reasoning chains below the
+   threshold). Round 7 (`57fd8aa`) adds a no-op edit guard (2
+   behavior cases pinning the `last_progress_text` short-circuit
+   for byte-identical text and for post-truncation collisions).
+   Round 6 (`ddd468a`) adds a periodic tool-pulse while a tool
+   call is in flight (4 behavior cases pinning the pulse firing
+   after threshold, clearing on completion, skipping for short
+   calls, and respecting the re-fire interval)
 
 `memo_smoke.py` is the full integration smoke and needs a populated `.env`
 — it is gated behind `make smoke-all` precisely so the env-free chain is
@@ -702,4 +716,4 @@ ssh $REMOTE \
 
 ---
 
-*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `6f1d9ea`.*
+*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `ddd468a`.*

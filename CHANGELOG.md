@@ -1,8 +1,67 @@
 # CHANGELOG
 
-Trajectory snapshot at HEAD `6f1d9ea` (33 commits). README.md owns the
+Trajectory snapshot at HEAD `ddd468a` (35 commits). README.md owns the
 file/command reference; this file is the change history and current state
 at a glance.
+
+## [unreleased] - chat-feel polish rounds 6+7
+
+Rounds 6 and 7 plug the last two chat-feel gaps that round 5 left
+visible. After round 5, a long-running tool call (a `curl` of a slow
+API, a multi-second `python` job, a `git` clone) still shows just
+`🔧 curl...` once and then the placeholder sits silent for the
+duration, so the chat looks frozen even though the model is alive.
+Round 6 adds a periodic `🔧 name (Ns)...` tool-pulse every 4s while a
+tool call is in flight: arm on `item.started`, disarm on the matching
+`item.completed`, gated by threshold + interval so short calls and
+frequent re-fires do not spam the chat. The other gap is a live bug:
+Telegram's `editMessageText` 400s with `Message is not modified` when
+the new content matches the current content, and the existing
+`except` latch was flipping the rest of the job into `send_message`
+mode, scattering one-off messages through the chat. Live evidence:
+journalctl on the VPS showed 2 such 400s on 2026-06-05 18:09 and
+18:10, both at `bot.py:574` (the edit call). Round 7 short-circuits
+identical `progress()` payloads before the wire so the storm cannot
+start. Together, round 6 surfaces a long tool call, round 7 keeps the
+edit ladder intact when the model emits a no-op progression.
+
+- `57fd8aa` - bot: skip no-op placeholder edits to prevent edit-broken latch storm
+  - `bot.py` - `progress()` in `_start_job` now tracks `last_progress_text`
+    (post-truncation, the wire format) and short-circuits when the next
+    call's outgoing text matches. Telegram's `editMessageText` 400s
+    with `Message is not modified` on identical content, and the
+    existing `except` latch was flipping the rest of the job into
+    `send_message` mode, scattering one-off messages through the chat.
+    Live evidence: journalctl showed 2 such 400s on 2026-06-05 18:09
+    and 18:10, both at `bot.py:574` (the edit call)
+  - `scripts/progress_smoke.py` - 2 new contract cases
+    (`_test_no_op_edit_skipped`,
+    `_test_no_op_edit_skipped_after_truncation_collision`); 30 -> 32
+    cases
+
+- `ddd468a` - runner: surface periodic tool-call pulse while a tool call is in flight
+  - `runner.py` - new module-level constants `TOOL_PULSE_THRESHOLD_SECONDS`
+    (4.0s) and `TOOL_PULSE_INTERVAL_SECONDS` (4.0s). Re-binding these
+    at the module level is the test override hook (mirrors
+    `THINKING_THRESHOLD_SECONDS`)
+  - `runner.py` - `_is_tool_call_start_event` / `_is_tool_call_complete_event`
+    helpers (delegate to `_tool_call_name`). Arm fires on `item.started`
+    (or `item.updated`) for a `function_call` / `tool_call` /
+    `command_execution` envelope; disarm fires on `item.completed`
+    with a name-match guard so a stale complete from a prior call
+    cannot wipe a fresh arm
+  - `runner.py` - `_read_jsonl_stdout` gains 3 per-stream state vars
+    (`pending_tool_name` / `pending_tool_since` / `last_pulse_at`)
+    and a 7th gate (pulse send) downstream of the existing 6-gate
+    chain. Pulse text is `🔧 name (Ns)...`. Shares
+    `telegram_progress_seconds` cooldown with the rest of the gate
+    ladder. `last_sent_text` is NOT updated on the pulse so a
+    tool-call summary that lands right after the pulse still surfaces
+  - `scripts/progress_smoke.py` - 4 new contract cases
+    (`_test_tool_pulse_appears_after_threshold`,
+    `_test_tool_pulse_clears_on_completion`,
+    `_test_tool_pulse_skipped_for_short_call`,
+    `_test_tool_pulse_respects_interval`); 32 -> 36 cases
 
 ## [unreleased] - chat-feel polish round 5
 
@@ -227,11 +286,18 @@ This batch is governance, docs, and CI only; the runtime surface
   for `function_call` items (and `command_execution` items surface as
   `🔧 <binary>...` where the binary name is extracted from the command
   string, with a `🔧 shell...` fallback for empty / unparseable commands),
+  "🔧 name (Ns)..." periodic tool-pulse every 4s while a tool call is
+  in flight (round 6; arm on `item.started`, disarm on matching
+  `item.completed`, gated by threshold + interval so short calls and
+  frequent re-fires do not spam the chat),
   "💭 thinking..." indicator after >1.0s of sustained reasoning so a
   hard think (math, multi-step planning, debugging) does not look
   frozen (round 5; per-chain, fires at most once, breaks on any
   non-reasoning event), typing pulse every 1.5s for the job's
-  lifetime; latches to send-message if Telegram rate-limits edits
+  lifetime; skips no-op placeholder edits (round 7; the 2nd identical
+  `progress()` short-circuits before the wire so `BadRequest: Message
+  is not modified` cannot trip the edit-broken latch); latches to
+  send-message if Telegram rate-limits edits
 
 ### Codex CLI bridge (runner.py)
 - `CodexRunner.start(mode, prompt, on_progress)` is the single spawn point
@@ -293,7 +359,7 @@ This batch is governance, docs, and CI only; the runtime surface
 - Maintain is a separate unit from the bot - a maintain failure does not
   take the bot down
 
-### Smokes (8 scripts, 77 cases)
+### Smokes (8 scripts, 83 cases)
 - `make smoke` is the local pre-deploy gate
 - VPS deploy gate is per-script `python scripts/*_smoke.py`; the Makefile
   is intentionally NOT in `scripts/deploy.sh`'s rsync list
@@ -326,9 +392,11 @@ This batch is governance, docs, and CI only; the runtime surface
   counter, the next hourly tick is what surfaces the recovery
 
 
-## Commit timeline (all 33, newest first)
+## Commit timeline (all 35, newest first)
 
 ```
+ddd468a runner: surface periodic tool-call pulse while a tool call is in flight
+57fd8aa bot: skip no-op placeholder edits to prevent edit-broken latch storm
 6f1d9ea runner: surface sustained-reasoning thinking indicator after 1s threshold
 c70de25 runner: gate prose updates by length per item to avoid chat re-write
 04fbced compress-day-smoke: freeze clock for day-boundary branches
@@ -361,5 +429,5 @@ e786a65 runner: plumb RUNNER_HOME into codex sandbox via --add-dir and CODEX_RUN
 2df91f7 cleanup JobMode.MEMO; reuse classify_memo in compress_day.py for unfiled reclass
 ```
 
-VPS `main` is at the same HEAD; bot unit `active`; full chain 77/77
+VPS `main` is at the same HEAD; bot unit `active`; full chain 83/83
 green locally across 8 env-free smoke scripts.
