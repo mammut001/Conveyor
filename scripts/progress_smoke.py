@@ -831,7 +831,7 @@ def _test_edit_broken_latch() -> CheckResult:
 
 
 def _test_command_execution_tool_indicator() -> CheckResult:
-    name = 'behavior: _event_summary renders command_execution as "🔧 shell..." (no name fallback)'
+    name = 'behavior: _event_summary renders command_execution as "🔧 <binary>..." (real binary, not the generic shell fallback)'
     try:
         import runner as runner_mod  # noqa: PLC0415
         with tempfile.TemporaryDirectory() as tmp:
@@ -851,26 +851,55 @@ def _test_command_execution_tool_indicator() -> CheckResult:
                 settings = runner_mod.load_settings()
                 r = runner_mod.CodexRunner(settings)
                 # Real codex command_execution items do not carry a
-                # "name" field; the user previously saw a multi-kilobyte
-                # curl command JSON-dumped into the chat. Now the
-                # summary collapses to a short "🔧 shell..." indicator.
+                # "name" field. Round 1 collapsed them to "🔧 shell..."
+                # which was technically safe but non-informative; the
+                # user wants to know *what* is actually running, not
+                # just that something shell-shaped happened. We now
+                # extract the leading binary name from the command
+                # string (handling the /bin/bash -lc '...' wrapper)
+                # and surface "🔧 curl..." etc. The raw command body
+                # must still NOT leak into the chat.
                 line = json.dumps(
                     {"type": "item.completed", "item": {"type": "command_execution", "command": "curl -sS https://example.com/ -o /dev/null -w '%{http_code}\\n'"}}
                 )
                 summary = r._event_summary(line)
-                if "🔧 shell" not in summary:
+                if "🔧 curl" not in summary:
                     return CheckResult(
                         name, False,
-                        f"command_execution should surface as 🔧 shell...; got {summary!r}",
+                        f"command_execution should surface as 🔧 curl...; got {summary!r}",
                     )
-                if "curl" in summary:
+                # Command body must not leak; the binary name is fine.
+                for needle in ("example.com", "-w", "http_code", "/dev/null"):
+                    if needle in summary:
+                        return CheckResult(
+                            name, False,
+                            f"command body leaked into summary ({needle!r}); got {summary!r}",
+                        )
+                # Fallback contract: when no command (or empty string)
+                # is present, we still surface "🔧 shell..." rather
+                # than a vague empty indicator.
+                for empty_cmd in ("", "   "):
+                    empty_line = json.dumps(
+                        {"type": "item.completed", "item": {"type": "command_execution", "command": empty_cmd}}
+                    )
+                    empty_summary = r._event_summary(empty_line)
+                    if "🔧 shell" not in empty_summary:
+                        return CheckResult(
+                            name, False,
+                            f"empty/missing command should fall back to 🔧 shell...; got {empty_summary!r}",
+                        )
+                missing_cmd_line = json.dumps(
+                    {"type": "item.completed", "item": {"type": "command_execution"}}
+                )
+                missing_summary = r._event_summary(missing_cmd_line)
+                if "🔧 shell" not in missing_summary:
                     return CheckResult(
                         name, False,
-                        f"command body leaked into summary; got {summary!r}",
+                        f"missing command field should fall back to 🔧 shell...; got {missing_summary!r}",
                     )
                 return CheckResult(
                     name, True,
-                    f"command_execution -> {summary!r}",
+                    f"command_execution -> {summary!r} (with 🔧 shell fallback for empty/missing)",
                 )
     except Exception as exc:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
@@ -1050,10 +1079,10 @@ def _test_consecutive_dedup() -> CheckResult:
                         name, False,
                         f"expected 1 on_progress call (2nd dedup'd); got {len(progress_calls)}: {progress_calls!r}",
                     )
-                if "🔧 shell" not in progress_calls[0]:
+                if "🔧 true" not in progress_calls[0]:
                     return CheckResult(
                         name, False,
-                        f"progress text should still be the shell indicator; got {progress_calls[0]!r}",
+                        f"progress text should be the binary-name indicator (🔧 true...); got {progress_calls[0]!r}",
                     )
                 # Raw line was still written to the log file (dedup is for
                 # the user-facing edit, not the audit trail).

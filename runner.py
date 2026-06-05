@@ -602,6 +602,11 @@ class CodexRunner:
         # tool_call without a name still return None to avoid a vague
         # "🔧 ..." indicator (the original round-1 contract).
         if "command_execution" in item_type:
+            command = item.get("command")
+            if isinstance(command, str) and command.strip():
+                extracted = _extract_command_name(command)
+                if extracted:
+                    return extracted
             return "shell"
         return None
 
@@ -1433,6 +1438,44 @@ class CodexRunner:
 # The bot's keyword fast path and /fix (via codex) both use these as their
 # single source of truth. The model is told about them in the <tool-registry>
 # block; humans can call them directly from a shell.
+
+
+def _extract_command_name(command: str) -> str | None:
+    """Pull a short human-readable executable name out of a codex
+    ``command_execution.command`` string. The real-world shape is
+    ``/bin/bash -lc 'cmd1 && cmd2 | cmd3'``; the round-1 contract was
+    to just say "shell", but the user wants to know what is actually
+    running. We strip the bash wrapper, take the last ``&&`` segment
+    (the effective command in a chain), then the first part of any
+    ``|`` pipe (the source), then the first whitespace-delimited word,
+    and finally strip the path with ``Path.name``. Returns None when
+    nothing clean comes out (e.g. empty command, no shell metachars
+    and no leading executable); the caller falls back to ``"shell"``.
+    """
+    if not command or not command.strip():
+        return None
+    cmd = command.strip()
+    # Strip the bash -lc '...' wrapper if present. The opening and
+    # closing quote are the same character; we look for either pair.
+    m = re.match(r"^/bin/(?:ba)?sh\s+-lc\s+([\'\"])(.*)\1\s*$", cmd, re.DOTALL)
+    if m:
+        cmd = m.group(2)
+    # Last `&&` segment is usually the effective command in a chain
+    # (e.g. `cd ... && .venv/bin/python -m runner ...` -> python).
+    if "&&" in cmd:
+        cmd = cmd.rsplit("&&", 1)[-1]
+    # If piped, take the first part (the source of the pipe).
+    if "|" in cmd:
+        cmd = cmd.split("|", 1)[0]
+    # First whitespace-delimited word, strip surrounding quotes.
+    first = re.split(r"\s+", cmd.strip(), 1)[0].strip("\'\"")
+    if not first:
+        return None
+    # Strip the path; `Path("ls").name == "ls"`, `Path(".venv/bin/python").name == "python"`.
+    name = Path(first).name
+    if not name or not name.strip():
+        return None
+    return name[:32]
 MEMO_ENV_SKIP_DIRS = (".venv", "venv", "env", "node_modules", "__pycache__")
 
 
