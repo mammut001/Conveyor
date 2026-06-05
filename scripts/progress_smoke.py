@@ -1269,6 +1269,336 @@ def _test_growing_gate_on_prose() -> CheckResult:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
 
+def _test_thinking_indicator_appears_after_threshold() -> CheckResult:
+    """Three reasoning events in a row with the production threshold
+    lowered to 0.0 (test-only override) must surface exactly one
+    ``💭 thinking...`` edit. Per-chain dedup: the second and
+    third reasoning events do NOT re-fire the indicator. The raw
+    lines are still written to ``job.log_path`` so the audit trail
+    is preserved."""
+    name = "behavior: _read_jsonl_stdout surfaces one 'thinking...' indicator per sustained-reasoning chain"
+    original_threshold = None
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        # Lower the threshold to 0.0 so the first reasoning event of
+        # the chain immediately satisfies it. This is the test
+        # override hook (re-binding a module global) and mirrors the
+        # frozen-Settings bypass used by _test_growing_gate_on_prose.
+        original_threshold = runner_mod.THINKING_THRESHOLD_SECONDS
+        runner_mod.THINKING_THRESHOLD_SECONDS = 0.0
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                # 0-second cooldown so the indicator isn't gated by
+                # telegram_progress_seconds (which defaults to 1.5s).
+                # Bypass the frozen __setattr__ guard.
+                object.__setattr__(settings, "telegram_progress_seconds", 0.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                lines = [
+                    json.dumps({"item": {"type": "reasoning", "text": "step 1"}}),
+                    json.dumps({"item": {"type": "reasoning", "text": "step 2"}}),
+                    json.dumps({"item": {"type": "reasoning", "text": "step 3"}}),
+                ]
+                encoded = [ln.encode("utf-8") + b"\n" for ln in lines]
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes]) -> None:
+                        self._chunks = list(chunks)
+
+                    async def readline(self) -> bytes:
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout(encoded))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                if progress_calls != [runner_mod.THINKING_INDICATOR]:
+                    return CheckResult(
+                        name, False,
+                        f"expected exactly 1 thinking-indicator call; got {progress_calls!r}",
+                    )
+                if runner_mod.THINKING_INDICATOR not in progress_calls[0]:
+                    return CheckResult(
+                        name, False,
+                        f"indicator text mismatch: got {progress_calls[0]!r}",
+                    )
+                logged = log_path.read_text()
+                if logged.count("reasoning") != 3:
+                    return CheckResult(
+                        name, False,
+                        f"raw log should contain 3 reasoning lines; got {logged.count('reasoning')}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"3 reasoning lines, 1 indicator call ({progress_calls[0]!r}); 2nd and 3rd dedup'd per chain",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+    finally:
+        if original_threshold is not None:
+            import runner as runner_mod  # noqa: PLC0415
+            runner_mod.THINKING_THRESHOLD_SECONDS = original_threshold
+
+
+def _test_thinking_indicator_clears_on_prose() -> CheckResult:
+    """A reasoning chain that gets interrupted by an agent_message
+    item must clear the chain (thinking_since=None, thinking_indicator_sent=False)
+    and the prose event replaces the indicator. The new chain starts
+    fresh so a second reasoning burst would be eligible to fire again."""
+    name = "behavior: _read_jsonl_stdout clears the thinking chain when a prose event arrives"
+    original_threshold = None
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        original_threshold = runner_mod.THINKING_THRESHOLD_SECONDS
+        runner_mod.THINKING_THRESHOLD_SECONDS = 0.0
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                object.__setattr__(settings, "telegram_progress_seconds", 0.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                lines = [
+                    json.dumps({"item": {"type": "reasoning", "text": "deep thought"}}),
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello"}}),
+                ]
+                encoded = [ln.encode("utf-8") + b"\n" for ln in lines]
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes]) -> None:
+                        self._chunks = list(chunks)
+
+                    async def readline(self) -> bytes:
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout(encoded))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                if progress_calls != [runner_mod.THINKING_INDICATOR, "Hello"]:
+                    return CheckResult(
+                        name, False,
+                        f"expected [thinking, 'Hello']; got {progress_calls!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"chain cleared on prose: indicator then prose '{progress_calls[1]}'; chain state reset for next burst",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+    finally:
+        if original_threshold is not None:
+            import runner as runner_mod  # noqa: PLC0415
+            runner_mod.THINKING_THRESHOLD_SECONDS = original_threshold
+
+
+def _test_thinking_indicator_clears_on_tool_call() -> CheckResult:
+    """A reasoning chain that gets interrupted by a function_call
+    item (which surfaces as '🔧 shell...' on this test's payload since
+    no name is set) must clear the chain. The tool indicator replaces
+    the thinking indicator, so the user sees the model is doing
+    something concrete instead of just thinking."""
+    name = "behavior: _read_jsonl_stdout clears the thinking chain when a tool-call event arrives"
+    original_threshold = None
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        original_threshold = runner_mod.THINKING_THRESHOLD_SECONDS
+        runner_mod.THINKING_THRESHOLD_SECONDS = 0.0
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                object.__setattr__(settings, "telegram_progress_seconds", 0.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                lines = [
+                    json.dumps({"item": {"type": "reasoning", "text": "planning"}}),
+                    json.dumps({"item": {"type": "function_call", "name": "shell"}}),
+                ]
+                encoded = [ln.encode("utf-8") + b"\n" for ln in lines]
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes]) -> None:
+                        self._chunks = list(chunks)
+
+                    async def readline(self) -> bytes:
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout(encoded))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                if len(progress_calls) != 2:
+                    return CheckResult(
+                        name, False,
+                        f"expected 2 progress calls; got {progress_calls!r}",
+                    )
+                if progress_calls[0] != runner_mod.THINKING_INDICATOR:
+                    return CheckResult(
+                        name, False,
+                        f"first call should be the thinking indicator; got {progress_calls[0]!r}",
+                    )
+                if not progress_calls[1].startswith("\U0001f527"):
+                    return CheckResult(
+                        name, False,
+                        f"second call should be the tool indicator (\U0001f527 shell...); got {progress_calls[1]!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"chain cleared on tool call: indicator then tool indicator '{progress_calls[1]}'",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+    finally:
+        if original_threshold is not None:
+            import runner as runner_mod  # noqa: PLC0415
+            runner_mod.THINKING_THRESHOLD_SECONDS = original_threshold
+
+
+def _test_thinking_indicator_skipped_for_short_reasoning() -> CheckResult:
+    """A reasoning chain shorter than ``THINKING_THRESHOLD_SECONDS``
+    (test raises the threshold to 1000s so the unit-test elapsed time
+    of microseconds can never satisfy it) must NOT fire the indicator.
+    The next prose event lands directly without a thinking call in
+    between. This pins the round-5 contract that short reasoning
+    bursts are not surfaced to the user."""
+    name = "behavior: _read_jsonl_stdout skips the thinking indicator when reasoning is shorter than the threshold"
+    original_threshold = None
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        original_threshold = runner_mod.THINKING_THRESHOLD_SECONDS
+        # Raise the threshold so the unit test's microsecond inter-
+        # event spacing can never satisfy it. This proves the
+        # threshold is honored, not just that the constant is wired
+        # in.
+        runner_mod.THINKING_THRESHOLD_SECONDS = 1000.0
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                object.__setattr__(settings, "telegram_progress_seconds", 0.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                lines = [
+                    json.dumps({"item": {"type": "reasoning", "text": "quick thought"}}),
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello"}}),
+                ]
+                encoded = [ln.encode("utf-8") + b"\n" for ln in lines]
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes]) -> None:
+                        self._chunks = list(chunks)
+
+                    async def readline(self) -> bytes:
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout(encoded))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                if progress_calls != ["Hello"]:
+                    return CheckResult(
+                        name, False,
+                        f"expected ['Hello'] (no thinking call); got {progress_calls!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"short reasoning chain: prose '{progress_calls[0]}' lands directly; no thinking indicator at 1000s threshold",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+    finally:
+        if original_threshold is not None:
+            import runner as runner_mod  # noqa: PLC0415
+            runner_mod.THINKING_THRESHOLD_SECONDS = original_threshold
+
+
 
 def main() -> int:
     tests = [
@@ -1302,6 +1632,11 @@ def main() -> int:
         _test_is_prose_event_exists,
         _test_is_prose_event_classification,
         _test_growing_gate_on_prose,
+        # Chat-feel round-5 contracts
+        _test_thinking_indicator_appears_after_threshold,
+        _test_thinking_indicator_clears_on_prose,
+        _test_thinking_indicator_clears_on_tool_call,
+        _test_thinking_indicator_skipped_for_short_reasoning,
     ]
     results = [t() for t in tests]
     print_results(results)

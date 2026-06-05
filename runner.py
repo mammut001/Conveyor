@@ -698,6 +698,20 @@ class CodexRunner:
         # tracker resets on complete so the next item can be shorter
         # (and start a new growing chain).
         last_prose_text: str | None = None
+        # Round-5 thinking indicator. Reasoning events stream silently
+        # via ``_event_summary`` returning "" (runner.py:1406), so the
+        # placeholder sits at the bot's initial "⏳ Got it, working on
+        # it..." for 5-30s during a hard think and the chat feels
+        # frozen. After ``THINKING_THRESHOLD_SECONDS`` of sustained
+        # reasoning we surface a short "💭 thinking..." so the user
+        # knows the model is alive. Any non-reasoning event (prose,
+        # tool indicator, ``item.completed``, lifecycle, malformed
+        # JSON) breaks the chain so the next reasoning burst starts
+        # a fresh threshold window. ``thinking_indicator_sent`` is
+        # per-chain: once we've emitted the indicator we don't keep
+        # editing the placeholder on every reasoning tick.
+        thinking_since: float | None = None
+        thinking_indicator_sent = False
         with job.log_path.open("ab") as log_file:
             while True:
                 line = await process.stdout.readline()
@@ -717,6 +731,26 @@ class CodexRunner:
                     job.last_event = event_text
                 self._capture_usage(job, text)
                 now = asyncio.get_running_loop().time()
+                # Chain management for the round-5 thinking indicator.
+                # ``is_reasoning_event`` gates whether we extend the
+                # chain (set ``thinking_since`` on the first reasoning
+                # event of a chain) or break it (clear ``thinking_since``
+                # + reset ``thinking_indicator_sent`` so a fresh chain
+                # is eligible to send again). Lifecycle events are
+                # non-reasoning so they break the chain too. A
+                # malformed JSON payload (``event_obj is None``) is
+                # treated as "unknown, bail out" and breaks the chain.
+                is_reasoning_event = (
+                    isinstance(event_obj, dict)
+                    and self._is_reasoning_event(event_obj)
+                )
+                if is_reasoning_event:
+                    if thinking_since is None:
+                        thinking_since = now
+                else:
+                    if thinking_since is not None:
+                        thinking_since = None
+                        thinking_indicator_sent = False
                 is_prose = isinstance(event_obj, dict) and self._is_prose_event(event_obj)
                 is_prose_complete = is_prose and event_obj.get("type") == "item.completed"
                 # Tool calls (is_prose False) bypass the gate: the
@@ -730,6 +764,27 @@ class CodexRunner:
                     or len(event_text) > len(last_prose_text)
                     or is_prose_complete
                 )
+                # Round-5 thinking indicator send: emit "💭 thinking..."
+                # once per chain after the threshold. Shares the
+                # existing ``telegram_progress_seconds`` cooldown so
+                # the next prose is not double-blasted. Sent BEFORE
+                # the prose ``if`` so the cooldown clock is shared:
+                # if this came after, the prose block would have
+                # already updated ``last_sent`` and the indicator
+                # would not fire. ``last_sent_text`` is set to the
+                # indicator so a hypothetical back-to-back duplicate
+                # is deduped; in practice a non-reasoning event resets
+                # the chain before the dedup is reached.
+                if (
+                    thinking_since is not None
+                    and not thinking_indicator_sent
+                    and now - thinking_since >= THINKING_THRESHOLD_SECONDS
+                    and now - last_sent >= self.settings.telegram_progress_seconds
+                ):
+                    last_sent = now
+                    last_sent_text = THINKING_INDICATOR
+                    thinking_indicator_sent = True
+                    await on_progress(truncate(THINKING_INDICATOR, 1200))
                 if (
                     event_text
                     and event_text != last_sent_text
@@ -1526,6 +1581,21 @@ def _extract_command_name(command: str) -> str | None:
     if not name or not name.strip():
         return None
     return name[:32]
+
+# ---- Thinking indicator (chat-feel round 5) -----------------------------
+# Reasoning events stream silently via _event_summary returning "", so the
+# placeholder sits at "⏳ Got it, working on it..." for 5-30s during a hard
+# think and the chat feels frozen. After THINKING_THRESHOLD_SECONDS of
+# sustained reasoning, surface a short indicator to the placeholder so the
+# user knows the model is alive. Shared cooldown with the existing
+# telegram_progress_seconds so the next prose is not double-blasted. Sent at
+# most once per chain; any non-reasoning event (prose, tool indicator,
+# item.completed, lifecycle, malformed JSON) ends the chain so the next
+# reasoning burst starts a fresh threshold window. Re-binding
+# THINKING_THRESHOLD_SECONDS at the module level is the test override hook
+# (mirrors the frozen-Settings bypass used by progress_smoke).
+THINKING_INDICATOR = "💭 thinking..."
+THINKING_THRESHOLD_SECONDS = 1.0
 MEMO_ENV_SKIP_DIRS = (".venv", "venv", "env", "node_modules", "__pycache__")
 
 
