@@ -7,16 +7,22 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/opt/codex-telegram-runner
-EnvironmentFile=/opt/codex-telegram-runner/.env
+# Install path. Defaults to /opt/codex-telegram-runner; override by
+# creating /etc/default/codex-telegram-runner and setting
+# CODEX_TELEGRAM_DIR there. The .venv/bin/python interpreter and the
+# .env secrets file are both expected under this directory.
+Environment=CODEX_TELEGRAM_DIR=/opt/codex-telegram-runner
+EnvironmentFile=-/etc/default/codex-telegram-runner
+WorkingDirectory=${CODEX_TELEGRAM_DIR}
+EnvironmentFile=${CODEX_TELEGRAM_DIR}/.env
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/opt/codex-telegram-runner/.venv/bin/python /opt/codex-telegram-runner/bot.py
+ExecStart=${CODEX_TELEGRAM_DIR}/.venv/bin/python ${CODEX_TELEGRAM_DIR}/bot.py
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/opt/codex-telegram-runner /srv /home/ubuntu
+ReadWritePaths=${CODEX_TELEGRAM_DIR} /srv /home/ubuntu
 
 [Install]
 WantedBy=multi-user.target
