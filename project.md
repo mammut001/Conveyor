@@ -5,8 +5,10 @@ quickstart; **CHANGELOG.md** is the change history and current surface at a
 glance; this file is the design + deploy + invariants + open-items brief a
 new session needs to be useful fast.
 
-Snapshot at HEAD `7d55769` (2026-06-04, America/Toronto). 17 commits on
-`main`. No git remote configured. Working tree clean. 47/47 smokes green.
+Snapshot at HEAD `a6e0b09` (2026-06-05, America/Toronto). 24 commits on
+`main`. No git remote configured. Working tree has uncommitted
+`scripts/compress_day_smoke.py` (clock-freeze for 3 compress-day tests,
+unrelated to chat-feel). 51/51 smokes green (progress_smoke 19 -> 23 cases).
 
 ---
 
@@ -386,7 +388,7 @@ the 13:25-14:22 silent window is recorded in CHANGELOG "Honest gaps".
 
 ---
 
-## 8. Smokes (47 cases, 7 scripts)
+## 8. Smokes (51 cases, 8 scripts)
 
 Local pre-deploy gate:
 
@@ -407,6 +409,10 @@ Makefile declares them:
 5. `classify_memo_smoke` — never-raise + return-string contract
 6. `memo_flow_smoke` — append_memo + reclassify_unfiled contract
 7. `memo_fastpath_smoke` — `_handle_memo_fast_path` routing contract
+8. `progress_smoke` — chat-feel contract (19 -> 23 cases after
+   `a6e0b09` round 2; 4 new cases pin `command_execution` shell
+   indicator, lifecycle suppression, no-event-type-prefix, and
+   consecutive-same-text dedup)
 
 `memo_smoke.py` is the full integration smoke and needs a populated `.env`
 — it is gated behind `make smoke-all` precisely so the env-free chain is

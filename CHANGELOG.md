@@ -1,6 +1,6 @@
 # CHANGELOG
 
-Trajectory snapshot at HEAD `490b288` (23 commits). README.md owns the
+Trajectory snapshot at HEAD `a6e0b09` (24 commits). README.md owns the
 file/command reference; this file is the change history and current state
 at a glance.
 
@@ -33,7 +33,7 @@ to raw JSON for some event types and held the cooldown hostage to no-op
 updates. Round 2 fixes three contract gaps in `_event_summary` /
 `_read_jsonl_stdout` and pins them with four new smoke cases.
 
-- `tbd` - chat-feel polish round 2
+- `a6e0b09` - chat-feel polish round 2
   - `runner.py` - `_tool_call_name` now also matches `command_execution`
     items and falls back to `"shell"` (real codex `command_execution`
     items do not carry a `name`; round 1 JSON-dumped a multi-kilobyte
@@ -178,9 +178,11 @@ This batch is governance, docs, and CI only; the runtime surface
   counter, the next hourly tick is what surfaces the recovery
 
 
-## Commit timeline (all 23, newest first)
+## Commit timeline (all 24, newest first)
 
 ```
+a6e0b09 runner: fix chat-feel for real-world codex events (command_execution, lifecycle, dedup)
+1d03c53 chat-feel: placeholder + edit-in-place + tool indicator + fallback latch
 490b288 open-source: scrub personal markers, add README architecture callout
 e899a32 open-source: add LICENSE, governance, and CI smoke gate
 2b59622 docs: relocate project from Desktop/Focus to Documents/GitHub
