@@ -432,6 +432,106 @@ def _test_placeholder_send_failure_falls_back() -> CheckResult:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
 
+# ---- chat-feel round-7: no-op edit skip -------------------------------
+
+def _test_no_op_edit_skipped() -> CheckResult:
+    """Two consecutive ``progress()`` calls with byte-identical text
+    must result in exactly one ``edit_message_text`` call and zero
+    ``send_message`` calls. Telegram's ``editMessageText`` 400s with
+    "Message is not modified" when the new content matches the
+    current content, and the existing ``except`` latch flips the rest
+    of the job into ``send_message`` mode (scattering one-off
+    messages through the chat). The round-7 ``last_progress_text``
+    guard short-circuits the second call before the wire."""
+    name = "behavior: progress() skips a no-op edit when the new text matches the last delivered text"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            with _bot_in_tmp_env(tmp_p) as bot:
+                app = _make_fake_app()
+                update = _make_fake_update(app, placeholder_id=99)
+                # Two identical texts. The first call should edit;
+                # the second should be a no-op and NOT touch the
+                # wire at all (no edit, no send).
+                fake_runner = _build_fake_runner(
+                    progress_texts=["SAME", "SAME"],
+                )
+                with mock.patch.object(bot, "runner", fake_runner):
+                    asyncio.run(bot._start_job(update, bot.JobMode.RUN, "test prompt"))
+                if app.edit_message_text.call_count != 1:
+                    return CheckResult(
+                        name, False,
+                        f"expected exactly 1 edit_message_text; got {app.edit_message_text.call_count}",
+                    )
+                if app.send_message.call_count != 0:
+                    return CheckResult(
+                        name, False,
+                        f"expected 0 send_message (no-op should not fall through); got {app.send_message.call_count}",
+                    )
+                return CheckResult(
+                    name, True,
+                    "2 identical progress() calls -> 1 edit, 0 send (2nd dedup'd by last_progress_text guard)",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_no_op_edit_skipped_after_truncation_collision() -> CheckResult:
+    """Two different ``progress()`` payloads that produce the same
+    wire text after ``truncate()`` must be deduped too. The wire
+    format (post-truncation) is what Telegram compares, so the
+    guard compares post-truncation text. This pins the contract
+    that long-prose truncation collisions (a real risk when a
+    long message lands at exactly the 3900-char cap twice) do
+    not surface as ``BadRequest: Message is not modified`` storms."""
+    name = "behavior: progress() skips a no-op edit when truncate() produces the same wire text"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            with _bot_in_tmp_env(tmp_p) as bot:
+                app = _make_fake_app()
+                update = _make_fake_update(app, placeholder_id=99)
+                # Two distinct inputs that the test's stubbed
+                # truncate() collapses to the same wire string.
+                fake_runner = _build_fake_runner(
+                    progress_texts=["alpha", "beta"],
+                )
+                with mock.patch.object(
+                    bot, "truncate",
+                    lambda s, *a, **k: "SAME_TRUNCATED",
+                ), mock.patch.object(bot, "runner", fake_runner):
+                    asyncio.run(bot._start_job(update, bot.JobMode.RUN, "test prompt"))
+                if app.edit_message_text.call_count != 1:
+                    return CheckResult(
+                        name, False,
+                        f"expected exactly 1 edit_message_text; got {app.edit_message_text.call_count}",
+                    )
+                if app.send_message.call_count != 0:
+                    return CheckResult(
+                        name, False,
+                        f"expected 0 send_message; got {app.send_message.call_count}",
+                    )
+                # The single edit must carry the post-truncation
+                # text, not the original input.
+                sent_text = app.edit_message_text.call_args.kwargs.get("text")
+                if sent_text != "SAME_TRUNCATED":
+                    return CheckResult(
+                        name, False,
+                        f"edit text mismatch: {sent_text!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    "2 distinct inputs collide on truncate() -> 1 edit ('SAME_TRUNCATED'), 0 send; "
+                    "wire-format dedup pins the contract",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
 # ---- main ----------------------------------------------------------------
 
 def _test_agent_message_text_exists() -> CheckResult:
@@ -1623,6 +1723,9 @@ def main() -> int:
         _test_edit_failure_falls_back_to_send,
         _test_edit_broken_latch,
         _test_placeholder_send_failure_falls_back,
+        # Chat-feel round-7 contracts
+        _test_no_op_edit_skipped,
+        _test_no_op_edit_skipped_after_truncation_collision,
         # Chat-feel round-2 contracts
         _test_command_execution_tool_indicator,
         _test_lifecycle_events_suppressed,

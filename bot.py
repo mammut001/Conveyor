@@ -564,18 +564,32 @@ async def _start_job(update: Update, mode: JobMode, prompt: str) -> None:
     # latching keeps it to "placeholder stuck on first edit" + a chain of
     # new messages, which is the lesser evil.
     edit_broken = False
+    # Round-7 no-op guard. Telegram's editMessageText 400s with
+    # "Message is not modified" when the new content is byte-identical
+    # to the current content. Even short runs can hit that on a tight
+    # stream of similar summaries (e.g. two consecutive tool indicators
+    # for the same call, or post-truncation collisions on long prose),
+    # and the existing except latch would flip the rest of this job
+    # into send_message mode and scatter one-off messages through the
+    # chat. Compare post-truncation (the wire format) and short-circuit
+    # when it matches the last successful delivery.
+    last_progress_text: str | None = None
 
     async def progress(message_text: str) -> None:
-        nonlocal edit_broken
+        nonlocal edit_broken, last_progress_text
         if chat_id is None:
+            return
+        outgoing = truncate(message_text)
+        if outgoing == last_progress_text:
             return
         if placeholder_id is not None and not edit_broken:
             try:
                 await app.edit_message_text(
                     chat_id=chat_id,
                     message_id=placeholder_id,
-                    text=truncate(message_text),
+                    text=outgoing,
                 )
+                last_progress_text = outgoing
                 return
             except Exception:
                 logger.exception("Failed to edit placeholder; latching to send mode")
@@ -583,9 +597,10 @@ async def _start_job(update: Update, mode: JobMode, prompt: str) -> None:
         try:
             await app.send_message(
                 chat_id=chat_id,
-                text=truncate(message_text),
+                text=outgoing,
                 disable_web_page_preview=True,
             )
+            last_progress_text = outgoing
         except Exception:
             logger.exception("Failed to send Telegram progress update")
 
