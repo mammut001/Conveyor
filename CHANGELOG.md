@@ -4,6 +4,27 @@ Trajectory snapshot at HEAD `490b288` (23 commits). README.md owns the
 file/command reference; this file is the change history and current state
 at a glance.
 
+## [unreleased] - chat-feel polish batch
+
+This batch is a chat-feel pass on the Telegram bot. The runtime surface
+moves: the bot now acknowledges in <1s, edits the placeholder in place
+as model prose streams in, surfaces tool calls as a short indicator,
+and latches to a send-message fallback if Telegram rate-limits edits.
+
+- `tbd` - chat-feel polish batch
+  - `bot.py` - sub-second placeholder ("⏳ Got it, working on it..."),
+    edit-in-place progress, `edit_broken` latch to stop retry storms
+    when Telegram rate-limits `edit_message_text`
+  - `bot.py` - typing-loop interval 4s → 1.5s so the chat-list pulse
+    stays alive within Telegram's 5s auto-typing expiry
+  - `runner.py` - `_tool_call_name` + `_is_user_visible_event` extension
+    so `function_call` items surface as a "🔧 name..." progress line
+    instead of leaving the placeholder frozen mid-tool
+  - `config.py` / `.env.example` - default `TELEGRAM_PROGRESS_SECONDS`
+    20s → 3s so the user sees prose growing in near-real-time
+  - `scripts/progress_smoke.py` - new Tier 1 contract smoke
+    (14 → 18 cases), wired into `make smoke`
+
 ## [unreleased] - open-source prep batch
 
 This batch is governance, docs, and CI only; the runtime surface
@@ -25,8 +46,11 @@ This batch is governance, docs, and CI only; the runtime surface
   without spawning codex)
 - `/memory [category]` (read), `/apply <job_id>` (merge a /fix result back)
 - `/cancel`, `/status`, `/help`
-- Regex rejection + 1200-char message truncation; typing indicator while
-  a job runs
+- Regex rejection + 1200-char message truncation
+- Chat-feel: sub-second "⏳ Got it, working on it..." placeholder,
+  edit-in-place progress as model prose streams in, "🔧 tool..." indicator
+  for `function_call` items, typing pulse every 1.5s for the job's
+  lifetime; latches to send-message if Telegram rate-limits edits
 
 ### Codex CLI bridge (runner.py)
 - `CodexRunner.start(mode, prompt, on_progress)` is the single spawn point

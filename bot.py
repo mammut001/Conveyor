@@ -526,7 +526,7 @@ async def _typing_loop(app, chat_id: int) -> None:
     try:
         while True:
             await app.send_chat_action(chat_id=chat_id, action="typing")
-            await asyncio.sleep(4)
+            await asyncio.sleep(1.5)  # chat feel: keep typing pulse alive within Telegram 5s expiry
     except asyncio.CancelledError:
         pass
     except Exception:
@@ -536,20 +536,54 @@ async def _typing_loop(app, chat_id: int) -> None:
 async def _start_job(update: Update, mode: JobMode, prompt: str) -> None:
     chat_id = update.effective_chat.id if update.effective_chat else None
     app = update.get_bot()
+    message = update.effective_message
+    placeholder_id: int | None = None
 
     typing_task: asyncio.Task | None = None
-    if chat_id is not None:
+    if chat_id is not None and message is not None:
         typing_task = asyncio.create_task(_typing_loop(app, chat_id))
+        # Let the typing loop run for the lifetime of the job. The
+        # placeholder edits the message in place, but Telegram's chat-list
+        # typing pulse needs to keep firing in the gaps between codex
+        # events — otherwise a long think looks frozen. Cancellation
+        # happens in the `finally` block below when the job ends.
+        try:
+            placeholder_msg = await message.reply_text(
+                "⏳ Got it, working on it...",
+                disable_web_page_preview=True,
+            )
+            placeholder_id = getattr(placeholder_msg, "message_id", None)
+        except Exception:
+            logger.exception("Failed to send placeholder")
+            placeholder_id = None
 
-    async def progress(message: str) -> None:
-        if typing_task is not None and not typing_task.done():
-            typing_task.cancel()
+    # Latch: once an edit_message_text call raises (typically Telegram's
+    # 20 edits/min/message limit), stop trying to edit the same placeholder
+    # for the rest of this job. Falling back to send_message for every
+    # subsequent update would scatter one-off messages through the chat;
+    # latching keeps it to "placeholder stuck on first edit" + a chain of
+    # new messages, which is the lesser evil.
+    edit_broken = False
+
+    async def progress(message_text: str) -> None:
+        nonlocal edit_broken
         if chat_id is None:
             return
+        if placeholder_id is not None and not edit_broken:
+            try:
+                await app.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=placeholder_id,
+                    text=truncate(message_text),
+                )
+                return
+            except Exception:
+                logger.exception("Failed to edit placeholder; latching to send mode")
+                edit_broken = True
         try:
             await app.send_message(
                 chat_id=chat_id,
-                text=truncate(message),
+                text=truncate(message_text),
                 disable_web_page_preview=True,
             )
         except Exception:
@@ -560,7 +594,14 @@ async def _start_job(update: Update, mode: JobMode, prompt: str) -> None:
     except Exception as exc:
         if typing_task is not None and not typing_task.done():
             typing_task.cancel()
-        await _reply(update, f"现在不能开始：{truncate(str(exc), 1200)}")
+        if message is not None:
+            try:
+                await message.reply_text(
+                    f"现在不能开始：{truncate(str(exc), 1200)}",
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                logger.exception("Failed to send error reply")
     finally:
         if typing_task is not None and not typing_task.done():
             typing_task.cancel()

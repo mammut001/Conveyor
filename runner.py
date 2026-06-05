@@ -505,9 +505,16 @@ class CodexRunner:
         text = f"{job.error}\n{job.last_event}".lower()
         return "429" in text or "too many requests" in text or "rate limit" in text or "high demand" in text
 
-    def _should_send_event_progress(self, event_text: str) -> bool:
-        # Chat-bot feel: never stream Codex internals to the user.
-        return False
+    def _should_send_event_progress(
+        self, event_text: str, event_obj: dict | None = None,
+    ) -> bool:
+        """Forward codex events to the user's progress callback when they
+        have user-readable text. Conservative: skip raw tool-call JSON,
+        lifecycle events, and anything that isn't a top-level text-like
+        field. The final answer reaches the user via --output-last-message
+        regardless, so this stream is decorative.
+        """
+        return self._is_user_visible_event(event_obj)
 
     def _is_reasoning_event(self, event: dict) -> bool:
         event_type = str(event.get("type") or event.get("event") or "").lower()
@@ -521,6 +528,77 @@ class CodexRunner:
         if isinstance(item, str) and "reasoning" in item.lower():
             return True
         return False
+
+    def _is_user_visible_event(self, event_obj: dict | None) -> bool:
+        """True when the event has a top-level text-like field that would
+        be worth showing in chat. Returns False for non-dict payloads,
+        reasoning events, and any event whose only "text" lives in a
+        raw tool-call/item/data block (which is JSON, not chat text).
+        """
+        if not isinstance(event_obj, dict):
+            return False
+        if self._is_reasoning_event(event_obj):
+            return False
+        for key in ("message", "summary", "text", "delta"):
+            value = event_obj.get(key)
+            if isinstance(value, str) and value.strip():
+                return True
+        # Codex nests the model's prose under item.text for agent_message
+        # items. Surface it so the user sees the answer stream in place
+        # instead of waiting for the final --output-last-message dump.
+        if self._agent_message_text(event_obj) is not None:
+            return True
+        # Tool-call indicator: function_call items show up empty in the
+        # top-level text fields but the user wants to see the model is
+        # actually doing something during a long tool invocation
+        # (otherwise the placeholder sits still for 5-30s and looks
+        # frozen). The summary line is "🔧 name...".
+        if self._tool_call_name(event_obj) is not None:
+            return True
+        return False
+
+    def _tool_call_name(self, event_obj: dict | None) -> str | None:
+        """Return the tool name for a function_call / tool_call item, or
+        None when this event isn't a tool invocation. Used by
+        ``_is_user_visible_event`` and ``_event_summary`` to surface a
+        short "🔧 name..." progress line so the user knows the model is
+        doing work between prose events.
+        """
+        if not isinstance(event_obj, dict):
+            return None
+        item = event_obj.get("item")
+        if not isinstance(item, dict):
+            return None
+        item_type = str(item.get("type") or "").lower()
+        if not any(tag in item_type for tag in ("function_call", "tool_call")):
+            return None
+        name = item.get("name") or item.get("tool") or item.get("function")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+        return None
+
+    def _agent_message_text(self, event_obj: dict | None) -> str | None:
+        """Extract the streaming prose from a codex item envelope.
+
+        Codex's --json stream puts the model's reply under
+        ``item.text`` for ``type == "agent_message"`` items (item.updated
+        during streaming, item.completed at the end). Top-level text-like
+        fields are surfaced by ``_is_user_visible_event``; this helper
+        is for the nested case so the user actually sees the answer text
+        grow in place instead of waiting for ``--output-last-message``.
+        """
+        if not isinstance(event_obj, dict):
+            return None
+        item = event_obj.get("item")
+        if not isinstance(item, dict):
+            return None
+        item_type = str(item.get("type") or "").lower()
+        if "agent_message" not in item_type:
+            return None
+        item_text = item.get("text")
+        if isinstance(item_text, str) and item_text.strip():
+            return item_text.strip()
+        return None
 
     def _completed_message(self, job: Job) -> str:
         summary = truncate(job.summary or job.last_event, 3000)
@@ -562,7 +640,7 @@ class CodexRunner:
                     job.last_event = event_text
                 self._capture_usage(job, text)
                 now = asyncio.get_running_loop().time()
-                if event_text and self._should_send_event_progress(event_text) and now - last_sent >= self.settings.telegram_progress_seconds:
+                if event_text and self._should_send_event_progress(event_text, event_obj) and now - last_sent >= self.settings.telegram_progress_seconds:
                     last_sent = now
                     await on_progress(truncate(event_text, 1200))
 
@@ -1234,6 +1312,16 @@ class CodexRunner:
             value = event.get(key)
             if isinstance(value, str) and value.strip():
                 return f"{event_type}: {value.strip()}"
+
+        agent_text = self._agent_message_text(event)
+        if agent_text is not None:
+            return f"{event_type}: {agent_text}"
+
+        # Tool-call indicator: short, so the next prose edit can replace
+        # it without the user feeling like they lost information.
+        tool_name = self._tool_call_name(event)
+        if tool_name is not None:
+            return f"{event_type}: 🔧 {tool_name}..."
 
         if "item" in event:
             return f"{event_type}: {safe_json(event['item'], 1000)}"

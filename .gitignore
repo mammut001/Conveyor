@@ -24,3 +24,17 @@ JOURNAL/
 state/
 MEMORY.md
 MEMORY.md.archived-*
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Python tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/

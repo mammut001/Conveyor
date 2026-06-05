@@ -22,18 +22,36 @@ class FakeMessage:
     text: str = ""
     replies: list[str] | None = None
 
-    async def reply_text(self, text: str, **_: Any) -> None:
+    async def reply_text(self, text: str, **_: Any) -> SimpleNamespace:
         if self.replies is None:
             self.replies = []
         self.replies.append(text)
+        return SimpleNamespace(message_id=1)
 
 
 @dataclass
 class FakeBot:
-    sent: list[str]
+    # Each entry: (chat_id, text, message_id) in send order. message_id
+    # matches the SimpleNamespace returned to the caller, so test code can
+    # assert the placeholder id and then check the edits addressed to it.
+    sent: list[tuple[int, str, int]]
+    # Each entry: (chat_id, message_id, text) in edit order.
+    edits: list[tuple[int, int, str]]
+    # Each entry: (chat_id, action) - e.g. "typing". No-op for the bot.
+    chat_actions: list[tuple[int, str]]
+    _next_message_id: int = 1
 
-    async def send_message(self, chat_id: int, text: str, **_: Any) -> None:
-        self.sent.append(f"{chat_id}:{text}")
+    async def send_message(self, chat_id: int, text: str, **_: Any) -> SimpleNamespace:
+        mid = self._next_message_id
+        self._next_message_id += 1
+        self.sent.append((chat_id, text, mid))
+        return SimpleNamespace(message_id=mid)
+
+    async def edit_message_text(self, chat_id: int, message_id: int, text: str, **_: Any) -> None:
+        self.edits.append((chat_id, message_id, text))
+
+    async def send_chat_action(self, chat_id: int, action: str, **_: Any) -> None:
+        self.chat_actions.append((chat_id, action))
 
 
 @dataclass
@@ -46,7 +64,7 @@ class FakeUpdate:
         self.effective_user = SimpleNamespace(id=self.user_id, username=self.username)
         self.effective_chat = SimpleNamespace(id=4242)
         self.effective_message = FakeMessage(self.text, [])
-        self._bot = FakeBot([])
+        self._bot = FakeBot([], [], [])
 
     def get_bot(self) -> FakeBot:
         return self._bot
