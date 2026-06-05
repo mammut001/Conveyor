@@ -1,8 +1,21 @@
 # CHANGELOG
 
-Trajectory snapshot at HEAD `408f3b2` (15 commits). README.md owns the
+Trajectory snapshot at HEAD `490b288` (23 commits). README.md owns the
 file/command reference; this file is the change history and current state
 at a glance.
+
+## [unreleased] - open-source prep batch
+
+This batch is governance, docs, and CI only; the runtime surface
+("Current surface" below) is unchanged at HEAD `490b288`.
+
+- `e899a32` - add `LICENSE` (MIT), `CONTRIBUTING.md`, `SECURITY.md`,
+  `CODE_OF_CONDUCT.md`, and a GitHub Actions smoke gate
+  (`.github/workflows/smoke.yml`)
+- `490b288` - scrub VPS IP and local paths from the repo, add a
+  "How it works" callout to `README.md`
+- `2b59622` - relocate project root from `~/Desktop/Focus/` to
+  `~/Documents/GitHub/telegram_codex_runner/`
 
 ## Current surface
 
@@ -108,9 +121,13 @@ at a glance.
   counter, the next hourly tick is what surfaces the recovery
 
 
-## Commit timeline (all 19, newest first)
+## Commit timeline (all 23, newest first)
 
 ```
+490b288 open-source: scrub personal markers, add README architecture callout
+e899a32 open-source: add LICENSE, governance, and CI smoke gate
+2b59622 docs: relocate project from Desktop/Focus to Documents/GitHub
+8f49c79 docs: fix CHANGELOG timeline SHA for 5b9a170
 5b9a170 runner + smoke: allow web tools (search/fetch) in /run mode by default
 7193602 docs: fix worktree root path in §3.1 and §6.2
 7d55769 docs: note 13:25 maintain-failure alerting gap in Honest gaps
