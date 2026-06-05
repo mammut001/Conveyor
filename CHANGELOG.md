@@ -1,8 +1,68 @@
 # CHANGELOG
 
-Trajectory snapshot at HEAD `c70de25` (32 commits). README.md owns the
+Trajectory snapshot at HEAD `6f1d9ea` (33 commits). README.md owns the
 file/command reference; this file is the change history and current state
 at a glance.
+
+## [unreleased] - chat-feel polish round 5
+
+Round 5 plugs the last chat-feel gap that round 4 left visible: when
+the model enters a long reasoning burst (math, multi-step planning,
+debugging chains), reasoning events stream silently via
+`_event_summary` returning "" (runner.py:1406), so the placeholder
+sits at the bot's initial "⏳ Got it, working on it..." for 5-30s and
+the chat looks frozen. Round 5 surfaces a short "💭 thinking..."
+indicator after 1.0s of sustained reasoning so the user knows the
+model is alive. Any non-reasoning event (prose, tool indicator,
+`item.completed`, lifecycle, malformed JSON) breaks the chain so the
+next reasoning burst starts a fresh threshold window. The indicator
+is sent at most once per chain and shares the existing
+`telegram_progress_seconds` cooldown so the next prose is not
+double-blasted. The contract is added in `_read_jsonl_stdout` after
+the existing 5-gate chain; the next prose is still gated by the
+round-4 per-item growing check.
+
+- `6f1d9ea` - runner: surface sustained-reasoning thinking indicator after 1s threshold
+  - `runner.py` - new module-level constants `THINKING_INDICATOR`
+    (`"💭 thinking..."`) and `THINKING_THRESHOLD_SECONDS` (1.0).
+    Re-binding `THINKING_THRESHOLD_SECONDS` at the module level is
+    the test override hook (mirrors the frozen-Settings bypass
+    used by progress_smoke)
+  - `runner.py` - `_read_jsonl_stdout` gains two new per-stream
+    state vars: `thinking_since: float | None` (start time of the
+    current reasoning chain) and `thinking_indicator_sent: bool`
+    (whether the indicator has already fired for this chain). After
+    the existing `now = asyncio.get_running_loop().time()` line,
+    chain management runs first: a reasoning event extends the
+    chain (sets `thinking_since` on first event of the chain); any
+    non-reasoning event breaks the chain (clears `thinking_since`
+    AND resets `thinking_indicator_sent` so the next chain is
+    eligible to fire again). A malformed JSON payload
+    (`event_obj is None`) is treated as "unknown, bail out" and
+    breaks the chain too
+  - `runner.py` - `_read_jsonl_stdout` adds a 6th gate BEFORE the
+    existing prose `if` block. It evaluates True when
+    `thinking_since` is not None, `thinking_indicator_sent` is
+    False, `now - thinking_since >= THINKING_THRESHOLD_SECONDS`,
+    and the existing `telegram_progress_seconds` cooldown is
+    satisfied. The send block updates `last_sent`,
+    `last_sent_text = THINKING_INDICATOR`, sets
+    `thinking_indicator_sent = True`, and calls
+    `on_progress(truncate(THINKING_INDICATOR, 1200))`. The block
+    comes BEFORE the prose `if` so the cooldown clock is shared
+    correctly: if it came after, the prose block would have already
+    updated `last_sent` and the indicator would not fire
+  - `runner.py` - the raw reasoning line is still written to
+    `job.log_path`; only the user-facing chat edit is gated. The
+    `job.last_event` field is also NOT updated for reasoning
+    events (the existing `if event_text and not ...reasoning...`
+    guard already excluded reasoning)
+  - `scripts/progress_smoke.py` - 4 new contract cases
+    (`_test_thinking_indicator_appears_after_threshold`,
+    `_test_thinking_indicator_clears_on_prose`,
+    `_test_thinking_indicator_clears_on_tool_call`,
+    `_test_thinking_indicator_skipped_for_short_reasoning`);
+    26 -> 30 cases
 
 ## [unreleased] - chat-feel polish round 4
 
@@ -167,8 +227,11 @@ This batch is governance, docs, and CI only; the runtime surface
   for `function_call` items (and `command_execution` items surface as
   `🔧 <binary>...` where the binary name is extracted from the command
   string, with a `🔧 shell...` fallback for empty / unparseable commands),
-  typing pulse every 1.5s for the job's lifetime; latches to send-message
-  if Telegram rate-limits edits
+  "💭 thinking..." indicator after >1.0s of sustained reasoning so a
+  hard think (math, multi-step planning, debugging) does not look
+  frozen (round 5; per-chain, fires at most once, breaks on any
+  non-reasoning event), typing pulse every 1.5s for the job's
+  lifetime; latches to send-message if Telegram rate-limits edits
 
 ### Codex CLI bridge (runner.py)
 - `CodexRunner.start(mode, prompt, on_progress)` is the single spawn point
@@ -230,7 +293,7 @@ This batch is governance, docs, and CI only; the runtime surface
 - Maintain is a separate unit from the bot - a maintain failure does not
   take the bot down
 
-### Smokes (8 scripts, 73 cases)
+### Smokes (8 scripts, 77 cases)
 - `make smoke` is the local pre-deploy gate
 - VPS deploy gate is per-script `python scripts/*_smoke.py`; the Makefile
   is intentionally NOT in `scripts/deploy.sh`'s rsync list
@@ -263,9 +326,10 @@ This batch is governance, docs, and CI only; the runtime surface
   counter, the next hourly tick is what surfaces the recovery
 
 
-## Commit timeline (all 31, newest first)
+## Commit timeline (all 33, newest first)
 
 ```
+6f1d9ea runner: surface sustained-reasoning thinking indicator after 1s threshold
 c70de25 runner: gate prose updates by length per item to avoid chat re-write
 04fbced compress-day-smoke: freeze clock for day-boundary branches
 0d76a15 runner: extract actual binary name from command_execution indicators
@@ -297,5 +361,5 @@ e786a65 runner: plumb RUNNER_HOME into codex sandbox via --add-dir and CODEX_RUN
 2df91f7 cleanup JobMode.MEMO; reuse classify_memo in compress_day.py for unfiled reclass
 ```
 
-VPS `main` is at the same HEAD; bot unit `active`; full chain 73/73
+VPS `main` is at the same HEAD; bot unit `active`; full chain 77/77
 green locally across 8 env-free smoke scripts.
