@@ -5,14 +5,15 @@ quickstart; **CHANGELOG.md** is the change history and current surface at a
 glance; this file is the design + deploy + invariants + open-items brief a
 new session needs to be useful fast.
 
-Snapshot at HEAD `04fbced` (2026-06-05, America/Toronto). 31 commits on
-`main`. No git remote configured. Working tree is clean. 70/70 smokes
-green (progress_smoke 19 -> 23 cases after chat-feel round 2; the binary-
-name extraction in round 3 is the same 23 cases, but two were expanded to
-pin the new contract). Round 2's `command_execution` indicator said
-`"shell"`; round 3 now extracts the actual binary name and surfaces
+Snapshot at HEAD `c70de25` (2026-06-05, America/Toronto). 32 commits on
+`main`. No git remote configured. Working tree is clean. 73/73 smokes
+green (progress_smoke 19 -> 23 cases after chat-feel round 2; 23 -> 26
+cases after chat-feel round 4). Round 2's `command_execution` indicator
+said `"shell"`; round 3 extracts the actual binary name and surfaces
 `🔧 curl...` / `🔧 python...` etc. (falling back to `🔧 shell...` for
-empty / unparseable commands).
+empty / unparseable commands); round 4 adds a per-item growing gate on
+prose events so a mid-stream paragraph rewrite no longer re-edits the
+placeholder to a shorter string.
 
 ---
 
@@ -392,7 +393,7 @@ the 13:25-14:22 silent window is recorded in CHANGELOG "Honest gaps".
 
 ---
 
-## 8. Smokes (70 cases, 8 scripts)
+## 8. Smokes (73 cases, 8 scripts)
 
 Local pre-deploy gate:
 
@@ -414,13 +415,16 @@ Makefile declares them:
 6. `memo_flow_smoke` — append_memo + reclassify_unfiled contract
 7. `memo_fastpath_smoke` — `_handle_memo_fast_path` routing contract
 8. `progress_smoke` — chat-feel contract (19 -> 23 cases after
-   `a6e0b09` round 2; 4 new cases pin `command_execution` shell
-   indicator, lifecycle suppression, no-event-type-prefix, and
-   consecutive-same-text dedup). Round 3 (`0d76a15`) updates two of
-   those cases to pin the binary-name extraction
-   (`🔧 curl...` / `🔧 true...` instead of `🔧 shell...`); the
-   `🔧 shell` fallback for empty / unparseable commands is asserted
-   in the same case as a regression guard
+   `a6e0b09` round 2; 23 -> 26 cases after `c70de25` round 4;
+   4 round-2 cases pin `command_execution` shell indicator,
+   lifecycle suppression, no-event-type-prefix, and consecutive-
+   same-text dedup). Round 3 (`0d76a15`) updates two of those cases
+   to pin the binary-name extraction (`🔧 curl...` / `🔧 true...`
+   instead of `🔧 shell...`); the `🔧 shell` fallback for empty /
+   unparseable commands is asserted in the same case as a regression
+   guard. Round 4 (`c70de25`) adds a per-item growing gate on prose
+   events (1 AST + 2 behavior cases pinning `_is_prose_event`
+   classification and the mid-stream shrink suppression)
 
 `memo_smoke.py` is the full integration smoke and needs a populated `.env`
 — it is gated behind `make smoke-all` precisely so the env-free chain is
@@ -690,4 +694,4 @@ ssh $REMOTE \
 
 ---
 
-*Last updated: 2026-06-04, America/Toronto. Snapshot at HEAD `7d55769`.*
+*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `c70de25`.*

@@ -1,8 +1,42 @@
 # CHANGELOG
 
-Trajectory snapshot at HEAD `04fbced` (31 commits). README.md owns the
+Trajectory snapshot at HEAD `c70de25` (32 commits). README.md owns the
 file/command reference; this file is the change history and current state
 at a glance.
+
+## [unreleased] - chat-feel polish round 4
+
+Round 4 plugs the last prose-streaming chat-feel gap that round 2 left
+visible. The model can briefly re-write a paragraph mid-stream, which
+made the placeholder visibly shrink to a shorter string (the chat
+looked like the model was "going backwards"). Round 4 adds a per-item
+"growing" gate: the placeholder only forwards edits that strictly
+extend the last sent prose, `item.completed` is exempt so the final
+text always wins, and the tracker resets on complete so the next
+item can start a new growing chain. Tool-call indicators (🔧 curl...)
+bypass the gate on purpose - the user wants the current state, not a
+growing sequence. Lifecycle events were already filtered to "" by
+`_event_summary` so they short-circuit before the new gate; the gate
+is downstream of the existing 4-gate chain and adds a 5th.
+
+- `c70de25` - runner: gate prose updates by length per item to avoid chat re-write
+  - `runner.py` - new `_is_prose_event` helper. Strict subset of
+    `_is_user_visible_event`: agent_message items and top-level
+    text-like fields are prose; lifecycle, reasoning, function_call,
+    and command_execution are NOT prose (the growing gate only
+    applies to user-readable chat text)
+  - `runner.py` - `_read_jsonl_stdout` adds a 5th gate in the
+    existing chain. `last_prose_text` is updated only on prose sends
+    (not tool indicators). The gate evaluates to True when the new
+    event is non-prose, or is the first prose after a None tracker,
+    or strictly extends the last sent prose, or is `item.completed`
+    (which resets the tracker to None so the next item starts fresh).
+    Mid-stream shrinks are now suppressed; the raw line is still
+    written to `job.log_path`
+  - `scripts/progress_smoke.py` - 3 new contract cases
+    (`_test_is_prose_event_exists`,
+    `_test_is_prose_event_classification`,
+    `_test_growing_gate_on_prose`); 23 -> 26 cases
 
 ## [unreleased] - chat-feel polish batch
 
@@ -196,7 +230,7 @@ This batch is governance, docs, and CI only; the runtime surface
 - Maintain is a separate unit from the bot - a maintain failure does not
   take the bot down
 
-### Smokes (8 scripts, 70 cases)
+### Smokes (8 scripts, 73 cases)
 - `make smoke` is the local pre-deploy gate
 - VPS deploy gate is per-script `python scripts/*_smoke.py`; the Makefile
   is intentionally NOT in `scripts/deploy.sh`'s rsync list
@@ -232,6 +266,7 @@ This batch is governance, docs, and CI only; the runtime surface
 ## Commit timeline (all 31, newest first)
 
 ```
+c70de25 runner: gate prose updates by length per item to avoid chat re-write
 04fbced compress-day-smoke: freeze clock for day-boundary branches
 0d76a15 runner: extract actual binary name from command_execution indicators
 db114df docs: refresh snapshot, timeline, and smoke count after chat-feel round 2
@@ -262,5 +297,5 @@ e786a65 runner: plumb RUNNER_HOME into codex sandbox via --add-dir and CODEX_RUN
 2df91f7 cleanup JobMode.MEMO; reuse classify_memo in compress_day.py for unfiled reclass
 ```
 
-VPS `main` is at the same HEAD; bot unit `active`; full chain 70/70
+VPS `main` is at the same HEAD; bot unit `active`; full chain 73/73
 green locally across 8 env-free smoke scripts.
