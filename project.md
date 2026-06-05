@@ -31,9 +31,10 @@ bot down.
 
 ## 2. Repository layout
 
-Lives at `telegram_codex_runner/` — a nested git repo inside the larger
-`/Users/example/Desktop/Focus/` worktree (which is an unrelated Swift app and
-**must not be touched**).
+Lives at `/Users/example/Documents/GitHub/telegram_codex_runner/`. As of
+2026-06-05 the repo is no longer nested inside `/Users/example/Desktop/Focus/`
+(that path is an unrelated Swift app and **must not be touched**);
+previously the project sat inside it as a nested git repo.
 
 ```text
 telegram_codex_runner/
