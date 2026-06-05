@@ -544,19 +544,21 @@ def _test_event_summary_streams_prose() -> CheckResult:
                         f"tool item should surface as 🔧 indicator; got {tool_summary!r}",
                     )
                 # And a truly opaque item (no agent_message text, no
-                # function_call name) still gets JSON-dumped.
+                # function_call name) returns "" instead of dumping JSON.
+                # The raw line still lives in job.log_path for debugging;
+                # the chat surface stays clean.
                 opaque_line = json.dumps(
                     {"type": "item.updated", "item": {"type": "custom_thing", "payload": 1}}
                 )
                 opaque_summary = r._event_summary(opaque_line)
-                if "custom_thing" not in opaque_summary:
+                if opaque_summary != "":
                     return CheckResult(
                         name, False,
-                        f"opaque item should be JSON-dumped; got {opaque_summary!r}",
+                        f"opaque item should return ''; got {opaque_summary!r}",
                     )
                 return CheckResult(
                     name, True,
-                    "agent_message -> prose; function_call -> 🔧 indicator; opaque -> JSON",
+                    "agent_message -> prose; function_call -> 🔧 indicator; opaque -> ''",
                 )
     except Exception as exc:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
@@ -740,7 +742,7 @@ def _test_tool_call_event_is_user_visible() -> CheckResult:
 
 
 def _test_event_summary_tool_indicator() -> CheckResult:
-    name = 'behavior: _event_summary renders function_call as "🔧 name..." progress line'
+    name = 'behavior: _event_summary renders function_call as "🔧 name..." (no event_type prefix)'
     try:
         import runner as runner_mod  # noqa: PLC0415
         with tempfile.TemporaryDirectory() as tmp:
@@ -765,10 +767,10 @@ def _test_event_summary_tool_indicator() -> CheckResult:
                 summary = r._event_summary(line)
                 if "🔧 shell" not in summary:
                     return CheckResult(name, False, f"missing 🔧 shell in {summary!r}")
-                if not summary.startswith("item.updated:"):
+                if summary.startswith("item.updated:") or summary.startswith("item.completed:"):
                     return CheckResult(
                         name, False,
-                        f"summary should be prefixed with the event type; got {summary!r}",
+                        f"summary should NOT carry an event_type prefix; got {summary!r}",
                     )
                 return CheckResult(
                     name, True,
@@ -828,6 +830,248 @@ def _test_edit_broken_latch() -> CheckResult:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
 
+def _test_command_execution_tool_indicator() -> CheckResult:
+    name = 'behavior: _event_summary renders command_execution as "🔧 shell..." (no name fallback)'
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                r = runner_mod.CodexRunner(settings)
+                # Real codex command_execution items do not carry a
+                # "name" field; the user previously saw a multi-kilobyte
+                # curl command JSON-dumped into the chat. Now the
+                # summary collapses to a short "🔧 shell..." indicator.
+                line = json.dumps(
+                    {"type": "item.completed", "item": {"type": "command_execution", "command": "curl -sS https://example.com/ -o /dev/null -w '%{http_code}\\n'"}}
+                )
+                summary = r._event_summary(line)
+                if "🔧 shell" not in summary:
+                    return CheckResult(
+                        name, False,
+                        f"command_execution should surface as 🔧 shell...; got {summary!r}",
+                    )
+                if "curl" in summary:
+                    return CheckResult(
+                        name, False,
+                        f"command body leaked into summary; got {summary!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"command_execution -> {summary!r}",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_lifecycle_events_suppressed() -> CheckResult:
+    name = 'behavior: _event_summary returns "" for thread.started / turn.completed (usage captured separately)'
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                r = runner_mod.CodexRunner(settings)
+                cases = [
+                    {"type": "thread.started", "thread_id": "abc-123"},
+                    {"type": "thread.completed", "thread_id": "abc-123"},
+                    {"type": "turn.started"},
+                    {
+                        "type": "turn.completed",
+                        "usage": {"input_tokens": 1234, "output_tokens": 56},
+                    },
+                    {"type": "turn.failed", "error": {"message": "boom"}},
+                ]
+                results = []
+                for event in cases:
+                    line = json.dumps(event)
+                    actual = r._event_summary(line)
+                    results.append((event["type"], actual))
+                non_empty = [c for c in results if c[1] != ""]
+                if non_empty:
+                    return CheckResult(
+                        name, False,
+                        "lifecycle events should all return ""; non-empty: " + ", ".join(
+                            f"{c[0]} -> {c[1]!r}" for c in non_empty
+                        ),
+                    )
+                return CheckResult(
+                    name, True,
+                    f"{len(cases)} lifecycle events all return '' (usage captured via _capture_usage)",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_no_event_type_prefix() -> CheckResult:
+    name = "behavior: _event_summary does NOT prefix summaries with event_type (chat surface, not log)"
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                r = runner_mod.CodexRunner(settings)
+                bad_prefixes = ("item.updated:", "item.completed:", "thread.started:", "turn.completed:")
+                cases = [
+                    # Prose path
+                    ({"type": "item.updated", "item": {"type": "agent_message", "text": "real answer"}}, "real answer"),
+                    ({"type": "item.completed", "item": {"type": "agent_message", "text": "tail chunk"}}, "tail chunk"),
+                    # Top-level text-like field on a non-lifecycle event
+                    ({"type": "item.updated", "summary": "tight recap"}, "tight recap"),
+                    ({"type": "item.updated", "message": "early note"}, "early note"),
+                    # Tool indicator
+                    ({"type": "item.updated", "item": {"type": "function_call", "name": "shell"}}, "🔧 shell"),
+                ]
+                offenders = []
+                for event_obj, expected_text in cases:
+                    line = json.dumps(event_obj)
+                    actual = r._event_summary(line)
+                    if not actual:
+                        offenders.append((event_obj, f"empty summary; expected {expected_text!r}"))
+                        continue
+                    if any(actual.startswith(p) for p in bad_prefixes):
+                        offenders.append((event_obj, f"starts with event_type prefix: {actual!r}"))
+                        continue
+                    if expected_text not in actual:
+                        offenders.append((event_obj, f"expected {expected_text!r} substring; got {actual!r}"))
+                if offenders:
+                    return CheckResult(
+                        name, False,
+                        f"{len(offenders)} offender(s): " + ", ".join(
+                            f"in={c[0]!r} -> {c[1]}" for c in offenders[:3]
+                        ),
+                    )
+                return CheckResult(
+                    name, True,
+                    f"{len(cases)} cases, none prefixed with event_type",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_consecutive_dedup() -> CheckResult:
+    """Feed two identical command_execution lines to _read_jsonl_stdout; the
+    second must NOT trigger an on_progress call. The cooldown check stays,
+    but is bypassed here (telegram_progress_seconds=0) so only the
+    consecutive-same-text dedup is being exercised. The raw line is still
+    written to job.log_path; only the user-facing edit is suppressed."""
+    name = "behavior: _read_jsonl_stdout suppresses an exact-repeat summary on the next line"
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                # 0-second cooldown so the test only exercises the
+                # consecutive-same-text dedup, not the time-based gate.
+                # Settings is a frozen dataclass, so we bypass the
+                # __setattr__ guard rather than mutating the field
+                # through the public API (which would raise FrozenInstanceError).
+                object.__setattr__(settings, "telegram_progress_seconds", 0.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                # Use SimpleNamespace: the reader only touches .log_path
+                # and assigns to .last_event. Avoid full Job so the test
+                # does not pull in any worktree / metadata side effects.
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                line = json.dumps(
+                    {"type": "item.completed", "item": {"type": "command_execution", "command": "true"}}
+                ) + "\n"
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes]) -> None:
+                        self._chunks = list(chunks)
+
+                    async def readline(self) -> bytes:
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout([line.encode("utf-8"), line.encode("utf-8")]))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                if len(progress_calls) != 1:
+                    return CheckResult(
+                        name, False,
+                        f"expected 1 on_progress call (2nd dedup'd); got {len(progress_calls)}: {progress_calls!r}",
+                    )
+                if "🔧 shell" not in progress_calls[0]:
+                    return CheckResult(
+                        name, False,
+                        f"progress text should still be the shell indicator; got {progress_calls[0]!r}",
+                    )
+                # Raw line was still written to the log file (dedup is for
+                # the user-facing edit, not the audit trail).
+                logged = log_path.read_bytes().decode("utf-8")
+                if logged.count("command_execution") != 2:
+                    return CheckResult(
+                        name, False,
+                        f"raw log should contain 2 command_execution lines; got {logged.count('command_execution')}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"2 raw lines, 1 on_progress call ({progress_calls[0]!r}); 2nd dedup'd",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+
 def main() -> int:
     tests = [
         # AST contracts
@@ -851,6 +1095,11 @@ def main() -> int:
         _test_edit_failure_falls_back_to_send,
         _test_edit_broken_latch,
         _test_placeholder_send_failure_falls_back,
+        # Chat-feel round-2 contracts
+        _test_command_execution_tool_indicator,
+        _test_lifecycle_events_suppressed,
+        _test_no_event_type_prefix,
+        _test_consecutive_dedup,
     ]
     results = [t() for t in tests]
     print_results(results)

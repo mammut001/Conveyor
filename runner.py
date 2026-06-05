@@ -166,6 +166,23 @@ class CodexRunner:
     DAILY_WORKTREE_PREFIX = "day-"
     DAILY_WORKTREE_FORMAT = "%Y-%m-%d"
 
+    # Codex --json event types that carry no user-visible text and would
+    # otherwise leak raw JSON into the chat. turn.completed in particular
+    # used to dump {usage: {input_tokens: ...}} into the placeholder; that
+    # data is captured separately via _capture_usage, so suppressing the
+    # summary here is safe. thread.started / turn.started are pure
+    # bookkeeping events that fire before any user-visible work and would
+    # only reset the progress cooldown to no effect.
+    _LIFECYCLE_EVENT_TYPES = frozenset(
+        {
+            "thread.started",
+            "thread.completed",
+            "turn.started",
+            "turn.completed",
+            "turn.failed",
+        }
+    )
+
     # Memo classification buckets. The first four are user-tagged (preferred);
     # "unfiled" is the fallback for anything the classifier cannot place.
     # Sections in MEMORY.md follow these headings verbatim.
@@ -563,6 +580,11 @@ class CodexRunner:
         ``_is_user_visible_event`` and ``_event_summary`` to surface a
         short "🔧 name..." progress line so the user knows the model is
         doing work between prose events.
+
+        ``command_execution`` items are shell invocations; codex does not
+        set a ``name`` on them, so we fall back to ``"shell"`` so the user
+        sees a short indicator instead of a multi-kilobyte curl command
+        being JSON-dumped into the chat.
         """
         if not isinstance(event_obj, dict):
             return None
@@ -570,11 +592,17 @@ class CodexRunner:
         if not isinstance(item, dict):
             return None
         item_type = str(item.get("type") or "").lower()
-        if not any(tag in item_type for tag in ("function_call", "tool_call")):
+        if not any(tag in item_type for tag in ("function_call", "tool_call", "command_execution")):
             return None
         name = item.get("name") or item.get("tool") or item.get("function")
         if isinstance(name, str) and name.strip():
             return name.strip()
+        # command_execution items never carry a name; surface them as
+        # "shell" so the progress line is informative. function_call /
+        # tool_call without a name still return None to avoid a vague
+        # "🔧 ..." indicator (the original round-1 contract).
+        if "command_execution" in item_type:
+            return "shell"
         return None
 
     def _agent_message_text(self, event_obj: dict | None) -> str | None:
@@ -621,6 +649,16 @@ class CodexRunner:
         assert process.stdout is not None
         assert job.log_path is not None
         last_sent = 0.0
+        # Consecutive-same-text dedup: when codex emits
+        # ``item.started`` + ``item.completed`` for the same tool call in
+        # quick succession (typical for a short shell command), the
+        # _event_summary produces the same indicator text twice. The
+        # cooldown alone lets both through if they land within
+        # ``telegram_progress_seconds`` of each other, so we also
+        # suppress exact repeats of the last forwarded text. The raw
+        # lines are still written to ``job.log_path``; only the user-
+        # facing edit is skipped.
+        last_sent_text: str | None = None
         with job.log_path.open("ab") as log_file:
             while True:
                 line = await process.stdout.readline()
@@ -640,8 +678,14 @@ class CodexRunner:
                     job.last_event = event_text
                 self._capture_usage(job, text)
                 now = asyncio.get_running_loop().time()
-                if event_text and self._should_send_event_progress(event_text, event_obj) and now - last_sent >= self.settings.telegram_progress_seconds:
+                if (
+                    event_text
+                    and event_text != last_sent_text
+                    and self._should_send_event_progress(event_text, event_obj)
+                    and now - last_sent >= self.settings.telegram_progress_seconds
+                ):
                     last_sent = now
+                    last_sent_text = event_text
                     await on_progress(truncate(event_text, 1200))
 
     async def _read_stderr(self, job: Job, process: asyncio.subprocess.Process) -> None:
@@ -1307,27 +1351,41 @@ class CodexRunner:
         if self._is_reasoning_event(event):
             return ""
 
-        event_type = str(event.get("type") or event.get("event") or "event")
+        event_type = str(event.get("type") or event.get("event") or "").lower()
+        # Lifecycle events: drop them on the floor. ``turn.completed``'s
+        # usage payload is captured separately by ``_capture_usage`` so
+        # suppressing the summary here loses no data. Returning "" also
+        # keeps ``_read_jsonl_stdout``'s cooldown clock from being reset
+        # by a JSON dump, which would otherwise hold the placeholder
+        # hostage to no-op updates.
+        if event_type in self._LIFECYCLE_EVENT_TYPES:
+            return ""
+
+        # Top-level text-like fields. No ``event_type:`` prefix: the
+        # user wants the chat surface to read like a chat, not like a
+        # raw event log.
         for key in ("message", "summary", "text", "delta"):
             value = event.get(key)
             if isinstance(value, str) and value.strip():
-                return f"{event_type}: {value.strip()}"
+                return value.strip()
 
         agent_text = self._agent_message_text(event)
         if agent_text is not None:
-            return f"{event_type}: {agent_text}"
+            return agent_text
 
         # Tool-call indicator: short, so the next prose edit can replace
-        # it without the user feeling like they lost information.
+        # it without the user feeling like they lost information. The
+        # type filter now includes ``command_execution`` (shell calls),
+        # which never carry a name and so fall back to ``"shell"``.
         tool_name = self._tool_call_name(event)
         if tool_name is not None:
-            return f"{event_type}: 🔧 {tool_name}..."
+            return f"🔧 {tool_name}..."
 
-        if "item" in event:
-            return f"{event_type}: {safe_json(event['item'], 1000)}"
-        if "data" in event:
-            return f"{event_type}: {safe_json(event['data'], 1000)}"
-        return f"{event_type}: {safe_json(event, 1000)}"
+        # Opaque event (item with no agent_message text, no tool name,
+        # no top-level text field). Return "" instead of dumping JSON:
+        # the raw line is still captured in ``job.log_path`` for
+        # debugging, and the chat surface stays clean.
+        return ""
 
     async def _git(self, args: list[str], cwd: Path, check: bool = True) -> str:
         process = await asyncio.create_subprocess_exec(

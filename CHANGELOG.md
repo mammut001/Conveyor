@@ -11,7 +11,7 @@ moves: the bot now acknowledges in <1s, edits the placeholder in place
 as model prose streams in, surfaces tool calls as a short indicator,
 and latches to a send-message fallback if Telegram rate-limits edits.
 
-- `tbd` - chat-feel polish batch
+- `1d03c53` - chat-feel polish batch
   - `bot.py` - sub-second placeholder ("⏳ Got it, working on it..."),
     edit-in-place progress, `edit_broken` latch to stop retry storms
     when Telegram rate-limits `edit_message_text`
@@ -24,6 +24,39 @@ and latches to a send-message fallback if Telegram rate-limits edits.
     20s → 3s so the user sees prose growing in near-real-time
   - `scripts/progress_smoke.py` - new Tier 1 contract smoke
     (14 → 18 cases), wired into `make smoke`
+
+## [unreleased] - chat-feel polish round 2
+
+This round plugs the real-world codex event-shape holes that round 1
+left visible in the chat. After round 1 the placeholder still flickered
+to raw JSON for some event types and held the cooldown hostage to no-op
+updates. Round 2 fixes three contract gaps in `_event_summary` /
+`_read_jsonl_stdout` and pins them with four new smoke cases.
+
+- `tbd` - chat-feel polish round 2
+  - `runner.py` - `_tool_call_name` now also matches `command_execution`
+    items and falls back to `"shell"` (real codex `command_execution`
+    items do not carry a `name`; round 1 JSON-dumped a multi-kilobyte
+    curl command into the chat)
+  - `runner.py` - `_event_summary` returns `""` for the five lifecycle
+    event types (`thread.started` / `thread.completed` / `turn.started` /
+    `turn.completed` / `turn.failed`); `turn.completed` usage is still
+    captured separately via `_capture_usage`, so suppressing the
+    summary here loses no data, and the cooldown clock no longer
+    resets on a JSON dump
+  - `runner.py` - `_event_summary` drops the `event_type:` prefix from
+    prose, tool-indicator, and top-level text fields; opaque events
+    (item with no agent_message text, no tool name, no top-level text
+    field) now return `""` instead of dumping JSON, so the chat
+    surface reads like a chat and the raw line stays in `job.log_path`
+  - `runner.py` - `_read_jsonl_stdout` adds a consecutive-same-text
+    dedup: when codex emits `item.started` + `item.completed` for the
+    same tool call in quick succession, the second identical
+    indicator is suppressed; the time-based cooldown stays
+  - `scripts/progress_smoke.py` - 4 new contract cases
+    (`_test_command_execution_tool_indicator`,
+    `_test_lifecycle_events_suppressed`, `_test_no_event_type_prefix`,
+    `_test_consecutive_dedup`); 19 -> 23 cases
 
 ## [unreleased] - open-source prep batch
 
@@ -112,7 +145,7 @@ This batch is governance, docs, and CI only; the runtime surface
 - Maintain is a separate unit from the bot - a maintain failure does not
   take the bot down
 
-### Smokes (7 scripts, 47 cases)
+### Smokes (7 scripts, 51 cases)
 - `make smoke` is the local pre-deploy gate
 - VPS deploy gate is per-script `python scripts/*_smoke.py`; the Makefile
   is intentionally NOT in `scripts/deploy.sh`'s rsync list
