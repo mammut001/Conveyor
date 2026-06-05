@@ -1,6 +1,6 @@
 # CHANGELOG
 
-Trajectory snapshot at HEAD `a6e0b09` (24 commits). README.md owns the
+Trajectory snapshot at HEAD `04fbced` (31 commits). README.md owns the
 file/command reference; this file is the change history and current state
 at a glance.
 
@@ -58,6 +58,54 @@ updates. Round 2 fixes three contract gaps in `_event_summary` /
     `_test_lifecycle_events_suppressed`, `_test_no_event_type_prefix`,
     `_test_consecutive_dedup`); 19 -> 23 cases
 
+## [unreleased] - chat-feel polish round 3
+
+Round 3 plugs the last chat-feel gap that round 2 left visible: the
+`command_execution` indicator said `"shell"`, which is technically
+safe but tells the user nothing about what is actually running. A
+real-world codex session surfaces lots of `command_execution` items
+(`curl`, `python`, `git`, `bash`, ...) and seeing `🔧 shell...`
+three times in a row reads as a frozen chat. Round 3 extracts the
+leading binary name from the command string (handling the
+`/bin/bash -lc '...'` wrapper, the `&&` chain, and the `|` pipe
+source) and surfaces `🔧 curl...`, `🔧 python...`, etc. The raw
+command body still does NOT leak - that was the original round-1
+problem and the round-3 contract is strictly tighter: only the
+binary name (path-stripped, capped at 32 chars) appears in chat.
+
+- `0d76a15` - runner: extract actual binary name from command_execution indicators
+  - `runner.py` - new module-level `_extract_command_name(command)`
+    helper. Strips the `/bin/bash -lc '...'` wrapper if present,
+    takes the last `&&` segment (the effective command in a chain),
+    then the first part of any `|` pipe (the source), then the first
+    whitespace-delimited word, and finally `Path(name).name` to
+    drop the path. Returns None on empty / unparseable input so the
+    caller falls back to the existing `"shell"` indicator.
+  - `runner.py` - `_tool_call_name` consults `_extract_command_name`
+    before returning the `"shell"` fallback. The new contract is
+    `🔧 <binary>...` for parseable commands and `🔧 shell...` for
+    empty / missing / unparseable ones.
+  - `scripts/progress_smoke.py` - `_test_command_execution_tool_indicator`
+    updated to expect `🔧 curl...` for a `curl ...` command and to
+    assert command-body needles (`example.com`, `-w`, `http_code`,
+    `/dev/null`) do NOT appear; the original `🔧 shell` contract
+    is preserved as a fallback for empty / whitespace / missing
+    `command` field, so the indicator is never vague or empty.
+  - `scripts/progress_smoke.py` - `_test_consecutive_dedup` updated
+    to expect `🔧 true...` (its `command: "true"` payload now
+    extracts to `true` instead of falling back to `shell`). The
+    dedup contract (2 raw lines, 1 `on_progress` call) is
+    unchanged.
+- `04fbced` - compress-day-smoke: freeze clock for day-boundary branches
+  - `scripts/compress_day_smoke.py` - wrap the three `compress_if_needed`
+    calls that pin a specific `today` (`_test_already_ran_today`,
+    `_test_no_prior_day`, `_test_last_covers_candidate`) in
+    `_frozen_clock(today)` so the day-boundary branch asserts the
+    contract on the intended day, not on whatever day the test
+    host happens to be on. Surfaces only on hosts whose wall clock
+    has advanced past 2026-06-04. Orthogonal to chat-feel; landed
+    in its own commit per the "one thing at a time" rule.
+
 ## [unreleased] - open-source prep batch
 
 This batch is governance, docs, and CI only; the runtime surface
@@ -82,8 +130,11 @@ This batch is governance, docs, and CI only; the runtime surface
 - Regex rejection + 1200-char message truncation
 - Chat-feel: sub-second "⏳ Got it, working on it..." placeholder,
   edit-in-place progress as model prose streams in, "🔧 tool..." indicator
-  for `function_call` items, typing pulse every 1.5s for the job's
-  lifetime; latches to send-message if Telegram rate-limits edits
+  for `function_call` items (and `command_execution` items surface as
+  `🔧 <binary>...` where the binary name is extracted from the command
+  string, with a `🔧 shell...` fallback for empty / unparseable commands),
+  typing pulse every 1.5s for the job's lifetime; latches to send-message
+  if Telegram rate-limits edits
 
 ### Codex CLI bridge (runner.py)
 - `CodexRunner.start(mode, prompt, on_progress)` is the single spawn point
@@ -145,7 +196,7 @@ This batch is governance, docs, and CI only; the runtime surface
 - Maintain is a separate unit from the bot - a maintain failure does not
   take the bot down
 
-### Smokes (7 scripts, 51 cases)
+### Smokes (8 scripts, 70 cases)
 - `make smoke` is the local pre-deploy gate
 - VPS deploy gate is per-script `python scripts/*_smoke.py`; the Makefile
   is intentionally NOT in `scripts/deploy.sh`'s rsync list
@@ -178,9 +229,12 @@ This batch is governance, docs, and CI only; the runtime surface
   counter, the next hourly tick is what surfaces the recovery
 
 
-## Commit timeline (all 24, newest first)
+## Commit timeline (all 31, newest first)
 
 ```
+04fbced compress-day-smoke: freeze clock for day-boundary branches
+0d76a15 runner: extract actual binary name from command_execution indicators
+db114df docs: refresh snapshot, timeline, and smoke count after chat-feel round 2
 a6e0b09 runner: fix chat-feel for real-world codex events (command_execution, lifecycle, dedup)
 1d03c53 chat-feel: placeholder + edit-in-place + tool indicator + fallback latch
 490b288 open-source: scrub personal markers, add README architecture callout
@@ -208,5 +262,5 @@ e786a65 runner: plumb RUNNER_HOME into codex sandbox via --add-dir and CODEX_RUN
 2df91f7 cleanup JobMode.MEMO; reuse classify_memo in compress_day.py for unfiled reclass
 ```
 
-VPS `main` is at the same HEAD; bot unit `active`; VPS smoke run 9/9 on
-the memo_fastpath block, full chain 47/47 green locally.
+VPS `main` is at the same HEAD; bot unit `active`; full chain 70/70
+green locally across 8 env-free smoke scripts.

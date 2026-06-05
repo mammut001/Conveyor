@@ -5,10 +5,14 @@ quickstart; **CHANGELOG.md** is the change history and current surface at a
 glance; this file is the design + deploy + invariants + open-items brief a
 new session needs to be useful fast.
 
-Snapshot at HEAD `a6e0b09` (2026-06-05, America/Toronto). 24 commits on
-`main`. No git remote configured. Working tree has uncommitted
-`scripts/compress_day_smoke.py` (clock-freeze for 3 compress-day tests,
-unrelated to chat-feel). 51/51 smokes green (progress_smoke 19 -> 23 cases).
+Snapshot at HEAD `04fbced` (2026-06-05, America/Toronto). 31 commits on
+`main`. No git remote configured. Working tree is clean. 70/70 smokes
+green (progress_smoke 19 -> 23 cases after chat-feel round 2; the binary-
+name extraction in round 3 is the same 23 cases, but two were expanded to
+pin the new contract). Round 2's `command_execution` indicator said
+`"shell"`; round 3 now extracts the actual binary name and surfaces
+`🔧 curl...` / `🔧 python...` etc. (falling back to `🔧 shell...` for
+empty / unparseable commands).
 
 ---
 
@@ -388,13 +392,13 @@ the 13:25-14:22 silent window is recorded in CHANGELOG "Honest gaps".
 
 ---
 
-## 8. Smokes (51 cases, 8 scripts)
+## 8. Smokes (70 cases, 8 scripts)
 
 Local pre-deploy gate:
 
 ```bash
 cd telegram_codex_runner
-make smoke                  # 7 env-free scripts, fast
+make smoke                  # 8 env-free scripts, fast
 make smoke-all              # also memo_smoke (requires .env with keys)
 ```
 
@@ -412,7 +416,11 @@ Makefile declares them:
 8. `progress_smoke` — chat-feel contract (19 -> 23 cases after
    `a6e0b09` round 2; 4 new cases pin `command_execution` shell
    indicator, lifecycle suppression, no-event-type-prefix, and
-   consecutive-same-text dedup)
+   consecutive-same-text dedup). Round 3 (`0d76a15`) updates two of
+   those cases to pin the binary-name extraction
+   (`🔧 curl...` / `🔧 true...` instead of `🔧 shell...`); the
+   `🔧 shell` fallback for empty / unparseable commands is asserted
+   in the same case as a regression guard
 
 `memo_smoke.py` is the full integration smoke and needs a populated `.env`
 — it is gated behind `make smoke-all` precisely so the env-free chain is
