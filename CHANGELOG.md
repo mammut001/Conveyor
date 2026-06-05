@@ -111,7 +111,7 @@ at a glance.
 ## Commit timeline (all 19, newest first)
 
 ```
-<pending> runner + smoke: allow web tools (search/fetch) in /run mode by default
+5b9a170 runner + smoke: allow web tools (search/fetch) in /run mode by default
 7193602 docs: fix worktree root path in §3.1 and §6.2
 7d55769 docs: note 13:25 maintain-failure alerting gap in Honest gaps
 dbc718a docs: add CHANGELOG.md with current surface and 15-commit timeline
