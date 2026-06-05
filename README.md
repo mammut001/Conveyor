@@ -2,6 +2,23 @@
 
 Small Python service that lets one whitelisted Telegram user run `codex exec --json` jobs on an Ubuntu VPS.
 
+## How it works
+
+A single Python process runs on the VPS:
+
+1. `bot.py` receives Telegram messages and gates them on
+   `TELEGRAM_ALLOWED_USER_ID`.
+2. `runner.py` serializes one Codex invocation at a time. Each job
+   runs in a detached git worktree and streams `codex --json` events
+   into `logs/<job-id>/`.
+3. The final Codex answer is redacted by `redaction.py` and sent
+   back to Telegram.
+4. `codex-telegram-maintain.timer` runs `auto_maintain.py` once an
+   hour to clean up old jobs and run read-only diagnostics.
+
+For the endpoint table, env vars, smoke gate, operator cheat sheet,
+and what is intentionally out of scope, see [`project.md`](project.md).
+
 ## File Structure
 
 ```text
@@ -58,7 +75,7 @@ Only one job runs at a time for the configured repository. Telegram replies are 
    ```bash
    sudo mkdir -p /opt/codex-telegram-runner
    sudo chown -R ubuntu:ubuntu /opt/codex-telegram-runner
-   rsync -av telegram_codex_runner/ ubuntu@203.0.113.42:/opt/codex-telegram-runner/
+   rsync -av telegram_codex_runner/ <ssh-user>@<vps-host>:/opt/codex-telegram-runner/
    ```
 
 3. Create a virtual environment.

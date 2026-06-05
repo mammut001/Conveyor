@@ -5,7 +5,8 @@
 # explicit --exclude for any future secret files.
 set -euo pipefail
 
-REMOTE="${CODEX_TELEGRAM_REMOTE:-ubuntu@203.0.113.42}"
+# Override on the command line: CODEX_TELEGRAM_REMOTE=user@host bash scripts/deploy.sh
+REMOTE="${CODEX_TELEGRAM_REMOTE:-<ssh-user>@<vps-host>}"
 REMOTE_DIR="${CODEX_TELEGRAM_REMOTE_DIR:-/opt/codex-telegram-runner}"
 LOCAL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 

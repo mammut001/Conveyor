@@ -31,10 +31,10 @@ bot down.
 
 ## 2. Repository layout
 
-Lives at `/Users/example/Documents/GitHub/telegram_codex_runner/`. As of
-2026-06-05 the repo is no longer nested inside `/Users/example/Desktop/Focus/`
-(that path is an unrelated Swift app and **must not be touched**);
-previously the project sat inside it as a nested git repo.
+Lives at the repo root (this directory). As of 2026-06-05 the
+repo is no longer nested inside any unrelated project directory;
+previously it lived as a nested git repo inside a different
+worktree, but that nesting is no longer in use.
 
 ```text
 telegram_codex_runner/
@@ -76,7 +76,7 @@ telegram_codex_runner/
 
 | What | Value |
 |---|---|
-| Host | `ubuntu@203.0.113.42` (NOT `203.0.113.43` — that is a stale address) |
+| Host | `<ssh-user>@<vps-host>` (set via `CODEX_TELEGRAM_REMOTE`, see §3.3) |
 | Runtime path | `/opt/codex-telegram-runner/` |
 | Codex CLI home (uv tool dir) | `~/.codex/` (under the `ubuntu` user) |
 | Bot systemd unit | `/etc/systemd/system/codex-telegram-bot.service` |
@@ -94,7 +94,7 @@ project are local-commit + rsync; VPS commits are not a thing.
 variables with sensible defaults:
 
 ```bash
-CODEX_TELEGRAM_REMOTE=ubuntu@203.0.113.42
+CODEX_TELEGRAM_REMOTE=<ssh-user>@<vps-host>
 CODEX_TELEGRAM_REMOTE_DIR=/opt/codex-telegram-runner
 ```
 
@@ -121,7 +121,7 @@ local copy intentionally omits it. Use a per-subdir rsync list with
 These are deployed manually when they change:
 
 - `CHANGELOG.md` — not in the script; sync with
-  `rsync -avz CHANGELOG.md ubuntu@203.0.113.42:/opt/codex-telegram-runner/CHANGELOG.md`
+  `rsync -avz CHANGELOG.md $REMOTE:/opt/codex-telegram-runner/CHANGELOG.md  # $REMOTE = $CODEX_TELEGRAM_REMOTE`
 - `README.md` — same manual treatment if you care about the live doc
 - `Makefile` — same; the bot service runs `bot.py` directly, Makefile is
   local-only
@@ -639,7 +639,14 @@ say so if you want it moved to active:
 
 ## 17. Quick-start (one-liners)
 
+> In the snippets below, `$REMOTE` is shorthand for your SSH target
+> (e.g. `ubuntu@203.0.113.42`). The deploy script reads
+> `CODEX_TELEGRAM_REMOTE`; the one-liners assume you have exported
+> the same value as a shell variable.
+
 ```bash
+# $REMOTE = $CODEX_TELEGRAM_REMOTE, e.g. export REMOTE=ubuntu@203.0.113.42
+
 # local pre-deploy gate
 cd telegram_codex_runner && make smoke
 
@@ -648,21 +655,21 @@ cd telegram_codex_runner && bash scripts/deploy.sh
 
 # deploy CHANGELOG (not in deploy.sh list)
 rsync -avz telegram_codex_runner/CHANGELOG.md \
-  ubuntu@203.0.113.42:/opt/codex-telegram-runner/CHANGELOG.md
+  $REMOTE:/opt/codex-telegram-runner/CHANGELOG.md
 
 # ssh to VPS, check services
-ssh ubuntu@203.0.113.42 \
+ssh $REMOTE \
   'systemctl status codex-telegram-bot.service \
    && systemctl list-timers codex-telegram-maintain.timer \
    && journalctl -u codex-telegram-maintain.service -n 5'
 
 # run an operator job (no Telegram, VPS-side)
-ssh ubuntu@203.0.113.42 \
+ssh $REMOTE \
   'cd /opt/codex-telegram-runner && \
    .venv/bin/python scripts/submit_job.py --mode run "say ready"'
 
 # capture a memo from VPS shell (fast path, no codex)
-ssh ubuntu@203.0.113.42 \
+ssh $REMOTE \
   'cd /opt/codex-telegram-runner && \
    .venv/bin/python -m runner memorize --category fact "<x>"'
 ```

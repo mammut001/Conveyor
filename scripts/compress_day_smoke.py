@@ -242,7 +242,7 @@ async def _test_full_archive() -> CheckResult:
             # without hitting the network.
             memory_content = (
                 "## preference\n- user prefers dark mode\n\n"
-                "## fact\n- vps ip 203.0.113.42\n"
+                "## fact\n- sample fact line\n"
             )
             _write_memory(prior_wt, memory_content)
             _write_state(settings, datetime(2026, 6, 2, 12, 0))
