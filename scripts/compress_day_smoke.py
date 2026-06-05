@@ -137,7 +137,8 @@ async def _test_already_ran_today() -> CheckResult:
             _make_daily_worktree(settings, datetime(2026, 6, 3, 12, 0))
             _write_state(settings, today)
 
-            summary = await compress_if_needed(settings)
+            with _frozen_clock(today):
+                summary = await compress_if_needed(settings)
             if "already ran today" not in summary:
                 return CheckResult(name, False, f"unexpected: {summary!r}")
             if _read_state(settings) != today.strftime("%Y-%m-%d"):
@@ -157,7 +158,8 @@ async def _test_no_prior_day() -> CheckResult:
             today = datetime(2026, 6, 4, 15, 0, tzinfo=ZoneInfo("UTC"))
             _make_daily_worktree(settings, today)
 
-            summary = await compress_if_needed(settings)
+            with _frozen_clock(today):
+                summary = await compress_if_needed(settings)
             if "no prior day worktree" not in summary:
                 return CheckResult(name, False, f"unexpected: {summary!r}")
             if _read_state(settings) != today.strftime("%Y-%m-%d"):
@@ -184,7 +186,8 @@ async def _test_last_covers_candidate() -> CheckResult:
             _write_memory(prior_wt, "## preference\n- exists but should NOT be archived again\n")
             _write_state(settings, prior)
 
-            summary = await compress_if_needed(settings)
+            with _frozen_clock(today):
+                summary = await compress_if_needed(settings)
             if "already covers candidate" not in summary:
                 return CheckResult(name, False, f"unexpected: {summary!r}")
             if _read_state(settings) != today.strftime("%Y-%m-%d"):
