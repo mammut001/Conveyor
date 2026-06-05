@@ -1696,7 +1696,359 @@ def _test_thinking_indicator_skipped_for_short_reasoning() -> CheckResult:
     finally:
         if original_threshold is not None:
             import runner as runner_mod  # noqa: PLC0415
-            runner_mod.THINKING_THRESHOLD_SECONDS = original_threshold
+
+
+# ---- chat-feel round-6: tool-call pulse -------------------------------
+
+def _test_tool_pulse_appears_after_threshold() -> CheckResult:
+    """A long tool call (network fetch, big shell pipeline) leaves
+    the placeholder sitting on the one-line ``🔧 name...`` indicator
+    from round 2 for 5-30s with no further edits, which reads as
+    frozen. Round 6 arms a periodic "still working" pulse that
+    updates the indicator in place with the elapsed seconds. With
+    the production threshold and interval lowered to 0.0, an
+    ``item.started`` for a function_call must surface the original
+    ``🔧 curl...`` indicator AND a subsequent ``🔧 curl (0s)...``
+    pulse on the same iteration. The pulse shares the
+    ``telegram_progress_seconds`` cooldown with the rest of the
+    gate ladder."""
+    name = "behavior: _read_jsonl_stdout surfaces a '🔧 name (Ns)...' pulse after the tool-call threshold"
+    original_threshold = None
+    original_interval = None
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        # Test override hook: re-binding the module-level constants
+        # is the only way to bypass the frozen-Settings guard. This
+        # mirrors the THINKING_THRESHOLD_SECONDS pattern above.
+        original_threshold = runner_mod.TOOL_PULSE_THRESHOLD_SECONDS
+        original_interval = runner_mod.TOOL_PULSE_INTERVAL_SECONDS
+        runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = 0.0
+        runner_mod.TOOL_PULSE_INTERVAL_SECONDS = 0.0
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                # 0-second cooldown so the pulse isn't gated by
+                # telegram_progress_seconds (which defaults to 1.5s).
+                # Bypass the frozen __setattr__ guard.
+                object.__setattr__(settings, "telegram_progress_seconds", 0.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                lines = [
+                    json.dumps({"type": "item.started", "item": {"type": "function_call", "name": "curl"}}),
+                ]
+                encoded = [ln.encode("utf-8") + b"\n" for ln in lines]
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes]) -> None:
+                        self._chunks = list(chunks)
+
+                    async def readline(self) -> bytes:
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout(encoded))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                if progress_calls != ["🔧 curl...", "🔧 curl (0s)..."]:
+                    return CheckResult(
+                        name, False,
+                        f"expected ['🔧 curl...', '🔧 curl (0s)...']; got {progress_calls!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"item.started -> 2 calls: tool summary + immediate pulse at 0s threshold: {progress_calls!r}",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+    finally:
+        if original_threshold is not None:
+            import runner as runner_mod  # noqa: PLC0415
+            runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = original_threshold
+        if original_interval is not None:
+            import runner as runner_mod  # noqa: PLC0415
+            runner_mod.TOOL_PULSE_INTERVAL_SECONDS = original_interval
+
+
+def _test_tool_pulse_clears_on_completion() -> CheckResult:
+    """The round-6 pulse window must disarm on the matching
+    ``item.completed`` event for the same tool name so a stale
+    complete from a prior call cannot wipe a fresh arm. The
+    sequence is: ``item.started`` (arm + summary + pulse) ->
+    ``item.completed`` (disarm, the consecutive-same-text dedup
+    suppresses the second ``🔧 curl...``) -> ``agent_message``
+    prose. Expected: 3 progress calls (tool summary, pulse, prose)
+    in that order, with no pulse after the disarm."""
+    name = "behavior: _read_jsonl_stdout disarms the tool-pulse window on the matching item.completed"
+    original_threshold = None
+    original_interval = None
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        original_threshold = runner_mod.TOOL_PULSE_THRESHOLD_SECONDS
+        original_interval = runner_mod.TOOL_PULSE_INTERVAL_SECONDS
+        runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = 0.0
+        runner_mod.TOOL_PULSE_INTERVAL_SECONDS = 0.0
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                object.__setattr__(settings, "telegram_progress_seconds", 0.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                lines = [
+                    json.dumps({"type": "item.started", "item": {"type": "function_call", "name": "curl"}}),
+                    json.dumps({"type": "item.completed", "item": {"type": "function_call", "name": "curl"}}),
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello"}}),
+                ]
+                encoded = [ln.encode("utf-8") + b"\n" for ln in lines]
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes]) -> None:
+                        self._chunks = list(chunks)
+
+                    async def readline(self) -> bytes:
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout(encoded))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                if progress_calls != ["🔧 curl...", "🔧 curl (0s)...", "Hello"]:
+                    return CheckResult(
+                        name, False,
+                        f"expected ['🔧 curl...', '🔧 curl (0s)...', 'Hello']; got {progress_calls!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"start -> pulse -> disarm -> prose: 3 calls in order, post-disarm no more pulses: {progress_calls!r}",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+    finally:
+        if original_threshold is not None:
+            import runner as runner_mod  # noqa: PLC0415
+            runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = original_threshold
+        if original_interval is not None:
+            import runner as runner_mod  # noqa: PLC0415
+            runner_mod.TOOL_PULSE_INTERVAL_SECONDS = original_interval
+
+
+def _test_tool_pulse_skipped_for_short_call() -> CheckResult:
+    """A short tool call (e.g. ``true``) finishes in microseconds,
+    well below the 4.0s production threshold. The pulse must NOT
+    fire. With the production threshold raised to 1000s, the unit
+    test's microsecond inter-event spacing can never satisfy it.
+    Expected: 2 progress calls (tool summary, prose) and no pulse.
+    This pins the round-6 contract that short tool calls do not
+    add a pulse tick on top of the existing one-line indicator."""
+    name = "behavior: _read_jsonl_stdout skips the tool-pulse when the call is shorter than the threshold"
+    original_threshold = None
+    original_interval = None
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        original_threshold = runner_mod.TOOL_PULSE_THRESHOLD_SECONDS
+        original_interval = runner_mod.TOOL_PULSE_INTERVAL_SECONDS
+        # Raise the threshold so the unit test's microsecond
+        # inter-event spacing can never satisfy it. This proves
+        # the threshold is honored, not just that the constant
+        # is wired in.
+        runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = 1000.0
+        runner_mod.TOOL_PULSE_INTERVAL_SECONDS = 0.0
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                object.__setattr__(settings, "telegram_progress_seconds", 0.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                lines = [
+                    json.dumps({"type": "item.started", "item": {"type": "function_call", "name": "true"}}),
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello"}}),
+                ]
+                encoded = [ln.encode("utf-8") + b"\n" for ln in lines]
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes]) -> None:
+                        self._chunks = list(chunks)
+
+                    async def readline(self) -> bytes:
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout(encoded))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                if progress_calls != ["🔧 true...", "Hello"]:
+                    return CheckResult(
+                        name, False,
+                        f"expected ['🔧 true...', 'Hello'] (no pulse at 1000s threshold); got {progress_calls!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"short tool call: tool summary + prose, no pulse at 1000s threshold: {progress_calls!r}",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+    finally:
+        if original_threshold is not None:
+            import runner as runner_mod  # noqa: PLC0415
+            runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = original_threshold
+        if original_interval is not None:
+            import runner as runner_mod  # noqa: PLC0415
+            runner_mod.TOOL_PULSE_INTERVAL_SECONDS = original_interval
+
+
+def _test_tool_pulse_respects_interval() -> CheckResult:
+    """The pulse must respect ``TOOL_PULSE_INTERVAL_SECONDS`` between
+    re-fires, not just the first-fire ``TOOL_PULSE_THRESHOLD_SECONDS``.
+    With the production interval raised to 1000s, the second and
+    third pulse checks (which fire on every loop iteration while
+    a tool call is in flight) must be suppressed. The expected
+    sequence is: tool summary -> ONE pulse -> prose1 -> prose2,
+    with no additional pulses despite the threshold being 0.
+    This pins the round-6 contract that the pulse is a periodic
+    heartbeat, not a per-iteration tick."""
+    name = "behavior: _read_jsonl_stdout re-arms the tool-pulse only after TOOL_PULSE_INTERVAL_SECONDS"
+    original_threshold = None
+    original_interval = None
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        original_threshold = runner_mod.TOOL_PULSE_THRESHOLD_SECONDS
+        original_interval = runner_mod.TOOL_PULSE_INTERVAL_SECONDS
+        runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = 0.0
+        # Raise the interval so the unit test's microsecond
+        # inter-event spacing can never satisfy it. This proves
+        # the interval gate is honored, not just that the constant
+        # is wired in.
+        runner_mod.TOOL_PULSE_INTERVAL_SECONDS = 1000.0
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                object.__setattr__(settings, "telegram_progress_seconds", 0.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                lines = [
+                    json.dumps({"type": "item.started", "item": {"type": "function_call", "name": "curl"}}),
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello"}}),
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello world"}}),
+                ]
+                encoded = [ln.encode("utf-8") + b"\n" for ln in lines]
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes]) -> None:
+                        self._chunks = list(chunks)
+
+                    async def readline(self) -> bytes:
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout(encoded))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                if progress_calls != ["🔧 curl...", "🔧 curl (0s)...", "Hello", "Hello world"]:
+                    return CheckResult(
+                        name, False,
+                        f"expected ['🔧 curl...', '🔧 curl (0s)...', 'Hello', 'Hello world']; got {progress_calls!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"interval gate suppresses re-fire: 1 pulse despite threshold=0: {progress_calls!r}",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+    finally:
+        if original_threshold is not None:
+            import runner as runner_mod  # noqa: PLC0415
+            runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = original_threshold
+        if original_interval is not None:
+            import runner as runner_mod  # noqa: PLC0415
+            runner_mod.TOOL_PULSE_INTERVAL_SECONDS = original_interval
+
 
 
 
@@ -1740,6 +2092,11 @@ def main() -> int:
         _test_thinking_indicator_clears_on_prose,
         _test_thinking_indicator_clears_on_tool_call,
         _test_thinking_indicator_skipped_for_short_reasoning,
+        # Chat-feel round-6 contracts
+        _test_tool_pulse_appears_after_threshold,
+        _test_tool_pulse_clears_on_completion,
+        _test_tool_pulse_skipped_for_short_call,
+        _test_tool_pulse_respects_interval,
     ]
     results = [t() for t in tests]
     print_results(results)

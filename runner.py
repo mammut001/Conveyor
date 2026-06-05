@@ -546,6 +546,43 @@ class CodexRunner:
             return True
         return False
 
+    def _is_tool_call_start_event(self, event_obj: dict | None) -> bool:
+        """True for an ``item.started`` (or ``item.updated``) event whose
+        item envelope is a function_call / tool_call / command_execution.
+        Used by ``_read_jsonl_stdout`` to arm the round-6 tool-pulse
+        window: a long tool call would otherwise leave the placeholder
+        sitting on the one-line ``🔧 name...`` indicator for 5-30s
+        with no further edits, which feels frozen. The arm fires the
+        first time we see the tool invocation; the disarm is the
+        matching ``_is_tool_call_complete_event`` for the same name.
+        """
+        if not isinstance(event_obj, dict):
+            return False
+        event_type = str(event_obj.get("type") or event_obj.get("event") or "").lower()
+        # ``item.started`` is the canonical codex-CLI start event for a
+        # tool invocation. ``item.updated`` is accepted too because
+        # some codex builds emit the first tick of a tool call as an
+        # updated envelope instead of started; both carry a tool-call
+        # item, so reusing ``_tool_call_name`` is the right gate.
+        if event_type not in ("item.started", "item.updated"):
+            return False
+        return self._tool_call_name(event_obj) is not None
+
+    def _is_tool_call_complete_event(self, event_obj: dict | None) -> bool:
+        """True for an ``item.completed`` event whose item envelope is
+        a function_call / tool_call / command_execution. Used by
+        ``_read_jsonl_stdout`` to disarm the round-6 tool-pulse
+        window. The disarm only fires when the completed tool name
+        matches the currently armed name so a stale complete from a
+        prior call cannot wipe a fresh arm.
+        """
+        if not isinstance(event_obj, dict):
+            return False
+        event_type = str(event_obj.get("type") or event_obj.get("event") or "").lower()
+        if event_type != "item.completed":
+            return False
+        return self._tool_call_name(event_obj) is not None
+
     def _is_user_visible_event(self, event_obj: dict | None) -> bool:
         """True when the event has a top-level text-like field that would
         be worth showing in chat. Returns False for non-dict payloads,
@@ -712,6 +749,20 @@ class CodexRunner:
         # editing the placeholder on every reasoning tick.
         thinking_since: float | None = None
         thinking_indicator_sent = False
+        # Round-6 tool-pulse state. A long tool call (network fetch,
+        # big shell pipeline) would otherwise leave the placeholder
+        # sitting on the one-line 🔧 name... indicator from
+        # round 2 with no further edits for 5-30s, which reads as
+        # frozen. ``pending_tool_name`` is the active tool call;
+        # ``pending_tool_since`` is the wall time the arm fired;
+        # ``last_pulse_at`` is the most recent pulse tick (None
+        # between fires). Disarm is the matching ``item.completed``
+        # event; the pulse is gated by ``TOOL_PULSE_THRESHOLD_SECONDS``
+        # (first-fire delay) and ``TOOL_PULSE_INTERVAL_SECONDS``
+        # (re-arm).
+        pending_tool_name: str | None = None
+        pending_tool_since: float | None = None
+        last_pulse_at: float | None = None
         with job.log_path.open("ab") as log_file:
             while True:
                 line = await process.stdout.readline()
@@ -751,6 +802,29 @@ class CodexRunner:
                     if thinking_since is not None:
                         thinking_since = None
                         thinking_indicator_sent = False
+                # Round-6 tool-pulse arm/disarm. A long tool call leaves
+                # the placeholder sitting on the one-line indicator that
+                # round 2 shipped; this arms a periodic "still working"
+                # pulse that updates the indicator in place with the
+                # elapsed seconds. The arm fires on the first
+                # ``item.started`` for a tool call; the disarm is the
+                # matching ``item.completed`` for the same name so a
+                # stale complete from a prior call cannot wipe a fresh
+                # arm. The arm/ disarm is intentionally outside the
+                # prose gate so the tool-call pulse fires even when the
+                # prose "growing_ok" rule would otherwise dedup.
+                if self._is_tool_call_start_event(event_obj):
+                    tool_name = self._tool_call_name(event_obj)
+                    if tool_name is not None:
+                        pending_tool_name = tool_name
+                        pending_tool_since = now
+                        last_pulse_at = None
+                elif self._is_tool_call_complete_event(event_obj):
+                    completed_name = self._tool_call_name(event_obj)
+                    if completed_name is not None and completed_name == pending_tool_name:
+                        pending_tool_name = None
+                        pending_tool_since = None
+                        last_pulse_at = None
                 is_prose = isinstance(event_obj, dict) and self._is_prose_event(event_obj)
                 is_prose_complete = is_prose and event_obj.get("type") == "item.completed"
                 # Tool calls (is_prose False) bypass the gate: the
@@ -797,6 +871,28 @@ class CodexRunner:
                     if is_prose:
                         last_prose_text = None if is_prose_complete else event_text
                     await on_progress(truncate(event_text, 1200))
+                # Round-6 tool-pulse send. Only fires after
+                # ``TOOL_PULSE_THRESHOLD_SECONDS`` of an active tool call
+                # and re-arms every ``TOOL_PULSE_INTERVAL_SECONDS`` until
+                # the matching ``item.completed`` disarms. Shares the
+                # ``telegram_progress_seconds`` cooldown with the rest
+                # of the gate ladder so the pulse never overruns
+                # Telegram's 20 edits/min/message limit. ``last_sent_text``
+                # is not updated on the pulse so a tool-call summary
+                # that lands right after the pulse still surfaces (the
+                # prose gate's growing_ok / event_text != last_sent_text
+                # rules apply normally).
+                if (
+                    pending_tool_name is not None
+                    and pending_tool_since is not None
+                    and now - pending_tool_since >= TOOL_PULSE_THRESHOLD_SECONDS
+                    and (last_pulse_at is None or now - last_pulse_at >= TOOL_PULSE_INTERVAL_SECONDS)
+                    and now - last_sent >= self.settings.telegram_progress_seconds
+                ):
+                    last_sent = now
+                    last_pulse_at = now
+                    elapsed = int(now - pending_tool_since)
+                    await on_progress(f"\U0001f527 {pending_tool_name} ({elapsed}s)...")
 
     async def _read_stderr(self, job: Job, process: asyncio.subprocess.Process) -> None:
         assert process.stderr is not None
@@ -1596,6 +1692,21 @@ def _extract_command_name(command: str) -> str | None:
 # (mirrors the frozen-Settings bypass used by progress_smoke).
 THINKING_INDICATOR = "💭 thinking..."
 THINKING_THRESHOLD_SECONDS = 1.0
+# ---- Tool-call pulse (chat-feel round 6) -----------------------------
+# A long tool call (network fetch, big shell pipeline) leaves the
+# placeholder sitting on the one-line "🔧 name..." indicator that
+# round 2 shipped, with no further edits for 5-30s. The user reads
+# the chat as frozen. This block adds a periodic "still working"
+# pulse that updates the indicator in place with the elapsed seconds.
+# The arm fires on the first item.started for a tool call; the disarm
+# is the matching item.completed for the same name. The pulse shares
+# the telegram_progress_seconds cooldown so we never overrun Telegram's
+# 20 edits/min/message limit. Re-binding TOOL_PULSE_THRESHOLD_SECONDS
+# and TOOL_PULSE_INTERVAL_SECONDS at the module level is the test
+# override hook (mirrors the THINKING_THRESHOLD_SECONDS pattern above
+# and the frozen-Settings bypass used by progress_smoke).
+TOOL_PULSE_THRESHOLD_SECONDS = 4.0
+TOOL_PULSE_INTERVAL_SECONDS = 4.0
 MEMO_ENV_SKIP_DIRS = (".venv", "venv", "env", "node_modules", "__pycache__")
 
 
