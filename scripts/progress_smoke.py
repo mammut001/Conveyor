@@ -1100,6 +1100,175 @@ def _test_consecutive_dedup() -> CheckResult:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
 
+def _test_is_prose_event_exists() -> CheckResult:
+    name = "AST: _is_prose_event is FunctionDef on CodexRunner with signature (self, event_obj: dict | None -> bool)"
+    try:
+        method = _class_method(_parse_runner(), "CodexRunner", "_is_prose_event")
+        if not isinstance(method, ast.FunctionDef):
+            return CheckResult(name, False, "method missing on CodexRunner class")
+        actual = _signature_str(method)
+        expected = "self, event_obj: dict | None -> bool"
+        if actual != expected:
+            return CheckResult(name, False, f"signature mismatch: got {actual!r}, expected {expected!r}")
+        return CheckResult(name, True, actual)
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_is_prose_event_classification() -> CheckResult:
+    """Classify a spread of event shapes against the round-4 contract:
+    agent_message items and top-level text-like fields are prose;
+    lifecycle, reasoning, function_call, and command_execution are NOT
+    prose (so they bypass the per-stream growing gate and surface as
+    the current state). Non-dict / malformed payloads are not prose."""
+    name = "behavior: _is_prose_event classifies agent_message / top-level text as prose; tool calls / lifecycle / malformed as not"
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                r = runner_mod.CodexRunner(settings)
+                cases = [
+                    # agent_message item.updated / item.completed -> True
+                    ({"type": "item.updated", "item": {"type": "agent_message", "text": "hello"}}, True),
+                    ({"type": "item.completed", "item": {"type": "agent_message", "text": "hi"}}, True),
+                    # top-level message / summary / text / delta -> True
+                    ({"message": "early note"}, True),
+                    ({"summary": "tight recap"}, True),
+                    ({"text": "verbatim quote"}, True),
+                    ({"delta": "stream chunk"}, True),
+                    # thread.started / turn.completed / reasoning -> False
+                    ({"type": "thread.started"}, False),
+                    ({"type": "turn.completed", "usage": {}}, False),
+                    ({"item": {"type": "reasoning", "text": "..."}}, False),
+                    # function_call / command_execution must NOT be prose
+                    # (the growing gate only applies to user-readable chat text)
+                    ({"item": {"type": "function_call", "name": "shell"}}, False),
+                    ({"item": {"type": "command_execution", "command": "curl ..."}}, False),
+                    # non-dict / malformed -> False
+                    (None, False),
+                    ({"item": "not a dict"}, False),
+                ]
+                offenders = []
+                for event_obj, expected in cases:
+                    actual = r._is_prose_event(event_obj)
+                    if actual is not expected:
+                        offenders.append((event_obj, expected, actual))
+                if offenders:
+                    return CheckResult(
+                        name, False,
+                        f"{len(offenders)} misclassified: " + ", ".join(
+                            f"in={c[0]!r} expected={c[1]} got={c[2]}" for c in offenders[:5]
+                        ),
+                    )
+                return CheckResult(
+                    name, True,
+                    f"{len(cases)} cases classified correctly",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_growing_gate_on_prose() -> CheckResult:
+    """Per-stream prose gate: only forward edits that strictly extend
+    the last sent prose. A mid-stream shrink is suppressed so the chat
+    does not visibly re-write to a shorter string. ``item.completed``
+    is exempt so the final text always wins; the tracker resets on
+    complete so the next item can start a new growing chain (even if
+    its first update is shorter than the previous item's last edit)."""
+    name = "behavior: _read_jsonl_stdout suppresses mid-stream prose shrinks; item.completed wins; new items start a new chain"
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                # 0-second cooldown so only the growing gate is exercised.
+                # Settings is a frozen dataclass, so we bypass the
+                # __setattr__ guard rather than mutating the field
+                # through the public API (which would raise FrozenInstanceError).
+                object.__setattr__(settings, "telegram_progress_seconds", 0.0)
+                r = runner_mod.CodexRunner(settings)
+
+                log_path = tmp_p / "job.jsonl"
+                # Use SimpleNamespace: the reader only touches .log_path
+                # and assigns to .last_event. Avoid full Job so the test
+                # does not pull in any worktree / metadata side effects.
+                job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+                lines = [
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello"}}),
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hello world"}}),
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "a", "text": "Hi"}}),
+                    json.dumps({"type": "item.completed", "item": {"type": "agent_message", "id": "a", "text": "Hi there"}}),
+                    json.dumps({"type": "item.updated", "item": {"type": "agent_message", "id": "b", "text": "Bye"}}),
+                ]
+                encoded = [ln.encode("utf-8") + b"\n" for ln in lines]
+
+                class _FakeStdout:
+                    def __init__(self, chunks: list[bytes]) -> None:
+                        self._chunks = list(chunks)
+
+                    async def readline(self) -> bytes:
+                        if self._chunks:
+                            return self._chunks.pop(0)
+                        return b""
+
+                process = SimpleNamespace(stdout=_FakeStdout(encoded))
+
+                progress_calls: list[str] = []
+
+                async def _on_progress(text: str) -> None:
+                    progress_calls.append(text)
+
+                asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+
+                expected = ["Hello", "Hello world", "Hi there", "Bye"]
+                if progress_calls != expected:
+                    return CheckResult(
+                        name, False,
+                        f"progress calls mismatch: expected {expected!r}; got {progress_calls!r}",
+                    )
+                # All 5 raw lines were still written to the log (growing
+                # gate is for the user-facing edit, not the audit trail).
+                logged = log_path.read_text()
+                if logged.count("agent_message") != 5:
+                    return CheckResult(
+                        name, False,
+                        f"raw log should contain 5 agent_message lines; got {logged.count('agent_message')}",
+                    )
+                return CheckResult(
+                    name, True,
+                    "4 progress calls (mid-stream 'Hi' shrink suppressed; "
+                    "item.completed 'Hi there' wins; new item 'Bye' starts a new chain); 5 raw lines logged",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
 
 def main() -> int:
     tests = [
@@ -1129,6 +1298,10 @@ def main() -> int:
         _test_lifecycle_events_suppressed,
         _test_no_event_type_prefix,
         _test_consecutive_dedup,
+        # Chat-feel round-4 contracts
+        _test_is_prose_event_exists,
+        _test_is_prose_event_classification,
+        _test_growing_gate_on_prose,
     ]
     results = [t() for t in tests]
     print_results(results)

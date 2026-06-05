@@ -574,6 +574,29 @@ class CodexRunner:
             return True
         return False
 
+    def _is_prose_event(self, event_obj: dict | None) -> bool:
+        """True when the event carries user-readable chat prose that
+        should be streamed growing in place. Strict subset of
+        ``_is_user_visible_event`` (same checks minus the tool-call
+        indicator branch). Tool calls are short-lived indicators
+        and the user wants the *current* state, not a growing
+        sequence, so they are excluded here on purpose.
+        """
+        if not isinstance(event_obj, dict):
+            return False
+        if self._is_reasoning_event(event_obj):
+            return False
+        # Agent_message items are the streaming prose. Check this
+        # BEFORE the top-level text sweep so an item envelope wins
+        # over any incidental top-level field on the same event.
+        if self._agent_message_text(event_obj) is not None:
+            return True
+        for key in ("message", "summary", "text", "delta"):
+            value = event_obj.get(key)
+            if isinstance(value, str) and value.strip():
+                return True
+        return False
+
     def _tool_call_name(self, event_obj: dict | None) -> str | None:
         """Return the tool name for a function_call / tool_call item, or
         None when this event isn't a tool invocation. Used by
@@ -664,6 +687,17 @@ class CodexRunner:
         # lines are still written to ``job.log_path``; only the user-
         # facing edit is skipped.
         last_sent_text: str | None = None
+        # Per-stream "growing" gate for prose events. When codex
+        # streams an ``agent_message`` (or a top-level text field) the
+        # item text can briefly SHRINK mid-stream if the model
+        # re-writes a paragraph. Editing the placeholder to a shorter
+        # string makes the chat visibly re-write from char 1, which
+        # feels like the model is "going backwards". Only forward
+        # edits that strictly extend the last sent prose. ``item.
+        # completed`` is exempt so the final text always wins; the
+        # tracker resets on complete so the next item can be shorter
+        # (and start a new growing chain).
+        last_prose_text: str | None = None
         with job.log_path.open("ab") as log_file:
             while True:
                 line = await process.stdout.readline()
@@ -683,14 +717,30 @@ class CodexRunner:
                     job.last_event = event_text
                 self._capture_usage(job, text)
                 now = asyncio.get_running_loop().time()
+                is_prose = isinstance(event_obj, dict) and self._is_prose_event(event_obj)
+                is_prose_complete = is_prose and event_obj.get("type") == "item.completed"
+                # Tool calls (is_prose False) bypass the gate: the
+                # user wants the current "🔧 name..." state, not a
+                # growing sequence. Lifecycle events are already
+                # filtered to "" by _event_summary so they cannot
+                # reach this point.
+                growing_ok = (
+                    not is_prose
+                    or last_prose_text is None
+                    or len(event_text) > len(last_prose_text)
+                    or is_prose_complete
+                )
                 if (
                     event_text
                     and event_text != last_sent_text
                     and self._should_send_event_progress(event_text, event_obj)
                     and now - last_sent >= self.settings.telegram_progress_seconds
+                    and growing_ok
                 ):
                     last_sent = now
                     last_sent_text = event_text
+                    if is_prose:
+                        last_prose_text = None if is_prose_complete else event_text
                     await on_progress(truncate(event_text, 1200))
 
     async def _read_stderr(self, job: Job, process: asyncio.subprocess.Process) -> None:
