@@ -472,6 +472,16 @@ def _save_operator_profile(data: dict) -> bool:
 async def onboard_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await _guard(update):
         return ConversationHandler.END
+    # The same entry point serves two surfaces: the explicit
+    # /onboard command and the inline "开始 onboarding" button
+    # (callback_data="ob:start") on the first-run welcome. For the
+    # callback case we have to answer the callback query so Telegram
+    # dismisses the button's loading indicator before the next
+    # message arrives; _reply uses effective_message.reply_text
+    # which is the same for both Update paths so no branching
+    # needed downstream.
+    if update.callback_query:
+        await update.callback_query.answer()
     context.user_data["onboarding_draft"] = {}
     await _reply(
         update,
@@ -583,10 +593,15 @@ async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # set their identity; the prompt just doesn't let the first
     # message get lost in a job they didn't intend.
     if not _operator_profile_exists():
+        # First-run nudge: same button as /start so the user does
+        # not have to type /onboard after reading the hint.
         await _reply(
             update,
             "第一次用先告诉我你是谁：\n"
             "`/onboard` 走 3 步问卷，或 `/skip` 用默认。",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("开始 onboarding", callback_data="ob:start")],
+            ]),
         )
         return
     message = update.effective_message
@@ -690,12 +705,21 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # optional) but the user gets a clear "first time" experience
     # mirroring Hermes-style personal agent onboarding.
     if not _operator_profile_exists():
+        # First-run path: show the welcome with a one-tap button so
+        # the user does not have to remember the /onboard command.
+        # The button drives the same ConversationHandler entry
+        # point (callback_data="ob:start" -> onboard_start). /skip
+        # remains available as a text command for users who want
+        # to skip without going through the Q&A.
         await _reply(
             update,
             "你好！看起来这是第一次用。\n\n"
             "`/onboard` 告诉我怎么称呼你、用啥语言、想要啥风格，"
             "之后每次都会按这个走。\n"
             "不想设的话 `/skip` 跳过（用默认）。",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("开始 onboarding", callback_data="ob:start")],
+            ]),
         )
         return
     await _reply(update, "你好！直接发消息给我就行，我会用我的方式回。改文件用 /fix，运维相关的命令用 /help。")
@@ -869,7 +893,15 @@ def main() -> None:
     # writing operator.json (the .env defaults stay in effect).
     application.add_handler(
         ConversationHandler(
-            entry_points=[CommandHandler("onboard", onboard_start)],
+            entry_points=[
+                CommandHandler("onboard", onboard_start),
+                # First-run welcome button (callback_data="ob:start")
+                # drives the same conversation start as the
+                # /onboard command. Pattern is anchored so a typo
+                # callback from another handler can't accidentally
+                # enter the conversation.
+                CallbackQueryHandler(onboard_start, pattern=r"^ob:start$"),
+            ],
             states={
                 ONBOARDING_NAME: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, onboard_name),
