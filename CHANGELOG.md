@@ -1,8 +1,44 @@
 # CHANGELOG
 
-# Trajectory snapshot at HEAD `484c085` (41 commits). README.md owns the
+# Trajectory snapshot at HEAD `0c13cdc` (43 commits). README.md owns the
 file/command reference; this file is the change history and current state
 at a glance.
+
+## [unreleased] - onboarding C button (UX polish)
+
+The first-run `/onboard` flow used to be command-only: the user
+had to type `/onboard` after reading the welcome message or the
+first-message nudge. This round adds a one-tap inline button
+("开始 onboarding", `callback_data="ob:start"`) to both the
+`/start` welcome and the `text_cmd` first-run nudge so the
+user can launch the Q&A without typing. The button drives the
+same `ConversationHandler` entry point as the `/onboard`
+command (`onboard_start` is now callback-aware — it calls
+`update.callback_query.answer()` before sending the first
+question so Telegram dismisses the loading indicator).
+
+Telegram bots cannot send proactive messages to users who have
+not messaged them first; the button is the best UX in that
+constraint. `/skip` remains available as a text command for
+the "don't ask me anything, just use defaults" path.
+
+- `0c13cdc` - bot: add inline '开始 onboarding' button to the first-run welcome (onboarding-C button)
+  - `bot.py` - 4 small changes: `onboard_start` now handles
+    both Update and CallbackQuery (calls
+    `update.callback_query.answer()` to dismiss the button's
+    loading indicator); `start_cmd` first-run reply includes
+    the inline button via `InlineKeyboardMarkup`; `text_cmd`
+    first-run nudge carries the same button; `ConversationHandler`
+    `entry_points` extended with
+    `CallbackQueryHandler(onboard_start, pattern=r"^ob:start$")`
+    alongside the existing `CommandHandler("onboard", ...)`.
+    The pattern anchor prevents a typo callback from another
+    handler from accidentally entering the conversation.
+  - 0 new smoke cases: the button is UI plumbing that
+    env-free smoke cannot exercise end-to-end. The
+    ConversationHandler shape is pinned by the existing
+    onboard_* test handles; the VPS deploy gate verifies
+    the live button click.
 
 ## [unreleased] - onboarding round C
 
@@ -561,7 +597,6 @@ This batch is governance, docs, and CI only; the runtime surface
 - Maintain is a separate unit from the bot - a maintain failure does not
   take the bot down
 
-### Smokes (8 scripts, 89 cases)
 ### Smokes (8 scripts, 91 cases)
 - `make smoke` is the local pre-deploy gate
 - VPS deploy gate is per-script `python scripts/*_smoke.py`; the Makefile
@@ -595,9 +630,10 @@ This batch is governance, docs, and CI only; the runtime surface
   counter, the next hourly tick is what surfaces the recovery
 
 
-## Commit timeline (all 41, newest first)
+## Commit timeline (all 43, newest first)
 
 ```
+0c13cdc bot: add inline '开始 onboarding' button to the first-run welcome (onboarding-C button)
 484c085 bot: add first-run /onboard conversation + operator.json persistence (onboarding-C)
 54f1144 runner: inject operator profile + first-of-day day-brief into every prompt (onboarding A+B)
 edd2750 runner: bypass progress cooldown for the first event after the placeholder

@@ -5,7 +5,7 @@ quickstart; **CHANGELOG.md** is the change history and current surface at a
 glance; this file is the design + deploy + invariants + open-items brief a
 new session needs to be useful fast.
 
-Snapshot at HEAD `484c085` (2026-06-05, America/Toronto). 41 commits on
+Snapshot at HEAD `0c13cdc` (2026-06-05, America/Toronto). 43 commits on
 `main`. No git remote configured. Working tree is clean. 91/91 smokes
 green (progress_smoke 19 -> 23 cases after chat-feel round 2; 23 -> 26
 cases after chat-feel round 4; 26 -> 30 cases after chat-feel round
@@ -47,6 +47,13 @@ language / style) that writes a persistent
 no operator.json and `start_cmd` + `text_cmd` both nudge
 `/onboard` instead of silently starting a job, mirroring the
 Hermes-style "first time" experience.
+Onboarding C button (`0c13cdc`) adds a one-tap inline
+"开始 onboarding" button to the first-run /start and first-message
+nudges, so the user does not have to type /onboard after reading
+the welcome — the button drives the same ConversationHandler
+entry point (callback_data="ob:start"). Telegram bots cannot
+send proactive messages to users who have not messaged them
+first, so this is the best UX in that constraint.
 
 ---
 
@@ -498,6 +505,15 @@ Makefile declares them:
    is absent — the bot-side /onboard ConversationHandler and
    first-run nudge are deploy-gated on the VPS, not env-free
    smoke-tested)
+   Onboarding C button (`0c13cdc`) is UI plumbing with 0
+   new smoke cases — the button is a `CallbackQueryHandler`
+   driving the same `onboard_start` entry point, which the
+   existing onboard_* test handles already cover, and the
+   VPS deploy gate verifies the live click. The feature is
+   pinned in the project dossier via the round-8 / round-A+B
+   / round-C pattern: each round adds prose to the snapshot
+   header description, and the smoke count only bumps when
+   a new behavior case lands.
 
 `memo_smoke.py` is the full integration smoke and needs a populated `.env`
 — it is gated behind `make smoke-all` precisely so the env-free chain is
@@ -767,4 +783,4 @@ ssh $REMOTE \
 
 ---
 
-*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `484c085`.*
+*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `0c13cdc`.*
