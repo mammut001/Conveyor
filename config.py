@@ -102,7 +102,7 @@ OPERATOR_PROFILE_FIELDS = (
 )
 
 
-def _load_operator_profile(memory_root: Path) -> dict[str, str | None]:
+def load_operator_profile(memory_root: Path) -> dict[str, str | None]:
     path = memory_root / "operator.json"
     if not path.exists():
         return {}
@@ -145,7 +145,7 @@ def load_settings(env_file: str | Path = ".env") -> Settings:
     # operator_name is None-friendly: an empty string from
     # operator.json or env becomes None so the _operator_profile_text
     # renderer can fall back to the "(anonymous)" placeholder.
-    profile = _load_operator_profile(memory_root)
+    profile = load_operator_profile(memory_root)
     operator_name_env = os.getenv("OPERATOR_NAME") or None
     operator_language_env = os.getenv("OPERATOR_LANGUAGE", "zh-CN")
     operator_style_env = os.getenv("OPERATOR_STYLE", "terse")

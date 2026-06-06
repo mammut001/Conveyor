@@ -1097,18 +1097,31 @@ class CodexRunner:
         # always non-empty for the model. The language and style are
         # duplicated inside the block (attrs + prose) so the directive
         # is harder to lose in a long context.
-        name = self.settings.operator_name or "(anonymous)"
+        # Hot-reload: read operator.json fresh on every call so
+        # /profile edits take effect on the next job without a
+        # bot restart. The file is ~200 bytes; reads are O(1)
+        # from the page cache and the single-write _save
+        # in bot.py is atomic on Linux (under PIPE_BUF). The
+        # settings.operator_* fields (env / startup defaults)
+        # are the fallback when operator.json is missing or a
+        # field is unset in the JSON.
+        from config import load_operator_profile as _load_op_live
+        live = _load_op_live(self.settings.codex_memory_root)
+        name = live.get("operator_name") or self.settings.operator_name or "(anonymous)"
+        language = live.get("operator_language") or self.settings.operator_language
+        style = live.get("operator_style") or self.settings.operator_style
+        standing = live.get("operator_standing") or self.settings.operator_standing
         return (
             f'<operator-profile name="{name}" '
-            f'language="{self.settings.operator_language}" '
-            f'style="{self.settings.operator_style}" '
-            f'standing="{self.settings.operator_standing}">\n'
+            f'language="{language}" '
+            f'style="{style}" '
+            f'standing="{standing}">\n'
             f"You are the operator's persistent coding agent. The "
             f"operator is a single human in the "
             f"{self.settings.user_timezone} timezone. Default reply "
-            f"language: {self.settings.operator_language}. Default "
-            f"tone: {self.settings.operator_style}. Setup: "
-            f"{self.settings.operator_standing}.\n"
+            f"language: {language}. Default "
+            f"tone: {style}. Setup: "
+            f"{standing}.\n"
             f"</operator-profile>\n\n"
         )
 

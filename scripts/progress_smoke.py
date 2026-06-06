@@ -2641,6 +2641,154 @@ def _test_load_settings_falls_back_to_env_when_no_operator_json() -> CheckResult
     except Exception as exc:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
+# ---- hot-reload: operator.json picked up on every prefetch ----
+# The /profile edit path lets the operator change identity
+# without a bot restart. _operator_profile_text in runner.py
+# re-reads operator.json on every call (not at startup), so
+# the next job after the edit sees the new values. The 2
+# cases pin both paths: (1) no operator.json -> env defaults
+# fall through, (2) operator.json edited live -> next call
+# renders the new values without a bot restart.
+
+def _test_operator_profile_text_uses_env_when_no_operator_json() -> CheckResult:
+    """Hot-reload: when operator.json is absent, _operator_profile_text
+    falls through to settings.operator_* (the env values loaded by
+    config.py at startup). This pins the no-profile-yet path so a
+    fresh deploy without operator.json still renders the profile
+    block with the .env defaults."""
+    name = "behavior: _operator_profile_text uses env defaults when operator.json is absent (hot-reload)"
+    try:
+        import runner as runner_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            memory_root = tmp_p / "memory"
+            memory_root.mkdir(parents=True, exist_ok=True)
+            # No operator.json exists.
+            assert not (memory_root / "operator.json").exists()
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_BIN": "codex",
+                "CODEX_MEMORY_ROOT": str(memory_root),
+                "USER_TIMEZONE": "UTC",
+                "OPERATOR_NAME": "EnvName",
+                "OPERATOR_LANGUAGE": "en",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                r = runner_mod.CodexRunner(settings)
+                text = r._operator_profile_text()
+                for needle in (
+                    'name="EnvName"',
+                    'language="en"',
+                    'style="terse"',
+                    'standing="personal-scale, single operator"',
+                ):
+                    if needle not in text:
+                        return CheckResult(
+                            name, False,
+                            f"env fallback missing: {needle!r} not in profile text",
+                        )
+                return CheckResult(
+                    name, True,
+                    f"no operator.json -> env defaults used for all 4 attrs: name=EnvName, language=en, style=terse, standing=personal-scale, single operator",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_operator_profile_text_picks_up_live_operator_json_edit() -> CheckResult:
+    """Hot-reload: when operator.json is edited live (no bot restart),
+    the next _operator_profile_text call re-reads the file and
+    renders the new values. This pins the persistence-wins path
+    so a /profile edit or a manual ssh edit takes effect on the
+    next job. The 3-step sequence is:
+      1. No operator.json -> env defaults render
+      2. Write operator.json with Alice/ja -> next call renders Alice/ja
+      3. Edit operator.json to Bob/en -> next call renders Bob/en
+    The bot never restarts between calls; the file-watch is on
+    every call."""
+    name = "behavior: _operator_profile_text re-reads operator.json on every call (hot-reload, no restart)"
+    try:
+        import runner as runner_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            memory_root = tmp_p / "memory"
+            memory_root.mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_BIN": "codex",
+                "CODEX_MEMORY_ROOT": str(memory_root),
+                "USER_TIMEZONE": "UTC",
+                "OPERATOR_NAME": "EnvName",
+                "OPERATOR_LANGUAGE": "en",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                r = runner_mod.CodexRunner(settings)
+
+                # Step 1: no operator.json -> env defaults
+                t1 = r._operator_profile_text()
+                if 'name="EnvName"' not in t1 or 'language="en"' not in t1:
+                    return CheckResult(
+                        name, False,
+                        f"step 1 (no operator.json): env defaults missing in profile text",
+                    )
+
+                # Step 2: write operator.json, no restart, call again
+                (memory_root / "operator.json").write_text(
+                    json.dumps({
+                        "operator_name": "Alice",
+                        "operator_language": "ja",
+                        "operator_style": "verbose",
+                        "operator_standing": "team-lead",
+                    }),
+                    encoding="utf-8",
+                )
+                t2 = r._operator_profile_text()
+                for needle in (
+                    'name="Alice"',
+                    'language="ja"',
+                    'style="verbose"',
+                    'standing="team-lead"',
+                ):
+                    if needle not in t2:
+                        return CheckResult(
+                            name, False,
+                            f"step 2 (after write): expected {needle!r} (from operator.json) in profile text",
+                        )
+                if 'name="EnvName"' in t2:
+                    return CheckResult(
+                        name, False,
+                        "step 2: env name='EnvName' leaked through after operator.json was written",
+                    )
+
+                # Step 3: edit operator.json live, no restart, call again
+                (memory_root / "operator.json").write_text(
+                    json.dumps({"operator_name": "Bob", "operator_language": "en"}),
+                    encoding="utf-8",
+                )
+                t3 = r._operator_profile_text()
+                if 'name="Bob"' not in t3 or 'language="en"' not in t3:
+                    return CheckResult(
+                        name, False,
+                        f"step 3 (after live edit): expected name='Bob' language='en' in profile text",
+                    )
+                if 'name="Alice"' in t3:
+                    return CheckResult(
+                        name, False,
+                        "step 3: stale name='Alice' from the previous operator.json content",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"operator.json live-edits take effect on the next call: t1=EnvName -> t2=Alice/ja/verbose/team-lead -> t3=Bob/en (no restart)",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
 def main() -> int:
     tests = [
         # AST contracts
@@ -2698,6 +2846,9 @@ def main() -> int:
         # Onboarding-C contracts
         _test_load_settings_reads_operator_json_overrides,
         _test_load_settings_falls_back_to_env_when_no_operator_json,
+        # Hot-reload contracts
+        _test_operator_profile_text_uses_env_when_no_operator_json,
+        _test_operator_profile_text_picks_up_live_operator_json_edit,
     ]
     results = [t() for t in tests]
     print_results(results)
