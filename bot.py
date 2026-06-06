@@ -7,7 +7,10 @@ import re
 from datetime import datetime
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
+                               ContextTypes, ConversationHandler, InlineQueryHandler,
+                               MessageHandler, filters)
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import load_settings
 from redaction import redact_text, truncate
@@ -420,8 +423,171 @@ async def editcheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _reply(update, outcome.summary)
 
 
+# --- Onboarding-C: first-run /onboard conversation + /profile view ----
+# When the user fires the bot for the first time (no
+# codex_memory_root/operator.json yet), /onboard walks them through
+# a 3-step identity setup: name (free text), language (3 button
+# choices + free text fallback), style (3 button choices). Answers
+# are saved to operator.json which load_settings reads on next
+# startup. The conversation uses python-telegram-bot\'s
+# ConversationHandler so the per-chat state lives in the bot
+# runtime; settings persistence is via the JSON file (bot restart
+# does not lose progress). /skip ends the conversation without
+# writing operator.json — the .env defaults stay in effect.
+# /profile shows the current 4-field profile and points at /onboard
+# to re-run. The intent is a Hermes-style first-run experience:
+# light-touch 3 questions, persistent across restarts, editable
+# later, no ceremony, no forced commitment.
+
+ONBOARDING_NAME, ONBOARDING_LANG, ONBOARDING_STYLE = range(3)
+OPERATOR_PROFILE_FILENAME = "operator.json"
+
+
+def _operator_profile_path() -> Path:
+    return settings.codex_memory_root / OPERATOR_PROFILE_FILENAME
+
+
+def _operator_profile_exists() -> bool:
+    return _operator_profile_path().exists()
+
+
+def _save_operator_profile(data: dict) -> bool:
+    """Write the operator.json with the 4 known fields. Returns True
+    on success, False on OSError. Stale or unknown fields from
+    older /onboard runs are silently dropped (the loader only
+    returns the 4 known keys)."""
+    path = _operator_profile_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({k: data[k] for k in OPERATOR_PROFILE_FIELDS if k in data}, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return True
+    except OSError:
+        logger.exception("Failed to write operator.json")
+        return False
+
+
+async def onboard_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await _guard(update):
+        return ConversationHandler.END
+    context.user_data["onboarding_draft"] = {}
+    await _reply(
+        update,
+        "1/3 怎么称呼你？\n"
+        "(直接回复名字，或 `/skip` 跳过全部问卷)",
+    )
+    return ONBOARDING_NAME
+
+
+async def onboard_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    name = (update.effective_message.text or "").strip()
+    if not name:
+        await _reply(update, "名字不能为空。直接回复名字，或 `/skip` 跳过：")
+        return ONBOARDING_NAME
+    context.user_data["onboarding_draft"]["operator_name"] = name
+    await _reply(
+        update,
+        f"好的，{name}。\n\n2/3 用什么语言？",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("zh-CN", callback_data="ob:lang:zh-CN")],
+            [InlineKeyboardButton("en", callback_data="ob:lang:en")],
+            [InlineKeyboardButton("ja", callback_data="ob:lang:ja")],
+        ]),
+    )
+    return ONBOARDING_LANG
+
+
+async def onboard_lang_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    lang = query.data.split(":", 2)[2]
+    context.user_data["onboarding_draft"]["operator_language"] = lang
+    await query.edit_message_text(
+        f"已选 {lang}。\n\n3/3 想要啥风格？",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("terse", callback_data="ob:style:terse")],
+            [InlineKeyboardButton("balanced", callback_data="ob:style:balanced")],
+            [InlineKeyboardButton("detailed", callback_data="ob:style:detailed")],
+        ]),
+    )
+    return ONBOARDING_STYLE
+
+
+async def onboard_style_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    style = query.data.split(":", 2)[2]
+    context.user_data["onboarding_draft"]["operator_style"] = style
+    # Default standing from project assumption; /profile shows it
+    # so the user can change it later if they want to.
+    context.user_data["onboarding_draft"]["operator_standing"] = settings.operator_standing or "personal-scale, single operator"
+    saved = _save_operator_profile(context.user_data["onboarding_draft"])
+    if not saved:
+        await query.edit_message_text("保存失败了，重启 bot 后再试。")
+        return ConversationHandler.END
+    draft = context.user_data["onboarding_draft"]
+    await query.edit_message_text(
+        f"✅ 已保存到 `operator.json`：\n"
+        f"  name: {draft.get('operator_name', '?')}\n"
+        f"  language: {draft.get('operator_language', '?')}\n"
+        f"  style: {draft.get('operator_style', '?')}\n"
+        f"  standing: {draft.get('operator_standing', '?')}\n\n"
+        f"生效需要重启 bot（runner 启动时读这份 JSON）。\n"
+        f"改用 /profile；重做问卷 /onboard。"
+    )
+    return ConversationHandler.END
+
+
+async def onboard_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _reply(update, "Onboarding 取消。继续用 .env 默认值。")
+    return ConversationHandler.END
+
+
+async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard(update):
+        return
+    if not _operator_profile_exists():
+        await _reply(
+            update,
+            "暂无 `operator.json`，用的是 .env 默认值。\n"
+            "跑 `/onboard` 创建一份（重启后生效）。",
+        )
+        return
+    try:
+        content = _operator_profile_path().read_text(encoding="utf-8")
+        data = json.loads(content)
+    except (OSError, json.JSONDecodeError) as exc:
+        await _reply(update, f"读 operator.json 失败：{exc}")
+        return
+    text = "当前 profile（`codex_memory_root/operator.json`）：\n"
+    for key, label in (
+        ("operator_name", "name"),
+        ("operator_language", "language"),
+        ("operator_style", "style"),
+        ("operator_standing", "standing"),
+    ):
+        val = data.get(key)
+        text += f"  {label}: {val if val is not None else '(unset)'}\n"
+    text += "\n重做问卷 `/onboard`。"
+    await _reply(update, text)
+
+
 async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
+        return
+    # Onboarding-C: first-run nudge. If the user types ANY message
+    # before running /onboard, surface the prompt instead of
+    # silently starting a job. They can still /onboard later to
+    # set their identity; the prompt just doesn't let the first
+    # message get lost in a job they didn't intend.
+    if not _operator_profile_exists():
+        await _reply(
+            update,
+            "第一次用先告诉我你是谁：\n"
+            "`/onboard` 走 3 步问卷，或 `/skip` 用默认。",
+        )
         return
     message = update.effective_message
     prompt = (message.text if message and message.text else "").strip()
@@ -517,6 +683,20 @@ async def journal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
+        return
+    # Onboarding-C: when no operator.json exists yet, replace the
+    # canned greeting with a first-run prompt that nudges the user
+    # to /onboard. The .env defaults still work (operator.json is
+    # optional) but the user gets a clear "first time" experience
+    # mirroring Hermes-style personal agent onboarding.
+    if not _operator_profile_exists():
+        await _reply(
+            update,
+            "你好！看起来这是第一次用。\n\n"
+            "`/onboard` 告诉我怎么称呼你、用啥语言、想要啥风格，"
+            "之后每次都会按这个走。\n"
+            "不想设的话 `/skip` 跳过（用默认）。",
+        )
         return
     await _reply(update, "你好！直接发消息给我就行，我会用我的方式回。改文件用 /fix，运维相关的命令用 /help。")
 
@@ -682,6 +862,29 @@ def main() -> None:
     application.add_handler(CommandHandler("memo", memo_cmd))
     application.add_handler(CommandHandler("memory", memory_cmd))
     application.add_handler(CommandHandler("journal", journal_cmd))
+    # Onboarding-C: ConversationHandler for /onboard. The
+    # CallbackQueryHandler entries pick up the button presses
+    # inside each step; the MessageHandler entry takes the free-text
+    # name. /skip is a fallback that ends the conversation without
+    # writing operator.json (the .env defaults stay in effect).
+    application.add_handler(
+        ConversationHandler(
+            entry_points=[CommandHandler("onboard", onboard_start)],
+            states={
+                ONBOARDING_NAME: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, onboard_name),
+                ],
+                ONBOARDING_LANG: [
+                    CallbackQueryHandler(onboard_lang_button, pattern=r"^ob:lang:"),
+                ],
+                ONBOARDING_STYLE: [
+                    CallbackQueryHandler(onboard_style_button, pattern=r"^ob:style:"),
+                ],
+            },
+            fallbacks=[CommandHandler("skip", onboard_cancel)],
+        )
+    )
+    application.add_handler(CommandHandler("profile", profile_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_cmd))
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 

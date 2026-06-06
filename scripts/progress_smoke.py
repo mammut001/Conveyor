@@ -2520,6 +2520,126 @@ def _test_day_brief_skipped_on_second_job_of_day() -> CheckResult:
     except Exception as exc:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
+# ---- onboarding round-C: operator.json overrides load_settings ----
+# Onboarding-C: load_settings reads codex_memory_root/operator.json
+# at startup and uses its 4 operator_* fields to override the
+# deployment-time .env values. The JSON file is written by the
+# /onboard Telegram conversation handler in bot.py; this loader
+# contract is the persistence half of the round (the bot half is
+# smoke-tested by the deploy gate on the VPS, not by the env-free
+# chain). The 2 tests pin both paths: operator.json present
+# (overrides win) and operator.json absent (env defaults survive).
+
+def _test_load_settings_reads_operator_json_overrides() -> CheckResult:
+    """Onboarding-C: when codex_memory_root/operator.json exists, its
+    4 operator_* fields override the .env values at load_settings
+    time. This pins the persistence-wins semantics: the operator's
+    /onboard choices survive across bot restarts and take precedence
+    over the deployer's defaults."""
+    name = "behavior: load_settings reads operator.json and overrides the 4 operator_* fields (onboarding-C)"
+    try:
+        import config as config_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            memory_root = tmp_p / "memory"
+            memory_root.mkdir(parents=True, exist_ok=True)
+            (memory_root / "operator.json").write_text(
+                json.dumps({
+                    "operator_name": "Alice",
+                    "operator_language": "en",
+                    "operator_style": "verbose",
+                    "operator_standing": "team-lead",
+                }),
+                encoding="utf-8",
+            )
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_BIN": "codex",
+                "CODEX_MEMORY_ROOT": str(memory_root),
+                "USER_TIMEZONE": "UTC",
+                # .env is set to conflicting values on purpose to
+                # prove operator.json wins.
+                "OPERATOR_NAME": "EnvName",
+                "OPERATOR_LANGUAGE": "env-lang",
+                "OPERATOR_STYLE": "env-style",
+                "OPERATOR_STANDING": "env-standing",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = config_mod.load_settings()
+                checks = {
+                    "operator_name": ("Alice", settings.operator_name),
+                    "operator_language": ("en", settings.operator_language),
+                    "operator_style": ("verbose", settings.operator_style),
+                    "operator_standing": ("team-lead", settings.operator_standing),
+                }
+                for label, (expected, got) in checks.items():
+                    if got != expected:
+                        return CheckResult(
+                            name, False,
+                            f"{label}: expected {expected!r}, got {got!r} (operator.json should win over .env)",
+                        )
+                return CheckResult(
+                    name, True,
+                    f"operator.json wins over .env for all 4 fields: name=Alice, language=en, style=verbose, standing=team-lead",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_load_settings_falls_back_to_env_when_no_operator_json() -> CheckResult:
+    """Onboarding-C: when codex_memory_root/operator.json does NOT
+    exist (fresh deploy, pre-/onboard), load_settings uses the
+    .env values (or the project defaults if .env is empty). This
+    pins the no-profile-yet path so a fresh deploy starts with
+    sensible defaults before the user has run /onboard."""
+    name = "behavior: load_settings falls back to env defaults when codex_memory_root/operator.json is absent (onboarding-C)"
+    try:
+        import config as config_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            memory_root = tmp_p / "memory"
+            memory_root.mkdir(parents=True, exist_ok=True)
+            # Pre-condition: no operator.json
+            assert not (memory_root / "operator.json").exists()
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_BIN": "codex",
+                "CODEX_MEMORY_ROOT": str(memory_root),
+                "USER_TIMEZONE": "UTC",
+                "OPERATOR_NAME": "EnvName",
+                "OPERATOR_LANGUAGE": "en",
+                "OPERATOR_STYLE": "balanced",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = config_mod.load_settings()
+                checks = {
+                    "operator_name": ("EnvName", settings.operator_name),
+                    "operator_language": ("en", settings.operator_language),
+                    "operator_style": ("balanced", settings.operator_style),
+                }
+                for label, (expected, got) in checks.items():
+                    if got != expected:
+                        return CheckResult(
+                            name, False,
+                            f"{label}: expected {expected!r} (from .env), got {got!r}",
+                        )
+                # operator_standing has no .env override here, so it
+                # should fall through to the project default.
+                if settings.operator_standing != "personal-scale, single operator":
+                    return CheckResult(
+                        name, False,
+                        f"operator_standing: expected project default 'personal-scale, single operator', got {settings.operator_standing!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"no operator.json -> .env values used; project default for operator_standing: name=EnvName, language=en, style=balanced, standing=personal-scale, single operator",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
 def main() -> int:
     tests = [
@@ -2575,6 +2695,9 @@ def main() -> int:
         # Onboarding-B contracts
         _test_day_brief_fires_on_first_job_of_day,
         _test_day_brief_skipped_on_second_job_of_day,
+        # Onboarding-C contracts
+        _test_load_settings_reads_operator_json_overrides,
+        _test_load_settings_falls_back_to_env_when_no_operator_json,
     ]
     results = [t() for t in tests]
     print_results(results)
