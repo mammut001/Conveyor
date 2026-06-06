@@ -5,13 +5,14 @@ quickstart; **CHANGELOG.md** is the change history and current surface at a
 glance; this file is the design + deploy + invariants + open-items brief a
 new session needs to be useful fast.
 
-Snapshot at HEAD `54f1144` (2026-06-05, America/Toronto). 39 commits on
-`main`. No git remote configured. Working tree is clean. 89/89 smokes
+Snapshot at HEAD `484c085` (2026-06-05, America/Toronto). 41 commits on
+`main`. No git remote configured. Working tree is clean. 91/91 smokes
 green (progress_smoke 19 -> 23 cases after chat-feel round 2; 23 -> 26
 cases after chat-feel round 4; 26 -> 30 cases after chat-feel round
 5; 30 -> 32 cases after chat-feel round 7; 32 -> 36 cases after
 chat-feel round 6; 36 -> 39 cases after chat-feel round 8; 39 -> 42
-cases after onboarding round). Round 2's
+cases after onboarding A+B round; 42 -> 44 cases after onboarding C
+round). Round 2's
 `"shell"`; round 3 extracts the actual binary name and surfaces
 `🔧 curl...` / `🔧 python...` etc. (falling back to `🔧 shell...` for
 empty / unparseable commands); round 4 adds a per-item growing gate
@@ -39,6 +40,13 @@ first job of each user-local day, with 3 sections (yesterday's
 journal preview, today's MEMORY.md preview, last 3 jobs'
 summaries), state at codex_memory_root/state/last_day_brief.txt,
 so the first message of the day does not feel like a cold start.
+Onboarding C adds the first-run `/onboard` 3-step Q&A (name /
+language / style) that writes a persistent
+`codex_memory_root/operator.json` profile, loaded at startup with
+`operator.json > .env > default` resolution; the first run detects
+no operator.json and `start_cmd` + `text_cmd` both nudge
+`/onboard` instead of silently starting a job, mirroring the
+Hermes-style "first time" experience.
 
 ---
 
@@ -418,7 +426,7 @@ the 13:25-14:22 silent window is recorded in CHANGELOG "Honest gaps".
 
 ---
 
-## 8. Smokes (89 cases, 8 scripts)
+## 8. Smokes (91 cases, 8 scripts)
 
 Local pre-deploy gate:
 
@@ -445,6 +453,7 @@ Makefile declares them:
    `57fd8aa` round 7; 32 -> 36 cases after `ddd468a` round 6;
    36 -> 39 cases after `edd2750` round 8;
    39 -> 42 cases after `54f1144` onboarding round;
+   42 -> 44 cases after `484c085` onboarding C round;
    4 round-2 cases pin `command_execution` shell indicator,
    lifecycle suppression, no-event-type-prefix, and consecutive-
    same-text dedup). Round 3 (`0d76a15`) updates two of those cases
@@ -481,6 +490,14 @@ Makefile declares them:
    the state file, and that the day-brief is suppressed on the
    second job of the same day so the recap is not repeated on
    every message)
+   Onboarding C (`484c085`) adds the load_settings persistence
+   contract (2 behavior cases pinning that operator.json
+   overrides .env for all 4 operator_* fields when the file
+   exists, and that load_settings falls back to the .env values
+   plus the project default for the unset field when the file
+   is absent — the bot-side /onboard ConversationHandler and
+   first-run nudge are deploy-gated on the VPS, not env-free
+   smoke-tested)
 
 `memo_smoke.py` is the full integration smoke and needs a populated `.env`
 — it is gated behind `make smoke-all` precisely so the env-free chain is
@@ -750,4 +767,4 @@ ssh $REMOTE \
 
 ---
 
-*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `54f1144`.*
+*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `484c085`.*

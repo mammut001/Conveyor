@@ -1,8 +1,84 @@
 # CHANGELOG
 
-# Trajectory snapshot at HEAD `54f1144` (39 commits). README.md owns the
+# Trajectory snapshot at HEAD `484c085` (41 commits). README.md owns the
 file/command reference; this file is the change history and current state
 at a glance.
+
+## [unreleased] - onboarding round C
+
+The bot has been talking to the agent with no fixed identity and no
+warm-start, and the operator has had no way to set that identity
+short of editing .env on the VPS and restarting the bot. Onboarding
+C is the first-run /onboard flow: a 3-step Q&A (name / language /
+style) that writes a persistent `codex_memory_root/operator.json`
+profile which load_settings reads at startup, overriding the .env
+values. Hermes and similar personal AI agents run a similar
+first-run experience (light-touch 3-5 questions, persistent
+profile, editable later); the difference here is that the profile
+file lives in `codex_memory_root` (not a dotfile in ~/) so the
+bot's existing state-management surface stays the source of truth.
+
+Round C's contract: the `/onboard` conversation runs as a
+`ConversationHandler` with 3 states (ONBOARDING_NAME /
+ONBOARDING_LANG / ONBOARDING_STYLE), uses inline keyboard buttons
+for the language and style picks, accepts free text as a fallback
+for any step, and writes the 4-field profile on completion. The
+fallback paths are deliberate: `/skip` ends the conversation
+without writing the file (the .env defaults stay in effect, the
+user stays a "first-time user" until they come back to /onboard),
+and a `bot.json` write failure is non-fatal (the conversation
+ends with a "保存失败" message and the user can retry).
+
+The loader side: `_load_operator_profile` in config.py reads
+`operator.json` if it exists and returns the 4 known fields.
+`load_settings` resolution order is `operator.json > .env >
+dataclass default`, so the operator's explicit choice always
+wins over the deployer's defaults. Restart required for changes
+to take effect (this is a simplification; a follow-up round can
+add hot-reload via a SIGHUP handler or a periodic file-watch).
+
+The first-run nudge: both `start_cmd` and `text_cmd` detect the
+missing `operator.json` and surface the /onboard prompt
+immediately, instead of silently starting a job with the .env
+defaults. A new `start_cmd` paragraph on a fresh install is the
+canonical Hermes-style "first time" experience; a new
+`text_cmd` line catches the case where the user typed something
+before running /onboard (so the first message is not lost).
+
+- `484c085` - bot: add first-run /onboard conversation + operator.json persistence (onboarding-C)
+  - `bot.py` - 6 new handlers (onboard_start, onboard_name,
+    onboard_lang_button, onboard_style_button, onboard_cancel,
+    profile_cmd) + 3 conversation states (ONBOARDING_NAME /
+    LANG / STYLE) + 3 helpers (_operator_profile_path,
+    _operator_profile_exists, _save_operator_profile).
+    ConversationHandler drives a 3-step Q&A: name (free text),
+    language (3 inline buttons: zh-CN/en/ja), style (3 inline
+    buttons: terse/balanced/detailed). `/skip` ends the
+    conversation without writing operator.json. `/profile`
+    shows the current 4-field profile and points at /onboard to
+    re-run. `start_cmd` and `text_cmd` both nudge /onboard on
+    the first-run path (no operator.json) instead of silently
+    starting a job with the .env defaults. Imports extended:
+    ConversationHandler, CallbackQueryHandler,
+    InlineKeyboardButton, InlineKeyboardMarkup.
+  - `config.py` - _load_operator_profile helper reads
+    codex_memory_root/operator.json (if it exists) and returns
+    a dict of overrides for the 4 operator_* fields.
+    load_settings resolution order is now: operator.json > .env
+    > dataclass default. Stale or unknown fields in the JSON
+    are silently dropped (the loader only returns the 4 known
+    keys) so a hand-edited or older profile file can't break
+    load_settings. New import: json.
+  - `scripts/progress_smoke.py` - 2 new contract cases
+    (_test_load_settings_reads_operator_json_overrides,
+    _test_load_settings_falls_back_to_env_when_no_operator_json).
+    42 -> 44 cases in progress_smoke; 89 -> 91 in the full
+    chain. The first pins persistence-wins (operator.json
+    overrides .env for all 4 fields); the second pins the
+    no-profile-yet path (.env values used; project default for
+    unset fields). Test override pattern (mock.patch.dict for
+    env, temp dir for memory_root) mirrors the round-5/6/8/C
+    convention.
 
 ## [unreleased] - onboarding round A+B
 
@@ -486,6 +562,7 @@ This batch is governance, docs, and CI only; the runtime surface
   take the bot down
 
 ### Smokes (8 scripts, 89 cases)
+### Smokes (8 scripts, 91 cases)
 - `make smoke` is the local pre-deploy gate
 - VPS deploy gate is per-script `python scripts/*_smoke.py`; the Makefile
   is intentionally NOT in `scripts/deploy.sh`'s rsync list
@@ -518,9 +595,10 @@ This batch is governance, docs, and CI only; the runtime surface
   counter, the next hourly tick is what surfaces the recovery
 
 
-## Commit timeline (all 39, newest first)
+## Commit timeline (all 41, newest first)
 
 ```
+484c085 bot: add first-run /onboard conversation + operator.json persistence (onboarding-C)
 54f1144 runner: inject operator profile + first-of-day day-brief into every prompt (onboarding A+B)
 edd2750 runner: bypass progress cooldown for the first event after the placeholder
 ddd468a runner: surface periodic tool-call pulse while a tool call is in flight
@@ -557,5 +635,5 @@ e786a65 runner: plumb RUNNER_HOME into codex sandbox via --add-dir and CODEX_RUN
 2df91f7 cleanup JobMode.MEMO; reuse classify_memo in compress_day.py for unfiled reclass
 ```
 
-VPS `main` is at the same HEAD; bot unit `active`; full chain 89/89
+VPS `main` is at the same HEAD; bot unit `active`; full chain 91/91
 green locally across 8 env-free smoke scripts.
