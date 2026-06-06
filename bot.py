@@ -920,11 +920,31 @@ def main() -> None:
                     CallbackQueryHandler(onboard_style_button, pattern=r"^ob:style:"),
                 ],
             },
-            fallbacks=[CommandHandler("skip", onboard_cancel)],
+    fallbacks=[CommandHandler("skip", onboard_cancel)],
         )
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_cmd))
+    # Defense-in-depth: any unhandled exception in a handler is
+    # logged by PTB with "No error handlers are registered,
+    # logging exception." The user sees nothing. The recent
+    # onboarding-C NameError was a 20-minute hunt for the same
+    # reason. error_handler catches the exception, logs the
+    # full traceback, and surfaces a short, non-leaky user
+    # message so the operator knows something is broken
+    # before ssh-ing into the VPS. The reply itself is
+    # wrapped in try/except so a failure in the error path
+    # does not loop back into the error handler.
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.exception("Unhandled exception in handler")
+        try:
+            if isinstance(update, Update) and update.effective_message:
+                await update.effective_message.reply_text(
+                    "Bot 内部错误，看下 logs。\n（最近一次自动运行的 progress_smoke 在 /opt/codex-telegram-runner/scripts/。）",
+                )
+        except Exception:
+            logger.exception("Failed to send error reply")
+    application.add_error_handler(error_handler)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
