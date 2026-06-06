@@ -5,12 +5,13 @@ quickstart; **CHANGELOG.md** is the change history and current surface at a
 glance; this file is the design + deploy + invariants + open-items brief a
 new session needs to be useful fast.
 
-Snapshot at HEAD `edd2750` (2026-06-05, America/Toronto). 37 commits on
-`main`. No git remote configured. Working tree is clean. 86/86 smokes
+Snapshot at HEAD `54f1144` (2026-06-05, America/Toronto). 39 commits on
+`main`. No git remote configured. Working tree is clean. 89/89 smokes
 green (progress_smoke 19 -> 23 cases after chat-feel round 2; 23 -> 26
 cases after chat-feel round 4; 26 -> 30 cases after chat-feel round
 5; 30 -> 32 cases after chat-feel round 7; 32 -> 36 cases after
-chat-feel round 6; 36 -> 39 cases after chat-feel round 8). Round 2's
+chat-feel round 6; 36 -> 39 cases after chat-feel round 8; 39 -> 42
+cases after onboarding round). Round 2's
 `"shell"`; round 3 extracts the actual binary name and surfaces
 `🔧 curl...` / `🔧 python...` etc. (falling back to `🔧 shell...` for
 empty / unparseable commands); round 4 adds a per-item growing gate
@@ -27,7 +28,17 @@ trip the bot's edit-broken latch; round 8 seeds `_read_jsonl_stdout`'s
 lands immediately after the placeholder (T+0) instead of waiting 3s
 for the shared cooldown to elapse, after which the normal 3s cooldown
 applies for the rest of the stream (one-shot bypass, not a permanent
-lowering of the cooldown).
+lowering of the cooldown). Onboarding A prepends an
+`<operator-profile>` block to every prompt with the 4 attrs the
+agent always needs (name / language / style / standing) sourced
+from .env (OPERATOR_NAME / LANGUAGE / STYLE / STANDING; defaults
+to anonymous / zh-CN / terse / personal-scale, single operator),
+so the agent no longer re-discovers who the operator is on every
+session; onboarding B delivers a one-shot `<day-brief>` on the
+first job of each user-local day, with 3 sections (yesterday's
+journal preview, today's MEMORY.md preview, last 3 jobs'
+summaries), state at codex_memory_root/state/last_day_brief.txt,
+so the first message of the day does not feel like a cold start.
 
 ---
 
@@ -407,8 +418,7 @@ the 13:25-14:22 silent window is recorded in CHANGELOG "Honest gaps".
 
 ---
 
-## 8. Smokes (83 cases, 8 scripts)
-## 8. Smokes (86 cases, 8 scripts)
+## 8. Smokes (89 cases, 8 scripts)
 
 Local pre-deploy gate:
 
@@ -434,6 +444,7 @@ Makefile declares them:
    26 -> 30 cases after `6f1d9ea` round 5; 30 -> 32 cases after
    `57fd8aa` round 7; 32 -> 36 cases after `ddd468a` round 6;
    36 -> 39 cases after `edd2750` round 8;
+   39 -> 42 cases after `54f1144` onboarding round;
    4 round-2 cases pin `command_execution` shell indicator,
    lifecycle suppression, no-event-type-prefix, and consecutive-
    same-text dedup). Round 3 (`0d76a15`) updates two of those cases
@@ -462,6 +473,14 @@ Makefile declares them:
    seed of `_read_jsonl_stdout`'s `last_sent` at
    `-telegram_progress_seconds` so the first edit lands at T+0
    instead of waiting 3s for the shared cooldown to elapse)
+   Onboarding (`54f1144`) adds the always-on operator profile
+   + first-of-day day-brief contract (3 behavior cases pinning
+   that the profile block is prepended to every prefetch with
+   the 4 attrs and prose body, that the day-brief fires once
+   on the first job of the day with all 3 sections and writes
+   the state file, and that the day-brief is suppressed on the
+   second job of the same day so the recap is not repeated on
+   every message)
 
 `memo_smoke.py` is the full integration smoke and needs a populated `.env`
 — it is gated behind `make smoke-all` precisely so the env-free chain is
@@ -731,4 +750,4 @@ ssh $REMOTE \
 
 ---
 
-*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `edd2750`.*
+*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `54f1144`.*

@@ -1,8 +1,71 @@
 # CHANGELOG
 
-# Trajectory snapshot at HEAD `edd2750` (37 commits). README.md owns the
+# Trajectory snapshot at HEAD `54f1144` (39 commits). README.md owns the
 file/command reference; this file is the change history and current state
 at a glance.
+
+## [unreleased] - onboarding round A+B
+
+The bot has been talking to the agent with no fixed identity and no
+warm-start. Every Telegram message spawns a fresh codex subprocess
+that re-discovers the operator's name, language, tone, and the
+state of yesterday. Onboarding A+B gives the agent a stable
+identity and a daily warm-up so the first message of the day does
+not feel like a cold start.
+
+Round A: an `<operator-profile>` block is prepended to every
+prompt, carrying the 4 attrs the agent always needs to know (name,
+language, style, standing). Values come from .env
+(OPERATOR_NAME/LANGUAGE/STYLE/STANDING); the project defaults
+match the single-operator / zh-CN / terse / personal-scale
+assumption (anonymous, zh-CN, terse, personal-scale, single
+operator). The block is always-on: it fires on /run, /fix, and the
+plain-message path, with no per-mode branching. Empty
+OPERATOR_NAME falls back to `(anonymous)` so the name attr is
+never empty.
+
+Round B: a `<day-brief>` block is delivered once per user-local
+day, on the first job only. It has 3 sections (yesterday's journal
+preview at ~/.codex/JOURNAL/YYYY-MM-DD.md, today's MEMORY.md
+preview, and the last 3 jobs' summaries from logs/). State is a
+one-line date stamp at codex_memory_root/state/last_day_brief.txt
+written on the first deliver; subsequent jobs the same day get
+'' (no brief) so the recap is not repeated on every message.
+Failure to read or write the state file is non-fatal: a duplicate
+brief is harmless; a missing brief is the cold start we are
+trying to avoid. After the first send, the agent already has
+yesterday's context and can lead with carryovers instead of asking
+"what was I doing yesterday?".
+
+- `54f1144` - runner: inject operator profile + first-of-day day-brief into every prompt (onboarding A+B)
+  - `config.py` - 4 new Settings fields (operator_name/language/
+    style/standing) loaded from .env (OPERATOR_NAME/LANGUAGE/
+    STYLE/STANDING). Fields live at the END of the dataclass
+    with defaults so existing Settings(...) positional callers in
+    the smokes keep working unchanged. Defaults: None, zh-CN,
+    terse, personal-scale, single operator.
+  - `.env.example` - 4 commented lines documenting the new
+    OPERATOR_* env vars, grouped with USER_TIMEZONE.
+  - `runner.py` - 2 new methods (`_operator_profile_text`,
+    `_day_brief_text`) + 3 class constants
+    (DAY_BRIEF_STATE_FILENAME/PREVIEW_CHARS/RECENT_JOBS) + 2
+    helpers (`_day_brief_state_path`,
+    `_day_brief_recent_jobs`). `_prefetch_memory` rewired to
+    call 4 blocks in order: profile, day-brief, memory-context,
+    tool-registry. The profile block is mode-agnostic and
+    always-on; the day-brief is one-shot per user-local day.
+  - `scripts/progress_smoke.py` - 3 new contract cases
+    (`_test_operator_profile_block_in_prefetch`,
+    `_test_day_brief_fires_on_first_job_of_day`,
+    `_test_day_brief_skipped_on_second_job_of_day`); 39 -> 42
+    cases in progress_smoke. The first pins that the profile
+    block has all 4 attrs and a prose body, and is prepended
+    before `<memory-context>`. The second pins the first-of-day
+    brief shape (3 sections, state file written with today's
+    date). The third pins the one-brief-per-day contract
+    (second call returns '' when the state file is dated today).
+    Test override pattern (object.__setattr__ on frozen Settings,
+    mock.patch.dict for env) mirrors the round-5/6/8 convention.
 
 ## [unreleased] - chat-feel polish round 8
 
@@ -366,6 +429,14 @@ This batch is governance, docs, and CI only; the runtime surface
 - Per-day worktree (`worktrees/day-YYYY-MM-DD`) is shared across the day's
   jobs; MEMORY.md in that worktree is the day's running notes and is
   excluded from the `git apply` that brings tracked changes back to main
+- `_prefetch_memory` stitches 4 blocks before the user's prompt, in order:
+  `<operator-profile>` (onboarding-A; always-on; 4 attrs from .env
+  OPERATOR_NAME/LANGUAGE/STYLE/STANDING; defaults to anonymous / zh-CN /
+  terse / personal-scale, single operator), `<day-brief>` (onboarding-B;
+  one-shot per user-local day; 3 sections - yesterday's journal preview,
+  today's MEMORY.md preview, last 3 jobs' summaries; state at
+  codex_memory_root/state/last_day_brief.txt), `<memory-context>` (today's
+  MEMORY.md), `<tool-registry>` (mode-aware tool list)
 
 ### Memory system (runner.py MEMORY.md)
 - Five sections: `preference`, `fact`, `tool-quirk`, `convention`, `unfiled`
@@ -414,7 +485,7 @@ This batch is governance, docs, and CI only; the runtime surface
 - Maintain is a separate unit from the bot - a maintain failure does not
   take the bot down
 
-### Smokes (8 scripts, 86 cases)
+### Smokes (8 scripts, 89 cases)
 - `make smoke` is the local pre-deploy gate
 - VPS deploy gate is per-script `python scripts/*_smoke.py`; the Makefile
   is intentionally NOT in `scripts/deploy.sh`'s rsync list
@@ -447,9 +518,10 @@ This batch is governance, docs, and CI only; the runtime surface
   counter, the next hourly tick is what surfaces the recovery
 
 
-## Commit timeline (all 37, newest first)
+## Commit timeline (all 39, newest first)
 
 ```
+54f1144 runner: inject operator profile + first-of-day day-brief into every prompt (onboarding A+B)
 edd2750 runner: bypass progress cooldown for the first event after the placeholder
 ddd468a runner: surface periodic tool-call pulse while a tool call is in flight
 57fd8aa bot: skip no-op placeholder edits to prevent edit-broken latch storm
@@ -485,5 +557,5 @@ e786a65 runner: plumb RUNNER_HOME into codex sandbox via --add-dir and CODEX_RUN
 2df91f7 cleanup JobMode.MEMO; reuse classify_memo in compress_day.py for unfiled reclass
 ```
 
-VPS `main` is at the same HEAD; bot unit `active`; full chain 86/86
+VPS `main` is at the same HEAD; bot unit `active`; full chain 89/89
 green locally across 8 env-free smoke scripts.
