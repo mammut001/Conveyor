@@ -1085,8 +1085,128 @@ class CodexRunner:
             "</tool-registry>\n\n"
         )
 
+    def _operator_profile_text(self) -> str:
+        # Onboarding-A. Always-on context: who the operator is, what
+        # language and tone the agent should default to. Injected at
+        # the top of every prompt so the agent doesn't have to
+        # re-discover the operator's identity on each session. Values
+        # come from .env (OPERATOR_NAME / LANGUAGE / STYLE / STANDING);
+        # defaults match the project's single-operator / zh-CN / terse
+        # / personal-scale assumption (see config.py). Empty
+        # OPERATOR_NAME falls back to "(anonymous)" so the name attr is
+        # always non-empty for the model. The language and style are
+        # duplicated inside the block (attrs + prose) so the directive
+        # is harder to lose in a long context.
+        name = self.settings.operator_name or "(anonymous)"
+        return (
+            f'<operator-profile name="{name}" '
+            f'language="{self.settings.operator_language}" '
+            f'style="{self.settings.operator_style}" '
+            f'standing="{self.settings.operator_standing}">\n'
+            f"You are the operator's persistent coding agent. The "
+            f"operator is a single human in the "
+            f"{self.settings.user_timezone} timezone. Default reply "
+            f"language: {self.settings.operator_language}. Default "
+            f"tone: {self.settings.operator_style}. Setup: "
+            f"{self.settings.operator_standing}.\n"
+            f"</operator-profile>\n\n"
+        )
+
+    # Onboarding-B day-brief constants. The brief is delivered once
+    # per user-local day to warm-start the first job. Preview caps
+    # keep the block small enough to not push the agent's useful
+    # context out of the window; 3 recent jobs is the same number
+    # the chat's /jobs command defaults to.
+    DAY_BRIEF_STATE_FILENAME = "last_day_brief.txt"
+    DAY_BRIEF_PREVIEW_CHARS = 500
+    DAY_BRIEF_RECENT_JOBS = 3
+
+    def _day_brief_state_path(self) -> Path:
+        return self.settings.codex_memory_root / "state" / self.DAY_BRIEF_STATE_FILENAME
+
+    def _day_brief_recent_jobs(self, limit: int = 3) -> list[str]:
+        records = self.job_records(limit=limit)
+        if not records:
+            return []
+        lines: list[str] = []
+        for record in records:
+            preview = record.final_preview or "(no preview)"
+            stamp = record.updated_at.strftime(self.DAILY_WORKTREE_FORMAT)
+            lines.append(f"- {stamp} {record.id} {record.state} {preview}")
+        return lines
+
+    def _day_brief_text(self) -> str:
+        # Onboarding-B. Day-brief: warm-start the agent for the first
+        # job of each user-local day with a snapshot of yesterday's
+        # journal, today's MEMORY.md, and the most recent job
+        # summaries. Subsequent jobs the same day get "" (no brief)
+        # so we don't repeat the recap on every message. State is a
+        # one-line date stamp in codex_memory_root/state/ written on
+        # the first deliver; checked at the top of every call.
+        # Failure to read or write the state file is non-fatal: the
+        # brief is still delivered this call, and the next call will
+        # simply redeliver (a duplicate brief is harmless; a missing
+        # brief is a cold start, which is what we're trying to avoid).
+        from datetime import timedelta
+        today = self._user_today()
+        today_str = today.strftime(self.DAILY_WORKTREE_FORMAT)
+        state_path = self._day_brief_state_path()
+        last_brief_date = ""
+        if state_path.exists():
+            try:
+                last_brief_date = state_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                last_brief_date = ""
+        if last_brief_date == today_str:
+            return ""
+        yesterday = today - timedelta(days=1)
+        yesterday_str = yesterday.strftime(self.DAILY_WORKTREE_FORMAT)
+        yesterday_journal = self.settings.codex_memory_root / "JOURNAL" / f"{yesterday_str}.md"
+        yesterday_text = "(no journal)"
+        if yesterday_journal.exists():
+            try:
+                content = yesterday_journal.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                content = ""
+            if content:
+                snippet = content[: self.DAY_BRIEF_PREVIEW_CHARS]
+                if len(content) > self.DAY_BRIEF_PREVIEW_CHARS:
+                    snippet += "..."
+                yesterday_text = snippet
+        today_memory = self.today_memory_text()
+        if today_memory:
+            snippet = today_memory[: self.DAY_BRIEF_PREVIEW_CHARS]
+            if len(today_memory) > self.DAY_BRIEF_PREVIEW_CHARS:
+                snippet += "..."
+            today_memory = snippet
+        else:
+            today_memory = "(empty)"
+        recent_jobs = self._day_brief_recent_jobs(limit=self.DAY_BRIEF_RECENT_JOBS)
+        recent_block = "\n".join(recent_jobs) if recent_jobs else "(none)"
+        brief = (
+            f'<day-brief date="{today_str}" first-job-of-day="true">\n'
+            f"## Yesterday's journal ({yesterday_str})\n"
+            f"{yesterday_text}\n\n"
+            f"## Today's MEMORY.md\n"
+            f"{today_memory}\n\n"
+            f"## Recent jobs (last {self.DAY_BRIEF_RECENT_JOBS})\n"
+            f"{recent_block}\n"
+            f"</day-brief>\n\n"
+        )
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(today_str, encoding="utf-8")
+        except OSError:
+            pass
+        return brief
+
     def _prefetch_memory(self, job: Job) -> str:
-        return self._memory_context_text(job) + self._tool_registry_text(job)
+        return (
+            self._operator_profile_text()
+            + self._day_brief_text()
+            + self._memory_context_text(job)
+            + self._tool_registry_text(job)
+        )
 
     def today_memory_text(self) -> str:
         path = self._memory_path(self._today_worktree_path())

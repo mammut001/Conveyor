@@ -33,6 +33,17 @@ class Settings:
     codex_retry_429_delays_seconds: tuple[int, ...]
     codex_memory_root: Path
     user_timezone: str
+    # Operator profile (onboarding-A). Defaults match the project's
+    # single-operator / zh-CN / terse / personal-scale assumption;
+    # load_settings overrides from .env (OPERATOR_NAME/LANGUAGE/
+    # STYLE/STANDING). Fields live at the END with defaults so
+    # existing Settings(...) positional callers in the smokes keep
+    # working unchanged - the 4 new fields are constructed from
+    # defaults if omitted.
+    operator_name: str | None = None
+    operator_language: str = "zh-CN"
+    operator_style: str = "terse"
+    operator_standing: str = "personal-scale, single operator"
 
 
 def _required(name: str) -> str:
@@ -96,4 +107,13 @@ def load_settings(env_file: str | Path = ".env") -> Settings:
         codex_retry_429_delays_seconds=_int_list_env("CODEX_RETRY_429_DELAYS_SECONDS", (300, 900, 1800)),
         codex_memory_root=memory_root,
         user_timezone=user_timezone,
+        # Operator profile is the agent's always-on context block. All
+        # four are optional; defaults match the project's single-
+        # operator / zh-CN / terse / personal-scale assumption. Empty
+        # OPERATOR_NAME falls back to "(anonymous)" in the block so the
+        # model still sees a non-empty name attribute.
+        operator_name=os.getenv("OPERATOR_NAME") or None,
+        operator_language=os.getenv("OPERATOR_LANGUAGE", "zh-CN"),
+        operator_style=os.getenv("OPERATOR_STYLE", "terse"),
+        operator_standing=os.getenv("OPERATOR_STANDING", "personal-scale, single operator"),
     )

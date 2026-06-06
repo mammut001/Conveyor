@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+from datetime import datetime, timezone
 import json
 import os
 import sys
@@ -2297,6 +2298,228 @@ def _test_subsequent_prose_fires_after_cooldown() -> CheckResult:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
 
+# ---- onboarding round-A: operator profile block -----------------------
+# Onboarding-A: every prompt is prefixed with an <operator-profile>
+# block that gives the agent a stable identity for the operator
+# (name, language, style, standing) so it does not have to
+# re-discover those on each session. The test pins that the block
+# is in _prefetch_memory output and carries the four attrs sourced
+# from Settings. The override pattern (object.__setattr__ on frozen
+# Settings) mirrors the round-5/6/8 test convention.
+
+def _test_operator_profile_block_in_prefetch() -> CheckResult:
+    """Onboarding-A: <operator-profile> block is prepended to every
+    prefetch output. The four attrs (name, language, style, standing)
+    are present and the prose body restates language + style + setup
+    so the directive is harder to lose in a long context."""
+    name = "behavior: _prefetch_memory prepends <operator-profile> with the 4 attrs (onboarding-A)"
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                # Bypass the frozen-Settings guard to inject the test
+                # values. Mirrors the round-5/6/8 pattern.
+                object.__setattr__(settings, "operator_name", "TestOp")
+                object.__setattr__(settings, "operator_language", "en")
+                object.__setattr__(settings, "operator_style", "verbose")
+                object.__setattr__(settings, "operator_standing", "test-rig")
+                # Pre-write the day-brief state file with today's UTC
+                # date so _day_brief_text returns "" - keeps the test
+                # focused on the profile block only.
+                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                state_path = tmp_p / "memory" / "state" / "last_day_brief.txt"
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(today_str, encoding="utf-8")
+                r = runner_mod.CodexRunner(settings)
+
+                # _tool_registry_text reads job.mode, so a RUN-mode
+                # namespace is needed even though the profile block
+                # itself is mode-agnostic.
+                # _memory_context_text reads job.worktree_path +
+                # MEMORY.md; stub a tiny worktree with an empty
+                # MEMORY.md so the full prefetch pipeline runs and the
+                # ordering assertion (<operator-profile> before
+                # <memory-context>) is meaningful.
+                ws = tmp_p / "wt"
+                ws.mkdir(parents=True, exist_ok=True)
+                (ws / "MEMORY.md").write_text("# stub\n", encoding="utf-8")
+                job = SimpleNamespace(
+                    worktree_path=ws, last_event="starting", mode=runner_mod.JobMode.RUN,
+                )
+                prefetched = r._prefetch_memory(job)
+
+                for needle in (
+                    '<operator-profile name="TestOp"',
+                    'language="en"',
+                    'style="verbose"',
+                    'standing="test-rig"',
+                    "Default reply language: en",
+                    "Default tone: verbose",
+                    "Setup: test-rig",
+                ):
+                    if needle not in prefetched:
+                        return CheckResult(
+                            name, False,
+                            f"missing {needle!r} in prefetch output",
+                        )
+                # Block must come before <memory-context> so the agent
+                # sees identity first, then todays memories.
+                profile_idx = prefetched.find("<operator-profile")
+                memory_idx = prefetched.find("<memory-context")
+                if profile_idx == -1 or memory_idx == -1 or profile_idx > memory_idx:
+                    return CheckResult(
+                        name, False,
+                        f"<operator-profile> must precede <memory-context>; profile_idx={profile_idx} memory_idx={memory_idx}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"<operator-profile> is prepended with all 4 attrs and prose body, before <memory-context>",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+# ---- onboarding round-B: day-brief ------------------------------------
+# Onboarding-B: the first job of each user-local day gets a <day-brief>
+# block with yesterdays journal preview, todays MEMORY.md preview, and
+# the last 3 jobs summaries. State is a one-line date stamp in
+# codex_memory_root/state/; subsequent jobs the same day get "" (no
+# recap). The 2 tests pin the first-of-day / second-of-day contract.
+
+def _test_day_brief_fires_on_first_job_of_day() -> CheckResult:
+    """Onboarding-B: on the first call (no state file), _day_brief_text
+    returns a <day-brief> block with all 3 sections (yesterdays
+    journal, todays MEMORY.md, recent jobs) and writes the state
+    file with todays date. This pins the warm-start contract: a fresh
+    days first job gets a snapshot, not a cold start."""
+    name = "behavior: _day_brief_text returns a 3-section brief on the first job of the day and writes state (onboarding-B)"
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                r = runner_mod.CodexRunner(settings)
+
+                # No state file pre-written - this is the first call.
+                state_path = r._day_brief_state_path()
+                if state_path.exists():
+                    return CheckResult(
+                        name, False,
+                        f"precondition: state file should not exist yet; found at {state_path}",
+                    )
+
+                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                brief = r._day_brief_text()
+
+                for needle in (
+                    f'<day-brief date="{today_str}" first-job-of-day="true">',
+                    "## Yesterday\u0027s journal (",
+                    "## Today\u0027s MEMORY.md",
+                    "## Recent jobs (last 3)",
+                    "</day-brief>",
+                ):
+                    if needle not in brief:
+                        return CheckResult(
+                            name, False,
+                            f"missing {needle!r} in first-of-day brief",
+                        )
+                # State file must now contain todays date.
+                if not state_path.exists():
+                    return CheckResult(
+                        name, False,
+                        f"state file should be written at {state_path} but was not created",
+                    )
+                written_date = state_path.read_text(encoding="utf-8").strip()
+                if written_date != today_str:
+                    return CheckResult(
+                        name, False,
+                        f"state file date mismatch: expected {today_str!r}, got {written_date!r}",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"first-of-day brief delivered, state file written with {today_str}: {len(brief)} chars",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_day_brief_skipped_on_second_job_of_day() -> CheckResult:
+    """Onboarding-B: on the second call (state file with todays date),
+    _day_brief_text returns "" so we dont repeat the recap on every
+    message. This pins the one-brief-per-day contract; the agent
+    should not see the day-brief twice in a single user-local day."""
+    name = "behavior: _day_brief_text returns empty on the second job of the same day (onboarding-B)"
+    try:
+        import runner as runner_mod  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            for sub in ("ws", "task", "memory"):
+                (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_TASK_ROOT": str(tmp_p / "task"),
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "CODEX_BIN": "codex",
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                settings = runner_mod.load_settings()
+                r = runner_mod.CodexRunner(settings)
+
+                # Pre-write the state file with todays UTC date so
+                # _day_brief_texts check fires and returns "".
+                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                state_path = r._day_brief_state_path()
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(today_str, encoding="utf-8")
+
+                brief = r._day_brief_text()
+
+                if brief != "":
+                    return CheckResult(
+                        name, False,
+                        f"expected '' (second-of-day is skipped); got {brief!r}",
+                    )
+                # State file must still be todays date (not clobbered).
+                if state_path.read_text(encoding="utf-8").strip() != today_str:
+                    return CheckResult(
+                        name, False,
+                        f"state file should be unchanged at {today_str!r} but was modified",
+                    )
+                return CheckResult(
+                    name, True,
+                    f"second-of-day returns empty (one-brief-per-day contract): {brief!r}",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
 
 def main() -> int:
     tests = [
@@ -2347,6 +2570,11 @@ def main() -> int:
         _test_first_prose_fires_immediately_after_placeholder,
         _test_subsequent_prose_respects_cooldown,
         _test_subsequent_prose_fires_after_cooldown,
+        # Onboarding-A contracts
+        _test_operator_profile_block_in_prefetch,
+        # Onboarding-B contracts
+        _test_day_brief_fires_on_first_job_of_day,
+        _test_day_brief_skipped_on_second_job_of_day,
     ]
     results = [t() for t in tests]
     print_results(results)
