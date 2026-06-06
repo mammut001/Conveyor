@@ -5,8 +5,8 @@ quickstart; **CHANGELOG.md** is the change history and current surface at a
 glance; this file is the design + deploy + invariants + open-items brief a
 new session needs to be useful fast.
 
-Snapshot at HEAD `0c13cdc` (2026-06-05, America/Toronto). 43 commits on
-`main`. No git remote configured. Working tree is clean. 91/91 smokes
+Snapshot at HEAD `b4540d5` (2026-06-05, America/Toronto). 47 commits on
+`main`. No git remote configured. Working tree is clean. 93/93 smokes
 green (progress_smoke 19 -> 23 cases after chat-feel round 2; 23 -> 26
 cases after chat-feel round 4; 26 -> 30 cases after chat-feel round
 5; 30 -> 32 cases after chat-feel round 7; 32 -> 36 cases after
@@ -46,8 +46,10 @@ language / style) that writes a persistent
 `operator.json > .env > default` resolution; the first run detects
 no operator.json and `start_cmd` + `text_cmd` both nudge
 `/onboard` instead of silently starting a job, mirroring the
-Hermes-style "first time" experience.
-Onboarding C button (`0c13cdc`) adds a one-tap inline
+Hermes-style "first time" experience. Hot-reload
+(`b4540d5`) makes the operator.json re-read on every
+prefetch so /profile edits or manual ssh edits take effect
+on the next job without a bot restart. Onboarding C button (`0c13cdc`) adds a one-tap inline
 "开始 onboarding" button to the first-run /start and first-message
 nudges, so the user does not have to type /onboard after reading
 the welcome — the button drives the same ConversationHandler
@@ -433,7 +435,7 @@ the 13:25-14:22 silent window is recorded in CHANGELOG "Honest gaps".
 
 ---
 
-## 8. Smokes (91 cases, 8 scripts)
+## 8. Smokes (93 cases, 8 scripts)
 
 Local pre-deploy gate:
 
@@ -460,7 +462,8 @@ Makefile declares them:
    `57fd8aa` round 7; 32 -> 36 cases after `ddd468a` round 6;
    36 -> 39 cases after `edd2750` round 8;
    39 -> 42 cases after `54f1144` onboarding round;
-   42 -> 44 cases after `484c085` onboarding C round;
+  42 -> 44 cases after `484c085` onboarding C round;
+  44 -> 46 cases after `b4540d5` hot-reload round;
    4 round-2 cases pin `command_execution` shell indicator,
    lifecycle suppression, no-event-type-prefix, and consecutive-
    same-text dedup). Round 3 (`0d76a15`) updates two of those cases
@@ -505,6 +508,18 @@ Makefile declares them:
    is absent — the bot-side /onboard ConversationHandler and
    first-run nudge are deploy-gated on the VPS, not env-free
    smoke-tested)
+   Hot-reload (`b4540d5`) adds 2 behavior cases pinning
+   that `_operator_profile_text` re-reads operator.json
+   fresh on every call (no SIGHUP, no bot restart). The
+   first pins the env-fallback path when the file is
+   absent; the second pins a 3-step live-edit sequence
+   (no JSON -> env defaults; write JSON -> next call
+   renders the new values; edit JSON -> next call
+   renders the latest values). The runner.py change
+   is a one-block swap: from `self.settings.operator_*`
+   to `live.get(...) or self.settings.operator_* or
+   default`. The settings.operator_* fields stay the
+   env fallback; the JSON file is the live override.
    Onboarding C button (`0c13cdc`) is UI plumbing with 0
    new smoke cases — the button is a `CallbackQueryHandler`
    driving the same `onboard_start` entry point, which the
@@ -783,4 +798,4 @@ ssh $REMOTE \
 
 ---
 
-*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `0c13cdc`.*
+*Last updated: 2026-06-05, America/Toronto. Snapshot at HEAD `b4540d5`.*

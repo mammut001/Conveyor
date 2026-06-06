@@ -1,10 +1,63 @@
 # CHANGELOG
 
-# Trajectory snapshot at HEAD `0c13cdc` (43 commits). README.md owns the
+# Trajectory snapshot at HEAD `b4540d5` (47 commits). README.md owns the
 file/command reference; this file is the change history and current state
 at a glance.
 
 ## [unreleased] - onboarding C button (UX polish)
+
+## [unreleased] - hot-reload for operator.json
+
+The /profile edit path (and the manual `ssh ... rm/sed operator.json`
+path) used to require a `systemctl restart codex-telegram-bot.service`
+to take effect: `_operator_profile_text` was reading
+`self.settings.operator_*` which is the frozen Settings object
+populated once at startup. This round adds a per-call re-read so
+any operator.json edit is picked up on the very next job
+without a bot restart. The 4 attrs (name, language, style,
+standing) now resolve in this order on every prefetch:
+  1. live `codex_memory_root/operator.json` (per-call re-read)
+  2. `settings.operator_*` (env / startup defaults from .env)
+  3. project default (e.g. `(anonymous)` for name when neither
+     of the above is set)
+The `settings.operator_*` fields stay as the env fallback; the
+JSON file is the live override. Reads are O(1) from the page
+cache (file is ~200 bytes); the single-write `_save` in
+bot.py is atomic on Linux (under PIPE_BUF) so the live read
+never sees a partial write.
+
+This is a hot-reload without a SIGHUP handler: the
+file-watch happens on every call, so no signal plumbing
+is needed. The simpler design avoids the SIGHUP-reload
+complexity (re-creating the frozen Settings dataclass,
+threading the reload through Application) for the same
+end-user UX: edits take effect on the next job.
+
+- `b4540d5` - runner: hot-reload operator.json on every prefetch (no bot restart needed)
+  - `config.py` - promote `_load_operator_profile` to the
+    public `load_operator_profile`. The single underscore
+    was signalling 'internal' when only config.py used
+    it; runner.py now calls it too, so it's no longer
+    internal. Behavior unchanged; rename only.
+  - `runner.py` - `_operator_profile_text` now reads
+    operator.json fresh on every call via
+    `config.load_operator_profile(self.settings.codex_memory_root)`.
+    The 4 attrs are resolved live (operator.json) then
+    fall through to settings.operator_* then to a
+    project default. The settings.operator_* fields
+    stay the env fallback; the file is the live override.
+  - `scripts/progress_smoke.py` - 2 new contract cases
+    (`_test_operator_profile_text_uses_env_when_no_operator_json`,
+    `_test_operator_profile_text_picks_up_live_operator_json_edit`).
+    The first pins the no-profile-yet path: env defaults
+    fall through when operator.json is absent. The
+    second pins the hot-reload path: a 3-step sequence
+    (no JSON -> env defaults render; write JSON with
+    Alice/ja/verbose/team-lead -> next call renders
+    Alice; edit JSON to Bob/en -> next call renders
+    Bob) without any bot restart between calls. Both
+    pass; 44 -> 46 cases in progress_smoke; 91 -> 93 in
+    the full chain.
 
 The first-run `/onboard` flow used to be command-only: the user
 had to type `/onboard` after reading the welcome message or the
@@ -597,7 +650,7 @@ This batch is governance, docs, and CI only; the runtime surface
 - Maintain is a separate unit from the bot - a maintain failure does not
   take the bot down
 
-### Smokes (8 scripts, 91 cases)
+### Smokes (8 scripts, 93 cases)
 - `make smoke` is the local pre-deploy gate
 - VPS deploy gate is per-script `python scripts/*_smoke.py`; the Makefile
   is intentionally NOT in `scripts/deploy.sh`'s rsync list
@@ -630,9 +683,10 @@ This batch is governance, docs, and CI only; the runtime surface
   counter, the next hourly tick is what surfaces the recovery
 
 
-## Commit timeline (all 43, newest first)
+## Commit timeline (all 47, newest first)
 
 ```
+b4540d5 runner: hot-reload operator.json on every prefetch (no bot restart needed)
 0c13cdc bot: add inline '开始 onboarding' button to the first-run welcome (onboarding-C button)
 484c085 bot: add first-run /onboard conversation + operator.json persistence (onboarding-C)
 54f1144 runner: inject operator profile + first-of-day day-brief into every prompt (onboarding A+B)
@@ -671,5 +725,5 @@ e786a65 runner: plumb RUNNER_HOME into codex sandbox via --add-dir and CODEX_RUN
 2df91f7 cleanup JobMode.MEMO; reuse classify_memo in compress_day.py for unfiled reclass
 ```
 
-VPS `main` is at the same HEAD; bot unit `active`; full chain 91/91
+VPS `main` is at the same HEAD; bot unit `active`; full chain 93/93
 green locally across 8 env-free smoke scripts.
