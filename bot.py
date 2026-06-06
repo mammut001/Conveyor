@@ -900,14 +900,6 @@ def main() -> None:
     # writing operator.json (the .env defaults stay in effect).
     application.add_handler(
         ConversationHandler(
-            # per_message=True: PTB tracks callbacks across all
-            # states for every incoming message, not just the
-            # current state. Safe here because the three callback
-            # patterns (^ob:start$, ^ob:lang:, ^ob:style:) are
-            # anchored to specific actions and don't conflict
-            # across states. per_message=True silences the
-            # PTBUserWarning at construction time.
-            per_message=True,
             entry_points=[
                 CommandHandler("onboard", onboard_start),
                 # First-run welcome button (callback_data="ob:start")
