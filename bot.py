@@ -13,6 +13,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import load_settings
+from config import OPERATOR_PROFILE_FIELDS, load_settings
 from redaction import redact_text, truncate
 from runner import CodexRunner, JobMode
 from scripts.auto_maintain import run_maintenance
@@ -107,12 +108,18 @@ async def _handle_memo_fast_path(update: Update, prompt: str) -> None:
     await _reply(update, summary)
 
 
-async def _reply(update: Update, text: str) -> None:
+async def _reply(
+    update: Update,
+    text: str,
+    *,
+    reply_markup=None,
+) -> None:
     if not update.effective_message:
         return
     await update.effective_message.reply_text(
         truncate(text),
         disable_web_page_preview=True,
+        reply_markup=reply_markup,
     )
 
 
