@@ -2789,6 +2789,390 @@ def _test_operator_profile_text_picks_up_live_operator_json_edit() -> CheckResul
     except Exception as exc:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
+# ---- e2e: bot handler integration tests via fake Update pattern ----
+from unittest.mock import AsyncMock, MagicMock
+# The hot-reload / operator.json tests above exercise the
+# runner.py side of the onboarding flow (load_settings +
+# _operator_profile_text). These 5 e2e tests exercise the
+# bot.py side directly: the handler functions that are
+# the only path a Telegram user can actually take. The
+# pattern is to construct a fake Update with mocked
+# async reply_text / edit_text / answer, call the handler
+# directly, and assert both the reply text + the file
+# side effects (operator.json written or read).
+
+def _make_fake_handler_update(text=None, callback_data=None):
+    """Build a fake Update + Context that satisfies the bot.py
+    handler contract. user.id is set to 0 to match the
+    test's TELEGRAM_ALLOWED_USER_ID=0 (so _guard passes
+    without a real Telegram call)."""
+    update = MagicMock()
+    update.effective_user = MagicMock()
+    update.effective_user.id = 0
+    update.effective_chat = MagicMock()
+    update.effective_chat.id = 12345
+    update.effective_message = MagicMock()
+    update.effective_message.chat = MagicMock()
+    update.effective_message.chat.id = 12345
+    update.effective_message.from_user = MagicMock()
+    update.effective_message.from_user.id = 0
+    update.effective_message.text = text
+    update.effective_message.reply_text = AsyncMock(return_value=MagicMock())
+    update.effective_message.edit_text = AsyncMock(return_value=MagicMock())
+    if callback_data is not None:
+        update.callback_query = MagicMock()
+        update.callback_query.data = callback_data
+        update.callback_query.answer = AsyncMock()
+        update.callback_query.edit_message_text = AsyncMock(return_value=MagicMock())
+    else:
+        update.callback_query = None
+    context = MagicMock()
+    context.user_data = {}
+    context.bot = MagicMock()
+    return update, context
+
+
+def _test_start_cmd_first_run_welcome_with_button() -> CheckResult:
+    """E2E: /start on a fresh install (no operator.json) sends the
+    first-run welcome message WITH the inline '开始 onboarding'
+    button. Pins the 3-state first-run contract: when
+    operator.json is absent, the welcome text contains the
+    onboarding nudge AND a reply_markup is attached with
+    a button whose callback_data is 'ob:start' (so the button
+    can drive the same ConversationHandler entry point as the
+    /onboard command). Without this test, a future change
+    that drops reply_markup (or hard-codes the welcome to
+    always show the old canned greeting) would silently
+    regress the onboarding-C button affordance."""
+    name = "e2e: start_cmd on a fresh install (no operator.json) sends welcome with 'ob:start' button"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            memory_root = tmp_p / "memory"
+            memory_root.mkdir(parents=True, exist_ok=True)
+            assert not (memory_root / "operator.json").exists()
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_BIN": "codex",
+                "CODEX_MEMORY_ROOT": str(memory_root),
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                import bot as bot_mod
+                # _guard reads settings.telegram_allowed_user_id;
+                # the patched env has it as "0" (string), and the
+                # _allowed() helper compares to .id which we set
+                # to 0 above. _reply() falls through to
+                # update.effective_message.reply_text.
+                update, context = _make_fake_handler_update(text="/start")
+                asyncio.run(bot_mod.start_cmd(update, context))
+                # _reply was called once on the welcome path
+                update.effective_message.reply_text.assert_called_once()
+                args, kwargs = update.effective_message.reply_text.call_args
+                text = args[0]
+                if "看起来这是第一次用" not in text:
+                    return CheckResult(name, False, f"first-run welcome text missing: {text!r}")
+                if "onboard" not in text.lower():
+                    return CheckResult(name, False, f"onboard nudge missing: {text!r}")
+                if "reply_markup" not in kwargs:
+                    return CheckResult(name, False, "reply_markup not attached to first-run welcome")
+                markup = kwargs["reply_markup"]
+                if not any(
+                    button.callback_data == "ob:start"
+                    for row in markup.inline_keyboard
+                    for button in row
+                ):
+                    return CheckResult(name, False, f"ob:start button not in reply_markup: {markup}")
+                return CheckResult(
+                    name, True,
+                    f"first-run /start sent welcome with inline 'ob:start' button: {text[:80]!r}",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_text_cmd_first_run_nudge_with_button() -> CheckResult:
+    """E2E: any text message on a fresh install (no operator.json)
+    triggers the first-run nudge INSTEAD of starting a job. Pins
+    the contract that the very first user-typed message does
+    not get silently dropped in a job they didn't intend. The
+    nudge must include the same inline 'ob:start' button as
+    /start so the user can launch onboarding with one tap."""
+    name = "e2e: text_cmd on a fresh install (no operator.json) sends nudge with 'ob:start' button"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            memory_root = tmp_p / "memory"
+            memory_root.mkdir(parents=True, exist_ok=True)
+            assert not (memory_root / "operator.json").exists()
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_BIN": "codex",
+                "CODEX_MEMORY_ROOT": str(memory_root),
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                import bot as bot_mod
+                update, context = _make_fake_handler_update(text="hi")
+                asyncio.run(bot_mod.text_cmd(update, context))
+                # First-run nudge path: reply was called, NO job
+                # was started. The handler's contract is to short-
+                # circuit before reaching runner.start in the
+                # no-profile path. We can't directly observe
+                # runner.start was not called without mocking it,
+                # but the assertion is: reply was called (so we
+                # showed the user the nudge) and the message text
+                # was the nudge (not a job start).
+                update.effective_message.reply_text.assert_called_once()
+                args, kwargs = update.effective_message.reply_text.call_args
+                text = args[0]
+                if "第一次用" not in text and "first" not in text.lower():
+                    return CheckResult(name, False, f"first-run nudge text missing: {text!r}")
+                if "reply_markup" not in kwargs:
+                    return CheckResult(name, False, "reply_markup not attached to first-run nudge")
+                markup = kwargs["reply_markup"]
+                if not any(
+                    button.callback_data == "ob:start"
+                    for row in markup.inline_keyboard
+                    for button in row
+                ):
+                    return CheckResult(name, False, f"ob:start button not in reply_markup: {markup}")
+                return CheckResult(
+                    name, True,
+                    f"first-run text_cmd sent nudge with inline 'ob:start' button: {text[:80]!r}",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_onboard_flow_3_steps_writes_operator_json() -> CheckResult:
+    """E2E: the full 3-step onboarding flow (/onboard -> name ->
+    lang -> style) writes operator.json with the 4 known
+    fields. Pins the persistence contract end-to-end: the
+    bot handlers that the user actually drives via Telegram
+    produce a well-formed operator.json that load_settings
+    can re-read. Without this test, a future change to the
+    conversation state handling could silently drop the
+    name, language, or style field and the agent would
+    degrade to defaults without the user noticing."""
+    name = "e2e: full 3-step onboarding flow writes operator.json with all 4 fields"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            memory_root = tmp_p / "memory"
+            memory_root.mkdir(parents=True, exist_ok=True)
+            assert not (memory_root / "operator.json").exists()
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_BIN": "codex",
+                "CODEX_MEMORY_ROOT": str(memory_root),
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                import bot as bot_mod
+                # bot.py loads settings at module import time, before
+                # this env override took effect. Re-read so settings
+                # point at THIS test's tmpdir, otherwise
+                # _save_operator_profile writes to whichever tmpdir
+                # the first e2e test used. Mirrors what would
+                # happen in a fresh process start with the patched
+                # env.
+                bot_mod.settings = bot_mod.load_settings()
+                # PTB keeps the same context.user_data across the
+                # whole ConversationHandler. The test must share one
+                # context across all 4 steps so the onboarding_draft
+                # dict persists; creating a fresh context per step
+                # (the previous shape) made step 2+ hit a fresh
+                # empty dict and KeyError on
+                # context.user_data["onboarding_draft"].
+                _, context = _make_fake_handler_update(text="/onboard")
+                # Step 1: /onboard command -> onboard_start
+                update, _ = _make_fake_handler_update(text="/onboard")
+                state = asyncio.run(bot_mod.onboard_start(update, context))
+                if state != bot_mod.ONBOARDING_NAME:
+                    return CheckResult(name, False, f"onboard_start returned wrong state: {state}, expected ONBOARDING_NAME")
+                if context.user_data.get("onboarding_draft") is None:
+                    return CheckResult(name, False, f"onboarding_draft not seeded by onboard_start: {context.user_data!r}")
+                # Step 2: name as free text -> onboard_name
+                update, _ = _make_fake_handler_update(text="Alice")
+                state = asyncio.run(bot_mod.onboard_name(update, context))
+                if state != bot_mod.ONBOARDING_LANG:
+                    return CheckResult(name, False, f"onboard_name returned wrong state: {state}, expected ONBOARDING_LANG")
+                if context.user_data["onboarding_draft"].get("operator_name") != "Alice":
+                    return CheckResult(name, False, f"operator_name not stored: {context.user_data['onboarding_draft']}")
+                # Step 3: lang callback -> onboard_lang_button
+                update, _ = _make_fake_handler_update(callback_data="ob:lang:en")
+                state = asyncio.run(bot_mod.onboard_lang_button(update, context))
+                if state != bot_mod.ONBOARDING_STYLE:
+                    return CheckResult(name, False, f"onboard_lang_button returned wrong state: {state}, expected ONBOARDING_STYLE")
+                if context.user_data["onboarding_draft"].get("operator_language") != "en":
+                    return CheckResult(name, False, f"operator_language not stored: {context.user_data['onboarding_draft']}")
+                # Step 4: style callback -> onboard_style_button -> writes operator.json
+                update, _ = _make_fake_handler_update(callback_data="ob:style:terse")
+                state = asyncio.run(bot_mod.onboard_style_button(update, context))
+                if state != -1:  # ConversationHandler.END == -1
+                    return CheckResult(name, False, f"onboard_style_button did not return END: {state}")
+                # operator.json must now exist with all 4 fields
+                operator_path = memory_root / "operator.json"
+                if not operator_path.exists():
+                    return CheckResult(name, False, f"operator.json was not written at {operator_path}")
+                data = json.loads(operator_path.read_text(encoding="utf-8"))
+                checks = {
+                    "operator_name": "Alice",
+                    "operator_language": "en",
+                    "operator_style": "terse",
+                }
+                for key, expected in checks.items():
+                    if data.get(key) != expected:
+                        return CheckResult(name, False, f"operator.json[{key}] = {data.get(key)!r}, expected {expected!r}")
+                # operator_standing defaults to settings value (the test env has no OPERATOR_STANDING override so the dataclass default is used)
+                if "operator_standing" not in data:
+                    return CheckResult(name, False, f"operator_standing missing: {data!r}")
+                return CheckResult(
+                    name, True,
+                    f"3-step flow wrote operator.json: name=Alice, language=en, style=terse, standing={data.get('operator_standing')!r}",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_profile_cmd_shows_current_profile() -> CheckResult:
+    """E2E: /profile on a profile that exists reads the 4 fields
+    from operator.json and renders them in the reply. Pins
+    the visibility contract: when /profile is called, the
+    user sees the actual values the agent will use on the
+    next job, not stale env defaults. Without this test,
+    a future change to profile_cmd could silently show
+    'unset' for fields that ARE set, leaving the user
+    unable to verify their /onboard choices."""
+    name = "e2e: profile_cmd renders all 4 fields of operator.json in the reply"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            memory_root = tmp_p / "memory"
+            memory_root.mkdir(parents=True, exist_ok=True)
+            operator_path = memory_root / "operator.json"
+            operator_path.write_text(
+                json.dumps({
+                    "operator_name": "Bob",
+                    "operator_language": "ja",
+                    "operator_style": "verbose",
+                    "operator_standing": "team-lead",
+                }),
+                encoding="utf-8",
+            )
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_BIN": "codex",
+                "CODEX_MEMORY_ROOT": str(memory_root),
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                import bot as bot_mod
+                # Same env-reload as the onboarding-flow test:
+                # bot.py imported settings at first import, so
+                # settings.codex_memory_root points at the first
+                # e2e test's tmpdir unless we re-read.
+                bot_mod.settings = bot_mod.load_settings()
+                update, context = _make_fake_handler_update(text="/profile")
+                asyncio.run(bot_mod.profile_cmd(update, context))
+                update.effective_message.reply_text.assert_called_once()
+                args, kwargs = update.effective_message.reply_text.call_args
+                text = args[0]
+                # All 4 labels and values must appear in the reply
+                checks = [
+                    ("name", "Bob"),
+                    ("language", "ja"),
+                    ("style", "verbose"),
+                    ("standing", "team-lead"),
+                ]
+                for label, value in checks:
+                    if value not in text:
+                        return CheckResult(name, False, f"{label}={value!r} missing from profile reply: {text!r}")
+                if "operator.json" not in text and "operator.json" not in text:
+                    return CheckResult(name, False, f"profile reply missing operator.json reference: {text!r}")
+                return CheckResult(
+                    name, True,
+                    f"/profile rendered all 4 fields: name=Bob, language=ja, style=verbose, standing=team-lead",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_save_operator_profile_handles_oserror() -> CheckResult:
+    """E2E: _save_operator_profile returns False (not crash) when
+    the path is unwritable. Pins the failure-handling contract:
+    the conversation handler calls _save in onboard_style_button
+    and checks the return value to decide between 'saved' and
+    'save failed' messages. A regression that lets OSError
+    propagate would crash the conversation; a regression that
+    always reports success would lie to the user. The test
+    writes to a path that lives under a non-existent directory
+    to force a FileNotFoundError on the parent mkdir."""
+    name = "e2e: _save_operator_profile returns False on OSError (no crash, no false success)"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            # Create a path that is a regular file (not a directory)
+            # so mkdir(parents=True) on its parent will fail.
+            blocker = tmp_p / "blocker"
+            blocker.write_text("not a dir", encoding="utf-8")
+            # The operator.json path will be blocker/operator.json;
+            # blocker.parent (tmp_p) is fine, but the _save code
+            # does path.parent.mkdir(parents=True) where parent
+            # is blocker. Since blocker exists as a FILE, mkdir
+            # on it will raise FileExistsError / NotADirectoryError.
+            # We bypass _operator_profile_path by calling
+            # _save_operator_profile directly with the data dict.
+            overrides = {
+                "TELEGRAM_BOT_TOKEN": "fake-token",
+                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+                "CODEX_BIN": "codex",
+                "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+                "USER_TIMEZONE": "UTC",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                import bot as bot_mod
+                # Patch the path to point at the blocker
+                from config import OPERATOR_PROFILE_FIELDS
+                bad_path = blocker / "operator.json"
+                # Force the helper to use bad_path
+                with mock.patch.object(bot_mod, "OPERATOR_PROFILE_FILENAME", "blocker/operator.json"):
+                    # Hmm, _operator_profile_path uses
+                    # settings.codex_memory_root / "operator.json",
+                    # not a module constant. So patching the constant
+                    # doesn't work. We need a different approach.
+                    pass
+                # Simpler: call _save_operator_profile with a
+                # data dict and a manually-broken path. We
+                # monkey-patch _operator_profile_path.
+                with mock.patch.object(bot_mod, "_operator_profile_path", lambda: blocker / "operator.json"):
+                    result = bot_mod._save_operator_profile({
+                        "operator_name": "Test",
+                        "operator_language": "en",
+                        "operator_style": "terse",
+                    })
+                if result is not False:
+                    return CheckResult(name, False, f"expected False on OSError, got {result!r}")
+                # operator.json must NOT have been written at the blocker path
+                if (blocker / "operator.json").exists():
+                    return CheckResult(name, False, "operator.json was written despite OSError — false success!")
+                return CheckResult(
+                    name, True,
+                    f"_save_operator_profile returned False on OSError (no crash, no false success)",
+                )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
 def main() -> int:
     tests = [
         # AST contracts
@@ -2849,6 +3233,12 @@ def main() -> int:
         # Hot-reload contracts
         _test_operator_profile_text_uses_env_when_no_operator_json,
         _test_operator_profile_text_picks_up_live_operator_json_edit,
+        # E2E onboarding contracts (bot.py handler side)
+        _test_start_cmd_first_run_welcome_with_button,
+        _test_text_cmd_first_run_nudge_with_button,
+        _test_onboard_flow_3_steps_writes_operator_json,
+        _test_profile_cmd_shows_current_profile,
+        _test_save_operator_profile_handles_oserror,
     ]
     results = [t() for t in tests]
     print_results(results)
