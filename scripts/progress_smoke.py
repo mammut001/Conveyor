@@ -32,13 +32,62 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.harness_common import CheckResult, print_results
 
 
+# After the runner/ package refactor, the CodexRunner class
+# shell lives in runner/core.py and the methods live as top-
+# level functions in their focused modules. The class is
+# bound to the methods at import time via setattr in core.py.
+# The AST tests below walk `CodexRunner.<method>`; we
+# synthesize a class node that lifts all top-level functions
+# from runner/*.py and runner/operators/*.py onto a
+# CodexRunner class so the existing walks keep working.
 RUNNER_PY = Path(__file__).resolve().parents[1] / "runner.py"
+RUNNER_CORE_PY = Path(__file__).resolve().parents[1] / "runner" / "core.py"
 BOT_PY = Path(__file__).resolve().parents[1] / "bot.py"
+
+# All runner/ submodules whose top-level functions get bound
+# to CodexRunner via setattr in runner/core.py
+RUNNER_METHOD_MODULES = [
+    Path(__file__).resolve().parents[1] / "runner" / "streaming.py",
+    Path(__file__).resolve().parents[1] / "runner" / "worktree.py",
+    Path(__file__).resolve().parents[1] / "runner" / "prefetch.py",
+    Path(__file__).resolve().parents[1] / "runner" / "day_brief.py",
+    Path(__file__).resolve().parents[1] / "runner" / "memo.py",
+    Path(__file__).resolve().parents[1] / "runner" / "metadata.py",
+    Path(__file__).resolve().parents[1] / "runner" / "operators" / "run.py",
+    Path(__file__).resolve().parents[1] / "runner" / "operators" / "jobs.py",
+    Path(__file__).resolve().parents[1] / "runner" / "operators" / "maintain.py",
+]
 
 
 # ---- AST helpers ---------------------------------------------------------
 
 def _parse_runner() -> ast.Module:
+    if RUNNER_PY.stat().st_size < 5000:
+        # Post-refactor: synthesize CodexRunner with all
+        # methods lifted from the focused modules.
+        core_tree = ast.parse(RUNNER_CORE_PY.read_text(encoding="utf-8"))
+        cls = next(
+            (n for n in core_tree.body if isinstance(n, ast.ClassDef) and n.name == "CodexRunner"),
+            None,
+        )
+        if cls is None:
+            return core_tree
+        new_body = list(cls.body)
+        for mod_path in RUNNER_METHOD_MODULES:
+            if not mod_path.exists():
+                continue
+            mod_tree = ast.parse(mod_path.read_text(encoding="utf-8"))
+            for n in mod_tree.body:
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    new_body.append(n)
+        new_cls = ast.ClassDef(
+            name=cls.name,
+            bases=cls.bases,
+            keywords=cls.keywords,
+            body=new_body,
+            decorator_list=cls.decorator_list,
+        )
+        return ast.Module(body=[new_cls], type_ignores=[])
     return ast.parse(RUNNER_PY.read_text(encoding="utf-8"))
 
 
@@ -1385,8 +1434,8 @@ def _test_thinking_indicator_appears_after_threshold() -> CheckResult:
         # the chain immediately satisfies it. This is the test
         # override hook (re-binding a module global) and mirrors the
         # frozen-Settings bypass used by _test_growing_gate_on_prose.
-        original_threshold = runner_mod.THINKING_THRESHOLD_SECONDS
-        runner_mod.THINKING_THRESHOLD_SECONDS = 0.0
+        original_threshold = runner_mod.streaming.THINKING_THRESHOLD_SECONDS
+        runner_mod.streaming.THINKING_THRESHOLD_SECONDS = 0.0
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
             for sub in ("ws", "task", "memory"):
@@ -1436,12 +1485,12 @@ def _test_thinking_indicator_appears_after_threshold() -> CheckResult:
 
                 asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
 
-                if progress_calls != [runner_mod.THINKING_INDICATOR]:
+                if progress_calls != [runner_mod.streaming.THINKING_INDICATOR]:
                     return CheckResult(
                         name, False,
                         f"expected exactly 1 thinking-indicator call; got {progress_calls!r}",
                     )
-                if runner_mod.THINKING_INDICATOR not in progress_calls[0]:
+                if runner_mod.streaming.THINKING_INDICATOR not in progress_calls[0]:
                     return CheckResult(
                         name, False,
                         f"indicator text mismatch: got {progress_calls[0]!r}",
@@ -1461,7 +1510,7 @@ def _test_thinking_indicator_appears_after_threshold() -> CheckResult:
     finally:
         if original_threshold is not None:
             import runner as runner_mod  # noqa: PLC0415
-            runner_mod.THINKING_THRESHOLD_SECONDS = original_threshold
+            runner_mod.streaming.THINKING_THRESHOLD_SECONDS = original_threshold
 
 
 def _test_thinking_indicator_clears_on_prose() -> CheckResult:
@@ -1473,8 +1522,8 @@ def _test_thinking_indicator_clears_on_prose() -> CheckResult:
     original_threshold = None
     try:
         import runner as runner_mod  # noqa: PLC0415
-        original_threshold = runner_mod.THINKING_THRESHOLD_SECONDS
-        runner_mod.THINKING_THRESHOLD_SECONDS = 0.0
+        original_threshold = runner_mod.streaming.THINKING_THRESHOLD_SECONDS
+        runner_mod.streaming.THINKING_THRESHOLD_SECONDS = 0.0
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
             for sub in ("ws", "task", "memory"):
@@ -1520,7 +1569,7 @@ def _test_thinking_indicator_clears_on_prose() -> CheckResult:
 
                 asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
 
-                if progress_calls != [runner_mod.THINKING_INDICATOR, "Hello"]:
+                if progress_calls != [runner_mod.streaming.THINKING_INDICATOR, "Hello"]:
                     return CheckResult(
                         name, False,
                         f"expected [thinking, 'Hello']; got {progress_calls!r}",
@@ -1534,7 +1583,7 @@ def _test_thinking_indicator_clears_on_prose() -> CheckResult:
     finally:
         if original_threshold is not None:
             import runner as runner_mod  # noqa: PLC0415
-            runner_mod.THINKING_THRESHOLD_SECONDS = original_threshold
+            runner_mod.streaming.THINKING_THRESHOLD_SECONDS = original_threshold
 
 
 def _test_thinking_indicator_clears_on_tool_call() -> CheckResult:
@@ -1547,8 +1596,8 @@ def _test_thinking_indicator_clears_on_tool_call() -> CheckResult:
     original_threshold = None
     try:
         import runner as runner_mod  # noqa: PLC0415
-        original_threshold = runner_mod.THINKING_THRESHOLD_SECONDS
-        runner_mod.THINKING_THRESHOLD_SECONDS = 0.0
+        original_threshold = runner_mod.streaming.THINKING_THRESHOLD_SECONDS
+        runner_mod.streaming.THINKING_THRESHOLD_SECONDS = 0.0
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
             for sub in ("ws", "task", "memory"):
@@ -1599,7 +1648,7 @@ def _test_thinking_indicator_clears_on_tool_call() -> CheckResult:
                         name, False,
                         f"expected 2 progress calls; got {progress_calls!r}",
                     )
-                if progress_calls[0] != runner_mod.THINKING_INDICATOR:
+                if progress_calls[0] != runner_mod.streaming.THINKING_INDICATOR:
                     return CheckResult(
                         name, False,
                         f"first call should be the thinking indicator; got {progress_calls[0]!r}",
@@ -1618,7 +1667,7 @@ def _test_thinking_indicator_clears_on_tool_call() -> CheckResult:
     finally:
         if original_threshold is not None:
             import runner as runner_mod  # noqa: PLC0415
-            runner_mod.THINKING_THRESHOLD_SECONDS = original_threshold
+            runner_mod.streaming.THINKING_THRESHOLD_SECONDS = original_threshold
 
 
 def _test_thinking_indicator_skipped_for_short_reasoning() -> CheckResult:
@@ -1632,12 +1681,12 @@ def _test_thinking_indicator_skipped_for_short_reasoning() -> CheckResult:
     original_threshold = None
     try:
         import runner as runner_mod  # noqa: PLC0415
-        original_threshold = runner_mod.THINKING_THRESHOLD_SECONDS
+        original_threshold = runner_mod.streaming.THINKING_THRESHOLD_SECONDS
         # Raise the threshold so the unit test's microsecond inter-
         # event spacing can never satisfy it. This proves the
         # threshold is honored, not just that the constant is wired
         # in.
-        runner_mod.THINKING_THRESHOLD_SECONDS = 1000.0
+        runner_mod.streaming.THINKING_THRESHOLD_SECONDS = 1000.0
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
             for sub in ("ws", "task", "memory"):
@@ -1721,10 +1770,10 @@ def _test_tool_pulse_appears_after_threshold() -> CheckResult:
         # Test override hook: re-binding the module-level constants
         # is the only way to bypass the frozen-Settings guard. This
         # mirrors the THINKING_THRESHOLD_SECONDS pattern above.
-        original_threshold = runner_mod.TOOL_PULSE_THRESHOLD_SECONDS
-        original_interval = runner_mod.TOOL_PULSE_INTERVAL_SECONDS
-        runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = 0.0
-        runner_mod.TOOL_PULSE_INTERVAL_SECONDS = 0.0
+        original_threshold = runner_mod.streaming.TOOL_PULSE_THRESHOLD_SECONDS
+        original_interval = runner_mod.streaming.TOOL_PULSE_INTERVAL_SECONDS
+        runner_mod.streaming.TOOL_PULSE_THRESHOLD_SECONDS = 0.0
+        runner_mod.streaming.TOOL_PULSE_INTERVAL_SECONDS = 0.0
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
             for sub in ("ws", "task", "memory"):
@@ -1786,10 +1835,10 @@ def _test_tool_pulse_appears_after_threshold() -> CheckResult:
     finally:
         if original_threshold is not None:
             import runner as runner_mod  # noqa: PLC0415
-            runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = original_threshold
+            runner_mod.streaming.TOOL_PULSE_THRESHOLD_SECONDS = original_threshold
         if original_interval is not None:
             import runner as runner_mod  # noqa: PLC0415
-            runner_mod.TOOL_PULSE_INTERVAL_SECONDS = original_interval
+            runner_mod.streaming.TOOL_PULSE_INTERVAL_SECONDS = original_interval
 
 
 def _test_tool_pulse_clears_on_completion() -> CheckResult:
@@ -1806,10 +1855,10 @@ def _test_tool_pulse_clears_on_completion() -> CheckResult:
     original_interval = None
     try:
         import runner as runner_mod  # noqa: PLC0415
-        original_threshold = runner_mod.TOOL_PULSE_THRESHOLD_SECONDS
-        original_interval = runner_mod.TOOL_PULSE_INTERVAL_SECONDS
-        runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = 0.0
-        runner_mod.TOOL_PULSE_INTERVAL_SECONDS = 0.0
+        original_threshold = runner_mod.streaming.TOOL_PULSE_THRESHOLD_SECONDS
+        original_interval = runner_mod.streaming.TOOL_PULSE_INTERVAL_SECONDS
+        runner_mod.streaming.TOOL_PULSE_THRESHOLD_SECONDS = 0.0
+        runner_mod.streaming.TOOL_PULSE_INTERVAL_SECONDS = 0.0
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
             for sub in ("ws", "task", "memory"):
@@ -1870,10 +1919,10 @@ def _test_tool_pulse_clears_on_completion() -> CheckResult:
     finally:
         if original_threshold is not None:
             import runner as runner_mod  # noqa: PLC0415
-            runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = original_threshold
+            runner_mod.streaming.TOOL_PULSE_THRESHOLD_SECONDS = original_threshold
         if original_interval is not None:
             import runner as runner_mod  # noqa: PLC0415
-            runner_mod.TOOL_PULSE_INTERVAL_SECONDS = original_interval
+            runner_mod.streaming.TOOL_PULSE_INTERVAL_SECONDS = original_interval
 
 
 def _test_tool_pulse_skipped_for_short_call() -> CheckResult:
@@ -1889,14 +1938,14 @@ def _test_tool_pulse_skipped_for_short_call() -> CheckResult:
     original_interval = None
     try:
         import runner as runner_mod  # noqa: PLC0415
-        original_threshold = runner_mod.TOOL_PULSE_THRESHOLD_SECONDS
-        original_interval = runner_mod.TOOL_PULSE_INTERVAL_SECONDS
+        original_threshold = runner_mod.streaming.TOOL_PULSE_THRESHOLD_SECONDS
+        original_interval = runner_mod.streaming.TOOL_PULSE_INTERVAL_SECONDS
         # Raise the threshold so the unit test's microsecond
         # inter-event spacing can never satisfy it. This proves
         # the threshold is honored, not just that the constant
         # is wired in.
-        runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = 1000.0
-        runner_mod.TOOL_PULSE_INTERVAL_SECONDS = 0.0
+        runner_mod.streaming.TOOL_PULSE_THRESHOLD_SECONDS = 1000.0
+        runner_mod.streaming.TOOL_PULSE_INTERVAL_SECONDS = 0.0
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
             for sub in ("ws", "task", "memory"):
@@ -1956,10 +2005,10 @@ def _test_tool_pulse_skipped_for_short_call() -> CheckResult:
     finally:
         if original_threshold is not None:
             import runner as runner_mod  # noqa: PLC0415
-            runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = original_threshold
+            runner_mod.streaming.TOOL_PULSE_THRESHOLD_SECONDS = original_threshold
         if original_interval is not None:
             import runner as runner_mod  # noqa: PLC0415
-            runner_mod.TOOL_PULSE_INTERVAL_SECONDS = original_interval
+            runner_mod.streaming.TOOL_PULSE_INTERVAL_SECONDS = original_interval
 
 
 def _test_tool_pulse_respects_interval() -> CheckResult:
@@ -1977,14 +2026,14 @@ def _test_tool_pulse_respects_interval() -> CheckResult:
     original_interval = None
     try:
         import runner as runner_mod  # noqa: PLC0415
-        original_threshold = runner_mod.TOOL_PULSE_THRESHOLD_SECONDS
-        original_interval = runner_mod.TOOL_PULSE_INTERVAL_SECONDS
-        runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = 0.0
+        original_threshold = runner_mod.streaming.TOOL_PULSE_THRESHOLD_SECONDS
+        original_interval = runner_mod.streaming.TOOL_PULSE_INTERVAL_SECONDS
+        runner_mod.streaming.TOOL_PULSE_THRESHOLD_SECONDS = 0.0
         # Raise the interval so the unit test's microsecond
         # inter-event spacing can never satisfy it. This proves
         # the interval gate is honored, not just that the constant
         # is wired in.
-        runner_mod.TOOL_PULSE_INTERVAL_SECONDS = 1000.0
+        runner_mod.streaming.TOOL_PULSE_INTERVAL_SECONDS = 1000.0
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
             for sub in ("ws", "task", "memory"):
@@ -2045,10 +2094,10 @@ def _test_tool_pulse_respects_interval() -> CheckResult:
     finally:
         if original_threshold is not None:
             import runner as runner_mod  # noqa: PLC0415
-            runner_mod.TOOL_PULSE_THRESHOLD_SECONDS = original_threshold
+            runner_mod.streaming.TOOL_PULSE_THRESHOLD_SECONDS = original_threshold
         if original_interval is not None:
             import runner as runner_mod  # noqa: PLC0415
-            runner_mod.TOOL_PULSE_INTERVAL_SECONDS = original_interval
+            runner_mod.streaming.TOOL_PULSE_INTERVAL_SECONDS = original_interval
 
 
 # ---- chat-feel round-8: first-event cooldown bypass ---------------------

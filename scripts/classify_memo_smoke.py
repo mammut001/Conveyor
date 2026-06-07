@@ -32,10 +32,19 @@ from runner import CodexRunner
 from scripts.harness_common import CheckResult, print_results
 
 
+# After the runner/ package refactor, the CodexRunner class
+# shell lives in runner/core.py and the methods live as top-
+# level functions in their focused module (e.g. runner/memo.py
+# for classify_memo). The class is bound to the methods at
+# import time via setattr in runner/core.py. So the old
+# "parse runner.py and find class CodexRunner.method" walk
+# no longer works as-is. We synthesize a ClassDef that
+# combines the class shell with the methods from memo.py
+# so the existing AST tests can keep walking the same shape.
 RUNNER_PY = Path(__file__).resolve().parents[1] / "runner.py"
+RUNNER_CORE_PY = Path(__file__).resolve().parents[1] / "runner" / "core.py"
+RUNNER_MEMO_PY = Path(__file__).resolve().parents[1] / "runner" / "memo.py"
 
-
-# ---- AST helpers ---------------------------------------------------------
 
 def _class_def(tree: ast.Module, name: str) -> ast.ClassDef | None:
     return next(
@@ -52,6 +61,38 @@ def _method_def(class_node: ast.ClassDef, name: str) -> ast.AsyncFunctionDef | N
 
 
 def _parse_runner() -> ast.Module:
+    """Synthesize a view: CodexRunner class + classify_memo method.
+
+    If runner.py is the new shim (19 lines), build a synthetic
+    Module whose CodexRunner class has classify_memo (and any
+    other AsyncFunctionDef) lifted from runner/memo.py. If
+    runner.py is the old monolith (2005 lines), parse it directly
+    for back-compat. The shim test is the common path post-refactor.
+    """
+    if RUNNER_PY.stat().st_size < 5000:
+        # Post-refactor: build the synthetic view
+        core_tree = ast.parse(RUNNER_CORE_PY.read_text(encoding="utf-8"))
+        memo_tree = ast.parse(RUNNER_MEMO_PY.read_text(encoding="utf-8"))
+        cls = _class_def(core_tree, "CodexRunner")
+        if cls is None:
+            return core_tree  # let the test fail naturally
+        # Clone the class node with the AsyncFunctionDefs from
+        # memo.py added to its body. The body of the synthesized
+        # class is shallow-copied so we don't mutate the core_tree.
+        new_body = list(cls.body)
+        for n in memo_tree.body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                new_body.append(n)
+        new_cls = ast.ClassDef(
+            name=cls.name,
+            bases=cls.bases,
+            keywords=cls.keywords,
+            body=new_body,
+            decorator_list=cls.decorator_list,
+        )
+        new_module = ast.Module(body=[new_cls], type_ignores=[])
+        return new_module
+    # Pre-refactor monolith: parse it directly
     return ast.parse(RUNNER_PY.read_text(encoding="utf-8"))
 
 

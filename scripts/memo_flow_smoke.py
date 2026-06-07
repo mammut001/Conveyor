@@ -53,12 +53,44 @@ from runner import CodexRunner
 from scripts.harness_common import CheckResult, print_results
 
 
+# After the runner/ package refactor, methods live as top-level
+# functions in their focused module (e.g. runner/memo.py for
+# append_memo + reclassify_unfiled) and get bound to CodexRunner
+# at import time via setattr in runner/core.py. We synthesize a
+# ClassDef view so the AST walks keep working.
 RUNNER_PY = Path(__file__).resolve().parents[1] / "runner.py"
+RUNNER_CORE_PY = Path(__file__).resolve().parents[1] / "runner" / "core.py"
+RUNNER_MEMO_PY = Path(__file__).resolve().parents[1] / "runner" / "memo.py"
 
 
 # ---- AST helpers ---------------------------------------------------------
 
+def _class_def(tree: ast.Module, name: str) -> ast.ClassDef | None:
+    return next(
+        (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == name),
+        None,
+    )
+
+
 def _parse_runner() -> ast.Module:
+    if RUNNER_PY.stat().st_size < 5000:
+        core_tree = ast.parse(RUNNER_CORE_PY.read_text(encoding="utf-8"))
+        memo_tree = ast.parse(RUNNER_MEMO_PY.read_text(encoding="utf-8"))
+        cls = _class_def(core_tree, "CodexRunner")
+        if cls is None:
+            return core_tree
+        new_body = list(cls.body)
+        for n in memo_tree.body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                new_body.append(n)
+        new_cls = ast.ClassDef(
+            name=cls.name,
+            bases=cls.bases,
+            keywords=cls.keywords,
+            body=new_body,
+            decorator_list=cls.decorator_list,
+        )
+        return ast.Module(body=[new_cls], type_ignores=[])
     return ast.parse(RUNNER_PY.read_text(encoding="utf-8"))
 
 
