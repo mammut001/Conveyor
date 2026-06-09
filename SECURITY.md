@@ -18,11 +18,11 @@ release note before any public disclosure.
 
 ## Threat model in scope
 
-`telegram_codex_runner` runs `codex exec` on a VPS on behalf of a
-single whitelisted Telegram chat. The threat model is "Telegram
-account compromise" and "untrusted Telegram chat". Both are mitigated
-by `TELEGRAM_ALLOWED_USER_ID` and the redaction layer in
-[`redaction.py`](redaction.py).
+`Conveyor` runs `codex exec` on a VPS on behalf of a
+single whitelisted chat (Telegram user id, Feishu open_id). The threat
+model is "Telegram account compromise", "Feishu app-tenant compromise",
+and "untrusted chat". Both channels are mitigated by per-channel
+`ALLOWED_*` gates and the redaction layer in [`redaction.py`](redaction.py).
 
 Out of scope: the underlying host, the Codex CLI itself, and the
 Telegram Bot API. Report those to their respective maintainers.

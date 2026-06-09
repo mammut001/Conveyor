@@ -25,6 +25,15 @@ state/
 MEMORY.md
 MEMORY.md.archived-*
 
+# Personal reference docs (not shipped). docs/ is now git-ignored by
+# design; the only docs that ship with the repo are README.md and
+# docs/architecture.md. Anything else in docs/ is operator-only.
+docs/001-*
+docs/002-*
+docs/003-*
+docs/004-*
+docs/005-*
+
 # Editor / IDE
 *.swp
 *.swo

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in `telegram_codex_runner`.
+Thanks for your interest in `Conveyor`.
 
 This project is intentionally small and single-user in origin: the same
 person who runs the bot also reviews the diffs. That means a few things
@@ -8,9 +8,9 @@ for new contributors.
 
 ## What this project is
 
-A small Python service that bridges a whitelisted Telegram user to the
-[`codex`](https://github.com/openai/codex) CLI on a VPS. It is a tool for
-running `codex exec` from a phone, not a multi-tenant SaaS. Read
+A small Python service that bridges a whitelisted user (Telegram, Feishu)
+to the [`codex`](https://github.com/openai/codex) CLI on a VPS. It is a
+tool for running `codex exec` from a phone, not a multi-tenant SaaS. Read
 [`README.md`](README.md) for the command surface and
 [`project.md`](project.md) for the deep design notes.
 

@@ -19,7 +19,7 @@ What you expected to happen.
 **Smoke baseline**
 Output of `make smoke` on a clean checkout. If you can't run it
 (e.g. you hit the bug on the live VPS), say so and paste the last
-few lines of the relevant `journalctl -u codex-telegram-bot`
+few lines of the relevant `journalctl -u conveyor-telegram-bot`
 output.
 
 **Environment**
