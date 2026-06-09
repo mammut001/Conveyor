@@ -9,6 +9,8 @@ answer back; same for `记 xxx` (write to memory), `/status`, `/diff`,
 > Conveyor is the **transport** layer, not the agent. Codex CLI is
 > the agent. See [`docs/architecture.md`](docs/architecture.md) for
 > the full design.
+>
+> **[中文文档 / Chinese](README.zh.md)**
 
 ---
 
