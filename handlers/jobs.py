@@ -60,11 +60,18 @@ async def handle_codex_job(
         return
 
     # Wait for completion (runner.start spawns the task; we await state
-    # transitions to keep port lifecycle simple).
+    # transitions to keep port lifecycle simple). The progress callback may
+    # have already sent the final answer (e.g. feishu's edit_progress always
+    # returns False, so each progress step — including the last — is sent as
+    # a new message and recorded in last_progress). Re-send only if the
+    # final summary differs from what we already delivered, so the user does
+    # not see the same paragraph twice.
     while job.state == JobState.RUNNING:
         await _sleep(0.3)
     if job.summary:
-        await port.send_new(msg, job.summary)
+        summary = job.summary
+        if summary.strip() != last_progress.strip():
+            await port.send_new(msg, summary)
     elif job.error:
         await port.send_new(msg, truncate(job.error, 3500))
     elif last_progress and last_progress != PLACEHOLDER_TEXT:

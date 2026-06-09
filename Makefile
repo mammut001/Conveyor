@@ -5,7 +5,7 @@
 #                  .env and is gated behind 'make smoke-all' for that reason.
 
 PY ?= .venv/bin/python
-SMOKE_FREE = scripts/auto_maintain_smoke.py scripts/compress_day_smoke.py scripts/clean_worktrees_smoke.py scripts/clean_old_jobs_smoke.py scripts/classify_memo_smoke.py scripts/memo_flow_smoke.py scripts/memo_fastpath_smoke.py scripts/progress_smoke.py scripts/handlers_smoke.py
+SMOKE_FREE = scripts/auto_maintain_smoke.py scripts/compress_day_smoke.py scripts/clean_worktrees_smoke.py scripts/clean_old_jobs_smoke.py scripts/classify_memo_smoke.py scripts/memo_flow_smoke.py scripts/memo_fastpath_smoke.py scripts/progress_smoke.py scripts/handlers_smoke.py scripts/jobs_dedupe_smoke.py
 
 .PHONY: smoke smoke-all help
 
