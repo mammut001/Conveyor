@@ -775,6 +775,9 @@ cd telegram_codex_runner && make smoke
 # deploy to VPS (rsync + restart bot)
 cd telegram_codex_runner && bash scripts/deploy.sh
 
+# first install from laptop (rsync + venv + systemd + configure_env)
+cd telegram_codex_runner && bash scripts/install-remote.sh
+
 # deploy CHANGELOG (not in deploy.sh list)
 rsync -avz telegram_codex_runner/CHANGELOG.md \
   $REMOTE:/opt/codex-telegram-runner/CHANGELOG.md

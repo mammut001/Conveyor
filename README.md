@@ -2,6 +2,40 @@
 
 Small Python service that lets one whitelisted Telegram user run `codex exec --json` jobs on an Ubuntu VPS.
 
+## Quick Start
+
+Run these from a laptop with SSH access to your VPS. The VPS host and secrets
+stay in your shell environment or on the server — they are not stored in this
+repository.
+
+**First install** (VPS prerequisites: Ubuntu, [Codex CLI](https://github.com/openai/codex) installed for the SSH user, and a git repo for `CODEX_WORKSPACE_ROOT`):
+
+```bash
+git clone https://github.com/mammut001/telegram_codex_runner.git
+cd telegram_codex_runner
+CODEX_TELEGRAM_REMOTE=ubuntu@<host> bash scripts/install-remote.sh
+```
+
+The installer rsyncs source, creates `.venv`, installs systemd units, runs the
+interactive `configure_env.py` helper when `.env` is missing, then starts the
+bot. Open Telegram and send `/start` when done.
+
+**Deploy code updates** (after `.env` and systemd are already in place):
+
+```bash
+CODEX_TELEGRAM_REMOTE=ubuntu@<host> bash scripts/deploy.sh
+```
+
+Optional shell shortcut (local only, e.g. in `~/.zshrc`):
+
+```bash
+export CODEX_TELEGRAM_REMOTE=ubuntu@<host>
+export CODEX_TELEGRAM_REMOTE_DIR=/opt/codex-telegram-runner
+alias deploy-runner='cd ~/telegram_codex_runner && bash scripts/deploy.sh'
+```
+
+Manual step-by-step setup on the VPS is in [Setup On Ubuntu](#setup-on-ubuntu) below.
+
 ## How it works
 
 A single Python process runs on the VPS:
@@ -61,6 +95,9 @@ telegram_codex_runner/
 Only one job runs at a time for the configured repository. Telegram replies are intentionally quiet: the bot sends a short start acknowledgement, useful retry/failure notices, and the final Codex answer. Raw Codex JSONL events stay on disk in the job logs. If Codex exits because the provider returns `429 Too Many Requests`, the runner retries the whole Codex attempt using `CODEX_RETRY_429_DELAYS_SECONDS`.
 
 ## Setup On Ubuntu
+
+> **Shortcut:** from your laptop, `CODEX_TELEGRAM_REMOTE=ubuntu@<host> bash scripts/install-remote.sh`
+> runs the steps below automatically (rsync, venv, systemd, `.env` wizard).
 
 1. Install Codex CLI and authenticate it for the `ubuntu` user.
 
