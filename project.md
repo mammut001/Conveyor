@@ -706,6 +706,9 @@ Inherited from CHANGELOG.md, expanded with current state:
   hand-edit; the next `classify_memo` call will not touch a line it did
   not write.
 - **Hermes-agent-style parsed tool-call routing** — see §13.1.
+- **Channel decouple (Telegram + Feishu)** — duplicate memo/command logic
+  in `bot.py` vs `feishu_bot.py`; harness is Telegram-shaped only. Design:
+  `docs/003-channel-decoupling.md` (P0: extract `handlers/`, shared dispatch).
 - **Maintain-failure alerting** — the 13:25 incident on 2026-06-04 had a
   57-minute silent window because the maintain unit has no
   `OnFailure=` notify path and no failed-run counter. The fix is in

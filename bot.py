@@ -12,23 +12,13 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                                MessageHandler, filters)
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from channel import InboundMessage
+from channel.auth import is_allowed
 from config import load_settings
-from config import OPERATOR_PROFILE_FIELDS, load_settings
+from config import OPERATOR_PROFILE_FIELDS
+from handlers import dispatch
 from redaction import redact_text, truncate
 from runner import CodexRunner, JobMode
-from scripts.auto_maintain import run_maintenance
-from scripts.diagnostics import diagnostics_report
-from scripts.doctor import check_disk, check_latest_job, check_runtime_dirs, check_workspace
-from scripts.edit_harness import run_edit_harness
-from scripts.harness_common import check_minimax_models, check_systemd_active
-from scripts.health_snapshot import health_snapshot
-from scripts.job_audit import run_job_audit
-from scripts.log_summary import summarize_log
-from scripts.metadata_report import metadata_report
-from scripts.metrics_report import metrics_report
-from scripts.rate_limit_report import rate_limit_report
-from scripts.security_audit import run_security_audit
-from scripts.smoke import run_smoke
 
 
 logging.basicConfig(
@@ -58,54 +48,97 @@ logger = logging.getLogger("codex_telegram_bot")
 settings = load_settings()
 runner = CodexRunner(settings)
 
-# Plain-text prompts that start with one of these words route to the memo
-# fast path (_handle_memo_fast_path below), which writes to MEMORY.md
-# directly without going through codex. Used by text_cmd so users can write
-# "记住 xxx" or "记一下 yyy" without needing a /memo command.
-MEMORY_KEYWORD_PATTERN = re.compile(r"^\s*(memo|备忘|记下|记一下|记住|记录|记\b)", re.IGNORECASE)
-# Optional explicit category tag inside the memo body, e.g. "[preference] 用 pnpm".
-# The first match wins; later tags are stripped from the content.
-CATEGORY_PATTERN = re.compile(r"\[(preference|fact|tool-quirk|convention)\]", re.IGNORECASE)
 # YYYY-MM-DD, used to slice a specific day's archived journal.
 DATE_ARG_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def _detect_memory_intent(prompt: str) -> bool:
-    return bool(MEMORY_KEYWORD_PATTERN.match(prompt))
+# ---- Channel adapter shim (P0.2: bot.py -> handlers/dispatch) -------------
+# These let text_cmd / memo_cmd delegate to the channel-agnostic dispatcher
+# without rewriting the rest of bot.py. The full TelegramOutbound lives in
+# channel/telegram.py once P0.2 stabilizes.
+
+def _inbound_from_update(update: Update, text: str | None = None) -> InboundMessage:
+    user = update.effective_user
+    chat = update.effective_chat
+    msg = update.effective_message
+    text_value = text
+    if text_value is None and msg is not None:
+        text_value = msg.text or ""
+    return InboundMessage(
+        channel="telegram",
+        operator_id=str(getattr(user, "id", "") or ""),
+        chat_id=str(getattr(chat, "id", "") or ""),
+        message_id=str(getattr(msg, "message_id", "") or "") if msg else None,
+        text=(text_value or "").strip(),
+        chat_type="p2p" if (chat and getattr(chat, "type", None) == "private") else "group",
+        raw=update,
+    )
 
 
-async def _handle_memo_fast_path(update: Update, prompt: str) -> None:
-    """Append a memo to today's MEMORY.md. Skips codex entirely.
+class _TelegramOutbound:
+    """Minimal OutboundPort: replays edits/sends via python-telegram-bot.
 
-    Fast path for "记 x" / /memo: parse optional [category] tag, fall back to
-    the LLM classifier (any failure -> "unfiled"), then atomic-append to the
-    per-day worktree's MEMORY.md. Replaces the old codex-via-MEMO flow.
+    edit_progress returns False on the first failure (Telegram's
+    20-edits/min cap or "Message is not modified"), causing the
+    dispatcher's latching fallback to send_new. This mirrors the
+    pre-P0.2 _start_job behavior exactly.
     """
-    stripped = MEMORY_KEYWORD_PATTERN.sub("", prompt, count=1).strip()
-    matches = CATEGORY_PATTERN.findall(stripped)
-    if not stripped:
-        await _reply(update, "Usage: 记 <something>  or  /memo [category] <something>")
+    supports_inline_buttons: bool = True
+
+    def __init__(self, update: Update) -> None:
+        self._update = update
+        self._edit_broken = False
+
+    async def reply(self, msg: InboundMessage, text: str):
+        await _reply(self._update, text)
+        # The placeholder id is captured in _start_job via the original
+        # update.effective_message.message_id; bot.py's text_cmd does not
+        # spin its own placeholder — _start_job still owns progress edits
+        # through its own closure. Return None so the dispatcher falls
+        # back to send_new for progress updates; the reply is sent now.
+        return None
+
+    async def send_new(self, msg: InboundMessage, text: str):
+        await _reply(self._update, text)
+        return None
+
+    async def edit_progress(self, msg: InboundMessage, placeholder_id, text: str) -> bool:
+        return False  # delegates back to the legacy _start_job path
+
+    async def reply_with_buttons(self, msg: InboundMessage, text: str, buttons):
+        keyboard = [
+            [InlineKeyboardButton(b["text"], callback_data=b["callback_data"]) for b in row]
+            for row in buttons
+        ]
+        await _reply(self._update, text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return None
+
+
+# ---- Channel-agnostic handler shims ---------------------------------------
+
+async def _dispatch_text(update: Update, text: str) -> None:
+    """Send a free-text message through the shared dispatcher."""
+    inbound = _inbound_from_update(update, text=text)
+    await dispatch(inbound, _TelegramOutbound(update), settings, runner)
+
+
+async def _dispatch_command(update: Update, *, arg_text: str | None = None) -> None:
+    """Route a Telegram /<cmd> through the shared dispatcher.
+
+    If arg_text is None, we use the command's natural arg (the rest of
+    the message after /<cmd>); otherwise the caller supplies the slice.
+    """
+    message = update.effective_message
+    if message is None or not message.text:
         return
-    if matches:
-        category = matches[0].lower()
-        content = CATEGORY_PATTERN.sub("", stripped).strip()
-    else:
-        content = stripped
-        if not content:
-            await _reply(update, "Usage: 记 <something>  or  /memo [category] <something>")
-            return
-        try:
-            category = await runner.classify_memo(content)
-        except Exception as exc:  # never let classifier crashes break capture
-            logger.exception("classify_memo failed: %s", exc)
-            category = "unfiled"
-    auto_ts = category == "fact"
-    try:
-        summary = await runner.append_memo(category, content, auto_timestamp=auto_ts)
-    except Exception as exc:
-        await _reply(update, f"记下来的时候出了点问题：{truncate(str(exc), 1200)}")
-        return
-    await _reply(update, summary)
+    inbound = _inbound_from_update(update, text=message.text)
+    if arg_text is not None:
+        # Substitute the (already-mutated) text the dispatcher will see.
+        # We re-parse via parse_command by rebuilding the full /<cmd> arg.
+        cmd_name, _sep, _rest = message.text.partition(" ")
+        rebuilt = f"{cmd_name} {arg_text}".strip()
+        inbound = _inbound_from_update(update, text=rebuilt)
+    await dispatch(inbound, _TelegramOutbound(update), settings, runner)
 
 
 async def _reply(
@@ -149,7 +182,8 @@ async def run_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not prompt:
         await _reply(update, "Usage: /run <prompt>")
         return
-    await _start_job(update, JobMode.RUN, prompt)
+    # /run shares the channel-agnostic codex-job path. 003 P1.
+    await _dispatch_text(update, f"/run {prompt}")
 
 
 async def fix_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -159,275 +193,138 @@ async def fix_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not prompt:
         await _reply(update, "Usage: /fix <prompt>")
         return
-    await _start_job(update, JobMode.FIX, prompt)
+    await _dispatch_text(update, f"/fix {prompt}")
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    await _reply(update, runner.status_text())
+    await _dispatch_text(update, "/status")
 
 
 async def diff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    await _reply(update, await runner.diff_text())
+    await _dispatch_text(update, "/diff")
 
 
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    await _reply(update, await runner.cancel())
+    await _dispatch_text(update, "/cancel")
 
 
 async def jobs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    raw_limit = context.args[0] if context.args else "8"
-    try:
-        limit = max(1, min(30, int(raw_limit)))
-    except ValueError:
-        limit = 8
-    await _reply(update, runner.jobs_text(limit))
+    arg = _prompt(context)
+    await _dispatch_command(update, arg_text=arg)
 
 
 async def last_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    await _reply(update, runner.last_text())
+    await _dispatch_text(update, "/last")
 
 
 async def clean_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    raw_keep = context.args[0] if context.args else "20"
-    try:
-        keep = max(1, min(200, int(raw_keep)))
-    except ValueError:
-        keep = 20
-    await _reply(update, await runner.clean_old_jobs(keep))
+    arg = _prompt(context)
+    await _dispatch_command(update, arg_text=arg)
 
 
 async def maintain_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    raw_keep = context.args[0] if context.args else "50"
-    try:
-        keep = max(1, min(500, int(raw_keep)))
-    except ValueError:
-        keep = 50
-    try:
-        outcome = await run_maintenance(".env", "codex-telegram-bot", clean_threshold=100, keep=keep)
-    except Exception as exc:
-        await _reply(update, f"maintain 没跑成：{truncate(str(exc), 1200)}")
-        return
-    await _reply(update, outcome.summary)
+    arg = _prompt(context)
+    await _dispatch_command(update, arg_text=arg)
 
 
 async def discard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    await _reply(update, await runner.discard_last_job())
+    await _dispatch_text(update, "/discard")
 
 
 async def apply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    await _reply(update, await runner.apply_last_job())
+    await _dispatch_text(update, "/apply")
 
 
 async def doctor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    results = [
-        check_systemd_active("codex-telegram-bot"),
-        check_workspace(settings),
-        check_minimax_models(settings),
-        check_disk(settings.codex_task_root),
-    ]
-    results.extend(check_runtime_dirs(settings))
-    results.extend(check_latest_job(settings))
-    lines = [result.line() for result in results]
-    await _reply(update, "\n".join(lines))
+    await _dispatch_text(update, "/doctor")
 
 
 async def diag_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    since = " ".join(context.args) if context.args else "1 hour ago"
-    try:
-        text = diagnostics_report(".env", "codex-telegram-bot", since, metrics_limit=20)
-    except Exception as exc:
-        await _reply(update, f"diag 没跑成：{truncate(str(exc), 1200)}")
-        return
-    await _reply(update, text)
+    arg = _prompt(context)
+    await _dispatch_command(update, arg_text=arg)
 
 
 async def security_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    since = " ".join(context.args) if context.args else "1 hour ago"
-    try:
-        results = run_security_audit(".env", "codex-telegram-bot", since)
-    except Exception as exc:
-        await _reply(update, f"security 没跑成：{truncate(str(exc), 1200)}")
-        return
-    await _reply(update, "\n".join(result.line() for result in results))
+    arg = _prompt(context)
+    await _dispatch_command(update, arg_text=arg)
 
 
 async def ratelimit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    raw_limit = context.args[0] if context.args else "5"
-    try:
-        limit = max(1, min(20, int(raw_limit)))
-    except ValueError:
-        limit = 5
-    await _reply(update, rate_limit_report(".env", limit))
+    arg = _prompt(context)
+    await _dispatch_command(update, arg_text=arg)
 
 
 async def audit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    raw_stale = context.args[0] if context.args else "90"
-    try:
-        stale_minutes = max(1, min(24 * 60, int(raw_stale)))
-    except ValueError:
-        stale_minutes = 90
-    try:
-        results = run_job_audit(".env", stale_minutes)
-    except Exception as exc:
-        await _reply(update, f"audit 没跑成：{truncate(str(exc), 1200)}")
-        return
-    await _reply(update, "\n".join(result.line() for result in results))
+    arg = _prompt(context)
+    await _dispatch_command(update, arg_text=arg)
 
 
 async def log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    selector = context.args[0] if context.args else "latest"
-    try:
-        text = summarize_log(".env", selector, limit=12)
-    except Exception as exc:
-        await _reply(update, f"log 没读成：{truncate(str(exc), 1200)}")
-        return
-    await _reply(update, text)
+    arg = _prompt(context)
+    await _dispatch_command(update, arg_text=arg)
 
 
 async def meta_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    selector = context.args[0] if context.args else "latest"
-    try:
-        text = metadata_report(".env", selector)
-    except Exception as exc:
-        await _reply(update, f"meta 没读成：{truncate(str(exc), 1200)}")
-        return
-    await _reply(update, text)
+    arg = _prompt(context)
+    await _dispatch_command(update, arg_text=arg)
 
 
 async def metrics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    raw_limit = context.args[0] if context.args else "20"
-    try:
-        limit = max(1, min(100, int(raw_limit)))
-    except ValueError:
-        limit = 20
-    await _reply(update, metrics_report(".env", limit))
-
-
-def _health_summary(snapshot: dict) -> str:
-    latest = snapshot.get("latest_job") if isinstance(snapshot.get("latest_job"), dict) else {}
-    metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else {}
-    checks = snapshot.get("checks") if isinstance(snapshot.get("checks"), dict) else {}
-    offline = checks.get("offline_harnesses", [])
-    offline_status = " ".join(
-        f"{item.get('name')}={'ok' if item.get('ok') else 'fail'}"
-        for item in offline
-        if isinstance(item, dict)
-    ) or "none"
-    triage = snapshot.get("triage") if isinstance(snapshot.get("triage"), list) else []
-    failed_checks = [
-        item
-        for group in checks.values()
-        if isinstance(group, list)
-        for item in group
-        if isinstance(item, dict) and not item.get("ok")
-    ]
-    if not snapshot.get("ok"):
-        lines = ["Health: failed"]
-        if failed_checks:
-            lines.append("Failing checks:")
-            lines.extend(f"- {item.get('name', 'check')}: {item.get('detail', '')}" for item in failed_checks[:6])
-        if triage:
-            lines.append("Triage:")
-            lines.extend(str(item) for item in triage[:4])
-        else:
-            lines.append("Triage: Run /diag for details.")
-        lines.append(f"Recent: jobs={metrics.get('count', 0)} success={metrics.get('success_rate', 0)}% rate_limits={metrics.get('rate_limit_hits', 0)}")
-        return "\n".join(lines)
-
-    lines = [
-        f"Health: {'ok' if snapshot.get('ok') else 'failed'}",
-        f"Latest: {latest.get('id', '(none)')} · {latest.get('state', 'unknown')} · {latest.get('summary', '')}",
-        f"Recent: jobs={metrics.get('count', 0)} success={metrics.get('success_rate', 0)}% rate_limits={metrics.get('rate_limit_hits', 0)}",
-        f"Offline: {offline_status}",
-    ]
-    if triage:
-        lines.append("Triage:")
-        lines.extend(str(item) for item in triage[:4])
-    else:
-        lines.append("Triage: No failing checks.")
-    return "\n".join(lines)
+    arg = _prompt(context)
+    await _dispatch_command(update, arg_text=arg)
 
 
 async def health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    raw_args = [arg.lower() for arg in (context.args or [])]
-    compact_json = "json" in raw_args
-    full = "full" in raw_args
-    try:
-        snapshot = health_snapshot(
-            ".env",
-            "codex-telegram-bot",
-            "1 hour ago",
-            metrics_limit=20,
-            include_security=full and "nosecurity" not in raw_args,
-            include_offline=full,
-        )
-    except Exception as exc:
-        await _reply(update, f"health 没跑成：{truncate(str(exc), 1200)}")
-        return
-    if compact_json:
-        await _reply(update, json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")))
-        return
-    await _reply(update, _health_summary(snapshot))
+    arg = _prompt(context)
+    await _dispatch_command(update, arg_text=arg)
 
 
 async def smoke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    await _reply(update, "开始 smoke。它会跑一条最小 MiniMax/Codex 端到端测试。")
-    try:
-        code = await run_smoke(".env", "codex-telegram-bot", notify=False)
-    except Exception as exc:
-        await _reply(update, f"smoke 没跑成：{truncate(str(exc), 1200)}")
-        return
-    await _reply(update, "smoke 通过。" if code == 0 else "smoke 失败，发 /doctor 看细节。")
+    await _dispatch_text(update, "/smoke")
 
 
 async def editcheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    await _reply(update, "开始 editcheck。它会建临时 repo，让 Codex 真改一个文件，然后自动验收和清理。")
-    try:
-        outcome = await run_edit_harness(".env", notify=False)
-    except Exception as exc:
-        await _reply(update, f"editcheck 没跑成：{truncate(str(exc), 1200)}")
-        return
-    await _reply(update, outcome.summary)
+    await _dispatch_text(update, "/editcheck")
 
 
 # --- Onboarding-C: first-run /onboard conversation + /profile view ----
@@ -615,10 +512,8 @@ async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prompt = (message.text if message and message.text else "").strip()
     if not prompt:
         return
-    if _detect_memory_intent(prompt):
-        await _handle_memo_fast_path(update, prompt)
-        return
-    await _start_job(update, JobMode.RUN, prompt)
+    # Delegate to the shared channel-agnostic dispatcher (003 P0.2).
+    await _dispatch_text(update, prompt)
 
 
 async def memo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -628,7 +523,8 @@ async def memo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not prompt:
         await _reply(update, "Usage: /memo <something to remember>")
         return
-    await _handle_memo_fast_path(update, prompt)
+    # Delegate to the shared channel-agnostic handler (003 P0.2).
+    await _dispatch_text(update, f"记 {prompt}")
 
 
 async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -45,6 +45,10 @@ class Settings:
     operator_language: str = "zh-CN"
     operator_style: str = "terse"
     operator_standing: str = "personal-scale, single operator"
+    # Feishu/Lark bot (feishu_bot.py). Optional for Telegram-only deploys.
+    lark_app_id: str | None = None
+    lark_app_secret: str | None = None
+    lark_allowed_open_id: str | None = None
 
 
 def _required(name: str) -> str:
@@ -126,6 +130,16 @@ def load_operator_profile(memory_root: Path) -> dict[str, str | None]:
 
 
 def load_settings(env_file: str | Path = ".env") -> Settings:
+    codex = _load_codex_fields(env_file)
+    return Settings(
+        telegram_bot_token=_required("TELEGRAM_BOT_TOKEN"),
+        telegram_allowed_user_id=_int_env("TELEGRAM_ALLOWED_USER_ID"),
+        **codex,
+    )
+
+
+def _load_codex_fields(env_file: str | Path = ".env") -> dict:
+    """Shared Codex/operator fields for Telegram and Feishu bots."""
     load_dotenv(env_file)
 
     workspace_root = Path(_required("CODEX_WORKSPACE_ROOT")).expanduser().resolve()
@@ -140,11 +154,6 @@ def load_settings(env_file: str | Path = ".env") -> Settings:
     # 1. operator.json (explicit operator choice from /onboard)
     # 2. .env OPERATOR_* (deployment-time override)
     # 3. dataclass default (project assumption)
-    # operator.json wins because it represents the operator's
-    # explicit choice and must survive across deploys/env changes.
-    # operator_name is None-friendly: an empty string from
-    # operator.json or env becomes None so the _operator_profile_text
-    # renderer can fall back to the "(anonymous)" placeholder.
     profile = load_operator_profile(memory_root)
     operator_name_env = os.getenv("OPERATOR_NAME") or None
     operator_language_env = os.getenv("OPERATOR_LANGUAGE", "zh-CN")
@@ -155,20 +164,32 @@ def load_settings(env_file: str | Path = ".env") -> Settings:
     operator_style = profile.get("operator_style", operator_style_env) or operator_style_env
     operator_standing = profile.get("operator_standing", operator_standing_env) or operator_standing_env
 
+    return {
+        "codex_workspace_root": workspace_root,
+        "codex_bin": os.getenv("CODEX_BIN", "codex"),
+        "codex_task_root": task_root,
+        "codex_model": os.getenv("CODEX_MODEL") or None,
+        "codex_timeout_seconds": _int_env("CODEX_TIMEOUT_SECONDS", 3600),
+        "telegram_progress_seconds": _int_env("TELEGRAM_PROGRESS_SECONDS", 3),
+        "codex_retry_429_delays_seconds": _int_list_env("CODEX_RETRY_429_DELAYS_SECONDS", (300, 900, 1800)),
+        "codex_memory_root": memory_root,
+        "user_timezone": user_timezone,
+        "operator_name": operator_name,
+        "operator_language": operator_language,
+        "operator_style": operator_style,
+        "operator_standing": operator_standing,
+    }
+
+
+def load_feishu_settings(env_file: str | Path = ".env") -> Settings:
+    """Load settings for feishu_bot.py (Codex + Lark credentials)."""
+    codex = _load_codex_fields(env_file)
+    allowed = os.getenv("LARK_ALLOWED_OPEN_ID", "").strip() or None
     return Settings(
-        telegram_bot_token=_required("TELEGRAM_BOT_TOKEN"),
-        telegram_allowed_user_id=_int_env("TELEGRAM_ALLOWED_USER_ID"),
-        codex_workspace_root=workspace_root,
-        codex_bin=os.getenv("CODEX_BIN", "codex"),
-        codex_task_root=task_root,
-        codex_model=os.getenv("CODEX_MODEL") or None,
-        codex_timeout_seconds=_int_env("CODEX_TIMEOUT_SECONDS", 3600),
-        telegram_progress_seconds=_int_env("TELEGRAM_PROGRESS_SECONDS", 3),  # chat feel: 3s instead of 20s
-        codex_retry_429_delays_seconds=_int_list_env("CODEX_RETRY_429_DELAYS_SECONDS", (300, 900, 1800)),
-        codex_memory_root=memory_root,
-        user_timezone=user_timezone,
-        operator_name=operator_name,
-        operator_language=operator_language,
-        operator_style=operator_style,
-        operator_standing=operator_standing,
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "feishu-only-unused"),
+        telegram_allowed_user_id=_int_env("TELEGRAM_ALLOWED_USER_ID", 0),
+        lark_app_id=_required("LARK_APP_ID"),
+        lark_app_secret=_required("LARK_APP_SECRET"),
+        lark_allowed_open_id=allowed,
+        **codex,
     )

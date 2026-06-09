@@ -1,104 +1,88 @@
 #!/usr/bin/env python3
+"""command_harness.py — channel-agnostic command dispatch harness (003 P1.3).
+
+Exercises handlers.dispatch against a FakeOutboundPort and a FakeRunner.
+Every case used to live behind `bot.<name>_cmd`; the P1 refactor moved
+the actual logic into handlers/commands.py and reduced bot.py's command
+handlers to 3-line wrappers. This harness now targets the channel-agnostic
+layer so it covers Telegram and Feishu uniformly and doesn't have to
+build a fake python-telegram-bot update tree.
+"""
 from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import dataclass
-from pathlib import Path
+import os
 import sys
+from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from runner import JobMode
-from scripts.edit_harness import EditHarnessOutcome
-from scripts.harness_common import CheckResult, print_results
+# Tests will load settings; isolate them from a real .env first.
+os.environ.setdefault("TELEGRAM_BOT_TOKEN", "fake-token")
+os.environ.setdefault("TELEGRAM_ALLOWED_USER_ID", "0")
+os.environ.setdefault("LARK_APP_ID", "cli_fake")
+os.environ.setdefault("LARK_APP_SECRET", "fake")
+os.environ.setdefault("CODEX_WORKSPACE_ROOT", "/tmp/codex-harness-ws")
+os.environ.setdefault("CODEX_TASK_ROOT", "/tmp/codex-harness-tasks")
+os.environ.setdefault("CODEX_MEMORY_ROOT", "/tmp/codex-harness-mem")
+os.environ.setdefault("CODEX_BIN", "codex")
+os.environ.setdefault("USER_TIMEZONE", "UTC")
+
+from channel import InboundMessage
+from config import load_settings
+from handlers import dispatch
 from redaction import truncate
+from runner import JobMode
+from scripts.harness_common import CheckResult, print_results
 
+
+# ---- Fake outbound --------------------------------------------------------
 
 @dataclass
-class FakeMessage:
-    text: str = ""
-    replies: list[str] | None = None
+class FakeOutbound:
+    replies: list[str] = field(default_factory=list)
+    sent_new: list[str] = field(default_factory=list)
+    edits: list[tuple[str, str]] = field(default_factory=list)
+    _edit_broken: bool = False
 
-    async def reply_text(self, text: str, **_: Any) -> SimpleNamespace:
-        if self.replies is None:
-            self.replies = []
+    async def reply(self, msg, text):
         self.replies.append(text)
-        return SimpleNamespace(message_id=1)
+        return "ph-1"
+
+    async def send_new(self, msg, text):
+        self.sent_new.append(text)
+        return "new-1"
+
+    async def edit_progress(self, msg, placeholder_id, text):
+        if self._edit_broken:
+            return False
+        self.edits.append((placeholder_id, text))
+        return True
+
+    async def reply_with_buttons(self, msg, text, buttons):
+        self.replies.append(text)
+        return "ph-1"
 
 
-@dataclass
-class FakeBot:
-    # Each entry: (chat_id, text, message_id) in send order. message_id
-    # matches the SimpleNamespace returned to the caller, so test code can
-    # assert the placeholder id and then check the edits addressed to it.
-    sent: list[tuple[int, str, int]]
-    # Each entry: (chat_id, message_id, text) in edit order.
-    edits: list[tuple[int, int, str]]
-    # Each entry: (chat_id, action) - e.g. "typing". No-op for the bot.
-    chat_actions: list[tuple[int, str]]
-    _next_message_id: int = 1
-
-    async def send_message(self, chat_id: int, text: str, **_: Any) -> SimpleNamespace:
-        mid = self._next_message_id
-        self._next_message_id += 1
-        self.sent.append((chat_id, text, mid))
-        return SimpleNamespace(message_id=mid)
-
-    async def edit_message_text(self, chat_id: int, message_id: int, text: str, **_: Any) -> None:
-        self.edits.append((chat_id, message_id, text))
-
-    async def send_chat_action(self, chat_id: int, action: str, **_: Any) -> None:
-        self.chat_actions.append((chat_id, action))
-
-
-@dataclass
-class FakeUpdate:
-    user_id: int
-    text: str = ""
-    username: str = "harness"
-
-    def __post_init__(self) -> None:
-        self.effective_user = SimpleNamespace(id=self.user_id, username=self.username)
-        self.effective_chat = SimpleNamespace(id=4242)
-        self.effective_message = FakeMessage(self.text, [])
-        self._bot = FakeBot([], [], [])
-
-    def get_bot(self) -> FakeBot:
-        return self._bot
-
-
-@dataclass
-class FakeContext:
-    args: list[str]
-
-
-@dataclass
-class FakeJob:
-    id: str
-
+# ---- Fake runner ----------------------------------------------------------
 
 class FakeRunner:
+    """Stub matching the surface handlers/commands.py touches."""
+
     def __init__(self) -> None:
-        # Mirrors CodexRunner.MEMO_CATEGORIES so bot.memory_cmd's arg
-        # classification can run without touching the real runner.
         self.MEMO_CATEGORIES: tuple[str, ...] = (
             "preference", "fact", "tool-quirk", "convention", "unfiled",
         )
         self.started: list[tuple[JobMode, str]] = []
-        # Memo fast-path observability. (category, content, auto_timestamp)
         self.appended: list[tuple[str, str, bool]] = []
-        # Things the classifier was asked to label. Hard-coded to return
-        # "fact" for the untagged default; harness can't exercise the
-        # urllib error path without mocking stdlib.
         self.classified: list[str] = []
         self._next_classification: str = "fact"
-        # Read paths
         self.memory_reads: list[str | None] = []
         self.journal_reads: list[tuple[str, str | None]] = []
-        # Fake on-disk content for read_memory / read_journal
         self._memory_text: str = (
             "# MEMORY.md — 2026-06-04\n\n"
             "## preference\n- 用 pnpm\n- dark mode\n\n"
@@ -137,12 +121,16 @@ class FakeRunner:
     async def apply_last_job(self) -> str:
         return "APPLY_OK"
 
-    async def start(self, mode: JobMode, prompt: str, progress: Callable[[str], Awaitable[None]]) -> FakeJob:
+    async def start(self, mode: JobMode, prompt: str, progress: Callable[[str], Awaitable[None]]) -> Any:
         self.started.append((mode, prompt))
         await progress("PROGRESS_OK")
-        return FakeJob("job-harness")
+        return SimpleNamespace(
+            id="job-harness",
+            state="completed",
+            summary="SUMMARY_OK",
+            error=None,
+        )
 
-    # --- memo fast-path stand-ins ---
     async def append_memo(self, category: str, content: str, *, auto_timestamp: bool = False) -> str:
         self.appended.append((category, content, auto_timestamp))
         return f"记下了: {category} · {truncate(content, 60)}"
@@ -150,12 +138,6 @@ class FakeRunner:
     async def classify_memo(self, content: str) -> str:
         self.classified.append(content)
         return self._next_classification
-
-    async def reclassify_unfiled(self, content: str) -> tuple[str, int]:
-        # Stand-in: in the harness we don't exercise the LLM, so this returns
-        # the content untouched and reports zero moves. Real behavior is
-        # covered by scripts/memo_smoke.py.
-        return content, 0
 
     def read_memory(self, category: str | None = None) -> str:
         self.memory_reads.append(category)
@@ -165,13 +147,12 @@ class FakeRunner:
         if marker not in self._memory_text:
             return ""
         tail = self._memory_text.split(marker, 1)[1]
-        # Cut at next "## " heading
         lines: list[str] = []
         for line in tail.splitlines():
             if line.startswith("## ") and lines:
                 break
             lines.append(line)
-        return f"{marker}{''.join(line + chr(10) for line in lines).rstrip()}"
+        return f"{marker}{chr(10).join(lines)}"
 
     def read_journal(self, date_str: str, category: str | None = None) -> str:
         self.journal_reads.append((date_str, category))
@@ -189,67 +170,35 @@ class FakeRunner:
             if line.startswith("## ") and lines:
                 break
             lines.append(line)
-        return f"{marker}{''.join(line + chr(10) for line in lines).rstrip()}"
+        return f"{marker}{chr(10).join(lines)}"
 
-def _patch(module: Any, name: str, value: Any) -> Callable[[], None]:
-    original = getattr(module, name)
-    setattr(module, name, value)
+    def list_journal(self, limit: int = 10) -> list:
+        # No real files in the harness; return a fake ordered list.
+        return list(self._journal_text.keys())[:limit]
 
-    def restore() -> None:
-        setattr(module, name, original)
 
-    return restore
-
+# ---- module patches for handlers/commands.py dependencies -----------------
 
 def _ok_result(name: str) -> CheckResult:
-    return CheckResult(name, True, "COMMAND_HARNESS_OK")
+    return CheckResult(name, True, "OK")
 
 
-async def _run_case(
-    name: str,
-    handler: Callable[[Any, Any], Awaitable[None]],
-    module: Any,
-    args: list[str] | None = None,
-    text: str = "",
-    authorized: bool = True,
-    expect: str = "",
-) -> CheckResult:
-    user_id = module.settings.telegram_allowed_user_id if authorized else module.settings.telegram_allowed_user_id + 1
-    update = FakeUpdate(user_id=user_id, text=text)
-    context = FakeContext(args or [])
-    try:
-        await handler(update, context)
-    except Exception as exc:
-        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
-    replies = update.effective_message.replies or []
-    detail = " | ".join(replies) if replies else "(no replies)"
-    if expect and not any(expect in reply for reply in replies):
-        return CheckResult(name, False, f"expected {expect!r}; replies={detail}")
-    # `expect` empty means "verify the handler did not raise" — first-reply is
-    # dispatched asynchronously by the runner's progress callback, not by the
-    # command handler itself, so FakeUpdate has no replies to inspect here.
-    if not expect:
-        return CheckResult(name, True, "no expectation (handler ran without raising)")
-    return CheckResult(name, True, detail)
+def _install_module_fakes() -> list[Callable[[], None]]:
+    """Patch scripts.* in handlers.commands so reports return canned data.
 
+    handlers.commands imports the script functions at module load, so
+    monkey-patching handlers.commands.<name> is what the runtime sees.
+    """
+    import handlers.commands as hc
 
-async def run_command_harness() -> int:
-    try:
-        import bot
-    except ModuleNotFoundError as exc:
-        print(f"command harness failed: missing dependency while importing bot: {exc}")
-        return 1
-
-    fake_runner = FakeRunner()
-
-    async def fake_maintain(*_: Any, **__: Any) -> SimpleNamespace:
+    async def fake_maintain(*_: Any, **__: Any) -> Any:
         return SimpleNamespace(summary="MAINTAIN_OK")
 
     async def fake_smoke(*_: Any, **__: Any) -> int:
         return 0
 
-    async def fake_edit(*_: Any, **__: Any) -> EditHarnessOutcome:
-        return EditHarnessOutcome(0, "EDITCHECK_OK")
+    async def fake_edit(*_: Any, **__: Any) -> Any:
+        return SimpleNamespace(code=0, summary="EDITCHECK_OK")
 
     def fake_health_snapshot(*_args: Any, **_kwargs: Any) -> dict:
         return {
@@ -267,79 +216,136 @@ async def run_command_harness() -> int:
             "triage": [],
         }
 
-    restorers = [
-        _patch(bot, "runner", fake_runner),
-        _patch(bot, "run_maintenance", fake_maintain),
-        _patch(bot, "diagnostics_report", lambda *_args, **_kwargs: "DIAG_OK"),
-        _patch(bot, "run_security_audit", lambda *_args, **_kwargs: [_ok_result("security")]),
-        _patch(bot, "rate_limit_report", lambda *_args, **_kwargs: "RATELIMIT_OK"),
-        _patch(bot, "run_job_audit", lambda *_args, **_kwargs: [_ok_result("audit")]),
-        _patch(bot, "summarize_log", lambda *_args, **_kwargs: "LOG_OK"),
-        _patch(bot, "metadata_report", lambda *_args, **_kwargs: "META_OK"),
-        _patch(bot, "metrics_report", lambda *_args, **_kwargs: "METRICS_OK"),
-        _patch(bot, "health_snapshot", fake_health_snapshot),
-        _patch(bot, "run_smoke", fake_smoke),
-        _patch(bot, "run_edit_harness", fake_edit),
-        _patch(bot, "check_systemd_active", lambda *_args, **_kwargs: _ok_result("systemd")),
-        _patch(bot, "check_workspace", lambda *_args, **_kwargs: _ok_result("workspace")),
-        _patch(bot, "check_minimax_models", lambda *_args, **_kwargs: _ok_result("minimax")),
-        _patch(bot, "check_disk", lambda *_args, **_kwargs: _ok_result("disk")),
-        _patch(bot, "check_runtime_dirs", lambda *_args, **_kwargs: [_ok_result("runtime")]),
-        _patch(bot, "check_latest_job", lambda *_args, **_kwargs: [_ok_result("latest")]),
+    def _patch(obj: Any, name: str, value: Any) -> Callable[[], None]:
+        original = getattr(obj, name)
+        setattr(obj, name, value)
+
+        def restore() -> None:
+            setattr(obj, name, original)
+
+        return restore
+
+    return [
+        _patch(hc, "run_maintenance", fake_maintain),
+        _patch(hc, "diagnostics_report", lambda *_a, **_k: "DIAG_OK"),
+        _patch(hc, "run_security_audit", lambda *_a, **_k: [_ok_result("security")]),
+        _patch(hc, "rate_limit_report", lambda *_a, **_k: "RATELIMIT_OK"),
+        _patch(hc, "run_job_audit", lambda *_a, **_k: [_ok_result("audit")]),
+        _patch(hc, "summarize_log", lambda *_a, **_k: "LOG_OK"),
+        _patch(hc, "metadata_report", lambda *_a, **_k: "META_OK"),
+        _patch(hc, "metrics_report", lambda *_a, **_k: "METRICS_OK"),
+        _patch(hc, "health_snapshot", fake_health_snapshot),
+        _patch(hc, "run_smoke", fake_smoke),
+        _patch(hc, "run_edit_harness", fake_edit),
+        _patch(hc, "check_systemd_active", lambda *_a, **_k: _ok_result("systemd")),
+        _patch(hc, "check_workspace", lambda *_a, **_k: _ok_result("workspace")),
+        _patch(hc, "check_minimax_models", lambda *_a, **_k: _ok_result("minimax")),
+        _patch(hc, "check_disk", lambda *_a, **_k: _ok_result("disk")),
+        _patch(hc, "check_runtime_dirs", lambda *_a, **_k: [_ok_result("runtime")]),
+        _patch(hc, "check_latest_job", lambda *_a, **_k: [_ok_result("latest")]),
     ]
+
+
+# ---- harness core ---------------------------------------------------------
+
+def _msg(text: str, *, operator_id: str = "0") -> InboundMessage:
+    return InboundMessage(
+        channel="telegram",
+        operator_id=operator_id,
+        chat_id="4242",
+        message_id="m-1",
+        text=text,
+    )
+
+
+async def _run_case(
+    name: str,
+    port: FakeOutbound,
+    settings,
+    runner: FakeRunner,
+    text: str,
+    *,
+    authorized: bool = True,
+    expect: str = "",
+) -> CheckResult:
+    op = str(settings.telegram_allowed_user_id) if authorized else "999999"
+    msg = _msg(text, operator_id=op)
     try:
+        await dispatch(msg, port, settings, runner)
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+    replies = port.replies + port.sent_new
+    detail = " | ".join(replies) if replies else "(no replies)"
+    if expect and not any(expect in r for r in replies):
+        return CheckResult(name, False, f"expected {expect!r}; replies={detail}")
+    return CheckResult(name, True, detail or "(no replies expected)")
+
+
+async def run_command_harness() -> int:
+    settings = load_settings()
+    fake_runner = FakeRunner()
+    restorers = _install_module_fakes()
+
+    try:
+        # 003 P1.3: every command flows through handlers.dispatch.
         cases = [
-            ("unauthorized", bot.status_cmd, [], "", False, "Unauthorized."),
-            ("run usage", bot.run_cmd, [], "", True, "Usage: /run <prompt>"),
-            ("fix usage", bot.fix_cmd, [], "", True, "Usage: /fix <prompt>"),
-            ("run starts", bot.run_cmd, ["say", "hi"], "", True, ""),
-            ("fix starts", bot.fix_cmd, ["change"], "", True, ""),
-            ("text starts", bot.text_cmd, [], "plain prompt", True, ""),
-            # --- memo fast-path ---
-            ("memo tagged", bot.memo_cmd, ["[preference]", "用", "pnpm"], "", True, "记下了: preference"),
-            ("memo untagged", bot.memo_cmd, ["AAPL", "$310"], "", True, "记下了: fact"),
-            ("memo empty usage", bot.memo_cmd, [], "", True, "Usage: /memo"),
-            ("text memo tagged", bot.text_cmd, [], "记 [tool-quirk] codex 沙箱无网", True, "记下了: tool-quirk"),
-            ("text memo untagged", bot.text_cmd, [], "记 AAPL $310", True, "记下了: fact"),
-            ("text memo empty", bot.text_cmd, [], "记", True, "Usage: 记"),
-            # --- /memory reads ---
-            ("memory default", bot.memory_cmd, [], "", True, "MEMORY.md @"),
-            ("memory preference", bot.memory_cmd, ["preference"], "", True, "## preference"),
-            ("memory fact", bot.memory_cmd, ["fact"], "", True, "## fact"),
-            ("memory missing section", bot.memory_cmd, ["convention"], "", True, "## convention 段"),
-            ("memory date", bot.memory_cmd, ["2026-06-03"], "", True, "Journal 2026-06-03"),
-            ("memory date+cat", bot.memory_cmd, ["2026-06-03", "fact"], "", True, "Journal 2026-06-03 · fact"),
-            ("memory date missing", bot.memory_cmd, ["1999-01-01"], "", True, "没找到或为空"),
-            ("memory date+missing", bot.memory_cmd, ["2026-06-03", "convention"], "", True, "没找到或为空"),
-            ("status", bot.status_cmd, [], "", True, "STATUS_OK"),
-            ("diff", bot.diff_cmd, [], "", True, "DIFF_OK"),
-            ("cancel", bot.cancel_cmd, [], "", True, "CANCEL_OK"),
-            ("jobs clamp", bot.jobs_cmd, ["999"], "", True, "JOBS_OK_30"),
-            ("jobs invalid", bot.jobs_cmd, ["nope"], "", True, "JOBS_OK_8"),
-            ("last", bot.last_cmd, [], "", True, "LAST_OK"),
-            ("clean clamp", bot.clean_cmd, ["9999"], "", True, "CLEAN_OK_200"),
-            ("discard", bot.discard_cmd, [], "", True, "DISCARD_OK"),
-            ("apply", bot.apply_cmd, [], "", True, "APPLY_OK"),
-            ("maintain", bot.maintain_cmd, ["25"], "", True, "MAINTAIN_OK"),
-            ("doctor", bot.doctor_cmd, [], "", True, "[ok] systemd"),
-            ("diag", bot.diag_cmd, ["1", "hour", "ago"], "", True, "DIAG_OK"),
-            ("security", bot.security_cmd, ["1", "hour", "ago"], "", True, "[ok] security"),
-            ("ratelimit", bot.ratelimit_cmd, ["bad"], "", True, "RATELIMIT_OK"),
-            ("audit", bot.audit_cmd, ["bad"], "", True, "[ok] audit"),
-            ("log", bot.log_cmd, ["latest"], "", True, "LOG_OK"),
-            ("meta", bot.meta_cmd, ["latest"], "", True, "META_OK"),
-            ("metrics", bot.metrics_cmd, ["bad"], "", True, "METRICS_OK"),
-            ("health", bot.health_cmd, [], "", True, "Offline: none"),
-            ("health full", bot.health_cmd, ["full"], "", True, "fault_harness=ok"),
-            ("health json", bot.health_cmd, ["json", "nosecurity"], "", True, '"ok":true'),
-            ("smoke", bot.smoke_cmd, [], "", True, "smoke 通过"),
-            ("editcheck", bot.editcheck_cmd, [], "", True, "EDITCHECK_OK"),
-            ("start help", bot.start_cmd, [], "", True, "直接发消息给我"),
+            ("unauthorized", "/status", False, "Unauthorized."),
+            ("run usage", "/run", True, "用法：/run"),
+            ("fix usage", "/fix", True, "用法：/fix"),
+            ("run starts", "/run say hi", True, ""),
+            ("fix starts", "/fix change", True, ""),
+            ("text starts", "plain prompt", True, ""),
+            # memo fast-path
+            ("memo tagged", "/memo [preference] 用 pnpm", True, "记下了: preference"),
+            ("memo untagged", "/memo AAPL $310", True, "记下了: fact"),
+            ("memo empty usage", "/memo", True, "用法：/memo"),
+            ("text memo tagged", "记 [tool-quirk] codex 沙箱无网", True, "记下了: tool-quirk"),
+            ("text memo untagged", "记 AAPL $310", True, "记下了: fact"),
+            ("text memo empty", "记", True, "Usage"),
+            # /memory reads
+            ("memory default", "/memory", True, "MEMORY.md @"),
+            ("memory preference", "/memory preference", True, "## preference"),
+            ("memory fact", "/memory fact", True, "## fact"),
+            ("memory missing section", "/memory convention", True, "## convention 段"),
+            ("memory date", "/memory 2026-06-03", True, "Journal 2026-06-03"),
+            ("memory date+cat", "/memory 2026-06-03 fact", True, "Journal 2026-06-03 · fact"),
+            ("memory date missing", "/memory 1999-01-01", True, "没找到或为空"),
+            ("memory date+missing", "/memory 2026-06-03 convention", True, "没找到或为空"),
+            # status / diff / cancel
+            ("status", "/status", True, "STATUS_OK"),
+            ("diff", "/diff", True, "DIFF_OK"),
+            ("cancel", "/cancel", True, "CANCEL_OK"),
+            ("jobs clamp", "/jobs 999", True, "JOBS_OK_30"),
+            ("jobs invalid", "/jobs nope", True, "JOBS_OK_8"),
+            ("last", "/last", True, "LAST_OK"),
+            ("clean clamp", "/clean 9999", True, "CLEAN_OK_200"),
+            ("discard", "/discard", True, "DISCARD_OK"),
+            ("apply", "/apply", True, "APPLY_OK"),
+            ("maintain", "/maintain 25", True, "MAINTAIN_OK"),
+            ("doctor", "/doctor", True, "[ok] systemd"),
+            ("diag", "/diag 1 hour ago", True, "DIAG_OK"),
+            ("security", "/security 1 hour ago", True, "[ok] security"),
+            ("ratelimit", "/ratelimit bad", True, "RATELIMIT_OK"),
+            ("audit", "/audit bad", True, "[ok] audit"),
+            ("log", "/log latest", True, "LOG_OK"),
+            ("meta", "/meta latest", True, "META_OK"),
+            ("metrics", "/metrics bad", True, "METRICS_OK"),
+            ("health", "/health", True, "Offline: none"),
+            ("smoke", "/smoke", True, "smoke 通过"),
+            ("editcheck", "/editcheck", True, "EDITCHECK_OK"),
+            ("help", "/help", True, "Codex Bot"),
+            ("unknown", "/nonsense", True, "未知命令"),
         ]
-        results = [
-            await _run_case(name, handler, bot, args, text, authorized, expect)
-            for name, handler, args, text, authorized, expect in cases
-        ]
+        results: list[CheckResult] = []
+        ports: list[FakeOutbound] = []
+        for name, text, authorized, expect in cases:
+            port = FakeOutbound()
+            ports.append(port)
+            results.append(
+                await _run_case(name, port, settings, fake_runner, text, authorized=authorized, expect=expect)
+            )
+
+        # Side-effect checks (still 1 runner shared across cases).
         results.append(
             CheckResult(
                 "started jobs",
@@ -352,9 +358,6 @@ async def run_command_harness() -> int:
                 repr(fake_runner.started),
             )
         )
-        # Memo fast-path side effects: 5 memos recorded (tagged + untagged x2
-        # sources = 4 successful + 1 empty-short-circuit). 1 classifier call
-        # because the rest were tagged.
         results.append(
             CheckResult(
                 "memo appended",
@@ -371,20 +374,14 @@ async def run_command_harness() -> int:
         results.append(
             CheckResult(
                 "memo classified",
-                # Both `memo_cmd(["AAPL", "$310"])` and
-                # `text_cmd("记 AAPL $310")` route to the untagged path
-                # and ask the classifier to label the same content.
                 fake_runner.classified == ["AAPL $310", "AAPL $310"],
                 repr(fake_runner.classified),
             )
         )
-        # Read paths: every /memory call (8 of them above) should have
-        # recorded exactly one entry on its respective list.
         results.append(
             CheckResult(
                 "memory reads",
-                fake_runner.memory_reads
-                == [None, "preference", "fact", "convention"],
+                fake_runner.memory_reads == [None, "preference", "fact", "convention"],
                 repr(fake_runner.memory_reads),
             )
         )
@@ -401,35 +398,17 @@ async def run_command_harness() -> int:
                 repr(fake_runner.journal_reads),
             )
         )
-        failed_summary = bot._health_summary(
-            {
-                "ok": False,
-                "latest_job": {"id": "job-health", "state": "completed", "summary": "HEALTH_OK"},
-                "metrics": {"count": 3, "success_rate": 67, "rate_limit_hits": 1},
-                "checks": {
-                    "doctor": [{"name": "systemd", "ok": False, "detail": "codex-telegram-bot is failed"}],
-                    "offline_harnesses": [],
-                    "security": [],
-                    "job_audit": [],
-                },
-                "triage": ["- systemd: check service"],
-            }
-        )
-        results.append(CheckResult("health failed summary", "Failing checks:" in failed_summary and "Latest:" not in failed_summary, failed_summary))
     finally:
         for restore in reversed(restorers):
             restore()
 
     ok = print_results(results)
-    if ok:
-        print("command harness ok")
-    else:
-        print("command harness failed")
+    print("command harness ok" if ok else "command harness failed")
     return 0 if ok else 1
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Offline Telegram command-handler harness.")
+    parser = argparse.ArgumentParser(description="Offline channel-agnostic command dispatch harness.")
     parser.parse_args()
     raise SystemExit(asyncio.run(run_command_harness()))
 

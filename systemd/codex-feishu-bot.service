@@ -1,0 +1,23 @@
+[Unit]
+Description=Feishu-controlled Codex CLI runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+EnvironmentFile=-/etc/default/codex-telegram-runner
+WorkingDirectory=/opt/codex-telegram-runner
+EnvironmentFile=/opt/codex-telegram-runner/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/codex-telegram-runner/.venv/bin/python /opt/codex-telegram-runner/feishu_bot.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/codex-telegram-runner /srv /home/ubuntu
+
+[Install]
+WantedBy=multi-user.target

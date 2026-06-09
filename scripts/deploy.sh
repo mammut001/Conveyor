@@ -17,14 +17,20 @@ EXCLUDES=(
   --exclude=__pycache__
   --exclude=*.pyc
   --exclude=.venv
+  --exclude=logs
+  --exclude=worktrees
+  --exclude=snapshots
+  --exclude=state
+  --exclude=MEMORY.md
+  --exclude='MEMORY.md.archived-*'
 )
 
-for sub in scripts runner bot.py config.py runner.py redaction.py requirements.txt systemd; do
+for sub in scripts runner bot.py feishu_bot.py config.py runner.py redaction.py requirements.txt systemd channel handlers; do
   rsync -avz "${EXCLUDES[@]}" \
     "$LOCAL_DIR/$sub" "$REMOTE:$REMOTE_DIR/"
 done
 
-ssh "$REMOTE" "rm -rf $REMOTE_DIR/scripts/__pycache__ $REMOTE_DIR/__pycache__ $REMOTE_DIR/runner/__pycache__ 2>/dev/null; \
+ssh "$REMOTE" "rm -rf $REMOTE_DIR/scripts/__pycache__ $REMOTE_DIR/__pycache__ $REMOTE_DIR/runner/__pycache__ $REMOTE_DIR/channel/__pycache__ $REMOTE_DIR/handlers/__pycache__ 2>/dev/null; \
   sudo systemctl restart codex-telegram-bot.service; \
   sleep 2; \
   sudo systemctl is-active codex-telegram-bot.service"
