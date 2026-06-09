@@ -38,7 +38,7 @@ update README.md and/or CHANGELOG.md in the same diff.
 
 ## Self-review
 
-- [ ] `git grep -nE "155\\.248\\.224\\.186|149\\.56\\.97\\.109|/Users/example"` returns nothing
+- [ ] `git grep -nE "203\\.0\\.113\\.42|203\\.0\\.113\\.43|/Users/example"` returns nothing
 - [ ] No `.env`, `.env.test`, or secrets in the diff
 - [ ] Commit message explains the *why*, not just the *what*
 - [ ] No drive-by refactors unrelated to the PR
