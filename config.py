@@ -143,7 +143,7 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
     load_dotenv(env_file)
 
     workspace_root = Path(_required("CODEX_WORKSPACE_ROOT")).expanduser().resolve()
-    task_root = Path(os.getenv("CODEX_TASK_ROOT", workspace_root.parent / "codex-telegram-runner")).expanduser().resolve()
+    task_root = Path(os.getenv("CODEX_TASK_ROOT", workspace_root.parent / "conveyor")).expanduser().resolve()
     memory_root = Path(os.getenv("CODEX_MEMORY_ROOT", "~/.codex")).expanduser().resolve()
     (memory_root / "JOURNAL").mkdir(parents=True, exist_ok=True)
     (memory_root / "snapshots").mkdir(parents=True, exist_ok=True)

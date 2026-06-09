@@ -3,20 +3,20 @@
 # Syncs source, creates .venv, installs systemd units, runs configure_env.py
 # when .env is missing, then healthcheck + enable services.
 #
-# Secrets and VPS host stay local — never commit CODEX_TELEGRAM_REMOTE or .env.
+# Secrets and VPS host stay local — never commit CONVEYOR_REMOTE or .env.
 #
-#   CODEX_TELEGRAM_REMOTE=ubuntu@<host> bash scripts/install-remote.sh
+#   CONVEYOR_REMOTE=ubuntu@<host> bash scripts/install-remote.sh
 #
 # After the first install, use scripts/deploy.sh for code-only updates.
 set -euo pipefail
 
-REMOTE="${CODEX_TELEGRAM_REMOTE:-}"
-REMOTE_DIR="${CODEX_TELEGRAM_REMOTE_DIR:-/opt/codex-telegram-runner}"
+REMOTE="${CONVEYOR_REMOTE:-}"
+REMOTE_DIR="${CONVEYOR_REMOTE_DIR:-/opt/conveyor}"
 LOCAL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [[ -z "$REMOTE" || "$REMOTE" == *"<"* ]]; then
-  echo "Set CODEX_TELEGRAM_REMOTE first, e.g.:" >&2
-  echo "  CODEX_TELEGRAM_REMOTE=ubuntu@203.0.113.42 bash scripts/install-remote.sh" >&2
+  echo "Set CONVEYOR_REMOTE first, e.g.:" >&2
+  echo "  CONVEYOR_REMOTE=ubuntu@203.0.113.42 bash scripts/install-remote.sh" >&2
   exit 1
 fi
 
@@ -65,9 +65,10 @@ echo "==> Installing systemd units"
 ssh "$REMOTE" "bash -s" <<EOF
 set -euo pipefail
 cd '$REMOTE_DIR'
-sudo cp systemd/codex-telegram-bot.service /etc/systemd/system/
-sudo cp systemd/codex-telegram-maintain.service /etc/systemd/system/
-sudo cp systemd/codex-telegram-maintain.timer /etc/systemd/system/
+sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
+sudo cp systemd/conveyor-feishu-bot.service /etc/systemd/system/
+sudo cp systemd/conveyor-maintain.service /etc/systemd/system/
+sudo cp systemd/conveyor-maintain.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 EOF
 
@@ -84,9 +85,9 @@ echo "==> Running healthcheck"
 ssh "$REMOTE" "cd '$REMOTE_DIR' && bash scripts/healthcheck.sh"
 
 echo "==> Enabling and starting services"
-ssh "$REMOTE" "sudo systemctl enable --now codex-telegram-bot codex-telegram-maintain.timer && \
-  sleep 2 && sudo systemctl is-active codex-telegram-bot.service"
+ssh "$REMOTE" "sudo systemctl enable --now conveyor-telegram-bot conveyor-feishu-bot conveyor-maintain.timer && \
+  sleep 2 && sudo systemctl is-active conveyor-telegram-bot.service"
 
 echo
 echo "Install complete. Open Telegram and send /start to your bot."
-echo "Code updates: CODEX_TELEGRAM_REMOTE=$REMOTE bash scripts/deploy.sh"
+echo "Code updates: CONVEYOR_REMOTE=$REMOTE bash scripts/deploy.sh"

@@ -10,7 +10,7 @@ import urllib.request
 from pathlib import Path
 
 
-ENV_PATH = Path("/opt/codex-telegram-runner/.env")
+ENV_PATH = Path("/opt/conveyor/.env")
 DEFAULT_WORKSPACE = "/srv/codex-telegram-test-repo"
 DEFAULT_CODEX_BIN = "/usr/bin/codex"
 
@@ -132,7 +132,7 @@ def main() -> int:
         "CODEX_BIN": codex_bin,
         "OPENAI_API_KEY": openai_api_key,
         "MINIMAX_API_KEY": minimax_api_key,
-        "CODEX_TASK_ROOT": existing.get("CODEX_TASK_ROOT", "/srv/codex-telegram-runner"),
+        "CODEX_TASK_ROOT": existing.get("CODEX_TASK_ROOT", "/srv/conveyor"),
         "CODEX_TIMEOUT_SECONDS": existing.get("CODEX_TIMEOUT_SECONDS", "3600"),
         "TELEGRAM_PROGRESS_SECONDS": existing.get("TELEGRAM_PROGRESS_SECONDS", "20"),
     }

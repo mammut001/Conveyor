@@ -1,0 +1,23 @@
+[Unit]
+Description=Conveyor maintenance (hourly self-clean + diagnostics)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+# Install path. See conveyor-telegram-bot.service for the
+# parameterization pattern and /etc/default/conveyor for the override
+# file.
+Environment=CONVEYOR_DIR=/opt/conveyor
+EnvironmentFile=-/etc/default/conveyor
+WorkingDirectory=/opt/conveyor
+EnvironmentFile=/opt/conveyor/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/conveyor/.venv/bin/python /opt/conveyor/scripts/auto_maintain.py --clean-threshold 100 --keep 50
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/conveyor /srv /home/ubuntu

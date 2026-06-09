@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /opt/codex-telegram-runner
+cd /opt/conveyor
 
 if [[ ! -f .env ]]; then
   echo "missing .env"

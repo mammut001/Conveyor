@@ -12,7 +12,7 @@ without await in auto_maintain), so this smoke walks all 5 branches and an
 AST guard for the await on _archive_day.
 
 Tests use a tmp dir for codex_task_root and codex_memory_root, never the
-real ~/.codex/ or /srv/codex-telegram-runner/worktrees/. classify_memo
+real ~/.codex/ or /srv/conveyor/worktrees/. classify_memo
 (network) is bypassed by making the test MEMORY.md contain NO "## unfiled"
 section, which makes reclassify_unfiled return early.
 

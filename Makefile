@@ -1,4 +1,4 @@
-# codex-telegram-runner local Makefile
+# Conveyor local Makefile
 #
 # make smoke       runs the env-free AST/behavior smokes. Use it as a pre-deploy
 #                  gate before 'bash scripts/deploy.sh'. memo_smoke needs a populated

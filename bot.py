@@ -43,7 +43,7 @@ for handler in logging.getLogger().handlers:
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-logger = logging.getLogger("codex_telegram_bot")
+logger = logging.getLogger("conveyor.telegram")
 
 settings = load_settings()
 runner = CodexRunner(settings)
@@ -836,7 +836,7 @@ def main() -> None:
         try:
             if isinstance(update, Update) and update.effective_message:
                 await update.effective_message.reply_text(
-                    "Bot 内部错误，看下 logs。\n（最近一次自动运行的 progress_smoke 在 /opt/codex-telegram-runner/scripts/。）",
+                    "Bot 内部错误，看下 logs。\n（最近一次自动运行的 progress_smoke 在 /opt/conveyor/scripts/。）",
                 )
         except Exception:
             logger.exception("Failed to send error reply")

@@ -1,5 +1,5 @@
 [Unit]
-Description=Run Telegram Codex runner maintenance hourly
+Description=Run Conveyor maintenance hourly
 
 [Timer]
 OnBootSec=5min

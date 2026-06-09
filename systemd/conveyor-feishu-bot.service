@@ -1,0 +1,23 @@
+[Unit]
+Description=Conveyor: Feishu-controlled Codex CLI runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+EnvironmentFile=-/etc/default/conveyor
+WorkingDirectory=/opt/conveyor
+EnvironmentFile=/opt/conveyor/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/conveyor/.venv/bin/python /opt/conveyor/feishu_bot.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/conveyor /srv /home/ubuntu
+
+[Install]
+WantedBy=multi-user.target

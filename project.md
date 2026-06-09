@@ -1,4 +1,4 @@
-# codex-telegram-runner — project dossier
+# conveyor — project dossier
 
 Comprehensive reference for the project. **README.md** is the install-and-run
 quickstart; **CHANGELOG.md** is the change history and current surface at a
@@ -86,7 +86,7 @@ previously it lived as a nested git repo inside a different
 worktree, but that nesting is no longer in use.
 
 ```text
-telegram_codex_runner/
+conveyor/
   bot.py                          24 KB   Telegram command handlers
   config.py                        4 KB   .env loading + Settings dataclass
   runner.py                       60 KB   CodexRunner, job queue, worktrees, codex subprocess
@@ -125,14 +125,14 @@ telegram_codex_runner/
 
 | What | Value |
 |---|---|
-| Host | `<ssh-user>@<vps-host>` (set via `CODEX_TELEGRAM_REMOTE`, see §3.3) |
-| Runtime path | `/opt/codex-telegram-runner/` |
+| Host | `<ssh-user>@<vps-host>` (set via `CONVEYOR_REMOTE`, see §3.3) |
+| Runtime path | `/opt/conveyor/` |
 | Codex CLI home (uv tool dir) | `~/.codex/` (under the `ubuntu` user) |
 | Bot systemd unit | `/etc/systemd/system/codex-telegram-bot.service` |
 | Maintain unit + timer | `/etc/systemd/system/codex-telegram-maintain.{service,timer}` |
 | Workspace | `/srv/codex-telegram-test-repo/` (the user's project; git operations and codex runs) |
-| Worktree root | `/srv/codex-telegram-runner/worktrees/` (per-day `day-YYYY-MM-DD/` and `/fix` worktrees; all `git worktree add` of workspace) |
-| Health snapshots | `/srv/codex-telegram-runner/health/latest-{fast,full}.json` |
+| Worktree root | `/srv/conveyor/worktrees/` (per-day `day-YYYY-MM-DD/` and `/fix` worktrees; all `git worktree add` of workspace) |
+| Health snapshots | `/srv/conveyor/health/latest-{fast,full}.json` |
 
 The VPS is **not** a git repo. `/opt` has no `.git`. Push semantics in this
 project are local-commit + rsync; VPS commits are not a thing.
@@ -143,8 +143,8 @@ project are local-commit + rsync; VPS commits are not a thing.
 variables with sensible defaults:
 
 ```bash
-CODEX_TELEGRAM_REMOTE=<ssh-user>@<vps-host>
-CODEX_TELEGRAM_REMOTE_DIR=/opt/codex-telegram-runner
+CONVEYOR_REMOTE=<ssh-user>@<vps-host>
+CONVEYOR_REMOTE_DIR=/opt/conveyor
 ```
 
 Steps (verbatim from the script):
@@ -154,8 +154,8 @@ Steps (verbatim from the script):
    `rsync -avz --exclude=.env --exclude=.env.* --exclude=__pycache__
    --exclude=*.pyc --exclude=.venv LOCAL/... REMOTE:/opt/...`
 2. SSH to the VPS and:
-   - `rm -rf /opt/codex-telegram-runner/scripts/__pycache__
-     /opt/codex-telegram-runner/__pycache__`
+   - `rm -rf /opt/conveyor/scripts/__pycache__
+     /opt/conveyor/__pycache__`
    - `sudo systemctl restart codex-telegram-bot.service`
    - `sleep 2`
    - `sudo systemctl is-active codex-telegram-bot.service` (asserts active)
@@ -170,12 +170,12 @@ local copy intentionally omits it. Use a per-subdir rsync list with
 These are deployed manually when they change:
 
 - `CHANGELOG.md` — not in the script; sync with
-  `rsync -avz CHANGELOG.md $REMOTE:/opt/codex-telegram-runner/CHANGELOG.md  # $REMOTE = $CODEX_TELEGRAM_REMOTE`
+  `rsync -avz CHANGELOG.md $REMOTE:/opt/conveyor/CHANGELOG.md  # $REMOTE = $CONVEYOR_REMOTE`
 - `README.md` — same manual treatment if you care about the live doc
 - `Makefile` — same; the bot service runs `bot.py` directly, Makefile is
   local-only
 - `.env` — local-only, never deploy. The VPS `.env` is provisioned at
-  install time and lives in `/opt/codex-telegram-runner/.env`
+  install time and lives in `/opt/conveyor/.env`
 - `.venv/` — provisioned on the VPS by `python3 -m venv .venv &&
   .venv/bin/pip install -r requirements.txt`
 
@@ -187,14 +187,14 @@ These are deployed manually when they change:
 [Service]
 Type=simple
 User=ubuntu / Group=ubuntu
-WorkingDirectory=/opt/codex-telegram-runner
-EnvironmentFile=/opt/codex-telegram-runner/.env
+WorkingDirectory=/opt/conveyor
+EnvironmentFile=/opt/conveyor/.env
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/opt/codex-telegram-runner/.venv/bin/python /opt/codex-telegram-runner/bot.py
+ExecStart=/opt/conveyor/.venv/bin/python /opt/conveyor/bot.py
 Restart=on-failure / RestartSec=5
 NoNewPrivileges=true / PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/opt/codex-telegram-runner /srv /home/ubuntu
+ReadWritePaths=/opt/conveyor /srv /home/ubuntu
 ```
 
 **codex-telegram-maintain.service** (oneshot, kicked by the timer):
@@ -202,8 +202,8 @@ ReadWritePaths=/opt/codex-telegram-runner /srv /home/ubuntu
 ```ini
 [Service]
 Type=oneshot
-ExecStart=/opt/codex-telegram-runner/.venv/bin/python
-  /opt/codex-telegram-runner/scripts/auto_maintain.py
+ExecStart=/opt/conveyor/.venv/bin/python
+  /opt/conveyor/scripts/auto_maintain.py
   --clean-threshold 100 --keep 50
 ProtectSystem=strict / ProtectHome=read-only
 ```
@@ -337,7 +337,7 @@ Sections are matched verbatim by the reader and writer.
 ### 6.2 Where MEMORY.md lives
 
 In the per-day worktree, e.g.
-`/srv/codex-telegram-runner/worktrees/day-2026-06-04/MEMORY.md`. The
+`/srv/conveyor/worktrees/day-2026-06-04/MEMORY.md`. The
 `worktrees/day-YYYY-MM-DD` is shared across the day's jobs. The same file
 is in scope for `git apply` (when `/apply` brings tracked changes back to
 main) but MEMORY.md is **excluded** from that apply via pathspec
@@ -408,8 +408,8 @@ of operations:
 2. **`backfill_job_metadata`** — for old job dirs missing `job.json`,
    generate one. Idempotent, `force=False`.
 3. **Health snapshot** — two flavours:
-   - `fast` (no offline harnesses, no security): `/srv/codex-telegram-runner/health/latest-fast.json`
-   - `full` (with offline + security): `/srv/codex-telegram-runner/health/latest-full.json`
+   - `fast` (no offline harnesses, no security): `/srv/conveyor/health/latest-fast.json`
+   - `full` (with offline + security): `/srv/conveyor/health/latest-full.json`
 4. **GC** — `runner.clean_old_jobs(keep)` and
    `runner.clean_old_worktrees(keep_days=7)`. Fires only when **either**
    log count or worktree count ≥ `clean_threshold`. The timer passes
@@ -440,7 +440,7 @@ the 13:25-14:22 silent window is recorded in CHANGELOG "Honest gaps".
 Local pre-deploy gate:
 
 ```bash
-cd telegram_codex_runner
+cd conveyor
 make smoke                  # 8 env-free scripts, fast
 make smoke-all              # also memo_smoke (requires .env with keys)
 ```
@@ -561,7 +561,7 @@ All env vars, with defaults:
 | `TELEGRAM_ALLOWED_USER_ID` | yes | — | single-user lockout |
 | `CODEX_WORKSPACE_ROOT` | yes | — | the user's repo on the VPS |
 | `CODEX_BIN` | no | `codex` | path to codex CLI |
-| `CODEX_TASK_ROOT` | no | `<workspace>/../codex-telegram-runner` | where the runner lives |
+| `CODEX_TASK_ROOT` | no | `<workspace>/../conveyor` | where the runner lives |
 | `CODEX_MODEL` | no | unset (codex default) | optional model override |
 | `CODEX_TIMEOUT_SECONDS` | no | `3600` | per-attempt codex timeout |
 | `TELEGRAM_PROGRESS_SECONDS` | no | `20` | typing-indicator tick |
@@ -766,24 +766,24 @@ say so if you want it moved to active:
 
 > In the snippets below, `$REMOTE` is shorthand for your SSH target
 > (e.g. `ubuntu@203.0.113.42`). The deploy script reads
-> `CODEX_TELEGRAM_REMOTE`; the one-liners assume you have exported
+> `CONVEYOR_REMOTE`; the one-liners assume you have exported
 > the same value as a shell variable.
 
 ```bash
-# $REMOTE = $CODEX_TELEGRAM_REMOTE, e.g. export REMOTE=ubuntu@203.0.113.42
+# $REMOTE = $CONVEYOR_REMOTE, e.g. export REMOTE=ubuntu@203.0.113.42
 
 # local pre-deploy gate
-cd telegram_codex_runner && make smoke
+cd conveyor && make smoke
 
 # deploy to VPS (rsync + restart bot)
-cd telegram_codex_runner && bash scripts/deploy.sh
+cd conveyor && bash scripts/deploy.sh
 
 # first install from laptop (rsync + venv + systemd + configure_env)
-cd telegram_codex_runner && bash scripts/install-remote.sh
+cd conveyor && bash scripts/install-remote.sh
 
 # deploy CHANGELOG (not in deploy.sh list)
-rsync -avz telegram_codex_runner/CHANGELOG.md \
-  $REMOTE:/opt/codex-telegram-runner/CHANGELOG.md
+rsync -avz conveyor/CHANGELOG.md \
+  $REMOTE:/opt/conveyor/CHANGELOG.md
 
 # ssh to VPS, check services
 ssh $REMOTE \
@@ -793,12 +793,12 @@ ssh $REMOTE \
 
 # run an operator job (no Telegram, VPS-side)
 ssh $REMOTE \
-  'cd /opt/codex-telegram-runner && \
+  'cd /opt/conveyor && \
    .venv/bin/python scripts/submit_job.py --mode run "say ready"'
 
 # capture a memo from VPS shell (fast path, no codex)
 ssh $REMOTE \
-  'cd /opt/codex-telegram-runner && \
+  'cd /opt/conveyor && \
    .venv/bin/python -m runner memorize --category fact "<x>"'
 ```
 

@@ -5,10 +5,10 @@
 # explicit --exclude for any future secret files.
 set -euo pipefail
 
-# Override on the command line: CODEX_TELEGRAM_REMOTE=user@host bash scripts/deploy.sh
+# Override on the command line: CONVEYOR_REMOTE=user@host bash scripts/deploy.sh
 # First install from laptop: bash scripts/install-remote.sh (same env vars)
-REMOTE="${CODEX_TELEGRAM_REMOTE:-<ssh-user>@<vps-host>}"
-REMOTE_DIR="${CODEX_TELEGRAM_REMOTE_DIR:-/opt/codex-telegram-runner}"
+REMOTE="${CONVEYOR_REMOTE:-<ssh-user>@<vps-host>}"
+REMOTE_DIR="${CONVEYOR_REMOTE_DIR:-/opt/conveyor}"
 LOCAL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 EXCLUDES=(
@@ -31,6 +31,6 @@ for sub in scripts runner bot.py feishu_bot.py config.py runner.py redaction.py 
 done
 
 ssh "$REMOTE" "rm -rf $REMOTE_DIR/scripts/__pycache__ $REMOTE_DIR/__pycache__ $REMOTE_DIR/runner/__pycache__ $REMOTE_DIR/channel/__pycache__ $REMOTE_DIR/handlers/__pycache__ 2>/dev/null; \
-  sudo systemctl restart codex-telegram-bot.service; \
+  sudo systemctl restart conveyor-telegram-bot.service; \
   sleep 2; \
-  sudo systemctl is-active codex-telegram-bot.service"
+  sudo systemctl is-active conveyor-telegram-bot.service"

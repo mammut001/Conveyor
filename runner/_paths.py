@@ -22,5 +22,5 @@ from zoneinfo import ZoneInfo
 from config import Settings, load_settings
 from redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
-# Project root (/opt/codex-telegram-runner on VPS), not the runner/ package dir.
+# Project root (/opt/conveyor on VPS), not the runner/ package dir.
 RUNNER_HOME = Path(__file__).resolve().parent.parent
