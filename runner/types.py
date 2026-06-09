@@ -38,27 +38,17 @@ class JobMode(str, Enum):
 
     @property
     def sandbox(self) -> str:
-        # /run is a read-only Q&A path; /fix lets the model edit the workspace.
-        return "read-only" if self is JobMode.RUN else "workspace-write"
+        # Chat-first (docs/001): plain text and /run use the same capabilities
+        # as /fix. Security is Telegram allowlist + worktree + /apply gate,
+        # not a read-only codex sandbox.
+        return "workspace-write"
 
     @property
     def stdin_prefix(self) -> str:
-        # One short hint line, so the model knows its sandbox before it starts.
-        # /run is a read-only Q&A path; the codex CLI's read-only sandbox
-        # does NOT disable web tools (search/fetch) — the old "no network"
-        # clause in this prompt was the only thing blocking them. We allow
-        # web tools in /run so plain chat can answer "what's AAPL at"
-        # without forcing the user to type /fix. Writes and shell still
-        # require /fix (workspace-write), so the security boundary is
-        # unchanged.
-        if self is JobMode.RUN:
-            return (
-                "[mode: run | sandbox: read-only | network on, no writes | "
-                "web tools allowed, file/shell writes still need /fix]\n\n"
-            )
+        label = "chat" if self is JobMode.RUN else "fix"
         return (
-            "[mode: fix | sandbox: workspace-write | network on | "
-            "you may read and write inside the workspace]\n\n"
+            f"[mode: {label} | sandbox: workspace-write | network on | "
+            "shell, web, and file writes allowed in the worktree]\n\n"
         )
 
 

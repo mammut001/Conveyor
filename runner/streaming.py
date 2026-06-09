@@ -150,6 +150,7 @@ async def _read_jsonl_stdout(
     pending_tool_name: str | None = None
     pending_tool_since: float | None = None
     last_pulse_at: float | None = None
+    reconnect_stalls = 0
     with job.log_path.open("ab") as log_file:
         while True:
             line = await process.stdout.readline()
@@ -165,6 +166,18 @@ async def _read_jsonl_stdout(
                 event_obj = json.loads(text)
             except json.JSONDecodeError:
                 event_obj = None
+            if isinstance(event_obj, dict) and str(event_obj.get("type") or "").lower() == "error":
+                err_msg = str(event_obj.get("message") or "")
+                err_lower = err_msg.lower()
+                if "reconnecting" in err_lower or "high demand" in err_lower:
+                    reconnect_stalls += 1
+                    if reconnect_stalls >= RECONNECT_STALL_LIMIT:
+                        job.error = truncate(err_msg, 500)
+                        if job.process and job.process.returncode is None:
+                            job.process.terminate()
+                        break
+                else:
+                    reconnect_stalls = 0
             if event_text and not (isinstance(event_obj, dict) and self._is_reasoning_event(event_obj)):
                 job.last_event = event_text
             self._capture_usage(job, text)
@@ -366,3 +379,7 @@ TOOL_PULSE_THRESHOLD_SECONDS = 4.0
 
 
 TOOL_PULSE_INTERVAL_SECONDS = 4.0
+
+# Abort codex when the provider keeps reconnecting (high demand). Without
+# this, the subprocess can hold the single-job lock until CODEX_TIMEOUT_SECONDS.
+RECONNECT_STALL_LIMIT = 5

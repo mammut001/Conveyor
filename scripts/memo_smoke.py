@@ -255,114 +255,65 @@ async def main() -> int:
     except Exception as exc:
         results.append(CheckResult("CLI recall-journal empty", False, f"raised {type(exc).__name__}: {exc}"))
 
-    # 16. tool-registry payload: build Job objects for both modes, call
-    #     _prefetch_memory, and verify the right block is emitted.
-    #     FIX -> workspace-write variant (lists tools, includes
-    #     CODEX_WORKSPACE_ROOT and memorize policy). RUN -> read-only
-    #     variant (lists tools as not available, tells model to re-send
-    #     as /fix).
+    # 16. tool-registry payload: chat-first — RUN and FIX share workspace-write.
     try:
-        job_fix = Job(
-            id="smoke-test-fix",
-            mode=JobMode.FIX,
-            prompt="x",
-            sandbox="workspace-write",
+        def _registry_ok(text: str) -> bool:
+            return (
+                "<tool-registry" in text
+                and "memorize" in text
+                and 'policy="' in text
+                and "CODEX_WORKSPACE_ROOT" in text
+                and "workspace-write" in text
+            )
+
+        fix_text = runner._prefetch_memory(Job(
+            id="smoke-test-fix", mode=JobMode.FIX, prompt="x", sandbox="workspace-write",
+        ))
+        run_text = runner._prefetch_memory(Job(
+            id="smoke-test-run", mode=JobMode.RUN, prompt="x", sandbox="workspace-write",
+        ))
+        ok = _registry_ok(fix_text) and _registry_ok(run_text)
+        detail = (
+            f"fix_ok={_registry_ok(fix_text)} run_ok={_registry_ok(run_text)} "
+            f"run_has_readonly={'read-only' in run_text}"
         )
-        fix_text = runner._prefetch_memory(job_fix)
-        fix_ok = (
-            "<tool-registry" in fix_text
-            and "memorize" in fix_text
-            and 'policy="' in fix_text
-            and "CODEX_WORKSPACE_ROOT" in fix_text
-            and "workspace-write" in fix_text
-        )
-        job_run = Job(
-            id="smoke-test-run",
-            mode=JobMode.RUN,
-            prompt="x",
-            sandbox="read-only",
-        )
-        run_text = runner._prefetch_memory(job_run)
-        run_ok = (
-            "read-only" in run_text
-            and "no-shell-no-write" in run_text
-            and "not available" in run_text
-        )
-        ok = fix_ok and run_ok
-        detail = (f"fix_present={'<tool-registry' in fix_text}/"
-                  f"memorize={('memorize' in fix_text)}/"
-                  f"workspace_write={('workspace-write' in fix_text)}, "
-                  f"run_readonly={('read-only' in run_text)}/"
-                  f"unavailable={('not available' in run_text)}")
         results.append(CheckResult("tool-registry payload (FIX + RUN)", ok, detail))
     except Exception as exc:
         results.append(CheckResult("tool-registry payload (FIX + RUN)", False, f"raised {type(exc).__name__}: {exc}"))
 
-    # 16b. /run must allow web tools (search/fetch) by default. The
-    #      codex CLI's read-only sandbox already permits them; the
-    #      previous "no network" wording in the prompt was the only
-    #      thing blocking them. This pins the new contract: the RUN
-    #      tool-registry block must name web tools as available AND
-    #      must NOT carry the old "no network" clause.
+    # 16b. Plain chat must mention web tools and must not forbid network.
     try:
-        run_web_job = Job(
-            id="smoke-test-run-web",
-            mode=JobMode.RUN,
-            prompt="x",
-            sandbox="read-only",
-        )
-        run_web_text = runner._prefetch_memory(run_web_job)
-        web_mentioned = "Web tools" in run_web_text and "search/fetch" in run_web_text
-        no_network_clause = "no network" in run_web_text
+        run_web_text = runner._prefetch_memory(Job(
+            id="smoke-test-run-web", mode=JobMode.RUN, prompt="x", sandbox="workspace-write",
+        ))
+        web_mentioned = "web tools" in run_web_text.lower()
+        no_network_clause = "no network" in run_web_text.lower()
         ok = web_mentioned and not no_network_clause
-        detail = (f"web_mentioned={web_mentioned}/"
-                  f"no_network_clause={no_network_clause}")
+        detail = f"web_mentioned={web_mentioned}/no_network_clause={no_network_clause}"
         results.append(CheckResult("RUN mode web tools by default", ok, detail))
     except Exception as exc:
         results.append(CheckResult("RUN mode web tools by default", False, f"raised {type(exc).__name__}: {exc}"))
 
-    # 17. tool-registry must warn that apply_patch is unavailable. The model
-    #     otherwise defaults to codex's built-in apply_patch for MEMORY.md
-    #     edits and codex_core::tools::router rejects it as "unsupported
-    #     call". The warning must appear in the FIX variant and not leak
-    #     into the read-only RUN variant.
+    # 17. tool-registry must warn that apply_patch is unavailable (RUN + FIX).
     try:
         fix_text = runner._prefetch_memory(Job(
-            id="smoke-test-fix-apply-patch",
-            mode=JobMode.FIX,
-            prompt="x",
-            sandbox="workspace-write",
+            id="smoke-test-fix-apply-patch", mode=JobMode.FIX, prompt="x", sandbox="workspace-write",
         ))
         run_text = runner._prefetch_memory(Job(
-            id="smoke-test-run-apply-patch",
-            mode=JobMode.RUN,
-            prompt="x",
-            sandbox="read-only",
+            id="smoke-test-run-apply-patch", mode=JobMode.RUN, prompt="x", sandbox="workspace-write",
         ))
-        fix_warns = (
-            "apply_patch" in fix_text
-            and "unsupported call" in fix_text
-            and "python -m runner memorize" in fix_text
-            and "$CODEX_RUNNER_HOME" in fix_text
-            and ".venv/bin/python -m runner memorize" in fix_text
-        )
-        run_clean = "apply_patch" not in run_text
-        fix_clean = (
-            "$CODEX_RUNNER_HOME" not in run_text
-            and "python -m runner memorize" not in run_text
-        )
-        runner_home_token = "$CODEX_RUNNER_HOME"
-        venv_invocation = ".venv/bin/python -m runner memorize"
-        ok = fix_warns and run_clean and fix_clean
-        detail = (f"fix_warns_apply_patch={fix_warns} ("
-                  f"apply_patch={'apply_patch' in fix_text}, "
-                  f"unsupported_call={'unsupported call' in fix_text}, "
-                  f"memorize_invocation={'python -m runner memorize' in fix_text}, "
-                  f"runner_home_env={runner_home_token in fix_text}, "
-                  f"venv_python={venv_invocation in fix_text}), "
-                  f"run_clean={run_clean} (apply_patch_in_run={'apply_patch' in run_text}), "
-                  f"fix_clean={fix_clean} (runner_home_in_run={runner_home_token in run_text}, "
-                  f"memorize_in_run={'python -m runner memorize' in run_text})")
+
+        def _apply_patch_warns(text: str) -> bool:
+            return (
+                "apply_patch" in text
+                and "unsupported call" in text
+                and "python -m runner memorize" in text
+                and "$CODEX_RUNNER_HOME" in text
+                and ".venv/bin/python -m runner memorize" in text
+            )
+
+        ok = _apply_patch_warns(fix_text) and _apply_patch_warns(run_text)
+        detail = f"fix_warns={_apply_patch_warns(fix_text)} run_warns={_apply_patch_warns(run_text)}"
         results.append(CheckResult("tool-registry warns apply_patch unavailable", ok, detail))
     except Exception as exc:
         results.append(CheckResult("tool-registry warns apply_patch unavailable", False, f"raised {type(exc).__name__}: {exc}"))

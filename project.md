@@ -738,7 +738,7 @@ say so if you want it moved to active:
 - **Commit message style:** `<area>: <one-line summary>`, lowercase,
   imperative ("runner: plumb RUNNER_HOME into codex sandbox").
   Multi-line bodies are rare; keep one commit per logical change.
-- **Author/committer:** `codex <codex@local>`. Don't change.
+- **Author/committer:** `mammut001 <mammut001@users.noreply.github.com>`.
 - **Branch:** `main`, no remote, no PRs. Linear history is fine.
 - **Smoke first, deploy second.** A commit that breaks `make smoke`
   does not get deployed. Smoke scripts are part of the commit that

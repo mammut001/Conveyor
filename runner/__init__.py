@@ -17,7 +17,9 @@ from runner.streaming import (
     THINKING_THRESHOLD_SECONDS,
     TOOL_PULSE_THRESHOLD_SECONDS,
     TOOL_PULSE_INTERVAL_SECONDS,
+    RECONNECT_STALL_LIMIT,
 )
+from runner._paths import RUNNER_HOME
 
 __all__ = [
     "CodexRunner",
@@ -26,4 +28,6 @@ __all__ = [
     "JobState",
     "JobRecord",
     "ProgressCallback",
+    "RUNNER_HOME",
+    "RECONNECT_STALL_LIMIT",
 ]

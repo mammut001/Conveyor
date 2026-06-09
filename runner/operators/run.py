@@ -18,12 +18,12 @@ import subprocess
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from uuid import uuid4
 
 
-# Module-level constants (also on CodexRunner class shell)
-
-MEMORY_FILENAME = "MEMORY.md"
-from config import Settings, load_settings
+# Project root for codex --add-dir and CODEX_RUNNER_HOME env.
+from runner._paths import RUNNER_HOME
+from runner.types import Job, JobMode, JobState, ProgressCallback
 from redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 

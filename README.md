@@ -37,9 +37,8 @@ telegram_codex_runner/
 
 ## Commands
 
-- Plain text messages run Codex with `--sandbox read-only`, the same as `/run <prompt>`.
-- `/run <prompt>` runs Codex with `--sandbox read-only`.
-- `/fix <prompt>` runs Codex with `--sandbox workspace-write`.
+- Plain text messages run Codex with full workspace access (same as `/run` and `/fix`).
+- `/run <prompt>` and `/fix <prompt>` are equivalent for sandbox; both allow shell, web, and writes in the daily worktree.
 - `/status` shows the current or last job.
 - `/jobs [limit]` shows recent jobs.
 - `/last` shows the latest final result.
@@ -237,8 +236,8 @@ Set `CODEX_TASK_ROOT` in `.env` to move this elsewhere.
 
 - Telegram access is denied unless `effective_user.id` exactly matches `TELEGRAM_ALLOWED_USER_ID`.
 - Telegram prompts are passed only to Codex stdin. They are not executed as shell commands.
-- `/run` uses Codex `read-only` sandbox by default.
-- `/fix` uses Codex `workspace-write` sandbox by default.
+- `/run` and plain text use Codex `workspace-write` in the daily worktree (chat-first; see `docs/001-hermes-learning-and-chat-mode.md`).
+- `/fix` is an alias with the same sandbox; kept for habit compatibility.
 - `danger-full-access` is never used by this service.
 - Each job uses a detached git worktree created from `HEAD`.
 - The service keeps raw Codex JSONL logs on disk, but Telegram output is truncated and redacted for common secret patterns.

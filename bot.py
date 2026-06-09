@@ -729,7 +729,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             ]),
         )
         return
-    await _reply(update, "你好！直接发消息给我就行，我会用我的方式回。改文件用 /fix，运维相关的命令用 /help。")
+    await _reply(update, "你好！直接发消息就行，我会像对话一样处理（shell、查资料、改文件都可以）。运维命令用 /help。")
 
 
 async def _typing_loop(app, chat_id: int) -> None:
