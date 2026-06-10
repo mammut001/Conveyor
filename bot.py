@@ -17,6 +17,7 @@ from channel.auth import is_allowed
 from config import load_settings
 from config import OPERATOR_PROFILE_FIELDS
 from handlers import dispatch
+from handlers.tools.runner import cancel_pending, execute_confirmed, parse_tool_callback
 from redaction import redact_text, truncate
 from runner import CodexRunner, JobMode
 
@@ -538,6 +539,35 @@ async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await _reply(update, text)
 
 
+async def tool_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline-button confirmation for dangerous agent tools."""
+    if not await _guard(update):
+        return
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    parsed = parse_tool_callback(query.data or "")
+    if parsed is None:
+        return
+    action, token = parsed
+    user = update.effective_user
+    chat = update.effective_chat
+    inbound = InboundMessage(
+        channel="telegram",
+        operator_id=str(getattr(user, "id", "") or ""),
+        chat_id=str(getattr(chat, "id", "") or ""),
+        message_id=str(getattr(query.message, "message_id", "") or "") if query.message else None,
+        text="",
+        raw=update,
+    )
+    port = _TelegramOutbound(update)
+    if action == "confirm":
+        await execute_confirmed(inbound, port, settings, token)
+    else:
+        await cancel_pending(inbound, port, token)
+
+
 async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
@@ -870,6 +900,7 @@ def main() -> None:
         )
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
+    application.add_handler(CallbackQueryHandler(tool_callback, pattern=r"^tool:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_cmd))
     # Defense-in-depth: any unhandled exception in a handler is
     # logged by PTB with "No error handlers are registered,

@@ -214,12 +214,42 @@ job logs under `CODEX_TASK_ROOT`.
   and archived journals
 - `/help` — full command list
 
-### Deterministic host ops (bypass Codex)
+### Agent tool layer
 
-These four commands and the matching natural-language phrases run
-short host commands from the bot process and return the result
-directly. They do **not** invoke Codex, so the answer is always
-grounded in the actual machine state, not an LLM guess.
+Conveyor is **not** only a hardcoded command bot. A structured tool
+registry plus a lightweight intent router sit between chat input and
+Codex:
+
+| Path | When | Example |
+|---|---|---|
+| **Deterministic** | Stable host checks | `看看磁盘`, `/logs`, `git status` |
+| **Hybrid** | Diagnosis / “why” questions | `为什么服务器这么慢` → collect load/ps/disk/service facts, then Codex analyzes |
+| **LLM** | Open-ended coding / debugging | `写个 quicksort`, `fix this test` |
+
+Registered tools (`/tools` lists all):
+
+| Tool | Danger | What it does |
+|---|---|---|
+| `load` | read | Host load / memory / CPU / top processes |
+| `ps` | read | Top processes (`comm` mode by default) |
+| `htop` | read | Non-interactive top frame |
+| `disk` | read | `df` for `/`, `/srv`, `/opt` |
+| `logs` | read | `journalctl` tail for conveyor services |
+| `service_status` | read | `systemctl is-active` for conveyor units |
+| `git_status` | read | Workspace `git status` |
+| `service_restart` | **write (confirm)** | Restart a conveyor systemd unit |
+
+Safety: **write/destructive tools require explicit confirmation**
+(Telegram inline buttons; Feishu/text replies `确认` / `取消`).
+
+Implementation: `handlers/tools/` (registry + executors + runner),
+`handlers/intent.py` (`route_intent`). Handlers stay channel-agnostic;
+Telegram callbacks use `tool:confirm:<token>` / `tool:cancel:<token>`.
+
+### Deterministic host ops (legacy slash commands)
+
+These slash commands and matching natural-language phrases still work
+and map into the tool layer above:
 
 | Command | Phrasing | What it does |
 |---|---|---|

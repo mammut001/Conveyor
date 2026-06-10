@@ -170,40 +170,40 @@ class OutboundPort(Protocol):
 
 ---
 
-## 6.5 Host ops fast path
+## 6.5 Agent tool layer
 
-Conveyor 不再是纯粹的 transport —— 对**显式主机状态查询**，它有
-deterministic 短路径，**完全 bypass Codex**：
+Conveyor 在 transport 之上增加了 **结构化 tool registry** 和 **轻量 intent router**，不是纯 hardcoded 命令 bot：
 
-| 命令 | 自然语言 | 行为 |
+```
+用户消息
+  → route_intent()
+      ├─ deterministic → handlers/tools/runner.run_tool(s)
+      ├─ hybrid        → run_tools() 采集事实 → handle_codex_job(带 facts 的 prompt)
+      └─ llm           → handle_codex_job(原始 prompt)
+```
+
+### 已注册工具 (`handlers/tools/registry.py`)
+
+| name | danger | 说明 |
 |---|---|---|
-| `/load` `/vps` | `看看我的负载` / `check vps load` | 主机名 + uptime + CPU + 内存 + 磁盘 + top CPU/mem 进程 |
-| `/htop` | `跑一下 htop` | htop 是 TUI；返回 `top -bn1` 一帧 + 解释 |
-| `/ps` `/ps full` | `ps aux` / `哪些进程` | top 进程；默认用 `comm` 不含 args（防 token 泄露） |
+| load, ps, htop, disk, logs, service_status, git_status | READ | 主机快照，0 token |
+| service_restart | WRITE | 重启 conveyor 单元，**需确认** |
 
-实现位置：`handlers/ops.py`，**纯函数** `detect_ops_intent(text)`
-做轻量意图识别，`handle_ops_intent()` 路由到对应 snapshot builder。
-`dispatch()` 在 `detect_memory_intent` 之后、codex fallback 之前
-调用。
+### Intent router (`handlers/intent.py`)
 
-为什么独立做成 fast path：
+- **Deterministic 优先**：显式 ops 请求（负载/htop/磁盘/日志）不走 hybrid
+- **Hybrid**：`为什么服务器慢` / `分析一下 vps` → 默认采集 load+ps+disk+service_status，再把 facts 注入 Codex prompt
+- **LLM fallback**：编码/调试类开放式任务
 
-- "this is a container, not your VPS" —— LLM 不知道答案**还是答了**
-  的现象不复存在。答案来自真实主机
-- 0 token、0 延迟
-- **不破坏 chat-first 模式** —— 用户写「写个 quicksort」/「修这个测试」
-  仍然完整走 Codex
+### 安全策略
 
-安全约束：
+- READ 工具立即执行
+- WRITE/DESTRUCTIVE 工具 → `create_pending()` → Telegram `reply_with_buttons` 或文本 `确认`
+- 确认回调：`bot.py` 的 `CallbackQueryHandler(pattern=r"^tool:")`
 
-- 子进程用 argument array（`asyncio.create_subprocess_exec(*argv)`），
-  不用 shell，避免注入
-- 每个子进程 5s 超时
-- `/ps` 默认 `comm` 模式，**不**输出 argv，避免 token 泄露
-- 输出过 `redact_text` 和 `truncate`
-- ssh 到别的机器的请求**不**走 fast path（也不该走 Codex）——
-  detect_ops_intent 看到 `ssh user@host` 时主动返回 None，让 prompt
-  走 Codex
+### Legacy ops fast path
+
+Slash 命令 `/load` `/vps` `/htop` `/ps` 仍经 `COMMAND_TABLE` 注册；自然语言 ops 意图由 `route_intent()` 统一路由到 tool registry（内部复用 `handlers/ops.py` 快照函数）。
 
 ---
 
@@ -216,6 +216,8 @@ make smoke
   │   memo_flow / memo_fastpath / progress
   ├── handlers smokes（channel-agnostic）
   │   handlers_smoke / jobs_dedupe_smoke
+  │   ops_intent_smoke / ops_smoke / telegram_outbound_smoke
+  │   tools_intent_smoke / tools_runner_smoke
   └── command_harness
       38 用例，驱动 handlers.dispatch + FakeOutbound + FakeRunner
       （不再用 FakeUpdate / FakeMessage / FakeContext）

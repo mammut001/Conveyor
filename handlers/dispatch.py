@@ -12,9 +12,10 @@ from channel.auth import is_allowed
 from channel.types import InboundMessage, OutboundPort
 from config import Settings
 from handlers.commands import parse_command, run_command
+from handlers.intent import route_intent
 from handlers.jobs import handle_codex_job
 from handlers.memo import detect_memory_intent, handle_memo
-from handlers.ops import detect_ops_intent, handle_ops_intent
+from handlers.tools.runner import handle_hybrid, handle_route, try_resolve_confirmation
 from runner import CodexRunner, JobMode
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,10 @@ async def dispatch(
 
     if not is_allowed(msg, settings):
         await port.reply(msg, "Unauthorized.")
+        return
+
+    # Dangerous-tool text confirmation (YES/取消) before other routing.
+    if await try_resolve_confirmation(msg, port, settings):
         return
 
     parsed = parse_command(msg.text)
@@ -59,13 +64,13 @@ async def dispatch(
         await handle_memo(msg, port, runner)
         return
 
-    # Host-status fast path: phrases like "看看我的负载" or
-    # "check vps load" route to /load /htop /ps without invoking
-    # Codex. Conservative matching; coding requests about htop in
-    # a sandbox are NOT hijacked.
-    ops_kind = detect_ops_intent(msg.text)
-    if ops_kind is not None:
-        await handle_ops_intent(msg, port, runner, settings, ops_kind)
+    # Agent tool layer: deterministic tools, hybrid (tools + Codex), or LLM.
+    route = route_intent(msg.text)
+    if route.kind == "deterministic":
+        await handle_route(msg, port, runner, settings, route)
+        return
+    if route.kind == "hybrid":
+        await handle_hybrid(msg, port, runner, settings, route)
         return
 
     await handle_codex_job(msg, port, runner, mode=JobMode.RUN)

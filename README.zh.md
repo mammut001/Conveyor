@@ -194,10 +194,36 @@ detached worktree，job 日志写在 `CODEX_TASK_ROOT` 下。
 - `/memory [date] [category]` / `/journal [n]` — 读 `MEMORY.md` 和归档
 - `/help` — 完整命令列表
 
-### 本机运维快路径（bypass Codex）
+### Agent 工具层
 
-以下 4 个命令 + 对应的自然语言，都走 **host 真实命令** 直接拿结果，
-**不**经过 Codex。所以答案永远基于真实机器状态，不是 LLM 猜的。
+Conveyor **不是**纯硬编码命令 bot。结构化 tool registry + 轻量 intent router 位于聊天输入与 Codex 之间：
+
+| 路径 | 何时 | 示例 |
+|---|---|---|
+| **Deterministic** | 稳定主机检查 | `看看磁盘`、`/logs`、`git status` |
+| **Hybrid** | 诊断 / “为什么”类问题 | `为什么服务器这么慢` → 先采集 load/ps/disk/service，再 Codex 分析 |
+| **LLM** | 开放式编码 / 调试 | `写个 quicksort`、`修这个测试` |
+
+已注册工具（`/tools` 列出全部）：
+
+| 工具 | 危险级别 | 行为 |
+|---|---|---|
+| `load` | 只读 | 主机负载/内存/CPU/top 进程 |
+| `ps` | 只读 | Top 进程（默认 comm 模式） |
+| `htop` | 只读 | 非交互 top 一帧 |
+| `disk` | 只读 | `/ /srv /opt` 的 df |
+| `logs` | 只读 | conveyor 服务 journal 尾部 |
+| `service_status` | 只读 | conveyor systemd 单元状态 |
+| `git_status` | 只读 | workspace git status |
+| `service_restart` | **写（需确认）** | 重启 conveyor systemd 单元 |
+
+安全：**写/破坏性工具必须显式确认**（Telegram 内联按钮；飞书/文本回复 `确认` / `取消`）。
+
+实现：`handlers/tools/`（registry + executors + runner）、`handlers/intent.py`（`route_intent`）。Handler 保持通道无关；Telegram callback 用 `tool:confirm:<token>` / `tool:cancel:<token>`。
+
+### 本机运维快路径（legacy slash 命令）
+
+以下 slash 命令及对应自然语言仍可用，并映射到上述 tool 层：
 
 | 命令 | 自然语言 | 行为 |
 |---|---|---|

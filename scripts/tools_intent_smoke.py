@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""tools_intent_smoke.py — route_intent classifies deterministic/hybrid/llm paths.
+
+Run: .venv/bin/python scripts/tools_intent_smoke.py
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import handlers.tools.executors  # noqa: F401 — register tools
+from handlers.intent import route_intent
+from scripts.harness_common import CheckResult, print_results
+
+
+CASES: list[tuple[str, str, tuple[str, ...] | None]] = [
+    ("看看我的负载", "deterministic", ("load",)),
+    ("看看磁盘", "deterministic", ("disk",)),
+    ("看看日志", "deterministic", ("logs",)),
+    ("服务还在跑吗", "deterministic", ("service_status",)),
+    ("git status", "deterministic", ("git_status",)),
+    ("为什么服务器这么慢", "hybrid", ("load", "ps", "disk", "service_status")),
+    ("帮我分析一下 vps 为什么这么卡", "hybrid", None),
+    ("写个 quicksort", "llm", None),
+    ("fix the failing test", "llm", None),
+    ("tool load", "deterministic", ("load",)),
+    ("重启 telegram bot", "deterministic", ("service_restart",)),
+]
+
+
+def _test_routes() -> list[CheckResult]:
+    out: list[CheckResult] = []
+    for text, expected_kind, expected_tools in CASES:
+        route = route_intent(text)
+        ok = route.kind == expected_kind
+        detail = f"kind={route.kind!r} tools={route.tools!r}"
+        if ok and expected_tools is not None and route.tools != expected_tools:
+            ok = False
+            detail += f" expected tools={expected_tools!r}"
+        out.append(CheckResult(f"route({text!r}) -> {expected_kind}", ok, detail))
+    return out
+
+
+def main() -> int:
+    results = _test_routes()
+    print_results(results)
+    ok = all(r.ok for r in results)
+    print("tools intent smoke ok" if ok else "tools intent smoke failed")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -39,6 +39,7 @@ from scripts.smoke import run_smoke
 from scripts.edit_harness import run_edit_harness
 from scripts.health_snapshot import health_snapshot
 from handlers import ops as ops_handlers
+from handlers.tools.registry import TOOL_REGISTRY, requires_confirmation
 
 # Mirrors runner-side constants; keep near command logic that needs them.
 DATE_ARG_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -336,6 +337,44 @@ async def _journal(msg, port, runner, _settings, arg):
     await port.reply(msg, "\n".join(lines))
 
 
+async def _tool_disk(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "disk", arg))
+
+
+async def _tool_logs(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "logs", arg))
+
+
+async def _tool_service_status(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "service_status", arg))
+
+
+async def _tool_git_status(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "git_status", arg))
+
+
+async def _tools(msg, port, _runner, _settings, _arg):
+    lines = ["Agent 工具层 (deterministic tools):", ""]
+    for name in sorted(TOOL_REGISTRY):
+        spec = TOOL_REGISTRY[name]
+        flag = " ⚠️需确认" if requires_confirmation(spec) else ""
+        lines.append(f"  /{name} — {spec.summary}{flag}")
+    lines += [
+        "",
+        "自然语言示例:",
+        "  看看负载 → load | 磁盘空间 → disk | 看日志 → logs",
+        "  服务状态 → service_status | git status → git_status",
+        "  为什么服务器慢 → hybrid (工具采集 + Codex 分析)",
+        "",
+        "也可: tool load / tool ps",
+    ]
+    await port.reply(msg, "\n".join(lines))
+
+
 async def _help(msg, port, _runner, _settings, _arg):
     text = "Codex Bot\n"
     text += "直接发文字 → 跑 Codex（workspace-write）\n"
@@ -351,6 +390,7 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/htop — top 风格的进程帧 (htop 是 TUI)\n"
     text += "/ps [full] — 进程快照，comm 模式默认不含 args\n"
     text += "自然语言 '看看我的负载' / '跑 htop 看看' / 'check vps load' 也走快路径。\n"
+    text += "/tools — 列出 agent 工具层全部工具\n"
     await port.reply(msg, text)
 
 
@@ -385,6 +425,11 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("vps", "同上 (alias of /load)", ops_handlers._vps),
         CommandSpec("htop", "top 快照 (htop-style)", ops_handlers._htop),
         CommandSpec("ps", "进程快照 (comm 模式)", ops_handlers._ps, takes_optional_arg=True),
+        CommandSpec("tools", "列出 agent 工具", _tools),
+        CommandSpec("disk", "磁盘快照", _tool_disk),
+        CommandSpec("logs", "服务 journal 日志", _tool_logs, takes_optional_arg=True),
+        CommandSpec("service_status", "Conveyor 服务状态", _tool_service_status),
+        CommandSpec("git_status", "Workspace git status", _tool_git_status),
         CommandSpec("help", "帮助", _help),
     ]
 }
