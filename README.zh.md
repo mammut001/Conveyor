@@ -194,6 +194,32 @@ detached worktree，job 日志写在 `CODEX_TASK_ROOT` 下。
 - `/memory [date] [category]` / `/journal [n]` — 读 `MEMORY.md` 和归档
 - `/help` — 完整命令列表
 
+### 本机运维快路径（bypass Codex）
+
+以下 4 个命令 + 对应的自然语言，都走 **host 真实命令** 直接拿结果，
+**不**经过 Codex。所以答案永远基于真实机器状态，不是 LLM 猜的。
+
+| 命令 | 自然语言 | 行为 |
+|---|---|---|
+| `/load`（alias `/vps`）| `看看我的负载`、`check vps load` | 主机名、时间、uptime、CPU 数、内存、`/ /srv /opt` 磁盘、CPU/内存占用最高进程 |
+| `/htop` | `跑一下 htop`、`top 看一下` | htop 是交互 TUI；返回 `top -bn1` 一帧 + 一行 TUI 解释 |
+| `/ps`（或 `/ps full`）| `ps aux`、`哪些进程` | CPU/内存 top 进程。默认用 `comm`（不含 argv → 不漏 token）。`full` 包含 args（仍然过 redact） |
+
+安全：
+
+- 用 argument array，**不**做 shell interpolation 用户文本
+- 5 秒超时
+- `/ps` 默认 `comm` 模式，argv 里的 token 不会泄露
+- 输出过 `redact_text` 和 `truncate`
+- 默认不读环境变量、`.env`、完整进程命令行
+
+bot 跑在单台 VPS 上，所以快照就是那一台机器的状态。回复里明确
+写着「这是 bot 服务当前所在机器的本地快照」，避免和 `codex exec`
+sandbox 视图混淆。
+
+Telegram 上 ops 输出是**新消息**（不流式编辑）。长跑 Codex 任务时
+Telegram 是**就地编辑**原占位符；飞书目前是**新消息**（卡片/流式是 P2.2 backlog）。
+
 任意时刻只跑一个 Codex 任务。回信刻意保持安静：开始确认、必要的重试/失败
 通知、最终答案。原始 JSONL 事件留在 `logs/<job-id>/` 磁盘上，不下发。
 

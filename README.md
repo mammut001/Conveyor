@@ -214,6 +214,39 @@ job logs under `CODEX_TASK_ROOT`.
   and archived journals
 - `/help` — full command list
 
+### Deterministic host ops (bypass Codex)
+
+These four commands and the matching natural-language phrases run
+short host commands from the bot process and return the result
+directly. They do **not** invoke Codex, so the answer is always
+grounded in the actual machine state, not an LLM guess.
+
+| Command | Phrasing | What it does |
+|---|---|---|
+| `/load` (alias `/vps`) | `看看我的负载`, `check vps load` | Hostname, time, uptime, CPU count, memory, disk for `/ /srv /opt`, top CPU/mem processes. |
+| `/htop` | `跑一下 htop`, `top 看一下` | htop is a TUI; returns a `top -bn1` snapshot with a one-line TUI explanation. |
+| `/ps` (or `/ps full`) | `ps aux`, `哪些进程` | Top processes by CPU/mem. Default uses `comm` (no argv → no token leak). `full` includes args (still passed through redaction). |
+
+Safety:
+
+- Uses argument arrays (no shell interpolation of user text).
+- 5-second timeout per subprocess.
+- `comm` not `args` for `/ps` default, so secrets in argv are not
+  exposed.
+- Output is run through `redact_text` and `truncate`.
+- Never reads environment variables, `.env`, or full process command
+  lines by default.
+
+The bot runs on a single VPS, so the snapshot is for that one
+machine. The reply explicitly says "this is the machine where the bot
+service is running" so the operator does not confuse it with the
+`codex exec` sandbox view.
+
+Telegram shows the ops output as a fresh message (no streaming
+edit). For long-running Codex jobs, Telegram edits the original
+"⏳ 收到，处理中..." placeholder in place; Feishu currently
+degrades to fresh messages (cards / streaming are P2.2 backlog).
+
 Only one Codex job runs at a time. Replies are intentionally quiet:
 start acknowledgement, useful retry/failure notices, final answer.
 Raw JSONL events stay on disk under `logs/<job-id>/`.

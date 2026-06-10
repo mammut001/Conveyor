@@ -99,7 +99,10 @@ class OutboundPort(Protocol):
 **设计要点**：
 - `operator_id` 统一为 `str`，adapter 负责 `str(telegram_user_id)` / feishu `open_id`
 - Handler 禁止 import `Update` / `FeishuChannel`
-- `OutboundPort.edit_progress` 返回 `bool`：Telegram 实现为 `edit_message_text`；**Feishu 首版返回 `False`**，所有进度都 `send_new`（计划在 P2.2 用卡片流式或 throttle reply 升级）
+- `OutboundPort.reply` / `send_new` 返回**真实 message_id**（str），让 handler 能把它当 placeholder 传给 `edit_progress` 做就地编辑
+- `OutboundPort.edit_progress` 返回 `bool`：
+  - **Telegram** 用 `bot.edit_message_text` 真正就地编辑；遇到 `Message is not modified` 当成 success；其他异常记 log + 返回 `False`，handler latch 退化为 `send_new`
+  - **Feishu** 首版返 `False`，所有进度走 `send_new`（计划 P2.2 用卡片流式或 throttle 升级）
 - 重复发收尾已修复（2026-06-09 commit `09ab931`）
 
 ---
@@ -164,6 +167,43 @@ class OutboundPort(Protocol):
 **借鉴**：onboarding、day-brief、streaming 聊天感、MEMORY 归档。
 
 **不重复造**：Conveyor 不维护自己的 tool loop、自己的 session DB、自己的 reasoning step —— 这些都让 Codex CLI 做。Conveyor 负责「在 user 和 Codex 之间搬运消息 + 鉴权 + 渲染回复」。
+
+---
+
+## 6.5 Host ops fast path
+
+Conveyor 不再是纯粹的 transport —— 对**显式主机状态查询**，它有
+deterministic 短路径，**完全 bypass Codex**：
+
+| 命令 | 自然语言 | 行为 |
+|---|---|---|
+| `/load` `/vps` | `看看我的负载` / `check vps load` | 主机名 + uptime + CPU + 内存 + 磁盘 + top CPU/mem 进程 |
+| `/htop` | `跑一下 htop` | htop 是 TUI；返回 `top -bn1` 一帧 + 解释 |
+| `/ps` `/ps full` | `ps aux` / `哪些进程` | top 进程；默认用 `comm` 不含 args（防 token 泄露） |
+
+实现位置：`handlers/ops.py`，**纯函数** `detect_ops_intent(text)`
+做轻量意图识别，`handle_ops_intent()` 路由到对应 snapshot builder。
+`dispatch()` 在 `detect_memory_intent` 之后、codex fallback 之前
+调用。
+
+为什么独立做成 fast path：
+
+- "this is a container, not your VPS" —— LLM 不知道答案**还是答了**
+  的现象不复存在。答案来自真实主机
+- 0 token、0 延迟
+- **不破坏 chat-first 模式** —— 用户写「写个 quicksort」/「修这个测试」
+  仍然完整走 Codex
+
+安全约束：
+
+- 子进程用 argument array（`asyncio.create_subprocess_exec(*argv)`），
+  不用 shell，避免注入
+- 每个子进程 5s 超时
+- `/ps` 默认 `comm` 模式，**不**输出 argv，避免 token 泄露
+- 输出过 `redact_text` 和 `truncate`
+- ssh 到别的机器的请求**不**走 fast path（也不该走 Codex）——
+  detect_ops_intent 看到 `ssh user@host` 时主动返回 None，让 prompt
+  走 Codex
 
 ---
 
