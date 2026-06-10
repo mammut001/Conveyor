@@ -70,10 +70,20 @@ async def handle_codex_job(
         await _sleep(0.3)
     if job.summary:
         summary = job.summary
-        if summary.strip() != last_progress.strip():
+        # Round-9 de-dup. The runner's terminal on_progress already
+        # delivered a (truncated) final message, and that truncated
+        # text is what `last_progress` recorded. Compare against the
+        # same truncation so long answers that differ only in
+        # post-truncation characters do not get re-sent as a second
+        # message. Same logic for the error and last_progress
+        # branches below.
+        summary_truncated = truncate(summary)
+        if summary_truncated.strip() != last_progress.strip():
             await port.send_new(msg, summary)
     elif job.error:
-        await port.send_new(msg, truncate(job.error, 3500))
+        err_truncated = truncate(job.error, 3500)
+        if err_truncated.strip() != last_progress.strip():
+            await port.send_new(msg, err_truncated)
     elif last_progress and last_progress != PLACEHOLDER_TEXT:
         await port.send_new(msg, last_progress)
 
