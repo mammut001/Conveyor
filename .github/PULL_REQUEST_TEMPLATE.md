@@ -21,8 +21,7 @@ bug, see project.md "Honest gaps"; not introduced by this PR)
 ```
 
 If you introduce a new smoke, add it to the `SMOKE_FREE` list in
-the `Makefile` and verify it runs in the GitHub Actions
-`.github/workflows/smoke.yml` job too.
+the `Makefile`.
 
 ## Blast radius
 
