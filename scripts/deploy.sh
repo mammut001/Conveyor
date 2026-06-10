@@ -7,8 +7,10 @@ set -euo pipefail
 
 # Override on the command line: CONVEYOR_REMOTE=user@host bash scripts/deploy.sh
 # First install from laptop: bash scripts/install-remote.sh (same env vars)
-REMOTE="${CONVEYOR_REMOTE:-<ssh-user>@<vps-host>}"
-REMOTE_DIR="${CONVEYOR_REMOTE_DIR:-/opt/conveyor}"
+# Also honors CODEX_TELEGRAM_REMOTE / CODEX_TELEGRAM_REMOTE_DIR from the
+# developer shell so `alias deploy-runner` in ~/.zshrc works without edits.
+REMOTE="${CONVEYOR_REMOTE:-${CODEX_TELEGRAM_REMOTE:-<ssh-user>@<vps-host>}}"
+REMOTE_DIR="${CONVEYOR_REMOTE_DIR:-${CODEX_TELEGRAM_REMOTE_DIR:-/opt/conveyor}}"
 LOCAL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 EXCLUDES=(
