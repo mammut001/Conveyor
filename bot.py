@@ -76,42 +76,33 @@ def _inbound_from_update(update: Update, text: str | None = None) -> InboundMess
 
 
 class _TelegramOutbound:
-    """Minimal OutboundPort: replays edits/sends via python-telegram-bot.
+    """Telegram OutboundPort: real edit-in-place progress.
 
-    edit_progress returns False on the first failure (Telegram's
-    20-edits/min cap or "Message is not modified"), causing the
-    dispatcher's latching fallback to send_new. This mirrors the
-    pre-P0.2 _start_job behavior exactly.
+    reply() and send_new() return the sent message_id as a str so
+    handlers can use it as a placeholder for edit_progress(). The
+    dispatcher latches to send_new on the first edit failure (latch
+    lives in handlers/jobs.py, not here).
     """
     supports_inline_buttons: bool = True
 
     def __init__(self, update: Update) -> None:
         self._update = update
-        self._edit_broken = False
 
-    async def reply(self, msg: InboundMessage, text: str):
-        await _reply(self._update, text)
-        # The placeholder id is captured in _start_job via the original
-        # update.effective_message.message_id; bot.py's text_cmd does not
-        # spin its own placeholder — _start_job still owns progress edits
-        # through its own closure. Return None so the dispatcher falls
-        # back to send_new for progress updates; the reply is sent now.
-        return None
+    async def reply(self, msg: InboundMessage, text: str) -> str | None:
+        return await _send_text(self._update, text)
 
-    async def send_new(self, msg: InboundMessage, text: str):
-        await _reply(self._update, text)
-        return None
+    async def send_new(self, msg: InboundMessage, text: str) -> str | None:
+        return await _send_text(self._update, text)
 
     async def edit_progress(self, msg: InboundMessage, placeholder_id, text: str) -> bool:
-        return False  # delegates back to the legacy _start_job path
+        return await _edit_text(self._update, placeholder_id, text)
 
     async def reply_with_buttons(self, msg: InboundMessage, text: str, buttons):
         keyboard = [
             [InlineKeyboardButton(b["text"], callback_data=b["callback_data"]) for b in row]
             for row in buttons
         ]
-        await _reply(self._update, text, reply_markup=InlineKeyboardMarkup(keyboard))
-        return None
+        return await _send_text(self._update, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # ---- Channel-agnostic handler shims ---------------------------------------
@@ -147,13 +138,72 @@ async def _reply(
     *,
     reply_markup=None,
 ) -> None:
-    if not update.effective_message:
-        return
-    await update.effective_message.reply_text(
-        truncate(text),
-        disable_web_page_preview=True,
-        reply_markup=reply_markup,
-    )
+    """Legacy fire-and-forget reply. Use _send_text when you need the
+    message_id (placeholder for in-place edit)."""
+    await _send_text(update, text, reply_markup=reply_markup)
+
+
+async def _send_text(
+    update: Update,
+    text: str,
+    *,
+    reply_markup=None,
+) -> str | None:
+    """Send a message; return the sent message_id as str|None.
+
+    Returns the id so OutboundPort.reply/send_new can hand it to
+    edit_progress for in-place Telegram updates. Returns None on any
+    failure (logs and continues) so the dispatcher doesn't crash on
+    a transient network blip.
+    """
+    message = update.effective_message
+    if message is None:
+        return None
+    try:
+        sent = await message.reply_text(
+            truncate(text),
+            disable_web_page_preview=True,
+            reply_markup=reply_markup,
+        )
+    except Exception:
+        logger.exception("Failed to send Telegram message")
+        return None
+    return str(getattr(sent, "message_id", "") or "") or None
+
+
+async def _edit_text(update: Update, placeholder_id, text: str) -> bool:
+    """Edit an existing Telegram message in place. Returns True on
+    success, False on any failure (handler falls back to send_new).
+
+    Catches "Message is not modified" (Telegram 400) and treats it
+    as success — the wire content is already what we wanted, and
+    short-circuiting the fallback keeps progress text stable.
+    """
+    message = update.effective_message
+    chat = update.effective_chat
+    if message is None or chat is None or not placeholder_id:
+        return False
+    try:
+        pid_int = int(placeholder_id)
+    except (TypeError, ValueError):
+        return False
+    try:
+        await update.get_bot().edit_message_text(
+            chat_id=chat.id,
+            message_id=pid_int,
+            text=truncate(text),
+            disable_web_page_preview=True,
+        )
+        return True
+    except Exception as exc:
+        # BadRequest("Message is not modified") means the wire text
+        # is already what we wanted — no-op success.
+        name = exc.__class__.__name__
+        msg = str(exc)
+        if "not modified" in msg.lower() or name == "BadRequest" and "not modified" in msg.lower():
+            return True
+        logger.debug("edit_progress failed (%s): %s; will fall back to send_new", name, msg)
+        return False
 
 
 def _allowed(update: Update) -> bool:
