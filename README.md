@@ -404,6 +404,37 @@ PR style.
 | Feishu: WebSocket immediate disconnect | `.env` value has stray whitespace, quotes, or CJK punctuation. Re-edit with `nano` |
 | Long-connection save fails | The local `feishu_bot.py` must be running before you save the event subscription |
 | Job stuck in `running` | `/cancel` or `sudo systemctl restart conveyor-telegram-bot`; check for repeated `Reconnecting... high demand` in `journalctl` |
+
+## Live Telegram smoke (manual, optional)
+
+`scripts/telegram_live_smoke.py` drives the bot as a **real Telegram
+user** (Telethon) and checks the agent tool layer end-to-end. This is
+the only way to exercise the bot's `MessageHandler` because Telegram
+Bot API messages do not trigger the bot's own handlers when sent by
+the bot itself.
+
+It is **not** part of `make smoke`. Install Telethon explicitly when
+you want to run it:
+
+```bash
+pip install telethon
+export TELEGRAM_API_ID=...
+export TELEGRAM_API_HASH=...
+export TELEGRAM_BOT_USERNAME=your_bot_username
+.venv/bin/python scripts/telegram_live_smoke.py --quick
+.venv/bin/python scripts/telegram_live_smoke.py --full
+```
+
+Restart confirmation is **cancelled by default**. To actually
+restart a conveyor service, both gates must be open:
+
+```bash
+TELEGRAM_LIVE_ALLOW_RESTART=1 \
+  .venv/bin/python scripts/telegram_live_smoke.py --full --allow-restart
+```
+
+The script never prints bot tokens, api hash, session paths, or
+`.env` content; `.telegram-live-smoke*` is git-ignored.
 | Telegram replies are very slow | `TEGRAM_PROGRESS_SECONDS` (default 3s) controls placeholder edits; rate limit is 20 edits/min on Telegram |
 
 ---

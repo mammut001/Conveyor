@@ -47,3 +47,9 @@ docs/005-*
 .mypy_cache/
 .coverage
 htmlcov/
+
+# Telethon session files used by scripts/telegram_live_smoke.py. The
+# session is the user's login state — never commit it.
+.telegram-live-smoke*
+*.session
+*.session-journal

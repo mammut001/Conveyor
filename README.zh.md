@@ -342,6 +342,35 @@ make smoke-all       # 还会跑要 .env 的脚本
 | 症状 | 检查 |
 |------|------|
 | Telegram 没回 | `journalctl -u conveyor-telegram-bot`；确认 `TELEGRAM_ALLOWED_USER_ID` 等于你的 user id |
+
+## 实时 Telegram 烟测（手动，可选）
+
+`scripts/telegram_live_smoke.py` 以**真实 Telegram 用户**身份
+（Telethon）驱动 bot，端到端验证 agent 工具层。这是唯一能真正触发
+bot `MessageHandler` 的方式——bot 自己用 Bot API 发的消息不会再次
+触发它自己的 handler。
+
+**不**在 `make smoke` 里。要用时手动装 Telethon：
+
+```bash
+pip install telethon
+export TELEGRAM_API_ID=...
+export TELEGRAM_API_HASH=...
+export TELEGRAM_BOT_USERNAME=your_bot_username
+.venv/bin/python scripts/telegram_live_smoke.py --quick
+.venv/bin/python scripts/telegram_live_smoke.py --full
+```
+
+重启确认默认**只发取消**。要真正重启 conveyor 服务，必须**同时**
+满足两个开关：
+
+```bash
+TELEGRAM_LIVE_ALLOW_RESTART=1 \
+  .venv/bin/python scripts/telegram_live_smoke.py --full --allow-restart
+```
+
+脚本不会打印 bot token、api hash、session 路径或 `.env` 内容；
+`.telegram-live-smoke*` 已被 `.gitignore` 屏蔽。
 | 飞书私聊没回 | `im:message.p2p_msg:readonly` 已开且新版本已发布；`journalctl -u conveyor-feishu-bot` 找 `400` |
 | 飞书：`Access denied. One of the following scopes is required: [im:message:send, im:message, im:message:send_as_bot]` | `im:message:send_as_bot` 没开，或新版本没发布，或没装到企业 |
 | 飞书：每条消息都看到 `/contact/v3/users/batch ... 400` | `contact:user.id:readonly` 没开；无害但日志吵。补 scope、发版即可 |

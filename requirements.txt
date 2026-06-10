@@ -1,3 +1,8 @@
 python-dotenv==1.0.1
 python-telegram-bot==21.10
 lark-oapi>=1.4.0
+# Optional, used only by scripts/telegram_live_smoke.py for live
+# Telegram end-to-end tests (a real user client, not the Bot API).
+# Install explicitly when you want to run the live smoke:
+#   pip install telethon
+# telethon
