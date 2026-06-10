@@ -73,4 +73,10 @@ async def dispatch(
         await handle_hybrid(msg, port, runner, settings, route)
         return
 
-    await handle_codex_job(msg, port, runner, mode=JobMode.RUN)
+    await handle_codex_job(
+        msg,
+        port,
+        runner,
+        mode=JobMode.RUN,
+        prompt=(route.question or msg.text),
+    )

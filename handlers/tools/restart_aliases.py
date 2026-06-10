@@ -7,6 +7,18 @@ RESTART_ALIASES: dict[str, str] = {
     "maintain": "conveyor-maintain.timer",
 }
 
+# Chinese-friendly aliases used by natural-language intent routing.
+# Keep in sync with RESTART_ALIASES_ZH in handlers/tools/executors.py
+# (both layers need to resolve the same surface forms to the same
+# units; duplicating is intentional because executors.py cannot
+# depend on the intent layer).
+RESTART_ALIASES_ZH: dict[str, str] = {
+    "飞书": "conveyor-feishu-bot",
+    "电报": "conveyor-telegram-bot",
+    "tg": "conveyor-telegram-bot",
+    "维护": "conveyor-maintain.timer",
+}
+
 RESTART_USAGE = "用法: /restart telegram|feishu|maintain"
 
 

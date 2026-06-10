@@ -115,9 +115,41 @@ async def exec_htop(_settings: Settings, _arg: str) -> str:
     return await _htop_snapshot()
 
 
+# Friendly restart aliases used by both /restart and the natural-language
+# intent router. Mapping is identical to handlers/tools/restart_aliases.py
+# but duplicated here intentionally so executors.py has no upward
+# dependency on the intent layer (executors must stay callable from
+# any entry point, not just /restart).
+RESTART_ALIASES: dict[str, str] = {
+    "telegram": "conveyor-telegram-bot",
+    "feishu": "conveyor-feishu-bot",
+    "maintain": "conveyor-maintain.timer",
+}
+
+# Chinese-friendly aliases that resolve to the same units.
+RESTART_ALIASES_ZH: dict[str, str] = {
+    "飞书": "conveyor-feishu-bot",
+    "电报": "conveyor-telegram-bot",
+    "tg": "conveyor-telegram-bot",
+    "维护": "conveyor-maintain.timer",
+}
+
+
 async def exec_service_restart(_settings: Settings, arg: str) -> str:
-    """Dangerous: restart a conveyor systemd unit. Requires confirmation."""
-    unit = arg.strip() or _CONVEYOR_SERVICES[0]
+    """Dangerous: restart a conveyor systemd unit. Requires confirmation.
+
+    No implicit default: an empty or unknown arg is refused without
+    touching systemctl. Natural-language intent must resolve to a
+    concrete unit before reaching this executor; ambiguous requests
+    get a usage reply instead.
+    """
+    raw = (arg or "").strip().lower()
+    if not raw:
+        return (
+            "未指定可重启的服务。请使用 /restart telegram|feishu|maintain，"
+            "或在自然语言里明确写目标，例如「重启 feishu bot」「重启 telegram 服务」。"
+        )
+    unit = RESTART_ALIASES.get(raw) or RESTART_ALIASES_ZH.get(raw) or raw
     if unit not in _CONVEYOR_SERVICES:
         allowed = ", ".join(_CONVEYOR_SERVICES)
         return f"只允许重启以下服务: {allowed}\n（未知单元 {unit!r} 已拒绝）"

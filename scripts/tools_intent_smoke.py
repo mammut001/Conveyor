@@ -39,6 +39,27 @@ _DIAGNOSE_ITEM_EXPECTATIONS: dict[str, frozenset[str]] = {
     "帮我诊断一下 bot": frozenset({"service_status", "logs", "git_status", "disk"}),
 }
 
+# Natural-language restart intent: route_intent should resolve the
+# target unit (or fall through to llm if ambiguous — never default).
+# Each row is (text, expected_arg_or_none). None means: must NOT be a
+# service_restart route with empty arg.
+_RESTART_CASES: list[tuple[str, str | None]] = [
+    ("重启 telegram bot", "conveyor-telegram-bot"),
+    ("重启 feishu bot", "conveyor-feishu-bot"),
+    ("重启 maintain", "conveyor-maintain.timer"),
+    ("restart conveyor-feishu-bot", "conveyor-feishu-bot"),
+    ("restart feishu", "conveyor-feishu-bot"),
+    ("重启飞书 bot", "conveyor-feishu-bot"),
+    ("重启电报 bot", "conveyor-telegram-bot"),
+    ("重启维护", "conveyor-maintain.timer"),
+    # Ambiguous: must NOT default to telegram-bot. Either routed to
+    # llm, or to service_restart with a non-empty arg (this second
+    # branch never happens by design, but we keep the guard).
+    ("重启 bot", None),
+    ("重启服务", None),
+    ("帮我重启 bot", None),
+]
+
 
 def _test_routes() -> list[CheckResult]:
     out: list[CheckResult] = []
@@ -59,8 +80,28 @@ def _test_routes() -> list[CheckResult]:
     return out
 
 
+def _test_restart_intent() -> list[CheckResult]:
+    """Round-10 safety: never default restart to telegram-bot."""
+    out: list[CheckResult] = []
+    for text, expected_arg in _RESTART_CASES:
+        route = route_intent(text)
+        is_restart_route = (
+            route.kind == "deterministic"
+            and route.tools == ("service_restart",)
+        )
+        if expected_arg is None:
+            ok = not (is_restart_route and route.arg == "")
+            detail = f"kind={route.kind!r} tools={route.tools!r} arg={route.arg!r}"
+            out.append(CheckResult(f"restart ambiguous({text!r}) does NOT default", ok, detail))
+        else:
+            ok = is_restart_route and route.arg == expected_arg
+            detail = f"kind={route.kind!r} tools={route.tools!r} arg={route.arg!r} expected={expected_arg!r}"
+            out.append(CheckResult(f"restart({text!r}) -> {expected_arg!r}", ok, detail))
+    return out
+
+
 def main() -> int:
-    results = _test_routes()
+    results = _test_routes() + _test_restart_intent()
     print_results(results)
     ok = all(r.ok for r in results)
     print("tools intent smoke ok" if ok else "tools intent smoke failed")

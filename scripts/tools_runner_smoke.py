@@ -178,6 +178,55 @@ async def _test_service_restart_whitelist() -> CheckResult:
         return CheckResult(name, False, str(exc))
 
 
+async def _test_service_restart_empty_arg_refused() -> CheckResult:
+    name = "safety: service_restart(\"\") refuses without touching systemctl"
+    try:
+        text = await run_tool(_settings(), "service_restart", "")
+        ok = ("未指定" in text or "/restart" in text) and "已请求重启" not in text
+        return CheckResult(name, ok, text[:160])
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
+async def _test_natural_lang_feishu_pending() -> CheckResult:
+    name = "behavior: '重启 feishu bot' pending targets conveyor-feishu-bot"
+    try:
+        from handlers.tools.confirm import clear_all_pending, get_pending_for_context
+        clear_all_pending()
+        port = FakeOutbound()
+        runner = mock.Mock()
+        runner.start = mock.AsyncMock(side_effect=AssertionError("codex should not run"))
+        with mock.patch("handlers.dispatch.is_allowed", return_value=True):
+            await dispatch(_msg("重启 feishu bot"), port, settings=_settings(), runner=runner)
+        pending = get_pending_for_context("12345", "chat-1", "telegram")
+        ok = pending is not None and pending.arg == "conveyor-feishu-bot"
+        return CheckResult(name, ok, f"pending={pending!r}")
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
+async def _test_natural_lang_ambiguous_no_telegram_default() -> CheckResult:
+    name = "safety: '重启 bot' must NOT default to telegram"
+    try:
+        from handlers.tools.confirm import clear_all_pending, get_pending_for_context
+        clear_all_pending()
+        port = FakeOutbound()
+        runner = mock.Mock()
+        # If this test ever creates a pending service_restart with
+        # empty arg, run_tool would refuse — but we want to fail loud
+        # BEFORE that, by asserting no pending was created at all.
+        async def fail(*_a, **_k):
+            raise AssertionError("service_restart should not run for ambiguous restart")
+        with mock.patch("handlers.tools.runner.run_tool", side_effect=fail):
+            with mock.patch("handlers.dispatch.is_allowed", return_value=True):
+                await dispatch(_msg("重启 bot"), port, settings=_settings(), runner=runner)
+        pending = get_pending_for_context("12345", "chat-1", "telegram")
+        ok = pending is None
+        return CheckResult(name, ok, f"pending={pending!r}")
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
 async def _test_dispatch_disk_deterministic_no_codex() -> CheckResult:
     name = "behavior: '看看磁盘' does not call CodexRunner.start"
     try:
@@ -207,6 +256,9 @@ def main() -> int:
         _test_hybrid_calls_codex_with_facts,
         _test_dispatch_hybrid_skips_direct_codex_for_facts_only,
         _test_service_restart_whitelist,
+        _test_service_restart_empty_arg_refused,
+        _test_natural_lang_feishu_pending,
+        _test_natural_lang_ambiguous_no_telegram_default,
         _test_dispatch_disk_deterministic_no_codex,
     ]
     results = [fn() for fn in sync_checks]

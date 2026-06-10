@@ -17,6 +17,7 @@ from typing import Literal
 from handlers.ops import detect_ops_intent
 from handlers.tools.diagnose import DIAGNOSE_MODES
 from handlers.tools.registry import TOOL_REGISTRY
+from handlers.tools.restart_aliases import RESTART_ALIASES, RESTART_ALIASES_ZH
 
 # Ensure builtin tools are registered before route_intent uses TOOL_REGISTRY.
 import handlers.tools.executors  # noqa: F401
@@ -95,7 +96,7 @@ _GIT_PATTERNS = (
     re.compile(r"(代码|git).*(改了什么|变更|改动|diff|status)", re.IGNORECASE),
 )
 _RESTART_PATTERNS = (
-    re.compile(r"(重启|restart).*(bot|服务|service|conveyor|telegram|feishu)", re.IGNORECASE),
+    re.compile(r"(重启|restart).*(bot|服务|service|conveyor|telegram|feishu|飞书|电报|维护|maintain)", re.IGNORECASE),
 )
 
 
@@ -118,7 +119,28 @@ def route_intent(text: str) -> RouteResult:
     for pat in _RESTART_PATTERNS:
         if pat.search(body):
             arg = _extract_service_arg(body)
-            return RouteResult(kind="deterministic", tools=("service_restart",), arg=arg)
+            if arg:
+                return RouteResult(
+                    kind="deterministic",
+                    tools=("service_restart",),
+                    arg=arg,
+                )
+            # Ambiguous restart (e.g. "重启 bot" / "重启服务"). Fall
+            # through to llm so Codex can ask which one, instead of
+            # silently defaulting to conveyor-telegram-bot. We embed a
+            # short clarification directive alongside the original
+            # text so the user message is preserved.
+            return RouteResult(
+                kind="llm",
+                question=(
+                    "用户发了重启请求但目标不明确，原文：\n"
+                    f"{body}\n\n"
+                    "请用简短中文反问「要重启 telegram、feishu 还是 maintain？」"
+                    "（可用 /restart telegram|feishu|maintain）。"
+                    "不要调用任何工具，不要编造主机状态。"
+                ),
+                arg="",
+            )
     for pat in _DISK_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("disk",))
@@ -172,9 +194,40 @@ def route_intent(text: str) -> RouteResult:
 
 
 def _extract_service_arg(body: str) -> str:
-    for name in ("conveyor-feishu-bot", "conveyor-telegram-bot", "conveyor-maintain.timer"):
-        if name in body:
+    """Return a concrete conveyor unit name from natural-language restart
+    intent, or '' when the target is ambiguous.
+
+    Accepts both full systemd unit names and the friendly /restart
+    aliases (English + Chinese). Order matters: full units first
+    (longer matches win over substrings like 'telegram' inside a URL).
+    """
+    lower = body.lower()
+    full_units = (
+        "conveyor-feishu-bot",
+        "conveyor-telegram-bot",
+        "conveyor-maintain.timer",
+    )
+    for name in full_units:
+        if name in lower:
             return name
+    # Aliases: longest keys first so 'tg' does not shadow 'telegram'.
+    alias_keys = sorted(
+        list(RESTART_ALIASES.keys()) + list(RESTART_ALIASES_ZH.keys()),
+        key=len,
+        reverse=True,
+    )
+    for alias in alias_keys:
+        if not alias:
+            continue
+        # Use word-boundary matching for ASCII aliases so 'tg' does not
+        # match inside 'btg-bot'; Chinese aliases match as substrings.
+        if any("\u4e00" <= ch <= "\u9fff" for ch in alias):
+            if alias in body:
+                return RESTART_ALIASES.get(alias) or RESTART_ALIASES_ZH[alias]
+        else:
+            pattern = r"(?<!\w)" + re.escape(alias) + r"(?!\w)"
+            if re.search(pattern, lower):
+                return RESTART_ALIASES.get(alias) or RESTART_ALIASES_ZH[alias]
     return ""
 
 
