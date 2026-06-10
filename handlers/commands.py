@@ -38,6 +38,7 @@ from scripts.security_audit import run_security_audit
 from scripts.smoke import run_smoke
 from scripts.edit_harness import run_edit_harness
 from scripts.health_snapshot import health_snapshot
+from handlers import ops as ops_handlers
 
 # Mirrors runner-side constants; keep near command logic that needs them.
 DATE_ARG_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -343,7 +344,13 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/jobs [n] /memory [date] [cat] /journal [n]\n"
     text += "/health [full] [json] [nosecurity] /doctor /diag [since] /audit [stale-min]\n"
     text += "/security [since] /ratelimit [n] /metrics [n] /log [sel] /meta [sel]\n"
-    text += "/smoke /editcheck /maintain [keep] /clean [keep] /run /fix"
+    text += "/smoke /editcheck /maintain [keep] /clean [keep] /run /fix\n"
+    text += "\n"
+    text += "本机运维快路径 (bypass Codex):\n"
+    text += "/load /vps — 主机负载/内存/磁盘快照\n"
+    text += "/htop — top 风格的进程帧 (htop 是 TUI)\n"
+    text += "/ps [full] — 进程快照，comm 模式默认不含 args\n"
+    text += "自然语言 '看看我的负载' / '跑 htop 看看' / 'check vps load' 也走快路径。\n"
     await port.reply(msg, text)
 
 
@@ -373,6 +380,11 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("maintain", "自维护检查", _maintain, takes_optional_arg=True),
         CommandSpec("clean", "清理旧任务", _clean, takes_optional_arg=True),
         CommandSpec("diag", "一键诊断包", _diag, takes_optional_arg=True),
+        # Fast-path host ops (bypass Codex; run local host commands).
+        CommandSpec("load", "本机负载快照 (host)", ops_handlers._load),
+        CommandSpec("vps", "同上 (alias of /load)", ops_handlers._vps),
+        CommandSpec("htop", "top 快照 (htop-style)", ops_handlers._htop),
+        CommandSpec("ps", "进程快照 (comm 模式)", ops_handlers._ps, takes_optional_arg=True),
         CommandSpec("help", "帮助", _help),
     ]
 }
