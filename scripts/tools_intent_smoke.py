@@ -23,11 +23,21 @@ CASES: list[tuple[str, str, tuple[str, ...] | None]] = [
     ("git status", "deterministic", ("git_status",)),
     ("为什么服务器这么慢", "hybrid", ("load", "ps", "disk", "service_status")),
     ("帮我分析一下 vps 为什么这么卡", "hybrid", None),
+    ("诊断服务器", "hybrid", None),
+    ("帮我诊断一下 bot", "hybrid", None),
     ("写个 quicksort", "llm", None),
     ("fix the failing test", "llm", None),
+    ("look at htop source code", "llm", None),
+    ("帮我改 htop 相关代码", "llm", None),
+    ("write docs about htop", "llm", None),
     ("tool load", "deterministic", ("load",)),
     ("重启 telegram bot", "deterministic", ("service_restart",)),
 ]
+
+_DIAGNOSE_ITEM_EXPECTATIONS: dict[str, frozenset[str]] = {
+    "诊断服务器": frozenset({"load", "ps", "disk", "service_status", "logs"}),
+    "帮我诊断一下 bot": frozenset({"service_status", "logs", "git_status", "disk"}),
+}
 
 
 def _test_routes() -> list[CheckResult]:
@@ -39,6 +49,12 @@ def _test_routes() -> list[CheckResult]:
         if ok and expected_tools is not None and route.tools != expected_tools:
             ok = False
             detail += f" expected tools={expected_tools!r}"
+        if ok and text in _DIAGNOSE_ITEM_EXPECTATIONS:
+            names = frozenset(n for n, _ in route.tool_items)
+            exp = _DIAGNOSE_ITEM_EXPECTATIONS[text]
+            if names != exp:
+                ok = False
+                detail += f" tool_items={names!r} expected={exp!r}"
         out.append(CheckResult(f"route({text!r}) -> {expected_kind}", ok, detail))
     return out
 

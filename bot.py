@@ -565,7 +565,7 @@ async def tool_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if action == "confirm":
         await execute_confirmed(inbound, port, settings, token)
     else:
-        await cancel_pending(inbound, port, token)
+        await cancel_pending(inbound, port, settings, token)
 
 
 async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -809,6 +809,14 @@ async def _start_job(update: Update, mode: JobMode, prompt: str) -> None:
             typing_task.cancel()
 
 
+async def generic_command_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fallback for slash commands registered in COMMAND_TABLE but not
+    wired to explicit CommandHandler entries (e.g. /load /tools /disk)."""
+    if not await _guard(update):
+        return
+    await _dispatch_command(update)
+
+
 async def post_init(application: Application) -> None:
     await runner.validate()
     await application.bot.set_my_commands(
@@ -836,6 +844,18 @@ async def post_init(application: Application) -> None:
             ("memory", "看今天 MEMORY.md"),
             ("journal", "看已归档的 journal 列表"),
             ("cancel", "中止当前任务"),
+            ("load", "本机负载快照"),
+            ("vps", "同上 (alias /load)"),
+            ("htop", "top 风格进程帧"),
+            ("ps", "进程快照 (comm 模式)"),
+            ("tools", "列出 agent 工具"),
+            ("disk", "磁盘使用快照"),
+            ("logs", "Conveyor 服务日志"),
+            ("service_status", "Conveyor 服务状态"),
+            ("git_status", "Workspace git status"),
+            ("diagnose", "Hybrid 主机诊断"),
+            ("restart", "重启 Conveyor 服务"),
+            ("audit_tools", "危险工具审计"),
         ]
     )
     logger.info("Codex Telegram bot ready. Workspace=%s task_root=%s", settings.codex_workspace_root, settings.codex_task_root)
@@ -901,6 +921,8 @@ def main() -> None:
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
     application.add_handler(CallbackQueryHandler(tool_callback, pattern=r"^tool:"))
+    # Catch-all for COMMAND_TABLE entries without explicit CommandHandler above.
+    application.add_handler(MessageHandler(filters.COMMAND, generic_command_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_cmd))
     # Defense-in-depth: any unhandled exception in a handler is
     # logged by PTB with "No error handlers are registered,

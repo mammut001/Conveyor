@@ -27,8 +27,8 @@ async def exec_load(_settings: Settings, _arg: str) -> str:
 
 
 async def exec_ps(_settings: Settings, arg: str) -> str:
-    full = arg.strip().lower() in ("full", "full=true")
-    return await _ps_snapshot(full=full)
+    from handlers.ops import format_ps_output
+    return await format_ps_output(arg)
 
 
 async def exec_disk(_settings: Settings, _arg: str) -> str:
@@ -118,8 +118,9 @@ async def exec_htop(_settings: Settings, _arg: str) -> str:
 async def exec_service_restart(_settings: Settings, arg: str) -> str:
     """Dangerous: restart a conveyor systemd unit. Requires confirmation."""
     unit = arg.strip() or _CONVEYOR_SERVICES[0]
-    if unit not in _CONVEYOR_SERVICES and not unit.startswith("conveyor"):
-        return f"只允许重启 conveyor 服务: {', '.join(_CONVEYOR_SERVICES)}"
+    if unit not in _CONVEYOR_SERVICES:
+        allowed = ", ".join(_CONVEYOR_SERVICES)
+        return f"只允许重启以下服务: {allowed}\n（未知单元 {unit!r} 已拒绝）"
     result = await _run(["sudo", "systemctl", "restart", unit], timeout=15.0)
     active = await _run(["systemctl", "is-active", unit]) or "unknown"
     body = (

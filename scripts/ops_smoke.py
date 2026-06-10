@@ -43,7 +43,7 @@ from handlers.ops import (
     handle_ops_intent,
     _htop_snapshot,
     _load_snapshot,
-    _ps_snapshot,
+    format_ps_output,
 )
 from runner import CodexRunner
 from scripts.harness_common import CheckResult, print_results
@@ -151,11 +151,11 @@ def _test_htop_contains_tui_explanation() -> CheckResult:
 
 
 def _test_ps_default_does_not_contain_args() -> CheckResult:
-    name = "behavior: /ps default uses comm only, no full args"
+    name = "behavior: /ps default uses comm only, no args"
     try:
-        text = asyncio.run(_ps_snapshot(full=False))
-        if "args" in text.lower() and "args" not in text.split("说明")[0]:
-            return CheckResult(name, False, f"args leaked: {text[:200]!r}")
+        text = asyncio.run(format_ps_output(""))
+        if "comm 模式" not in text:
+            return CheckResult(name, False, f"missing comm title: {text[:200]!r}")
         if "CPU 占用最高" not in text or "内存占用最高" not in text:
             return CheckResult(name, False, f"missing tables: {text[:200]!r}")
         return CheckResult(name, True, f"len={len(text)}, comm-only confirmed")

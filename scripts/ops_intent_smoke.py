@@ -50,6 +50,9 @@ CASES: list[tuple[str, str | None]] = [
     ("写个 quicksort", None),
     ("fix the failing test", None),
     ("帮我 ssh 到别的机器", None),
+    ("look at htop source code", None),
+    ("帮我改 htop 相关代码", None),
+    ("write docs about htop", None),
     ("", None),
 ]
 

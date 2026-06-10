@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from handlers.ops import detect_ops_intent
+from handlers.tools.diagnose import DIAGNOSE_MODES
 from handlers.tools.registry import TOOL_REGISTRY
 
 # Ensure builtin tools are registered before route_intent uses TOOL_REGISTRY.
@@ -27,6 +28,7 @@ RouteKind = Literal["deterministic", "hybrid", "llm"]
 class RouteResult:
     kind: RouteKind
     tools: tuple[str, ...] = ()
+    tool_items: tuple[tuple[str, str], ...] = ()
     question: str = ""
     arg: str = ""
 
@@ -54,6 +56,24 @@ _HYBRID_PATTERNS = (
 )
 
 _HYBRID_DEFAULT_TOOLS = ("load", "ps", "disk", "service_status")
+
+# Explicit diagnose phrasing (conservative; no coding/docs hijack).
+_DIAGNOSE_SERVER_PATTERNS = (
+    re.compile(r"(诊断|diagnose).*(服务器|server|vps|主机|host)", re.IGNORECASE),
+    re.compile(r"(帮我|请).*(诊断|看看|分析).*(服务器|vps|主机)", re.IGNORECASE),
+)
+_DIAGNOSE_BOT_PATTERNS = (
+    re.compile(r"(诊断|diagnose).*\b(bot|机器人)\b", re.IGNORECASE),
+    re.compile(r"(帮我|请).*诊断.*\b(bot|机器人)\b", re.IGNORECASE),
+)
+_DIAGNOSE_LOGS_PATTERNS = (
+    re.compile(r"(诊断|分析).*(日志|log|journal)", re.IGNORECASE),
+)
+# Coding/docs guard: skip diagnose if clearly about source/docs/code.
+_CODING_GUARD = re.compile(
+    r"(source\s*code|源码|改.*代码|写.*文档|docs?\s+about|implement|refactor|debug\s+code)",
+    re.IGNORECASE,
+)
 
 
 # ---- Deterministic tool patterns (beyond legacy ops) -----------------------
@@ -115,6 +135,29 @@ def route_intent(text: str) -> RouteResult:
     tool_match = _match_explicit_tool(body)
     if tool_match is not None:
         return RouteResult(kind="deterministic", tools=(tool_match,))
+
+    if not _CODING_GUARD.search(body):
+        for pat in _DIAGNOSE_BOT_PATTERNS:
+            if pat.search(body):
+                return RouteResult(
+                    kind="hybrid",
+                    tool_items=DIAGNOSE_MODES["bot"],
+                    question=body,
+                )
+        for pat in _DIAGNOSE_LOGS_PATTERNS:
+            if pat.search(body):
+                return RouteResult(
+                    kind="hybrid",
+                    tool_items=DIAGNOSE_MODES["logs"],
+                    question=body,
+                )
+        for pat in _DIAGNOSE_SERVER_PATTERNS:
+            if pat.search(body):
+                return RouteResult(
+                    kind="hybrid",
+                    tool_items=DIAGNOSE_MODES["server"],
+                    question=body,
+                )
 
     # Hybrid: diagnosis / analysis questions (tools first, then Codex).
     for pat in _HYBRID_PATTERNS:

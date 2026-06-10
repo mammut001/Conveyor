@@ -193,17 +193,35 @@ Conveyor 在 transport 之上增加了 **结构化 tool registry** 和 **轻量 
 
 - **Deterministic 优先**：显式 ops 请求（负载/htop/磁盘/日志）不走 hybrid
 - **Hybrid**：`为什么服务器慢` / `分析一下 vps` → 默认采集 load+ps+disk+service_status，再把 facts 注入 Codex prompt
+- **显式诊断**：`/diagnose [server|bot|logs|quick]`（`handlers/tools/diagnose.py` 定义各模式 tool 组合）；自然语言「诊断服务器」「帮我诊断 bot」保守匹配
 - **LLM fallback**：编码/调试类开放式任务
+
+### 命令别名
+
+| 命令 | 说明 |
+|---|---|
+| `/diagnose [mode]` | hybrid 主机诊断 → Codex 分析（≠ `/diag` harness） |
+| `/restart telegram\|feishu\|maintain` | 映射白名单单元 → `service_restart` + 确认 |
+| `/tools` | 按 READ/WRITE 分组列出工具、确认规则、hybrid 示例 |
+| `/audit_tools [n]` | 读取 `audit/tools.log` 最近 n 条（只读） |
 
 ### 安全策略
 
 - READ 工具立即执行
-- WRITE/DESTRUCTIVE 工具 → `create_pending()` → Telegram `reply_with_buttons` 或文本 `确认`
+- WRITE/DESTRUCTIVE 工具 → `create_pending()` → Telegram `reply_with_buttons` 或文本确认
+- 文本确认须用明确短语（`确认执行`、`confirm`、`execute` 等）；`好` / `ok` / `是` 等日常回复**不会**触发 pending 操作
+- **确认绑定**：`execute_confirmed` / `cancel_pending` / 文本 fallback 均校验 `operator_id + chat_id + channel`
+- 取消仍较宽松：`取消`、`算了`、`no` 等
 - 确认回调：`bot.py` 的 `CallbackQueryHandler(pattern=r"^tool:")`
+- `service_restart` 仅允许白名单单元：`conveyor-telegram-bot`、`conveyor-feishu-bot`、`conveyor-maintain.timer`
+- **审计**：`handlers/tools/audit.py` → `codex_memory_root/audit/tools.log`（requested/confirmed/cancelled/executed/rejected）；写入失败不阻断用户流程
 
 ### Legacy ops fast path
 
-Slash 命令 `/load` `/vps` `/htop` `/ps` 仍经 `COMMAND_TABLE` 注册；自然语言 ops 意图由 `route_intent()` 统一路由到 tool registry（内部复用 `handlers/ops.py` 快照函数）。
+Slash 命令 `/load` `/vps` `/htop` `/ps` 等在 `COMMAND_TABLE` 注册。Telegram 侧通过 `bot.py` 的 generic `filters.COMMAND` fallback 确保新命令可达（无需为每条命令单独注册 `CommandHandler`）。自然语言 ops 意图由 `route_intent()` 统一路由到 tool registry（内部复用 `handlers/ops.py` 快照函数）。
+
+- **htop 意图保守**：仅在有运行/查看语境时匹配；编码/文档类提及 htop 走 LLM
+- **`/ps` 安全**：默认 comm 模式；`/ps full` 仅提示风险；`/ps full confirm` 才输出 args（仍 redact）
 
 ---
 
@@ -216,8 +234,11 @@ make smoke
   │   memo_flow / memo_fastpath / progress
   ├── handlers smokes（channel-agnostic）
   │   handlers_smoke / jobs_dedupe_smoke
-  │   ops_intent_smoke / ops_smoke / telegram_outbound_smoke
+  │   ops_intent_smoke / ops_smoke / ops_run_smoke / telegram_outbound_smoke
   │   tools_intent_smoke / tools_runner_smoke
+  │   telegram_command_fallback_smoke / confirm_strict_smoke / ps_full_smoke
+  │   diagnose_command_smoke / restart_alias_smoke / tools_output_smoke
+  │   confirmation_context_smoke / tool_audit_smoke / audit_tools_smoke
   └── command_harness
       38 用例，驱动 handlers.dispatch + FakeOutbound + FakeRunner
       （不再用 FakeUpdate / FakeMessage / FakeContext）

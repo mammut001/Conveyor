@@ -201,7 +201,15 @@ Conveyor **不是**纯硬编码命令 bot。结构化 tool registry + 轻量 int
 | 路径 | 何时 | 示例 |
 |---|---|---|
 | **Deterministic** | 稳定主机检查 | `看看磁盘`、`/logs`、`git status` |
-| **Hybrid** | 诊断 / “为什么”类问题 | `为什么服务器这么慢` → 先采集 load/ps/disk/service，再 Codex 分析 |
+| **Hybrid** | 诊断 / “为什么”类问题 | `/diagnose server`、`为什么服务器这么慢` → 采集事实 + Codex 分析 |
+
+**显式 hybrid 诊断：** `/diagnose [server|bot|logs|quick]`（默认 `server`）按模式采集工具事实，再由 Codex 用中文给出可能原因、严重程度和下一步安全操作建议。与 `/diag`（job/运行时诊断 harness）不同。
+
+**重启别名：** `/restart telegram|feishu|maintain` 映射白名单 systemd 单元，确认流程同 `service_restart`（内联按钮或「确认执行」）。
+
+**确认绑定：** pending 危险操作绑定 `operator_id + chat_id + channel`；跨会话确认会被拒绝。
+
+**审计日志：** WRITE/DESTRUCTIVE 事件写入 `codex_memory_root/audit/tools.log`（JSONL）。`/audit_tools [n]` 查看最近 redact 后的记录（只读）。
 | **LLM** | 开放式编码 / 调试 | `写个 quicksort`、`修这个测试` |
 
 已注册工具（`/tools` 列出全部）：
@@ -217,9 +225,11 @@ Conveyor **不是**纯硬编码命令 bot。结构化 tool registry + 轻量 int
 | `git_status` | 只读 | workspace git status |
 | `service_restart` | **写（需确认）** | 重启 conveyor systemd 单元 |
 
-安全：**写/破坏性工具必须显式确认**（Telegram 内联按钮；飞书/文本回复 `确认` / `取消`）。
+安全：**写/破坏性工具必须显式确认**（Telegram 内联按钮；飞书/文本须用明确短语如 `确认执行` / `confirm` — 随意的 `好` / `ok` / `是` **不会**被接受）。确认绑定 originating chat + channel；事件写入 `audit/tools.log`。
 
 实现：`handlers/tools/`（registry + executors + runner）、`handlers/intent.py`（`route_intent`）。Handler 保持通道无关；Telegram callback 用 `tool:confirm:<token>` / `tool:cancel:<token>`。
+
+**Telegram slash 命令：** 新 ops/tool 命令（`/load`、`/tools`、`/disk` 等）在 `COMMAND_TABLE` 注册，并通过 `bot.py` 中的通用 `MessageHandler(filters.COMMAND, …)` fallback 到达（位于显式 `CommandHandler` 之后、纯文本 handler 之前），确保未知 slash 命令仍能进入 `dispatch()` → `COMMAND_TABLE`。
 
 ### 本机运维快路径（legacy slash 命令）
 
@@ -228,8 +238,8 @@ Conveyor **不是**纯硬编码命令 bot。结构化 tool registry + 轻量 int
 | 命令 | 自然语言 | 行为 |
 |---|---|---|
 | `/load`（alias `/vps`）| `看看我的负载`、`check vps load` | 主机名、时间、uptime、CPU 数、内存、`/ /srv /opt` 磁盘、CPU/内存占用最高进程 |
-| `/htop` | `跑一下 htop`、`top 看一下` | htop 是交互 TUI；返回 `top -bn1` 一帧 + 一行 TUI 解释 |
-| `/ps`（或 `/ps full`）| `ps aux`、`哪些进程` | CPU/内存 top 进程。默认用 `comm`（不含 argv → 不漏 token）。`full` 包含 args（仍然过 redact） |
+| `/htop` | `跑一下 htop`、`top 看一下` | htop 是交互 TUI；返回 `top -bn1` 一帧 + 一行 TUI 解释。意图匹配保守 — 提及 htop 的编码/文档请求（如「look at htop source code」）走 LLM，不走 ops |
+| `/ps` | `ps aux`、`哪些进程` | CPU/内存 top 进程。默认仅 `comm`（不含 argv → 不漏 token）。`/ps full` 显示安全提示；`/ps full confirm` 才含 args（仍 redact/truncate） |
 
 安全：
 

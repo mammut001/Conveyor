@@ -12,14 +12,17 @@ from channel.types import InboundMessage, OutboundPort
 from config import Settings
 from handlers.intent import RouteResult
 from handlers.jobs import handle_codex_job
+from handlers.tools.audit import audit_tool_event
 from handlers.tools.confirm import (
     create_pending,
     get_pending,
     is_cancellation_text,
     is_confirmation_text,
+    matches_context,
     pop_pending,
-    get_pending_for_operator,
+    get_pending_for_context,
 )
+from handlers.tools.diagnose import build_hybrid_prompt, diagnose_tool_items, normalize_diagnose_mode
 from handlers.tools.registry import get_tool, requires_confirmation
 from runner import CodexRunner, JobMode
 
@@ -27,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 CALLBACK_CONFIRM_PREFIX = "tool:confirm:"
 CALLBACK_CANCEL_PREFIX = "tool:cancel:"
+
+_HYBRID_DEFAULT_TOOLS = ("load", "ps", "disk", "service_status")
 
 
 async def run_tool(settings: Settings, tool_name: str, arg: str = "") -> str:
@@ -48,6 +53,22 @@ async def run_tools(settings: Settings, tool_names: tuple[str, ...], arg: str = 
     return "\n\n".join(parts)
 
 
+async def run_tools_collected(
+    settings: Settings,
+    items: tuple[tuple[str, str], ...],
+) -> str:
+    parts: list[str] = []
+    for name, arg in items:
+        result = await run_tool(settings, name, arg)
+        parts.append(f"## tool:{name}\n{result}")
+    return "\n\n".join(parts)
+
+
+def _danger_label(tool_name: str) -> str:
+    spec = get_tool(tool_name)
+    return spec.danger.value if spec else "unknown"
+
+
 async def handle_route(
     msg: InboundMessage,
     port: OutboundPort,
@@ -56,6 +77,10 @@ async def handle_route(
     route: RouteResult,
 ) -> None:
     """Execute deterministic tool(s) from a route result."""
+    if route.tool_items:
+        combined = await run_tools_collected(settings, route.tool_items)
+        await port.reply(msg, combined)
+        return
     if not route.tools:
         await port.reply(msg, "没有匹配的工具。")
         return
@@ -74,17 +99,40 @@ async def handle_hybrid(
     route: RouteResult,
 ) -> None:
     """Collect deterministic facts, then ask Codex to analyze."""
-    tools = route.tools or ("load", "ps", "disk", "service_status")
-    facts = await run_tools(settings, tools, route.arg)
+    if route.tool_items:
+        facts = await run_tools_collected(settings, route.tool_items)
+    elif route.tools:
+        facts = await run_tools(settings, route.tools, route.arg)
+    else:
+        facts = await run_tools(settings, _HYBRID_DEFAULT_TOOLS, route.arg)
     question = route.question or msg.text.strip()
-    prompt = (
-        f"用户问题：{question}\n\n"
-        "以下是 bot 主机上的确定性采集数据（本地快照，非 Codex sandbox 猜测）：\n\n"
-        f"{facts}\n\n"
-        "请基于以上真实数据回答用户问题。如果数据不足以回答，说明还需要什么信息。"
-        "不要编造主机状态；只分析已提供的数据。"
-    )
+    prompt = build_hybrid_prompt(question, facts)
     await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=prompt)
+
+
+async def handle_diagnose_command(
+    msg: InboundMessage,
+    port: OutboundPort,
+    runner: CodexRunner,
+    settings: Settings,
+    arg: str,
+) -> None:
+    mode = normalize_diagnose_mode(arg)
+    if not mode:
+        await port.reply(
+            msg,
+            "用法: /diagnose [server|bot|logs|quick]\n"
+            "默认 server。示例: /diagnose server",
+        )
+        return
+    tool_items = diagnose_tool_items(mode)
+    question = f"/diagnose {mode} — 请分析 bot 主机状态并给出诊断建议"
+    route = RouteResult(
+        kind="hybrid",
+        tool_items=tool_items,
+        question=question,
+    )
+    await handle_hybrid(msg, port, runner, settings, route)
 
 
 async def _invoke_tool(
@@ -99,7 +147,7 @@ async def _invoke_tool(
         await port.reply(msg, f"未知工具: {tool_name}")
         return
     if requires_confirmation(spec):
-        await _request_confirmation(msg, port, tool_name, arg)
+        await _request_confirmation(msg, port, settings, tool_name, arg)
         return
     result = await run_tool(settings, tool_name, arg)
     await port.reply(msg, result)
@@ -108,6 +156,7 @@ async def _invoke_tool(
 async def _request_confirmation(
     msg: InboundMessage,
     port: OutboundPort,
+    settings: Settings,
     tool_name: str,
     arg: str,
 ) -> None:
@@ -120,13 +169,26 @@ async def _request_confirmation(
         chat_id=msg.chat_id,
         channel=msg.channel,
     )
+    audit_tool_event(
+        settings,
+        operator_id=msg.operator_id,
+        chat_id=msg.chat_id,
+        channel=msg.channel,
+        tool_name=tool_name,
+        arg=arg,
+        danger=_danger_label(tool_name),
+        action="requested",
+    )
     text = (
         f"⚠️ 危险操作需确认\n\n"
         f"工具: {tool_name}\n"
         f"说明: {summary}\n"
     )
     if arg.strip():
-        text += f"参数: {arg.strip()}\n"
+        if tool_name == "service_restart":
+            text += f"目标单元: {arg.strip()}\n"
+        else:
+            text += f"参数: {arg.strip()}\n"
     text += "\n确认执行？"
     if port.supports_inline_buttons:
         buttons = [[
@@ -135,8 +197,22 @@ async def _request_confirmation(
         ]]
         await port.reply_with_buttons(msg, text, buttons)
     else:
-        text += "\n\n回复「确认」执行，或「取消」放弃。"
+        text += "\n\n回复「确认执行」执行，或「取消」放弃。"
         await port.reply(msg, text)
+
+
+def _audit_rejected(settings: Settings, action: PendingToolAction, msg: InboundMessage) -> None:
+    audit_tool_event(
+        settings,
+        operator_id=msg.operator_id,
+        chat_id=msg.chat_id,
+        channel=msg.channel,
+        tool_name=action.tool_name,
+        arg=action.arg,
+        danger=_danger_label(action.tool_name),
+        action="rejected",
+        error_preview="context_mismatch",
+    )
 
 
 async def execute_confirmed(
@@ -146,14 +222,53 @@ async def execute_confirmed(
     token: str,
 ) -> bool:
     """Run a previously confirmed dangerous tool. Returns True if handled."""
-    action = pop_pending(token)
+    action = get_pending(token)
     if action is None:
         await port.reply(msg, "确认已过期或无效，请重新发起。")
         return True
-    if action.operator_id != msg.operator_id:
+    if not matches_context(action, msg.operator_id, msg.chat_id, msg.channel):
+        _audit_rejected(settings, action, msg)
         await port.reply(msg, "Unauthorized.")
         return True
-    result = await run_tool(settings, action.tool_name, action.arg)
+    action = pop_pending(token)
+    assert action is not None
+    audit_tool_event(
+        settings,
+        operator_id=action.operator_id,
+        chat_id=action.chat_id,
+        channel=action.channel,
+        tool_name=action.tool_name,
+        arg=action.arg,
+        danger=_danger_label(action.tool_name),
+        action="confirmed",
+    )
+    try:
+        result = await run_tool(settings, action.tool_name, action.arg)
+    except Exception as exc:
+        audit_tool_event(
+            settings,
+            operator_id=action.operator_id,
+            chat_id=action.chat_id,
+            channel=action.channel,
+            tool_name=action.tool_name,
+            arg=action.arg,
+            danger=_danger_label(action.tool_name),
+            action="executed",
+            error_preview=str(exc),
+        )
+        await port.reply(msg, f"工具 {action.tool_name} 执行失败: {type(exc).__name__}")
+        return True
+    audit_tool_event(
+        settings,
+        operator_id=action.operator_id,
+        chat_id=action.chat_id,
+        channel=action.channel,
+        tool_name=action.tool_name,
+        arg=action.arg,
+        danger=_danger_label(action.tool_name),
+        action="executed",
+        result_preview=result,
+    )
     await port.reply(msg, result)
     return True
 
@@ -161,16 +276,31 @@ async def execute_confirmed(
 async def cancel_pending(
     msg: InboundMessage,
     port: OutboundPort,
+    settings: Settings,
     token: str,
 ) -> bool:
-    action = pop_pending(token)
+    action = get_pending(token)
     if action is None:
         await port.reply(msg, "没有待确认的操作。")
         return True
-    if action.operator_id != msg.operator_id:
+    if not matches_context(action, msg.operator_id, msg.chat_id, msg.channel):
+        _audit_rejected(settings, action, msg)
         await port.reply(msg, "Unauthorized.")
         return True
-    await port.reply(msg, f"已取消: {action.tool_name}")
+    action = pop_pending(token)
+    assert action is not None
+    audit_tool_event(
+        settings,
+        operator_id=action.operator_id,
+        chat_id=action.chat_id,
+        channel=action.channel,
+        tool_name=action.tool_name,
+        arg=action.arg,
+        danger=_danger_label(action.tool_name),
+        action="cancelled",
+    )
+    label = action.arg.strip() or action.tool_name
+    await port.reply(msg, f"已取消: {action.tool_name} ({label})")
     return True
 
 
@@ -180,14 +310,13 @@ async def try_resolve_confirmation(
     settings: Settings,
 ) -> bool:
     """Text-based YES/NO fallback (Feishu and Telegram). Returns True if consumed."""
+    pending = get_pending_for_context(msg.operator_id, msg.chat_id, msg.channel)
+    if pending is None:
+        return False
     if is_confirmation_text(msg.text):
-        pending = get_pending_for_operator(msg.operator_id)
-        if pending is not None:
-            return await execute_confirmed(msg, port, settings, pending.token)
+        return await execute_confirmed(msg, port, settings, pending.token)
     if is_cancellation_text(msg.text):
-        pending = get_pending_for_operator(msg.operator_id)
-        if pending is not None:
-            return await cancel_pending(msg, port, pending.token)
+        return await cancel_pending(msg, port, settings, pending.token)
     return False
 
 

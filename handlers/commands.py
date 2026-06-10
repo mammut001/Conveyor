@@ -39,7 +39,8 @@ from scripts.smoke import run_smoke
 from scripts.edit_harness import run_edit_harness
 from scripts.health_snapshot import health_snapshot
 from handlers import ops as ops_handlers
-from handlers.tools.registry import TOOL_REGISTRY, requires_confirmation
+from handlers.tools.registry import TOOL_REGISTRY, DangerLevel
+from handlers.tools.restart_aliases import RESTART_USAGE, resolve_restart_alias
 
 # Mirrors runner-side constants; keep near command logic that needs them.
 DATE_ARG_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -337,6 +338,65 @@ async def _journal(msg, port, runner, _settings, arg):
     await port.reply(msg, "\n".join(lines))
 
 
+# Slash aliases shown in /tools (tool name -> slash commands).
+_TOOL_SLASH: dict[str, tuple[str, ...]] = {
+    "load": ("/load", "/vps"),
+    "ps": ("/ps",),
+    "htop": ("/htop",),
+    "disk": ("/disk",),
+    "logs": ("/logs",),
+    "service_status": ("/service_status",),
+    "git_status": ("/git_status",),
+    "service_restart": ("/restart telegram|feishu|maintain",),
+}
+
+_TOOL_EXAMPLES: dict[str, str] = {
+    "load": "看看负载",
+    "disk": "磁盘空间",
+    "logs": "看日志",
+    "service_status": "服务还在跑吗",
+    "git_status": "git status",
+    "service_restart": "重启 telegram bot",
+}
+
+
+async def _diagnose(msg, port, runner, settings, arg):
+    from handlers.tools.runner import handle_diagnose_command
+    await handle_diagnose_command(msg, port, runner, settings, arg)
+
+
+async def _restart(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    unit = resolve_restart_alias(arg)
+    if unit is None:
+        await port.reply(msg, RESTART_USAGE)
+        return
+    await _invoke_tool(msg, port, settings, "service_restart", unit)
+
+
+async def _audit_tools(msg, port, _runner, settings, arg):
+    from handlers.tools.audit import read_audit_tail
+    from redaction import redact_text, truncate
+    n = _int_arg(arg.strip().split()[0] if arg.strip() else "", default=10, lo=1, hi=50)
+    records = read_audit_tail(settings, n)
+    if not records:
+        await port.reply(msg, "暂无工具审计日志。")
+        return
+    lines = [f"工具审计 (最近 {len(records)} 条):", ""]
+    for rec in records:
+        ts = rec.get("timestamp", "?")
+        action = rec.get("action", "?")
+        tool = rec.get("tool_name", "?")
+        danger = rec.get("danger", "?")
+        arg_preview = rec.get("arg", "")
+        line = f"  {ts} | {action} | {tool} ({danger})"
+        if arg_preview:
+            line += f" arg={arg_preview}"
+        lines.append(truncate(redact_text(line), 500))
+    lines.append("\n路径: audit/tools.log（已 redact）")
+    await port.reply(msg, truncate("\n".join(lines)))
+
+
 async def _tool_disk(msg, port, _runner, settings, arg):
     from handlers.tools.runner import run_tool
     await port.reply(msg, await run_tool(settings, "disk", arg))
@@ -358,17 +418,50 @@ async def _tool_git_status(msg, port, _runner, settings, arg):
 
 
 async def _tools(msg, port, _runner, _settings, _arg):
-    lines = ["Agent 工具层 (deterministic tools):", ""]
+    lines = [
+        "Agent 工具层",
+        "",
+        "Hybrid 诊断:",
+        "  /diagnose [server|bot|logs|quick] — 采集事实 + Codex 分析",
+        "  自然语言: 「为什么服务器慢」「诊断服务器」",
+        "",
+        "危险操作别名:",
+        "  /restart telegram|feishu|maintain — 映射 systemd 单元，需确认",
+        "",
+    ]
+    by_danger: dict[DangerLevel, list[str]] = {
+        DangerLevel.READ: [],
+        DangerLevel.WRITE: [],
+        DangerLevel.DESTRUCTIVE: [],
+    }
     for name in sorted(TOOL_REGISTRY):
         spec = TOOL_REGISTRY[name]
-        flag = " ⚠️需确认" if requires_confirmation(spec) else ""
-        lines.append(f"  /{name} — {spec.summary}{flag}")
+        slashes = " ".join(_TOOL_SLASH.get(name, (f"/{name}",)))
+        example = _TOOL_EXAMPLES.get(name, "")
+        ex_part = f' · 例: "{example}"' if example else ""
+        entry = f"  {slashes} — {name}: {spec.summary}{ex_part}"
+        by_danger[spec.danger].append(entry)
+
+    lines.append("READ (立即执行):")
+    lines.extend(by_danger[DangerLevel.READ] or ["  (none)"])
+    lines.append("")
+    write_entries = by_danger[DangerLevel.WRITE]
+    if write_entries:
+        lines.append("WRITE (需确认):")
+        lines.extend(write_entries)
+        lines.append("")
+    destruct_entries = by_danger[DangerLevel.DESTRUCTIVE]
+    if destruct_entries:
+        lines.append("DESTRUCTIVE (需确认):")
+        lines.extend(destruct_entries)
+        lines.append("")
+
     lines += [
-        "",
-        "自然语言示例:",
-        "  看看负载 → load | 磁盘空间 → disk | 看日志 → logs",
-        "  服务状态 → service_status | git status → git_status",
-        "  为什么服务器慢 → hybrid (工具采集 + Codex 分析)",
+        "确认规则:",
+        "  Telegram: 点内联按钮 ✅ 确认",
+        "  文本 fallback: 回复「确认执行」",
+        "  取消: 「取消」「算了」「no」",
+        "  随意的「好/ok/是/y」不会确认（防误触）",
         "",
         "也可: tool load / tool ps",
     ]
@@ -388,9 +481,12 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "本机运维快路径 (bypass Codex):\n"
     text += "/load /vps — 主机负载/内存/磁盘快照\n"
     text += "/htop — top 风格的进程帧 (htop 是 TUI)\n"
-    text += "/ps [full] — 进程快照，comm 模式默认不含 args\n"
+    text += "/ps [full confirm] — 进程快照，comm 默认；full confirm 才含 args\n"
     text += "自然语言 '看看我的负载' / '跑 htop 看看' / 'check vps load' 也走快路径。\n"
     text += "/tools — 列出 agent 工具层全部工具\n"
+    text += "/diagnose [server|bot|logs|quick] — hybrid 主机诊断\n"
+    text += "/restart telegram|feishu|maintain — 重启服务 (需确认)\n"
+    text += "/audit_tools [n] — 查看危险工具审计日志\n"
     await port.reply(msg, text)
 
 
@@ -430,6 +526,9 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("logs", "服务 journal 日志", _tool_logs, takes_optional_arg=True),
         CommandSpec("service_status", "Conveyor 服务状态", _tool_service_status),
         CommandSpec("git_status", "Workspace git status", _tool_git_status),
+        CommandSpec("diagnose", "Hybrid 主机诊断", _diagnose, takes_optional_arg=True),
+        CommandSpec("restart", "重启 Conveyor 服务 (需确认)", _restart, takes_arg=True),
+        CommandSpec("audit_tools", "危险工具审计日志", _audit_tools, takes_optional_arg=True),
         CommandSpec("help", "帮助", _help),
     ]
 }

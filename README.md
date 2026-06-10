@@ -223,7 +223,23 @@ Codex:
 | Path | When | Example |
 |---|---|---|
 | **Deterministic** | Stable host checks | `看看磁盘`, `/logs`, `git status` |
-| **Hybrid** | Diagnosis / “why” questions | `为什么服务器这么慢` → collect load/ps/disk/service facts, then Codex analyzes |
+| **Hybrid** | Diagnosis / “why” questions | `/diagnose server`, `为什么服务器这么慢` → collect facts, then Codex analyzes |
+
+**Explicit hybrid diagnose:** `/diagnose [server|bot|logs|quick]` (default
+`server`) runs a mode-specific tool bundle, then Codex analysis in Chinese
+with likely cause, severity, and safe next steps. This is separate from
+`/diag` (job/runtime diagnostics harness).
+
+**Friendly restart aliases:** `/restart telegram|feishu|maintain` maps to
+whitelist systemd units and uses the same confirmation flow as
+`service_restart` (inline button or explicit `确认执行`).
+
+**Confirmation binding:** Pending dangerous actions are scoped to
+`operator_id + chat_id + channel`; confirming from another chat is rejected.
+
+**Audit log:** WRITE/DESTRUCTIVE tool events append JSONL to
+`codex_memory_root/audit/tools.log`. `/audit_tools [n]` shows recent
+redacted entries (READ only).
 | **LLM** | Open-ended coding / debugging | `写个 quicksort`, `fix this test` |
 
 Registered tools (`/tools` lists all):
@@ -240,11 +256,20 @@ Registered tools (`/tools` lists all):
 | `service_restart` | **write (confirm)** | Restart a conveyor systemd unit |
 
 Safety: **write/destructive tools require explicit confirmation**
-(Telegram inline buttons; Feishu/text replies `确认` / `取消`).
+(Telegram inline buttons; Feishu/text replies must use explicit phrases
+like `确认执行` / `confirm` — casual `好` / `ok` / `是` is intentionally
+**not** accepted). Confirmations are bound to the originating chat and
+channel. Events are audit-logged under `audit/tools.log`.
 
 Implementation: `handlers/tools/` (registry + executors + runner),
 `handlers/intent.py` (`route_intent`). Handlers stay channel-agnostic;
 Telegram callbacks use `tool:confirm:<token>` / `tool:cancel:<token>`.
+
+**Telegram slash commands:** New ops/tool commands (`/load`, `/tools`,
+`/disk`, …) are registered in `COMMAND_TABLE` and reached via a
+generic `MessageHandler(filters.COMMAND, …)` fallback in `bot.py` (after
+explicit `CommandHandler`s, before plain text). This ensures unknown
+slash commands still route through `dispatch()` → `COMMAND_TABLE`.
 
 ### Deterministic host ops (legacy slash commands)
 
@@ -254,8 +279,8 @@ and map into the tool layer above:
 | Command | Phrasing | What it does |
 |---|---|---|
 | `/load` (alias `/vps`) | `看看我的负载`, `check vps load` | Hostname, time, uptime, CPU count, memory, disk for `/ /srv /opt`, top CPU/mem processes. |
-| `/htop` | `跑一下 htop`, `top 看一下` | htop is a TUI; returns a `top -bn1` snapshot with a one-line TUI explanation. |
-| `/ps` (or `/ps full`) | `ps aux`, `哪些进程` | Top processes by CPU/mem. Default uses `comm` (no argv → no token leak). `full` includes args (still passed through redaction). |
+| `/htop` | `跑一下 htop`, `top 看一下` | htop is a TUI; returns a `top -bn1` snapshot with a one-line TUI explanation. Intent matching is conservative — coding/docs requests mentioning htop (e.g. “look at htop source code”) route to LLM, not ops. |
+| `/ps` | `ps aux`, `哪些进程` | Top processes by CPU/mem. Default uses `comm` only (no argv → no token leak). `/ps full` shows a safety warning; `/ps full confirm` includes args (still redacted/truncated). |
 
 Safety:
 

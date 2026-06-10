@@ -44,8 +44,10 @@ _LOAD_PATTERNS = (
     re.compile(r"(show|get)\s+(me\s+)?(the\s+)?(host|server|vps|system)\s+(status|load)", re.IGNORECASE),
 )
 _HTOP_PATTERNS = (
-    re.compile(r"(跑|运行|开|启动|执行|跑一下|跑下|看下|看|查)\s*.*\bhtop\b", re.IGNORECASE),
-    re.compile(r"\bhtop\b", re.IGNORECASE),
+    re.compile(r"(跑|运行|开|启动|执行|跑一下|跑下)\s*.*\bhtop\b", re.IGNORECASE),
+    re.compile(r"(看|查|看一下|看看)\s*.*\bhtop\b", re.IGNORECASE),
+    re.compile(r"\bhtop\b\s*(看看|看一下|一下|看看服务器|看看.*vps)", re.IGNORECASE),
+    re.compile(r"check\s+htop\s+on\s+(server|vps|host)", re.IGNORECASE),
     re.compile(r"(跑|运行|看|查|执行)\s*.*\btop\b\s*(看一下|看看|一下)?", re.IGNORECASE),
     re.compile(r"\btop\s+(看一下|看看|一下)\b", re.IGNORECASE),
 )
@@ -108,6 +110,10 @@ async def _run(argv: list[str], timeout: float = _PER_CMD_TIMEOUT) -> str:
         try:
             proc.kill()
         except ProcessLookupError:
+            pass
+        try:
+            await proc.wait()
+        except Exception:
             pass
         logger.warning("Subprocess %s timed out after %.1fs", argv[0], timeout)
         return ""
@@ -201,32 +207,53 @@ async def _htop_snapshot() -> str:
     return body
 
 
-async def _ps_snapshot(full: bool = False) -> str:
+async def _ps_snapshot(*, include_args: bool = False) -> str:
     """Return top processes by CPU and memory.
 
-    `full=False` uses `comm` (the executable name) so secrets that
-    happen to live in argv (tokens, file paths with usernames) never
-    appear in the output. `full=True` includes `args` but is still
-    run through redact_text — Telegram secrets like bot tokens will
-    still get masked.
+    Default uses `comm` only. Args mode requires explicit `/ps full confirm`.
     """
-    if full:
+    if include_args:
         fmt = "pid,user,comm,args,%cpu,%mem"
-        sort_cpu = await _run(["ps", "-eo", fmt, "--sort=-%cpu"]) or "(ps not available)"
-        sort_mem = await _run(["ps", "-eo", fmt, "--sort=-%mem"]) or "(ps not available)"
+        title = "进程快照 (full args 模式，已 redact，但仍可能包含敏感路径/参数):\n\n"
+        footer = "\n\n说明: args 可能含 token/路径；已 redact 但不保证完全安全。"
     else:
         fmt = "pid,comm,%cpu,%mem"
-        sort_cpu = await _run(["ps", "-eo", fmt, "--sort=-%cpu"]) or "(ps not available)"
-        sort_mem = await _run(["ps", "-eo", fmt, "--sort=-%mem"]) or "(ps not available)"
+        title = "进程快照 (comm 模式，不含 args):\n\n"
+        footer = "\n\n说明: 想要 args 视图，发 /ps full confirm（需二次确认）。"
+    sort_cpu = await _run(["ps", "-eo", fmt, "--sort=-%cpu"]) or "(ps not available)"
+    sort_mem = await _run(["ps", "-eo", fmt, "--sort=-%mem"]) or "(ps not available)"
     body = (
-        "进程快照 (comm 模式，不含 args):\n\n"
-        "CPU 占用最高:\n"
+        title
+        + "CPU 占用最高:\n"
         + _safe_truncate("\n".join(sort_cpu.splitlines()[:11]))
         + "\n\n内存占用最高:\n"
         + _safe_truncate("\n".join(sort_mem.splitlines()[:11]))
-        + "\n\n说明: 想要带 args 的完整视图，发 /ps full（仍然会过 redact）。"
+        + footer
     )
     return _safe_truncate(body)
+
+
+_PS_FULL_WARN = (
+    "full args 模式可能包含敏感参数（token、路径、密钥）。\n"
+    "请发 /ps full confirm 才显示 args。"
+)
+
+
+def parse_ps_arg(arg: str) -> str:
+    """Return 'comm', 'full_warn', or 'full_args'."""
+    body = (arg or "").strip().lower()
+    if body in ("full confirm", "full confirm=true"):
+        return "full_args"
+    if body in ("full", "full=true"):
+        return "full_warn"
+    return "comm"
+
+
+async def format_ps_output(arg: str) -> str:
+    mode = parse_ps_arg(arg)
+    if mode == "full_warn":
+        return _PS_FULL_WARN
+    return await _ps_snapshot(include_args=(mode == "full_args"))
 
 
 # ---- Command handlers ----------------------------------------------------
@@ -240,8 +267,7 @@ async def _htop(msg: InboundMessage, port: OutboundPort, _runner, _settings, _ar
 
 
 async def _ps(msg: InboundMessage, port: OutboundPort, _runner, _settings, arg):
-    full = arg.strip().lower() in ("full", "full=true")
-    await port.reply(msg, await _ps_snapshot(full=full))
+    await port.reply(msg, await format_ps_output(arg))
 
 
 async def _vps(msg: InboundMessage, port: OutboundPort, runner, settings, arg):

@@ -167,6 +167,17 @@ async def _test_dispatch_hybrid_skips_direct_codex_for_facts_only() -> CheckResu
         return CheckResult(name, False, str(exc))
 
 
+async def _test_service_restart_whitelist() -> CheckResult:
+    name = "behavior: service_restart rejects unknown unit conveyor-foo"
+    try:
+        text = await run_tool(_settings(), "service_restart", "conveyor-foo")
+        ok = ("conveyor-foo" in text and ("拒绝" in text or "只允许" in text))
+        ok = ok and "已请求重启" not in text
+        return CheckResult(name, ok, text[:120])
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
 async def _test_dispatch_disk_deterministic_no_codex() -> CheckResult:
     name = "behavior: '看看磁盘' does not call CodexRunner.start"
     try:
@@ -176,7 +187,7 @@ async def _test_dispatch_disk_deterministic_no_codex() -> CheckResult:
         runner = mock.Mock()
         runner.start = mock.AsyncMock(side_effect=AssertionError("codex should not run"))
         with mock.patch("handlers.dispatch.is_allowed", return_value=True):
-            await dispatch(_msg("看看磁盘空间"), port, runner, _settings())
+            await dispatch(_msg("看看磁盘空间"), port, settings=_settings(), runner=runner)
         runner.start.assert_not_called()
         if not any("磁盘" in r for r in port.replies):
             return CheckResult(name, False, f"replies={port.replies!r}")
@@ -195,6 +206,7 @@ def main() -> int:
         _test_dangerous_tool_shows_confirmation,
         _test_hybrid_calls_codex_with_facts,
         _test_dispatch_hybrid_skips_direct_codex_for_facts_only,
+        _test_service_restart_whitelist,
         _test_dispatch_disk_deterministic_no_codex,
     ]
     results = [fn() for fn in sync_checks]
