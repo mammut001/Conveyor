@@ -60,7 +60,7 @@ jobs:
         run: |
           ssh -p ${{ secrets.VPS_PORT || 22 }} \
               ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
-              "CONVEYOR_DEPLOY_PATH=${DEPLOY_PATH} bash ${DEPLOY_PATH}/scripts/deploy_vps.sh"
+              "CONVEYOR_DEPLOY_PATH=${DEPLOY_PATH} bash ${DEPLOY_PATH}/scripts/deploy.sh"
 
       - name: Report failure
         if: failure()
