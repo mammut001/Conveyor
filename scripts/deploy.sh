@@ -105,7 +105,7 @@ log "Backup at ${BACKUP_PATH}"
 
 # ---- smoke -----------------------------------------------------------------
 log "Running make smoke ..."
-if ! .venv/bin/python -m pytest --co -q scripts/ 2>/dev/null && ! make smoke; then
+if ! make smoke; then
   die "Smoke tests FAILED. Services will NOT be restarted."
 fi
 log "Smoke passed."

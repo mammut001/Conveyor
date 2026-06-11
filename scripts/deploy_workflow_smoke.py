@@ -268,6 +268,60 @@ def _test_deploy_status_writes_services_json() -> CheckResult:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
 
+def _test_workflow_calls_deploy_vps() -> CheckResult:
+    name = "workflow: calls deploy_vps.sh on VPS (not deploy.sh locally)"
+    try:
+        content = WORKFLOW_YML.read_text(encoding="utf-8")
+        calls_vps = "deploy_vps.sh" in content
+        # Should NOT call deploy.sh directly (rsync mode is for manual use only)
+        calls_rsycn_deploy = "bash scripts/deploy.sh" in content
+        ok = calls_vps and not calls_rsycn_deploy
+        detail_parts = []
+        if not calls_vps:
+            detail_parts.append("missing deploy_vps.sh")
+        if calls_rsycn_deploy:
+            detail_parts.append("still calls deploy.sh directly")
+        return CheckResult(name, ok, "; ".join(detail_parts) if detail_parts else "calls deploy_vps.sh on VPS")
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_deploy_sh_no_pytest_co_smoke() -> CheckResult:
+    name = "deploy (rsync): no pytest --co as smoke gate"
+    try:
+        content = DEPLOY_SH.read_text(encoding="utf-8")
+        has_pytest_co = "pytest --co" in content
+        return CheckResult(
+            name,
+            not has_pytest_co,
+            "found pytest --co (should use direct make smoke)" if has_pytest_co else "no pytest --co gate",
+        )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
+def _test_deploy_sh_direct_make_smoke() -> CheckResult:
+    name = "deploy (rsync): uses direct 'make smoke' (not behind pytest)"
+    try:
+        content = DEPLOY_SH.read_text(encoding="utf-8")
+        # Strip comments
+        import re
+        code_lines = [
+            line for line in content.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        code = "\n".join(code_lines)
+        # Must have direct `if ! make smoke` pattern
+        has_direct = "if ! make smoke" in code
+        return CheckResult(
+            name,
+            has_direct,
+            "found 'if ! make smoke'" if has_direct else "missing direct 'if ! make smoke'",
+        )
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
 CHECKS = [
     _test_workflow_exists,
     _test_deploy_vps_script_exists,
@@ -275,8 +329,11 @@ CHECKS = [
     _test_workflow_references_secrets,
     _test_workflow_no_hardcoded_host,
     _test_workflow_passes_github_metadata,
+    _test_workflow_calls_deploy_vps,
     lambda: _test_deploy_contains_smoke(DEPLOY_VPS_SH, "vps"),
     lambda: _test_deploy_contains_smoke(DEPLOY_SH, "rsync"),
+    _test_deploy_sh_no_pytest_co_smoke,
+    _test_deploy_sh_direct_make_smoke,
     lambda: _test_deploy_smoke_before_restart(DEPLOY_VPS_SH, "vps"),
     lambda: _test_deploy_smoke_before_restart(DEPLOY_SH, "rsync"),
     lambda: _test_deploy_restarts_telegram(DEPLOY_VPS_SH, "vps"),

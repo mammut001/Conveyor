@@ -59,16 +59,17 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -p ${{ secrets.VPS_PORT || 22 }} -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Deploy via rsync and SSH
+      - name: Deploy via SSH (git-based)
         env:
-          CONVEYOR_REMOTE: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
-          CONVEYOR_REMOTE_DIR: ${{ secrets.CONVEYOR_DEPLOY_PATH || '/opt/conveyor' }}
+          DEPLOY_PATH: ${{ secrets.CONVEYOR_DEPLOY_PATH || '/opt/conveyor' }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           DEPLOY_SOURCE: github-actions
         run: |
-          bash scripts/deploy.sh
+          ssh -p ${{ secrets.VPS_PORT || 22 }} \
+              ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+              "GITHUB_SHA=${GITHUB_SHA} GITHUB_REF_NAME=${GITHUB_REF_NAME} GITHUB_RUN_ID=${GITHUB_RUN_ID} DEPLOY_SOURCE=${DEPLOY_SOURCE} CONVEYOR_DEPLOY_PATH=${DEPLOY_PATH} bash ${DEPLOY_PATH}/scripts/deploy_vps.sh"
 
       - name: Report failure
         if: failure()
