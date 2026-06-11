@@ -22,8 +22,10 @@ Run: .venv/bin/python scripts/jobs_progress_mode_smoke.py
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -413,6 +415,110 @@ def _test_fallback_text_constant() -> CheckResult:
     )
 
 
+# ---- streaming-layer mode filter tests -----------------------------------
+# These exercise runner/streaming.py::_read_jsonl_stdout directly,
+# without the handlers/jobs.py progress() wrapper. They verify that
+# the streaming layer itself respects CONVEYOR_PROGRESS_MODE.
+
+
+def _run_streaming(mode: str, lines: list[dict]) -> list[str]:
+    """Run ``_read_jsonl_stdout`` with the given progress mode and
+    return the list of texts that were forwarded to ``on_progress``."""
+    import runner as runner_mod  # noqa: PLC0415
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_p = Path(tmp)
+        for sub in ("ws", "task", "memory"):
+            (tmp_p / sub).mkdir(parents=True, exist_ok=True)
+        overrides = {
+            "TELEGRAM_BOT_TOKEN": "fake-token",
+            "TELEGRAM_ALLOWED_USER_ID": "0",
+            "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
+            "CODEX_TASK_ROOT": str(tmp_p / "task"),
+            "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
+            "CODEX_BIN": "codex",
+            "USER_TIMEZONE": "UTC",
+        }
+        with mock.patch.dict(os.environ, overrides, clear=False):
+            settings = runner_mod.load_settings()
+            object.__setattr__(settings, "telegram_progress_seconds", 0.0)
+            object.__setattr__(settings, "conveyor_progress_mode", mode)
+            r = runner_mod.CodexRunner(settings)
+
+            log_path = tmp_p / "job.jsonl"
+            job = SimpleNamespace(log_path=log_path, last_event="starting")
+
+            chunks = []
+            for obj in lines:
+                chunks.append((json.dumps(obj) + "\n").encode("utf-8"))
+
+            class _FakeStdout:
+                def __init__(self, data):
+                    self._data = list(data)
+
+                async def readline(self):
+                    return self._data.pop(0) if self._data else b""
+
+            process = SimpleNamespace(stdout=_FakeStdout(chunks))
+            progress_calls: list[str] = []
+
+            async def _on_progress(text):
+                progress_calls.append(text)
+
+            asyncio.run(r._read_jsonl_stdout(job, process, _on_progress))
+            return progress_calls
+
+
+_TOOL_LINE = {
+    "type": "item.completed",
+    "item": {"type": "function_call", "name": "curl"},
+}
+_PROSE_LINE = {
+    "type": "item.updated",
+    "item": {"type": "agent_message", "text": "我这就帮你查一下。"},
+}
+
+
+def _test_streaming_quiet_suppresses_tool() -> CheckResult:
+    name = "streaming: quiet mode suppresses tool indicator (no on_progress call)"
+    calls = _run_streaming("quiet", [_TOOL_LINE])
+    return CheckResult(
+        name,
+        len(calls) == 0,
+        f"expected 0 calls, got {len(calls)}: {calls!r}",
+    )
+
+
+def _test_streaming_compact_keeps_tool() -> CheckResult:
+    name = "streaming: compact mode keeps tool indicator (on_progress called)"
+    calls = _run_streaming("compact", [_TOOL_LINE])
+    return CheckResult(
+        name,
+        len(calls) == 1 and "🔧 curl" in calls[0],
+        f"expected 1 call with tool indicator, got {len(calls)}: {calls!r}",
+    )
+
+
+def _test_streaming_verbose_keeps_prose() -> CheckResult:
+    name = "streaming: verbose mode keeps prose (on_progress called)"
+    calls = _run_streaming("verbose", [_PROSE_LINE])
+    return CheckResult(
+        name,
+        len(calls) == 1 and "我这就帮你查一下" in calls[0],
+        f"expected 1 call with prose, got {len(calls)}: {calls!r}",
+    )
+
+
+def _test_streaming_compact_drops_prose() -> CheckResult:
+    name = "streaming: compact mode drops prose (no on_progress call)"
+    calls = _run_streaming("compact", [_PROSE_LINE])
+    return CheckResult(
+        name,
+        len(calls) == 0,
+        f"expected 0 calls, got {len(calls)}: {calls!r}",
+    )
+
+
 CHECKS = [
     _test_default_mode,
     _test_valid_modes,
@@ -433,6 +539,10 @@ CHECKS = [
     _test_compact_tool_indicator_fallback,
     _test_quiet_no_fallback_after_edit_failure,
     _test_fallback_text_constant,
+    _test_streaming_quiet_suppresses_tool,
+    _test_streaming_compact_keeps_tool,
+    _test_streaming_verbose_keeps_prose,
+    _test_streaming_compact_drops_prose,
 ]
 
 

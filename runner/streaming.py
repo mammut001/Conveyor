@@ -262,6 +262,7 @@ async def _read_jsonl_stdout(
                 event_text
                 and event_text != last_sent_text
                 and self._should_send_event_progress(event_text, event_obj)
+                and progress_mode != "quiet"
                 and (prose_allowed or not self._is_prose_event_text(event_text))
                 and now - last_sent >= self.settings.telegram_progress_seconds
                 and growing_ok
