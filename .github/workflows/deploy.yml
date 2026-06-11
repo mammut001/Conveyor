@@ -42,6 +42,9 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Install SSH key
         uses: shimataro/ssh-key-action@v2
         with:
@@ -54,13 +57,12 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -p ${{ secrets.VPS_PORT || 22 }} -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Deploy via SSH
+      - name: Deploy via rsync and SSH
         env:
-          DEPLOY_PATH: ${{ secrets.CONVEYOR_DEPLOY_PATH || '/opt/conveyor' }}
+          CONVEYOR_REMOTE: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+          CONVEYOR_REMOTE_DIR: ${{ secrets.CONVEYOR_DEPLOY_PATH || '/opt/conveyor' }}
         run: |
-          ssh -p ${{ secrets.VPS_PORT || 22 }} \
-              ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
-              "CONVEYOR_DEPLOY_PATH=${DEPLOY_PATH} bash ${DEPLOY_PATH}/scripts/deploy.sh"
+          bash scripts/deploy.sh
 
       - name: Report failure
         if: failure()
