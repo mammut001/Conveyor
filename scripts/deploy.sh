@@ -34,5 +34,7 @@ done
 
 ssh "$REMOTE" "rm -rf $REMOTE_DIR/scripts/__pycache__ $REMOTE_DIR/__pycache__ $REMOTE_DIR/runner/__pycache__ $REMOTE_DIR/channel/__pycache__ $REMOTE_DIR/handlers/__pycache__ 2>/dev/null; \
   sudo systemctl restart conveyor-telegram-bot.service; \
+  sudo systemctl restart conveyor-feishu-bot.service; \
   sleep 2; \
-  sudo systemctl is-active conveyor-telegram-bot.service"
+  sudo systemctl is-active conveyor-telegram-bot.service; \
+  sudo systemctl is-active conveyor-feishu-bot.service"
