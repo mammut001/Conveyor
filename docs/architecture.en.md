@@ -362,6 +362,8 @@ make smoke
   │     confirmation_context_smoke / tool_audit_smoke / audit_tools_smoke
   │     telegram_live_helpers_smoke
   │     docs_consistency_smoke
+  │     channel_telegram_smoke / channel_feishu_smoke
+  │     import_boundary_smoke
   └── command_harness
         38 cases, drives handlers.dispatch + FakeOutbound + FakeRunner
         (no more FakeUpdate / FakeMessage / FakeContext)
@@ -371,9 +373,11 @@ make smoke
 manual live script that needs real Telegram credentials and a
 Telethon install.
 
-`channel/telegram_smoke.py` / `channel/feishu_smoke.py` is the
-P2.1 target — the two channel adapters are still inlined in
-`bot.py` / `feishu_bot.py`.
+After P2.1: `channel/telegram.py` and `channel/feishu.py` own the
+adapter logic; the entrypoint files just wire handlers, onboarding,
+and the long-lived `_start_job` / `tool_callback` paths. Channel
+behavior is now testable in isolation; the layer rule is enforced
+statically by `import_boundary_smoke.py`.
 
 ---
 
@@ -389,7 +393,7 @@ P2.1 target — the two channel adapters are still inlined in
 | `/diagnose` + `/restart` aliases + `/audit_tools` | done | — |
 | Telegram live smoke (real user, Telethon) | done | `eddf1ba` |
 | docs bilingual sync | done | (this task) |
-| P2.1 Adapter split (`channel/telegram.py`, `channel/feishu.py`) | backlog | — |
+| P2.1 Adapter split (`channel/telegram.py`, `channel/feishu.py`) | done | (this task) |
 | P2.2 Feishu progress card / throttle | backlog | — |
 | P2.3 Onboarding extraction | backlog | — |
 | P2.4 Single-process dual-channel | backlog | — |
@@ -404,12 +408,23 @@ Ordered by impact-to-effort ratio. **Recommended next implementation
 order**: P2.1 → P2.2 → P2.4. The other two (P2.3, P2.5) can be
 picked up opportunistically.
 
-### P2.1 Adapter split (first)
+### P2.1 Adapter split (done)
 
-- Move Telegram outbound adapter out of `bot.py` into `channel/telegram.py`.
-- Move Feishu adapter out of `feishu_bot.py` into `channel/feishu.py`.
-- Add `channel/telegram_smoke.py` and `channel/feishu_smoke.py`.
-- Rationale: `bot.py` is large; channel behavior is currently hard to test in isolation.
+- Telegram adapter lives in `channel/telegram.py`:
+  `TelegramOutbound` / `inbound_from_update` / `make_outbound` /
+  `send_text` / `edit_text`.
+- Feishu adapter lives in `channel/feishu.py`:
+  `FeishuOutbound` / `inbound_from_event`.
+- Channel-level smokes: `channel_telegram_smoke.py` /
+  `channel_feishu_smoke.py`. The boundary rule is enforced
+  statically by `import_boundary_smoke.py` (AST scan: no Telegram
+  SDK in `handlers/`, no lark_oapi in `channel/telegram.py`, no
+  Telegram SDK in `channel/feishu.py`, no `runner` import in
+  `channel/*.py`).
+- `bot.py` / `feishu_bot.py` are now entrypoints only: handler
+  registration, onboarding, the long-lived `_start_job` /
+  `tool_callback` wiring, and the Feishu WebSocket connect. The
+  adapter volume (~150 lines) is gone from each file.
 
 ### P2.2 Feishu progress card / throttle (second)
 

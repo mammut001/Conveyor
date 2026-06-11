@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
-"""telegram_outbound_smoke.py — _TelegramOutbound really edits
+"""telegram_outbound_smoke.py — TelegramOutbound really edits
 placeholders in place and falls back to send_new when edit fails.
 
+P2.1: tests target `channel.telegram.TelegramOutbound` / `send_text` /
+`edit_text`, not the old inlined `bot._TelegramOutbound`.
+
 Pins:
-  - AST: _TelegramOutbound.reply / send_new are async, edit_progress is
-    async returning bool, reply_with_buttons is async
-  - AST: bot.py module references the new _send_text and _edit_text
-    helpers used by the OutboundPort
-  - behavior: with a fake bot + fake chat/message, reply() returns the
-    sent message_id (as str)
+  - AST: TelegramOutbound declares reply / send_new / edit_progress /
+    reply_with_buttons as async.
+  - AST: channel/telegram.py defines send_text and edit_text helpers
+    used by TelegramOutbound.
+  - behavior: with a fake bot + fake chat/message, reply() returns
+    the sent message_id (as str).
   - behavior: edit_progress() invokes bot.edit_message_text with the
-    chat.id and the int-casted placeholder_id; returns True on success
-  - behavior: when edit_message_text raises BadRequest("Message is not
-    modified"), edit_progress returns True (no-op success)
+    chat.id and the int-casted placeholder_id; returns True on
+    success.
+  - behavior: when edit_message_text raises an error whose message
+    contains "not modified", edit_progress returns True (no-op
+    success).
   - behavior: when edit_message_text raises any other exception,
-    edit_progress returns False
+    edit_progress returns False.
   - behavior: when placeholder_id is not int-castable, edit_progress
-    returns False without calling the bot
+    returns False without calling the bot.
 
 Run: .venv/bin/python scripts/telegram_outbound_smoke.py
 """
@@ -31,15 +36,16 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import bot  # registers _TelegramOutbound
 from channel import InboundMessage
+from channel.telegram import TelegramOutbound, edit_text, send_text
 from scripts.harness_common import CheckResult, print_results
 
 
-BOT_PY = Path(__file__).resolve().parents[1] / "bot.py"
+CHANNEL_PY = Path(__file__).resolve().parents[1] / "channel" / "telegram.py"
 
 
 # ---- Fake SDK objects ----------------------------------------------------
+
 
 class _FakeSentMessage:
     def __init__(self, message_id: int) -> None:
@@ -52,7 +58,7 @@ class _FakeChat:
 
 
 class _FakeMessage:
-    """Stand-in for telegram.Message; only the methods _send_text uses."""
+    """Stand-in for telegram.Message; only the methods send_text uses."""
 
     def __init__(self, chat: _FakeChat, sent_id: int = 9001) -> None:
         self._chat = chat
@@ -94,16 +100,18 @@ def _make_update(chat: _FakeChat, message: _FakeMessage, bot_obj: _FakeBot):
 
 # ---- AST tests -----------------------------------------------------------
 
-def _parse_bot() -> ast.Module:
-    return ast.parse(BOT_PY.read_text(encoding="utf-8"))
+
+def _parse_channel() -> ast.Module:
+    return ast.parse(CHANNEL_PY.read_text(encoding="utf-8"))
 
 
 def _test_outbound_port_methods() -> CheckResult:
-    name = "AST: _TelegramOutbound declares reply/send_new/edit_progress as async"
+    name = "AST: TelegramOutbound declares reply/send_new/edit_progress as async"
     try:
-        tree = _parse_bot()
+        tree = _parse_channel()
         cls = next(
-            (n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "_TelegramOutbound"),
+            (n for n in tree.body
+             if isinstance(n, ast.ClassDef) and n.name == "TelegramOutbound"),
             None,
         )
         if cls is None:
@@ -125,30 +133,31 @@ def _test_outbound_port_methods() -> CheckResult:
 
 
 def _test_helpers_present() -> CheckResult:
-    name = "AST: bot.py defines _send_text and _edit_text helpers used by _TelegramOutbound"
+    name = "AST: channel/telegram.py defines send_text and edit_text helpers"
     try:
-        tree = _parse_bot()
+        tree = _parse_channel()
         names = {n.name for n in tree.body
                  if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))}
-        needed = {"_send_text", "_edit_text"}
+        needed = {"send_text", "edit_text"}
         missing = needed - names
         if missing:
             return CheckResult(name, False, f"missing: {sorted(missing)}")
-        return CheckResult(name, True, "_send_text and _edit_text defined")
+        return CheckResult(name, True, "send_text and edit_text defined")
     except Exception as exc:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
 
 # ---- behavior tests ------------------------------------------------------
 
+
 def _test_reply_returns_message_id() -> CheckResult:
-    name = "behavior: _TelegramOutbound.reply() returns the sent message_id as str"
+    name = "behavior: TelegramOutbound.reply() returns the sent message_id as str"
     try:
         chat = _FakeChat()
         message = _FakeMessage(chat, sent_id=42)
         bot_obj = _FakeBot()
         update = _make_update(chat, message, bot_obj)
-        port = bot._TelegramOutbound(update)
+        port = TelegramOutbound(update)
         msg = InboundMessage(
             channel="telegram",
             operator_id="12345",
@@ -166,6 +175,19 @@ def _test_reply_returns_message_id() -> CheckResult:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
 
+def _test_send_text_helper() -> CheckResult:
+    name = "behavior: channel.telegram.send_text() returns the sent message_id as str"
+    try:
+        chat = _FakeChat()
+        message = _FakeMessage(chat, sent_id=43)
+        bot_obj = _FakeBot()
+        update = _make_update(chat, message, bot_obj)
+        out = asyncio.run(send_text(update, "hi"))
+        return CheckResult(name, out == "43", f"out={out!r}")
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
 def _test_edit_progress_succeeds() -> CheckResult:
     name = "behavior: edit_progress() invokes bot.edit_message_text with int(placeholder_id), returns True"
     try:
@@ -173,7 +195,7 @@ def _test_edit_progress_succeeds() -> CheckResult:
         message = _FakeMessage(chat)
         bot_obj = _FakeBot()
         update = _make_update(chat, message, bot_obj)
-        port = bot._TelegramOutbound(update)
+        port = TelegramOutbound(update)
         msg = InboundMessage(
             channel="telegram",
             operator_id="12345",
@@ -191,7 +213,10 @@ def _test_edit_progress_succeeds() -> CheckResult:
             return CheckResult(name, False, f"chat_id wrong: {call!r}")
         if call.get("message_id") != 555:
             return CheckResult(name, False, f"message_id wrong: {call!r}")
-        return CheckResult(name, True, f"edit succeeded, args={ {k: v for k, v in call.items() if k in ('chat_id','message_id')} }")
+        return CheckResult(
+            name, True,
+            f"edit succeeded, args={ {k: v for k, v in call.items() if k in ('chat_id','message_id')} }",
+        )
     except Exception as exc:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
@@ -204,7 +229,7 @@ def _test_edit_progress_not_modified_is_success() -> CheckResult:
         bot_obj = _FakeBot()
         bot_obj.edit_exception = _BadRequestLike("Message is not modified")
         update = _make_update(chat, message, bot_obj)
-        port = bot._TelegramOutbound(update)
+        port = TelegramOutbound(update)
         msg = InboundMessage(
             channel="telegram",
             operator_id="12345",
@@ -228,7 +253,7 @@ def _test_edit_progress_other_error_falls_back() -> CheckResult:
         bot_obj = _FakeBot()
         bot_obj.edit_succeeds = False  # raises RuntimeError("network blip")
         update = _make_update(chat, message, bot_obj)
-        port = bot._TelegramOutbound(update)
+        port = TelegramOutbound(update)
         msg = InboundMessage(
             channel="telegram",
             operator_id="12345",
@@ -251,7 +276,7 @@ def _test_edit_progress_bad_placeholder_id() -> CheckResult:
         message = _FakeMessage(chat)
         bot_obj = _FakeBot()
         update = _make_update(chat, message, bot_obj)
-        port = bot._TelegramOutbound(update)
+        port = TelegramOutbound(update)
         msg = InboundMessage(
             channel="telegram",
             operator_id="12345",
@@ -269,40 +294,35 @@ def _test_edit_progress_bad_placeholder_id() -> CheckResult:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
 
+def _test_edit_text_helper_returns_bool() -> CheckResult:
+    name = "behavior: channel.telegram.edit_text() returns False on bad id"
+    try:
+        chat = _FakeChat()
+        message = _FakeMessage(chat)
+        bot_obj = _FakeBot()
+        update = _make_update(chat, message, bot_obj)
+        out = asyncio.run(edit_text(update, "nope", "x"))
+        return CheckResult(name, out is False, f"out={out!r}")
+    except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+
+
 # python-telegram-bot's BadRequest isn't available without a real bot
 # import; we synthesize a stand-in class so the smoke is hermetic.
 class _BadRequestLike(Exception):
     pass
 
 
-# Patch the BadRequest symbol that bot.py looks at in edit_progress.
-# (bot.py does `name = exc.__class__.__name__` which is the actual
-#  defense; we just make sure the message body contains "not modified".)
-import builtins as _builtins
-_builtins._smoke_bad_request_marker = _BadRequestLike  # keep ref alive
-
-
-# Re-inject into bot's namespace if it referenced an importable name.
-# The current implementation uses __class__.__name__ in a class-name
-# check, so the marker class needs to be reachable. We expose it via
-# a module-level alias the smoke can swap in.
-class _PatchMarker:
-    pass
-
-
-# Inject BadRequest alias for the edit-progress code path that uses
-# name == "BadRequest".
-bot.BadRequest = _BadRequestLike  # type: ignore[attr-defined]
-
-
 CHECKS = [
     _test_outbound_port_methods,
     _test_helpers_present,
     _test_reply_returns_message_id,
+    _test_send_text_helper,
     _test_edit_progress_succeeds,
     _test_edit_progress_not_modified_is_success,
     _test_edit_progress_other_error_falls_back,
     _test_edit_progress_bad_placeholder_id,
+    _test_edit_text_helper_returns_bool,
 ]
 
 

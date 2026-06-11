@@ -290,6 +290,8 @@ make smoke
   │   confirmation_context_smoke / tool_audit_smoke / audit_tools_smoke
   │   telegram_live_helpers_smoke
   │   docs_consistency_smoke
+  │   channel_telegram_smoke / channel_feishu_smoke
+  │   import_boundary_smoke
   └── command_harness
       38 用例，驱动 handlers.dispatch + FakeOutbound + FakeRunner
       （不再用 FakeUpdate / FakeMessage / FakeContext）
@@ -297,7 +299,11 @@ make smoke
 
 `scripts/telegram_live_smoke.py` **不**在 `make smoke` 里 —— 它是手动 live 脚本，需要真 Telegram 凭据 + Telethon。
 
-`channel/telegram_smoke.py` / `channel/feishu_smoke.py` 是 P2.1 的目标——目前两个 channel adapter 还在 `bot.py` / `feishu_bot.py` 内联。
+P2.1 已完成：两个 channel adapter 各自落在 `channel/telegram.py` 和
+`channel/feishu.py`，`bot.py` / `feishu_bot.py` 只剩 entrypoint 与
+业务 command/onboarding 编排；adapter 单测在
+`channel_telegram_smoke.py` / `channel_feishu_smoke.py`，边界规则由
+`import_boundary_smoke.py` AST 静态守护。
 
 ---
 
@@ -313,7 +319,7 @@ make smoke
 | `/diagnose` + `/restart` 别名 + `/audit_tools` | ✅ | — |
 | Telegram 实时烟测（真用户，Telethon） | ✅ | `eddf1ba` |
 | 文档中英同步 | ✅ | （本次） |
-| P2.1 Adapter 独立文件 | ⏳ backlog | — |
+| P2.1 Adapter 独立文件（`channel/telegram.py` / `channel/feishu.py`） | ✅ | （本次） |
 | P2.2 飞书 progress 卡片 / throttle | ⏳ backlog | — |
 | P2.3 onboarding 移入 `handlers/onboarding.py` | ⏳ backlog | — |
 | P2.4 单进程双通道 | ⏳ backlog | — |
@@ -327,12 +333,16 @@ make smoke
 按"投入产出比"排序。**推荐落地顺序**：P2.1 → P2.2 → P2.4；
 P2.3、P2.5 看机会顺手做。
 
-### P2.1 Adapter 拆分（优先）
+### P2.1 Adapter 拆分（已完成）
 
-- 把 Telegram 出站适配器从 `bot.py` 抽到 `channel/telegram.py`
-- 把 Feishu 适配器从 `feishu_bot.py` 抽到 `channel/feishu.py`
-- 补 `channel/telegram_smoke.py` / `channel/feishu_smoke.py`
-- 理由：`bot.py` 太大；channel 行为目前难以单独测试
+- Telegram adapter 已搬到 `channel/telegram.py`：`TelegramOutbound` /
+  `inbound_from_update` / `make_outbound` / `send_text` / `edit_text`
+- Feishu adapter 已搬到 `channel/feishu.py`：`FeishuOutbound` /
+  `inbound_from_event`
+- 配套 smoke：`channel_telegram_smoke.py` / `channel_feishu_smoke.py`
+  / `import_boundary_smoke.py`（AST 静态守护层规则）
+- `bot.py` / `feishu_bot.py` 现在只剩 entrypoint + command/onboarding
+  编排；adapter 体积从 100+ 行各压到入口里只剩几行 `make_outbound` / `send_text`
 
 ### P2.2 飞书 progress 卡片 / throttle（次之）
 

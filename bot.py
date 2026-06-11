@@ -5,15 +5,22 @@ import json
 import logging
 import re
 from datetime import datetime
+from pathlib import Path
 
 from telegram import Update
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
-                               ContextTypes, ConversationHandler, InlineQueryHandler,
+                               ContextTypes, ConversationHandler,
                                MessageHandler, filters)
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from channel import InboundMessage
 from channel.auth import is_allowed
+from channel.telegram import (
+    TelegramOutbound,
+    inbound_from_update,
+    make_outbound,
+    send_text,
+)
 from config import load_settings
 from config import OPERATOR_PROFILE_FIELDS
 from handlers import dispatch
@@ -53,65 +60,18 @@ runner = CodexRunner(settings)
 DATE_ARG_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-# ---- Channel adapter shim (P0.2: bot.py -> handlers/dispatch) -------------
-# These let text_cmd / memo_cmd delegate to the channel-agnostic dispatcher
-# without rewriting the rest of bot.py. The full TelegramOutbound lives in
-# channel/telegram.py once P0.2 stabilizes.
-
-def _inbound_from_update(update: Update, text: str | None = None) -> InboundMessage:
-    user = update.effective_user
-    chat = update.effective_chat
-    msg = update.effective_message
-    text_value = text
-    if text_value is None and msg is not None:
-        text_value = msg.text or ""
-    return InboundMessage(
-        channel="telegram",
-        operator_id=str(getattr(user, "id", "") or ""),
-        chat_id=str(getattr(chat, "id", "") or ""),
-        message_id=str(getattr(msg, "message_id", "") or "") if msg else None,
-        text=(text_value or "").strip(),
-        chat_type="p2p" if (chat and getattr(chat, "type", None) == "private") else "group",
-        raw=update,
-    )
-
-
-class _TelegramOutbound:
-    """Telegram OutboundPort: real edit-in-place progress.
-
-    reply() and send_new() return the sent message_id as a str so
-    handlers can use it as a placeholder for edit_progress(). The
-    dispatcher latches to send_new on the first edit failure (latch
-    lives in handlers/jobs.py, not here).
-    """
-    supports_inline_buttons: bool = True
-
-    def __init__(self, update: Update) -> None:
-        self._update = update
-
-    async def reply(self, msg: InboundMessage, text: str) -> str | None:
-        return await _send_text(self._update, text)
-
-    async def send_new(self, msg: InboundMessage, text: str) -> str | None:
-        return await _send_text(self._update, text)
-
-    async def edit_progress(self, msg: InboundMessage, placeholder_id, text: str) -> bool:
-        return await _edit_text(self._update, placeholder_id, text)
-
-    async def reply_with_buttons(self, msg: InboundMessage, text: str, buttons):
-        keyboard = [
-            [InlineKeyboardButton(b["text"], callback_data=b["callback_data"]) for b in row]
-            for row in buttons
-        ]
-        return await _send_text(self._update, text, reply_markup=InlineKeyboardMarkup(keyboard))
+# ---- Channel adapter shim (P2.1: adapter moved to channel/telegram.py) ----
+# Inbound conversion and OutboundPort live in channel.telegram. bot.py
+# only wires handlers and the long-lived job scaffolding (_start_job,
+# typing loop, latched edits) that need direct SDK access.
 
 
 # ---- Channel-agnostic handler shims ---------------------------------------
 
 async def _dispatch_text(update: Update, text: str) -> None:
     """Send a free-text message through the shared dispatcher."""
-    inbound = _inbound_from_update(update, text=text)
-    await dispatch(inbound, _TelegramOutbound(update), settings, runner)
+    inbound = inbound_from_update(update, text=text)
+    await dispatch(inbound, make_outbound(update), settings, runner)
 
 
 async def _dispatch_command(update: Update, *, arg_text: str | None = None) -> None:
@@ -123,14 +83,14 @@ async def _dispatch_command(update: Update, *, arg_text: str | None = None) -> N
     message = update.effective_message
     if message is None or not message.text:
         return
-    inbound = _inbound_from_update(update, text=message.text)
+    inbound = inbound_from_update(update, text=message.text)
     if arg_text is not None:
         # Substitute the (already-mutated) text the dispatcher will see.
         # We re-parse via parse_command by rebuilding the full /<cmd> arg.
         cmd_name, _sep, _rest = message.text.partition(" ")
         rebuilt = f"{cmd_name} {arg_text}".strip()
-        inbound = _inbound_from_update(update, text=rebuilt)
-    await dispatch(inbound, _TelegramOutbound(update), settings, runner)
+        inbound = inbound_from_update(update, text=rebuilt)
+    await dispatch(inbound, make_outbound(update), settings, runner)
 
 
 async def _reply(
@@ -139,72 +99,9 @@ async def _reply(
     *,
     reply_markup=None,
 ) -> None:
-    """Legacy fire-and-forget reply. Use _send_text when you need the
+    """Legacy fire-and-forget reply. Use send_text when you need the
     message_id (placeholder for in-place edit)."""
-    await _send_text(update, text, reply_markup=reply_markup)
-
-
-async def _send_text(
-    update: Update,
-    text: str,
-    *,
-    reply_markup=None,
-) -> str | None:
-    """Send a message; return the sent message_id as str|None.
-
-    Returns the id so OutboundPort.reply/send_new can hand it to
-    edit_progress for in-place Telegram updates. Returns None on any
-    failure (logs and continues) so the dispatcher doesn't crash on
-    a transient network blip.
-    """
-    message = update.effective_message
-    if message is None:
-        return None
-    try:
-        sent = await message.reply_text(
-            truncate(text),
-            disable_web_page_preview=True,
-            reply_markup=reply_markup,
-        )
-    except Exception:
-        logger.exception("Failed to send Telegram message")
-        return None
-    return str(getattr(sent, "message_id", "") or "") or None
-
-
-async def _edit_text(update: Update, placeholder_id, text: str) -> bool:
-    """Edit an existing Telegram message in place. Returns True on
-    success, False on any failure (handler falls back to send_new).
-
-    Catches "Message is not modified" (Telegram 400) and treats it
-    as success — the wire content is already what we wanted, and
-    short-circuiting the fallback keeps progress text stable.
-    """
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None or not placeholder_id:
-        return False
-    try:
-        pid_int = int(placeholder_id)
-    except (TypeError, ValueError):
-        return False
-    try:
-        await update.get_bot().edit_message_text(
-            chat_id=chat.id,
-            message_id=pid_int,
-            text=truncate(text),
-            disable_web_page_preview=True,
-        )
-        return True
-    except Exception as exc:
-        # BadRequest("Message is not modified") means the wire text
-        # is already what we wanted — no-op success.
-        name = exc.__class__.__name__
-        msg = str(exc)
-        if "not modified" in msg.lower() or name == "BadRequest" and "not modified" in msg.lower():
-            return True
-        logger.debug("edit_progress failed (%s): %s; will fall back to send_new", name, msg)
-        return False
+    await send_text(update, text, reply_markup=reply_markup)
 
 
 def _allowed(update: Update) -> bool:
@@ -561,7 +458,7 @@ async def tool_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         text="",
         raw=update,
     )
-    port = _TelegramOutbound(update)
+    port = make_outbound(update)
     if action == "confirm":
         await execute_confirmed(inbound, port, settings, token)
     else:
