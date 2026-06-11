@@ -1,8 +1,8 @@
 # Conveyor — 架构与设计
 
 > **状态**: Active
-> **日期**: 2026-06-09
-> **适用版本**: 通道解耦 P0+P1 完成（2026-06-09 commit `8828489`）
+> **日期**: 2026-06-11
+> **适用版本**: 通道解耦 P0+P1、agent 工具层、实时 Telegram 烟测、Telegram live smoke
 
 ---
 
@@ -109,7 +109,7 @@ class OutboundPort(Protocol):
 
 ## 4. 命令表
 
-23 条命令，集中在 `handlers/commands.py` 的 `COMMAND_TABLE`。Telegram 和 Feishu 共用：
+命令集中在 `handlers/commands.py` 的 `COMMAND_TABLE`，Telegram 和 Feishu 共用：
 
 | 类别 | 命令 |
 |------|------|
@@ -123,8 +123,14 @@ class OutboundPort(Protocol):
 | 自检 | `/smoke` `/editcheck` |
 | 维护 | `/maintain [keep]` `/clean [keep]` |
 | 帮助 | `/help` |
+| **主机快照（READ）** | `/load` `/vps` `/htop` `/ps` `/disk` `/logs` `/service_status` `/git_status` |
+| **Agent 工具** | `/tools` `/diagnose [server\|bot\|logs\|quick]` `/restart telegram\|feishu\|maintain` `/audit_tools [n]` |
 
 加新命令 = 在 `COMMAND_TABLE` 加一行 + 写 handler；两侧 channel 同步。
+
+Telegram 路由：`bot.py` 为历史命令注册了显式 `CommandHandler`，之后挂一个
+generic `MessageHandler(filters.COMMAND, …)` fallback —— `COMMAND_TABLE`
+里新加的斜杠命令不需要在 `bot.py` 单独接线就能到达；显式注册的仍然优先。
 
 ---
 
@@ -201,9 +207,9 @@ Conveyor 在 transport 之上增加了 **结构化 tool registry** 和 **轻量 
 | 命令 | 说明 |
 |---|---|
 | `/diagnose [mode]` | hybrid 主机诊断 → Codex 分析（≠ `/diag` harness） |
-| `/restart telegram\|feishu\|maintain` | 映射白名单单元 → `service_restart` + 确认 |
-| `/tools` | 按 READ/WRITE 分组列出工具、确认规则、hybrid 示例 |
-| `/audit_tools [n]` | 读取 `audit/tools.log` 最近 n 条（只读） |
+| `/restart telegram\|feishu\|maintain` | 映射白名单单元 → `service_restart` + 确认；任意单元名直接拒 |
+| `/tools` | 按 READ/WRITE 分组列工具、确认规则、hybrid 示例 |
+| `/audit_tools [n]` | 读取 `audit/tools.log` 最近 n 条（默认 10，上限 50，**只读**） |
 
 ### 安全策略
 
@@ -214,7 +220,8 @@ Conveyor 在 transport 之上增加了 **结构化 tool registry** 和 **轻量 
 - 取消仍较宽松：`取消`、`算了`、`no` 等
 - 确认回调：`bot.py` 的 `CallbackQueryHandler(pattern=r"^tool:")`
 - `service_restart` 仅允许白名单单元：`conveyor-telegram-bot`、`conveyor-feishu-bot`、`conveyor-maintain.timer`
-- **审计**：`handlers/tools/audit.py` → `codex_memory_root/audit/tools.log`（requested/confirmed/cancelled/executed/rejected）；写入失败不阻断用户流程
+- **审计**：`handlers/tools/audit.py` → `codex_memory_root/audit/tools.log`（requested/confirmed/cancelled/executed/rejected）；`arg` 与结果预览都过 `redact_text` + `truncate`；写入失败不阻断用户流程
+- **自然语言 restart 防误触发**：`route_intent` 检测到 restart 模式但 `_extract_service_arg` 拿不到具体目标时，返回 `kind="llm"` 并附 `route.question`，由 Codex 反问目标，而不是隐式 default 到 `conveyor-telegram-bot`
 
 ### Legacy ops fast path
 
@@ -222,6 +229,48 @@ Slash 命令 `/load` `/vps` `/htop` `/ps` 等在 `COMMAND_TABLE` 注册。Telegr
 
 - **htop 意图保守**：仅在有运行/查看语境时匹配；编码/文档类提及 htop 走 LLM
 - **`/ps` 安全**：默认 comm 模式；`/ps full` 仅提示风险；`/ps full confirm` 才输出 args（仍 redact）
+
+### 6.6 Telegram 实时烟测（手动）
+
+`scripts/telegram_live_helpers_smoke.py` 覆盖纯函数（`redact`、`validate_restart_target`），**已**进入 `make smoke`。
+`scripts/telegram_live_smoke.py` 是真·端到端 live smoke —— 以 **真实 Telegram 用户**（Telethon 客户端）驱动运行中的 Conveyor bot。
+
+> **为什么不用 Bot API**：Bot API 自己发的消息不会触发自己的 `MessageHandler`，只能由真用户来发。
+
+**环境变量**：
+
+| 变量 | 必需 | 默认 |
+|---|---|---|
+| `TELEGRAM_API_ID` | ✅ | — |
+| `TELEGRAM_API_HASH` | ✅ | — |
+| `TELEGRAM_BOT_USERNAME` | ✅（或 `--bot`） | — |
+| `TELEGRAM_TEST_SESSION` | ❌ | `.telegram-live-smoke` |
+| `TELEGRAM_LIVE_TIMEOUT` | ❌ | 45s |
+| `TELEGRAM_LIVE_ALLOW_RESTART` | ❌（双门控 #1） | 未设置 |
+| `TELEGRAM_LIVE_RESTART_TARGET` | ❌ | `telegram` |
+
+**运行**：
+
+```bash
+pip install telethon
+export TELEGRAM_API_ID=...
+export TELEGRAM_API_HASH=...
+export TELEGRAM_BOT_USERNAME=your_bot_username
+.venv/bin/python scripts/telegram_live_smoke.py --quick
+.venv/bin/python scripts/telegram_live_smoke.py --full
+```
+
+`--quick` 6 个安全断言；`--full` 增加 Codex 路径与 restart 取消流程。
+Live 脚本本身**不在** `make smoke` 里 —— 它需要真凭据 + 真 Telethon。
+
+**Restart 安全门**：
+
+1. 默认所有 restart-creating 命令后立即发 `取消`，bot 不重启。
+2. 真正重启需 `TELEGRAM_LIVE_ALLOW_RESTART=1` **与** CLI `--allow-restart` 同时打开；
+   即便打开，target 也只接受白名单 `telegram|feishu|maintain`，并且要看到至少一条 bot 回复才 PASS。
+3. 脚本不会打印 bot token、api hash、session 路径或 `.env` 内容；`.telegram-live-smoke*` 与 `*.session` 已被 `.gitignore` 屏蔽。
+
+**退出码**：`0` 通过 / `1` 有失败 / `2` 缺 telethon 或缺 env / `3` 连接/认证失败。
 
 ---
 
@@ -239,10 +288,14 @@ make smoke
   │   telegram_command_fallback_smoke / confirm_strict_smoke / ps_full_smoke
   │   diagnose_command_smoke / restart_alias_smoke / tools_output_smoke
   │   confirmation_context_smoke / tool_audit_smoke / audit_tools_smoke
+  │   telegram_live_helpers_smoke
+  │   docs_consistency_smoke
   └── command_harness
       38 用例，驱动 handlers.dispatch + FakeOutbound + FakeRunner
       （不再用 FakeUpdate / FakeMessage / FakeContext）
 ```
+
+`scripts/telegram_live_smoke.py` **不**在 `make smoke` 里 —— 它是手动 live 脚本，需要真 Telegram 凭据 + Telethon。
 
 `channel/telegram_smoke.py` / `channel/feishu_smoke.py` 是 P2.1 的目标——目前两个 channel adapter 还在 `bot.py` / `feishu_bot.py` 内联。
 
@@ -255,11 +308,55 @@ make smoke
 | P0 抽 handler、零行为变化 | ✅ | `8828489` |
 | P1 命令表统一 + harness 迁移 | ✅ | `8828489` |
 | P1.x dedupe 收尾（不重复发 summary） | ✅ | `09ab931` |
+| Agent 工具层（registry / router / runner / confirm / audit） | ✅ | `eddf1ba` |
+| 主机快照 fast path（`/load` `/vps` `/htop` `/ps` `/disk` `/logs` `/service_status` `/git_status`） | ✅ | — |
+| `/diagnose` + `/restart` 别名 + `/audit_tools` | ✅ | — |
+| Telegram 实时烟测（真用户，Telethon） | ✅ | `eddf1ba` |
+| 文档中英同步 | ✅ | （本次） |
 | P2.1 Adapter 独立文件 | ⏳ backlog | — |
 | P2.2 飞书 progress 卡片 / throttle | ⏳ backlog | — |
 | P2.3 onboarding 移入 `handlers/onboarding.py` | ⏳ backlog | — |
 | P2.4 单进程双通道 | ⏳ backlog | — |
 | Session 摘要（多轮接着聊） | ⏳ backlog | — |
+| 审计日志轮转 | ⏳ backlog | — |
+
+---
+
+## 9. 下一批 backlog 候选
+
+按"投入产出比"排序。**推荐落地顺序**：P2.1 → P2.2 → P2.4；
+P2.3、P2.5 看机会顺手做。
+
+### P2.1 Adapter 拆分（优先）
+
+- 把 Telegram 出站适配器从 `bot.py` 抽到 `channel/telegram.py`
+- 把 Feishu 适配器从 `feishu_bot.py` 抽到 `channel/feishu.py`
+- 补 `channel/telegram_smoke.py` / `channel/feishu_smoke.py`
+- 理由：`bot.py` 太大；channel 行为目前难以单独测试
+
+### P2.2 飞书 progress 卡片 / throttle（次之）
+
+- 如果飞书 API 支持，Feishu `edit_progress` 走卡片更新
+- 否则降级到 throttle 后的 `send_new`
+- 理由：飞书目前退化成连发新消息
+
+### P2.3 onboarding 抽离
+
+- 把 onboarding 状态机从 `bot.py` 挪到 `handlers/onboarding.py`（或 channel-aware handler）
+- 理由：`bot.py` 太大
+
+### P2.4 session 摘要（再次之）
+
+- 轻量 per-chat session 摘要，**不**是完整 DB
+- 把最近 N 轮 / tool 事实存到 `codex_memory_root/session`
+- 在 Codex prompt 里注入紧凑上下文，支持「接着刚才那个 / continue」
+- 理由：目前每条消息都开新 job
+
+### P2.5 审计日志轮转
+
+- 按大小或日期轮转 `audit/tools.log`
+- 若启用 `/audit_tools clear`，必须挂在确认流程之后
+- 理由：审计 JSONL 无限增长；目前没有保留策略
 
 ---
 
@@ -267,6 +364,7 @@ make smoke
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| 2.0 | 2026-06-11 | 加 agent 工具层、Telegram live smoke、backlog；中英同步 |
 | 1.0 | 2026-06-09 | 合并原 `001` + `003`；改名 Conveyor |
 | 0.9 | 2026-06-09 | 原 `003-channel-decoupling.md`（P0+P1 设计稿 + 落地） |
 | 0.1 | 2026-06-09 | 原 `001-hermes-learning-and-chat-mode.md`（Hermes 对照 + chat-first） |

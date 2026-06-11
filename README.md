@@ -391,6 +391,11 @@ make smoke-all       # also runs scripts that need a populated .env
 merged. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the commit and
 PR style.
 
+For design notes — runtime layout, channel types, the agent tool
+layer, command table, harness matrix, and backlog — see
+[`docs/architecture.en.md`](docs/architecture.en.md) (or the Chinese
+version: [`docs/architecture.md`](docs/architecture.md)).
+
 ---
 
 ## 8. Troubleshooting

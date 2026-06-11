@@ -335,6 +335,9 @@ make smoke-all       # 还会跑要 .env 的脚本
 
 `make smoke` 是发布前门禁，红了不能合。详见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
+设计笔记（运行时结构、通道类型、agent 工具层、命令表、harness 矩阵、backlog）见
+[`docs/architecture.md`](docs/architecture.md)（英文版：[`docs/architecture.en.md`](docs/architecture.en.md)）。
+
 ---
 
 ## 8. 故障排查
