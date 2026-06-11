@@ -1,0 +1,68 @@
+# .github/workflows/deploy.yml — auto-deploy to VPS on push to main.
+#
+# Required GitHub secrets:
+#   VPS_HOST       — VPS hostname or IP
+#   VPS_USER       — SSH user (prefer a dedicated deploy user)
+#   VPS_SSH_KEY    — private key for the deploy user
+#
+# Optional secrets:
+#   VPS_PORT       — SSH port (default 22)
+#   CONVEYOR_DEPLOY_PATH — repo root on VPS (default /opt/conveyor)
+#
+# VPS one-time setup:
+#   1. Clone repo at /opt/conveyor
+#   2. Create .env on VPS (never committed)
+#   3. Create .venv with dependencies
+#   4. Install systemd services: conveyor-telegram-bot, conveyor-feishu-bot
+#   5. Grant deploy user passwordless sudo for:
+#        systemctl restart conveyor-telegram-bot
+#        systemctl restart conveyor-feishu-bot
+#        systemctl status  conveyor-telegram-bot
+#        systemctl status  conveyor-feishu-bot
+#
+# Security:
+#   - No secrets are hardcoded; all come from GitHub Actions secrets.
+#   - The deploy script never prints .env.
+#   - known_hosts is populated from the VPS fingerprint to prevent MITM.
+
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Install SSH key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.VPS_SSH_KEY }}
+          known_hosts: unnecessary  # we scan below
+          if_key_exists: replace
+
+      - name: Add VPS to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p ${{ secrets.VPS_PORT || 22 }} -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy via SSH
+        env:
+          DEPLOY_PATH: ${{ secrets.CONVEYOR_DEPLOY_PATH || '/opt/conveyor' }}
+        run: |
+          ssh -p ${{ secrets.VPS_PORT || 22 }} \
+              ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+              "CONVEYOR_DEPLOY_PATH=${DEPLOY_PATH} bash ${DEPLOY_PATH}/scripts/deploy_vps.sh"
+
+      - name: Report failure
+        if: failure()
+        run: |
+          echo "::error::VPS deploy failed. Check the SSH step output above."

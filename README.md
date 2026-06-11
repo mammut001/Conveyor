@@ -444,6 +444,82 @@ The script never prints bot tokens, api hash, session paths, or
 
 ---
 
+## Automatic VPS deploy (GitHub Actions)
+
+When you push to `main`, GitHub Actions SSHs into the VPS, pulls the
+latest code, runs smoke tests, and restarts services — all in one
+step. Smoke failure prevents the restart.
+
+### Required GitHub secrets
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `VPS_HOST` | yes | VPS hostname or IP |
+| `VPS_USER` | yes | SSH user (prefer a dedicated deploy user) |
+| `VPS_SSH_KEY` | yes | Private key for the deploy user |
+| `VPS_PORT` | no | SSH port (default 22) |
+| `CONVEYOR_DEPLOY_PATH` | no | Repo root on VPS (default `/opt/conveyor`) |
+
+### VPS one-time setup
+
+1. Clone the repo at `/opt/conveyor`:
+   ```bash
+   sudo mkdir -p /opt/conveyor
+   sudo chown $USER /opt/conveyor
+   git clone https://github.com/mammut001/Conveyor.git /opt/conveyor
+   ```
+2. Create `.env` on the VPS (never commit it).
+3. Create `.venv` and install dependencies:
+   ```bash
+   cd /opt/conveyor
+   python3 -m venv .venv
+   .venv/bin/pip install -r requirements.txt
+   ```
+4. Install systemd services:
+   ```bash
+   sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
+   sudo cp systemd/conveyor-feishu-bot.service   /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable conveyor-telegram-bot conveyor-feishu-bot
+   ```
+5. Grant the deploy user passwordless sudo for exactly these commands:
+   ```
+   # /etc/sudoers.d/conveyor-deploy
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart conveyor-telegram-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart conveyor-feishu-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-telegram-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-feishu-bot
+   ```
+
+### Manual deploy test
+
+```bash
+ssh user@host 'bash /opt/conveyor/scripts/deploy_vps.sh'
+```
+
+### How it works
+
+1. GitHub Actions triggers on every push to `main` (or manual dispatch).
+2. It SSHs into the VPS and runs `scripts/deploy_vps.sh`.
+3. The script:
+   - acquires a `flock` lock (no concurrent deploys)
+   - `git fetch origin main && git reset --hard origin/main`
+   - runs `make smoke`
+   - if smoke passes: restarts `conveyor-telegram-bot` + `conveyor-feishu-bot`
+   - if smoke fails: exits nonzero, services are NOT restarted
+4. `.env` is never printed or committed.
+
+### Limitations
+
+- The live Telegram smoke (`scripts/telegram_live_smoke.py`) is NOT
+  run automatically — it needs real Telegram credentials and is
+  manual-only.
+- The deploy script assumes `.venv` already exists on the VPS. If
+  you need to bootstrap a fresh VPS, run `scripts/install-remote.sh`
+  first.
+
+---
+
 ## 9. License
 
 MIT — see [`LICENSE`](LICENSE).

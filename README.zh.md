@@ -384,6 +384,79 @@ TELEGRAM_LIVE_ALLOW_RESTART=1 \
 
 ---
 
+## 自动 VPS 部署（GitHub Actions）
+
+推送到 `main` 后，GitHub Actions 会自动 SSH 到 VPS，拉取最新代码，
+运行 smoke 测试，重启服务 —— 一步到位。smoke 失败则不重启。
+
+### 所需 GitHub secrets
+
+| Secret | 必填 | 说明 |
+|--------|------|------|
+| `VPS_HOST` | 是 | VPS 主机名或 IP |
+| `VPS_USER` | 是 | SSH 用户（建议专用 deploy 用户） |
+| `VPS_SSH_KEY` | 是 | deploy 用户的私钥 |
+| `VPS_PORT` | 否 | SSH 端口（默认 22） |
+| `CONVEYOR_DEPLOY_PATH` | 否 | VPS 上的 repo 根目录（默认 `/opt/conveyor`） |
+
+### VPS 一次性配置
+
+1. 克隆仓库到 `/opt/conveyor`：
+   ```bash
+   sudo mkdir -p /opt/conveyor
+   sudo chown $USER /opt/conveyor
+   git clone https://github.com/mammut001/Conveyor.git /opt/conveyor
+   ```
+2. 在 VPS 上创建 `.env`（永远不要提交）。
+3. 创建 `.venv` 并安装依赖：
+   ```bash
+   cd /opt/conveyor
+   python3 -m venv .venv
+   .venv/bin/pip install -r requirements.txt
+   ```
+4. 安装 systemd 服务：
+   ```bash
+   sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
+   sudo cp systemd/conveyor-feishu-bot.service   /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable conveyor-telegram-bot conveyor-feishu-bot
+   ```
+5. 为 deploy 用户配置 sudoers（仅限这几条命令）：
+   ```
+   # /etc/sudoers.d/conveyor-deploy
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart conveyor-telegram-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart conveyor-feishu-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-telegram-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-feishu-bot
+   ```
+
+### 手动测试部署
+
+```bash
+ssh user@host 'bash /opt/conveyor/scripts/deploy_vps.sh'
+```
+
+### 工作流程
+
+1. 每次推送到 `main`（或手动触发）都会触发 GitHub Actions。
+2. Actions SSH 到 VPS，运行 `scripts/deploy_vps.sh`。
+3. 脚本流程：
+   - 获取 `flock` 锁（防止并发部署）
+   - `git fetch origin main && git reset --hard origin/main`
+   - 运行 `make smoke`
+   - smoke 通过：重启 `conveyor-telegram-bot` + `conveyor-feishu-bot`
+   - smoke 失败：退出非零，**不重启**服务
+4. `.env` 永远不会被打印或提交。
+
+### 限制
+
+- 实时 Telegram 烟测（`scripts/telegram_live_smoke.py`）**不会**自动运行 ——
+  它需要真实 Telegram 凭据，仅限手动。
+- 部署脚本假设 VPS 上已有 `.venv`。如果需要初始化新 VPS，
+  请先运行 `scripts/install-remote.sh`。
+
+---
+
 ## 9. 许可证
 
 MIT — 见 [`LICENSE`](LICENSE)。
