@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,9 @@ except ImportError:  # pragma: no cover - production installs python-dotenv
             key, value = line.split("=", 1)
             os.environ.setdefault(key.strip(), value.strip().strip("'\""))
         return True
+
+
+logger = logging.getLogger("conveyor.config")
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,20 @@ class Settings:
     lark_app_id: str | None = None
     lark_app_secret: str | None = None
     lark_allowed_open_id: str | None = None
+    # Progress verbosity for the Codex streaming UX.
+    # verbose → every Codex event (prose, tool indicator, thinking,
+    #          tool-pulse) is forwarded to the chat (debug-friendly).
+    # compact (default) → suppress intermediate agent prose; only
+    #          tool indicators, thinking indicator, and tool-pulse
+    #          reach the chat. The final summary is still sent.
+    # quiet   → no intermediate progress at all; only the initial
+    #          placeholder and the final summary reach the chat.
+    # Invalid env values fall back to "compact" with a warning.
+    conveyor_progress_mode: str = "compact"
+
+
+VALID_PROGRESS_MODES = ("verbose", "compact", "quiet")
+DEFAULT_PROGRESS_MODE = "compact"
 
 
 def _required(name: str) -> str:
@@ -68,6 +86,22 @@ def _int_env(name: str, default: int | None = None) -> int:
         return int(value)
     except ValueError as exc:
         raise RuntimeError(f"{name} must be an integer") from exc
+
+
+def _progress_mode_env(name: str, default: str) -> str:
+    """Read CONVEYOR_PROGRESS_MODE. Unknown values fall back to
+    ``default`` with a logged warning; this is intentionally lenient
+    so a typo in .env does not brick a deploy."""
+    value = (os.getenv(name) or "").strip().lower()
+    if not value:
+        return default
+    if value not in VALID_PROGRESS_MODES:
+        logger.warning(
+            "%s=%r is not one of %s; falling back to %r",
+            name, value, list(VALID_PROGRESS_MODES), default,
+        )
+        return default
+    return value
 
 
 def _int_list_env(name: str, default: tuple[int, ...] = ()) -> tuple[int, ...]:
@@ -178,6 +212,9 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "operator_language": operator_language,
         "operator_style": operator_style,
         "operator_standing": operator_standing,
+        "conveyor_progress_mode": _progress_mode_env(
+            "CONVEYOR_PROGRESS_MODE", DEFAULT_PROGRESS_MODE,
+        ),
     }
 
 

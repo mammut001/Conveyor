@@ -22,6 +22,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -183,6 +184,10 @@ def _test_dispatch_load_phrase_skips_codex() -> CheckResult:
         runner.start = mock.AsyncMock(side_effect=AssertionError("runner.start should NOT be called"))
         runner.append_memo = mock.AsyncMock(side_effect=AssertionError("not memo"))
         runner.classify_memo = mock.AsyncMock(side_effect=AssertionError("not memo"))
+        # handlers/jobs reads runner.settings.conveyor_progress_mode
+        # (round 10). Mirror the production Settings default so the
+        # mock looks like a real runner.
+        runner.settings = SimpleNamespace(conveyor_progress_mode="verbose")
         asyncio.run(dispatch(_msg("看看我的负载"), port, _settings(), runner))
         runner.start.assert_not_called()
         if not any("VPS" in r or "负载" in r for r in port.replies):
@@ -200,12 +205,14 @@ def _test_dispatch_htop_phrase_skips_codex() -> CheckResult:
         runner.start = mock.AsyncMock(side_effect=AssertionError("runner.start should NOT be called"))
         runner.append_memo = mock.AsyncMock(side_effect=AssertionError("not memo"))
         runner.classify_memo = mock.AsyncMock(side_effect=AssertionError("not memo"))
+        runner.settings = SimpleNamespace(conveyor_progress_mode="verbose")
         asyncio.run(dispatch(_msg("帮我运行 htop 看看我的vps"), port, _settings(), runner))
         runner.start.assert_not_called()
         if not any("TUI" in r or "top" in r.lower() for r in port.replies):
             return CheckResult(name, False, f"port.replies={port.replies!r}")
         return CheckResult(name, True, "no CodexRunner.start, htop reply sent")
     except Exception as exc:
+        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
 
 
@@ -224,6 +231,7 @@ def _test_dispatch_coding_request_calls_codex() -> CheckResult:
         runner.start = fake_start
         runner.append_memo = mock.AsyncMock()
         runner.classify_memo = mock.AsyncMock()
+        runner.settings = SimpleNamespace(conveyor_progress_mode="verbose")
         asyncio.run(dispatch(_msg("写个 quicksort"), port, _settings(), runner))
         # Codex reply path: placeholder + possibly send_new final.
         if not any("收到" in r or "ok" in r.lower() for r in port.replies + port.replies):
@@ -239,6 +247,7 @@ def _test_dispatch_slash_load_routes_to_command_table() -> CheckResult:
         port = FakeOutbound()
         runner = mock.Mock(spec=CodexRunner)
         runner.start = mock.AsyncMock(side_effect=AssertionError("runner.start should NOT be called"))
+        runner.settings = SimpleNamespace(conveyor_progress_mode="verbose")
         asyncio.run(dispatch(_msg("/load"), port, _settings(), runner))
         runner.start.assert_not_called()
         if not any("VPS" in r for r in port.replies):

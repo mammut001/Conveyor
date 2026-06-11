@@ -340,6 +340,46 @@ Exit codes:
 - `2` missing optional dependency (telethon) or required env config
 - `3` Telethon connection / auth error
 
+## 6.7 Progress verbosity policy
+
+Codex streaming events are noisy on the chat surface: placeholder,
+"我这就帮你查一下。" style agent prose, "🔧 curl..." tool
+indicators, the round-5 thinking indicator, and the round-6 tool
+pulse can each become a fresh bubble. Feishu cannot edit_progress,
+so every progress becomes a new message and the user sees
+"⏳ Got it / Sure, looking into it / 🔧 curl / By the way... / 🔧
+curl / final".
+
+A new env var `CONVEYOR_PROGRESS_MODE` (default `compact`) controls
+the verbosity:
+
+| mode | prose progress | tool indicator | thinking indicator | tool pulse | fallback after edit failure |
+| --- | --- | --- | --- | --- | --- |
+| `verbose` (debug) | sent | sent | sent | sent | legacy: every progress is a new message |
+| `compact` (default) | **dropped** | sent | sent | sent | **at most one** "仍在处理..." line |
+| `quiet` | dropped | dropped | dropped | dropped | nothing |
+
+`handlers/jobs.py::progress()` also enforces the policy a second
+time, and the final `job.summary` is still sent exactly once (with
+the existing strip-based de-dup vs `last_progress`). Feishu
+benefits the most: under `quiet` the user sees only the placeholder
+and the final answer, with no "curl/curl/curl" chain.
+
+**Configuration**:
+
+- `CONVEYOR_PROGRESS_MODE=verbose|compact|quiet`
+- Default: `compact`
+- Unknown values fall back to `compact` with a warning so a bad
+  `.env` cannot brick a deploy.
+
+**Tests**:
+
+- `scripts/jobs_progress_mode_smoke.py` — 6 behavior groups + config
+  parsing (19/19 case).
+- The older `scripts/progress_smoke.py` and
+  `scripts/jobs_dedupe_smoke.py` force `verbose` to pin the legacy
+  contract; their behavior is unchanged.
+
 `scripts/telegram_live_helpers_smoke.py` covers the pure helpers
 (`redact`, `validate_restart_target`) and **is** part of
 `make smoke`; the live script itself is manual only.
@@ -364,6 +404,7 @@ make smoke
   │     docs_consistency_smoke
   │     channel_telegram_smoke / channel_feishu_smoke
   │     import_boundary_smoke
+  │     jobs_progress_mode_smoke        ← CONVEYOR_PROGRESS_MODE, 6 groups
   └── command_harness
         38 cases, drives handlers.dispatch + FakeOutbound + FakeRunner
         (no more FakeUpdate / FakeMessage / FakeContext)
@@ -394,6 +435,7 @@ statically by `import_boundary_smoke.py`.
 | Telegram live smoke (real user, Telethon) | done | `eddf1ba` |
 | docs bilingual sync | done | (this task) |
 | P2.1 Adapter split (`channel/telegram.py`, `channel/feishu.py`) | done | (this task) |
+| `CONVEYOR_PROGRESS_MODE` (verbose/compact/quiet) | done | (this task) |
 | P2.2 Feishu progress card / throttle | backlog | — |
 | P2.3 Onboarding extraction | backlog | — |
 | P2.4 Single-process dual-channel | backlog | — |
@@ -428,9 +470,16 @@ picked up opportunistically.
 
 ### P2.2 Feishu progress card / throttle (second)
 
-- Implement Feishu `edit_progress` via card update if the API supports it.
-- Fallback to throttled `send_new` to keep progress messages reasonable.
-- Rationale: Feishu currently degrades to a stream of new messages.
+- Current state: `channel/feishu.py::FeishuOutbound.edit_progress`
+  always returns `False`, so under `compact`/`quiet` the placeholder
+  edit failure produces at most one fallback "仍在处理..." line.
+- If Feishu eventually supports patching message cards, point
+  `edit_progress` at the card-update API and re-enable in-place
+  edits.
+- If only full re-sends are supported, the mode-aware cap already
+  in place (≤ 1 line in compact, 0 in quiet) is enough.
+- Rationale: `CONVEYOR_PROGRESS_MODE=quiet` already eliminates the
+  spam; the priority is lower than it was pre-P2.7.
 
 ### P2.3 Onboarding extraction
 
@@ -456,5 +505,6 @@ picked up opportunistically.
 
 | Version | Date | Notes |
 |---|---|---|
+| 2.1 | 2026-06-11 | Added `CONVEYOR_PROGRESS_MODE` (verbose/compact/quiet); compact mode fixes the Feishu progress chain; section 6.7 + harness + backlog updated. |
 | 2.0 | 2026-06-11 | English translation, added agent tool layer, Telegram live smoke, bilingual sync. |
 | 1.0 | 2026-06-09 | Original Chinese architecture doc. |

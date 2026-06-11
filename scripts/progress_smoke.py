@@ -32,6 +32,39 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.harness_common import CheckResult, print_results
 
 
+# This smoke is dedicated to the round-by-round streaming contract
+# (prose dedup, thinking indicator, tool pulse, etc.). Force
+# CONVEYOR_PROGRESS_MODE=verbose for the entire smoke so the
+# historical prose forwarding path is exercised exactly as it was
+# before the round-10 mode filter was added. New behavior for
+# compact/quiet is covered by the dedicated
+# scripts/jobs_progress_mode_smoke.py.
+import config as _config_mod  # noqa: E402
+import runner as _runner_mod  # noqa: E402
+import runner.streaming as _streaming_mod  # noqa: E402
+
+def _force_verbose(_mode: str) -> bool:  # noqa: ANN001
+    return True
+
+# Patch the two places that consult the mode so legacy smoke
+# behavior is preserved even if a future call site bypasses the
+# streaming filter.
+_streaming_mod._progress_mode_allows_prose = _force_verbose
+if hasattr(_runner_mod, "_progress_mode_allows_prose"):
+    _runner_mod._progress_mode_allows_prose = _force_verbose
+# Also override the per-Default at the dataclass level so a fresh
+# Settings() created mid-smoke without explicit overrides still
+# lands in verbose.
+try:
+    from dataclasses import fields as _dc_fields
+    for _f in _dc_fields(_config_mod.Settings):
+        if _f.name == "conveyor_progress_mode":
+            object.__setattr__(_f, "default", "verbose")
+            break
+except Exception:  # pragma: no cover - dataclass manipulation
+    pass
+
+
 # After the runner/ package refactor, the CodexRunner class
 # shell lives in runner/core.py and the methods live as top-
 # level functions in their focused modules. The class is

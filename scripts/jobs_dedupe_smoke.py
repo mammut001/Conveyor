@@ -46,6 +46,17 @@ from runner import JobMode
 from scripts.harness_common import CheckResult, print_results
 
 
+# This smoke is dedicated to the historical "summary dedup" contract:
+# every progress the runner emitted should be visible in port.sent_new
+# (one entry each), and the final summary should not be re-sent when
+# it matches the last progress. The compact/quiet mode filter is
+# separately covered by scripts/jobs_progress_mode_smoke.py. Pin this
+# smoke to verbose so it does not flake on the new mode.
+import handlers.jobs as _jobs_mod  # noqa: E402
+
+_jobs_mod._normalize_mode = lambda _m: "verbose"  # type: ignore[assignment]
+
+
 HANDLERS_JOBS_PY = Path(__file__).resolve().parents[1] / "handlers" / "jobs.py"
 
 

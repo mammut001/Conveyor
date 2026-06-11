@@ -272,6 +272,31 @@ Live 脚本本身**不在** `make smoke` 里 —— 它需要真凭据 + 真 Tel
 
 **退出码**：`0` 通过 / `1` 有失败 / `2` 缺 telethon 或缺 env / `3` 连接/认证失败。
 
+## 6.7 Progress verbosity 策略
+
+Codex 流式事件在 chat 表面太吵：占位符、`我这就帮你查一下。` 这样的 agent prose、`🔧 curl...` 工具提示、round-5 thinking indicator、round-6 tool-pulse 会接二连三冒泡。Feishu 这边 `edit_progress` 又不能真编辑，每次都得 send_new，于是用户看到一长串「⏳ 收到 / 我这就帮你 / 🔧 curl / 顺便再看看 / 🔧 curl / final」。
+
+新增一个环境变量 `CONVEYOR_PROGRESS_MODE`（默认 `compact`）控制 verbosity：
+
+| 模式 | prose 进度 | tool indicator | thinking indicator | tool pulse | edit 失败后 fallback |
+| --- | --- | --- | --- | --- | --- |
+| `verbose`（debug） | 发 | 发 | 发 | 发 | 沿用旧逻辑：每次都 send_new（继续 spam） |
+| `compact`（默认） | **不发** | 发 | 发 | 发 | **最多 1 条** `仍在处理...` |
+| `quiet` | 不发 | 不发 | 不发 | 不发 | 不发任何中间消息 |
+
+`handlers/jobs.py` 的 `progress()` 内部仍再做一次 mode-aware 过滤，**最终**仍会发出一次 `job.summary`（与 `last_progress` 去重）。Feishu 受益最大：`quiet` 下只有 placeholder + final answer，**没有**「curl/curl/curl」链。
+
+**配置**：
+
+- `CONVEYOR_PROGRESS_MODE=verbose|compact|quiet`
+- 默认 `compact`
+- 非法值会 fallback 到 `compact` 并打 warning，不会让坏 .env 把部署搞挂
+
+**测试**：
+
+- `scripts/jobs_progress_mode_smoke.py` —— 6 类 behavior + config 解析（19/19 case）。
+- 老的 `scripts/progress_smoke.py` 与 `scripts/jobs_dedupe_smoke.py` 强制走 verbose 模式 pin 旧契约，行为不变。
+
 ---
 
 ## 7. Harness 矩阵
@@ -292,6 +317,7 @@ make smoke
   │   docs_consistency_smoke
   │   channel_telegram_smoke / channel_feishu_smoke
   │   import_boundary_smoke
+  │   jobs_progress_mode_smoke        ← CONVEYOR_PROGRESS_MODE 6 类
   └── command_harness
       38 用例，驱动 handlers.dispatch + FakeOutbound + FakeRunner
       （不再用 FakeUpdate / FakeMessage / FakeContext）
@@ -346,9 +372,12 @@ P2.3、P2.5 看机会顺手做。
 
 ### P2.2 飞书 progress 卡片 / throttle（次之）
 
-- 如果飞书 API 支持，Feishu `edit_progress` 走卡片更新
-- 否则降级到 throttle 后的 `send_new`
-- 理由：飞书目前退化成连发新消息
+- 现状：飞书 `edit_progress` 永远返回 False，所以 compact/quiet 模式
+  下 placeholder 编辑失败后只发 1 条 fallback「仍在处理…」。
+- 如果飞书 API 后续支持消息卡片 patch，可把
+  `channel/feishu.py::FeishuOutbound.edit_progress` 改为卡片 update。
+- 如果只支持完全重发，**保留** mode-aware 限流（compact ≤ 1 条）即可。
+- 理由：现在用 `CONVEYOR_PROGRESS_MODE=quiet` 已经把 spam 压到 0，落地优先级降低。
 
 ### P2.3 onboarding 抽离
 
@@ -375,6 +404,7 @@ P2.3、P2.5 看机会顺手做。
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | 2.0 | 2026-06-11 | 加 agent 工具层、Telegram live smoke、backlog；中英同步 |
+| 2.1 | 2026-06-11 | 加 `CONVEYOR_PROGRESS_MODE`（verbose/compact/quiet）；compact 修 Feishu progress 链；同步 6.7 节、harness、backlog |
 | 1.0 | 2026-06-09 | 合并原 `001` + `003`；改名 Conveyor |
 | 0.9 | 2026-06-09 | 原 `003-channel-decoupling.md`（P0+P1 设计稿 + 落地） |
 | 0.1 | 2026-06-09 | 原 `001-hermes-learning-and-chat-mode.md`（Hermes 对照 + chat-first） |

@@ -49,7 +49,17 @@ from runner.operators.run import validate, start, cancel, _run_job, _run_codex_a
 
 from runner.prefetch import _tool_registry_text, _operator_profile_text, _prefetch_memory, today_memory_text, list_journal, _now_local_str
 
-from runner.streaming import _is_reasoning_event, _is_tool_call_start_event, _is_tool_call_complete_event, _read_jsonl_stdout, _read_stderr, _capture_usage, _event_summary
+from runner.streaming import (
+    _is_prose_event_text,
+    _is_reasoning_event,
+    _is_tool_call_start_event,
+    _is_tool_call_complete_event,
+    _progress_mode_allows_prose,
+    _read_jsonl_stdout,
+    _read_stderr,
+    _capture_usage,
+    _event_summary,
+)
 
 from runner.worktree import _create_worktree, _user_today, _today_worktree_path, _memory_path, _memory_context_text, _ensure_today_worktree, _remove_worktree, _copy_untracked_files, _git, cleanup_job_worktree
 
@@ -110,6 +120,8 @@ for _name, _func in [
     ("_is_reasoning_event", _is_reasoning_event),
     ("_is_tool_call_start_event", _is_tool_call_start_event),
     ("_is_tool_call_complete_event", _is_tool_call_complete_event),
+    ("_is_prose_event_text", _is_prose_event_text),
+    ("_progress_mode_allows_prose", _progress_mode_allows_prose),
     ("_read_jsonl_stdout", _read_jsonl_stdout),
     ("_read_stderr", _read_stderr),
     ("_capture_usage", _capture_usage),

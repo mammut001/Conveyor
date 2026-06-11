@@ -101,6 +101,15 @@ async def _read_jsonl_stdout(
     # the rest of the stream. This is a one-shot bypass, not a
     # permanent lowering of the cooldown.
     last_sent = -self.settings.telegram_progress_seconds
+    # Round-10 progress verbosity gate. Read once per stream so the
+    # mode is stable for the whole job. ``quiet`` drops ALL
+    # intermediate progress (placeholder survives untouched until
+    # the final summary in handlers/jobs.py). ``compact`` drops
+    # only agent prose; tool indicators, the thinking indicator,
+    # and the tool-pulse still reach the chat. ``verbose`` is the
+    # historical behavior.
+    progress_mode = (self.settings.conveyor_progress_mode or "compact").lower()
+    prose_allowed = _progress_mode_allows_prose(progress_mode)
     # Consecutive-same-text dedup: when codex emits
     # ``item.started`` + ``item.completed`` for the same tool call in
     # quick succession (typical for a short shell command), the
@@ -250,19 +259,10 @@ async def _read_jsonl_stdout(
             # is deduped; in practice a non-reasoning event resets
             # the chain before the dedup is reached.
             if (
-                thinking_since is not None
-                and not thinking_indicator_sent
-                and now - thinking_since >= THINKING_THRESHOLD_SECONDS
-                and now - last_sent >= self.settings.telegram_progress_seconds
-            ):
-                last_sent = now
-                last_sent_text = THINKING_INDICATOR
-                thinking_indicator_sent = True
-                await on_progress(truncate(THINKING_INDICATOR, 1200))
-            if (
                 event_text
                 and event_text != last_sent_text
                 and self._should_send_event_progress(event_text, event_obj)
+                and (prose_allowed or not self._is_prose_event_text(event_text))
                 and now - last_sent >= self.settings.telegram_progress_seconds
                 and growing_ok
             ):
@@ -271,6 +271,20 @@ async def _read_jsonl_stdout(
                 if is_prose:
                     last_prose_text = None if is_prose_complete else event_text
                 await on_progress(truncate(event_text, 1200))
+            # Round-5 thinking indicator (kept identical to the prior
+            # version except the mode gate). ``quiet`` drops it
+            # entirely; ``compact``/``verbose`` keep it.
+            if (
+                progress_mode != "quiet"
+                and thinking_since is not None
+                and not thinking_indicator_sent
+                and now - thinking_since >= THINKING_THRESHOLD_SECONDS
+                and now - last_sent >= self.settings.telegram_progress_seconds
+            ):
+                last_sent = now
+                last_sent_text = THINKING_INDICATOR
+                thinking_indicator_sent = True
+                await on_progress(truncate(THINKING_INDICATOR, 1200))
             # Round-6 tool-pulse send. Only fires after
             # ``TOOL_PULSE_THRESHOLD_SECONDS`` of an active tool call
             # and re-arms every ``TOOL_PULSE_INTERVAL_SECONDS`` until
@@ -281,9 +295,12 @@ async def _read_jsonl_stdout(
             # is not updated on the pulse so a tool-call summary
             # that lands right after the pulse still surfaces (the
             # prose gate's growing_ok / event_text != last_sent_text
-            # rules apply normally).
+            # rules apply normally). In ``quiet`` mode the pulse is
+            # suppressed (final summary is the only user-facing
+            # intermediate); in ``verbose`` it works as before.
             if (
-                pending_tool_name is not None
+                progress_mode != "quiet"
+                and pending_tool_name is not None
                 and pending_tool_since is not None
                 and now - pending_tool_since >= TOOL_PULSE_THRESHOLD_SECONDS
                 and (last_pulse_at is None or now - last_pulse_at >= TOOL_PULSE_INTERVAL_SECONDS)
@@ -379,6 +396,39 @@ TOOL_PULSE_THRESHOLD_SECONDS = 4.0
 
 
 TOOL_PULSE_INTERVAL_SECONDS = 4.0
+
+
+# Progress verbosity policy. ``verbose`` forwards every event
+# category to the chat (current behavior); ``compact`` (default)
+# forwards only tool indicators, the thinking indicator, and tool
+# pulses — not the agent's streaming prose; ``quiet`` forwards
+# nothing intermediate. ``is_prose_event`` is the only event
+# classification the streaming layer needs: tool calls, the
+# thinking indicator, and tool pulses are already a different
+# code path that does not go through this gate.
+def _is_prose_event_text(self, event_text: str) -> bool:
+    """True when the event_text we are about to forward is a chunk
+    of agent prose (top-level message / summary / text / delta or
+    ``agent_message`` text) rather than a tool indicator, thinking
+    indicator, or tool pulse.
+
+    Used by the ``CONVEYOR_PROGRESS_MODE`` filter in
+    ``_read_jsonl_stdout`` to drop prose in compact/quiet modes.
+    A leading ``🔧`` means a tool indicator; ``💭`` means the
+    thinking indicator; any other text from ``_event_summary`` is
+    prose.
+    """
+    if not event_text:
+        return False
+    if event_text.startswith("🔧") or event_text.startswith("\U0001f527"):
+        return False
+    if event_text.startswith("💭") or event_text.startswith("\U0001f4ad"):
+        return False
+    return True
+
+
+def _progress_mode_allows_prose(mode: str) -> bool:
+    return mode == "verbose"
 
 # Abort codex when the provider keeps reconnecting (high demand). Without
 # this, the subprocess can hold the single-job lock until CODEX_TIMEOUT_SECONDS.
