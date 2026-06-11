@@ -85,8 +85,10 @@ def _mask(value: str) -> str:
     return f"{value[:2]}***{value[-2:]}"
 
 
-def redact(text: str, env: dict[str, str] | None = None) -> str:
-    """Mask tokens, hashes, and sensitive env values inside free text."""
+def redact(text: str | None, env: dict[str, str] | None = None) -> str:
+    """Mask tokens, hashes, and sensitive env values inside free text.
+    `None` and `""` both yield `""` so callers may pass either freely.
+    """
     if not text:
         return ""
     out = text
@@ -210,6 +212,7 @@ class LiveSmoke:
         send_text: str,
         expects_all: Iterable[str] = (),
         expects_none: Iterable[str] = (),
+        require_reply: bool = True,
     ) -> TestResult:
         assert self.client is not None
         expects_all = list(expects_all)
@@ -222,11 +225,14 @@ class LiveSmoke:
             combined = "\n".join(replies)
             missing = [n for n in expects_all if n not in combined]
             forbidden = [n for n in expects_none if n in combined]
-            ok = (bool(all_ok) or not expects_all) and not forbidden
+            no_reply = require_reply and not replies
+            ok = (bool(all_ok) or not expects_all) and not forbidden and not no_reply
             if missing:
                 detail = f"missing={missing}"
             elif forbidden:
                 detail = f"forbidden_present={forbidden}"
+            elif no_reply:
+                detail = "no bot reply within timeout"
             elif not expects_all:
                 detail = f"matched none required; replies={len(replies)}"
             else:
@@ -350,7 +356,12 @@ def full_extra_tests(smoke: LiveSmoke) -> list[TestFn]:
             "G /diagnose quick routes through Codex",
             "/diagnose quick",
             expects_all=[],
-            expects_none=["TELEGRAM_BOT_TOKEN"],
+            expects_none=[
+                "TELEGRAM_BOT_TOKEN",
+                "Traceback",
+                "工具执行失败",
+                "现在不能开始",
+            ],
         ),
         lambda: smoke.run_cancel_after(
             "H /restart telegram prompt + cancel",
