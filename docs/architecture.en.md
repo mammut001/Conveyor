@@ -441,6 +441,7 @@ statically by `import_boundary_smoke.py`.
 | P2.4 Single-process dual-channel | backlog | — |
 | Session summary / multi-turn continuity | backlog | — |
 | Audit log rotation | backlog | — |
+| Auto VPS deploy (GitHub Actions) | done | `fa93606` |
 
 ---
 
@@ -506,5 +507,6 @@ picked up opportunistically.
 | Version | Date | Notes |
 |---|---|---|
 | 2.1 | 2026-06-11 | Added `CONVEYOR_PROGRESS_MODE` (verbose/compact/quiet); compact mode fixes the Feishu progress chain; section 6.7 + harness + backlog updated. |
+| 2.2 | 2026-06-11 | Added auto VPS deploy (GitHub Actions + deploy_vps.sh). |
 | 2.0 | 2026-06-11 | English translation, added agent tool layer, Telegram live smoke, bilingual sync. |
 | 1.0 | 2026-06-09 | Original Chinese architecture doc. |

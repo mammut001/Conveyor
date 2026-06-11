@@ -351,6 +351,7 @@ P2.1 已完成：两个 channel adapter 各自落在 `channel/telegram.py` 和
 | P2.4 单进程双通道 | ⏳ backlog | — |
 | Session 摘要（多轮接着聊） | ⏳ backlog | — |
 | 审计日志轮转 | ⏳ backlog | — |
+| 自动 VPS 部署（GitHub Actions） | ✅ | `fa93606` |
 
 ---
 
@@ -405,6 +406,7 @@ P2.3、P2.5 看机会顺手做。
 |------|------|------|
 | 2.0 | 2026-06-11 | 加 agent 工具层、Telegram live smoke、backlog；中英同步 |
 | 2.1 | 2026-06-11 | 加 `CONVEYOR_PROGRESS_MODE`（verbose/compact/quiet）；compact 修 Feishu progress 链；同步 6.7 节、harness、backlog |
+| 2.2 | 2026-06-11 | 加自动 VPS 部署（GitHub Actions + deploy_vps.sh） |
 | 1.0 | 2026-06-09 | 合并原 `001` + `003`；改名 Conveyor |
 | 0.9 | 2026-06-09 | 原 `003-channel-decoupling.md`（P0+P1 设计稿 + 落地） |
 | 0.1 | 2026-06-09 | 原 `001-hermes-learning-and-chat-mode.md`（Hermes 对照 + chat-first） |
