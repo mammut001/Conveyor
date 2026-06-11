@@ -405,6 +405,8 @@ make smoke
   │     channel_telegram_smoke / channel_feishu_smoke
   │     import_boundary_smoke
   │     jobs_progress_mode_smoke        ← CONVEYOR_PROGRESS_MODE, 6 groups
+  │     deploy_workflow_smoke           ← deploy script static checks
+  │     deploy_status_smoke             ← /deploy_status command
   └── command_harness
         38 cases, drives handlers.dispatch + FakeOutbound + FakeRunner
         (no more FakeUpdate / FakeMessage / FakeContext)
@@ -508,5 +510,6 @@ picked up opportunistically.
 |---|---|---|
 | 2.1 | 2026-06-11 | Added `CONVEYOR_PROGRESS_MODE` (verbose/compact/quiet); compact mode fixes the Feishu progress chain; section 6.7 + harness + backlog updated. |
 | 2.2 | 2026-06-11 | Added auto VPS deploy (GitHub Actions + deploy_vps.sh). |
+| 2.3 | 2026-06-11 | Deploy hardening (flock/smoke/rollback/.deploy-status.json); added `/deploy_status` command. |
 | 2.0 | 2026-06-11 | English translation, added agent tool layer, Telegram live smoke, bilingual sync. |
 | 1.0 | 2026-06-09 | Original Chinese architecture doc. |

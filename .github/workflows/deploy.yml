@@ -19,6 +19,8 @@
 #        systemctl restart conveyor-feishu-bot
 #        systemctl status  conveyor-telegram-bot
 #        systemctl status  conveyor-feishu-bot
+#        systemctl is-active conveyor-telegram-bot
+#        systemctl is-active conveyor-feishu-bot
 #
 # Security:
 #   - No secrets are hardcoded; all come from GitHub Actions secrets.
@@ -39,7 +41,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
@@ -61,6 +63,10 @@ jobs:
         env:
           CONVEYOR_REMOTE: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
           CONVEYOR_REMOTE_DIR: ${{ secrets.CONVEYOR_DEPLOY_PATH || '/opt/conveyor' }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          DEPLOY_SOURCE: github-actions
         run: |
           bash scripts/deploy.sh
 

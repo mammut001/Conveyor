@@ -397,6 +397,84 @@ async def _audit_tools(msg, port, _runner, settings, arg):
     await port.reply(msg, truncate("\n".join(lines)))
 
 
+async def _deploy_status(msg, port, _runner, settings, _arg):
+    """Show last deploy status from .deploy-status.json + live service info."""
+    import subprocess
+    import shutil
+    from pathlib import Path
+
+    status_file = Path(".deploy-status.json")
+    lines = ["📦 部署状态", ""]
+
+    # Read .deploy-status.json
+    if status_file.exists():
+        try:
+            data = json.loads(status_file.read_text(encoding="utf-8"))
+            lines.append(f"部署时间: {data.get('deployed_at', '—')}")
+            lines.append(f"来源: {data.get('source', '—')}")
+            lines.append(f"Git SHA: {data.get('git_sha', '—')}")
+            ref = data.get("git_ref", "")
+            if ref:
+                lines.append(f"Git Ref: {ref}")
+            run_id = data.get("run_id", "")
+            if run_id:
+                lines.append(f"Run ID: {run_id}")
+            lines.append(f"Smoke: {data.get('smoke', '—')}")
+            svc = data.get("services", {})
+            lines.append(f"Telegram: {svc.get('telegram', '—')}")
+            lines.append(f"Feishu: {svc.get('feishu', '—')}")
+            if data.get("rollback_attempted"):
+                lines.append("⚠️ 上次部署触发了回滚")
+        except (json.JSONDecodeError, OSError) as exc:
+            lines.append(f"状态文件读取失败: {exc}")
+    else:
+        lines.append("暂无部署状态记录")
+
+    # Live runtime info
+    lines.append("")
+    lines.append("── 当前运行时 ──")
+
+    # Git info
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL, timeout=5,
+        ).strip()
+        lines.append(f"当前 Git SHA: {sha}")
+    except Exception:
+        lines.append("当前 Git SHA: (unknown)")
+
+    try:
+        ref = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL, timeout=5,
+        ).strip()
+        lines.append(f"当前分支: {ref}")
+    except Exception:
+        pass
+
+    # Progress mode
+    lines.append(f"Progress mode: {settings.conveyor_progress_mode}")
+
+    # Live service status (safe, read-only)
+    if shutil.which("systemctl"):
+        for svc_name in ("conveyor-telegram-bot", "conveyor-feishu-bot"):
+            try:
+                result = subprocess.run(
+                    ["systemctl", "is-active", svc_name],
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    timeout=5, check=False,
+                )
+                state = (result.stdout or "").strip() or "unknown"
+            except Exception:
+                state = "(timeout)"
+            lines.append(f"{svc_name}: {state}")
+    else:
+        lines.append("systemctl 不可用，服务状态未知")
+
+    await port.reply(msg, "\n".join(lines))
+
+
 async def _tool_disk(msg, port, _runner, settings, arg):
     from handlers.tools.runner import run_tool
     await port.reply(msg, await run_tool(settings, "disk", arg))
@@ -487,6 +565,7 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/diagnose [server|bot|logs|quick] — hybrid 主机诊断\n"
     text += "/restart telegram|feishu|maintain — 重启服务 (需确认)\n"
     text += "/audit_tools [n] — 查看危险工具审计日志\n"
+    text += "/deploy_status — 查看最近部署状态\n"
     await port.reply(msg, text)
 
 
@@ -529,6 +608,7 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("diagnose", "Hybrid 主机诊断", _diagnose, takes_optional_arg=True),
         CommandSpec("restart", "重启 Conveyor 服务 (需确认)", _restart, takes_arg=True),
         CommandSpec("audit_tools", "危险工具审计日志", _audit_tools, takes_optional_arg=True),
+        CommandSpec("deploy_status", "部署状态", _deploy_status),
         CommandSpec("help", "帮助", _help),
     ]
 }

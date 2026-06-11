@@ -489,6 +489,8 @@ step. Smoke failure prevents the restart.
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart conveyor-feishu-bot
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-telegram-bot
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-feishu-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active conveyor-telegram-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active conveyor-feishu-bot
    ```
 
 ### Manual deploy test
@@ -504,10 +506,25 @@ ssh user@host 'bash /opt/conveyor/scripts/deploy_vps.sh'
 3. The script:
    - acquires a `flock` lock (no concurrent deploys)
    - `git fetch origin main && git reset --hard origin/main`
+   - backs up key files before reset
    - runs `make smoke`
    - if smoke passes: restarts `conveyor-telegram-bot` + `conveyor-feishu-bot`
    - if smoke fails: exits nonzero, services are NOT restarted
+   - writes `.deploy-status.json` with deploy metadata
+   - if restart health check fails: attempts rollback from backup
 4. `.env` is never printed or committed.
+
+There is also an rsync-based deploy (`scripts/deploy.sh`) for local
+use that rsyncs source files then runs the same remote smoke + restart
+flow.
+
+### `/deploy_status` command
+
+Send `/deploy_status` to the bot to see:
+- last deploy time, source, git SHA
+- smoke result and service states (from `.deploy-status.json`)
+- current runtime git SHA, branch, progress mode
+- live `systemctl is-active` for both services
 
 ### Limitations
 
@@ -517,6 +534,9 @@ ssh user@host 'bash /opt/conveyor/scripts/deploy_vps.sh'
 - The deploy script assumes `.venv` already exists on the VPS. If
   you need to bootstrap a fresh VPS, run `scripts/install-remote.sh`
   first.
+- Rollback is minimal: key files are backed up before reset, and if
+  services fail to start after restart, the script restores from
+  backup and retries. This does not cover all failure modes.
 
 ---
 

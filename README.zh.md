@@ -428,6 +428,8 @@ TELEGRAM_LIVE_ALLOW_RESTART=1 \
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart conveyor-feishu-bot
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-telegram-bot
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-feishu-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active conveyor-telegram-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active conveyor-feishu-bot
    ```
 
 ### 手动测试部署
@@ -443,10 +445,24 @@ ssh user@host 'bash /opt/conveyor/scripts/deploy_vps.sh'
 3. 脚本流程：
    - 获取 `flock` 锁（防止并发部署）
    - `git fetch origin main && git reset --hard origin/main`
+   - 重置前备份关键文件
    - 运行 `make smoke`
    - smoke 通过：重启 `conveyor-telegram-bot` + `conveyor-feishu-bot`
    - smoke 失败：退出非零，**不重启**服务
+   - 写入 `.deploy-status.json` 部署元数据
+   - 重启健康检查失败：从备份回滚并重试
 4. `.env` 永远不会被打印或提交。
+
+另有 rsync 方式部署（`scripts/deploy.sh`），用于本地推送源文件后
+执行同样的远程 smoke + 重启流程。
+
+### `/deploy_status` 命令
+
+向机器人发送 `/deploy_status` 可查看：
+- 最近部署时间、来源、Git SHA
+- smoke 结果和服务状态（来自 `.deploy-status.json`）
+- 当前运行时 Git SHA、分支、progress mode
+- 实时 `systemctl is-active` 两个服务状态
 
 ### 限制
 
@@ -454,6 +470,8 @@ ssh user@host 'bash /opt/conveyor/scripts/deploy_vps.sh'
   它需要真实 Telegram 凭据，仅限手动。
 - 部署脚本假设 VPS 上已有 `.venv`。如果需要初始化新 VPS，
   请先运行 `scripts/install-remote.sh`。
+- 回滚是有限的：重置前备份关键文件，如果重启后服务未启动，
+  脚本会从备份恢复并重试。这不涵盖所有故障模式。
 
 ---
 
