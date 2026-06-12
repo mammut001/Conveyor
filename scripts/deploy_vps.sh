@@ -103,8 +103,8 @@ log "Smoke tests passed."
 
 # ---- restart services ----------------------------------------------------
 SERVICES=(
-    conveyor-telegram-bot
-    conveyor-feishu-bot
+    conveyor-telegram-bot.service
+    conveyor-feishu-bot.service
 )
 # Optionally restart maintain timer if it exists
 if systemctl list-unit-files conveyor-maintain.timer &>/dev/null; then
@@ -151,8 +151,8 @@ if [[ "$ALL_ACTIVE" == "false" && -n "${BACKUP_PATH:-}" && -d "${BACKUP_PATH:-}"
 fi
 
 # ---- write .deploy-status.json --------------------------------------------
-TG_STATE="${SVC_STATUS[conveyor-telegram-bot]:-unknown}"
-FS_STATE="${SVC_STATUS[conveyor-feishu-bot]:-unknown}"
+TG_STATE="${SVC_STATUS[conveyor-telegram-bot.service]:-unknown}"
+FS_STATE="${SVC_STATUS[conveyor-feishu-bot.service]:-unknown}"
 
 cat > "${STATUS_FILE}" <<STATUS_JSON
 {
