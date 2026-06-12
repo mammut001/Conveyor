@@ -156,7 +156,7 @@ async def _test_dispatch_hybrid_skips_direct_codex_for_facts_only() -> CheckResu
         async def fake_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=None):
             captured["prompt"] = prompt
 
-        with mock.patch("handlers.dispatch.is_allowed", return_value=True), mock.patch(
+        with mock.patch(
             "handlers.tools.runner.run_tools",
             mock.AsyncMock(return_value="## tool:load\nsnapshot facts"),
         ), mock.patch("handlers.tools.runner.handle_codex_job", fake_codex_job):
@@ -197,8 +197,7 @@ async def _test_natural_lang_feishu_pending() -> CheckResult:
         port = FakeOutbound()
         runner = mock.Mock()
         runner.start = mock.AsyncMock(side_effect=AssertionError("codex should not run"))
-        with mock.patch("handlers.dispatch.is_allowed", return_value=True):
-            await dispatch(_msg("重启 feishu bot"), port, settings=_settings(), runner=runner)
+        await dispatch(_msg("重启 feishu bot"), port, settings=_settings(), runner=runner)
         pending = get_pending_for_context("12345", "chat-1", "telegram")
         ok = pending is not None and pending.arg == "conveyor-feishu-bot"
         return CheckResult(name, ok, f"pending={pending!r}")
@@ -220,8 +219,7 @@ async def _test_natural_lang_ambiguous_no_telegram_default() -> CheckResult:
         async def fail(*_a, **_k):
             raise AssertionError("service_restart should not run for ambiguous restart")
         with mock.patch("handlers.tools.runner.run_tool", side_effect=fail):
-            with mock.patch("handlers.dispatch.is_allowed", return_value=True):
-                await dispatch(_msg("重启 bot"), port, settings=_settings(), runner=runner)
+            await dispatch(_msg("重启 bot"), port, settings=_settings(), runner=runner)
         pending = get_pending_for_context("12345", "chat-1", "telegram")
         ok = pending is None
         return CheckResult(name, ok, f"pending={pending!r}")
@@ -238,8 +236,7 @@ async def _test_dispatch_disk_deterministic_no_codex() -> CheckResult:
         runner = mock.Mock()
         runner.settings = _settings()
         runner.start = mock.AsyncMock(side_effect=AssertionError("codex should not run"))
-        with mock.patch("handlers.dispatch.is_allowed", return_value=True):
-            await dispatch(_msg("看看磁盘空间"), port, settings=_settings(), runner=runner)
+        await dispatch(_msg("看看磁盘空间"), port, settings=_settings(), runner=runner)
         runner.start.assert_not_called()
         if not any("磁盘" in r for r in port.replies):
             return CheckResult(name, False, f"replies={port.replies!r}")

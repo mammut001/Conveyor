@@ -14,7 +14,7 @@ Each line is a JSON object:
 Privacy:
   - user/assistant text is redacted + truncated before writing
   - no secrets, env values, or confirmation tokens stored
-  - max turns enforced on read (tail N)
+  - max turns enforced on both write (trim) and read (tail N)
 """
 from __future__ import annotations
 
@@ -65,6 +65,53 @@ def session_path(settings: Settings, msg: InboundMessage) -> Path:
 # ---- Write / Read / Clear --------------------------------------------------
 
 
+def _max_turns(settings: Settings) -> int:
+    """Return the configured max turns, falling back to 20 if invalid."""
+    val = getattr(settings, "conveyor_session_max_turns", 20)
+    if not isinstance(val, int) or val <= 0:
+        return 20
+    return val
+
+
+def _trim_session_file(path: Path, max_turns: int) -> None:
+    """Trim the JSONL file to the last *max_turns* valid records.
+
+    Reads all lines, parses JSON, keeps only valid records, rewrites
+    the file atomically using a temp file in the same directory.
+    Also removes corrupt lines even when the total is under max_turns.
+    On any failure, logs debug and continues (non-fatal).
+    """
+    try:
+        if not path.is_file():
+            return
+        lines = path.read_text(encoding="utf-8").splitlines()
+        valid: list[str] = []
+        total_non_empty = 0
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            total_non_empty += 1
+            try:
+                json.loads(stripped)
+                valid.append(stripped)
+            except json.JSONDecodeError:
+                continue
+        needs_rewrite = (
+            len(valid) > max_turns       # too many records
+            or len(valid) < total_non_empty  # corrupt lines present
+        )
+        if not needs_rewrite:
+            return
+        trimmed = valid[-max_turns:]
+        # Atomic-ish write: write to temp file, then replace.
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        logger.debug("session trim failed", exc_info=True)
+
+
 def append_turn(
     settings: Settings,
     msg: InboundMessage,
@@ -74,7 +121,8 @@ def append_turn(
     kind: str = "codex",
 ) -> None:
     """Append one turn to the session file. Redacts + truncates both
-    sides. No-ops when session is disabled or the write fails."""
+    sides, then trims the file to max_turns. No-ops when session is
+    disabled or the write fails."""
     if not getattr(settings, "conveyor_session_enabled", True):
         return
     path = session_path(settings, msg)
@@ -91,6 +139,8 @@ def append_turn(
         }
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        # Bound the file size after each write.
+        _trim_session_file(path, _max_turns(settings))
     except Exception:
         logger.debug("session append_turn failed", exc_info=True)
 

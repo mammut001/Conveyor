@@ -30,6 +30,7 @@ from scripts.harness_common import CheckResult, print_results  # noqa: E402
 
 from channel.types import InboundMessage  # noqa: E402
 from handlers.session import (  # noqa: E402
+    _max_turns,
     _safe_filename,
     append_turn,
     build_context_prompt,
@@ -324,6 +325,80 @@ def _test_multi_channel_isolation() -> CheckResult:
     return CheckResult(name, False, "tempdir failed")
 
 
+def _test_trim_on_write() -> CheckResult:
+    name = "append_turn: trims file to max_turns valid records"
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _fake_settings(Path(tmp), max_turns=3)
+        msg = _fake_msg()
+        for i in range(10):
+            append_turn(settings, msg, f"turn {i}", f"reply {i}")
+        p = session_path(settings, msg)
+        lines = [l.strip() for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+        ok1 = len(lines) == 3
+        # Verify the last 3 records are the ones kept.
+        records = [json.loads(l) for l in lines]
+        ok2 = records[0]["user"] == "turn 7" and records[2]["user"] == "turn 9"
+        return CheckResult(name, ok1 and ok2, f"file_lines={len(lines)} first={records[0]['user'] if records else 'N/A'}")
+    return CheckResult(name, False, "tempdir failed")
+
+
+def _test_corrupt_lines_removed_on_trim() -> CheckResult:
+    name = "append_turn: corrupt lines removed during trim"
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _fake_settings(Path(tmp), max_turns=5)
+        msg = _fake_msg()
+        p = session_path(settings, msg)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Write some corrupt lines mixed with valid ones.
+        p.write_text(
+            "not json at all\n"
+            '{"user": "valid1", "assistant": "ok1"}\n'
+            "another bad line\n"
+            '{"user": "valid2", "assistant": "ok2"}\n',
+            encoding="utf-8",
+        )
+        # Append a turn — this triggers trim.
+        append_turn(settings, msg, "new turn", "new reply")
+        # Re-read: corrupt lines should be gone.
+        lines = [l.strip() for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+        records = [json.loads(l) for l in lines]
+        ok1 = len(records) == 3  # 2 old valid + 1 new
+        ok2 = records[-1]["user"] == "new turn"
+        ok3 = all(r.get("user") in ("valid1", "valid2", "new turn") for r in records)
+        return CheckResult(name, ok1 and ok2 and ok3, f"records={len(records)} users={[r['user'] for r in records]}")
+    return CheckResult(name, False, "tempdir failed")
+
+
+def _test_invalid_max_turns_fallback() -> CheckResult:
+    name = "_max_turns: invalid (0) falls back to 20"
+    settings = SimpleNamespace(conveyor_session_max_turns=0)
+    val = _max_turns(settings)
+    ok1 = val == 20
+    # Also verify negative.
+    settings2 = SimpleNamespace(conveyor_session_max_turns=-5)
+    val2 = _max_turns(settings2)
+    ok2 = val2 == 20
+    # And non-int.
+    settings3 = SimpleNamespace(conveyor_session_max_turns="bad")
+    val3 = _max_turns(settings3)
+    ok3 = val3 == 20
+    return CheckResult(name, ok1 and ok2 and ok3, f"0→{val} -5→{val2} bad→{val3}")
+
+
+def _test_trim_with_invalid_max_turns() -> CheckResult:
+    name = "append_turn: invalid max_turns=0 still bounds file (fallback 20)"
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _fake_settings(Path(tmp), max_turns=0)
+        msg = _fake_msg()
+        for i in range(25):
+            append_turn(settings, msg, f"turn {i}", f"reply {i}")
+        p = session_path(settings, msg)
+        lines = [l.strip() for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+        ok = len(lines) == 20  # fallback
+        return CheckResult(name, ok, f"file_lines={len(lines)}")
+    return CheckResult(name, False, "tempdir failed")
+
+
 # ---- Main -------------------------------------------------------------------
 
 
@@ -355,6 +430,10 @@ def main() -> int:
         _test_context_prompt_label(),
         _test_turn_record_fields(),
         _test_multi_channel_isolation(),
+        _test_trim_on_write(),
+        _test_corrupt_lines_removed_on_trim(),
+        _test_invalid_max_turns_fallback(),
+        _test_trim_with_invalid_max_turns(),
     ]
     print_results(results)
     ok = all(r.ok for r in results)
