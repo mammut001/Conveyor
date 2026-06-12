@@ -23,29 +23,24 @@ from zoneinfo import ZoneInfo
 # Module-level constants (also on CodexRunner class shell)
 
 DAILY_WORKTREE_FORMAT = "%Y-%m-%d"
-from runner.types import Job
+from runner.types import Job, JobMode
 from config import Settings, load_settings
 from redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 def _tool_registry_text(self, job: Job) -> str:
-    # Chat-first (docs/001): RUN and FIX share one workspace-write registry.
-    # The bot's keyword fast path handles bare 记 x / /memo without codex.
+    sandbox = getattr(job, "sandbox", None) or getattr(getattr(job, "mode", None), "sandbox", None) or JobMode.RUN.sandbox
     return (
-        '<tool-registry sandbox="workspace-write" policy="fact-auto-user-explicit-otherwise">\n'
-        "This is a conversational agent turn: you CAN run shell, use web tools,\n"
-        "modify files in the worktree, and invoke the runner CLI. The bot's\n"
-        "keyword fast path already handles bare 记 x / /memo without codex.\n\n"
-        "DO NOT use codex's built-in apply_patch / edit_file / write_file tools\n"
-        "to modify MEMORY.md or any other file. codex_core::tools::router rejects\n"
-        "them as \"unsupported call\" in this sandbox config. For ALL writes to\n"
-        "MEMORY.md or any other file, you MUST invoke `python -m runner memorize`\n"
-        "(or another shell command) via the shell tool — that is the only path\n"
-        "the router accepts for memory edits.\n\n"
-        "Available tools (cd \"$CODEX_WORKSPACE_ROOT\" first to land in the project root):\n\n"
+        f'<tool-registry sandbox="{sandbox}" policy="fact-auto-user-explicit-otherwise">\n'
+        "This is a conversational agent turn with full host access on the bot\n"
+        "VPS: you CAN run shell anywhere on the machine, use web tools, read/write\n"
+        "files outside the worktree, and invoke the runner CLI. The bot's keyword\n"
+        "fast path already handles bare 记 x / /memo without codex.\n\n"
+        "For MEMORY.md entries, prefer `python -m runner memorize` so the runner\n"
+        "handles category classification and dedup — but shell and built-in file\n"
+        "tools are available if needed.\n\n"
+        "Available tools (cd \"$CODEX_WORKSPACE_ROOT\" first for project work):\n\n"
         "  memorize: write a single categorized entry into today's MEMORY.md.\n"
-        "    The runner CLI is NOT in $CODEX_WORKSPACE_ROOT — it lives at\n"
-        "    $CODEX_RUNNER_HOME (the bot's own project root). The sandbox\n"
-        "    has that dir mounted as an extra writable path via --add-dir, so:\n"
+        "    The runner CLI lives at $CODEX_RUNNER_HOME:\n"
         "      cd \"$CODEX_RUNNER_HOME\" && .venv/bin/python -m runner memorize [--category <cat>] [--quiet] \"<content>\"\n"
         "    Categories: fact | preference | convention | tool-quirk | unfiled\n"
         "    Omit --category to let the runner's classifier pick one. Default\n"
@@ -65,9 +60,8 @@ def _tool_registry_text(self, job: Job) -> str:
         "  recall_journal: read a past day's archived journal.\n"
         '    Use: python -m runner recall-journal <YYYY-MM-DD> [category]\n'
         "    Output: section markdown to stdout, empty on miss, rc=0.\n\n"
-        "  shell: run any shell command. `cd \"$CODEX_WORKSPACE_ROOT\" && <cmd>`\n"
-        "    first to land in the project root (worktree-relative paths won't\n"
-        "    resolve from codex's cwd).\n\n"
+        "  shell: run any shell command on the bot host (e.g. cat ~/.bashrc,\n"
+        "    systemctl, ssh). `cd \"$CODEX_WORKSPACE_ROOT\" && <cmd>` for project work.\n\n"
         "  git_status: not a separate tool; use `git status` via shell.\n\n"
         "SECRETS: never write API keys, tokens, or passwords into MEMORY.md or\n"
         "any committed file. The runner has a redaction layer; don't rely on it.\n"

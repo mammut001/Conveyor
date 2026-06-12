@@ -255,22 +255,24 @@ async def main() -> int:
     except Exception as exc:
         results.append(CheckResult("CLI recall-journal empty", False, f"raised {type(exc).__name__}: {exc}"))
 
-    # 16. tool-registry payload: chat-first — RUN and FIX share workspace-write.
+    # 16. tool-registry payload: RUN and FIX share danger-full-access sandbox.
     try:
+        _sb = JobMode.RUN.sandbox
+
         def _registry_ok(text: str) -> bool:
             return (
                 "<tool-registry" in text
                 and "memorize" in text
                 and 'policy="' in text
                 and "CODEX_WORKSPACE_ROOT" in text
-                and "workspace-write" in text
+                and "danger-full-access" in text
             )
 
         fix_text = runner._prefetch_memory(Job(
-            id="smoke-test-fix", mode=JobMode.FIX, prompt="x", sandbox="workspace-write",
+            id="smoke-test-fix", mode=JobMode.FIX, prompt="x", sandbox=_sb,
         ))
         run_text = runner._prefetch_memory(Job(
-            id="smoke-test-run", mode=JobMode.RUN, prompt="x", sandbox="workspace-write",
+            id="smoke-test-run", mode=JobMode.RUN, prompt="x", sandbox=_sb,
         ))
         ok = _registry_ok(fix_text) and _registry_ok(run_text)
         detail = (
@@ -284,7 +286,7 @@ async def main() -> int:
     # 16b. Plain chat must mention web tools and must not forbid network.
     try:
         run_web_text = runner._prefetch_memory(Job(
-            id="smoke-test-run-web", mode=JobMode.RUN, prompt="x", sandbox="workspace-write",
+            id="smoke-test-run-web", mode=JobMode.RUN, prompt="x", sandbox=JobMode.RUN.sandbox,
         ))
         web_mentioned = "web tools" in run_web_text.lower()
         no_network_clause = "no network" in run_web_text.lower()
@@ -294,29 +296,27 @@ async def main() -> int:
     except Exception as exc:
         results.append(CheckResult("RUN mode web tools by default", False, f"raised {type(exc).__name__}: {exc}"))
 
-    # 17. tool-registry must warn that apply_patch is unavailable (RUN + FIX).
+    # 17. tool-registry still recommends runner memorize (RUN + FIX).
     try:
         fix_text = runner._prefetch_memory(Job(
-            id="smoke-test-fix-apply-patch", mode=JobMode.FIX, prompt="x", sandbox="workspace-write",
+            id="smoke-test-fix-apply-patch", mode=JobMode.FIX, prompt="x", sandbox=JobMode.FIX.sandbox,
         ))
         run_text = runner._prefetch_memory(Job(
-            id="smoke-test-run-apply-patch", mode=JobMode.RUN, prompt="x", sandbox="workspace-write",
+            id="smoke-test-run-apply-patch", mode=JobMode.RUN, prompt="x", sandbox=JobMode.RUN.sandbox,
         ))
 
-        def _apply_patch_warns(text: str) -> bool:
+        def _memorize_guidance(text: str) -> bool:
             return (
-                "apply_patch" in text
-                and "unsupported call" in text
-                and "python -m runner memorize" in text
+                "python -m runner memorize" in text
                 and "$CODEX_RUNNER_HOME" in text
                 and ".venv/bin/python -m runner memorize" in text
             )
 
-        ok = _apply_patch_warns(fix_text) and _apply_patch_warns(run_text)
-        detail = f"fix_warns={_apply_patch_warns(fix_text)} run_warns={_apply_patch_warns(run_text)}"
-        results.append(CheckResult("tool-registry warns apply_patch unavailable", ok, detail))
+        ok = _memorize_guidance(fix_text) and _memorize_guidance(run_text)
+        detail = f"fix_ok={_memorize_guidance(fix_text)} run_ok={_memorize_guidance(run_text)}"
+        results.append(CheckResult("tool-registry recommends runner memorize", ok, detail))
     except Exception as exc:
-        results.append(CheckResult("tool-registry warns apply_patch unavailable", False, f"raised {type(exc).__name__}: {exc}"))
+        results.append(CheckResult("tool-registry recommends runner memorize", False, f"raised {type(exc).__name__}: {exc}"))
 
     # 18. codex subprocess plumbing: the runner home must be passed into
     #     the sandbox as both --add-dir (so the shell can `cd` there) and
@@ -331,7 +331,7 @@ async def main() -> int:
             id="smoke-test-plumbing",
             mode=JobMode.FIX,
             prompt="x",
-            sandbox="workspace-write",
+            sandbox=JobMode.FIX.sandbox,
         )
         command = runner._codex_command(job)
         env = runner._child_env()

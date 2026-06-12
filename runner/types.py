@@ -38,17 +38,17 @@ class JobMode(str, Enum):
 
     @property
     def sandbox(self) -> str:
-        # Chat-first (docs/001): plain text and /run use the same capabilities
-        # as /fix. Security is Telegram allowlist + worktree + /apply gate,
-        # not a read-only codex sandbox.
-        return "workspace-write"
+        # Full host access: Codex runs with danger-full-access so shell can
+        # reach ~/.bashrc, /opt/conveyor, etc. on the bot VPS. Outer gate is
+        # still Telegram/Feishu allowlist + explicit /apply for git merges.
+        return "danger-full-access"
 
     @property
     def stdin_prefix(self) -> str:
         label = "chat" if self is JobMode.RUN else "fix"
         return (
-            f"[mode: {label} | sandbox: workspace-write | network on | "
-            "shell, web, and file writes allowed in the worktree]\n\n"
+            f"[mode: {label} | sandbox: danger-full-access | network on | "
+            "shell and file access on the bot host]\n\n"
         )
 
 

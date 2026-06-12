@@ -577,7 +577,7 @@ async def _forget(msg, port, _runner, settings, _arg):
 
 async def _help(msg, port, _runner, _settings, _arg):
     text = "Codex Bot\n"
-    text += "直接发文字 → 跑 Codex（workspace-write）\n"
+    text += "直接发文字 → 跑 Codex（danger-full-access）\n"
     text += "记 xxx / /memo xxx → 写 MEMORY.md（不经 Codex）\n"
     text += "/status /last /diff /apply /discard /cancel\n"
     text += "/jobs [n] /memory [date] [cat] /journal [n]\n"
