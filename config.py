@@ -63,6 +63,12 @@ class Settings:
     #          placeholder and the final summary reach the chat.
     # Invalid env values fall back to "compact" with a warning.
     conveyor_progress_mode: str = "compact"
+    # Session summary: lightweight per-chat context for "继续" / "continue".
+    # Stores recent turns in codex_memory_root/session/ as JSONL.
+    # Not long-term memory — can be cleared with /forget.
+    conveyor_session_enabled: bool = True
+    conveyor_session_max_turns: int = 20
+    conveyor_session_inject_turns: int = 5
 
 
 VALID_PROGRESS_MODES = ("verbose", "compact", "quiet")
@@ -215,6 +221,9 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_progress_mode": _progress_mode_env(
             "CONVEYOR_PROGRESS_MODE", DEFAULT_PROGRESS_MODE,
         ),
+        "conveyor_session_enabled": os.getenv("CONVEYOR_SESSION_ENABLED", "true").strip().lower() in ("true", "1", "yes"),
+        "conveyor_session_max_turns": _int_env("CONVEYOR_SESSION_MAX_TURNS", 20),
+        "conveyor_session_inject_turns": _int_env("CONVEYOR_SESSION_INJECT_TURNS", 5),
     }
 
 

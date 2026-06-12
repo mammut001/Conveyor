@@ -546,6 +546,35 @@ async def _tools(msg, port, _runner, _settings, _arg):
     await port.reply(msg, "\n".join(lines))
 
 
+async def _context(msg, port, _runner, settings, _arg):
+    """Show the compact recent session summary for this chat/operator."""
+    from handlers.session import get_recent_turns
+    turns = get_recent_turns(settings, msg)
+    if not turns:
+        await port.reply(msg, "暂无会话记录。")
+        return
+    lines = [f"最近 {len(turns)} 条对话记录：", ""]
+    for t in turns:
+        user = t.get("user", "")
+        assistant = t.get("assistant", "")
+        if user:
+            lines.append(f"用户: {user}")
+        if assistant:
+            lines.append(f"助手: {assistant}")
+        lines.append("")
+    await port.reply(msg, "\n".join(lines))
+
+
+async def _forget(msg, port, _runner, settings, _arg):
+    """Clear this chat/operator session."""
+    from handlers.session import clear_session
+    removed = clear_session(settings, msg)
+    if removed:
+        await port.reply(msg, "会话记录已清除。")
+    else:
+        await port.reply(msg, "没有需要清除的会话记录。")
+
+
 async def _help(msg, port, _runner, _settings, _arg):
     text = "Codex Bot\n"
     text += "直接发文字 → 跑 Codex（workspace-write）\n"
@@ -566,6 +595,8 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/restart telegram|feishu|maintain — 重启服务 (需确认)\n"
     text += "/audit_tools [n] — 查看危险工具审计日志\n"
     text += "/deploy_status — 查看最近部署状态\n"
+    text += "/context — 查看最近会话上下文\n"
+    text += "/forget — 清除当前会话记录\n"
     await port.reply(msg, text)
 
 
@@ -609,6 +640,8 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("restart", "重启 Conveyor 服务 (需确认)", _restart, takes_arg=True),
         CommandSpec("audit_tools", "危险工具审计日志", _audit_tools, takes_optional_arg=True),
         CommandSpec("deploy_status", "部署状态", _deploy_status),
+        CommandSpec("context", "查看最近会话上下文", _context),
+        CommandSpec("forget", "清除当前会话记录", _forget),
         CommandSpec("help", "帮助", _help),
     ]
 }

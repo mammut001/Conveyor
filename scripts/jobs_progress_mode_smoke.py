@@ -103,7 +103,11 @@ def _fake_runner(*, summary: str, progress_text: str | None,
         error=None,
         last_event=None,
     )
-    settings = SimpleNamespace(conveyor_progress_mode=progress_mode)
+    settings = SimpleNamespace(
+        conveyor_progress_mode=progress_mode,
+        codex_memory_root=Path("/tmp/codex-progress-mem"),
+        conveyor_session_enabled=False,
+    )
 
     class _Stub:
         def __init__(self) -> None:
@@ -355,7 +359,11 @@ def _test_compact_tool_indicator_fallback() -> CheckResult:
     # We need TWO progress calls to exercise the spam: first turns
     # on edit_broken, second would normally spam.
     job = SimpleNamespace(state="COMPLETED", summary="ANSWER", error=None, last_event=None)
-    settings = SimpleNamespace(conveyor_progress_mode="compact")
+    settings = SimpleNamespace(
+        conveyor_progress_mode="compact",
+        codex_memory_root=Path("/tmp/codex-progress-mem"),
+        conveyor_session_enabled=False,
+    )
 
     call_count = {"n": 0}
 
@@ -384,7 +392,11 @@ def _test_quiet_no_fallback_after_edit_failure() -> CheckResult:
     name = "handlers/jobs: quiet + Feishu → no fallback line at all, only final"
     port = FakeOutbound(edit_works=False)
     job = SimpleNamespace(state="COMPLETED", summary="ANSWER", error=None, last_event=None)
-    settings = SimpleNamespace(conveyor_progress_mode="quiet")
+    settings = SimpleNamespace(
+        conveyor_progress_mode="quiet",
+        codex_memory_root=Path("/tmp/codex-progress-mem"),
+        conveyor_session_enabled=False,
+    )
 
     class _Stub:
         def __init__(self) -> None:

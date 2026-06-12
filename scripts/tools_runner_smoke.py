@@ -123,6 +123,7 @@ async def _test_hybrid_calls_codex_with_facts() -> CheckResult:
     try:
         port = FakeOutbound()
         runner = mock.Mock()
+        runner.settings = _settings()
         captured: dict = {}
 
         async def fake_start(mode, prompt, progress):
@@ -212,6 +213,7 @@ async def _test_natural_lang_ambiguous_no_telegram_default() -> CheckResult:
         clear_all_pending()
         port = FakeOutbound()
         runner = mock.Mock()
+        runner.settings = _settings()
         # If this test ever creates a pending service_restart with
         # empty arg, run_tool would refuse — but we want to fail loud
         # BEFORE that, by asserting no pending was created at all.
@@ -234,6 +236,7 @@ async def _test_dispatch_disk_deterministic_no_codex() -> CheckResult:
         clear_all_pending()
         port = FakeOutbound()
         runner = mock.Mock()
+        runner.settings = _settings()
         runner.start = mock.AsyncMock(side_effect=AssertionError("codex should not run"))
         with mock.patch("handlers.dispatch.is_allowed", return_value=True):
             await dispatch(_msg("看看磁盘空间"), port, settings=_settings(), runner=runner)

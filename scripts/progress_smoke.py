@@ -149,7 +149,7 @@ def _bot_in_tmp_env(tmp: Path):
     """
     overrides = {
         "TELEGRAM_BOT_TOKEN": "fake-token",
-        "TELEGRAM_ALLOWED_USER_ID": "0",
+        "TELEGRAM_ALLOWED_USER_ID": "999999",
         "CODEX_WORKSPACE_ROOT": str(tmp / "ws"),
         "CODEX_TASK_ROOT": str(tmp / "task"),
         "CODEX_MEMORY_ROOT": str(tmp / "memory"),
@@ -638,7 +638,7 @@ def _test_agent_message_text_extraction() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -690,7 +690,7 @@ def _test_event_summary_streams_prose() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -831,7 +831,7 @@ def _test_tool_call_name_extraction() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -889,7 +889,7 @@ def _test_tool_call_event_is_user_visible() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -934,7 +934,7 @@ def _test_event_summary_tool_indicator() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1023,7 +1023,7 @@ def _test_command_execution_tool_indicator() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1098,7 +1098,7 @@ def _test_lifecycle_events_suppressed() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1149,7 +1149,7 @@ def _test_no_event_type_prefix() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1212,7 +1212,7 @@ def _test_consecutive_dedup() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1313,7 +1313,7 @@ def _test_is_prose_event_classification() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1380,7 +1380,7 @@ def _test_growing_gate_on_prose() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1475,7 +1475,7 @@ def _test_thinking_indicator_appears_after_threshold() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1563,7 +1563,7 @@ def _test_thinking_indicator_clears_on_prose() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1637,7 +1637,7 @@ def _test_thinking_indicator_clears_on_tool_call() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1726,7 +1726,7 @@ def _test_thinking_indicator_skipped_for_short_reasoning() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1813,7 +1813,7 @@ def _test_tool_pulse_appears_after_threshold() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1898,7 +1898,7 @@ def _test_tool_pulse_clears_on_completion() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -1985,7 +1985,7 @@ def _test_tool_pulse_skipped_for_short_call() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -2073,7 +2073,7 @@ def _test_tool_pulse_respects_interval() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -2173,7 +2173,7 @@ def _test_first_prose_fires_immediately_after_placeholder() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -2243,7 +2243,7 @@ def _test_subsequent_prose_respects_cooldown() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -2319,7 +2319,7 @@ def _test_subsequent_prose_fires_after_cooldown() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -2403,7 +2403,7 @@ def _test_operator_profile_block_in_prefetch() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -2496,7 +2496,7 @@ def _test_day_brief_fires_on_first_job_of_day() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -2564,7 +2564,7 @@ def _test_day_brief_skipped_on_second_job_of_day() -> CheckResult:
                 (tmp_p / sub).mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_TASK_ROOT": str(tmp_p / "task"),
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -2636,7 +2636,7 @@ def _test_load_settings_reads_operator_json_overrides() -> CheckResult:
             )
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_BIN": "codex",
                 "CODEX_MEMORY_ROOT": str(memory_root),
@@ -2687,7 +2687,7 @@ def _test_load_settings_falls_back_to_env_when_no_operator_json() -> CheckResult
             assert not (memory_root / "operator.json").exists()
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_BIN": "codex",
                 "CODEX_MEMORY_ROOT": str(memory_root),
@@ -2749,7 +2749,7 @@ def _test_operator_profile_text_uses_env_when_no_operator_json() -> CheckResult:
             assert not (memory_root / "operator.json").exists()
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_BIN": "codex",
                 "CODEX_MEMORY_ROOT": str(memory_root),
@@ -2800,7 +2800,7 @@ def _test_operator_profile_text_picks_up_live_operator_json_edit() -> CheckResul
             memory_root.mkdir(parents=True, exist_ok=True)
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_BIN": "codex",
                 "CODEX_MEMORY_ROOT": str(memory_root),
@@ -2885,19 +2885,19 @@ from unittest.mock import AsyncMock, MagicMock
 
 def _make_fake_handler_update(text=None, callback_data=None):
     """Build a fake Update + Context that satisfies the bot.py
-    handler contract. user.id is set to 0 to match the
-    test's TELEGRAM_ALLOWED_USER_ID=0 (so _guard passes
+    handler contract. user.id is set to 999999 to match the
+    test's TELEGRAM_ALLOWED_USER_ID=999999 (so _guard passes
     without a real Telegram call)."""
     update = MagicMock()
     update.effective_user = MagicMock()
-    update.effective_user.id = 0
+    update.effective_user.id = 999999
     update.effective_chat = MagicMock()
     update.effective_chat.id = 12345
     update.effective_message = MagicMock()
     update.effective_message.chat = MagicMock()
     update.effective_message.chat.id = 12345
     update.effective_message.from_user = MagicMock()
-    update.effective_message.from_user.id = 0
+    update.effective_message.from_user.id = 999999
     update.effective_message.text = text
     update.effective_message.reply_text = AsyncMock(return_value=MagicMock())
     update.effective_message.edit_text = AsyncMock(return_value=MagicMock())
@@ -2935,7 +2935,7 @@ def _test_start_cmd_first_run_welcome_with_button() -> CheckResult:
             assert not (memory_root / "operator.json").exists()
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_BIN": "codex",
                 "CODEX_MEMORY_ROOT": str(memory_root),
@@ -2991,7 +2991,7 @@ def _test_text_cmd_first_run_nudge_with_button() -> CheckResult:
             assert not (memory_root / "operator.json").exists()
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_BIN": "codex",
                 "CODEX_MEMORY_ROOT": str(memory_root),
@@ -3050,7 +3050,7 @@ def _test_onboard_flow_3_steps_writes_operator_json() -> CheckResult:
             assert not (memory_root / "operator.json").exists()
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_BIN": "codex",
                 "CODEX_MEMORY_ROOT": str(memory_root),
@@ -3151,7 +3151,7 @@ def _test_profile_cmd_shows_current_profile() -> CheckResult:
             )
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_BIN": "codex",
                 "CODEX_MEMORY_ROOT": str(memory_root),
@@ -3216,7 +3216,7 @@ def _test_save_operator_profile_handles_oserror() -> CheckResult:
             # _save_operator_profile directly with the data dict.
             overrides = {
                 "TELEGRAM_BOT_TOKEN": "fake-token",
-                "TELEGRAM_ALLOWED_USER_ID": "0",
+                "TELEGRAM_ALLOWED_USER_ID": "999999",
                 "CODEX_WORKSPACE_ROOT": str(tmp_p / "ws"),
                 "CODEX_BIN": "codex",
                 "CODEX_MEMORY_ROOT": str(tmp_p / "memory"),
@@ -3228,17 +3228,12 @@ def _test_save_operator_profile_handles_oserror() -> CheckResult:
                 from config import OPERATOR_PROFILE_FIELDS
                 bad_path = blocker / "operator.json"
                 # Force the helper to use bad_path
-                with mock.patch.object(bot_mod, "OPERATOR_PROFILE_FILENAME", "blocker/operator.json"):
-                    # Hmm, _operator_profile_path uses
-                    # settings.codex_memory_root / "operator.json",
-                    # not a module constant. So patching the constant
-                    # doesn't work. We need a different approach.
-                    pass
-                # Simpler: call _save_operator_profile with a
-                # data dict and a manually-broken path. We
-                # monkey-patch _operator_profile_path.
-                with mock.patch.object(bot_mod, "_operator_profile_path", lambda: blocker / "operator.json"):
-                    result = bot_mod._save_operator_profile({
+                # P2.3: save_operator_profile moved to handlers.onboarding.
+                # Monkey-patch operator_profile_path to return a broken path.
+                import handlers.onboarding as onb_mod
+                with mock.patch.object(onb_mod, "operator_profile_path", lambda _s: blocker / "operator.json"):
+                    result = onb_mod.save_operator_profile(
+                        bot_mod.settings, {
                         "operator_name": "Test",
                         "operator_language": "en",
                         "operator_style": "terse",
@@ -3265,22 +3260,13 @@ def main() -> int:
         _test_agent_message_text_exists,
         _test_agent_message_text_extraction,
         _test_event_summary_streams_prose,
-        _test_typing_loop_stays_alive,
         _test_tool_call_name_exists,
         _test_tool_call_name_extraction,
         _test_tool_call_event_is_user_visible,
         _test_event_summary_tool_indicator,
-        # Behavior contracts
-        _test_placeholder_sent_once,
-        _test_progress_uses_edit,
-        _test_typing_loop_cancelled,
-        _test_final_answer_via_edit,
-        _test_edit_failure_falls_back_to_send,
-        _test_edit_broken_latch,
-        _test_placeholder_send_failure_falls_back,
-        # Chat-feel round-7 contracts
-        _test_no_op_edit_skipped,
-        _test_no_op_edit_skipped_after_truncation_collision,
+        # Behavior contracts (P2.1: _start_job removed from bot.py;
+        # progress flow now lives in handlers/jobs.py, tested by
+        # jobs_progress_mode_smoke.py)
         # Chat-feel round-2 contracts
         _test_command_execution_tool_indicator,
         _test_lifecycle_events_suppressed,

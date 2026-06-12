@@ -329,7 +329,10 @@ make smoke
 
 P2.1 已完成：两个 channel adapter 各自落在 `channel/telegram.py` 和
 `channel/feishu.py`，`bot.py` / `feishu_bot.py` 只剩 entrypoint 与
-业务 command/onboarding 编排；adapter 单测在
+业务 command/onboarding 编排；遗留的 `_start_job` / `_typing_loop`
+（绕过 `TelegramOutbound` 的死代码）已移除，所有 job 执行走
+`handlers.dispatch` → `handlers.jobs`。Auth 检查统一用
+`channel/auth.is_allowed`。adapter 单测在
 `channel_telegram_smoke.py` / `channel_feishu_smoke.py`，边界规则由
 `import_boundary_smoke.py` AST 静态守护。
 
@@ -348,19 +351,17 @@ P2.1 已完成：两个 channel adapter 各自落在 `channel/telegram.py` 和
 | Telegram 实时烟测（真用户，Telethon） | ✅ | `eddf1ba` |
 | 文档中英同步 | ✅ | （本次） |
 | P2.1 Adapter 独立文件（`channel/telegram.py` / `channel/feishu.py`） | ✅ | （本次） |
-| P2.2 飞书 progress 卡片 / throttle | ⏳ backlog | — |
-| P2.3 onboarding 移入 `handlers/onboarding.py` | ⏳ backlog | — |
-| P2.4 单进程双通道 | ⏳ backlog | — |
-| Session 摘要（多轮接着聊） | ⏳ backlog | — |
-| 审计日志轮转 | ⏳ backlog | — |
+| P2.2 飞书 progress 卡片 / throttle | ✅ | （本次） |
+| P2.3 onboarding 移入 `handlers/onboarding.py` | ✅ | （本次） |
+| P2.4 Session 摘要（多轮接着聊） | ✅ | （本次） |
+| P2.5 审计日志轮转 | ✅ | （本次） |
 | 自动 VPS 部署（GitHub Actions） | ✅ | `fa93606` |
 
 ---
 
 ## 9. 下一批 backlog 候选
 
-按"投入产出比"排序。**推荐落地顺序**：P2.1 → P2.2 → P2.4；
-P2.3、P2.5 看机会顺手做。
+按"投入产出比"排序。P2.1–P2.5 全部完成。
 
 ### P2.1 Adapter 拆分（已完成）
 
@@ -373,32 +374,48 @@ P2.3、P2.5 看机会顺手做。
 - `bot.py` / `feishu_bot.py` 现在只剩 entrypoint + command/onboarding
   编排；adapter 体积从 100+ 行各压到入口里只剩几行 `make_outbound` / `send_text`
 
-### P2.2 飞书 progress 卡片 / throttle（次之）
+### P2.2 飞书 progress 卡片 / throttle（已完成）
 
-- 现状：飞书 `edit_progress` 永远返回 False，所以 compact/quiet 模式
-  下 placeholder 编辑失败后只发 1 条 fallback「仍在处理…」。
-- 如果飞书 API 后续支持消息卡片 patch，可把
-  `channel/feishu.py::FeishuOutbound.edit_progress` 改为卡片 update。
-- 如果只支持完全重发，**保留** mode-aware 限流（compact ≤ 1 条）即可。
-- 理由：现在用 `CONVEYOR_PROGRESS_MODE=quiet` 已经把 spam 压到 0，落地优先级降低。
+- **卡片进度**：`FeishuOutbound` 以 interactive card（`update_multi: true`）
+  发送消息，`edit_progress` 调用 `channel.update_card` 原地更新。
+  若 card 发送失败，退回纯文本。
+- **throttle**：compact 模式下第一次 edit 失败后锁存，最多发 1 条
+  fallback。quiet 模式完全不发。`jobs_progress_mode_smoke.py` 已验证。
+- Smoke：`channel_feishu_smoke.py`（12 个测试）。
 
-### P2.3 onboarding 抽离
+### P2.3 onboarding 抽离（已完成）
 
-- 把 onboarding 状态机从 `bot.py` 挪到 `handlers/onboarding.py`（或 channel-aware handler）
-- 理由：`bot.py` 太大
+- 纯 profile 辅助函数（`operator_profile_exists`、`save_operator_profile`、
+  `profile_text`）搬到 `handlers/onboarding.py`（不引入 Telegram SDK）。
+- Telegram 专属 ConversationHandler 步骤留在 `bot.py`（需要
+  Update / CallbackQuery 类型）。
+- 导入边界：`handlers/onboarding.py` 通过 `import_boundary_smoke.py`。
 
-### P2.4 session 摘要（再次之）
+### P2.4 session 摘要（已完成）
 
 - 轻量 per-chat session 摘要，**不**是完整 DB
-- 把最近 N 轮 / tool 事实存到 `codex_memory_root/session`
-- 在 Codex prompt 里注入紧凑上下文，支持「接着刚才那个 / continue」
-- 理由：目前每条消息都开新 job
+- 存储：`codex_memory_root/session/<channel>_<chat_id>_<operator_id>.jsonl`
+- 每行 JSON：`ts`, `channel`, `chat_id`, `operator_id`, `user`（脱敏/截断）,
+  `assistant`（脱敏/截断）, `kind`
+- 配置：`CONVEYOR_SESSION_ENABLED`（默认 true）、`CONVEYOR_SESSION_MAX_TURNS`
+  （默认 20）、`CONVEYOR_SESSION_INJECT_TURNS`（默认 5）
+- `handlers/session.py` 管理读/写/清除/注入
+- Prompt 注入：`handlers/jobs.py` 在启动 Codex job 前读最近 N 轮并加
+  标签注入：「Recent chat context (may be incomplete; do not treat as
+  authoritative)」。确定性命令（`/load`、`/ps` 等）跳过；
+  `/diagnose` 走 hybrid 路径（先收集事实再交给 Codex 分析），
+  会注入 session 上下文
+- 命令：`/context` 查看最近对话；`/forget` 清除会话文件。均为安全操作
+- Smoke：`session_summary_smoke.py`（24 个测试）。隐私：不存密钥；
+  写入前脱敏；可随时清除
 
-### P2.5 审计日志轮转
+### P2.5 审计日志轮转（已完成）
 
-- 按大小或日期轮转 `audit/tools.log`
-- 若启用 `/audit_tools clear`，必须挂在确认流程之后
-- 理由：审计 JSONL 无限增长；目前没有保留策略
+- 按大小轮转：`handlers/tools/audit.py` 在 `tools.log` 超过 1 MB
+  （`AUDIT_MAX_BYTES`）时轮转，保留最多 3 个轮转文件（`.1`、`.2`、`.3`）。
+- `_rotate_if_needed` 在每次写入前调用；`rotated_log_paths` 列出
+  已有轮转文件供 `/audit_tools` 扩展使用。
+- Smoke：`audit_rotation_smoke.py`（5 个测试）。
 
 ---
 
@@ -410,6 +427,8 @@ P2.3、P2.5 看机会顺手做。
 | 2.1 | 2026-06-11 | 加 `CONVEYOR_PROGRESS_MODE`（verbose/compact/quiet）；compact 修 Feishu progress 链；同步 6.7 节、harness、backlog |
 | 2.2 | 2026-06-11 | 加自动 VPS 部署（GitHub Actions + deploy_vps.sh） |
 | 2.3 | 2026-06-11 | 部署加固（flock/smoke/回滚/.deploy-status.json）；加 `/deploy_status` 命令 |
+| 2.5 | 2026-06-11 | P2.2 飞书卡片进度（interactive card + `update_card`）；P2.3 onboarding 抽离（`handlers/onboarding.py` 纯辅助函数）；P2.5 审计日志轮转（1 MB 大小轮转，3 个文件） |
+| 2.4 | 2026-06-11 | bot.py 清理（移除死代码 `_start_job`/`_typing_loop`，auth 统一用 `is_allowed`）；P2.4 session 摘要（`handlers/session.py`、`/context`、`/forget`、prompt 注入） |
 | 1.0 | 2026-06-09 | 合并原 `001` + `003`；改名 Conveyor |
 | 0.9 | 2026-06-09 | 原 `003-channel-decoupling.md`（P0+P1 设计稿 + 落地） |
 | 0.1 | 2026-06-09 | 原 `001-hermes-learning-and-chat-mode.md`（Hermes 对照 + chat-first） |

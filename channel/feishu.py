@@ -26,14 +26,29 @@ logger = logging.getLogger("conveyor.channel.feishu")
 # ---- OutboundPort ----------------------------------------------------------
 
 
+def _make_card(text: str) -> dict:
+    """Build a Feishu interactive card with markdown content.
+
+    ``update_multi: true`` is required so later ``update_card`` PATCH
+    calls can modify the card in-place (shared card visible to all).
+    """
+    return {
+        "config": {"update_multi": True},
+        "elements": [
+            {
+                "tag": "markdown",
+                "content": truncate(text),
+            }
+        ],
+    }
+
+
 class FeishuOutbound:
     """OutboundPort backed by a FeishuChannel.
 
-    First version: every reply is a fresh message. The OutboundPort
-    contract promises edit_progress, so we accept the placeholder id
-    but degrade to send_new — this matches the prior feishu_bot.py
-    behavior (no streaming cards) and is enough for /status, /diff,
-    Codex replies.
+    Sends messages as interactive cards so edit_progress can update
+    them in-place via the Feishu PATCH API (P2.2).  Falls back to
+    plain text send_new if card send fails.
     """
     supports_inline_buttons: bool = False
 
@@ -41,19 +56,30 @@ class FeishuOutbound:
         self._channel = channel
 
     async def reply(self, msg: InboundMessage, text: str):
-        await self._send(msg, text, reply_to=msg.message_id)
-        return None
+        result = await self._send_card(msg, text, reply_to=msg.message_id)
+        return result
 
     async def send_new(self, msg: InboundMessage, text: str):
-        await self._send(msg, text, reply_to=None)
-        return None
+        result = await self._send_card(msg, text, reply_to=None)
+        return result
 
     async def edit_progress(
         self, msg: InboundMessage, placeholder_id: Any, text: str
     ) -> bool:
-        # Feishu OutboundPort does not implement streaming edit; let
-        # the caller fall back to send_new on the first latched edit.
-        return False
+        if not placeholder_id:
+            return False
+        try:
+            card = _make_card(text)
+            result = await self._channel.update_card(str(placeholder_id), card)
+            if result.ok:
+                return True
+            logger.debug(
+                "Feishu edit_progress update_card failed: %s", result.error,
+            )
+            return False
+        except Exception:
+            logger.debug("Feishu edit_progress exception", exc_info=True)
+            return False
 
     async def reply_with_buttons(
         self,
@@ -61,21 +87,33 @@ class FeishuOutbound:
         text: str,
         buttons: Sequence[Sequence[dict]],
     ):
-        # Feishu cards/interactive messages are not yet implemented; the
-        # safe fall-back is to send a text representation. The caller
-        # may append a textual button hint per row from `buttons` later
-        # if needed (P2.2 backlog).
-        await self._send(msg, text, reply_to=msg.message_id)
-        return None
+        result = await self._send_card(msg, text, reply_to=msg.message_id)
+        return result
 
-    async def _send(
+    async def _send_card(
         self, msg: InboundMessage, text: str, *, reply_to: str | None
-    ) -> None:
+    ) -> str | None:
+        """Send an interactive card.  Returns message_id on success,
+        None on failure (falls back to plain text)."""
         chat_id = msg.chat_id
         if not chat_id:
-            return
+            return None
+        try:
+            card = _make_card(text)
+            opts = {"reply_to": reply_to} if reply_to else None
+            result = await self._channel.send(chat_id, card, opts)
+            if result.ok and result.message_id:
+                return result.message_id
+            logger.debug(
+                "Feishu card send failed, falling back to text: %s",
+                result.error,
+            )
+        except Exception:
+            logger.debug("Feishu card send exception, falling back to text", exc_info=True)
+        # Fallback: plain text (no in-place update possible).
         opts = {"reply_to": reply_to} if reply_to else None
         await self._channel.send(chat_id, {"text": truncate(text)}, opts)
+        return None
 
 
 # ---- Inbound conversion ----------------------------------------------------

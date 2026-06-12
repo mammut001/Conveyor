@@ -115,6 +115,11 @@ def _fake_runner(*, summary: str | None, progress_text: str | None) -> mock.Mock
 
     runner = mock.Mock()
     runner.start = fake_start
+    runner.settings = SimpleNamespace(
+        codex_memory_root=Path("/tmp/codex-dedupe-mem"),
+        conveyor_progress_mode="verbose",
+        conveyor_session_enabled=False,
+    )
     return runner, job
 
 

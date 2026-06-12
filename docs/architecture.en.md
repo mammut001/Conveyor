@@ -438,11 +438,11 @@ statically by `import_boundary_smoke.py`.
 | docs bilingual sync | done | (this task) |
 | P2.1 Adapter split (`channel/telegram.py`, `channel/feishu.py`) | done | (this task) |
 | `CONVEYOR_PROGRESS_MODE` (verbose/compact/quiet) | done | (this task) |
-| P2.2 Feishu progress card / throttle | backlog | — |
-| P2.3 Onboarding extraction | backlog | — |
+| P2.2 Feishu progress card / throttle | done | (this task) |
+| P2.3 Onboarding extraction | done | (this task) |
 | P2.4 Single-process dual-channel | backlog | — |
-| Session summary / multi-turn continuity | backlog | — |
-| Audit log rotation | backlog | — |
+| P2.4 Session summary | done | (this task) |
+| P2.5 Audit log rotation | done | (this task) |
 | Auto VPS deploy (GitHub Actions) | done | `fa93606` |
 
 ---
@@ -467,40 +467,61 @@ picked up opportunistically.
   Telegram SDK in `channel/feishu.py`, no `runner` import in
   `channel/*.py`).
 - `bot.py` / `feishu_bot.py` are now entrypoints only: handler
-  registration, onboarding, the long-lived `_start_job` /
-  `tool_callback` wiring, and the Feishu WebSocket connect. The
-  adapter volume (~150 lines) is gone from each file.
+  registration, onboarding, `tool_callback` wiring, and the Feishu
+  WebSocket connect. The legacy `_start_job` / `_typing_loop` (which
+  bypassed `TelegramOutbound`) have been removed — all job execution
+  now goes through `handlers.dispatch` → `handlers.jobs`. Auth
+  checking in `bot.py` uses `channel/auth.is_allowed`.
 
-### P2.2 Feishu progress card / throttle (second)
+### P2.2 Feishu progress card / throttle (done)
 
-- Current state: `channel/feishu.py::FeishuOutbound.edit_progress`
-  always returns `False`, so under `compact`/`quiet` the placeholder
-  edit failure produces at most one fallback "仍在处理..." line.
-- If Feishu eventually supports patching message cards, point
-  `edit_progress` at the card-update API and re-enable in-place
-  edits.
-- If only full re-sends are supported, the mode-aware cap already
-  in place (≤ 1 line in compact, 0 in quiet) is enough.
-- Rationale: `CONVEYOR_PROGRESS_MODE=quiet` already eliminates the
-  spam; the priority is lower than it was pre-P2.7.
+- **Card-based progress**: `FeishuOutbound` sends messages as
+  interactive cards with `update_multi: true`.  `edit_progress` calls
+  `channel.update_card(message_id, card)` to update in-place.
+  Falls back to plain text if card send fails.
+- **Throttle**: Under `compact` mode, `handlers/jobs.py` latches after
+  the first edit failure and sends at most one fallback per job.
+  `quiet` mode sends nothing.  Verified by `jobs_progress_mode_smoke.py`.
+- Smoke: `channel_feishu_smoke.py` (12 tests).
 
-### P2.3 Onboarding extraction
+### P2.3 Onboarding extraction (done)
 
-- Move the onboarding state machine out of `bot.py` into `handlers/onboarding.py` (or a channel-aware handler).
-- Rationale: `bot.py` is too large.
+- Pure profile helpers (`operator_profile_exists`, `save_operator_profile`,
+  `profile_text`) live in `handlers/onboarding.py` (no Telegram SDK import).
+- Telegram-specific ConversationHandler steps stay in `bot.py` because
+  they need Update / CallbackQuery types.
+- Import boundary: `handlers/onboarding.py` passes `import_boundary_smoke.py`.
 
-### P2.4 Session summary (third)
+### P2.4 Session summary (done)
 
 - Lightweight per-chat session summary, not a full database.
-- Store last N turns / tool facts in `codex_memory_root/session`.
-- Inject compact context before Codex for "continue / 刚才那个" style requests.
-- Rationale: currently every message starts a fresh Codex job.
+- Storage: `codex_memory_root/session/<channel>_<chat_id>_<operator_id>.jsonl`.
+- Each line is a JSON object with `ts`, `channel`, `chat_id`,
+  `operator_id`, `user` (redacted/truncated), `assistant` (redacted/
+  truncated), `kind`.
+- Config: `CONVEYOR_SESSION_ENABLED` (default true),
+  `CONVEYOR_SESSION_MAX_TURNS` (default 20),
+  `CONVEYOR_SESSION_INJECT_TURNS` (default 5).
+- `handlers/session.py` manages read/write/clear/inject.
+- Prompt injection: before starting a Codex job, `handlers/jobs.py`
+  reads the last N turns and prepends them as labeled context:
+  "Recent chat context (may be incomplete; do not treat as
+  authoritative)". Deterministic commands (`/load`, `/ps`, etc.) are
+  skipped. `/diagnose` uses the hybrid path (collects facts, then
+  hands them to Codex for analysis) and DOES get session injection.
+- Commands: `/context` shows recent turns; `/forget` clears the
+  session file. Both are safe (no confirmation needed).
+- Smoke: `session_summary_smoke.py` (24 tests). Privacy: no secrets
+  stored; redaction applied before write; session can be cleared.
 
-### P2.5 Audit log rotation
+### P2.5 Audit log rotation (done)
 
-- Rotate `audit/tools.log` by size or date.
-- Add `/audit_tools clear` only if gated by confirmation.
-- Rationale: the audit JSONL grows unbounded; no retention policy yet.
+- Size-based rotation: `handlers/tools/audit.py` rotates `tools.log`
+  when it exceeds 1 MB (`AUDIT_MAX_BYTES`).  Keeps up to 3 rotated
+  files (`.1`, `.2`, `.3`).
+- `_rotate_if_needed` is called before every write; `rotated_log_paths`
+  lists existing rotated files for future `/audit_tools` extensions.
+- Smoke: `audit_rotation_smoke.py` (5 tests).
 
 ---
 
@@ -511,5 +532,7 @@ picked up opportunistically.
 | 2.1 | 2026-06-11 | Added `CONVEYOR_PROGRESS_MODE` (verbose/compact/quiet); compact mode fixes the Feishu progress chain; section 6.7 + harness + backlog updated. |
 | 2.2 | 2026-06-11 | Added auto VPS deploy (GitHub Actions + deploy_vps.sh). |
 | 2.3 | 2026-06-11 | Deploy hardening (flock/smoke/rollback/.deploy-status.json); added `/deploy_status` command. |
+| 2.5 | 2026-06-11 | P2.2 Feishu card-based progress (interactive cards + `update_card`); P2.3 onboarding extraction (`handlers/onboarding.py` pure helpers); P2.5 audit log rotation (1 MB size-based, 3 rotated files). |
+| 2.4 | 2026-06-11 | bot.py cleanup (removed dead `_start_job`/`_typing_loop`, auth uses `is_allowed`); P2.4 session summary (`handlers/session.py`, `/context`, `/forget`, prompt injection). |
 | 2.0 | 2026-06-11 | English translation, added agent tool layer, Telegram live smoke, bilingual sync. |
 | 1.0 | 2026-06-09 | Original Chinese architecture doc. |

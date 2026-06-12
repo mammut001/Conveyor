@@ -1,4 +1,10 @@
-"""handlers/tools/audit.py — JSONL audit log for WRITE/DESTRUCTIVE tools."""
+"""handlers/tools/audit.py — JSONL audit log for WRITE/DESTRUCTIVE tools.
+
+Includes size-based rotation: when tools.log exceeds AUDIT_MAX_BYTES,
+it is rotated to tools.log.1, tools.log.1 → tools.log.2, etc., up to
+AUDIT_MAX_ROTATED files.  This keeps the audit directory bounded
+without losing history.
+"""
 from __future__ import annotations
 
 import json
@@ -14,10 +20,40 @@ logger = logging.getLogger(__name__)
 
 AUDIT_FILENAME = "tools.log"
 PREVIEW_LIMIT = 400
+# Rotation defaults (bytes and file count).
+AUDIT_MAX_BYTES = 1 * 1024 * 1024   # 1 MB
+AUDIT_MAX_ROTATED = 3                # keep tools.log.1 … .3
 
 
 def audit_log_path(settings: Settings) -> Path:
     return settings.codex_memory_root / "audit" / AUDIT_FILENAME
+
+
+def _rotate_if_needed(path: Path) -> None:
+    """Rotate the log file if it exceeds AUDIT_MAX_BYTES.
+
+    Rotation scheme:  .3 is deleted, .2 → .3, .1 → .2, current → .1.
+    This is intentionally simple and avoids external dependencies.
+    """
+    try:
+        if not path.is_file():
+            return
+        if path.stat().st_size < AUDIT_MAX_BYTES:
+            return
+        parent = path.parent
+        # Drop the oldest rotated file.
+        oldest = parent / f"{AUDIT_FILENAME}.{AUDIT_MAX_ROTATED}"
+        oldest.unlink(missing_ok=True)
+        # Shift existing rotated files up by one.
+        for i in range(AUDIT_MAX_ROTATED - 1, 0, -1):
+            src = parent / f"{AUDIT_FILENAME}.{i}"
+            dst = parent / f"{AUDIT_FILENAME}.{i + 1}"
+            if src.exists():
+                src.rename(dst)
+        # Rotate the current log.
+        path.rename(parent / f"{AUDIT_FILENAME}.1")
+    except OSError:
+        logger.exception("Failed to rotate audit log")
 
 
 def audit_tool_event(
@@ -33,10 +69,11 @@ def audit_tool_event(
     result_preview: str = "",
     error_preview: str = "",
 ) -> None:
-    """Append one JSONL record. Never raises."""
+    """Append one JSONL record.  Rotates before writing if needed.  Never raises."""
     try:
         path = audit_log_path(settings)
         path.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_if_needed(path)
         record: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "operator_id": operator_id,
@@ -58,6 +95,7 @@ def audit_tool_event(
 
 
 def read_audit_tail(settings: Settings, n: int = 10) -> list[dict[str, Any]]:
+    """Read the last N records from the current (non-rotated) log."""
     path = audit_log_path(settings)
     if not path.is_file():
         return []
@@ -72,3 +110,14 @@ def read_audit_tail(settings: Settings, n: int = 10) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return records
+
+
+def rotated_log_paths(settings: Settings) -> list[Path]:
+    """Return paths to rotated log files (tools.log.1, .2, …) that exist."""
+    parent = audit_log_path(settings).parent
+    paths: list[Path] = []
+    for i in range(1, AUDIT_MAX_ROTATED + 1):
+        p = parent / f"{AUDIT_FILENAME}.{i}"
+        if p.is_file():
+            paths.append(p)
+    return paths

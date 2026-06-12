@@ -88,6 +88,14 @@ async def handle_codex_job(
         await port.reply(msg, "Usage: /run <prompt>")
         return
 
+    # Session context injection: prepend recent turns so the LLM has
+    # continuity when the user says "继续" / "continue". Only for LLM
+    # jobs (handle_codex_job is only called for /run, /fix, and free
+    # text fallback — never for deterministic commands).
+    from handlers.session import build_context_prompt, append_turn
+    ctx_prompt = build_context_prompt(runner.settings, msg)
+    user_text_for_session = body  # remember for session recording
+
     progress_mode = _normalize_mode(getattr(runner.settings, "conveyor_progress_mode", "compact"))
 
     placeholder_id = await port.reply(msg, PLACEHOLDER_TEXT)
@@ -163,8 +171,11 @@ async def handle_codex_job(
         await port.send_new(msg, outgoing)
         last_progress = outgoing
 
+    # Prepend session context if available.
+    effective_body = (ctx_prompt + body) if ctx_prompt else body
+
     try:
-        job = await runner.start(mode, body, progress)
+        job = await runner.start(mode, effective_body, progress)
     except Exception as exc:
         await port.reply(msg, f"现在不能开始：{truncate(str(exc), 1200)}")
         return
@@ -178,8 +189,12 @@ async def handle_codex_job(
     # not see the same paragraph twice.
     while job.state == JobState.RUNNING:
         await _sleep(0.3)
+
+    # Determine the final assistant text for session recording.
+    final_answer = ""
     if job.summary:
         summary = job.summary
+        final_answer = summary
         # Round-9 de-dup. The runner's terminal on_progress already
         # delivered a (truncated) final message, and that truncated
         # text is what `last_progress` recorded. Compare against the
@@ -192,10 +207,15 @@ async def handle_codex_job(
             await port.send_new(msg, summary)
     elif job.error:
         err_truncated = truncate(job.error, 3500)
+        final_answer = f"[error] {err_truncated}"
         if err_truncated.strip() != last_progress.strip():
             await port.send_new(msg, err_truncated)
     elif last_progress and last_progress != PLACEHOLDER_TEXT:
+        final_answer = last_progress
         await port.send_new(msg, last_progress)
+
+    # Record turn for session continuity.
+    append_turn(runner.settings, msg, user_text_for_session, final_answer)
 
 
 async def _sleep(seconds: float) -> None:

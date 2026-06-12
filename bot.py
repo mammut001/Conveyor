@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 from datetime import datetime
-from pathlib import Path
 
 from telegram import Update
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
@@ -16,17 +14,21 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from channel import InboundMessage
 from channel.auth import is_allowed
 from channel.telegram import (
-    TelegramOutbound,
     inbound_from_update,
     make_outbound,
     send_text,
 )
 from config import load_settings
-from config import OPERATOR_PROFILE_FIELDS
 from handlers import dispatch
+from handlers.onboarding import (
+    operator_profile_exists,
+    operator_profile_path,
+    profile_text,
+    save_operator_profile,
+)
 from handlers.tools.runner import cancel_pending, execute_confirmed, parse_tool_callback
-from redaction import redact_text, truncate
-from runner import CodexRunner, JobMode
+from redaction import redact_text
+from runner import CodexRunner
 
 
 logging.basicConfig(
@@ -62,8 +64,8 @@ DATE_ARG_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # ---- Channel adapter shim (P2.1: adapter moved to channel/telegram.py) ----
 # Inbound conversion and OutboundPort live in channel.telegram. bot.py
-# only wires handlers and the long-lived job scaffolding (_start_job,
-# typing loop, latched edits) that need direct SDK access.
+# only wires Telegram framework handlers and lifecycle. Job execution
+# goes through handlers.dispatch → handlers.jobs (channel-agnostic).
 
 
 # ---- Channel-agnostic handler shims ---------------------------------------
@@ -104,13 +106,11 @@ async def _reply(
     await send_text(update, text, reply_markup=reply_markup)
 
 
-def _allowed(update: Update) -> bool:
-    user = update.effective_user
-    return bool(user and user.id == settings.telegram_allowed_user_id)
-
-
 async def _guard(update: Update) -> bool:
-    if _allowed(update):
+    """Auth gate for Telegram command handlers. Uses channel/auth.is_allowed
+    for the actual check; adds Telegram-specific logging."""
+    inbound = inbound_from_update(update)
+    if is_allowed(inbound, settings):
         return True
     user = update.effective_user
     logger.warning("Rejected unauthorized Telegram user id=%s username=%s", getattr(user, "id", None), getattr(user, "username", None))
@@ -275,63 +275,17 @@ async def editcheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _dispatch_text(update, "/editcheck")
 
 
-# --- Onboarding-C: first-run /onboard conversation + /profile view ----
-# When the user fires the bot for the first time (no
-# codex_memory_root/operator.json yet), /onboard walks them through
-# a 3-step identity setup: name (free text), language (3 button
-# choices + free text fallback), style (3 button choices). Answers
-# are saved to operator.json which load_settings reads on next
-# startup. The conversation uses python-telegram-bot\'s
-# ConversationHandler so the per-chat state lives in the bot
-# runtime; settings persistence is via the JSON file (bot restart
-# does not lose progress). /skip ends the conversation without
-# writing operator.json — the .env defaults stay in effect.
-# /profile shows the current 4-field profile and points at /onboard
-# to re-run. The intent is a Hermes-style first-run experience:
-# light-touch 3 questions, persistent across restarts, editable
-# later, no ceremony, no forced commitment.
+# --- Onboarding (P2.3): Telegram-specific handlers --------------------
+# Pure profile helpers live in handlers/onboarding.py (no Telegram SDK).
+# The ConversationHandler steps stay here because they need Telegram
+# types (Update, CallbackQuery, InlineKeyboard*).
 
 ONBOARDING_NAME, ONBOARDING_LANG, ONBOARDING_STYLE = range(3)
-OPERATOR_PROFILE_FILENAME = "operator.json"
-
-
-def _operator_profile_path() -> Path:
-    return settings.codex_memory_root / OPERATOR_PROFILE_FILENAME
-
-
-def _operator_profile_exists() -> bool:
-    return _operator_profile_path().exists()
-
-
-def _save_operator_profile(data: dict) -> bool:
-    """Write the operator.json with the 4 known fields. Returns True
-    on success, False on OSError. Stale or unknown fields from
-    older /onboard runs are silently dropped (the loader only
-    returns the 4 known keys)."""
-    path = _operator_profile_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps({k: data[k] for k in OPERATOR_PROFILE_FIELDS if k in data}, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        return True
-    except OSError:
-        logger.exception("Failed to write operator.json")
-        return False
 
 
 async def onboard_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await _guard(update):
         return ConversationHandler.END
-    # The same entry point serves two surfaces: the explicit
-    # /onboard command and the inline "开始 onboarding" button
-    # (callback_data="ob:start") on the first-run welcome. For the
-    # callback case we have to answer the callback query so Telegram
-    # dismisses the button's loading indicator before the next
-    # message arrives; _reply uses effective_message.reply_text
-    # which is the same for both Update paths so no branching
-    # needed downstream.
     if update.callback_query:
         await update.callback_query.answer()
     context.user_data["onboarding_draft"] = {}
@@ -382,10 +336,10 @@ async def onboard_style_button(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     style = query.data.split(":", 2)[2]
     context.user_data["onboarding_draft"]["operator_style"] = style
-    # Default standing from project assumption; /profile shows it
-    # so the user can change it later if they want to.
-    context.user_data["onboarding_draft"]["operator_standing"] = settings.operator_standing or "personal-scale, single operator"
-    saved = _save_operator_profile(context.user_data["onboarding_draft"])
+    context.user_data["onboarding_draft"]["operator_standing"] = (
+        settings.operator_standing or "personal-scale, single operator"
+    )
+    saved = save_operator_profile(settings, context.user_data["onboarding_draft"])
     if not saved:
         await query.edit_message_text("保存失败了，重启 bot 后再试。")
         return ConversationHandler.END
@@ -410,30 +364,15 @@ async def onboard_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    if not _operator_profile_exists():
+    text = profile_text(settings)
+    if text is None:
         await _reply(
             update,
             "暂无 `operator.json`，用的是 .env 默认值。\n"
             "跑 `/onboard` 创建一份（重启后生效）。",
         )
-        return
-    try:
-        content = _operator_profile_path().read_text(encoding="utf-8")
-        data = json.loads(content)
-    except (OSError, json.JSONDecodeError) as exc:
-        await _reply(update, f"读 operator.json 失败：{exc}")
-        return
-    text = "当前 profile（`codex_memory_root/operator.json`）：\n"
-    for key, label in (
-        ("operator_name", "name"),
-        ("operator_language", "language"),
-        ("operator_style", "style"),
-        ("operator_standing", "standing"),
-    ):
-        val = data.get(key)
-        text += f"  {label}: {val if val is not None else '(unset)'}\n"
-    text += "\n重做问卷 `/onboard`。"
-    await _reply(update, text)
+    else:
+        await _reply(update, text)
 
 
 async def tool_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -473,7 +412,7 @@ async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # silently starting a job. They can still /onboard later to
     # set their identity; the prompt just doesn't let the first
     # message get lost in a job they didn't intend.
-    if not _operator_profile_exists():
+    if not operator_profile_exists(settings):
         # First-run nudge: same button as /start so the user does
         # not have to type /onboard after reading the hint.
         await _reply(
@@ -584,7 +523,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # to /onboard. The .env defaults still work (operator.json is
     # optional) but the user gets a clear "first time" experience
     # mirroring Hermes-style personal agent onboarding.
-    if not _operator_profile_exists():
+    if not operator_profile_exists(settings):
         # First-run path: show the welcome with a one-tap button so
         # the user does not have to remember the /onboard command.
         # The button drives the same ConversationHandler entry
@@ -603,107 +542,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
     await _reply(update, "你好！直接发消息就行，我会像对话一样处理（shell、查资料、改文件都可以）。运维命令用 /help。")
-
-
-async def _typing_loop(app, chat_id: int) -> None:
-    """Chat-bot feel: keep showing a typing indicator while Codex is thinking."""
-    try:
-        while True:
-            await app.send_chat_action(chat_id=chat_id, action="typing")
-            await asyncio.sleep(1.5)  # chat feel: keep typing pulse alive within Telegram 5s expiry
-    except asyncio.CancelledError:
-        pass
-    except Exception:
-        logger.exception("Typing indicator failed")
-
-
-async def _start_job(update: Update, mode: JobMode, prompt: str) -> None:
-    chat_id = update.effective_chat.id if update.effective_chat else None
-    app = update.get_bot()
-    message = update.effective_message
-    placeholder_id: int | None = None
-
-    typing_task: asyncio.Task | None = None
-    if chat_id is not None and message is not None:
-        typing_task = asyncio.create_task(_typing_loop(app, chat_id))
-        # Let the typing loop run for the lifetime of the job. The
-        # placeholder edits the message in place, but Telegram's chat-list
-        # typing pulse needs to keep firing in the gaps between codex
-        # events — otherwise a long think looks frozen. Cancellation
-        # happens in the `finally` block below when the job ends.
-        try:
-            placeholder_msg = await message.reply_text(
-                "⏳ Got it, working on it...",
-                disable_web_page_preview=True,
-            )
-            placeholder_id = getattr(placeholder_msg, "message_id", None)
-        except Exception:
-            logger.exception("Failed to send placeholder")
-            placeholder_id = None
-
-    # Latch: once an edit_message_text call raises (typically Telegram's
-    # 20 edits/min/message limit), stop trying to edit the same placeholder
-    # for the rest of this job. Falling back to send_message for every
-    # subsequent update would scatter one-off messages through the chat;
-    # latching keeps it to "placeholder stuck on first edit" + a chain of
-    # new messages, which is the lesser evil.
-    edit_broken = False
-    # Round-7 no-op guard. Telegram's editMessageText 400s with
-    # "Message is not modified" when the new content is byte-identical
-    # to the current content. Even short runs can hit that on a tight
-    # stream of similar summaries (e.g. two consecutive tool indicators
-    # for the same call, or post-truncation collisions on long prose),
-    # and the existing except latch would flip the rest of this job
-    # into send_message mode and scatter one-off messages through the
-    # chat. Compare post-truncation (the wire format) and short-circuit
-    # when it matches the last successful delivery.
-    last_progress_text: str | None = None
-
-    async def progress(message_text: str) -> None:
-        nonlocal edit_broken, last_progress_text
-        if chat_id is None:
-            return
-        outgoing = truncate(message_text)
-        if outgoing == last_progress_text:
-            return
-        if placeholder_id is not None and not edit_broken:
-            try:
-                await app.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=placeholder_id,
-                    text=outgoing,
-                )
-                last_progress_text = outgoing
-                return
-            except Exception:
-                logger.exception("Failed to edit placeholder; latching to send mode")
-                edit_broken = True
-        try:
-            await app.send_message(
-                chat_id=chat_id,
-                text=outgoing,
-                disable_web_page_preview=True,
-            )
-            last_progress_text = outgoing
-        except Exception:
-            logger.exception("Failed to send Telegram progress update")
-
-    try:
-        await runner.start(mode, prompt, progress)
-    except Exception as exc:
-        if typing_task is not None and not typing_task.done():
-            typing_task.cancel()
-        if message is not None:
-            try:
-                await message.reply_text(
-                    f"现在不能开始：{truncate(str(exc), 1200)}",
-                    disable_web_page_preview=True,
-                )
-            except Exception:
-                logger.exception("Failed to send error reply")
-    finally:
-        if typing_task is not None and not typing_task.done():
-            typing_task.cancel()
 
 
 async def generic_command_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -786,20 +624,13 @@ def main() -> None:
     application.add_handler(CommandHandler("memo", memo_cmd))
     application.add_handler(CommandHandler("memory", memory_cmd))
     application.add_handler(CommandHandler("journal", journal_cmd))
-    # Onboarding-C: ConversationHandler for /onboard. The
-    # CallbackQueryHandler entries pick up the button presses
-    # inside each step; the MessageHandler entry takes the free-text
-    # name. /skip is a fallback that ends the conversation without
-    # writing operator.json (the .env defaults stay in effect).
+    # Onboarding (P2.3): ConversationHandler for /onboard.  Profile
+    # helpers live in handlers/onboarding.py; Telegram-specific steps
+    # stay in bot.py because they need Update / CallbackQuery types.
     application.add_handler(
         ConversationHandler(
             entry_points=[
                 CommandHandler("onboard", onboard_start),
-                # First-run welcome button (callback_data="ob:start")
-                # drives the same conversation start as the
-                # /onboard command. Pattern is anchored so a typo
-                # callback from another handler can't accidentally
-                # enter the conversation.
                 CallbackQueryHandler(onboard_start, pattern=r"^ob:start$"),
             ],
             states={
@@ -813,7 +644,7 @@ def main() -> None:
                     CallbackQueryHandler(onboard_style_button, pattern=r"^ob:style:"),
                 ],
             },
-    fallbacks=[CommandHandler("skip", onboard_cancel)],
+            fallbacks=[CommandHandler("skip", onboard_cancel)],
         )
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
