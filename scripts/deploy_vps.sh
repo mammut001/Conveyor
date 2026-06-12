@@ -115,9 +115,9 @@ declare -A SVC_STATUS
 ALL_ACTIVE=true
 for svc in "${SERVICES[@]}"; do
     log "Restarting ${svc}..."
-    if sudo systemctl restart "${svc}"; then
+    if sudo -n systemctl restart "${svc}"; then
       sleep 2
-      STATE="$(systemctl is-active "${svc}" 2>/dev/null || echo 'inactive')"
+      STATE="$(sudo -n systemctl is-active "${svc}" 2>/dev/null || echo 'inactive')"
       SVC_STATUS["$svc"]="$STATE"
       if [[ "$STATE" != "active" ]]; then
         ALL_ACTIVE=false
@@ -144,9 +144,9 @@ if [[ "$ALL_ACTIVE" == "false" && -n "${BACKUP_PATH:-}" && -d "${BACKUP_PATH:-}"
     STATE="${SVC_STATUS[$svc]:-unknown}"
     if [[ "$STATE" != "active" ]]; then
       log "Re-restarting ${svc} after rollback ..."
-      sudo systemctl restart "${svc}" 2>/dev/null || true
+      sudo -n systemctl restart "${svc}" 2>/dev/null || true
       sleep 2
-      NEW_STATE="$(systemctl is-active "${svc}" 2>/dev/null || echo 'inactive')"
+      NEW_STATE="$(sudo -n systemctl is-active "${svc}" 2>/dev/null || echo 'inactive')"
       SVC_STATUS["$svc"]="$NEW_STATE"
       log "  ${svc}: ${NEW_STATE}"
     fi
