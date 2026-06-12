@@ -115,20 +115,17 @@ declare -A SVC_STATUS
 ALL_ACTIVE=true
 for svc in "${SERVICES[@]}"; do
     log "Restarting ${svc}..."
-    if sudo -n systemctl restart "${svc}"; then
-      sleep 2
-      STATE="$(sudo -n systemctl is-active "${svc}" 2>/dev/null || echo 'inactive')"
-      SVC_STATUS["$svc"]="$STATE"
-      if [[ "$STATE" != "active" ]]; then
-        ALL_ACTIVE=false
-        log "WARNING: ${svc} is ${STATE} after restart"
-      else
-        log "  ${svc}: ${STATE}"
-      fi
-    else
-      SVC_STATUS["$svc"]="restart-failed"
+    if ! sudo -n systemctl restart "${svc}"; then
+      log "WARNING: restart command for ${svc} returned non-zero; checking final state"
+    fi
+    sleep 2
+    STATE="$(sudo -n systemctl is-active "${svc}" 2>/dev/null || echo 'inactive')"
+    SVC_STATUS["$svc"]="$STATE"
+    if [[ "$STATE" != "active" ]]; then
       ALL_ACTIVE=false
-      log "WARNING: failed to restart ${svc}"
+      log "WARNING: ${svc} is ${STATE} after restart"
+    else
+      log "  ${svc}: ${STATE}"
     fi
 done
 
