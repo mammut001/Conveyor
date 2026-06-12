@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import importlib
 import os
 import sys
 from dataclasses import dataclass, field, replace
@@ -31,8 +32,11 @@ import handlers.tools.executors  # noqa: F401
 from channel import InboundMessage
 from config import load_settings
 from handlers.commands import COMMAND_TABLE
-from handlers.dispatch import dispatch
 from scripts.harness_common import CheckResult, print_results
+
+# Import the real dispatch module so we can patch its bound is_allowed symbol.
+DISPATCH_MODULE = importlib.import_module("handlers.dispatch")
+dispatch = DISPATCH_MODULE.dispatch
 
 BOT_PY = Path(__file__).resolve().parents[1] / "bot.py"
 
@@ -104,7 +108,7 @@ async def _test_slash_load() -> CheckResult:
         port = FakeOutbound()
         runner = mock.Mock()
         runner.start = mock.AsyncMock(side_effect=AssertionError("codex should not run"))
-        with mock.patch("handlers.dispatch.is_allowed", return_value=True):
+        with mock.patch.object(DISPATCH_MODULE, "is_allowed", return_value=True):
             await dispatch(_msg("/load"), port, settings=_settings(), runner=runner)
         runner.start.assert_not_called()
         ok = any("负载" in r or "VPS" in r for r in port.replies)
@@ -117,7 +121,7 @@ async def _test_slash_tools() -> CheckResult:
     name = "behavior: /tools via dispatch lists agent tools"
     try:
         port = FakeOutbound()
-        with mock.patch("handlers.dispatch.is_allowed", return_value=True):
+        with mock.patch.object(DISPATCH_MODULE, "is_allowed", return_value=True):
             await dispatch(_msg("/tools"), port, settings=_settings(), runner=mock.Mock())
         ok = any("Agent 工具" in r or "load" in r for r in port.replies)
         return CheckResult(name, ok, f"replies={port.replies[:1]!r}")
@@ -129,7 +133,7 @@ async def _test_slash_disk() -> CheckResult:
     name = "behavior: /disk via dispatch returns disk snapshot"
     try:
         port = FakeOutbound()
-        with mock.patch("handlers.dispatch.is_allowed", return_value=True):
+        with mock.patch.object(DISPATCH_MODULE, "is_allowed", return_value=True):
             await dispatch(_msg("/disk"), port, settings=_settings(), runner=mock.Mock())
         ok = any("磁盘" in r for r in port.replies)
         return CheckResult(name, ok, f"replies={port.replies[:1]!r}")
