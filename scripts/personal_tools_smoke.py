@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""personal_tools_smoke.py — P3.1 local notes/reminders + audit + isolation.
+"""personal_tools_smoke.py — P3.1+P3.2 local notes/reminders + delivery + audit.
 
 Run: .venv/bin/python scripts/personal_tools_smoke.py
 """
@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 from dataclasses import dataclass, field, replace
@@ -428,6 +429,202 @@ async def _test_cmd_reminders() -> CheckResult:
         return CheckResult(name, False, str(exc))
 
 
+# ---- P3.2: delivery schema migration ----------------------------------------
+
+def _test_migration_adds_delivery_columns() -> CheckResult:
+    name = "P3.2 migration: delivery columns added to existing DB"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            settings = _settings(Path(td))
+            path = db_path(settings)
+            # Simulate a pre-P3.2 DB with only the original schema.
+            conn = sqlite3.connect(path)
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS reminders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    operator_id TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    due_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TEXT NOT NULL
+                );
+            """)
+            conn.commit()
+            conn.close()
+            # Opening the store should trigger migration.
+            store = PersonalToolsStore(settings)
+            conn = sqlite3.connect(path)
+            conn.row_factory = sqlite3.Row
+            cols = {row["name"] for row in conn.execute("PRAGMA table_info(reminders)").fetchall()}
+            conn.close()
+            expected = {"channel", "chat_id", "delivered_at", "delivery_status", "delivery_error", "retry_count"}
+            missing = expected - cols
+            ok = not missing
+            return CheckResult(name, ok, f"cols={sorted(cols)} missing={sorted(missing)}")
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
+# ---- P3.2: channel/chat_id storage ------------------------------------------
+
+async def _test_remind_stores_channel_chat_id() -> CheckResult:
+    name = "P3.2 /remind: stores channel and chat_id"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            settings = _settings(Path(td))
+            op = "12345"
+            result = await execute_personal_tool(
+                settings, "reminders.create", "in 10m test",
+                operator_id=op, channel="telegram", chat_id="chat-42",
+            )
+            if "提醒已创建" not in result:
+                return CheckResult(name, False, f"create={result}")
+            store = PersonalToolsStore(settings)
+            rows = store.list_reminders(op)
+            if not rows:
+                return CheckResult(name, False, "no rows")
+            r = rows[0]
+            ok = r.channel == "telegram" and r.chat_id == "chat-42"
+            return CheckResult(name, ok, f"channel={r.channel} chat_id={r.chat_id}")
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
+# ---- P3.2: due query only returns deliverable --------------------------------
+
+def _test_due_query_deliverable_only() -> CheckResult:
+    name = "P3.2: list_due_deliverable skips no-channel and cancelled"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            settings = _settings(Path(td))
+            store = PersonalToolsStore(settings)
+            op = "u1"
+            past = datetime.now(timezone.utc) - timedelta(minutes=2)
+            # No channel/chat_id — should be skipped by deliverable query.
+            store.create_reminder(op, "no-channel", past)
+            # With channel/chat_id — should appear.
+            store.create_reminder(op, "has-channel", past, channel="telegram", chat_id="c1")
+            # Cancelled — should be skipped.
+            row_c = store.create_reminder(op, "cancelled", past, channel="telegram", chat_id="c1")
+            store.cancel_reminder(op, row_c.id)
+            deliverable = store.list_due_deliverable_reminders()
+            texts = [r.text for r in deliverable]
+            ok = "has-channel" in texts and "no-channel" not in texts and "cancelled" not in texts
+            return CheckResult(name, ok, f"deliverable={texts}")
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
+# ---- P3.2: mark done prevents redelivery ------------------------------------
+
+def _test_mark_done_prevents_redelivery() -> CheckResult:
+    name = "P3.2: mark_reminder_done prevents redelivery"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            settings = _settings(Path(td))
+            store = PersonalToolsStore(settings)
+            op = "u1"
+            past = datetime.now(timezone.utc) - timedelta(minutes=2)
+            row = store.create_reminder(op, "deliver-me", past, channel="telegram", chat_id="c1")
+            before = store.list_due_deliverable_reminders()
+            if len(before) != 1:
+                return CheckResult(name, False, f"before={len(before)}")
+            now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+            store.mark_reminder_done(row.id, now_iso)
+            after = store.list_due_deliverable_reminders()
+            ok = len(after) == 0
+            return CheckResult(name, ok, f"after_mark_done={len(after)}")
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
+# ---- P3.2: failed delivery records error + increments retry ------------------
+
+def _test_mark_failed_records_error() -> CheckResult:
+    name = "P3.2: mark_reminder_failed records error and retry_count"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            settings = _settings(Path(td))
+            store = PersonalToolsStore(settings)
+            op = "u1"
+            past = datetime.now(timezone.utc) - timedelta(minutes=2)
+            row = store.create_reminder(op, "will-fail", past, channel="telegram", chat_id="c1")
+            store.mark_reminder_failed(row.id, "ConnectionError", 1)
+            # Should still be deliverable (failed < 3 retries).
+            deliverable = store.list_due_deliverable_reminders()
+            found = [r for r in deliverable if r.id == row.id]
+            if not found:
+                return CheckResult(name, False, "not in deliverable after fail")
+            r = found[0]
+            ok = r.delivery_status == "failed" and r.delivery_error == "ConnectionError" and r.retry_count == 1
+            return CheckResult(name, ok, f"status={r.delivery_status} err={r.delivery_error} retries={r.retry_count}")
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
+# ---- P3.2: max retries stops delivery ---------------------------------------
+
+def _test_max_retries_stops_delivery() -> CheckResult:
+    name = "P3.2: retry_count >= 3 excluded from deliverable"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            settings = _settings(Path(td))
+            store = PersonalToolsStore(settings)
+            op = "u1"
+            past = datetime.now(timezone.utc) - timedelta(minutes=2)
+            row = store.create_reminder(op, "exhausted", past, channel="telegram", chat_id="c1")
+            store.mark_reminder_failed(row.id, "err", 3)
+            deliverable = store.list_due_deliverable_reminders()
+            found = [r for r in deliverable if r.id == row.id]
+            ok = len(found) == 0
+            return CheckResult(name, ok, f"found_after_max_retries={len(found)}")
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
+# ---- P3.2: scheduler dry-run ------------------------------------------------
+
+def _test_scheduler_dry_run() -> CheckResult:
+    name = "P3.2: scheduler_tick --dry-run delivers without network"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            settings = _settings(Path(td))
+            store = PersonalToolsStore(settings)
+            op = "u1"
+            past = datetime.now(timezone.utc) - timedelta(minutes=2)
+            store.create_reminder(op, "dry-run task", past, channel="telegram", chat_id="c1")
+            from scripts.scheduler_tick import run_tick
+            with mock.patch("scripts.scheduler_tick.load_settings", return_value=settings):
+                delivered, failed = run_tick(dry_run=True)
+            # DB should be unchanged after dry-run.
+            deliverable = store.list_due_deliverable_reminders()
+            still_pending = [r for r in deliverable if r.text == "dry-run task"]
+            ok = delivered == 1 and failed == 0 and len(still_pending) == 1
+            return CheckResult(name, ok, f"delivered={delivered} failed={failed} still_pending={len(still_pending)}")
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
+# ---- P3.2: CommandSpec drift check ------------------------------------------
+
+def _test_commandspec_no_drift() -> CheckResult:
+    name = "P3.2 drift: /note and /remind CommandSpec says 立即执行 not 需确认"
+    try:
+        from handlers.commands import COMMAND_TABLE
+        note_spec = COMMAND_TABLE.get("note")
+        remind_spec = COMMAND_TABLE.get("remind")
+        if note_spec is None or remind_spec is None:
+            return CheckResult(name, False, "missing note or remind in COMMAND_TABLE")
+        note_summary = note_spec.summary
+        remind_summary = remind_spec.summary
+        has_stale = "需确认" in note_summary or "需确认" in remind_summary
+        has_correct = "立即执行" in note_summary and "立即执行" in remind_summary
+        ok = not has_stale and has_correct
+        return CheckResult(name, ok, f"note={note_summary!r} remind={remind_summary!r}")
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
 # ---- main --------------------------------------------------------------------
 
 async def main() -> int:
@@ -448,6 +645,15 @@ async def main() -> int:
         await _test_cmd_notes(),
         await _test_cmd_remind(),
         await _test_cmd_reminders(),
+        # P3.2 delivery tests
+        _test_migration_adds_delivery_columns(),
+        await _test_remind_stores_channel_chat_id(),
+        _test_due_query_deliverable_only(),
+        _test_mark_done_prevents_redelivery(),
+        _test_mark_failed_records_error(),
+        _test_max_retries_stops_delivery(),
+        _test_scheduler_dry_run(),
+        _test_commandspec_no_drift(),
     ]
     print_results(results)
     ok = all(r.ok for r in results)

@@ -1,0 +1,20 @@
+[Unit]
+Description=Conveyor reminder scheduler tick
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+Environment=CONVEYOR_DIR=/opt/conveyor
+EnvironmentFile=-/etc/default/conveyor
+WorkingDirectory=/opt/conveyor
+EnvironmentFile=/opt/conveyor/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/conveyor/.venv/bin/python /opt/conveyor/scripts/scheduler_tick.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/conveyor /srv /home/ubuntu

@@ -234,18 +234,23 @@ Slash 命令 `/load` `/vps` `/htop` `/ps` 等在 `COMMAND_TABLE` 注册。Telegr
 - **htop 意图保守**：仅在有运行/查看语境时匹配；编码/文档类提及 htop 走 LLM
 - **`/ps` 安全**：默认 comm 模式；`/ps full` 仅提示风险；`/ps full confirm` 才输出 args（仍 redact）
 
-### 6.7 Personal Tools Hub（P3.1 — 本地笔记/提醒）
+### 6.7 Personal Tools Hub（P3.1 + P3.2 — 本地笔记/提醒 + 投递）
 
 结构化个人工具基础层，为未来 Gmail / Calendar / Contacts / GitHub 预留扩展点。**OAuth token 不进入 Codex prompt**；Codex job 行为不变。
 
 ```
 personal_tools/
   base.py      ToolResult / PersonalToolSpec / BasePersonalTool; DangerLevel 复用
-  store.py     SQLite @ codex_memory_root/personal_tools.db
-  registry.py  notes.* / reminders.* 注册 + 执行
+  store.py     SQLite @ codex_memory_root/personal_tools.db（含 delivery 列迁移）
+  registry.py  notes.* / reminders.* 注册 + 执行（传递 channel/chat_id 上下文）
   notes.py     笔记 CRUD
   reminders.py 提醒 CRUD + 简单时间解析
   reminder_parse.py  in 10m / in 2h / tomorrow HH:MM / ISO 解析
+scripts/
+  scheduler_tick.py  提醒投递调度器（每 60s 由 timer 触发）
+systemd/
+  conveyor-scheduler.service  oneshot: 运行 scheduler_tick.py
+  conveyor-scheduler.timer    每 60s 触发
 ```
 
 | 工具 | danger | 命令 | 说明 |
@@ -253,7 +258,7 @@ personal_tools/
 | notes.add | **WRITE_SAFE** | `/note` | 免确认；审计 |
 | notes.search / notes.list_recent | READ | `/notes [query]` | |
 | notes.delete | DESTRUCTIVE | （API；slash 未暴露） | 需确认 |
-| reminders.create | **WRITE_SAFE** | `/remind` | 免确认；审计 |
+| reminders.create | **WRITE_SAFE** | `/remind` | 免确认；审计；存储 channel/chat_id |
 | reminders.list / reminders.due | READ | `/reminders` | |
 | reminders.cancel | WRITE | （API；slash 未暴露） | 需确认 |
 
@@ -263,9 +268,17 @@ personal_tools/
 
 提醒时间：`in 10m` / `in 2h` / `tomorrow HH:MM` / ISO。解析失败返回用法说明。
 
+**P3.2 提醒投递**：`reminders` 表通过迁移扩展 `channel`、`chat_id`、`delivered_at`、
+`delivery_status`、`delivery_error`、`retry_count` 列。迁移自动处理已有数据库。
+`/remind` 创建时存储 `msg.channel` + `msg.chat_id`。`scheduler_tick.py` 每 60s
+查找 `delivery_status IN ('pending','failed') AND due_at <= now AND channel != ''`
+的记录，Telegram 直接调 `send_message`，Feishu 暂跳过并记日志。
+成功标记 `delivered`，失败标记 `failed` + 递增 `retry_count`（>=3 停止重试）。
+支持 `--dry-run` 模式（不发消息不写 DB）用于 smoke 测试。
+
 `notes.delete` / `reminders.cancel` 走 `handlers/tools/runner.py` 同一确认 + `audit/tools.log` redaction 路径。
 
-**TODO（后续 phase）**：Google OAuth broker、`gmail.*` / `calendar.*` / `contacts.*` / `github.*` 工具；token 存 VPS 侧加密 vault，Codex 仅见 tool 结果摘要；提醒调度投递（cron/timer）。
+**TODO（后续 phase）**：Google OAuth broker、`gmail.*` / `calendar.*` / `contacts.*` / `github.*` 工具；token 存 VPS 侧加密 vault，Codex 仅见 tool 结果摘要。
 
 ### 6.6 Telegram 实时烟测（手动）
 

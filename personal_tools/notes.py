@@ -13,7 +13,7 @@ def _format_note(row) -> str:
     return f"#{row.id} · {row.created_at} · {preview}"
 
 
-async def notes_add(settings: Settings, arg: str, *, operator_id: str) -> ToolResult:
+async def notes_add(settings: Settings, arg: str, *, operator_id: str, **_kw) -> ToolResult:
     text = (arg or "").strip()
     if not text:
         return ToolResult(False, "用法: /note <内容>")
@@ -22,7 +22,7 @@ async def notes_add(settings: Settings, arg: str, *, operator_id: str) -> ToolRe
     return ToolResult(True, f"笔记已保存 #{row.id}")
 
 
-async def notes_search(settings: Settings, arg: str, *, operator_id: str) -> ToolResult:
+async def notes_search(settings: Settings, arg: str, *, operator_id: str, **_kw) -> ToolResult:
     query = (arg or "").strip()
     if not query:
         return ToolResult(False, "用法: /notes <关键词>")
@@ -34,7 +34,7 @@ async def notes_search(settings: Settings, arg: str, *, operator_id: str) -> Too
     return ToolResult(True, "\n".join(lines))
 
 
-async def notes_list_recent(settings: Settings, arg: str, *, operator_id: str) -> ToolResult:
+async def notes_list_recent(settings: Settings, arg: str, *, operator_id: str, **_kw) -> ToolResult:
     limit = 10
     raw = (arg or "").strip()
     if raw:
@@ -50,7 +50,7 @@ async def notes_list_recent(settings: Settings, arg: str, *, operator_id: str) -
     return ToolResult(True, "\n".join(lines))
 
 
-async def notes_delete(settings: Settings, arg: str, *, operator_id: str) -> ToolResult:
+async def notes_delete(settings: Settings, arg: str, *, operator_id: str, **_kw) -> ToolResult:
     raw = (arg or "").strip()
     if not raw:
         return ToolResult(False, "用法: notes.delete <id>")

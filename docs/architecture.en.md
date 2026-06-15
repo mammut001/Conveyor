@@ -270,7 +270,7 @@ an execution / status context (e.g. "跑一下 htop", "运行 htop",
 "帮我改 htop 相关代码" / "write docs about htop" route to LLM, not
 the snapshot tool.
 
-### Personal Tools Hub (P3.1 — local notes/reminders)
+### Personal Tools Hub (P3.1 + P3.2 — local notes/reminders + delivery)
 
 Structured foundation for future Gmail / Calendar / Contacts / GitHub
 integrations. **OAuth tokens never enter Codex prompts**; Codex job
@@ -279,11 +279,16 @@ behavior is unchanged.
 ```
 personal_tools/
   base.py      ToolResult / PersonalToolSpec / BasePersonalTool; DangerLevel reuse
-  store.py     SQLite at codex_memory_root/personal_tools.db
-  registry.py  notes.* / reminders.* registration + execution
+  store.py     SQLite at codex_memory_root/personal_tools.db (delivery column migration)
+  registry.py  notes.* / reminders.* registration + execution (passes channel/chat_id)
   notes.py     note CRUD
   reminders.py reminder CRUD + simple time parsing
   reminder_parse.py  in 10m / in 2h / tomorrow HH:MM / ISO parsing
+scripts/
+  scheduler_tick.py  reminder delivery scheduler (triggered by timer every 60s)
+systemd/
+  conveyor-scheduler.service  oneshot: runs scheduler_tick.py
+  conveyor-scheduler.timer    every 60s
 ```
 
 | Tool | danger | Command | Notes |
@@ -291,7 +296,7 @@ personal_tools/
 | notes.add | **WRITE_SAFE** | `/note` | no confirmation; audited |
 | notes.search / notes.list_recent | READ | `/notes [query]` | |
 | notes.delete | DESTRUCTIVE | (API; no slash yet) | confirmation required |
-| reminders.create | **WRITE_SAFE** | `/remind` | no confirmation; audited |
+| reminders.create | **WRITE_SAFE** | `/remind` | no confirmation; audited; stores channel/chat_id |
 | reminders.list / reminders.due | READ | `/reminders` | |
 | reminders.cancel | WRITE | (API; no slash yet) | confirmation required |
 
@@ -302,6 +307,15 @@ cancel afterwards. Requiring confirmation would break the fluency of
 args + result preview are still audit-logged with redaction to
 `audit/tools.log`.
 
+**P3.2 reminder delivery:** The `reminders` table is extended via migration
+with `channel`, `chat_id`, `delivered_at`, `delivery_status`, `delivery_error`,
+`retry_count` columns. Migration is backward-compatible for existing DBs.
+`/remind` stores `msg.channel` + `msg.chat_id` at creation time. A systemd
+timer (`conveyor-scheduler.timer`) runs `scripts/scheduler_tick.py` every 60s
+to find due deliverable reminders and send them as Telegram messages. Delivery
+status is tracked per-reminder (`pending` → `delivered`/`failed`); failed
+reminders retry up to 3 times. Supports `--dry-run` for smoke testing.
+
 Reminder time formats: `in 10m`, `in 2h`, `tomorrow HH:MM`, ISO datetime.
 Parse failures return clear usage text.
 
@@ -310,8 +324,7 @@ Parse failures return clear usage text.
 
 **TODO (later phases)**: Google OAuth broker; `gmail.*` / `calendar.*` /
 `contacts.*` / `github.*` tools; encrypted token vault on VPS — Codex
-sees only redacted tool result summaries; reminder scheduler delivery
-(cron/timer).
+sees only redacted tool result summaries.
 
 ---
 

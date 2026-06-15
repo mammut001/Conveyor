@@ -53,7 +53,15 @@ def _should_audit_no_confirm(tool_name: str) -> bool:
     return pspec is not None and pspec.danger == DangerLevel.WRITE_SAFE
 
 
-async def run_tool(settings: Settings, tool_name: str, arg: str = "", *, operator_id: str = "") -> str:
+async def run_tool(
+    settings: Settings,
+    tool_name: str,
+    arg: str = "",
+    *,
+    operator_id: str = "",
+    channel: str = "",
+    chat_id: str = "",
+) -> str:
     from personal_tools.registry import execute_personal_tool, get_personal_tool
 
     if get_personal_tool(tool_name) is not None:
@@ -62,6 +70,8 @@ async def run_tool(settings: Settings, tool_name: str, arg: str = "", *, operato
             tool_name,
             arg,
             operator_id=operator_id,
+            channel=channel,
+            chat_id=chat_id,
         )
     spec = get_tool(tool_name)
     if spec is None:
@@ -182,7 +192,12 @@ async def _invoke_tool(
     if _requires_confirmation(tool_name):
         await _request_confirmation(msg, port, settings, tool_name, arg)
         return
-    result = await run_tool(settings, tool_name, arg, operator_id=msg.operator_id)
+    result = await run_tool(
+        settings, tool_name, arg,
+        operator_id=msg.operator_id,
+        channel=msg.channel,
+        chat_id=msg.chat_id,
+    )
     if _should_audit_no_confirm(tool_name):
         audit_tool_event(
             settings,
@@ -298,6 +313,8 @@ async def execute_confirmed(
             action.tool_name,
             action.arg,
             operator_id=action.operator_id,
+            channel=action.channel,
+            chat_id=action.chat_id,
         )
     except Exception as exc:
         audit_tool_event(

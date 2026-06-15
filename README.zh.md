@@ -192,9 +192,9 @@ detached worktree，job 日志写在 `CODEX_TASK_ROOT` 下。
 - `/smoke` / `/editcheck` — 端到端 / 真实编辑自检
 - `/memo <内容>` / `记 <内容>` — 写到当天 `MEMORY.md`（不走 Codex）
 - `/memory [date] [category]` / `/journal [n]` — 读 `MEMORY.md` 和归档
-- `/note <内容>` — 保存本地笔记（**WRITE**，需确认）
+- `/note <内容>` — 保存本地笔记（**WRITE_SAFE**，立即执行，审计）
 - `/notes [关键词]` — 列出/搜索笔记
-- `/remind <内容+时间>` — 创建本地提醒（**WRITE**，需确认）
+- `/remind <内容+时间>` — 创建本地提醒（**WRITE_SAFE**，立即执行，审计）
 - `/reminders` — 列出提醒
 - `/help` — 完整命令列表
 
@@ -233,7 +233,7 @@ Conveyor **不是**纯硬编码命令 bot。结构化 tool registry + 轻量 int
 
 实现：`handlers/tools/`（registry + executors + runner）、`handlers/intent.py`（`route_intent`）。Handler 保持通道无关；Telegram callback 用 `tool:confirm:<token>` / `tool:cancel:<token>`。
 
-### Personal Tools Hub（P3.1 — 仅本地）
+### Personal Tools Hub（P3.1 + P3.2 — 本地笔记/提醒 + 投递）
 
 为未来 Gmail / Calendar / Contacts / GitHub 集成打基础。**OAuth token 不进入 Codex prompt**，只在 VPS 服务端执行。
 
@@ -255,12 +255,19 @@ Conveyor **不是**纯硬编码命令 bot。结构化 tool registry + 轻量 int
 `WRITE_SAFE` = 立即执行，args + result preview 写入 `audit/tools.log` 并 redact。
 无需交互确认，因为是个人 append/create 操作；事后可 delete/cancel。
 
-提醒时间解析（P3.1）：`in 10m`、`in 2h`、`tomorrow HH:MM`、ISO 时间。
+提醒时间解析：`in 10m`、`in 2h`、`tomorrow HH:MM`、ISO 时间。
 解析失败返回用法说明。`notes.delete` 和 `reminders.cancel` 复用主机工具同一套
 确认 + `audit/tools.log` redaction。
 
-代码：`personal_tools/`（`base`、`store`、`registry`、`notes`、`reminders`）。
-Smoke：`scripts/personal_tools_smoke.py`（16 项：CRUD、隔离、审计、redaction、命令面）。
+**P3.2 — 提醒投递：** `/remind` 创建提醒时，bot 存储 `msg.channel`（telegram/feishu）和
+`msg.chat_id`。systemd timer（`conveyor-scheduler.timer`）每 60 秒运行
+`scripts/scheduler_tick.py`，查找到期提醒并通过 Telegram 发送投递消息。投递状态
+按提醒追踪（`pending` → `delivered`/`failed`）；失败提醒最多重试 3 次。无 `channel`/`chat_id`
+的旧提醒（P3.2 前记录）会被调度器跳过。
+
+代码：`personal_tools/`（`base`、`store`、`registry`、`notes`、`reminders`、`reminder_parse`）。
+调度器：`scripts/scheduler_tick.py`。
+Smoke：`scripts/personal_tools_smoke.py`（24 项：CRUD、隔离、审计、redaction、命令面、迁移、投递、dry-run、漂移检查）。
 
 **Telegram slash 命令：** 新 ops/tool 命令（`/load`、`/tools`、`/disk` 等）在 `COMMAND_TABLE` 注册，并通过 `bot.py` 中的通用 `MessageHandler(filters.COMMAND, …)` fallback 到达（位于显式 `CommandHandler` 之后、纯文本 handler 之前），确保未知 slash 命令仍能进入 `dispatch()` → `COMMAND_TABLE`。
 

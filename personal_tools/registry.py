@@ -109,13 +109,20 @@ async def execute_personal_tool(
     arg: str,
     *,
     operator_id: str,
+    channel: str = "",
+    chat_id: str = "",
 ) -> str:
     register_personal_tools()
     executor = _PERSONAL_EXECUTORS.get(tool_name)
     if executor is None:
         return f"未知个人工具: {tool_name}"
     try:
-        result: ToolResult = await executor(settings, arg, operator_id=operator_id)
+        result: ToolResult = await executor(
+            settings, arg,
+            operator_id=operator_id,
+            channel=channel,
+            chat_id=chat_id,
+        )
     except Exception as exc:
         return f"个人工具 {tool_name} 执行失败: {type(exc).__name__}"
     return result.text

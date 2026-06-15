@@ -9,13 +9,23 @@ from personal_tools.store import PersonalToolsStore
 
 def _format_reminder(row) -> str:
     flag = {"pending": "⏳", "cancelled": "❌", "done": "✅"}.get(row.status, "?")
+    delivery = ""
+    if row.channel and row.chat_id:
+        delivery = f" → {row.channel}"
     preview = row.text.replace("\n", " ")
     if len(preview) > 100:
         preview = preview[:97] + "..."
-    return f"{flag} #{row.id} · {row.due_at} · {preview}"
+    return f"{flag} #{row.id} · {row.due_at} · {preview}{delivery}"
 
 
-async def reminders_create(settings: Settings, arg: str, *, operator_id: str) -> ToolResult:
+async def reminders_create(
+    settings: Settings,
+    arg: str,
+    *,
+    operator_id: str,
+    channel: str = "",
+    chat_id: str = "",
+) -> ToolResult:
     parsed = parse_reminder_text(arg, tz_name=settings.user_timezone)
     if parsed is None:
         return ToolResult(False, REMIND_USAGE)
@@ -23,11 +33,12 @@ async def reminders_create(settings: Settings, arg: str, *, operator_id: str) ->
     if not body:
         return ToolResult(False, REMIND_USAGE)
     store = PersonalToolsStore(settings)
-    row = store.create_reminder(operator_id, body, due_at)
-    return ToolResult(True, f"提醒已创建 #{row.id} · {row.due_at} · {body}")
+    row = store.create_reminder(operator_id, body, due_at, channel=channel, chat_id=chat_id)
+    dest = f" → {channel}" if channel else ""
+    return ToolResult(True, f"提醒已创建 #{row.id} · {row.due_at} · {body}{dest}")
 
 
-async def reminders_list(settings: Settings, arg: str, *, operator_id: str) -> ToolResult:
+async def reminders_list(settings: Settings, arg: str, *, operator_id: str, **_kw) -> ToolResult:
     limit = 20
     raw = (arg or "").strip()
     if raw:
@@ -43,7 +54,7 @@ async def reminders_list(settings: Settings, arg: str, *, operator_id: str) -> T
     return ToolResult(True, "\n".join(lines))
 
 
-async def reminders_cancel(settings: Settings, arg: str, *, operator_id: str) -> ToolResult:
+async def reminders_cancel(settings: Settings, arg: str, *, operator_id: str, **_kw) -> ToolResult:
     raw = (arg or "").strip()
     if not raw:
         return ToolResult(False, "用法: reminders.cancel <id>")
@@ -57,7 +68,7 @@ async def reminders_cancel(settings: Settings, arg: str, *, operator_id: str) ->
     return ToolResult(False, f"提醒 #{reminder_id} 不存在或已取消。")
 
 
-async def reminders_due(settings: Settings, arg: str, *, operator_id: str) -> ToolResult:
+async def reminders_due(settings: Settings, arg: str, *, operator_id: str, **_kw) -> ToolResult:
     _ = arg
     store = PersonalToolsStore(settings)
     rows = store.list_due_reminders(operator_id)

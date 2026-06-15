@@ -212,9 +212,9 @@ job logs under `CODEX_TASK_ROOT`.
 - `/memo <text>` / `记 <text>` — write to today's `MEMORY.md` (no Codex)
 - `/memory [date] [category]` / `/journal [n]` — read MEMORY.md
   and archived journals
-- `/note <text>` — save a local note (**WRITE**, confirm)
+- `/note <text>` — save a local note (**WRITE_SAFE**, audited, no confirm)
 - `/notes [query]` — list recent notes or search
-- `/remind <text + time>` — create a local reminder (**WRITE**, confirm)
+- `/remind <text + time>` — create a local reminder (**WRITE_SAFE**, audited, no confirm)
 - `/reminders` — list reminders
 - `/help` — full command list
 
@@ -269,7 +269,7 @@ Implementation: `handlers/tools/` (registry + executors + runner),
 `handlers/intent.py` (`route_intent`). Handlers stay channel-agnostic;
 Telegram callbacks use `tool:confirm:<token>` / `tool:cancel:<token>`.
 
-### Personal Tools Hub (P3.1 — local only)
+### Personal Tools Hub (P3.1 + P3.2 — local notes/reminders + delivery)
 
 Structured foundation for future Gmail / Calendar / Contacts / GitHub
 integrations. **OAuth tokens never enter Codex prompts** — only
@@ -295,14 +295,23 @@ with redaction to `audit/tools.log`. No interactive confirmation required
 because these are personal append/create operations; the operator can
 always delete or cancel afterwards.
 
-Reminder time parsing (phase P3.1): `in 10m`, `in 2h`, `tomorrow HH:MM`,
+Reminder time parsing: `in 10m`, `in 2h`, `tomorrow HH:MM`,
 ISO datetime. Parse failures return usage text. `notes.delete` and
 `reminders.cancel` reuse the same confirmation + `audit/tools.log` redaction
 as host tools.
 
-Code: `personal_tools/` (`base`, `store`, `registry`, `notes`, `reminders`).
-Smoke: `scripts/personal_tools_smoke.py` (16 cases: CRUD, isolation, audit,
-redaction, command surface).
+**P3.2 — Reminder delivery:** When `/remind` creates a reminder, the bot
+stores `msg.channel` (telegram/feishu) and `msg.chat_id`. A systemd timer
+(`conveyor-scheduler.timer`) runs `scripts/scheduler_tick.py` every 60s
+to find due reminders and deliver them as Telegram messages. Delivery
+status is tracked per-reminder (`pending` → `delivered`/`failed`); failed
+reminders retry up to 3 times. Reminders without `channel`/`chat_id`
+(pre-P3.2 records) are skipped by the scheduler with a clear status.
+
+Code: `personal_tools/` (`base`, `store`, `registry`, `notes`, `reminders`,
+`reminder_parse`). Scheduler: `scripts/scheduler_tick.py`.
+Smoke: `scripts/personal_tools_smoke.py` (24 cases: CRUD, isolation, audit,
+redaction, command surface, migration, delivery, dry-run, drift check).
 
 **Telegram slash commands:** New ops/tool commands (`/load`, `/tools`,
 `/disk`, …) are registered in `COMMAND_TABLE` and reached via a
@@ -527,8 +536,13 @@ step. Smoke failure prevents the restart.
    ```bash
    sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
    sudo cp systemd/conveyor-feishu-bot.service   /etc/systemd/system/
+   sudo cp systemd/conveyor-maintain.service     /etc/systemd/system/
+   sudo cp systemd/conveyor-maintain.timer       /etc/systemd/system/
+   sudo cp systemd/conveyor-scheduler.service    /etc/systemd/system/
+   sudo cp systemd/conveyor-scheduler.timer      /etc/systemd/system/
    sudo systemctl daemon-reload
-   sudo systemctl enable conveyor-telegram-bot conveyor-feishu-bot
+   sudo systemctl enable --now conveyor-telegram-bot conveyor-feishu-bot
+   sudo systemctl enable --now conveyor-maintain.timer conveyor-scheduler.timer
    ```
 5. Grant the deploy user passwordless sudo for exactly these commands:
    ```
