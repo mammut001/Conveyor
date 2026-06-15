@@ -228,6 +228,7 @@ def should_inject_for_command(cmd_name: str | None) -> bool:
         "memory", "journal", "health", "doctor", "audit", "security",
         "ratelimit", "metrics", "log", "meta", "smoke", "editcheck",
         "clean", "maintain", "deploy_status", "tools",
+        "note", "notes", "remind", "reminders",
         "context", "forget", "help",
     }
     return cmd_name not in _SKIP_COMMANDS

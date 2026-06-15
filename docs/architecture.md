@@ -234,6 +234,39 @@ Slash 命令 `/load` `/vps` `/htop` `/ps` 等在 `COMMAND_TABLE` 注册。Telegr
 - **htop 意图保守**：仅在有运行/查看语境时匹配；编码/文档类提及 htop 走 LLM
 - **`/ps` 安全**：默认 comm 模式；`/ps full` 仅提示风险；`/ps full confirm` 才输出 args（仍 redact）
 
+### 6.7 Personal Tools Hub（P3.1 — 本地笔记/提醒）
+
+结构化个人工具基础层，为未来 Gmail / Calendar / Contacts / GitHub 预留扩展点。**OAuth token 不进入 Codex prompt**；Codex job 行为不变。
+
+```
+personal_tools/
+  base.py      ToolResult / PersonalToolSpec / BasePersonalTool; DangerLevel 复用
+  store.py     SQLite @ codex_memory_root/personal_tools.db
+  registry.py  notes.* / reminders.* 注册 + 执行
+  notes.py     笔记 CRUD
+  reminders.py 提醒 CRUD + 简单时间解析
+  reminder_parse.py  in 10m / in 2h / tomorrow HH:MM / ISO 解析
+```
+
+| 工具 | danger | 命令 | 说明 |
+|---|---|---|---|
+| notes.add | **WRITE_SAFE** | `/note` | 免确认；审计 |
+| notes.search / notes.list_recent | READ | `/notes [query]` | |
+| notes.delete | DESTRUCTIVE | （API；slash 未暴露） | 需确认 |
+| reminders.create | **WRITE_SAFE** | `/remind` | 免确认；审计 |
+| reminders.list / reminders.due | READ | `/reminders` | |
+| reminders.cancel | WRITE | （API；slash 未暴露） | 需确认 |
+
+**WRITE_SAFE 设计决策**：`notes.add` 和 `reminders.create` 是低风险 append/create 操作，
+事后可通过 `notes.delete` / `reminders.cancel` 回退。强制确认会破坏「/remind in 10m X」的
+流畅性。WRITE_SAFE = 不走确认流程，但 args + result preview 仍写入 `audit/tools.log` 并 redact。
+
+提醒时间：`in 10m` / `in 2h` / `tomorrow HH:MM` / ISO。解析失败返回用法说明。
+
+`notes.delete` / `reminders.cancel` 走 `handlers/tools/runner.py` 同一确认 + `audit/tools.log` redaction 路径。
+
+**TODO（后续 phase）**：Google OAuth broker、`gmail.*` / `calendar.*` / `contacts.*` / `github.*` 工具；token 存 VPS 侧加密 vault，Codex 仅见 tool 结果摘要；提醒调度投递（cron/timer）。
+
 ### 6.6 Telegram 实时烟测（手动）
 
 `scripts/telegram_live_helpers_smoke.py` 覆盖纯函数（`redact`、`validate_restart_target`），**已**进入 `make smoke`。

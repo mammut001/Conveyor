@@ -34,7 +34,35 @@ CALLBACK_CANCEL_PREFIX = "tool:cancel:"
 _HYBRID_DEFAULT_TOOLS = ("load", "ps", "disk", "service_status")
 
 
-async def run_tool(settings: Settings, tool_name: str, arg: str = "") -> str:
+def _requires_confirmation(tool_name: str) -> bool:
+    spec = get_tool(tool_name)
+    if spec is not None:
+        return requires_confirmation(spec)
+    from personal_tools.registry import requires_personal_confirmation
+    return requires_personal_confirmation(tool_name)
+
+
+def _should_audit_no_confirm(tool_name: str) -> bool:
+    """True for WRITE_SAFE tools: audit after execution but no confirmation."""
+    from handlers.tools.registry import DangerLevel
+    spec = get_tool(tool_name)
+    if spec is not None:
+        return spec.danger == DangerLevel.WRITE_SAFE
+    from personal_tools.registry import get_personal_tool
+    pspec = get_personal_tool(tool_name)
+    return pspec is not None and pspec.danger == DangerLevel.WRITE_SAFE
+
+
+async def run_tool(settings: Settings, tool_name: str, arg: str = "", *, operator_id: str = "") -> str:
+    from personal_tools.registry import execute_personal_tool, get_personal_tool
+
+    if get_personal_tool(tool_name) is not None:
+        return await execute_personal_tool(
+            settings,
+            tool_name,
+            arg,
+            operator_id=operator_id,
+        )
     spec = get_tool(tool_name)
     if spec is None:
         return f"未知工具: {tool_name}"
@@ -66,7 +94,10 @@ async def run_tools_collected(
 
 def _danger_label(tool_name: str) -> str:
     spec = get_tool(tool_name)
-    return spec.danger.value if spec else "unknown"
+    if spec is not None:
+        return spec.danger.value
+    from personal_tools.registry import personal_tool_danger
+    return personal_tool_danger(tool_name)
 
 
 async def handle_route(
@@ -142,14 +173,28 @@ async def _invoke_tool(
     tool_name: str,
     arg: str,
 ) -> None:
+    from personal_tools.registry import get_personal_tool
+
     spec = get_tool(tool_name)
-    if spec is None:
+    if spec is None and get_personal_tool(tool_name) is None:
         await port.reply(msg, f"未知工具: {tool_name}")
         return
-    if requires_confirmation(spec):
+    if _requires_confirmation(tool_name):
         await _request_confirmation(msg, port, settings, tool_name, arg)
         return
-    result = await run_tool(settings, tool_name, arg)
+    result = await run_tool(settings, tool_name, arg, operator_id=msg.operator_id)
+    if _should_audit_no_confirm(tool_name):
+        audit_tool_event(
+            settings,
+            operator_id=msg.operator_id,
+            chat_id=msg.chat_id,
+            channel=msg.channel,
+            tool_name=tool_name,
+            arg=arg,
+            danger=_danger_label(tool_name),
+            action="executed",
+            result_preview=result,
+        )
     await port.reply(msg, result)
 
 
@@ -161,7 +206,12 @@ async def _request_confirmation(
     arg: str,
 ) -> None:
     spec = get_tool(tool_name)
-    summary = spec.summary if spec else tool_name
+    if spec is not None:
+        summary = spec.summary
+    else:
+        from personal_tools.registry import get_personal_tool
+        pspec = get_personal_tool(tool_name)
+        summary = pspec.summary if pspec else tool_name
     pending = create_pending(
         tool_name=tool_name,
         arg=arg,
@@ -243,7 +293,12 @@ async def execute_confirmed(
         action="confirmed",
     )
     try:
-        result = await run_tool(settings, action.tool_name, action.arg)
+        result = await run_tool(
+            settings,
+            action.tool_name,
+            action.arg,
+            operator_id=action.operator_id,
+        )
     except Exception as exc:
         audit_tool_event(
             settings,

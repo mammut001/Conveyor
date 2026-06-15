@@ -17,6 +17,7 @@ ToolExecutor = Callable[[Settings, str], Awaitable[str]]
 
 class DangerLevel(str, Enum):
     READ = "read"           # safe: host snapshots, logs tail, git status
+    WRITE_SAFE = "write_safe"  # mutates state but low-risk/soft: audit, no confirmation
     WRITE = "write"         # mutates state: restart service, apply changes
     DESTRUCTIVE = "destructive"  # irreversible: clean, discard
 
@@ -52,3 +53,8 @@ def safe_tool_names() -> tuple[str, ...]:
 
 def requires_confirmation(spec: ToolSpec) -> bool:
     return spec.danger in (DangerLevel.WRITE, DangerLevel.DESTRUCTIVE)
+
+
+def requires_audit(spec: ToolSpec) -> bool:
+    """WRITE_SAFE + WRITE + DESTRUCTIVE are audit-logged."""
+    return spec.danger in (DangerLevel.WRITE_SAFE, DangerLevel.WRITE, DangerLevel.DESTRUCTIVE)

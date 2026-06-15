@@ -374,6 +374,30 @@ async def _restart(msg, port, _runner, settings, arg):
     await _invoke_tool(msg, port, settings, "service_restart", unit)
 
 
+async def _note(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(msg, port, settings, "notes.add", arg)
+
+
+async def _notes(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    query = (arg or "").strip()
+    if not query:
+        await _invoke_tool(msg, port, settings, "notes.list_recent", "")
+        return
+    await _invoke_tool(msg, port, settings, "notes.search", query)
+
+
+async def _remind(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(msg, port, settings, "reminders.create", arg)
+
+
+async def _reminders(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(msg, port, settings, "reminders.list", arg)
+
+
 async def _audit_tools(msg, port, _runner, settings, arg):
     from handlers.tools.audit import read_audit_tail
     from redaction import redact_text, truncate
@@ -509,6 +533,7 @@ async def _tools(msg, port, _runner, _settings, _arg):
     ]
     by_danger: dict[DangerLevel, list[str]] = {
         DangerLevel.READ: [],
+        DangerLevel.WRITE_SAFE: [],
         DangerLevel.WRITE: [],
         DangerLevel.DESTRUCTIVE: [],
     }
@@ -523,6 +548,11 @@ async def _tools(msg, port, _runner, _settings, _arg):
     lines.append("READ (立即执行):")
     lines.extend(by_danger[DangerLevel.READ] or ["  (none)"])
     lines.append("")
+    write_safe_entries = by_danger[DangerLevel.WRITE_SAFE]
+    if write_safe_entries:
+        lines.append("WRITE_SAFE (立即执行, 审计):")
+        lines.extend(write_safe_entries)
+        lines.append("")
     write_entries = by_danger[DangerLevel.WRITE]
     if write_entries:
         lines.append("WRITE (需确认):")
@@ -532,6 +562,15 @@ async def _tools(msg, port, _runner, _settings, _arg):
     if destruct_entries:
         lines.append("DESTRUCTIVE (需确认):")
         lines.extend(destruct_entries)
+        lines.append("")
+
+    from personal_tools.registry import PERSONAL_TOOL_REGISTRY
+    if PERSONAL_TOOL_REGISTRY:
+        lines.append("Personal Tools (本地):")
+        lines.append("  /note /notes /remind /reminders")
+        for name in sorted(PERSONAL_TOOL_REGISTRY):
+            pspec = PERSONAL_TOOL_REGISTRY[name]
+            lines.append(f"  {name} ({pspec.danger.value}): {pspec.summary}")
         lines.append("")
 
     lines += [
@@ -584,6 +623,7 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/health [full] [json] [nosecurity] /doctor /diag [since] /audit [stale-min]\n"
     text += "/security [since] /ratelimit [n] /metrics [n] /log [sel] /meta [sel]\n"
     text += "/smoke /editcheck /maintain [keep] /clean [keep] /run /fix\n"
+    text += "/note <内容> /notes [关键词] /remind <内容+时间> /reminders\n"
     text += "\n"
     text += "本机运维快路径 (bypass Codex):\n"
     text += "/load /vps — 主机负载/内存/磁盘快照\n"
@@ -638,6 +678,10 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("git_status", "Workspace git status", _tool_git_status),
         CommandSpec("diagnose", "Hybrid 主机诊断", _diagnose, takes_optional_arg=True),
         CommandSpec("restart", "重启 Conveyor 服务 (需确认)", _restart, takes_arg=True),
+        CommandSpec("note", "添加本地笔记 (需确认)", _note, takes_arg=True),
+        CommandSpec("notes", "搜索/列出本地笔记", _notes, takes_optional_arg=True),
+        CommandSpec("remind", "创建本地提醒 (需确认)", _remind, takes_arg=True),
+        CommandSpec("reminders", "列出本地提醒", _reminders, takes_optional_arg=True),
         CommandSpec("audit_tools", "危险工具审计日志", _audit_tools, takes_optional_arg=True),
         CommandSpec("deploy_status", "部署状态", _deploy_status),
         CommandSpec("context", "查看最近会话上下文", _context),

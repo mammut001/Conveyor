@@ -212,6 +212,10 @@ job logs under `CODEX_TASK_ROOT`.
 - `/memo <text>` / `记 <text>` — write to today's `MEMORY.md` (no Codex)
 - `/memory [date] [category]` / `/journal [n]` — read MEMORY.md
   and archived journals
+- `/note <text>` — save a local note (**WRITE**, confirm)
+- `/notes [query]` — list recent notes or search
+- `/remind <text + time>` — create a local reminder (**WRITE**, confirm)
+- `/reminders` — list reminders
 - `/help` — full command list
 
 ### Agent tool layer
@@ -264,6 +268,41 @@ channel. Events are audit-logged under `audit/tools.log`.
 Implementation: `handlers/tools/` (registry + executors + runner),
 `handlers/intent.py` (`route_intent`). Handlers stay channel-agnostic;
 Telegram callbacks use `tool:confirm:<token>` / `tool:cancel:<token>`.
+
+### Personal Tools Hub (P3.1 — local only)
+
+Structured foundation for future Gmail / Calendar / Contacts / GitHub
+integrations. **OAuth tokens never enter Codex prompts** — only
+server-side executors run on the VPS.
+
+| Storage | `$CODEX_MEMORY_ROOT/personal_tools.db` (SQLite) |
+|---|---|
+| Notes | `/note`, `/notes` → `notes.add/search/list_recent/delete` |
+| Reminders | `/remind`, `/reminders` → `reminders.create/list/cancel/due` |
+
+**Danger levels and UX choice:**
+
+| Tool | Level | Confirmation? | Rationale |
+|---|---|---|---|
+| `notes.add` | WRITE_SAFE | No | append-only, low-risk, reversible via `notes.delete` |
+| `reminders.create` | WRITE_SAFE | No | same; confirmation would break `/remind in 10m X` fluency |
+| `notes.delete` | DESTRUCTIVE | Yes | destructive — deletes data |
+| `reminders.cancel` | WRITE | Yes | mutates status — needs intent check |
+| `notes.search` / `list_recent` / `reminders.list` / `due` | READ | No | read-only |
+
+`WRITE_SAFE` = executes immediately, args + result preview audit-logged
+with redaction to `audit/tools.log`. No interactive confirmation required
+because these are personal append/create operations; the operator can
+always delete or cancel afterwards.
+
+Reminder time parsing (phase P3.1): `in 10m`, `in 2h`, `tomorrow HH:MM`,
+ISO datetime. Parse failures return usage text. `notes.delete` and
+`reminders.cancel` reuse the same confirmation + `audit/tools.log` redaction
+as host tools.
+
+Code: `personal_tools/` (`base`, `store`, `registry`, `notes`, `reminders`).
+Smoke: `scripts/personal_tools_smoke.py` (16 cases: CRUD, isolation, audit,
+redaction, command surface).
 
 **Telegram slash commands:** New ops/tool commands (`/load`, `/tools`,
 `/disk`, …) are registered in `COMMAND_TABLE` and reached via a
