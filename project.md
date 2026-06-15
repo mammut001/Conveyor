@@ -68,9 +68,10 @@ machine, fixed tool set.
 
 Two systemd units do the actual work:
 
-- `codex-telegram-bot.service` — long-running Telegram listener + codex
+- `conveyor-telegram-bot.service` — long-running Telegram listener + codex
   subprocess spawner
-- `codex-telegram-maintain.service` + `codex-telegram-maintain.timer` —
+- `conveyor-feishu-bot.service` — Feishu listener (same command surface)
+- `conveyor-maintain.service` + `conveyor-maintain.timer` —
   hourly self-maintenance (GC, snapshot, compress, unfiled reclassify)
 
 Maintain is a separate unit on purpose: a maintain failure does not take the
@@ -99,9 +100,10 @@ conveyor/
   CHANGELOG.md                    6 KB    surface + 17-commit timeline + Honest gaps
   project.md                      (this)  design + deploy + invariants
   systemd/
-    codex-telegram-bot.service
-    codex-telegram-maintain.service
-    codex-telegram-maintain.timer
+    conveyor-telegram-bot.service
+    conveyor-feishu-bot.service
+    conveyor-maintain.service
+    conveyor-maintain.timer
   scripts/
     deploy.sh                              rsync + restart
     auto_maintain.py                       hourly maintenance harness
@@ -128,8 +130,9 @@ conveyor/
 | Host | `<ssh-user>@<vps-host>` (set via `CONVEYOR_REMOTE`, see §3.3) |
 | Runtime path | `/opt/conveyor/` |
 | Codex CLI home (uv tool dir) | `~/.codex/` (under the `ubuntu` user) |
-| Bot systemd unit | `/etc/systemd/system/codex-telegram-bot.service` |
-| Maintain unit + timer | `/etc/systemd/system/codex-telegram-maintain.{service,timer}` |
+| Bot systemd unit | `/etc/systemd/system/conveyor-telegram-bot.service` |
+| Feishu bot unit | `/etc/systemd/system/conveyor-feishu-bot.service` |
+| Maintain unit + timer | `/etc/systemd/system/conveyor-maintain.{service,timer}` |
 | Workspace | `/srv/codex-telegram-test-repo/` (the user's project; git operations and codex runs) |
 | Worktree root | `/srv/conveyor/worktrees/` (per-day `day-YYYY-MM-DD/` and `/fix` worktrees; all `git worktree add` of workspace) |
 | Health snapshots | `/srv/conveyor/health/latest-{fast,full}.json` |
@@ -156,9 +159,9 @@ Steps (verbatim from the script):
 2. SSH to the VPS and:
    - `rm -rf /opt/conveyor/scripts/__pycache__
      /opt/conveyor/__pycache__`
-   - `sudo systemctl restart codex-telegram-bot.service`
+   - `sudo systemctl restart conveyor-telegram-bot.service`
    - `sleep 2`
-   - `sudo systemctl is-active codex-telegram-bot.service` (asserts active)
+   - `sudo systemctl is-active conveyor-telegram-bot.service` (asserts active)
 
 The script's preamble warns: **never** `rsync --delete` against the project
 root on the VPS — `.env` lives there and contains live bot/LLM secrets; the
@@ -181,7 +184,7 @@ These are deployed manually when they change:
 
 ### 3.4 systemd units
 
-**codex-telegram-bot.service** (always-on, restart on crash):
+**conveyor-telegram-bot.service** (always-on, restart on crash):
 
 ```ini
 [Service]
@@ -197,7 +200,7 @@ ProtectSystem=full
 ReadWritePaths=/opt/conveyor /srv /home/ubuntu
 ```
 
-**codex-telegram-maintain.service** (oneshot, kicked by the timer):
+**conveyor-maintain.service** (oneshot, kicked by the timer):
 
 ```ini
 [Service]
@@ -212,7 +215,7 @@ The timer-passed `--clean-threshold 100 --keep 50` is intentionally more
 conservative than the CLI default of `--clean-threshold 30` (commit `84de8a6`
 lowered the CLI default; the timer values predate that and are still safe).
 
-**codex-telegram-maintain.timer:**
+**conveyor-maintain.timer:**
 
 ```ini
 [Timer]
@@ -226,16 +229,16 @@ Persistent=true / RandomizedDelaySec=5min
 
 | Command | Sandbox | Goes through codex? | Notes |
 |---|---|---|---|
-| `/run <prompt>` | read-only | yes | explicit read-only |
-| `/fix <prompt>` | workspace-write | yes | merges via `/apply <job_id>` |
+| `/run <prompt>` | danger-full-access | yes | chat-first default |
+| `/fix <prompt>` | danger-full-access | yes | alias; merges via `/apply` |
 | `/memo [cat] <x>` | n/a | **no** | fast path, see §6.3 |
 | bare `记 x` | n/a | **no** | fast path, regex matched in bot.py |
 | `/memory [cat]` | n/a | no | read today's MEMORY.md |
-| `/apply <job_id>` | n/a | no | merge `/fix` worktree back to main, only if main clean |
+| `/apply <job_id>` | n/a | no | merge worktree back to main, only if main clean |
 | `/cancel` | n/a | no | terminate running codex process |
 | `/status` | n/a | no | current or last job summary |
 | `/help` | n/a | no | usage |
-| (plain text) | read-only | yes | alias of `/run` |
+| (plain text) | danger-full-access | yes | alias of `/run` |
 
 User-locked: `_int_env('TELEGRAM_ALLOWED_USER_ID')` gates every handler.
 1200-char message truncation; typing indicator while a job runs.
@@ -254,7 +257,7 @@ line 155, spawn sequence starts at `_run_job` ~line 470) is the only place
 the runner shells out to codex. The exact command line:
 
 ```bash
-codex exec --json --sandbox <read-only|workspace-write> \
+codex exec --json --sandbox danger-full-access \
   --cd <worktree-path> \
   --add-dir <RUNNER_HOME> \
   --output-last-message <final-message-path> \
@@ -294,14 +297,14 @@ runner CLI commands exist, told to invoke them via `cd "$CODEX_RUNNER_HOME"
 && .venv/bin/python -m runner memorize [...] "<content>"`, and that's it.
 There is no JSON-schema validation, no parse layer, no per-tool policy.
 
-In RUN (read-only) the block says: no shell, no writes, no runner CLI; ask
-the user to re-send as `/fix`.
+In RUN/FIX (danger-full-access) the block lists shell, memorize, recall,
+and other runner CLI tools the operator can invoke from chat. Narrowing
+sandbox scope (e.g. back toward workspace-write) is future hardening —
+not current behavior.
 
-In FIX (workspace-write) the block says: codex's built-in `apply_patch` /
-`edit_file` / `write_file` are rejected by `codex_core::tools::router` in
-this sandbox config — for **all** writes to MEMORY.md or any other file,
-invoke `python -m runner memorize` (or another shell command) via the
-shell tool. The `memorize` policy is three-tier:
+Legacy note: older docs described read-only RUN vs workspace-write FIX;
+the sandbox is now unified as danger-full-access for single-operator VPS use.
+The `memorize` policy is three-tier:
 
 - `fact` — the LLM MAY auto-invoke when something is objectively true and
   verifiable (close price, server IP, tool behaviour)
@@ -616,7 +619,7 @@ or manage):
 | `scripts/auto_maintain.py:60-100` | `run_maintenance` body |
 | `scripts/auto_maintain.py:80-87` | the summary `join` that the `2a81056` fix changed |
 | `scripts/deploy.sh` | the rsync + restart deploy |
-| `systemd/codex-telegram-maintain.timer` | hourly schedule |
+| `systemd/conveyor-maintain.timer` | hourly schedule |
 
 ---
 
@@ -787,9 +790,9 @@ rsync -avz conveyor/CHANGELOG.md \
 
 # ssh to VPS, check services
 ssh $REMOTE \
-  'systemctl status codex-telegram-bot.service \
-   && systemctl list-timers codex-telegram-maintain.timer \
-   && journalctl -u codex-telegram-maintain.service -n 5'
+  'systemctl status conveyor-telegram-bot.service \
+   && systemctl list-timers conveyor-maintain.timer \
+   && journalctl -u conveyor-maintain.service -n 5'
 
 # run an operator job (no Telegram, VPS-side)
 ssh $REMOTE \

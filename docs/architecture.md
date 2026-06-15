@@ -136,9 +136,13 @@ generic `MessageHandler(filters.COMMAND, …)` fallback —— `COMMAND_TABLE`
 
 ## 5. 对话模式（Chat-first）
 
+单操作员私有 VPS：Codex 沙箱刻意设为 `danger-full-access`，不是多租户 SaaS。
+安全靠 channel 白名单、低权用户、worktree 隔离、redaction，以及 `/diff` +
+`/apply` 人工审查。收窄 sandbox 是未来加固项，不是当前行为。
+
 | 触发 | JobMode | Codex `--sandbox` | 能力 |
 |------|---------|-------------------|------|
-| 纯文本 | `run` | `workspace-write` | shell、web、读写 worktree、runner CLI |
+| 纯文本 | `run` | `danger-full-access` | shell、web、读写 worktree、runner CLI |
 | `/run` | `run` | 同上 | 同上 |
 | `/fix` | `fix` | 同上 | 同上（与纯文本等价，保留命令兼容） |
 | `记 xxx` / `/memo` | — | — | **不经过 Codex**，直接写 MEMORY.md |
@@ -146,7 +150,7 @@ generic `MessageHandler(filters.COMMAND, …)` fallback —— `COMMAND_TABLE`
 **设计理由**：
 - 个人 bot + 单 operator：read-only 边界带来的「查 IP 必须 `/fix`」不符合对话直觉
 - 安全仍靠：channel 白名单、worktree 隔离、`/diff` + `/apply` 才合入主仓库、输出 redaction
-- `/run` 与 `/fix` 保留仅为兼容旧习惯与 job 日志区分，**sandbox 已统一**
+- `/run` 与 `/fix` 保留仅为兼容旧习惯与 job 日志区分，**sandbox 已统一为 danger-full-access**
 
 ### 5.1 Prompt 注入顺序
 
@@ -155,7 +159,7 @@ generic `MessageHandler(filters.COMMAND, …)` fallback —— `COMMAND_TABLE`
 1. `<operator-profile>` — 身份、语言、风格
 2. `<day-brief>` — 每天首个 job 的冷启动摘要
 3. `<memory-context>` — 当日 `MEMORY.md`
-4. `<tool-registry sandbox="workspace-write">` — shell、memorize、recall 等
+4. `<tool-registry sandbox="danger-full-access">` — shell、memorize、recall 等
 5. 用户消息
 
 ---

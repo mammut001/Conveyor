@@ -19,10 +19,18 @@ release note before any public disclosure.
 ## Threat model in scope
 
 `Conveyor` runs `codex exec` on a VPS on behalf of a
-single whitelisted chat (Telegram user id, Feishu open_id). The threat
-model is "Telegram account compromise", "Feishu app-tenant compromise",
+single whitelisted chat (Telegram user id, Feishu open_id). This is a
+**single-operator private control surface**, not multi-tenant SaaS.
+The threat model is "Telegram account compromise", "Feishu app-tenant compromise",
 and "untrusted chat". Both channels are mitigated by per-channel
 `ALLOWED_*` gates and the redaction layer in [`redaction.py`](redaction.py).
+
+Codex jobs intentionally use `danger-full-access` so shell and host reads
+work from chat on a personal VPS. Operational boundaries are: channel
+allowlist, low-privilege service user, per-day worktree isolation, output
+redaction, and explicit `/diff` + `/apply` review before merging into the
+main repo. Narrowing the Codex sandbox is future hardening — not current
+behavior.
 
 Out of scope: the underlying host, the Codex CLI itself, and the
 Telegram Bot API. Report those to their respective maintainers.

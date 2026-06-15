@@ -87,7 +87,7 @@ def check_disk(path: Path) -> CheckResult:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Show operational health for the Telegram Codex runner.")
     parser.add_argument("--env", default=".env", help="Path to .env file")
-    parser.add_argument("--service", default="codex-telegram-bot", help="systemd service name")
+    parser.add_argument("--service", default="conveyor-telegram-bot", help="systemd service name")
     parser.add_argument("--send-test", action="store_true", help="Send a Telegram Bot API test message")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     args = parser.parse_args()

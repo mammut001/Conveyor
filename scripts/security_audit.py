@@ -85,7 +85,7 @@ def run_security_audit(env_file: str, service_name: str, since: str) -> list[Che
         check_recent_journal(service_name, since),
     ]
     results.extend(check_service_hardening(service_name))
-    maintain_service = "codex-telegram-maintain.service"
+    maintain_service = "conveyor-maintain.service"
     if run_command(["systemctl", "cat", maintain_service], timeout=10).returncode == 0:
         results.extend(check_service_hardening(maintain_service))
     task_mode = _mode(settings.codex_task_root) if settings.codex_task_root.exists() else 0
@@ -96,7 +96,7 @@ def run_security_audit(env_file: str, service_name: str, since: str) -> list[Che
 def main() -> None:
     parser = argparse.ArgumentParser(description="Audit Telegram Codex runner security posture without printing secrets.")
     parser.add_argument("--env", default=".env", help="Path to .env file")
-    parser.add_argument("--service", default="codex-telegram-bot")
+    parser.add_argument("--service", default="conveyor-telegram-bot")
     parser.add_argument("--since", default="1 hour ago", help="Journal window for token-pattern scan")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()

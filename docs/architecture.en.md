@@ -147,9 +147,15 @@ wiring. Existing explicit handlers still win first.
 
 ## 5. Chat-first mode and CodexRunner path
 
+Single-operator private VPS: Codex sandbox is intentionally
+`danger-full-access`, not a multi-tenant SaaS. Safety comes from the
+channel allowlist, low-privilege VPS user, worktree isolation, redaction,
+and explicit `/diff` + `/apply` review. Narrowing the sandbox is future
+hardening — not current behavior.
+
 | Trigger | JobMode | Codex `--sandbox` | Capabilities |
 |---|---|---|---|
-| Plain text | `run` | `workspace-write` | shell, web, read/write worktree, runner CLI |
+| Plain text | `run` | `danger-full-access` | shell, web, read/write worktree, runner CLI |
 | `/run` | `run` | same | same |
 | `/fix` | `fix` | same | same (kept for compatibility) |
 | `记 xxx` / `/memo` | — | — | **bypasses Codex**, writes MEMORY.md directly |
@@ -157,7 +163,7 @@ wiring. Existing explicit handlers still win first.
 Design rationale:
 - Single-operator personal bot: a "must `/fix` to read an IP" boundary breaks conversational feel.
 - Safety is provided by: channel allowlist, worktree isolation, `/diff` + `/apply` to merge into the main repo, and output redaction.
-- `/run` vs `/fix` is kept only for legacy muscle memory and job-log separation; the **sandbox is unified**.
+- `/run` vs `/fix` is kept only for legacy muscle memory and job-log separation; the **sandbox is unified as danger-full-access**.
 
 ### 5.1 Prompt injection order
 
@@ -166,7 +172,7 @@ Order assembled before each Codex call (see `runner/prefetch.py`):
 1. `<operator-profile>` — identity, language, style
 2. `<day-brief>` — cold-start summary for the first job of the day
 3. `<memory-context>` — today's `MEMORY.md`
-4. `<tool-registry sandbox="workspace-write">` — shell, memorize, recall, …
+4. `<tool-registry sandbox="danger-full-access">` — shell, memorize, recall, …
 5. User message
 
 ---

@@ -112,7 +112,7 @@ async def _clean(msg, port, runner, _settings, arg):
 async def _maintain(msg, port, _runner, settings, arg):
     keep = _int_arg(arg, default=50, lo=1, hi=500)
     try:
-        outcome = await run_maintenance(".env", "codex-telegram-bot", clean_threshold=100, keep=keep)
+        outcome = await run_maintenance(".env", "conveyor-telegram-bot", clean_threshold=100, keep=keep)
     except Exception as exc:
         await port.reply(msg, f"maintain 没跑成：{truncate(str(exc), 1200)}")
         return
@@ -121,7 +121,7 @@ async def _maintain(msg, port, _runner, settings, arg):
 
 async def _doctor(msg, port, _runner, settings, _arg):
     results = [
-        check_systemd_active("codex-telegram-bot"),
+        check_systemd_active("conveyor-telegram-bot"),
         check_workspace(settings),
         check_minimax_models(settings),
         check_disk(settings.codex_task_root),
@@ -135,7 +135,7 @@ async def _doctor(msg, port, _runner, settings, _arg):
 async def _diag(msg, port, _runner, _settings, arg):
     since = _join_arg(arg) or "1 hour ago"
     try:
-        text = diagnostics_report(".env", "codex-telegram-bot", since, metrics_limit=20)
+        text = diagnostics_report(".env", "conveyor-telegram-bot", since, metrics_limit=20)
     except Exception as exc:
         await port.reply(msg, f"diag 没跑成：{truncate(str(exc), 1200)}")
         return
@@ -145,7 +145,7 @@ async def _diag(msg, port, _runner, _settings, arg):
 async def _security(msg, port, _runner, _settings, arg):
     since = _join_arg(arg) or "1 hour ago"
     try:
-        results = run_security_audit(".env", "codex-telegram-bot", since)
+        results = run_security_audit(".env", "conveyor-telegram-bot", since)
     except Exception as exc:
         await port.reply(msg, f"security 没跑成：{truncate(str(exc), 1200)}")
         return
@@ -248,7 +248,7 @@ async def _health(msg, port, _runner, _settings, arg):
     try:
         snapshot = health_snapshot(
             ".env",
-            "codex-telegram-bot",
+            "conveyor-telegram-bot",
             "1 hour ago",
             metrics_limit=20,
             include_security=full and "nosecurity" not in raw,
@@ -266,7 +266,7 @@ async def _health(msg, port, _runner, _settings, arg):
 async def _smoke(msg, port, _runner, _settings, _arg):
     await port.reply(msg, "开始 smoke。它会跑一条最小 MiniMax/Codex 端到端测试。")
     try:
-        code = await run_smoke(".env", "codex-telegram-bot", notify=False)
+        code = await run_smoke(".env", "conveyor-telegram-bot", notify=False)
     except Exception as exc:
         await port.reply(msg, f"smoke 没跑成：{truncate(str(exc), 1200)}")
         return

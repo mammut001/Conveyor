@@ -70,7 +70,7 @@ async def run_smoke(env_file: str, service_name: str, notify: bool) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run an end-to-end Telegram Codex runner smoke test.")
     parser.add_argument("--env", default=".env", help="Path to .env file")
-    parser.add_argument("--service", default="codex-telegram-bot", help="systemd service name")
+    parser.add_argument("--service", default="conveyor-telegram-bot", help="systemd service name")
     parser.add_argument("--notify", action="store_true", help="Send runner progress to Telegram during the smoke job")
     args = parser.parse_args()
 

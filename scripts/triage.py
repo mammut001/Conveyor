@@ -13,7 +13,7 @@ def advice_for_result(result: CheckResult) -> str | None:
     detail = result.detail.lower()
 
     if name == "systemd":
-        return "Check `sudo systemctl status codex-telegram-bot` and `sudo journalctl -u codex-telegram-bot -n 80 --no-pager`."
+        return "Check `sudo systemctl status conveyor-telegram-bot` and `sudo journalctl -u conveyor-telegram-bot -n 80 --no-pager`."
     if name == "workspace":
         return "Verify `CODEX_WORKSPACE_ROOT` points at the git repo root and the service user can read it."
     if name == "minimax":
@@ -40,7 +40,7 @@ def advice_for_result(result: CheckResult) -> str | None:
         return "Use `/status`, then `/cancel` if needed; inspect `scripts/job_audit.py` and the stale job log."
     if name == "orphan worktrees":
         return "Run `/clean` or `scripts/auto_maintain.py` after confirming no active job owns those worktrees."
-    if name.startswith("codex-telegram") or name in {"env permissions", "repo secret scan", "journal token scan", "task root permissions"}:
+    if name.startswith("conveyor-") or name in {"env permissions", "repo secret scan", "journal token scan", "task root permissions"}:
         return "Run `scripts/security_audit.py --since '1 hour ago'` and fix the named hardening or secret-hygiene item."
     return "Run `scripts/diagnostics.py --since '1 hour ago'` and inspect the failing section detail."
 

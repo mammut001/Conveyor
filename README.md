@@ -194,7 +194,7 @@ job logs under `CODEX_TASK_ROOT`.
 
 - Plain text → run Codex with full workspace access (same as `/run`)
 - `/run <prompt>` and `/fix <prompt>` are equivalent; both use
-  `workspace-write`
+  `danger-full-access`
 - `/status` / `/last` / `/jobs [n]` — current/most recent jobs
 - `/diff` — `git status` + truncated diff preview from the latest worktree
 - `/apply` — apply the latest worktree back to the main repo
@@ -313,16 +313,20 @@ transient `429 Too Many Requests` from the provider.
 
 ## 5. Safety model
 
+This is a **single-operator private VPS control surface**, not a
+multi-tenant SaaS. There is one whitelisted chat per channel and one
+human who reviews diffs before anything lands in the main repo.
+
 - Channel access is denied unless the sender id exactly matches
   `TELEGRAM_ALLOWED_USER_ID` or `LARK_ALLOWED_OPEN_ID`. There is no
   other authentication; the ALLOWED_* gate is the only thing
   standing between this bot and the public internet.
 - Prompts are passed only to Codex stdin; they are never executed
   as shell commands.
-- `/run` and plain text use Codex `workspace-write` in the daily
-  worktree (chat-first; see `docs/architecture.md` §5). `/fix` is
-  an alias with the same sandbox.
-- `danger-full-access` is never used.
+- `/run`, plain text, and `/fix` all invoke Codex with
+  `danger-full-access` in the daily worktree (chat-first; see
+  `docs/architecture.en.md` §5). This is intentional for a personal
+  VPS: shell, host reads, and worktree edits must work from chat.
 - Each job uses a detached git worktree created from `HEAD`.
 - Raw Codex JSONL stays on disk; Telegram / Feishu output is
   truncated and redacted for common secret patterns.
@@ -331,6 +335,11 @@ transient `429 Too Many Requests` from the provider.
   directory.
 - The bot does **not** commit, push, or merge changes. Apply is
   always an explicit `/apply` after you review `/diff`.
+
+**Operational boundaries today:** channel allowlist, low-privilege VPS
+user, per-day worktree isolation, output redaction, and your review
+discipline (`/diff` then `/apply`). **Future hardening** (e.g. narrowing
+sandbox back toward `workspace-write`) is backlog — not current behavior.
 
 This is still remote code-running infrastructure: keep the bot
 tokens private, use dedicated bots, keep the VPS user low privilege,

@@ -191,7 +191,7 @@ def health_snapshot(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Emit a machine-readable health snapshot for the Telegram Codex runner.")
     parser.add_argument("--env", default=".env", help="Path to .env file")
-    parser.add_argument("--service", default="codex-telegram-bot")
+    parser.add_argument("--service", default="conveyor-telegram-bot")
     parser.add_argument("--since", default="1 hour ago", help="Journal window for security scan")
     parser.add_argument("--metrics-limit", type=int, default=20)
     parser.add_argument("--no-security", action="store_true", help="Skip journal/security checks")

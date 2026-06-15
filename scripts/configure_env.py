@@ -138,7 +138,7 @@ def main() -> int:
     }
     write_env(values)
     print(f"Wrote {ENV_PATH} with mode 600.")
-    print("Next: run scripts/healthcheck.sh, then sudo systemctl enable --now codex-telegram-bot.")
+    print("Next: run scripts/healthcheck.sh, then sudo systemctl enable --now conveyor-telegram-bot.")
     return 0
 
 

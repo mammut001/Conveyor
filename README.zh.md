@@ -178,7 +178,7 @@ detached worktree，job 日志写在 `CODEX_TASK_ROOT` 下。
 ## 4. 命令表（Telegram + Feishu 同表）
 
 - 纯文本 → 跑 Codex（和 `/run` 一样）
-- `/run <prompt>` 和 `/fix <prompt>` 等价；都用 `workspace-write` 沙箱
+- `/run <prompt>` 和 `/fix <prompt>` 等价；都用 `danger-full-access` 沙箱
 - `/status` / `/last` / `/jobs [n]` — 当前 / 最近的任务
 - `/diff` — `git status` + 最近 worktree 的 diff 预览
 - `/apply` — 把最近 worktree 合回主仓库（仅当主仓库干净）
@@ -266,19 +266,26 @@ Telegram 是**就地编辑**原占位符；飞书目前是**新消息**（卡片
 
 ## 5. 安全模型
 
+这是**单操作员私有 VPS 控制面**，不是多租户 SaaS。每个 channel 只有一个
+白名单会话，合入主仓库前由同一个人审 `/diff`。
+
 - 通道鉴权：发送者 ID 必须**精确匹配** `TELEGRAM_ALLOWED_USER_ID` 或
   `LARK_ALLOWED_OPEN_ID`，否则拒收。除了 `ALLOWED_*` 这道门没有其他
   认证 —— 这道门是这个 bot 和公网之间唯一的东西。
 - prompt 只通过 Codex stdin 传，**绝不**当 shell 命令执行。
-- `/run` 和纯文本用 Codex `workspace-write` 沙箱（chat-first；见
-  `docs/architecture.md` §5）。`/fix` 是别名，沙箱相同。
-- `danger-full-access` **永远不用**。
+- `/run`、纯文本和 `/fix` 都在每日 worktree 里用 Codex
+  `danger-full-access`（chat-first；见 `docs/architecture.md` §5）。
+  个人 VPS 上这是刻意的：聊天里要能跑 shell、读主机、改 worktree。
 - 每个任务用一个从 `HEAD` 创建的 detached git worktree。
 - 原始 Codex JSONL 留磁盘；Telegram / Feishu 下发前会截断并脱敏常见秘钥格式。
 - systemd unit 设了 `PYTHONDONTWRITEBYTECODE=1`，运行时 import 不会在部署
   目录里留 `__pycache__`。
 - bot **不** commit / push / merge。`/apply` 永远是显式动作 —— 你先
   `/diff` 看过再 `/apply`。
+
+**当前安全边界**：channel 白名单、低权 VPS 用户、按日 worktree 隔离、
+输出 redaction、以及你的审查纪律（`/diff` 再 `/apply`）。**未来加固**
+（例如把 sandbox 收窄回 `workspace-write`）在 backlog —— **不是当前行为**。
 
 这仍然是远程跑代码的基础设施：bot token 保密、用专用 bot、VPS 用户保持
 低权、`/diff` 看过再手动合。

@@ -60,7 +60,7 @@ def diagnostics_report(env_file: str, service_name: str, since: str, metrics_lim
 def main() -> None:
     parser = argparse.ArgumentParser(description="Print a compact all-in-one diagnostics report for the Telegram Codex runner.")
     parser.add_argument("--env", default=".env", help="Path to .env file")
-    parser.add_argument("--service", default="codex-telegram-bot")
+    parser.add_argument("--service", default="conveyor-telegram-bot")
     parser.add_argument("--since", default="1 hour ago", help="Journal window for security scan")
     parser.add_argument("--metrics-limit", type=int, default=20)
     args = parser.parse_args()

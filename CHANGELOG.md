@@ -9,7 +9,7 @@ at a glance.
 ## [unreleased] - hot-reload for operator.json
 
 The /profile edit path (and the manual `ssh ... rm/sed operator.json`
-path) used to require a `systemctl restart codex-telegram-bot.service`
+path) used to require a `systemctl restart conveyor-telegram-bot.service`
 to take effect: `_operator_profile_text` was reading
 `self.settings.operator_*` which is the frozen Settings object
 populated once at startup. This round adds a per-call re-read so

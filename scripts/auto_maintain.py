@@ -108,7 +108,7 @@ async def maintain(env_file: str, service_name: str, clean_threshold: int, keep:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run safe autonomous maintenance for the Telegram Codex runner.")
     parser.add_argument("--env", default=".env", help="Path to .env file")
-    parser.add_argument("--service", default="codex-telegram-bot")
+    parser.add_argument("--service", default="conveyor-telegram-bot")
     # Threshold tuned to a typical day of Telegram traffic (~17 job
     # worktrees/day) so GC fires within ~1 day of accumulation instead of
     # batching 5+ days. 30 is well above the natural daily baseline; it

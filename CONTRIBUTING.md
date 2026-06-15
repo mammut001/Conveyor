@@ -10,7 +10,8 @@ for new contributors.
 
 A small Python service that bridges a whitelisted user (Telegram, Feishu)
 to the [`codex`](https://github.com/openai/codex) CLI on a VPS. It is a
-tool for running `codex exec` from a phone, not a multi-tenant SaaS. Read
+tool for running `codex exec` from a phone, not a multi-tenant SaaS —
+a single-operator private control surface on your own machine. Read
 [`README.md`](README.md) for the command surface and
 [`project.md`](project.md) for the deep design notes.
 
@@ -19,6 +20,9 @@ tool for running `codex exec` from a phone, not a multi-tenant SaaS. Read
 * **Keep the ALLOWED_USER_ID gate honest.** The whitelist is the only
   thing standing between this bot and the public internet. Do not add
   "support for multiple users" without an explicit threat model.
+* **Do not "fix" the sandbox without a threat model.** Runtime jobs use
+  Codex `danger-full-access` on purpose for a personal VPS. Narrowing
+  sandbox scope is a future hardening item, not a drive-by doc/code drift.
 * **Never commit secrets.** `.env` is git-ignored. `.env.example` and
   `.env.test` are the only env-shaped files in the repo, and both use
   placeholders. If you find a real token in a commit, rotate it.
