@@ -86,24 +86,51 @@ async def test_scheduler_status_no_systemctl() -> CheckResult:
         return CheckResult(name, False, str(exc))
 
 
-# ---- Test 2: scheduler_probe dry-run succeeds ----
+# ---- Test 2: scheduler_probe synthetic dry-run creates temp due reminder ----
 
 async def test_scheduler_probe_dryrun() -> CheckResult:
-    name = "scheduler_probe: dry-run succeeds without network"
+    name = "scheduler_probe: synthetic dry-run creates temp due reminder"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            settings = _settings(Path(td))
+            # Mock load_settings to return our test settings
+            with mock.patch("scripts.scheduler_probe.load_settings", return_value=settings):
+                result = await run_tool(settings, "scheduler_probe")
+            # Should mention synthetic mode
+            has_synthetic = "合成模式" in result
+            # Should have created a temp reminder and verified scan
+            has_delivered = "delivered=1" in result
+            # Should have verified DB remains pending
+            has_pending = "pending" in result
+            # Should report success
+            has_ok = "通过" in result
+            ok = has_synthetic and has_delivered and has_pending and has_ok
+            return CheckResult(name, ok, f"synthetic={has_synthetic} delivered={has_delivered} pending={has_pending} ok={has_ok}")
+    except Exception as exc:
+        return CheckResult(name, False, str(exc))
+
+
+# ---- Test 2b: scheduler_probe does not touch production DB ----
+
+async def test_scheduler_probe_no_prod_touch() -> CheckResult:
+    name = "scheduler_probe: production DB not touched"
     try:
         with tempfile.TemporaryDirectory() as td:
             settings = _settings(Path(td))
             store = PersonalToolsStore(settings)
+            # Add a reminder to "production" (test) DB
             past = datetime.now(timezone.utc) - timedelta(minutes=5)
-            store.create_reminder("u1", "test reminder", past, channel="telegram", chat_id="999")
+            store.create_reminder("u1", "production reminder", past, channel="telegram", chat_id="999")
+            prod_count_before = len(store.list_reminders("u1", limit=100))
 
+            # Run dry-run probe
             with mock.patch("scripts.scheduler_probe.load_settings", return_value=settings):
-                with mock.patch("scripts.scheduler_tick.load_settings", return_value=settings):
-                    result = await run_tool(settings, "scheduler_probe")
-            has_dryrun = "dry-run" in result
-            has_pending = "pending=" in result or "待投递" in result
-            ok = has_dryrun and has_pending
-            return CheckResult(name, ok, f"dryrun={has_dryrun} pending={has_pending}")
+                await run_tool(settings, "scheduler_probe")
+
+            # Verify production DB unchanged
+            prod_count_after = len(store.list_reminders("u1", limit=100))
+            ok = prod_count_before == prod_count_after
+            return CheckResult(name, ok, f"before={prod_count_before} after={prod_count_after}")
     except Exception as exc:
         return CheckResult(name, False, str(exc))
 
@@ -207,6 +234,7 @@ async def main() -> int:
         test_commands_registered(),
         await test_scheduler_status_no_systemctl(),
         await test_scheduler_probe_dryrun(),
+        await test_scheduler_probe_no_prod_touch(),
         await test_scheduler_probe_live_needs_confirm(),
         await test_tools_lists_new_tools(),
         await test_help_includes_new_commands(),

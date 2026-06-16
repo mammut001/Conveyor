@@ -164,19 +164,60 @@ def scheduler_status_report() -> str:
 
 
 def scheduler_probe_dry_run() -> str:
-    """Dry-run probe: run scheduler_tick --dry-run, report results. Safe for READ tool."""
-    settings = load_settings()
-    delivered, failed = scheduler_tick.run_tick(dry_run=True)
-    counts = _reminder_counts(settings)
+    """Synthetic dry-run probe: create temp DB with due reminder, verify scan path.
 
-    lines = ["🔍 Scheduler 探针 (dry-run)", ""]
-    lines.append(f"  本次 dry-run: {delivered} 条待投递, {failed} 条失败")
-    lines.append(f"  DB 统计: pending={counts['pending']} "
-                 f"delivery_pending={counts['delivery_pending']} "
-                 f"delivery_failed={counts['delivery_failed']}")
-    lines.append("")
-    lines.append("  ✅ dry-run 完成，未发送消息，未写入 DB。")
-    return truncate("\n".join(lines))
+    This is a true synthetic probe — it creates a temporary codex_memory_root
+    with one due telegram reminder, patches scheduler_tick to use it, runs
+    run_tick(dry_run=True), and asserts the reminder is found but NOT written
+    (dry-run must not mutate DB).
+    """
+    base_settings = load_settings()
+    with tempfile.TemporaryDirectory(prefix="conveyor-scheduler-probe-") as td:
+        settings = replace(base_settings, codex_memory_root=Path(td))
+        store = PersonalToolsStore(settings)
+        now = datetime.now(timezone.utc)
+        operator_id = str(settings.telegram_allowed_user_id)
+        test_text = f"[synthetic-probe] dry-run @ {now.strftime('%H:%M:%S UTC')}"
+        row = store.create_reminder(
+            operator_id=operator_id,
+            text=test_text,
+            due_at=now - timedelta(seconds=5),
+            channel="telegram",
+            chat_id=operator_id,
+        )
+
+        original = _patch_scheduler_settings(settings)
+        try:
+            delivered, failed = scheduler_tick.run_tick(dry_run=True)
+        finally:
+            scheduler_tick.load_settings = original  # type: ignore[assignment]
+
+        # Verify DB row remains unchanged (dry-run must not write)
+        after = _find_reminder(settings, row.id)
+        ok = (
+            delivered == 1
+            and failed == 0
+            and after is not None
+            and after.status == "pending"
+            and after.delivery_status == "pending"
+        )
+
+        lines = ["🔍 Scheduler 探针 (dry-run 合成模式)", ""]
+        lines.append(f"  创建临时测试提醒 #{row.id}: {test_text}")
+        lines.append(f"  run_tick(dry_run=True): delivered={delivered} failed={failed}")
+        lines.append("  dry-run 验证:")
+        lines.append(f"    ✓ 扫描到 1 条到期提醒: {delivered == 1}")
+        lines.append(f"    ✓ 投递计数为 0 (dry-run): {failed == 0}")
+        lines.append(f"    ✓ DB 行保持 pending: {after.status == 'pending' if after else False}")
+        lines.append(f"    ✓ delivery_status 未变: {after.delivery_status == 'pending' if after else False}")
+        lines.append("")
+        if ok:
+            lines.append("  ✅ 合成 dry-run 探针通过！扫描路径验证成功，未发送消息，未写入 DB。")
+        else:
+            lines.append("  ❌ 合成 dry-run 探针失败！")
+        lines.append("")
+        lines.append(f"  时间: {now.strftime('%Y-%m-%d %H:%M UTC')}")
+        return truncate("\n".join(lines))
 
 
 def scheduler_probe_live() -> str:
