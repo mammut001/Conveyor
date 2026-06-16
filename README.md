@@ -216,6 +216,9 @@ job logs under `CODEX_TASK_ROOT`.
 - `/notes [query]` — list recent notes or search
 - `/remind <text + time>` — create a local reminder (**WRITE_SAFE**, audited, no confirm)
 - `/reminders` — list reminders
+- `/scheduler_status` — reminder scheduler status report
+- `/scheduler_probe` — dry-run probe (no network, no DB writes)
+- `/scheduler_probe_live` — real delivery test (**WRITE**, requires confirmation)
 - `/help` — full command list
 
 ### Agent tool layer
@@ -258,6 +261,9 @@ Registered tools (`/tools` lists all):
 | `service_status` | read | `systemctl is-active` for conveyor units |
 | `git_status` | read | Workspace `git status` |
 | `service_restart` | **write (confirm)** | Restart a conveyor systemd unit |
+| `scheduler_status` | read | Reminder scheduler status report |
+| `scheduler_probe` | read | Scheduler dry-run probe |
+| `scheduler_probe_live` | **write (confirm)** | Scheduler live delivery test |
 
 Safety: **write/destructive tools require explicit confirmation**
 (Telegram inline buttons; Feishu/text replies must use explicit phrases
@@ -308,10 +314,27 @@ status is tracked per-reminder (`pending` → `delivered`/`failed`); failed
 reminders retry up to 3 times. Reminders without `channel`/`chat_id`
 (pre-P3.2 records) are skipped by the scheduler with a clear status.
 
+**P3.2.1 — Scheduler observability:** Three tools let the operator
+verify the delivery pipeline from chat without SSH:
+
+| Tool | Level | Command | What it does |
+|---|---|---|---|
+| `scheduler_status` | READ | `/scheduler_status` | Timer/Service status, journal tail, reminder counts, channel support |
+| `scheduler_probe` | READ | `/scheduler_probe` | Dry-run probe: runs scheduler_tick --dry-run, no network/DB writes |
+| `scheduler_probe_live` | WRITE | `/scheduler_probe_live` | Live delivery test to Telegram (requires confirmation) |
+
+`scheduler_status_report()` degrades gracefully when `systemctl` is
+unavailable (macOS/CI). `scheduler_probe_live()` creates a `[probe]`
+reminder, delivers it, and verifies `delivery_status=delivered` in DB.
+All output is redacted; no `.env` or tokens are exposed.
+
 Code: `personal_tools/` (`base`, `store`, `registry`, `notes`, `reminders`,
 `reminder_parse`). Scheduler: `scripts/scheduler_tick.py`.
+Probe: `scripts/scheduler_probe.py`.
 Smoke: `scripts/personal_tools_smoke.py` (24 cases: CRUD, isolation, audit,
 redaction, command surface, migration, delivery, dry-run, drift check).
+Smoke: `scripts/scheduler_probe_smoke.py` (7 cases: registry, commands,
+no-systemctl degradation, dry-run, live confirmation, /tools, /help).
 
 **Telegram slash commands:** New ops/tool commands (`/load`, `/tools`,
 `/disk`, …) are registered in `COMMAND_TABLE` and reached via a

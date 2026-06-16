@@ -196,6 +196,9 @@ detached worktree，job 日志写在 `CODEX_TASK_ROOT` 下。
 - `/notes [关键词]` — 列出/搜索笔记
 - `/remind <内容+时间>` — 创建本地提醒（**WRITE_SAFE**，立即执行，审计）
 - `/reminders` — 列出提醒
+- `/scheduler_status` — 提醒调度器状态报告
+- `/scheduler_probe` — dry-run 探测（不发消息，不写 DB）
+- `/scheduler_probe_live` — 实时投递测试（**WRITE**，需确认）
 - `/help` — 完整命令列表
 
 ### Agent 工具层
@@ -228,6 +231,9 @@ Conveyor **不是**纯硬编码命令 bot。结构化 tool registry + 轻量 int
 | `service_status` | 只读 | conveyor systemd 单元状态 |
 | `git_status` | 只读 | workspace git status |
 | `service_restart` | **写（需确认）** | 重启 conveyor systemd 单元 |
+| `scheduler_status` | 只读 | 提醒调度器状态报告 |
+| `scheduler_probe` | 只读 | 调度器 dry-run 探测 |
+| `scheduler_probe_live` | **写（需确认）** | 调度器实时投递测试 |
 
 安全：**写/破坏性工具必须显式确认**（Telegram 内联按钮；飞书/文本须用明确短语如 `确认执行` / `confirm` — 随意的 `好` / `ok` / `是` **不会**被接受）。确认绑定 originating chat + channel；事件写入 `audit/tools.log`。
 
@@ -265,9 +271,23 @@ Conveyor **不是**纯硬编码命令 bot。结构化 tool registry + 轻量 int
 按提醒追踪（`pending` → `delivered`/`failed`）；失败提醒最多重试 3 次。无 `channel`/`chat_id`
 的旧提醒（P3.2 前记录）会被调度器跳过。
 
+**P3.2.1 — 调度器可观测性：** 三个确定性工具让运维者从聊天中验证投递管线，无需 SSH：
+
+| 工具 | 级别 | 命令 | 说明 |
+|---|---|---|---|
+| `scheduler_status` | READ | `/scheduler_status` | Timer/Service 状态 + journal 尾部 + 提醒统计 + 通道支持 |
+| `scheduler_probe` | READ | `/scheduler_probe` | Dry-run 探测：运行 scheduler_tick --dry-run，不发消息不写 DB |
+| `scheduler_probe_live` | WRITE | `/scheduler_probe_live` | 实时投递测试到 Telegram（需确认） |
+
+`scheduler_status_report()` 在 `systemctl` 不可用时优雅降级（macOS/CI）。
+`scheduler_probe_live()` 创建一条 `[probe]` 提醒，投递后验证 DB 中 `delivery_status=delivered`。
+所有输出经 `redact_text()` + `truncate()` 处理，不暴露 `.env` 或 token。
+
 代码：`personal_tools/`（`base`、`store`、`registry`、`notes`、`reminders`、`reminder_parse`）。
 调度器：`scripts/scheduler_tick.py`。
-Smoke：`scripts/personal_tools_smoke.py`（24 项：CRUD、隔离、审计、redaction、命令面、迁移、投递、dry-run、漂移检查）。
+探针：`scripts/scheduler_probe.py`。
+Smoke：`scripts/personal_tools_smoke.py`（24 项）。
+Smoke：`scripts/scheduler_probe_smoke.py`（7 项：registry、commands、无 systemctl 降级、dry-run、live 确认、/tools、/help）。
 
 **Telegram slash 命令：** 新 ops/tool 命令（`/load`、`/tools`、`/disk` 等）在 `COMMAND_TABLE` 注册，并通过 `bot.py` 中的通用 `MessageHandler(filters.COMMAND, …)` fallback 到达（位于显式 `CommandHandler` 之后、纯文本 handler 之前），确保未知 slash 命令仍能进入 `dispatch()` → `COMMAND_TABLE`。
 

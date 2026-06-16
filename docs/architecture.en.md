@@ -285,7 +285,8 @@ personal_tools/
   reminders.py reminder CRUD + simple time parsing
   reminder_parse.py  in 10m / in 2h / tomorrow HH:MM / ISO parsing
 scripts/
-  scheduler_tick.py  reminder delivery scheduler (triggered by timer every 60s)
+  scheduler_tick.py   reminder delivery scheduler (triggered by timer every 60s)
+  scheduler_probe.py  scheduler probe (dry-run / live mode)
 systemd/
   conveyor-scheduler.service  oneshot: runs scheduler_tick.py
   conveyor-scheduler.timer    every 60s
@@ -315,6 +316,20 @@ timer (`conveyor-scheduler.timer`) runs `scripts/scheduler_tick.py` every 60s
 to find due deliverable reminders and send them as Telegram messages. Delivery
 status is tracked per-reminder (`pending` → `delivered`/`failed`); failed
 reminders retry up to 3 times. Supports `--dry-run` for smoke testing.
+
+**P3.2.1 Scheduler observability:** Three deterministic tools let the operator
+verify the delivery pipeline from chat without SSH:
+
+| Tool | danger | Command | Notes |
+|---|---|---|---|
+| scheduler_status | READ | `/scheduler_status` | Timer/Service status + journal tail + reminder counts + channel support |
+| scheduler_probe | READ | `/scheduler_probe` | Dry-run probe: runs scheduler_tick --dry-run, no network/DB writes |
+| scheduler_probe_live | WRITE | `/scheduler_probe_live` | Live probe: creates test reminder and delivers to Telegram, requires confirmation |
+
+`scheduler_status_report()` degrades gracefully when `systemctl` is unavailable (macOS/CI).
+`scheduler_probe_live()` creates a `[probe]` reminder, runs `run_tick(dry_run=False)`,
+then queries DB to verify `delivery_status=delivered`. All output is `redact_text()` +
+`truncate()` processed; no `.env` or tokens are exposed.
 
 Reminder time formats: `in 10m`, `in 2h`, `tomorrow HH:MM`, ISO datetime.
 Parse failures return clear usage text.

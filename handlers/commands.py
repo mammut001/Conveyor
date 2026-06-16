@@ -348,6 +348,9 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "service_status": ("/service_status",),
     "git_status": ("/git_status",),
     "service_restart": ("/restart telegram|feishu|maintain",),
+    "scheduler_status": ("/scheduler_status",),
+    "scheduler_probe": ("/scheduler_probe",),
+    "scheduler_probe_live": ("/scheduler_probe_live",),
 }
 
 _TOOL_EXAMPLES: dict[str, str] = {
@@ -357,6 +360,9 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "service_status": "服务还在跑吗",
     "git_status": "git status",
     "service_restart": "重启 telegram bot",
+    "scheduler_status": "调度器状态",
+    "scheduler_probe": "探测调度器",
+    "scheduler_probe_live": "实时测试投递",
 }
 
 
@@ -396,6 +402,21 @@ async def _remind(msg, port, _runner, settings, arg):
 async def _reminders(msg, port, _runner, settings, arg):
     from handlers.tools.runner import _invoke_tool
     await _invoke_tool(msg, port, settings, "reminders.list", arg)
+
+
+async def _scheduler_status(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "scheduler_status"))
+
+
+async def _scheduler_probe(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "scheduler_probe"))
+
+
+async def _scheduler_probe_live(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(msg, port, settings, "scheduler_probe_live", "")
 
 
 async def _audit_tools(msg, port, _runner, settings, arg):
@@ -624,6 +645,7 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/security [since] /ratelimit [n] /metrics [n] /log [sel] /meta [sel]\n"
     text += "/smoke /editcheck /maintain [keep] /clean [keep] /run /fix\n"
     text += "/note <内容> /notes [关键词] /remind <内容+时间> /reminders\n"
+    text += "/scheduler_status /scheduler_probe /scheduler_probe_live\n"
     text += "\n"
     text += "本机运维快路径 (bypass Codex):\n"
     text += "/load /vps — 主机负载/内存/磁盘快照\n"
@@ -682,6 +704,9 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("notes", "搜索/列出本地笔记", _notes, takes_optional_arg=True),
         CommandSpec("remind", "创建本地提醒 (立即执行, 审计)", _remind, takes_arg=True),
         CommandSpec("reminders", "列出本地提醒", _reminders, takes_optional_arg=True),
+        CommandSpec("scheduler_status", "提醒调度器状态报告", _scheduler_status),
+        CommandSpec("scheduler_probe", "调度器 dry-run 探测", _scheduler_probe),
+        CommandSpec("scheduler_probe_live", "调度器实时投递测试 (需确认)", _scheduler_probe_live),
         CommandSpec("audit_tools", "危险工具审计日志", _audit_tools, takes_optional_arg=True),
         CommandSpec("deploy_status", "部署状态", _deploy_status),
         CommandSpec("context", "查看最近会话上下文", _context),

@@ -135,6 +135,21 @@ RESTART_ALIASES_ZH: dict[str, str] = {
 }
 
 
+async def exec_scheduler_status(_settings: Settings, _arg: str) -> str:
+    from scripts.scheduler_probe import scheduler_status_report
+    return scheduler_status_report()
+
+
+async def exec_scheduler_probe(_settings: Settings, _arg: str) -> str:
+    from scripts.scheduler_probe import scheduler_probe_dry_run
+    return scheduler_probe_dry_run()
+
+
+async def exec_scheduler_probe_live(_settings: Settings, _arg: str) -> str:
+    from scripts.scheduler_probe import scheduler_probe_live
+    return scheduler_probe_live()
+
+
 async def exec_service_restart(_settings: Settings, arg: str) -> str:
     """Dangerous: restart a conveyor systemd unit. Requires confirmation.
 
@@ -222,6 +237,27 @@ def register_builtin_tools() -> None:
             danger=DangerLevel.WRITE,
             executor=exec_service_restart,
             keywords=("重启", "restart service", "restart bot"),
+        ),
+        ToolSpec(
+            name="scheduler_status",
+            summary="提醒调度器状态报告",
+            danger=DangerLevel.READ,
+            executor=exec_scheduler_status,
+            keywords=("scheduler", "调度器", "提醒状态"),
+        ),
+        ToolSpec(
+            name="scheduler_probe",
+            summary="调度器 dry-run 探测",
+            danger=DangerLevel.READ,
+            executor=exec_scheduler_probe,
+            keywords=("probe", "探针", "dry-run"),
+        ),
+        ToolSpec(
+            name="scheduler_probe_live",
+            summary="调度器实时投递测试 (需确认)",
+            danger=DangerLevel.WRITE,
+            executor=exec_scheduler_probe_live,
+            keywords=("probe live", "实时探针"),
         ),
     ]
     for spec in specs:

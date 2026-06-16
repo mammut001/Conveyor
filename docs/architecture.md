@@ -247,7 +247,8 @@ personal_tools/
   reminders.py 提醒 CRUD + 简单时间解析
   reminder_parse.py  in 10m / in 2h / tomorrow HH:MM / ISO 解析
 scripts/
-  scheduler_tick.py  提醒投递调度器（每 60s 由 timer 触发）
+  scheduler_tick.py   提醒投递调度器（每 60s 由 timer 触发）
+  scheduler_probe.py  调度器探针（dry-run / live 模式）
 systemd/
   conveyor-scheduler.service  oneshot: 运行 scheduler_tick.py
   conveyor-scheduler.timer    每 60s 触发
@@ -275,6 +276,18 @@ systemd/
 的记录，Telegram 直接调 `send_message`，Feishu 暂跳过并记日志。
 成功标记 `delivered`，失败标记 `failed` + 递增 `retry_count`（>=3 停止重试）。
 支持 `--dry-run` 模式（不发消息不写 DB）用于 smoke 测试。
+
+**P3.2.1 调度器可观测性**：三个确定性工具让运维者从聊天中验证投递管线，无需 SSH：
+
+| 工具 | danger | 命令 | 说明 |
+|---|---|---|---|
+| scheduler_status | READ | `/scheduler_status` | Timer/Service 状态 + journal 尾部 + 提醒统计 + 通道支持 |
+| scheduler_probe | READ | `/scheduler_probe` | Dry-run 探测：运行 scheduler_tick --dry-run，不发消息不写 DB |
+| scheduler_probe_live | WRITE | `/scheduler_probe_live` | 实时探针：创建测试提醒并真正投递到 Telegram，需确认 |
+
+`scheduler_status_report()` 在 `systemctl` 不可用时优雅降级（macOS/CI）。
+`scheduler_probe_live()` 创建一条 `[probe]` 提醒，运行 `run_tick(dry_run=False)`，然后查询 DB 验证 `delivery_status=delivered`。
+所有输出经 `redact_text()` + `truncate()` 处理，不暴露 `.env` 或 token。
 
 `notes.delete` / `reminders.cancel` 走 `handlers/tools/runner.py` 同一确认 + `audit/tools.log` redaction 路径。
 
