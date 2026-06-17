@@ -10,38 +10,58 @@
 
 ---
 
-## 1. 快速开始
+## 1. 快速开始（10 分钟）
 
-VPS 前置：Ubuntu、安装并认证 [`codex` CLI](https://github.com/openai/codex)
-（用 `codex doctor` 确认）、`CODEX_WORKSPACE_ROOT` 指向一个 git 仓库。
+**前置条件：** Ubuntu VPS、SSH 访问、已安装 [`codex` CLI](https://github.com/openai/codex)。
 
-**首次安装**（在你的笔记本上跑，前提是能 SSH 到 VPS；VPS 地址和秘钥保留在
-你本地的 shell 环境里，永远不进仓库）：
+### 1.1 安装（在笔记本上操作）
 
 ```bash
-git clone https://github.com/mammut001/conveyor.git
-cd conveyor
-CONVEYOR_REMOTE=ubuntu@<host> bash scripts/install-remote.sh
+git clone https://github.com/mammut001/conveyor.git && cd conveyor
+sudo bash scripts/install.sh
 ```
 
-安装脚本会 rsync 源码、建 `.venv`、装 3 个 systemd unit
-（`conveyor-telegram-bot`、`conveyor-feishu-bot`、`conveyor-maintain`），
-如果 `.env` 不存在就跑交互式 `configure_env.py`，最后启动服务。装完
-打开 Telegram 发 `/start`。
+安装脚本会：
+1. 安装系统依赖
+2. 同步代码到 `/opt/conveyor`
+3. 创建 Python `.venv`
+4. 提示配置 `.env`
+5. 安装并启动 systemd 服务
 
-**后续代码更新**（首次安装之后）：
+### 1.2 配置 `.env`
+
+编辑 `/opt/conveyor/.env`（完整选项见 [`.env.example`](.env.example)）：
 
 ```bash
-CONVEYOR_REMOTE=ubuntu@<host> bash scripts/deploy.sh
+sudo nano /opt/conveyor/.env
 ```
 
-可选的本地 shell 别名（写在 `~/.zshrc`）：
+**最低配置：**
+```dotenv
+TELEGRAM_BOT_TOKEN=123456789:从BotFather获取
+TELEGRAM_ALLOWED_USER_ID=你的用户ID
+CODEX_WORKSPACE_ROOT=/path/to/your/repo
+```
+
+### 1.3 重启并测试
 
 ```bash
-export CONVEYOR_REMOTE=ubuntu@<host>
-export CONVEYOR_REMOTE_DIR=/opt/conveyor
-alias deploy-runner='cd ~/conveyor && bash scripts/deploy.sh'
+sudo systemctl restart conveyor-telegram-bot
+sudo systemctl status conveyor-telegram-bot
 ```
+
+打开 Telegram，给机器人发 `/start`，搞定！
+
+### 1.4 更新（后续）
+
+```bash
+cd conveyor && git pull
+sudo bash scripts/install.sh --update
+```
+
+### 1.5 可选：飞书机器人
+
+见 [§2. 飞书机器人接入](#2-飞书机器人--完整接入) 添加第二个 channel。
 
 ---
 

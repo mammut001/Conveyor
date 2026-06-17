@@ -14,39 +14,58 @@ answer back; same for `记 xxx` (write to memory), `/status`, `/diff`,
 
 ---
 
-## 1. Quick Start
+## 1. Quick Start (10 min)
 
-VPS prerequisites: Ubuntu, [`codex` CLI](https://github.com/openai/codex)
-installed and authenticated for the SSH user, and a git repository
-for `CODEX_WORKSPACE_ROOT`.
+**Prerequisites:** Ubuntu VPS, SSH access, [`codex` CLI](https://github.com/openai/codex) installed.
 
-**First install** (run from a laptop with SSH access; the host and
-secrets stay in your shell environment, never in the repo):
+### 1.1 Install (from your laptop)
 
 ```bash
-git clone https://github.com/mammut001/conveyor.git
-cd conveyor
-CONVEYOR_REMOTE=ubuntu@<host> bash scripts/install-remote.sh
+git clone https://github.com/mammut001/conveyor.git && cd conveyor
+sudo bash scripts/install.sh
 ```
 
-The installer rsyncs source, creates `.venv`, installs systemd units
-(`conveyor-telegram-bot`, `conveyor-feishu-bot`, `conveyor-maintain`),
-runs the interactive `configure_env.py` helper when `.env` is missing,
-and starts the services. Open Telegram and send `/start` when done.
+The installer will:
+1. Install system dependencies
+2. Sync code to `/opt/conveyor`
+3. Create Python `.venv`
+4. Prompt for `.env` configuration
+5. Install and start systemd services
 
-**Code updates** (after first install):
+### 1.2 Configure `.env`
+
+Edit `/opt/conveyor/.env` (see [`.env.example`](.env.example) for all options):
 
 ```bash
-CONVEYOR_REMOTE=ubuntu@<host> bash scripts/deploy.sh
+sudo nano /opt/conveyor/.env
 ```
 
-Optional local shell shortcut (`~/.zshrc`):
+**Minimum required:**
+```dotenv
+TELEGRAM_BOT_TOKEN=123456789:from_botfather
+TELEGRAM_ALLOWED_USER_ID=your_user_id
+CODEX_WORKSPACE_ROOT=/path/to/your/repo
+```
+
+### 1.3 Restart and test
 
 ```bash
-export CONVEYOR_REMOTE=ubuntu@<host>
-export CONVEYOR_REMOTE_DIR=/opt/conveyor
-alias deploy-runner='cd ~/conveyor && bash scripts/deploy.sh'
+sudo systemctl restart conveyor-telegram-bot
+sudo systemctl status conveyor-telegram-bot
 ```
+
+Open Telegram, send `/start` to your bot. Done!
+
+### 1.4 Update (later)
+
+```bash
+cd conveyor && git pull
+sudo bash scripts/install.sh --update
+```
+
+### 1.5 Optional: Feishu bot
+
+See [§2. Feishu bot setup](#2-feishu-bot--full-setup) for adding a second channel.
 
 ---
 

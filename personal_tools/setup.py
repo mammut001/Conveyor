@@ -6,6 +6,7 @@ All commands are READ-only. Never exposes tokens, passwords, or secrets.
 from __future__ import annotations
 
 import shutil
+import subprocess
 from typing import TYPE_CHECKING
 
 from config import Settings, SENSITIVE_FIELDS
@@ -22,6 +23,18 @@ def _check_icon(ok: bool) -> str:
 
 def _opt_icon(ok: bool) -> str:
     return "✅" if ok else "⚪"
+
+
+def _check_systemd_timer(timer_name: str) -> bool:
+    """Check if a systemd timer is active."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", timer_name],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def setup_status(settings: Settings, operator_id: str) -> ToolResult:
@@ -84,6 +97,12 @@ def setup_status(settings: Settings, operator_id: str) -> ToolResult:
     except Exception:
         lines.append("❌ Scheduler: Store 不可用")
 
+    # Systemd timers
+    scheduler_timer_ok = _check_systemd_timer("conveyor-scheduler.timer")
+    maintain_timer_ok = _check_systemd_timer("conveyor-maintain.timer")
+    lines.append(f"{_opt_icon(scheduler_timer_ok)} Systemd Scheduler Timer: {'运行中' if scheduler_timer_ok else '未运行'}")
+    lines.append(f"{_opt_icon(maintain_timer_ok)} Systemd Maintain Timer: {'运行中' if maintain_timer_ok else '未运行'}")
+
     lines.append("")
     lines.append("使用 /setup_check 查看完整检查清单。")
     return ToolResult(ok=True, text=truncate("\n".join(lines)))
@@ -139,6 +158,12 @@ def setup_check(settings: Settings, operator_id: str) -> ToolResult:
             optional.append("⚪ 未配置项目 → /setup_project 查看指南")
     except Exception:
         pass
+
+    # Systemd timers
+    if not _check_systemd_timer("conveyor-scheduler.timer"):
+        optional.append("⚪ Scheduler Timer 未运行 → systemctl enable --now conveyor-scheduler.timer")
+    if not _check_systemd_timer("conveyor-maintain.timer"):
+        optional.append("⚪ Maintain Timer 未运行 → systemctl enable --now conveyor-maintain.timer")
 
     # Recommended next steps
     if not required:
