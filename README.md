@@ -336,6 +336,332 @@ redaction, command surface, migration, delivery, dry-run, drift check).
 Smoke: `scripts/scheduler_probe_smoke.py` (7 cases: registry, commands,
 no-systemctl degradation, dry-run, live confirmation, /tools, /help).
 
+**P3.3 — Gmail App Password MVP:** Conservative Gmail integration using
+IMAP + SMTP with Gmail App Password. **OAuth is a future phase.**
+
+| Tool | Level | Command | What it does |
+|---|---|---|---|
+| `gmail.status` | READ | `/gmail_status` | Gmail connection status |
+| `gmail.recent` | READ | `/gmail_recent [n]` | Recent emails from INBOX |
+| `gmail.search` | READ | `/gmail_search <query>` | Search emails by subject/from |
+| `gmail.read` | READ | `/gmail_read <id>` | Read specific email |
+| `email.send` | WRITE | `/email_send <to> \| <subject> \| <body>` | Send email (requires confirmation) |
+
+Environment variables:
+
+| Variable | Required | Default |
+|---|---|---|
+| `GMAIL_BACKEND` | Yes | `imap_smtp` |
+| `GMAIL_ADDRESS` | Yes | — |
+| `GMAIL_APP_PASSWORD` | Yes | — (16-char App Password) |
+| `GMAIL_IMAP_HOST` | No | `imap.gmail.com` |
+| `GMAIL_IMAP_PORT` | No | `993` |
+| `GMAIL_SMTP_HOST` | No | `smtp.gmail.com` |
+| `GMAIL_SMTP_PORT` | No | `587` |
+
+Security: App password is **never** exposed in chat replies, logs, audit
+logs, or `repr()`. Sending requires WRITE confirmation. No delete/archive
+label operations in this phase. Attachments are not downloaded.
+
+Natural language intent: `帮我看一下收件箱` → `gmail.recent`,
+`邮箱状态` → `gmail.status`, `搜索邮件 关于发票` → `gmail.search`,
+`发邮件` → prompts for details.
+
+Smoke: `scripts/gmail_smoke.py` (9 cases: config, registry, commands,
+missing config, no network, parse errors, confirmation, redaction, help/tools).
+
+**P3.4 — Google Calendar + Contacts:** Google OAuth broker with
+read-first Calendar and Contacts tools. **Gmail remains App Password
+backend; OAuth only for Calendar/Contacts.**
+
+| Tool | Level | Command | What it does |
+|---|---|---|---|
+| `google.status` | READ | `/google_status` | OAuth token status |
+| `google.auth` | WRITE | `/auth_google` | Start OAuth flow |
+| `google.revoke` | DESTRUCTIVE | `/google_revoke` | Revoke and delete token |
+| `calendar.status` | READ | `/calendar_status` | Calendar connection status |
+| `calendar.today` | READ | `/calendar_today` | Today's events |
+| `calendar.tomorrow` | READ | `/calendar_tomorrow` | Tomorrow's events |
+| `calendar.week` | READ | `/calendar_week` | This week's events |
+| `calendar.search` | READ | `/calendar_search <query>` | Search events |
+| `calendar.freebusy` | READ | `/calendar_freebusy <range>` | Check free/busy |
+| `calendar.create` | WRITE | `/calendar_create <title> \| <time> \| <desc>` | Create event (confirm) |
+| `contacts.search` | READ | `/contacts_search <query>` | Search contacts |
+
+Environment variables:
+
+| Variable | Required | Default |
+|---|---|---|
+| `GOOGLE_CLIENT_SECRET_PATH` | Yes | — (path to client_secret JSON) |
+| `GOOGLE_TOKEN_PATH` | No | `codex_memory_root/secrets/google_token.json` |
+| `GOOGLE_OAUTH_SCOPES` | No | calendar + contacts.readonly |
+| `GOOGLE_OAUTH_REDIRECT_PORT` | No | `8765` |
+
+Security: OAuth tokens stored at `secrets/google_token.json` with chmod 600.
+Tokens never appear in chat, logs, audit, or `repr()`. All API errors
+are redacted.
+
+Natural language intent: `看看今天的日程` → `calendar.today`,
+`搜索日程 关于会议` → `calendar.search`, `找一下联系人 张三` → `contacts.search`.
+
+Dependencies: `google-auth`, `google-auth-oauthlib`, `google-api-python-client`.
+
+Smoke: `scripts/google_tools_smoke.py` (10 cases: missing config, missing
+auth, setup instructions, confirmation, token path, registry, commands,
+help/tools, intent routing).
+
+**P3.5 — Daily Briefing:** Daily briefing system aggregating Calendar,
+reminders, Gmail, and notes.
+
+| Tool | Level | Command | What it does |
+|---|---|---|---|
+| `briefing.status` | READ | `/brief_settings` | Briefing settings status |
+| `briefing.today` | READ | `/brief_today` | Today's briefing |
+| `briefing.tomorrow` | READ | `/brief_tomorrow` | Tomorrow's briefing |
+| `briefing.enable` | WRITE_SAFE | `/brief_enable [HH:MM]` | Enable daily briefing |
+| `briefing.disable` | WRITE | `/brief_disable` | Disable daily briefing (requires confirmation) |
+| `briefing.probe` | READ | `/brief_probe` | Briefing probe (dry-run) |
+
+Briefing content includes: calendar events (requires Google OAuth), due
+reminders, recent email summary (requires Gmail), recent notes. Missing
+providers are gracefully degraded.
+
+Scheduler integration: `scripts/scheduler_tick.py` checks enabled briefing
+settings every minute, sends briefings when local time is reached, and
+avoids duplicate sends.
+
+Storage: `briefing_settings` and `briefing_runs` tables in `personal_tools.db`.
+
+Security: No raw email bodies, no OAuth tokens, no passwords. Output
+processed through `redact_text()` + `truncate()`.
+
+Natural language: `今日简报` → `briefing.today`, `启用每日简报` → `briefing.enable`,
+`禁用简报` → `briefing.disable`.
+
+Smoke: `scripts/briefing_smoke.py` (15 cases: settings CRUD, runs,
+graceful degradation, enable/disable, probe, registry, commands, help/tools,
+intent routing, dedup, redaction).
+
+**P3.6 — GitHub Issues/PR Tools:** Read-first GitHub project tools
+for issues, PRs, and CI status. **No merge/close/delete operations
+in this phase.**
+
+|| Tool | Level | Command | What it does |
+||---|---|---|---|
+|| `github.status` | READ | `/github_status` | GitHub connection status |
+|| `github.issues` | READ | `/github_issues [state|query]` | List issues (open/closed/all/search) |
+|| `github.issue` | READ | `/github_issue <number>` | View issue details |
+|| `github.prs` | READ | `/github_prs [state]` | List pull requests |
+|| `github.pr` | READ | `/github_pr <number>` | View PR details |
+|| `github.ci` | READ | `/github_ci [ref]` | CI status for ref/branch |
+|| `github.create_issue` | WRITE_SAFE | `/github_create_issue <title> \| <body>` | Create issue (audited) |
+|| `github.comment` | WRITE | `/github_comment <number> \| <body>` | Comment on issue/PR (requires confirmation) |
+
+Environment variables:
+
+|| Variable | Required | Default |
+||---|---|---|
+|| `GITHUB_TOKEN` | Yes | — (Personal Access Token) |
+|| `GITHUB_DEFAULT_REPO` | Yes | — (e.g. `mammut001/Conveyor`) |
+|| `GITHUB_API_BASE` | No | `https://api.github.com` |
+
+Security: GitHub token is **never** exposed in chat replies, logs, audit
+logs, or `repr()`. Creating issues is WRITE_SAFE (audited). Commenting
+requires WRITE confirmation. All outputs pass through `redact_text()` +
+`truncate()`.
+
+Natural language intent: `看看 GitHub issue` → `github.issues`,
+`PR 状态` → `github.prs`, `CI 挂了吗` → `github.ci`,
+`创建 issue` → prompts for details.
+
+Daily Briefing integration: If GitHub is configured, the briefing
+includes open issue count, open PR count, and CI status for the
+default branch.
+
+Smoke: `scripts/github_smoke.py` (11 cases: missing config, token
+redaction, command parsing, confirmation, registry, commands, help/tools,
+intent routing, briefing degradation, no network).
+
+**P3.7 — Natural Language Planner:** Planner profiles that compose
+existing deterministic tools into useful personal-agent workflows.
+**No new external integrations. All planner profiles are READ-only.**
+
+| Tool | Level | Command | What it does |
+|---|---|---|---|
+| `planner.list` | READ | `/planners` | List all planner profiles |
+| `planner.today` | READ | `/plan_today` | Today's priority analysis |
+| `planner.dev` | READ | `/plan_dev` | Development plan |
+| `planner.health` | READ | `/project_health` | Project health check |
+| `planner.triage` | READ | `/inbox_triage` | Email triage |
+| `planner.schedule` | READ | `/schedule_review` | Schedule review |
+
+Each planner profile collects facts from READ tools (calendar,
+reminders, Gmail, GitHub, notes, VPS ops) and passes them to Codex
+for structured analysis. Missing integrations degrade gracefully.
+
+Safety: **No write tools are used.** No sending emails, no creating
+calendar events, no GitHub comments/issues. All collected facts pass
+through `redact_text()` + `truncate()`.
+
+Natural language intent:
+- `我今天应该先干啥` → `daily_priority` planner
+- `今天开发计划` → `dev_plan` planner
+- `项目健康状态` / `Conveyor 有没有问题` → `project_health` planner
+- `帮我整理邮件` → `inbox_triage` planner
+- `今天日程安排` → `schedule_review` planner
+
+Smoke: `scripts/planner_smoke.py` (9 cases: registry, READ-only
+verification, graceful degradation, prompt building, commands,
+natural language routing, planner status).
+
+**P3.8 — Codex Job Queue:** Single-concurrency FIFO queue for Codex
+jobs. New jobs are queued instead of rejected when a Codex job is
+running. **Actual Codex execution remains single-concurrency.**
+
+| Command | What it does |
+|---|---|
+| `/queue` | List queued/running jobs |
+| `/queue_cancel <id>` | Cancel a queued job |
+| `/queue_clear` | Clear all queued jobs |
+| `/queue_pause` | Pause automatic dequeue |
+| `/queue_resume` | Resume automatic dequeue |
+
+Queue behavior:
+- In-memory FIFO queue (lost on bot restart, documented).
+- Max queue length: 10 jobs.
+- When a job completes, automatically starts the next queued job.
+- Queue only stores prompt text and routing metadata (no secrets).
+- Redact/truncate queue display.
+- Queue operations are audited when mutating.
+- `/cancel` still cancels the currently running job.
+
+Safety: **Only one Codex process at a time.** Queue is paused via
+`/queue_pause`; completed jobs do not auto-start next when paused.
+
+Smoke: `scripts/job_queue_smoke.py` (10 cases: enqueue/dequeue,
+FIFO order, max length, cancel, clear, pause/resume, status display,
+commands registered, help text, redaction).
+
+**P3.9 — Generic Project Profiles:** A project skills layer that works
+for any user's projects. Users define project profiles and run generic
+project commands against them. Reuses existing Gmail, Calendar, GitHub,
+Notes, Reminders tools.
+
+| Command | What it does |
+|---|---|
+| `/projects` | List project profiles |
+| `/project_add <name> \| <type> \| <desc> \| [github] \| [keywords]` | Add project (WRITE_SAFE, audited) |
+| `/project_use <id>` | Set active project (WRITE_SAFE, audited) |
+| `/project_show [id]` | Show project details |
+| `/project_remove <id>` | Remove project (DESTRUCTIVE, requires confirmation) |
+| `/project_status [id]` | Project status analysis (hybrid) |
+| `/project_health [id]` | Project health check (hybrid) |
+| `/project_roadmap [id]` | Project roadmap (hybrid) |
+| `/project_next [id]` | Next actions for project (hybrid) |
+| `/project_release_checklist [id]` | Release checklist (hybrid) |
+| `/project_brief [id]` | Project brief summary (hybrid) |
+
+Supported project types: `generic`, `mobile_app`, `web_app`, `bot`,
+`library`, `research`, `course`, `business`.
+
+Project analysis commands are READ-only. They collect facts from
+configured integrations (GitHub, Notes, Gmail, Calendar, Reminders)
+and use project-type-specific prompts for Codex analysis. Integrations
+degrade gracefully if not configured.
+
+Daily Briefing integration: Shows up to 3 enabled projects with short
+status. Degrades gracefully if no projects configured.
+
+Natural language routing (conservative):
+- "项目列表" → `/projects`
+- "切换项目 X" → `projects.use`
+- "项目下一步" → `project.next`
+- "项目健康状态" → `project.health`
+- "项目 roadmap" → `project.roadmap`
+- "发布清单" → `project.release_checklist`
+
+Smoke: `scripts/project_profiles_smoke.py` (23 cases: CRUD, operator
+isolation, active project fallback, danger levels, confirmation
+requirements, briefing integration, command registration, help text,
+redaction).
+
+**P3.10 — Setup Wizard:** Makes Conveyor easier for new users to
+configure after deployment. Checks existing integrations and guides
+the user through setup.
+
+| Command | What it does |
+|---|---|
+| `/setup` | Configuration status overview |
+| `/setup_status` | Same as /setup |
+| `/setup_check` | Prioritized setup checklist |
+| `/setup_project` | Project setup guide |
+| `/setup_gmail` | Gmail App Password guide |
+| `/setup_google` | Google OAuth guide |
+| `/setup_github` | GitHub Token guide |
+
+Setup checks include:
+- Telegram bot configured
+- Allowed user ID configured
+- Codex binary available
+- Workspace root exists
+- Gmail (IMAP) configured
+- Google OAuth configured
+- GitHub Token/Repo configured
+- Daily Briefing enabled
+- Active project configured
+
+Safety: All setup commands are READ-only. Never prints token values,
+app passwords, .env contents, or raw secrets. All output passes
+`redact_text()` + `truncate()`.
+
+Smoke: `scripts/setup_smoke.py` (13 cases: missing integrations,
+configured status, project examples, gmail warning, github no token
+leak, command registration, help text, tools list, no network calls).
+
+**P3.11 — Project Import/Export:** Makes project profiles portable and
+easier to set up. Adds import, export, and template tools for project
+profiles.
+
+| Command | What it does |
+|---------|--------------|
+| `/project_export [id]` | Export project(s) as JSON |
+| `/project_export_all` | Export all projects |
+| `/project_import <JSON>` | Import project(s) from JSON |
+| `/project_template [type]` | Show project template by type |
+
+Export JSON Schema:
+```json
+{
+  "schema": "conveyor.project.v1",
+  "projects": [
+    {
+      "name": "...",
+      "type": "mobile_app|web_app|bot|library|research|course|business|generic",
+      "description": "...",
+      "github_repo": "...",
+      "appstore_url": "...",
+      "keywords": ["..."],
+      "notes_query": "...",
+      "gmail_query": "...",
+      "default_branch": "...",
+      "enabled": true
+    }
+  ]
+}
+```
+
+Safety: Export does not include internal DB IDs, operator_id, tokens,
+secrets, OAuth paths, or .env values. Import validates schema and
+project type. Duplicate project names are skipped (not overwritten).
+Import is scoped to operator_id. Imported project becomes active only
+if no active project exists. Export/template are READ-only; import is
+WRITE_SAFE. All output passes `redact_text()` + `truncate()`.
+
+Smoke: `scripts/project_io_smoke.py` (15 cases: export single/all,
+no ids/operator_id, valid import, skip duplicates, set active, validate
+schema/type, template display, command registration, help text, no
+network calls, output redacted).
+
 **Telegram slash commands:** New ops/tool commands (`/load`, `/tools`,
 `/disk`, …) are registered in `COMMAND_TABLE` and reached via a
 generic `MessageHandler(filters.COMMAND, …)` fallback in `bot.py` (after

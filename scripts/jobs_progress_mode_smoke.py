@@ -98,6 +98,7 @@ def _fake_runner(*, summary: str, progress_text: str | None,
     Honors ``progress_mode`` so we can flip it per test without
     monkey-patching the module."""
     job = SimpleNamespace(
+        id="test-job-progress",
         state="COMPLETED",
         summary=summary,
         error=None,
@@ -112,6 +113,7 @@ def _fake_runner(*, summary: str, progress_text: str | None,
     class _Stub:
         def __init__(self) -> None:
             self.settings = settings
+            self.current_job = None
 
         async def start(self, mode, prompt, on_progress):
             if progress_text is not None:
@@ -358,7 +360,7 @@ def _test_compact_tool_indicator_fallback() -> CheckResult:
     port = FakeOutbound(edit_works=False)
     # We need TWO progress calls to exercise the spam: first turns
     # on edit_broken, second would normally spam.
-    job = SimpleNamespace(state="COMPLETED", summary="ANSWER", error=None, last_event=None)
+    job = SimpleNamespace(id="test-job-compact", state="COMPLETED", summary="ANSWER", error=None, last_event=None)
     settings = SimpleNamespace(
         conveyor_progress_mode="compact",
         codex_memory_root=Path("/tmp/codex-progress-mem"),
@@ -370,6 +372,7 @@ def _test_compact_tool_indicator_fallback() -> CheckResult:
     class _Stub:
         def __init__(self) -> None:
             self.settings = settings
+            self.current_job = None
 
         async def start(self, mode, prompt, on_progress):
             await on_progress("🔧 curl...")
@@ -391,7 +394,7 @@ def _test_compact_tool_indicator_fallback() -> CheckResult:
 def _test_quiet_no_fallback_after_edit_failure() -> CheckResult:
     name = "handlers/jobs: quiet + Feishu → no fallback line at all, only final"
     port = FakeOutbound(edit_works=False)
-    job = SimpleNamespace(state="COMPLETED", summary="ANSWER", error=None, last_event=None)
+    job = SimpleNamespace(id="test-job-quiet", state="COMPLETED", summary="ANSWER", error=None, last_event=None)
     settings = SimpleNamespace(
         conveyor_progress_mode="quiet",
         codex_memory_root=Path("/tmp/codex-progress-mem"),
@@ -401,6 +404,7 @@ def _test_quiet_no_fallback_after_edit_failure() -> CheckResult:
     class _Stub:
         def __init__(self) -> None:
             self.settings = settings
+            self.current_job = None
 
         async def start(self, mode, prompt, on_progress):
             await on_progress("🔧 curl...")

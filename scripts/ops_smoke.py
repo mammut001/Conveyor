@@ -231,12 +231,13 @@ def _test_dispatch_coding_request_calls_codex() -> CheckResult:
         runner = mock.Mock(spec=CodexRunner)
         # Build a job that completes immediately so handle_codex_job returns
         from types import SimpleNamespace
-        job = SimpleNamespace(state="completed", summary="ok", error=None)
+        job = SimpleNamespace(id="test-job-ops", state="completed", summary="ok", error=None)
 
         async def fake_start(mode, prompt, progress):
             return job
 
         runner.start = fake_start
+        runner.current_job = None
         runner.append_memo = mock.AsyncMock()
         runner.classify_memo = mock.AsyncMock()
         runner.settings = SimpleNamespace(

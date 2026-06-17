@@ -51,10 +51,24 @@ def _deliver_one(settings, reminder, *, dry_run: bool) -> tuple[bool, str]:
 
 
 def run_tick(*, dry_run: bool = False) -> tuple[int, int]:
-    """Run one scheduler tick. Returns (delivered, failed)."""
+    """Run one scheduler tick. Returns (delivered, failed).
+
+    Also checks and sends daily briefings if enabled and due.
+    """
     settings = load_settings()
     store = PersonalToolsStore(settings)
     due = store.list_due_deliverable_reminders()
+
+    # P3.5 Daily Briefing: check and send if enabled and due
+    briefing_sent = 0
+    if not dry_run:
+        try:
+            from personal_tools.briefing import briefing_check_and_send
+            briefing_sent = briefing_check_and_send(settings)
+            if briefing_sent > 0:
+                logger.info("Sent %d daily briefing(s)", briefing_sent)
+        except Exception as exc:
+            logger.error("Briefing check failed: %s", exc)
 
     if not due:
         logger.debug("No due deliverable reminders.")

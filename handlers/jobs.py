@@ -26,15 +26,23 @@ The mode is also enforced inside ``runner/streaming.py`` so a direct
 ``runner.start`` call (e.g. from a future tool harness) honors the
 same policy. The defense in ``progress()`` here is the second
 layer, applied to whatever survives the streaming filter.
+
+P3.8: Adds job queue integration. If a Codex job is running, new
+jobs are queued instead of rejected. Actual Codex execution remains
+single-concurrency.
 """
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from channel.types import InboundMessage, OutboundPort
 from config import Settings
 from redaction import truncate
 from runner import CodexRunner, JobMode, JobState
+
+if TYPE_CHECKING:
+    from handlers.job_queue import QueuedJob
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +96,38 @@ async def handle_codex_job(
         await port.reply(msg, "Usage: /run <prompt>")
         return
 
+    # P3.8: Check if a job is already running and queue if needed
+    from handlers.job_queue import get_job_queue
+    queue = get_job_queue()
+
+    if runner.current_job and runner.current_job.state == JobState.RUNNING:
+        # Job is running, queue this one
+        success, queue_msg, queued_job = await queue.enqueue(
+            mode=mode.value,
+            prompt=body,
+            msg=msg,
+            port=port,
+            runner=runner,
+            original_text=msg.text,
+        )
+        if success:
+            await port.reply(msg, queue_msg)
+        else:
+            await port.reply(msg, f"无法排队：{queue_msg}")
+        return
+
+    # No job running, execute immediately
+    await _execute_codex_job(msg, port, runner, mode, body)
+
+
+async def _execute_codex_job(
+    msg: InboundMessage,
+    port: OutboundPort,
+    runner: CodexRunner,
+    mode: JobMode,
+    body: str,
+) -> None:
+    """Execute a Codex job directly (not through queue)."""
     # Session context injection: prepend recent turns so the LLM has
     # continuity when the user says "继续" / "continue". Only for LLM
     # jobs (handle_codex_job is only called for /run, /fix, and free
@@ -216,6 +256,11 @@ async def handle_codex_job(
 
     # Record turn for session continuity.
     append_turn(runner.settings, msg, user_text_for_session, final_answer)
+
+    # P3.8: Notify queue that job completed, so next queued job can start
+    from handlers.job_queue import get_job_queue
+    queue = get_job_queue()
+    await queue.on_job_completed(job.id)
 
 
 async def _sleep(seconds: float) -> None:

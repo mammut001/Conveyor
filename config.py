@@ -25,6 +25,13 @@ except ImportError:  # pragma: no cover - production installs python-dotenv
 logger = logging.getLogger("conveyor.config")
 
 
+SENSITIVE_FIELDS = frozenset({
+    "telegram_bot_token", "lark_app_secret", "gmail_app_password",
+    "google_client_secret_path",  # path may hint at project layout
+    "github_token",
+})
+
+
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str
@@ -69,6 +76,36 @@ class Settings:
     conveyor_session_enabled: bool = True
     conveyor_session_max_turns: int = 20
     conveyor_session_inject_turns: int = 5
+    # Gmail App Password backend (P3.3). All optional; gmail.status reports
+    # missing config gracefully. OAuth is a future phase.
+    gmail_backend: str | None = None  # "imap_smtp" or None
+    gmail_address: str | None = None
+    gmail_app_password: str | None = None  # 16-char App Password, never exposed
+    gmail_imap_host: str = "imap.gmail.com"
+    gmail_imap_port: int = 993
+    gmail_smtp_host: str = "smtp.gmail.com"
+    gmail_smtp_port: int = 587
+    # Google OAuth (P3.4). Calendar + Contacts read tools.
+    # Gmail remains App Password backend; OAuth only for Calendar/Contacts.
+    google_client_secret_path: str | None = None  # path to client_secret_NNNN.json
+    google_token_path: str | None = None  # default: codex_memory_root/secrets/google_token.json
+    google_oauth_scopes: str | None = None  # comma-separated; default covers calendar+contacts
+    google_oauth_redirect_port: int = 8765
+    # GitHub (P3.6). Issues / PRs / CI read-first tools.
+    github_token: str | None = None  # GitHub Personal Access Token, never exposed
+    github_default_repo: str | None = None  # e.g. "mammut001/Conveyor"
+    github_api_base: str = "https://api.github.com"
+
+    def __repr__(self) -> str:
+        """Redact sensitive fields in repr."""
+        fields = []
+        for f in self.__dataclass_fields__.values():
+            value = getattr(self, f.name)
+            if f.name in SENSITIVE_FIELDS and value:
+                fields.append(f"{f.name}='[REDACTED]'")
+            else:
+                fields.append(f"{f.name}={value!r}")
+        return f"Settings({', '.join(fields)})"
 
 
 VALID_PROGRESS_MODES = ("verbose", "compact", "quiet")
@@ -224,6 +261,23 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_session_enabled": os.getenv("CONVEYOR_SESSION_ENABLED", "true").strip().lower() in ("true", "1", "yes"),
         "conveyor_session_max_turns": _int_env("CONVEYOR_SESSION_MAX_TURNS", 20),
         "conveyor_session_inject_turns": _int_env("CONVEYOR_SESSION_INJECT_TURNS", 5),
+        # Gmail App Password backend (P3.3)
+        "gmail_backend": os.getenv("GMAIL_BACKEND") or None,
+        "gmail_address": os.getenv("GMAIL_ADDRESS") or None,
+        "gmail_app_password": os.getenv("GMAIL_APP_PASSWORD") or None,
+        "gmail_imap_host": os.getenv("GMAIL_IMAP_HOST", "imap.gmail.com"),
+        "gmail_imap_port": _int_env("GMAIL_IMAP_PORT", 993),
+        "gmail_smtp_host": os.getenv("GMAIL_SMTP_HOST", "smtp.gmail.com"),
+        "gmail_smtp_port": _int_env("GMAIL_SMTP_PORT", 587),
+        # Google OAuth (P3.4)
+        "google_client_secret_path": os.getenv("GOOGLE_CLIENT_SECRET_PATH") or None,
+        "google_token_path": os.getenv("GOOGLE_TOKEN_PATH") or None,
+        "google_oauth_scopes": os.getenv("GOOGLE_OAUTH_SCOPES") or None,
+        "google_oauth_redirect_port": _int_env("GOOGLE_OAUTH_REDIRECT_PORT", 8765),
+        # GitHub (P3.6)
+        "github_token": os.getenv("GITHUB_TOKEN") or None,
+        "github_default_repo": os.getenv("GITHUB_DEFAULT_REPO") or None,
+        "github_api_base": os.getenv("GITHUB_API_BASE", "https://api.github.com"),
     }
 
 

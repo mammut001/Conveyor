@@ -1,9 +1,10 @@
 """personal_tools/store.py — SQLite backing store for local personal tools."""
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +22,15 @@ _REMINDER_BASE_COLUMNS = {
 _REMINDER_DELIVERY_COLUMNS = {
     "channel", "chat_id", "delivered_at", "delivery_status",
     "delivery_error", "retry_count",
+}
+
+# P3.5 Daily Briefing schema constants.
+BRIEFING_SETTINGS_COLUMNS = {
+    "operator_id", "enabled", "local_time", "channel", "chat_id",
+    "created_at", "updated_at",
+}
+BRIEFING_RUNS_COLUMNS = {
+    "id", "operator_id", "local_date", "status", "sent_at", "error",
 }
 
 
@@ -95,6 +105,55 @@ def init_db(settings: Settings) -> None:
                 ON reminders(operator_id, due_at);
             CREATE INDEX IF NOT EXISTS idx_reminders_status
                 ON reminders(operator_id, status, due_at);
+
+            -- P3.5 Daily Briefing tables
+            CREATE TABLE IF NOT EXISTS briefing_settings (
+                operator_id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                local_time TEXT NOT NULL DEFAULT '09:00',
+                channel TEXT NOT NULL DEFAULT '',
+                chat_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS briefing_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operator_id TEXT NOT NULL,
+                local_date TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'sent',
+                sent_at TEXT NOT NULL,
+                error TEXT,
+                UNIQUE(operator_id, local_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_briefing_runs_operator_date
+                ON briefing_runs(operator_id, local_date);
+
+            -- P3.9 Project Profiles tables
+            CREATE TABLE IF NOT EXISTS project_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operator_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'generic',
+                description TEXT NOT NULL DEFAULT '',
+                github_repo TEXT NOT NULL DEFAULT '',
+                appstore_url TEXT NOT NULL DEFAULT '',
+                keywords TEXT NOT NULL DEFAULT '[]',
+                notes_query TEXT NOT NULL DEFAULT '',
+                gmail_query TEXT NOT NULL DEFAULT '',
+                default_branch TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_project_profiles_operator
+                ON project_profiles(operator_id, enabled);
+
+            CREATE TABLE IF NOT EXISTS active_projects (
+                operator_id TEXT PRIMARY KEY,
+                project_id INTEGER NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES project_profiles(id)
+            );
             """
         )
         conn.commit()
@@ -134,6 +193,39 @@ class ReminderRow:
     delivery_status: str = "pending"
     delivery_error: str | None = None
     retry_count: int = 0
+
+
+@dataclass(frozen=True)
+class BriefingSettingsRow:
+    operator_id: str
+    enabled: bool
+    local_time: str
+    channel: str
+    chat_id: str
+    created_at: str
+    updated_at: str
+
+
+# Valid project types
+PROJECT_TYPES = ("generic", "mobile_app", "web_app", "bot", "library", "research", "course", "business")
+
+
+@dataclass(frozen=True)
+class ProjectProfileRow:
+    id: int
+    operator_id: str
+    name: str
+    type: str
+    description: str
+    github_repo: str
+    appstore_url: str
+    keywords: tuple[str, ...]
+    notes_query: str
+    gmail_query: str
+    default_branch: str
+    enabled: bool
+    created_at: str
+    updated_at: str
 
 
 class PersonalToolsStore:
@@ -329,6 +421,231 @@ class PersonalToolsStore:
             conn.commit()
             return cur.rowcount > 0
 
+    # --- P3.5 Daily Briefing methods ---
+
+    def get_briefing_settings(self, operator_id: str) -> BriefingSettingsRow | None:
+        with _connect(self._settings) as conn:
+            row = conn.execute(
+                "SELECT * FROM briefing_settings WHERE operator_id = ?",
+                (operator_id,),
+            ).fetchone()
+        return _briefing_settings_from_row(row) if row else None
+
+    def update_briefing_settings(
+        self,
+        operator_id: str,
+        *,
+        enabled: bool,
+        local_time: str = "09:00",
+        channel: str = "",
+        chat_id: str = "",
+    ) -> BriefingSettingsRow:
+        now = _utc_now()
+        with _connect(self._settings) as conn:
+            conn.execute(
+                """
+                INSERT INTO briefing_settings (operator_id, enabled, local_time, channel, chat_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(operator_id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    local_time = excluded.local_time,
+                    channel = excluded.channel,
+                    chat_id = excluded.chat_id,
+                    updated_at = excluded.updated_at
+                """,
+                (operator_id, int(enabled), local_time, channel, chat_id, now, now),
+            )
+            conn.commit()
+        return BriefingSettingsRow(
+            operator_id=operator_id,
+            enabled=enabled,
+            local_time=local_time,
+            channel=channel,
+            chat_id=chat_id,
+            created_at=now,
+            updated_at=now,
+        )
+
+    def has_briefing_run_for_date(self, operator_id: str, local_date: str) -> bool:
+        with _connect(self._settings) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM briefing_runs WHERE operator_id = ? AND local_date = ?",
+                (operator_id, local_date),
+            ).fetchone()
+        return row is not None
+
+    def record_briefing_run(
+        self,
+        operator_id: str,
+        local_date: str,
+        *,
+        status: str = "sent",
+        error: str | None = None,
+    ) -> int:
+        sent_at = _utc_now()
+        with _connect(self._settings) as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO briefing_runs (operator_id, local_date, status, sent_at, error)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(operator_id, local_date) DO UPDATE SET
+                    status = excluded.status,
+                    sent_at = excluded.sent_at,
+                    error = excluded.error
+                """,
+                (operator_id, local_date, status, sent_at, error),
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+
+    def list_enabled_briefings(self) -> list[BriefingSettingsRow]:
+        with _connect(self._settings) as conn:
+            rows = conn.execute(
+                "SELECT * FROM briefing_settings WHERE enabled = 1"
+            ).fetchall()
+        return [_briefing_settings_from_row(r) for r in rows]
+
+    # --- P3.9 Project Profile methods ---
+
+    def create_project_profile(
+        self,
+        operator_id: str,
+        name: str,
+        project_type: str = "generic",
+        description: str = "",
+        github_repo: str = "",
+        appstore_url: str = "",
+        keywords: tuple[str, ...] = (),
+        notes_query: str = "",
+        gmail_query: str = "",
+        default_branch: str = "",
+    ) -> ProjectProfileRow:
+        now = _utc_now()
+        keywords_json = json.dumps(list(keywords), ensure_ascii=False)
+        with _connect(self._settings) as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO project_profiles
+                    (operator_id, name, type, description, github_repo, appstore_url,
+                     keywords, notes_query, gmail_query, default_branch, enabled,
+                     created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (operator_id, name, project_type, description, github_repo,
+                 appstore_url, keywords_json, notes_query, gmail_query,
+                 default_branch, now, now),
+            )
+            conn.commit()
+            row_id = int(cur.lastrowid)
+        return ProjectProfileRow(
+            id=row_id, operator_id=operator_id, name=name, type=project_type,
+            description=description, github_repo=github_repo, appstore_url=appstore_url,
+            keywords=keywords, notes_query=notes_query, gmail_query=gmail_query,
+            default_branch=default_branch, enabled=True, created_at=now, updated_at=now,
+        )
+
+    def update_project_profile(
+        self,
+        operator_id: str,
+        project_id: int,
+        **kwargs,
+    ) -> bool:
+        allowed = {"name", "type", "description", "github_repo", "appstore_url",
+                    "keywords", "notes_query", "gmail_query", "default_branch", "enabled"}
+        updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+        if not updates:
+            return False
+        if "keywords" in updates and isinstance(updates["keywords"], (list, tuple)):
+            updates["keywords"] = json.dumps(list(updates["keywords"]), ensure_ascii=False)
+        if "enabled" in updates:
+            updates["enabled"] = int(bool(updates["enabled"]))
+        now = _utc_now()
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [now, operator_id, project_id]
+        with _connect(self._settings) as conn:
+            cur = conn.execute(
+                f"UPDATE project_profiles SET {set_clause}, updated_at = ? "
+                "WHERE operator_id = ? AND id = ?",
+                values,
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def delete_project_profile(self, operator_id: str, project_id: int) -> bool:
+        with _connect(self._settings) as conn:
+            # Remove from active_projects first
+            conn.execute(
+                "DELETE FROM active_projects WHERE operator_id = ? AND project_id = ?",
+                (operator_id, project_id),
+            )
+            cur = conn.execute(
+                "DELETE FROM project_profiles WHERE operator_id = ? AND id = ?",
+                (operator_id, project_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def list_project_profiles(self, operator_id: str) -> list[ProjectProfileRow]:
+        with _connect(self._settings) as conn:
+            rows = conn.execute(
+                "SELECT * FROM project_profiles WHERE operator_id = ? ORDER BY created_at DESC",
+                (operator_id,),
+            ).fetchall()
+        return [_project_profile_from_row(r) for r in rows]
+
+    def get_project_profile(self, operator_id: str, project_id: int) -> ProjectProfileRow | None:
+        with _connect(self._settings) as conn:
+            row = conn.execute(
+                "SELECT * FROM project_profiles WHERE operator_id = ? AND id = ?",
+                (operator_id, project_id),
+            ).fetchone()
+        return _project_profile_from_row(row) if row else None
+
+    def set_active_project(self, operator_id: str, project_id: int) -> bool:
+        with _connect(self._settings) as conn:
+            # Verify project exists
+            row = conn.execute(
+                "SELECT 1 FROM project_profiles WHERE operator_id = ? AND id = ?",
+                (operator_id, project_id),
+            ).fetchone()
+            if not row:
+                return False
+            conn.execute(
+                """
+                INSERT INTO active_projects (operator_id, project_id)
+                VALUES (?, ?)
+                ON CONFLICT(operator_id) DO UPDATE SET project_id = excluded.project_id
+                """,
+                (operator_id, project_id),
+            )
+            conn.commit()
+            return True
+
+    def get_active_project(self, operator_id: str) -> ProjectProfileRow | None:
+        with _connect(self._settings) as conn:
+            row = conn.execute(
+                """
+                SELECT p.* FROM project_profiles p
+                JOIN active_projects a ON p.id = a.project_id
+                WHERE a.operator_id = ?
+                """,
+                (operator_id,),
+            ).fetchone()
+        return _project_profile_from_row(row) if row else None
+
+    def get_active_or_first_project(self, operator_id: str) -> ProjectProfileRow | None:
+        """Get active project, or first enabled project if no active set."""
+        active = self.get_active_project(operator_id)
+        if active:
+            return active
+        with _connect(self._settings) as conn:
+            row = conn.execute(
+                "SELECT * FROM project_profiles WHERE operator_id = ? AND enabled = 1 "
+                "ORDER BY created_at DESC LIMIT 1",
+                (operator_id,),
+            ).fetchone()
+        return _project_profile_from_row(row) if row else None
+
 
 def _note_from_row(row: sqlite3.Row) -> NoteRow:
     return NoteRow(
@@ -354,4 +671,40 @@ def _reminder_from_row(row: sqlite3.Row) -> ReminderRow:
         delivery_status=str(row["delivery_status"]) if "delivery_status" in row.keys() else "pending",
         delivery_error=str(row["delivery_error"]) if row["delivery_error"] is not None else None,
         retry_count=int(row["retry_count"]) if "retry_count" in row.keys() else 0,
+    )
+
+
+def _briefing_settings_from_row(row: sqlite3.Row) -> BriefingSettingsRow:
+    return BriefingSettingsRow(
+        operator_id=str(row["operator_id"]),
+        enabled=bool(row["enabled"]),
+        local_time=str(row["local_time"]),
+        channel=str(row["channel"]),
+        chat_id=str(row["chat_id"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _project_profile_from_row(row: sqlite3.Row) -> ProjectProfileRow:
+    keywords_raw = str(row["keywords"])
+    try:
+        keywords = tuple(json.loads(keywords_raw)) if keywords_raw else ()
+    except (json.JSONDecodeError, TypeError):
+        keywords = ()
+    return ProjectProfileRow(
+        id=int(row["id"]),
+        operator_id=str(row["operator_id"]),
+        name=str(row["name"]),
+        type=str(row["type"]),
+        description=str(row["description"]),
+        github_repo=str(row["github_repo"]),
+        appstore_url=str(row["appstore_url"]),
+        keywords=keywords,
+        notes_query=str(row["notes_query"]),
+        gmail_query=str(row["gmail_query"]),
+        default_branch=str(row["default_branch"]),
+        enabled=bool(row["enabled"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
     )

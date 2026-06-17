@@ -85,7 +85,7 @@ def _settings(tmp: Path) -> Settings:
 # ---- registry / store basics -----------------------------------------------
 
 def _test_registry() -> CheckResult:
-    name = "registry: 8 tools, correct danger levels"
+    name = "registry: 45+ tools, correct danger levels"
     try:
         expected = {
             "notes.add",
@@ -96,17 +96,159 @@ def _test_registry() -> CheckResult:
             "reminders.list",
             "reminders.cancel",
             "reminders.due",
+            "gmail.status",
+            "gmail.recent",
+            "gmail.search",
+            "gmail.read",
+            "email.send",
+            "google.status",
+            "google.auth",
+            "google.revoke",
+            "calendar.status",
+            "calendar.today",
+            "calendar.tomorrow",
+            "calendar.week",
+            "calendar.search",
+            "calendar.freebusy",
+            "calendar.create",
+            "contacts.search",
+            "briefing.status",
+            "briefing.today",
+            "briefing.tomorrow",
+            "briefing.enable",
+            "briefing.disable",
+            "briefing.probe",
+            "github.status",
+            "github.issues",
+            "github.issue",
+            "github.prs",
+            "github.pr",
+            "github.ci",
+            "github.create_issue",
+            "github.comment",
+            "planner.list",
+            "planner.today",
+            "planner.dev",
+            "planner.health",
+            "planner.triage",
+            "planner.schedule",
+            # P3.9 Project Profiles
+            "projects.list",
+            "projects.add",
+            "projects.use",
+            "projects.show",
+            "projects.remove",
+            "project.status",
+            "project.health",
+            "project.roadmap",
+            "project.next",
+            "project.release_checklist",
+            "project.brief",
+            # P3.10 Setup Wizard
+            "setup.status",
+            "setup.check",
+            "setup.project",
+            "setup.gmail",
+            "setup.google",
+            "setup.github",
+            # P3.11 Project IO
+            "project.export",
+            "project.export_all",
+            "project.import",
+            "project.template",
         }
         ok_names = expected == set(PERSONAL_TOOL_REGISTRY)
         add_level = PERSONAL_TOOL_REGISTRY["notes.add"].danger
         create_level = PERSONAL_TOOL_REGISTRY["reminders.create"].danger
         delete_level = PERSONAL_TOOL_REGISTRY["notes.delete"].danger
         cancel_level = PERSONAL_TOOL_REGISTRY["reminders.cancel"].danger
+        gmail_status_level = PERSONAL_TOOL_REGISTRY["gmail.status"].danger
+        email_send_level = PERSONAL_TOOL_REGISTRY["email.send"].danger
+        google_auth_level = PERSONAL_TOOL_REGISTRY["google.auth"].danger
+        calendar_create_level = PERSONAL_TOOL_REGISTRY["calendar.create"].danger
+        contacts_search_level = PERSONAL_TOOL_REGISTRY["contacts.search"].danger
+        briefing_status_level = PERSONAL_TOOL_REGISTRY["briefing.status"].danger
+        briefing_enable_level = PERSONAL_TOOL_REGISTRY["briefing.enable"].danger
+        briefing_disable_level = PERSONAL_TOOL_REGISTRY["briefing.disable"].danger
+        github_status_level = PERSONAL_TOOL_REGISTRY["github.status"].danger
+        github_create_issue_level = PERSONAL_TOOL_REGISTRY["github.create_issue"].danger
+        github_comment_level = PERSONAL_TOOL_REGISTRY["github.comment"].danger
+        planner_list_level = PERSONAL_TOOL_REGISTRY["planner.list"].danger
+        planner_today_level = PERSONAL_TOOL_REGISTRY["planner.today"].danger
+        planner_dev_level = PERSONAL_TOOL_REGISTRY["planner.dev"].danger
+        planner_health_level = PERSONAL_TOOL_REGISTRY["planner.health"].danger
+        planner_triage_level = PERSONAL_TOOL_REGISTRY["planner.triage"].danger
+        planner_schedule_level = PERSONAL_TOOL_REGISTRY["planner.schedule"].danger
+        # P3.9 Project tools
+        projects_list_level = PERSONAL_TOOL_REGISTRY["projects.list"].danger
+        projects_add_level = PERSONAL_TOOL_REGISTRY["projects.add"].danger
+        projects_use_level = PERSONAL_TOOL_REGISTRY["projects.use"].danger
+        projects_show_level = PERSONAL_TOOL_REGISTRY["projects.show"].danger
+        projects_remove_level = PERSONAL_TOOL_REGISTRY["projects.remove"].danger
+        project_status_level = PERSONAL_TOOL_REGISTRY["project.status"].danger
+        project_health_level = PERSONAL_TOOL_REGISTRY["project.health"].danger
+        project_roadmap_level = PERSONAL_TOOL_REGISTRY["project.roadmap"].danger
+        project_next_level = PERSONAL_TOOL_REGISTRY["project.next"].danger
+        project_release_checklist_level = PERSONAL_TOOL_REGISTRY["project.release_checklist"].danger
+        project_brief_level = PERSONAL_TOOL_REGISTRY["project.brief"].danger
+        # P3.10 Setup tools
+        setup_status_level = PERSONAL_TOOL_REGISTRY["setup.status"].danger
+        setup_check_level = PERSONAL_TOOL_REGISTRY["setup.check"].danger
+        setup_project_level = PERSONAL_TOOL_REGISTRY["setup.project"].danger
+        setup_gmail_level = PERSONAL_TOOL_REGISTRY["setup.gmail"].danger
+        setup_google_level = PERSONAL_TOOL_REGISTRY["setup.google"].danger
+        setup_github_level = PERSONAL_TOOL_REGISTRY["setup.github"].danger
+        # P3.11 Project IO tools
+        project_export_level = PERSONAL_TOOL_REGISTRY["project.export"].danger
+        project_export_all_level = PERSONAL_TOOL_REGISTRY["project.export_all"].danger
+        project_import_level = PERSONAL_TOOL_REGISTRY["project.import"].danger
+        project_template_level = PERSONAL_TOOL_REGISTRY["project.template"].danger
         ok_levels = (
             add_level == DangerLevel.WRITE_SAFE
             and create_level == DangerLevel.WRITE_SAFE
             and delete_level == DangerLevel.DESTRUCTIVE
             and cancel_level == DangerLevel.WRITE
+            and gmail_status_level == DangerLevel.READ
+            and email_send_level == DangerLevel.WRITE
+            and google_auth_level == DangerLevel.WRITE
+            and calendar_create_level == DangerLevel.WRITE
+            and contacts_search_level == DangerLevel.READ
+            and briefing_status_level == DangerLevel.READ
+            and briefing_enable_level == DangerLevel.WRITE_SAFE
+            and briefing_disable_level == DangerLevel.WRITE
+            and github_status_level == DangerLevel.READ
+            and github_create_issue_level == DangerLevel.WRITE_SAFE
+            and github_comment_level == DangerLevel.WRITE
+            and planner_list_level == DangerLevel.READ
+            and planner_today_level == DangerLevel.READ
+            and planner_dev_level == DangerLevel.READ
+            and planner_health_level == DangerLevel.READ
+            and planner_triage_level == DangerLevel.READ
+            and planner_schedule_level == DangerLevel.READ
+            # P3.9 Project tools levels
+            and projects_list_level == DangerLevel.READ
+            and projects_add_level == DangerLevel.WRITE_SAFE
+            and projects_use_level == DangerLevel.WRITE_SAFE
+            and projects_show_level == DangerLevel.READ
+            and projects_remove_level == DangerLevel.DESTRUCTIVE
+            and project_status_level == DangerLevel.READ
+            and project_health_level == DangerLevel.READ
+            and project_roadmap_level == DangerLevel.READ
+            and project_next_level == DangerLevel.READ
+            and project_release_checklist_level == DangerLevel.READ
+            and project_brief_level == DangerLevel.READ
+            # P3.10 Setup tools levels
+            and setup_status_level == DangerLevel.READ
+            and setup_check_level == DangerLevel.READ
+            and setup_project_level == DangerLevel.READ
+            and setup_gmail_level == DangerLevel.READ
+            and setup_google_level == DangerLevel.READ
+            and setup_github_level == DangerLevel.READ
+            # P3.11 Project IO tools levels
+            and project_export_level == DangerLevel.READ
+            and project_export_all_level == DangerLevel.READ
+            and project_import_level == DangerLevel.WRITE_SAFE
+            and project_template_level == DangerLevel.READ
         )
         return CheckResult(name, ok_names and ok_levels, f"names={ok_names} levels={ok_levels}")
     except Exception as exc:

@@ -99,6 +99,186 @@ _RESTART_PATTERNS = (
     re.compile(r"(重启|restart).*(bot|服务|service|conveyor|telegram|feishu|飞书|电报|维护|maintain)", re.IGNORECASE),
 )
 
+# Gmail / email intent patterns (P3.3)
+_GMAIL_STATUS_PATTERNS = (
+    re.compile(r"(gmail|邮箱|邮件).*(状态|连接|status|connect)", re.IGNORECASE),
+    re.compile(r"(邮箱|邮件).*(正常|好使|能用|ok)", re.IGNORECASE),
+)
+_GMAIL_RECENT_PATTERNS = (
+    re.compile(r"(看看|查|看|最近).*(收件箱|邮件|inbox|email|gmail)", re.IGNORECASE),
+    re.compile(r"(收件箱|inbox).*(里有什么|最近|新邮件)", re.IGNORECASE),
+    re.compile(r"(最近|latest).*(邮件|email|mail)", re.IGNORECASE),
+)
+_GMAIL_SEARCH_PATTERNS = (
+    re.compile(r"(搜索|搜|找|search).*(邮件|email|gmail|mail)", re.IGNORECASE),
+    re.compile(r"(邮件|email).*(搜|找|search)", re.IGNORECASE),
+)
+_EMAIL_SEND_PATTERNS = (
+    re.compile(r"(发|send).*(邮件|email|mail|gmail)", re.IGNORECASE),
+    re.compile(r"(写|compose).*(邮件|email)", re.IGNORECASE),
+)
+
+# Calendar intent patterns (P3.4)
+_CALENDAR_TODAY_PATTERNS = (
+    re.compile(r"(今天|today).*(日程|日历|行程|calendar|schedule)", re.IGNORECASE),
+    re.compile(r"(看看|查|看).*(今天|今日).*(日程|行程|安排)", re.IGNORECASE),
+    re.compile(r"(日程|日历|行程).*(今天|today)", re.IGNORECASE),
+)
+_CALENDAR_TOMORROW_PATTERNS = (
+    re.compile(r"(明天|tomorrow).*(日程|日历|行程|calendar|schedule|安排)", re.IGNORECASE),
+    re.compile(r"(看看|查|看).*(明天|明日).*(日程|行程|安排)", re.IGNORECASE),
+    re.compile(r"(明天|明日).*(有什么|有啥|啥事)", re.IGNORECASE),
+)
+_CALENDAR_WEEK_PATTERNS = (
+    re.compile(r"(本周|这周|this week).*(日程|日历|行程|calendar|schedule)", re.IGNORECASE),
+    re.compile(r"(看看|查|看).*(本周|这周).*(日程|行程|安排)", re.IGNORECASE),
+)
+_CALENDAR_SEARCH_PATTERNS = (
+    re.compile(r"(搜索|搜|找|search).*(日程|日历|行程|calendar|schedule)", re.IGNORECASE),
+    re.compile(r"(日程|日历|行程).*(搜|找|search)", re.IGNORECASE),
+)
+_CALENDAR_CREATE_PATTERNS = (
+    re.compile(r"(创建|新建|添加|add|create).*(日程|日历|行程|calendar|event)", re.IGNORECASE),
+    re.compile(r"(安排|约|schedule).*(会议|meeting|日程)", re.IGNORECASE),
+)
+
+# Contacts intent patterns (P3.4)
+_CONTACTS_SEARCH_PATTERNS = (
+    re.compile(r"(搜索|搜|找|search).*(联系人|通讯录|contacts|contact)", re.IGNORECASE),
+    re.compile(r"(联系人|通讯录|contacts).*(搜|找|search)", re.IGNORECASE),
+    re.compile(r"(找|查|look up).*(电话|号码|phone).*(联系人|通讯录)?", re.IGNORECASE),
+)
+
+# Google OAuth patterns (P3.4)
+_GOOGLE_AUTH_PATTERNS = (
+    re.compile(r"(授权|auth|login|登录).*(google|谷歌|日历|calendar|contacts)", re.IGNORECASE),
+    re.compile(r"(google|谷歌).*(授权|auth)", re.IGNORECASE),
+)
+
+# Daily Briefing patterns (P3.5)
+_BRIEFING_TODAY_PATTERNS = (
+    re.compile(r"(今日|今天|today).*(简报|briefing|brief)", re.IGNORECASE),
+    re.compile(r"(简报|briefing|brief).*(今日|今天|today)", re.IGNORECASE),
+    re.compile(r"(看看|看|给).*(今天|今日).*(简报|安排|计划)", re.IGNORECASE),
+)
+_BRIEFING_TOMORROW_PATTERNS = (
+    re.compile(r"(明日|明天|tomorrow).*(简报|briefing|brief)", re.IGNORECASE),
+    re.compile(r"(简报|briefing|brief).*(明日|明天|tomorrow)", re.IGNORECASE),
+    re.compile(r"(看看|看).*(明天|明日).*(简报|安排|计划)", re.IGNORECASE),
+)
+_BRIEFING_STATUS_PATTERNS = (
+    re.compile(r"(简报|briefing).*(设置|状态|status|config)", re.IGNORECASE),
+    re.compile(r"(设置|查看).*(简报|briefing)", re.IGNORECASE),
+)
+_BRIEFING_ENABLE_PATTERNS = (
+    re.compile(r"(启用|开启|enable|设置).*(简报|briefing|每日)", re.IGNORECASE),
+    re.compile(r"(简报|briefing).*(启用|开启|enable)", re.IGNORECASE),
+    re.compile(r"(每天|每日).*(发送|推送).*(简报|briefing)", re.IGNORECASE),
+)
+_BRIEFING_DISABLE_PATTERNS = (
+    re.compile(r"(禁用|关闭|disable|取消).*(简报|briefing|每日)", re.IGNORECASE),
+    re.compile(r"(简报|briefing).*(禁用|关闭|disable)", re.IGNORECASE),
+)
+
+# GitHub intent patterns (P3.6)
+_GITHUB_STATUS_PATTERNS = (
+    re.compile(r"(github).*(状态|连接|status|connect)", re.IGNORECASE),
+    re.compile(r"(github).*(正常|好使|能用|ok)", re.IGNORECASE),
+)
+_GITHUB_ISSUES_PATTERNS = (
+    re.compile(r"(看看|查|看|列出|list).*(issue|issues|问题单)", re.IGNORECASE),
+    re.compile(r"(issue|issues|问题单).*(看看|查|看|列出|list)", re.IGNORECASE),
+    re.compile(r"(open|closed|all)\s*(issue|issues)", re.IGNORECASE),
+)
+_GITHUB_ISSUE_DETAIL_PATTERNS = (
+    re.compile(r"(查看|看|详情|detail).*#?\s*(\d+)\s*(issue)?", re.IGNORECASE),
+    re.compile(r"(issue|问题单)\s*#?\s*(\d+)", re.IGNORECASE),
+)
+_GITHUB_PRS_PATTERNS = (
+    re.compile(r"(看看|查|看|列出|list).*(pr|pull\s*request|prs|合并请求)", re.IGNORECASE),
+    re.compile(r"(pr|pull\s*request|prs|合并请求).*(看看|查|看|列出|list)", re.IGNORECASE),
+    re.compile(r"(open|closed|all|merged)\s*(pr|pull\s*request)", re.IGNORECASE),
+    re.compile(r"(pr|pull\s*request|prs|合并请求).*(状态|status)", re.IGNORECASE),
+    re.compile(r"(状态|status).*(pr|pull\s*request|prs)", re.IGNORECASE),
+)
+_GITHUB_PR_DETAIL_PATTERNS = (
+    re.compile(r"(查看|看|详情|detail).*#?\s*(\d+)\s*(pr|pull\s*request)?", re.IGNORECASE),
+    re.compile(r"(pr|pull\s*request|合并请求)\s*#?\s*(\d+)", re.IGNORECASE),
+)
+_GITHUB_CI_PATTERNS = (
+    re.compile(r"(ci|构建|build).*(状态|挂|失败|成功|status|fail|pass)", re.IGNORECASE),
+    re.compile(r"(看看|查|看).*(ci|构建|build)", re.IGNORECASE),
+    re.compile(r"(ci|build).*(挂了吗|怎么样|如何|ok)", re.IGNORECASE),
+    re.compile(r"(挂了吗|ci\s*挂了)", re.IGNORECASE),
+)
+_GITHUB_CREATE_ISSUE_PATTERNS = (
+    re.compile(r"(创建|新建|提|开|create|open|file).*(issue|问题单|bug|ticket)", re.IGNORECASE),
+    re.compile(r"(issue|问题单).*(创建|新建|提|开|create)", re.IGNORECASE),
+    re.compile(r"(提个|开个|建个).*(issue|bug|问题)", re.IGNORECASE),
+)
+_GITHUB_COMMENT_PATTERNS = (
+    re.compile(r"(评论|comment).*(issue|pr|pull\s*request|问题单)", re.IGNORECASE),
+    re.compile(r"(issue|pr|pull\s*request|问题单).*(评论|comment)", re.IGNORECASE),
+    re.compile(r"(回复|reply).*(#|号)\s*\d+", re.IGNORECASE),
+)
+
+# Planner intent patterns (P3.7)
+_PLANNER_TODAY_PATTERNS = (
+    re.compile(r"(我今天|今天|today).*(应该|先|干啥|干什么|做什么|做什么好)", re.IGNORECASE),
+    re.compile(r"(应该|先).*(干啥|干什么|做什么).*(今天|today)?", re.IGNORECASE),
+    re.compile(r"(优先|priority).*(事项|任务|今天)", re.IGNORECASE),
+    re.compile(r"(今天|today).*(优先|重点|先做)", re.IGNORECASE),
+)
+_PLANNER_DEV_PATTERNS = (
+    re.compile(r"(今天|today|今天).*(开发|dev).*(计划|plan)", re.IGNORECASE),
+    re.compile(r"(开发|dev).*(计划|plan)", re.IGNORECASE),
+    re.compile(r"(今天|today).*(写|改|修|开发).*(什么|啥)", re.IGNORECASE),
+    re.compile(r"(制定|给).*(开发|dev).*(计划|plan)", re.IGNORECASE),
+)
+_PLANNER_HEALTH_PATTERNS = (
+    re.compile(r"(项目|project).*(健康|health).*(状态|status)?", re.IGNORECASE),
+    re.compile(r"(conveyor|项目).*(有没有|有啥|有什么).*(问题|issue|bug)", re.IGNORECASE),
+    re.compile(r"(项目|project).*(状态|status|检查|check)", re.IGNORECASE),
+    re.compile(r"(有没有问题|有问题吗|健康吗)", re.IGNORECASE),
+)
+_PLANNER_TRIAGE_PATTERNS = (
+    re.compile(r"(帮|help).*(我|me).*(整理|triage|分类).*(邮件|email|inbox|收件箱)", re.IGNORECASE),
+    re.compile(r"(整理|triage|分类).*(邮件|email|inbox|收件箱)", re.IGNORECASE),
+    re.compile(r"(邮件|email|inbox).*(整理|triage|分类)", re.IGNORECASE),
+)
+_PLANNER_SCHEDULE_PATTERNS = (
+    re.compile(r"(今天|today).*(日程|schedule).*(安排|review|审查)", re.IGNORECASE),
+    re.compile(r"(日程|schedule).*(安排|审查|review)", re.IGNORECASE),
+    re.compile(r"(看看|看).*(日程|行程).*(安排|有没有冲突)", re.IGNORECASE),
+)
+
+# Project intent patterns (P3.9)
+_PROJECT_LIST_PATTERNS = (
+    re.compile(r"(项目列表|列出项目|list\s*projects?|看看项目)", re.IGNORECASE),
+    re.compile(r"(我有哪些|看看我的).*(项目|project)", re.IGNORECASE),
+)
+_PROJECT_USE_PATTERNS = (
+    re.compile(r"(切换|switch|use).*(项目|project)", re.IGNORECASE),
+    re.compile(r"(用|use).*(项目|project)\s*(\d+|\w+)", re.IGNORECASE),
+)
+_PROJECT_NEXT_PATTERNS = (
+    re.compile(r"(这个|当前|active).*(项目|project).*(下一步|next|做什么|干啥)", re.IGNORECASE),
+    re.compile(r"(项目|project).*(下一步|next\s*step|做什么|干啥)", re.IGNORECASE),
+    re.compile(r"(下一步|next).*(做什么|干啥)", re.IGNORECASE),
+)
+_PROJECT_HEALTH_PATTERNS = (
+    re.compile(r"(项目|project).*(健康|health).*(状态|status)?", re.IGNORECASE),
+    re.compile(r"(项目|project).*(有没有|有啥|有什么).*(问题|issue|bug)", re.IGNORECASE),
+)
+_PROJECT_ROADMAP_PATTERNS = (
+    re.compile(r"(项目|project).*(roadmap|路线图|规划)", re.IGNORECASE),
+    re.compile(r"(看看|看).*(项目|project).*(roadmap|路线图)", re.IGNORECASE),
+)
+_PROJECT_RELEASE_PATTERNS = (
+    re.compile(r"(生成|generate|看看).*(发布|release).*(清单|checklist)", re.IGNORECASE),
+    re.compile(r"(发布|release).*(清单|checklist)", re.IGNORECASE),
+)
+
 
 def route_intent(text: str) -> RouteResult:
     """Classify user text into deterministic / hybrid / llm path."""
@@ -153,6 +333,160 @@ def route_intent(text: str) -> RouteResult:
     for pat in _GIT_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("git_status",))
+
+    # Gmail / email intent (P3.3) — before hybrid so "邮件" doesn't hijack to ops
+    for pat in _GMAIL_STATUS_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("gmail.status",))
+    for pat in _GMAIL_RECENT_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("gmail.recent",))
+    for pat in _GMAIL_SEARCH_PATTERNS:
+        if pat.search(body):
+            # Extract search query if present
+            query = _extract_gmail_search_query(body)
+            return RouteResult(kind="deterministic", tools=("gmail.search",), arg=query)
+    for pat in _EMAIL_SEND_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="llm", question=(
+                "用户想发邮件，但需要收件人、主题和正文。请用中文问用户："
+                "「请告诉我收件人地址、邮件主题和正文内容，用 `/email_send 收件人 | 主题 | 正文` 的格式发送。」"
+            ))
+
+    # Planner intent (P3.7) — hybrid: collect facts, then Codex analysis
+    # Must come BEFORE calendar patterns since "今天日程安排" is a planner
+    # request (schedule_review), not a simple calendar.today lookup.
+    from personal_tools.planner import (
+        DAILY_PRIORITY, DEV_PLAN, PROJECT_HEALTH, INBOX_TRIAGE, SCHEDULE_REVIEW,
+    )
+    for pat in _PLANNER_TODAY_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="hybrid", tool_items=DAILY_PRIORITY.tool_items, question="今日优先级分析")
+    for pat in _PLANNER_DEV_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="hybrid", tool_items=DEV_PLAN.tool_items, question="开发计划")
+    for pat in _PLANNER_HEALTH_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="hybrid", tool_items=PROJECT_HEALTH.tool_items, question="项目健康检查")
+    for pat in _PLANNER_TRIAGE_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="hybrid", tool_items=INBOX_TRIAGE.tool_items, question="邮件分类整理")
+    for pat in _PLANNER_SCHEDULE_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="hybrid", tool_items=SCHEDULE_REVIEW.tool_items, question="日程审查")
+
+    # Project intent (P3.9) — conservative matching
+    for pat in _PROJECT_LIST_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("projects.list",))
+    for pat in _PROJECT_USE_PATTERNS:
+        if pat.search(body):
+            # Try to extract project ID
+            m = re.search(r"(\d+)", body)
+            arg = m.group(1) if m else ""
+            return RouteResult(kind="deterministic", tools=("projects.use",), arg=arg)
+    for pat in _PROJECT_NEXT_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("project.next",))
+    for pat in _PROJECT_HEALTH_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("project.health",))
+    for pat in _PROJECT_ROADMAP_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("project.roadmap",))
+    for pat in _PROJECT_RELEASE_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("project.release_checklist",))
+
+    # Calendar intent (P3.4)
+    for pat in _CALENDAR_TODAY_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("calendar.today",))
+    for pat in _CALENDAR_TOMORROW_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("calendar.tomorrow",))
+    for pat in _CALENDAR_WEEK_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("calendar.week",))
+    for pat in _CALENDAR_SEARCH_PATTERNS:
+        if pat.search(body):
+            query = _extract_gmail_search_query(body)  # reuse extraction
+            return RouteResult(kind="deterministic", tools=("calendar.search",), arg=query)
+    for pat in _CALENDAR_CREATE_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="llm", question=(
+                "用户想创建日程，但需要标题、时间和描述。请用中文问用户："
+                "「请告诉我日程标题、时间（如`明天 14:00-15:00`）和可选描述，"
+                "用 `/calendar_create 标题 | 时间 | 描述` 的格式创建。」"
+            ))
+
+    # Contacts intent (P3.4)
+    for pat in _CONTACTS_SEARCH_PATTERNS:
+        if pat.search(body):
+            query = _extract_gmail_search_query(body)  # reuse extraction
+            return RouteResult(kind="deterministic", tools=("contacts.search",), arg=query)
+
+    # Google OAuth intent (P3.4)
+    for pat in _GOOGLE_AUTH_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("google.status",))
+
+    # Daily Briefing intent (P3.5)
+    for pat in _BRIEFING_TODAY_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("briefing.today",))
+    for pat in _BRIEFING_TOMORROW_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("briefing.tomorrow",))
+    for pat in _BRIEFING_STATUS_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("briefing.status",))
+    for pat in _BRIEFING_ENABLE_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("briefing.enable",))
+    for pat in _BRIEFING_DISABLE_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("briefing.disable",))
+
+    # GitHub intent (P3.6)
+    for pat in _GITHUB_STATUS_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("github.status",))
+    # Issue detail patterns must come before issues list patterns
+    for pat in _GITHUB_ISSUE_DETAIL_PATTERNS:
+        if pat.search(body):
+            m = re.search(r"#?\s*(\d+)", body)
+            if m:
+                return RouteResult(kind="deterministic", tools=("github.issue",), arg=m.group(1))
+    for pat in _GITHUB_ISSUES_PATTERNS:
+        if pat.search(body):
+            query = _extract_github_query(body)
+            return RouteResult(kind="deterministic", tools=("github.issues",), arg=query)
+    # PR detail patterns must come before PRs list patterns
+    for pat in _GITHUB_PR_DETAIL_PATTERNS:
+        if pat.search(body):
+            m = re.search(r"#?\s*(\d+)", body)
+            if m:
+                return RouteResult(kind="deterministic", tools=("github.pr",), arg=m.group(1))
+    for pat in _GITHUB_PRS_PATTERNS:
+        if pat.search(body):
+            query = _extract_github_query(body)
+            return RouteResult(kind="deterministic", tools=("github.prs",), arg=query)
+    for pat in _GITHUB_CI_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("github.ci",))
+    for pat in _GITHUB_CREATE_ISSUE_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="llm", question=(
+                "用户想创建 GitHub Issue，但需要标题和正文。请用中文问用户："
+                "「请告诉我 Issue 标题和可选正文，用 `/github_create_issue 标题 | 正文` 的格式创建。」"
+            ))
+    for pat in _GITHUB_COMMENT_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="llm", question=(
+                "用户想在 GitHub Issue/PR 上评论，但需要编号和评论内容。请用中文问用户："
+                "「请告诉我 Issue/PR 编号和评论内容，用 `/github_comment 编号 | 评论内容` 的格式发送。」"
+            ))
 
     tool_match = _match_explicit_tool(body)
     if tool_match is not None:
@@ -240,6 +574,46 @@ def _extract_log_arg(body: str) -> str:
     if "telegram" in body.lower():
         return "conveyor-telegram-bot"
     return ""
+
+
+def _extract_gmail_search_query(body: str) -> str:
+    """Extract search query from natural language Gmail search intent.
+
+    Examples:
+        "搜索邮件 关于发票" → "发票"
+        "找一下邮件里的快递" → "快递"
+        "search email for invoice" → "invoice"
+    """
+    # Chinese: "搜索/搜/找 邮件 <query>"
+    m = re.search(r"(?:搜索|搜|找|search)\s*(?:邮件|email|gmail|mail)\s*(?:里的?|中的|for)?\s*(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    # "邮件 搜索 <query>"
+    m = re.search(r"(?:邮件|email)\s*(?:搜索|搜|找|search)\s*(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _extract_github_query(body: str) -> str:
+    """Extract state/query from natural language GitHub intent.
+
+    Examples:
+        "看看 open issue" → "open"
+        "列出 closed pr" → "closed"
+        "查看所有 issue" → "all"
+    """
+    lower = body.lower()
+    # Check for explicit state
+    for state in ("open", "closed", "all", "merged"):
+        if state in lower:
+            return state
+    # Check for Chinese state words
+    if "关闭" in body or "已关" in body:
+        return "closed"
+    if "所有" in body or "全部" in body:
+        return "all"
+    return "open"
 
 
 def _match_explicit_tool(body: str) -> str | None:

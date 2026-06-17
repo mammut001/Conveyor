@@ -124,12 +124,13 @@ async def _test_hybrid_calls_codex_with_facts() -> CheckResult:
         port = FakeOutbound()
         runner = mock.Mock()
         runner.settings = _settings()
+        runner.current_job = None
         captured: dict = {}
 
         async def fake_start(mode, prompt, progress):
             captured["prompt"] = prompt
             from types import SimpleNamespace
-            return SimpleNamespace(state="completed", summary="analysis", error=None)
+            return SimpleNamespace(id="test-job-hybrid", state="completed", summary="analysis", error=None)
 
         runner.start = fake_start
         route = RouteResult(

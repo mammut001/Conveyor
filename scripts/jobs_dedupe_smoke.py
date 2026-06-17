@@ -103,6 +103,7 @@ def _fake_runner(*, summary: str | None, progress_text: str | None) -> mock.Mock
     - job.state immediately reads as "completed" so the wait-loop exits
     """
     job = SimpleNamespace(
+        id="test-job-1",
         state="completed",  # JobState != RUNNING → loop exits
         summary=summary,
         error=None,
@@ -115,6 +116,7 @@ def _fake_runner(*, summary: str | None, progress_text: str | None) -> mock.Mock
 
     runner = mock.Mock()
     runner.start = fake_start
+    runner.current_job = None
     runner.settings = SimpleNamespace(
         codex_memory_root=Path("/tmp/codex-dedupe-mem"),
         conveyor_progress_mode="verbose",
@@ -140,7 +142,8 @@ def _test_summary_branch_uses_strip_compare():
     name = "AST: post-loop if job.summary branch uses .strip() comparison to dedupe"
     try:
         tree = _parse()
-        func = _function_def(tree, "handle_codex_job")
+        # The summary dedup logic is now in _execute_codex_job
+        func = _function_def(tree, "_execute_codex_job")
         if not isinstance(func, ast.AsyncFunctionDef):
             return CheckResult(name, False, "function missing")
         body_src = ast.unparse(func)

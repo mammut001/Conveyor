@@ -291,7 +291,308 @@ systemd/
 
 `notes.delete` / `reminders.cancel` 走 `handlers/tools/runner.py` 同一确认 + `audit/tools.log` redaction 路径。
 
-**TODO（后续 phase）**：Google OAuth broker、`gmail.*` / `calendar.*` / `contacts.*` / `github.*` 工具；token 存 VPS 侧加密 vault，Codex 仅见 tool 结果摘要。
+**P3.3 Gmail App Password MVP**：使用 IMAP + SMTP 的保守 Gmail 集成，**不使用 OAuth**。
+
+```
+personal_tools/
+  gmail_imap.py   IMAP 读取工具（gmail.status/recent/search/read）
+  email_smtp.py   SMTP 发送工具（email.send，需确认）
+```
+
+| 工具 | danger | 命令 | 说明 |
+|---|---|---|---|
+| gmail.status | READ | `/gmail_status` | Gmail 连接状态 |
+| gmail.recent | READ | `/gmail_recent [n]` | 最近邮件 |
+| gmail.search | READ | `/gmail_search <query>` | 搜索邮件 |
+| gmail.read | READ | `/gmail_read <id>` | 读取邮件 |
+| email.send | WRITE | `/email_send <to> \| <subject> \| <body>` | 发送邮件（需确认） |
+
+环境变量：`GMAIL_BACKEND=imap_smtp`、`GMAIL_ADDRESS`、`GMAIL_APP_PASSWORD`（16 字符 App Password）。
+可选：`GMAIL_IMAP_HOST`/`PORT`、`GMAIL_SMTP_HOST`/`PORT`。
+
+安全：App Password **绝不**暴露在聊天回复、日志、审计日志或 `repr()` 中（`SENSITIVE_FIELDS` 集合）。
+发送需要 WRITE 确认。此阶段不支持删除/归档/标签操作。不下载附件。
+`gmail.status` 在配置缺失时优雅降级。
+
+**P3.4 Google Calendar + Contacts**：Google OAuth broker + 只读日历/联系人工具。Gmail 仍用 App Password，OAuth 仅用于 Calendar/Contacts。
+
+```
+personal_tools/
+  google_oauth.py      OAuth broker（status/auth/revoke，token 存 secrets/）
+  calendar_google.py   日历工具（status/today/tomorrow/week/search/freebusy/create）
+  contacts_google.py   联系人工具（search）
+```
+
+| 工具 | danger | 命令 | 说明 |
+|---|---|---|---|
+| google.status | READ | `/google_status` | OAuth token 状态 |
+| google.auth | WRITE | `/auth_google` | OAuth 授权流程 |
+| google.revoke | DESTRUCTIVE | `/google_revoke` | 撤销并删除 token |
+| calendar.status | READ | `/calendar_status` | Calendar 连接状态 |
+| calendar.today | READ | `/calendar_today` | 今日日程 |
+| calendar.tomorrow | READ | `/calendar_tomorrow` | 明日日程 |
+| calendar.week | READ | `/calendar_week` | 本周日程 |
+| calendar.search | READ | `/calendar_search <query>` | 搜索日程 |
+| calendar.freebusy | READ | `/calendar_freebusy <range>` | 查询忙闲 |
+| calendar.create | WRITE | `/calendar_create <标题> \| <时间> \| <描述>` | 创建日程（需确认） |
+| contacts.search | READ | `/contacts_search <query>` | 搜索联系人 |
+
+环境变量：`GOOGLE_CLIENT_SECRET_PATH`（必需）、`GOOGLE_TOKEN_PATH`（默认 `secrets/google_token.json`）、`GOOGLE_OAUTH_SCOPES`、`GOOGLE_OAUTH_REDIRECT_PORT`（默认 8765）。
+
+安全：OAuth token 存储在 `codex_memory_root/secrets/google_token.json`，chmod 600。
+token 不暴露在聊天、日志、审计或 `repr()` 中。API 错误经脱敏处理。
+`calendar.create` 需要 WRITE 确认。`google.revoke` 是 DESTRUCTIVE。
+依赖：`google-auth`、`google-auth-oauthlib`、`google-api-python-client`。
+
+**TODO（后续 phase）**：Gmail OAuth、`github.*` 工具；token 存 VPS 侧加密 vault，Codex 仅见 tool 结果摘要。
+
+**P3.5 Daily Briefing**：每日简报系统，聚合 Calendar、提醒、Gmail、笔记。
+
+```
+personal_tools/
+  briefing.py          简报构建与调度（status/today/tomorrow/enable/disable/probe）
+```
+
+| 工具 | danger | 命令 | 说明 |
+|---|---|---|---|
+| briefing.status | READ | `/brief_settings` | 简报设置状态 |
+| briefing.today | READ | `/brief_today` | 今日简报 |
+| briefing.tomorrow | READ | `/brief_tomorrow` | 明日简报 |
+| briefing.enable | WRITE_SAFE | `/brief_enable [HH:MM]` | 启用每日简报 |
+| briefing.disable | WRITE | `/brief_disable` | 禁用每日简报（需确认） |
+| briefing.probe | READ | `/brief_probe` | 简报探针（dry-run） |
+
+简报内容：日历事件（需 Google OAuth）、到期提醒、最近邮件摘要（需 Gmail）、最近笔记。缺少配置时显示降级提示。
+
+调度器集成：`scripts/scheduler_tick.py` 每分钟检查已启用的简报设置，在用户本地时间到达时发送简报。`briefing_runs` 表记录已发送日期，避免重复。
+
+存储：`briefing_settings`（operator_id 主键，enabled/local_time/channel/chat_id）和 `briefing_runs`（operator_id + local_date 唯一约束）。
+
+安全：`briefing.enable` 是 `WRITE_SAFE`（仅启用本地设置，审计），`briefing.disable` 是 `WRITE`（需确认）。无原始邮件正文、无 OAuth token、无密码。输出经 `redact_text()` + `truncate()` 处理。
+
+自然语言意图：`今日简报` → `briefing.today`，`启用每日简报` → `briefing.enable`，`禁用简报` → `briefing.disable`。
+
+Smoke：`scripts/briefing_smoke.py`（15 项：settings CRUD、runs、graceful degradation、enable/disable、probe、registry、commands、help/tools、intent routing、dedup、redaction）。
+
+**P3.6 GitHub Issues/PR Tools**：只读的 GitHub 项目工具，支持 Issues、PRs 和 CI 状态。**此阶段不支持 merge/close/delete 操作。**
+
+```
+personal_tools/
+  github_tools.py      GitHub REST 客户端（status/issues/prs/ci/create/comment）
+```
+
+|| 工具 | danger | 命令 | 说明 |
+||---|---|---|---|
+|| github.status | READ | `/github_status` | GitHub 连接状态 |
+|| github.issues | READ | `/github_issues [state|query]` | 列出 Issues |
+|| github.issue | READ | `/github_issue <number>` | 查看 Issue 详情 |
+|| github.prs | READ | `/github_prs [state]` | 列出 PRs |
+|| github.pr | READ | `/github_pr <number>` | 查看 PR 详情 |
+|| github.ci | READ | `/github_ci [ref]` | CI 状态 |
+|| github.create_issue | WRITE_SAFE | `/github_create_issue <标题> \| <正文>` | 创建 Issue（审计） |
+|| github.comment | WRITE | `/github_comment <编号> \| <正文>` | 评论（需确认） |
+
+环境变量：`GITHUB_TOKEN`（必需）、`GITHUB_DEFAULT_REPO`（必需）、`GITHUB_API_BASE`（可选，默认 `https://api.github.com`）。
+
+安全：`github_token` 绝不暴露在聊天回复、日志、审计或 `repr()` 中。创建 Issue 是 `WRITE_SAFE`（审计），评论是 `WRITE`（需确认）。所有输出经 `redact_text()` + `truncate()` 处理。
+
+自然语言意图：`看看 GitHub issue` → `github.issues`，`PR 状态` → `github.prs`，`CI 挂了吗` → `github.ci`，`创建 issue` → 引导输入详情。
+
+Daily Briefing 集成：如果配置了 GitHub，简报会包含 open issue/PR 数量和默认分支 CI 状态。
+
+Smoke：`scripts/github_smoke.py`（11 项：缺少配置、token 脱敏、命令解析、确认、registry、commands、help/tools、意图路由、简报降级、无网络）。
+
+**P3.7 Natural Language Planner**：自然语言规划器，将现有确定性工具组合成有用的个人代理工作流。**不添加新的外部集成。所有 Planner profiles 都是只读的。**
+
+```
+personal_tools/
+  planner.py             PlannerProfile dataclass + 5 profiles
+```
+
+| 工具 | danger | 命令 | 说明 |
+|---|---|---|---|
+| planner.list | READ | `/planners` | 列出所有 Planner |
+| planner.today | READ | `/plan_today` | 今日优先级分析 |
+| planner.dev | READ | `/plan_dev` | 开发计划 |
+| planner.health | READ | `/project_health` | 项目健康检查 |
+| planner.triage | READ | `/inbox_triage` | 邮件分类整理 |
+| planner.schedule | READ | `/schedule_review` | 日程审查 |
+
+每个 Planner profile 定义了：
+- `tool_items`：要采集的 (tool_name, arg) 对列表（全部 READ）
+- `prompt_template`：传递给 Codex 的分析模板
+- `summary`：一句话描述
+
+采集流程：`handle_hybrid()` → `run_tools_collected()` → Codex 分析。
+
+安全：Planner profiles **只使用 READ 工具**。不发送邮件、不创建日历事件、不评论/创建 GitHub issue。所有采集事实经 `redact_text()` + `truncate()` 处理。
+
+自然语言意图：`我今天应该先干啥` → `daily_priority`，`今天开发计划` → `dev_plan`，`项目健康状态` → `project_health`，`帮我整理邮件` → `inbox_triage`，`今天日程安排` → `schedule_review`。
+
+Smoke：`scripts/planner_smoke.py`（9 项：registry、READ-only 验证、graceful degradation、prompt building、commands、自然语言路由、planner status）。
+
+**P3.8 Codex Job Queue**：单并发 FIFO 队列，用于管理 Codex 任务。当 Codex 任务正在运行时，新任务会排队而不是被拒绝。**实际 Codex 执行仍然是单并发的。**
+
+```
+handlers/
+  job_queue.py             JobQueue class + QueuedJob dataclass
+  jobs.py                  Queue integration in handle_codex_job
+```
+
+| 命令 | 说明 |
+|---|---|
+| `/queue` | 查看队列状态 |
+| `/queue_cancel <id>` | 取消队列任务 |
+| `/queue_clear` | 清空队列 |
+| `/queue_pause` | 暂停队列自动出队 |
+| `/queue_resume` | 恢复队列自动出队 |
+
+队列行为：
+- 内存 FIFO 队列（bot 重启后丢失）。
+- 最大队列长度：10 个任务。
+- 当任务完成时，自动启动下一个队列任务。
+- 队列仅存储 prompt 文本和路由元数据（无密钥）。
+- 队列显示经过 `redact_text()` + `truncate()` 处理。
+- 队列变更操作会记录审计日志。
+- `/cancel` 仍然取消当前正在运行的任务。
+
+安全性：**同一时间只有一个 Codex 进程。** 队列可通过 `/queue_pause` 暂停；暂停时完成的任务不会自动启动下一个。
+
+确定性 READ 工具绕过队列，直接执行。
+
+Smoke：`scripts/job_queue_smoke.py`（10 项：enqueue/dequeue、FIFO 顺序、最大长度、cancel、clear、pause/resume、状态显示、命令注册、help 文本、脱敏）。
+
+**P3.9 通用项目管理（Project Profiles）**：通用的项目技能层，适用于任何用户的项目。用户定义项目配置文件，并运行通用项目命令。复用现有 Gmail、Calendar、GitHub、Notes、Reminders 工具。
+
+```
+personal_tools/
+  store.py                 project_profiles + active_projects 表
+  projects.py              项目工具实现
+  registry.py              项目工具注册
+  briefing.py              集成活跃项目到每日简报
+handlers/
+  commands.py              项目 slash 命令
+  intent.py                项目自然语言路由
+  tools/runner.py          handle_hybrid_project
+```
+
+| 命令 | 说明 |
+|---|---|
+| `/projects` | 列出项目 |
+| `/project_add <名称> \| <类型> \| <描述> \| [github] \| [关键词]` | 添加项目（WRITE_SAFE，审计） |
+| `/project_use <id>` | 设置活跃项目（WRITE_SAFE，审计） |
+| `/project_show [id]` | 查看项目详情 |
+| `/project_remove <id>` | 删除项目（DESTRUCTIVE，需确认） |
+| `/project_status [id]` | 项目状态分析（hybrid） |
+| `/project_health [id]` | 项目健康检查（hybrid） |
+| `/project_roadmap [id]` | 项目路线图（hybrid） |
+| `/project_next [id]` | 项目下一步行动（hybrid） |
+| `/project_release_checklist [id]` | 发布清单（hybrid） |
+| `/project_brief [id]` | 项目简报（hybrid） |
+
+支持的项目类型：`generic`、`mobile_app`、`web_app`、`bot`、`library`、`research`、`course`、`business`。
+
+项目分析命令是 READ-only 的。它们从已配置的集成收集事实，并使用项目类型特定的 prompt 进行 Codex 分析。如果集成未配置，会优雅降级。
+
+安全性：
+- 项目分析命令是 READ-only 的。
+- `/project_add` 和 `/project_use` 是 WRITE_SAFE 的，会记录审计日志。
+- `/project_remove` 是 DESTRUCTIVE 的，需要确认。
+- 不会发送邮件、创建 GitHub issue/评论、创建日历事件。
+- 所有收集的事实和输出都经过 `redact_text()` + `truncate()` 处理。
+- 不会暴露 token、app password、.env 值或原始密钥。
+
+每日简报集成：显示最多 3 个已启用项目的简短状态。如果没有配置项目，会优雅降级。
+
+Smoke：`scripts/project_profiles_smoke.py`（23 项：CRUD、operator 隔离、活跃项目回退、danger 级别、确认要求、briefing 集成、命令注册、help 文本、脱敏）。
+
+**P3.10 设置向导（Setup Wizard）**：让新用户在部署后更容易配置 Conveyor。检查现有集成并引导用户完成设置。
+
+```
+personal_tools/
+  setup.py                 设置工具实现
+handlers/
+  commands.py              设置 slash 命令
+```
+
+| 命令 | 说明 |
+|---|---|
+| `/setup` | 配置状态概览 |
+| `/setup_status` | 同 /setup |
+| `/setup_check` | 设置检查清单 |
+| `/setup_project` | 项目配置指南 |
+| `/setup_gmail` | Gmail App Password 配置指南 |
+| `/setup_google` | Google OAuth 配置指南 |
+| `/setup_github` | GitHub Token 配置指南 |
+
+设置检查包括：
+- Telegram Bot 已配置
+- Allowed User ID 已配置
+- Codex Binary 可用
+- Workspace Root 存在
+- Gmail (IMAP) 已配置
+- Google OAuth 已配置
+- GitHub Token/Repo 已配置
+- Daily Briefing 已启用
+- 活跃项目已配置
+
+安全性：
+- 所有设置命令都是 READ-only 的。
+- 永远不会打印 token 值、app password、.env 内容或原始密钥。
+- 所有输出经过 `redact_text()` + `truncate()` 处理。
+- 无网络调用。
+
+Smoke：`scripts/setup_smoke.py`（13 项：缺失集成、配置状态、项目示例、gmail 警告、github 无 token 泄漏、命令注册、help 文本、工具列表、无网络调用）。
+
+**P3.11 项目导入/导出（Project Import/Export）**：使项目配置文件可移植，更容易设置。支持导入、导出和模板功能。
+
+```
+personal_tools/
+  project_io.py              导入/导出/模板工具实现
+handlers/
+  commands.py                项目导入/导出命令
+scripts/
+  project_io_smoke.py        烟测
+```
+
+| 命令 | 说明 | Danger Level |
+|------|------|--------------|
+| `/project_export [id]` | 导出指定项目为 JSON | READ |
+| `/project_export_all` | 导出所有项目 | READ |
+| `/project_import <JSON>` | 从 JSON 导入项目 | WRITE_SAFE |
+| `/project_template [type]` | 查看项目模板 | READ |
+
+导出 JSON Schema：
+```json
+{
+  "schema": "conveyor.project.v1",
+  "projects": [
+    {
+      "name": "...",
+      "type": "mobile_app|web_app|bot|library|research|course|business|generic",
+      "description": "...",
+      "github_repo": "...",
+      "appstore_url": "...",
+      "keywords": ["..."],
+      "notes_query": "...",
+      "gmail_query": "...",
+      "default_branch": "...",
+      "enabled": true
+    }
+  ]
+}
+```
+
+安全性：
+- 导出不包含内部 DB ID、operator_id、tokens、secrets、OAuth 路径或 .env 值。
+- 导入验证 schema 和项目类型。
+- 重复项目名称不覆盖（跳过）。
+- 导入作用域为 operator_id。
+- 导入的项目仅在无活跃项目时才设为活跃。
+- 导出/模板为 READ-only，导入为 WRITE_SAFE。
+- 所有输出经过 `redact_text()` + `truncate()` 处理。
+
+Smoke：`scripts/project_io_smoke.py`（15 项：导出单个/全部项目、无 ids/operator_id、有效 JSON 导入、跳过重复、设置活跃项目、验证 schema/类型、模板显示、命令注册、help 文本、无网络调用、输出 redacted）。
 
 ### 6.6 Telegram 实时烟测（手动）
 

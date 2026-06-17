@@ -151,6 +151,23 @@ async def handle_hybrid(
     await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=prompt)
 
 
+async def handle_hybrid_project(
+    msg: InboundMessage,
+    port: OutboundPort,
+    runner: CodexRunner,
+    settings: Settings,
+    tool_name: str,
+    arg: str,
+) -> None:
+    """Run a project analysis tool that returns [HYBRID_PROMPT], then send to Codex."""
+    result = await run_tool(settings, tool_name, arg)
+    if result.startswith("[HYBRID_PROMPT]"):
+        prompt = result[len("[HYBRID_PROMPT]"):]
+        await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=prompt)
+    else:
+        await port.reply(msg, result)
+
+
 async def handle_diagnose_command(
     msg: InboundMessage,
     port: OutboundPort,

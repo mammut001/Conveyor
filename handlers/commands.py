@@ -351,6 +351,63 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "scheduler_status": ("/scheduler_status",),
     "scheduler_probe": ("/scheduler_probe",),
     "scheduler_probe_live": ("/scheduler_probe_live",),
+    "gmail.status": ("/gmail_status",),
+    "gmail.recent": ("/gmail_recent",),
+    "gmail.search": ("/gmail_search",),
+    "gmail.read": ("/gmail_read",),
+    "email.send": ("/email_send",),
+    "google.status": ("/google_status",),
+    "google.auth": ("/auth_google",),
+    "google.revoke": ("/google_revoke",),
+    "calendar.status": ("/calendar_status",),
+    "calendar.today": ("/calendar_today",),
+    "calendar.tomorrow": ("/calendar_tomorrow",),
+    "calendar.week": ("/calendar_week",),
+    "calendar.search": ("/calendar_search",),
+    "calendar.freebusy": ("/calendar_freebusy",),
+    "calendar.create": ("/calendar_create",),
+    "contacts.search": ("/contacts_search",),
+    "briefing.status": ("/brief_settings",),
+    "briefing.today": ("/brief_today",),
+    "briefing.tomorrow": ("/brief_tomorrow",),
+    "briefing.enable": ("/brief_enable",),
+    "briefing.disable": ("/brief_disable",),
+    "briefing.probe": ("/brief_probe",),
+    "github.status": ("/github_status",),
+    "github.issues": ("/github_issues",),
+    "github.issue": ("/github_issue",),
+    "github.prs": ("/github_prs",),
+    "github.pr": ("/github_pr",),
+    "github.ci": ("/github_ci",),
+    "github.create_issue": ("/github_create_issue",),
+    "github.comment": ("/github_comment",),
+    "planner.list": ("/planners",),
+    "planner.today": ("/plan_today",),
+    "planner.dev": ("/plan_dev",),
+    "planner.health": ("/project_health",),
+    "planner.triage": ("/inbox_triage",),
+    "planner.schedule": ("/schedule_review",),
+    "projects.list": ("/projects",),
+    "projects.add": ("/project_add",),
+    "projects.use": ("/project_use",),
+    "projects.show": ("/project_show",),
+    "projects.remove": ("/project_remove",),
+    "project.status": ("/project_status",),
+    "project.health": ("/project_health_v2",),
+    "project.roadmap": ("/project_roadmap",),
+    "project.next": ("/project_next",),
+    "project.release_checklist": ("/project_release_checklist",),
+    "project.brief": ("/project_brief",),
+    "setup.status": ("/setup", "/setup_status"),
+    "setup.check": ("/setup_check",),
+    "setup.project": ("/setup_project",),
+    "setup.gmail": ("/setup_gmail",),
+    "setup.google": ("/setup_google",),
+    "setup.github": ("/setup_github",),
+    "project.export": ("/project_export",),
+    "project.export_all": ("/project_export_all",),
+    "project.import": ("/project_import",),
+    "project.template": ("/project_template",),
 }
 
 _TOOL_EXAMPLES: dict[str, str] = {
@@ -363,6 +420,62 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "scheduler_status": "调度器状态",
     "scheduler_probe": "探测调度器",
     "scheduler_probe_live": "实时测试投递",
+    "gmail.status": "邮箱状态",
+    "gmail.recent": "最近邮件",
+    "gmail.search": "搜索邮件",
+    "gmail.read": "读取邮件",
+    "email.send": "发邮件",
+    "google.status": "google 状态",
+    "google.auth": "授权 google",
+    "calendar.status": "日历状态",
+    "calendar.today": "今天的日程",
+    "calendar.tomorrow": "明天的日程",
+    "calendar.week": "本周日程",
+    "calendar.search": "搜索日程",
+    "calendar.freebusy": "查询忙闲",
+    "calendar.create": "创建日程",
+    "contacts.search": "搜索联系人",
+    "briefing.status": "简报设置",
+    "briefing.today": "今日简报",
+    "briefing.tomorrow": "明日简报",
+    "briefing.enable": "启用简报",
+    "briefing.disable": "禁用简报",
+    "briefing.probe": "简报探针",
+    "github.status": "github 状态",
+    "github.issues": "看看 issue",
+    "github.issue": "查看 issue",
+    "github.prs": "看看 PR",
+    "github.pr": "查看 PR",
+    "github.ci": "CI 状态",
+    "github.create_issue": "创建 issue",
+    "github.comment": "评论",
+    "planner.list": "看看 planner",
+    "planner.today": "今天应该先干啥",
+    "planner.dev": "今天开发计划",
+    "planner.health": "项目健康状态",
+    "planner.triage": "帮我整理邮件",
+    "planner.schedule": "今天日程安排",
+    "projects.list": "项目列表",
+    "projects.add": "添加项目",
+    "projects.use": "切换项目",
+    "projects.show": "项目详情",
+    "projects.remove": "删除项目",
+    "project.status": "项目状态",
+    "project.health": "项目健康",
+    "project.roadmap": "项目 roadmap",
+    "project.next": "项目下一步",
+    "project.release_checklist": "发布清单",
+    "project.brief": "项目简报",
+    "setup.status": "配置状态",
+    "setup.check": "检查清单",
+    "setup.project": "项目配置",
+    "setup.gmail": "gmail 配置",
+    "setup.google": "google 配置",
+    "setup.github": "github 配置",
+    "project.export": "导出项目",
+    "project.export_all": "导出所有项目",
+    "project.import": "导入项目",
+    "project.template": "项目模板",
 }
 
 
@@ -402,6 +515,380 @@ async def _remind(msg, port, _runner, settings, arg):
 async def _reminders(msg, port, _runner, settings, arg):
     from handlers.tools.runner import _invoke_tool
     await _invoke_tool(msg, port, settings, "reminders.list", arg)
+
+
+async def _gmail_status(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "gmail.status"))
+
+
+async def _gmail_recent(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "gmail.recent", arg))
+
+
+async def _gmail_search(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /gmail_search <关键词>")
+        return
+    await port.reply(msg, await run_tool(settings, "gmail.search", arg))
+
+
+async def _gmail_read(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /gmail_read <邮件ID>")
+        return
+    await port.reply(msg, await run_tool(settings, "gmail.read", arg))
+
+
+async def _email_send(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /email_send <收件人> | <主题> | <正文>")
+        return
+    await _invoke_tool(msg, port, settings, "email.send", arg)
+
+
+# Google OAuth / Calendar / Contacts commands (P3.4)
+
+async def _google_status(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "google.status"))
+
+
+async def _auth_google(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(msg, port, settings, "google.auth", arg)
+
+
+async def _google_revoke(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(msg, port, settings, "google.revoke", "")
+
+
+async def _calendar_status(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "calendar.status"))
+
+
+async def _calendar_today(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "calendar.today"))
+
+
+async def _calendar_tomorrow(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "calendar.tomorrow"))
+
+
+async def _calendar_week(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "calendar.week"))
+
+
+async def _calendar_search(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /calendar_search <关键词>")
+        return
+    await port.reply(msg, await run_tool(settings, "calendar.search", arg))
+
+
+async def _calendar_freebusy(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /calendar_freebusy <时间范围>\n示例: /calendar_freebusy 14:00-16:00")
+        return
+    await port.reply(msg, await run_tool(settings, "calendar.freebusy", arg))
+
+
+async def _calendar_create(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /calendar_create <标题> | <时间> | <描述>\n示例: /calendar_create 周会 | 明天 14:00-15:00 | 讨论计划")
+        return
+    await _invoke_tool(msg, port, settings, "calendar.create", arg)
+
+
+async def _contacts_search(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /contacts_search <关键词>")
+        return
+    await port.reply(msg, await run_tool(settings, "contacts.search", arg))
+
+
+# GitHub commands (P3.6)
+
+async def _github_status(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "github.status"))
+
+
+async def _github_issues(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    query = arg.strip() if arg.strip() else "open"
+    await port.reply(msg, await run_tool(settings, "github.issues", query))
+
+
+async def _github_issue(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /github_issue <number>")
+        return
+    await port.reply(msg, await run_tool(settings, "github.issue", arg.strip()))
+
+
+async def _github_prs(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    state = arg.strip() if arg.strip() else "open"
+    await port.reply(msg, await run_tool(settings, "github.prs", state))
+
+
+async def _github_pr(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /github_pr <number>")
+        return
+    await port.reply(msg, await run_tool(settings, "github.pr", arg.strip()))
+
+
+async def _github_ci(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "github.ci", arg.strip()))
+
+
+async def _github_create_issue(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /github_create_issue <标题> | <正文>")
+        return
+    await _invoke_tool(msg, port, settings, "github.create_issue", arg)
+
+
+async def _github_comment(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /github_comment <number> | <正文>")
+        return
+    await _invoke_tool(msg, port, settings, "github.comment", arg)
+
+
+# Daily Briefing commands (P3.5)
+
+async def _brief_today(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "briefing.today"))
+
+
+async def _brief_tomorrow(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "briefing.tomorrow"))
+
+
+async def _brief_settings(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "briefing.status"))
+
+
+async def _brief_enable(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    local_time = arg.strip() if arg.strip() else "09:00"
+    await _invoke_tool(msg, port, settings, "briefing.enable", local_time)
+
+
+async def _brief_disable(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(msg, port, settings, "briefing.disable", "")
+
+
+async def _brief_probe(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "briefing.probe"))
+
+
+# Planner commands (P3.7)
+
+async def _plan_today(msg, port, runner, settings, _arg):
+    from handlers.tools.runner import handle_hybrid
+    from handlers.intent import RouteResult
+    from personal_tools.planner import DAILY_PRIORITY, build_planner_prompt
+    route = RouteResult(kind="hybrid", tool_items=DAILY_PRIORITY.tool_items, question="今日优先级分析")
+    await handle_hybrid(msg, port, runner, settings, route)
+
+
+async def _plan_dev(msg, port, runner, settings, _arg):
+    from handlers.tools.runner import handle_hybrid
+    from handlers.intent import RouteResult
+    from personal_tools.planner import DEV_PLAN
+    route = RouteResult(kind="hybrid", tool_items=DEV_PLAN.tool_items, question="开发计划")
+    await handle_hybrid(msg, port, runner, settings, route)
+
+
+async def _plan_health(msg, port, runner, settings, _arg):
+    from handlers.tools.runner import handle_hybrid
+    from handlers.intent import RouteResult
+    from personal_tools.planner import PROJECT_HEALTH
+    route = RouteResult(kind="hybrid", tool_items=PROJECT_HEALTH.tool_items, question="项目健康检查")
+    await handle_hybrid(msg, port, runner, settings, route)
+
+
+async def _plan_triage(msg, port, runner, settings, _arg):
+    from handlers.tools.runner import handle_hybrid
+    from handlers.intent import RouteResult
+    from personal_tools.planner import INBOX_TRIAGE
+    route = RouteResult(kind="hybrid", tool_items=INBOX_TRIAGE.tool_items, question="邮件分类整理")
+    await handle_hybrid(msg, port, runner, settings, route)
+
+
+async def _plan_schedule(msg, port, runner, settings, _arg):
+    from handlers.tools.runner import handle_hybrid
+    from handlers.intent import RouteResult
+    from personal_tools.planner import SCHEDULE_REVIEW
+    route = RouteResult(kind="hybrid", tool_items=SCHEDULE_REVIEW.tool_items, question="日程审查")
+    await handle_hybrid(msg, port, runner, settings, route)
+
+
+async def _planners(msg, port, _runner, _settings, _arg):
+    from personal_tools.planner import planner_status
+    result = planner_status()
+    await port.reply(msg, result.text)
+
+
+# Project commands (P3.9)
+
+async def _projects(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "projects.list"))
+
+
+async def _project_add(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    if not arg.strip():
+        await port.reply(msg, (
+            "用法: /project_add <名称> | <类型> | <描述> | [github_repo] | [关键词]\n\n"
+            "示例:\n"
+            "  /project_add My App | mobile_app | iOS 待办应用 | user/repo | todo,productivity\n"
+            "  /project_add 研究课题 | research | AI 对 NLP 的影响\n\n"
+            "支持的类型: generic, mobile_app, web_app, bot, library, research, course, business"
+        ))
+        return
+    await _invoke_tool(msg, port, settings, "projects.add", arg)
+
+
+async def _project_use(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /project_use <id>")
+        return
+    await _invoke_tool(msg, port, settings, "projects.use", arg)
+
+
+async def _project_show(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "projects.show", arg))
+
+
+async def _project_remove(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /project_remove <id>")
+        return
+    await _invoke_tool(msg, port, settings, "projects.remove", arg)
+
+
+async def _project_status(msg, port, runner, settings, arg):
+    from handlers.tools.runner import handle_hybrid_project
+    await handle_hybrid_project(msg, port, runner, settings, "project.status", arg)
+
+
+async def _project_health(msg, port, runner, settings, arg):
+    from handlers.tools.runner import handle_hybrid_project
+    await handle_hybrid_project(msg, port, runner, settings, "project.health", arg)
+
+
+async def _project_roadmap(msg, port, runner, settings, arg):
+    from handlers.tools.runner import handle_hybrid_project
+    await handle_hybrid_project(msg, port, runner, settings, "project.roadmap", arg)
+
+
+async def _project_next(msg, port, runner, settings, arg):
+    from handlers.tools.runner import handle_hybrid_project
+    await handle_hybrid_project(msg, port, runner, settings, "project.next", arg)
+
+
+async def _project_release_checklist(msg, port, runner, settings, arg):
+    from handlers.tools.runner import handle_hybrid_project
+    await handle_hybrid_project(msg, port, runner, settings, "project.release_checklist", arg)
+
+
+async def _project_brief(msg, port, runner, settings, arg):
+    from handlers.tools.runner import handle_hybrid_project
+    await handle_hybrid_project(msg, port, runner, settings, "project.brief", arg)
+
+
+# Setup commands (P3.10)
+
+async def _setup(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "setup.status"))
+
+
+async def _setup_status(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "setup.status"))
+
+
+async def _setup_check(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "setup.check"))
+
+
+async def _setup_project(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "setup.project"))
+
+
+async def _setup_gmail(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "setup.gmail"))
+
+
+async def _setup_google(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "setup.google"))
+
+
+async def _setup_github(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "setup.github"))
+
+
+# Project Import/Export (P3.11)
+
+async def _project_export(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "project.export", arg))
+
+
+async def _project_export_all(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "project.export_all"))
+
+
+async def _project_import(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /project_import <JSON>")
+        return
+    await _invoke_tool(msg, port, settings, "project.import", arg)
+
+
+async def _project_template(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "project.template", arg))
 
 
 async def _scheduler_status(msg, port, _runner, settings, _arg):
@@ -589,6 +1076,11 @@ async def _tools(msg, port, _runner, _settings, _arg):
     if PERSONAL_TOOL_REGISTRY:
         lines.append("Personal Tools (本地):")
         lines.append("  /note /notes /remind /reminders")
+        lines.append("  /gmail_status /gmail_recent /gmail_search /gmail_read /email_send")
+        lines.append("  /auth_google /google_status /calendar_today /calendar_search /contacts_search")
+        lines.append("  /brief_today /brief_tomorrow /brief_settings /brief_enable /brief_disable /brief_probe")
+        lines.append("  /github_status /github_issues /github_prs /github_ci /github_create_issue /github_comment")
+        lines.append("  /plan_today /plan_dev /project_health /inbox_triage /schedule_review /planners")
         for name in sorted(PERSONAL_TOOL_REGISTRY):
             pspec = PERSONAL_TOOL_REGISTRY[name]
             lines.append(f"  {name} ({pspec.danger.value}): {pspec.summary}")
@@ -647,6 +1139,74 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/note <内容> /notes [关键词] /remind <内容+时间> /reminders\n"
     text += "/scheduler_status /scheduler_probe /scheduler_probe_live\n"
     text += "\n"
+    text += "Gmail 邮件 (需要配置 GMAIL_BACKEND):\n"
+    text += "/gmail_status — 连接状态\n"
+    text += "/gmail_recent [n] — 最近邮件\n"
+    text += "/gmail_search <关键词> — 搜索邮件\n"
+    text += "/gmail_read <邮件ID> — 读取邮件\n"
+    text += "/email_send <收件人> | <主题> | <正文> — 发送邮件 (需确认)\n"
+    text += "\n"
+    text += "Google 日历/联系人 (需要配置 OAuth):\n"
+    text += "/auth_google — 授权 Google OAuth\n"
+    text += "/google_status — OAuth 状态\n"
+    text += "/calendar_today /calendar_tomorrow /calendar_week — 日程\n"
+    text += "/calendar_search <关键词> — 搜索日程\n"
+    text += "/calendar_create <标题> | <时间> | <描述> — 创建日程 (需确认)\n"
+    text += "/contacts_search <关键词> — 搜索联系人\n"
+    text += "\n"
+    text += "Daily Briefing (每日简报):\n"
+    text += "/brief_today — 今日简报\n"
+    text += "/brief_tomorrow — 明日简报\n"
+    text += "/brief_settings — 简报设置状态\n"
+    text += "/brief_enable [HH:MM] — 启用每日简报\n"
+    text += "/brief_disable — 禁用每日简报 (需确认)\n"
+    text += "/brief_probe — 简报探针 (dry-run)\n"
+    text += "\n"
+    text += "GitHub (需要配置 GITHUB_TOKEN):\n"
+    text += "/github_status — 连接状态\n"
+    text += "/github_issues [open|closed|all|query] — 列出 Issues\n"
+    text += "/github_issue <number> — 查看 Issue 详情\n"
+    text += "/github_prs [open|closed|all] — 列出 PRs\n"
+    text += "/github_pr <number> — 查看 PR 详情\n"
+    text += "/github_ci [ref] — CI 状态\n"
+    text += "/github_create_issue <标题> | <正文> — 创建 Issue (审计)\n"
+    text += "/github_comment <number> | <正文> — 评论 (需确认)\n"
+    text += "\n"
+    text += "Planner (智能规划, 需要 Codex 分析):\n"
+    text += "/plan_today — 今日优先级分析\n"
+    text += "/plan_dev — 开发计划\n"
+    text += "/project_health — 项目健康检查\n"
+    text += "/inbox_triage — 邮件分类整理\n"
+    text += "/schedule_review — 日程审查\n"
+    text += "/planners — 列出所有 Planner\n"
+    text += "\n"
+    text += "Project Profiles (项目管理, P3.9):\n"
+    text += "/projects — 列出项目\n"
+    text += "/project_add <名称> | <类型> | <描述> — 添加项目\n"
+    text += "/project_use <id> — 切换活跃项目\n"
+    text += "/project_show [id] — 查看项目详情\n"
+    text += "/project_remove <id> — 删除项目 (需确认)\n"
+    text += "/project_status [id] — 项目状态分析\n"
+    text += "/project_health [id] — 项目健康检查\n"
+    text += "/project_roadmap [id] — 项目 Roadmap\n"
+    text += "/project_next [id] — 项目下一步行动\n"
+    text += "/project_release_checklist [id] — 发布清单\n"
+    text += "/project_brief [id] — 项目简报\n"
+    text += "\n"
+    text += "设置向导 (P3.10):\n"
+    text += "/setup — 配置状态概览\n"
+    text += "/setup_check — 设置检查清单\n"
+    text += "/setup_project — 项目配置指南\n"
+    text += "/setup_gmail — Gmail 配置指南\n"
+    text += "/setup_google — Google OAuth 配置指南\n"
+    text += "/setup_github — GitHub 配置指南\n"
+    text += "\n"
+    text += "项目导入/导出 (P3.11):\n"
+    text += "/project_export [id] — 导出项目为 JSON\n"
+    text += "/project_export_all — 导出所有项目\n"
+    text += "/project_import <JSON> — 从 JSON 导入项目\n"
+    text += "/project_template [type] — 查看项目模板\n"
+    text += "\n"
     text += "本机运维快路径 (bypass Codex):\n"
     text += "/load /vps — 主机负载/内存/磁盘快照\n"
     text += "/htop — top 风格的进程帧 (htop 是 TUI)\n"
@@ -659,7 +1219,66 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/deploy_status — 查看最近部署状态\n"
     text += "/context — 查看最近会话上下文\n"
     text += "/forget — 清除当前会话记录\n"
+    text += "\n"
+    text += "任务队列 (P3.8):\n"
+    text += "/queue — 查看队列状态\n"
+    text += "/queue_cancel <id> — 取消队列任务\n"
+    text += "/queue_clear — 清空队列 (需确认)\n"
+    text += "/queue_pause — 暂停队列自动出队\n"
+    text += "/queue_resume — 恢复队列自动出队\n"
     await port.reply(msg, text)
+
+
+# P3.8: Queue commands
+
+async def _queue_status(msg, port, _runner, _settings, _arg):
+    """Show queue status."""
+    from handlers.job_queue import get_job_queue
+    queue = get_job_queue()
+    status = await queue.get_queue_status()
+    await port.reply(msg, status)
+
+
+async def _queue_cancel(msg, port, _runner, _settings, arg):
+    """Cancel a queued job by ID."""
+    if not arg.strip():
+        await port.reply(msg, "用法: /queue_cancel <队列ID>")
+        return
+    from handlers.job_queue import get_job_queue
+    queue = get_job_queue()
+    success, message = await queue.cancel(arg.strip())
+    await port.reply(msg, message)
+
+
+async def _queue_clear(msg, port, _runner, _settings, _arg):
+    """Clear all queued jobs (requires confirmation)."""
+    from handlers.job_queue import get_job_queue
+    queue = get_job_queue()
+    count = queue.queue_length
+    if count == 0:
+        await port.reply(msg, "队列为空，无需清空。")
+        return
+    # For now, clear directly (WRITE operation)
+    cleared = await queue.clear()
+    await port.reply(msg, f"已清空队列 ({cleared} 个任务)")
+
+
+async def _queue_pause(msg, port, _runner, _settings, _arg):
+    """Pause automatic dequeue."""
+    from handlers.job_queue import get_job_queue
+    queue = get_job_queue()
+    await queue.pause()
+    await port.reply(msg, "队列已暂停，新任务仍可入队但不会自动执行。")
+
+
+async def _queue_resume(msg, port, _runner, _settings, _arg):
+    """Resume automatic dequeue."""
+    from handlers.job_queue import get_job_queue
+    queue = get_job_queue()
+    await queue.resume()
+    await port.reply(msg, "队列已恢复，将自动执行下一个任务。")
+    # Try to start next job if any
+    await queue.on_job_completed()
 
 
 COMMAND_TABLE: dict[str, CommandSpec] = {
@@ -704,6 +1323,77 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("notes", "搜索/列出本地笔记", _notes, takes_optional_arg=True),
         CommandSpec("remind", "创建本地提醒 (立即执行, 审计)", _remind, takes_arg=True),
         CommandSpec("reminders", "列出本地提醒", _reminders, takes_optional_arg=True),
+        CommandSpec("gmail_status", "Gmail 连接状态", _gmail_status),
+        CommandSpec("gmail_recent", "最近邮件", _gmail_recent, takes_optional_arg=True),
+        CommandSpec("gmail_search", "搜索邮件", _gmail_search, takes_arg=True),
+        CommandSpec("gmail_read", "读取邮件", _gmail_read, takes_arg=True),
+        CommandSpec("email_send", "发送邮件 (需确认)", _email_send, takes_arg=True),
+        # Google OAuth / Calendar / Contacts (P3.4)
+        CommandSpec("google_status", "Google OAuth 状态", _google_status),
+        CommandSpec("auth_google", "Google OAuth 授权", _auth_google, takes_optional_arg=True),
+        CommandSpec("google_revoke", "撤销 Google 授权 (需确认)", _google_revoke),
+        CommandSpec("calendar_status", "Calendar 连接状态", _calendar_status),
+        CommandSpec("calendar_today", "今日日程", _calendar_today),
+        CommandSpec("calendar_tomorrow", "明日日程", _calendar_tomorrow),
+        CommandSpec("calendar_week", "本周日程", _calendar_week),
+        CommandSpec("calendar_search", "搜索日程", _calendar_search, takes_arg=True),
+        CommandSpec("calendar_freebusy", "查询忙闲", _calendar_freebusy, takes_arg=True),
+        CommandSpec("calendar_create", "创建日程 (需确认)", _calendar_create, takes_arg=True),
+        CommandSpec("contacts_search", "搜索联系人", _contacts_search, takes_arg=True),
+        # GitHub (P3.6)
+        CommandSpec("github_status", "GitHub 连接状态", _github_status),
+        CommandSpec("github_issues", "列出 Issues", _github_issues, takes_optional_arg=True),
+        CommandSpec("github_issue", "查看 Issue 详情", _github_issue, takes_arg=True),
+        CommandSpec("github_prs", "列出 Pull Requests", _github_prs, takes_optional_arg=True),
+        CommandSpec("github_pr", "查看 PR 详情", _github_pr, takes_arg=True),
+        CommandSpec("github_ci", "CI 状态", _github_ci, takes_optional_arg=True),
+        CommandSpec("github_create_issue", "创建 Issue (审计)", _github_create_issue, takes_arg=True),
+        CommandSpec("github_comment", "评论 Issue/PR (需确认)", _github_comment, takes_arg=True),
+        # Planner (P3.7)
+        CommandSpec("plan_today", "今日优先级分析", _plan_today),
+        CommandSpec("plan_dev", "开发计划", _plan_dev),
+        CommandSpec("project_health", "项目健康检查", _plan_health),
+        CommandSpec("inbox_triage", "邮件分类整理", _plan_triage),
+        CommandSpec("schedule_review", "日程审查", _plan_schedule),
+        CommandSpec("planners", "列出 Planner Profiles", _planners),
+        # Project Profiles (P3.9)
+        CommandSpec("projects", "列出项目", _projects),
+        CommandSpec("project_add", "添加项目 (审计)", _project_add, takes_arg=True),
+        CommandSpec("project_use", "切换活跃项目 (审计)", _project_use, takes_arg=True),
+        CommandSpec("project_show", "查看项目详情", _project_show, takes_optional_arg=True),
+        CommandSpec("project_remove", "删除项目 (需确认)", _project_remove, takes_arg=True),
+        CommandSpec("project_status", "项目状态分析", _project_status, takes_optional_arg=True),
+        CommandSpec("project_health_v2", "项目健康检查 (v2)", _project_health, takes_optional_arg=True),
+        CommandSpec("project_roadmap", "项目 Roadmap", _project_roadmap, takes_optional_arg=True),
+        CommandSpec("project_next", "项目下一步行动", _project_next, takes_optional_arg=True),
+        CommandSpec("project_release_checklist", "发布清单", _project_release_checklist, takes_optional_arg=True),
+        CommandSpec("project_brief", "项目简报", _project_brief, takes_optional_arg=True),
+        # Setup Wizard (P3.10)
+        CommandSpec("setup", "设置向导", _setup),
+        CommandSpec("setup_status", "配置状态", _setup_status),
+        CommandSpec("setup_check", "设置检查清单", _setup_check),
+        CommandSpec("setup_project", "项目配置指南", _setup_project),
+        CommandSpec("setup_gmail", "Gmail 配置指南", _setup_gmail),
+        CommandSpec("setup_google", "Google 配置指南", _setup_google),
+        CommandSpec("setup_github", "GitHub 配置指南", _setup_github),
+        # Project Import/Export (P3.11)
+        CommandSpec("project_export", "导出项目为 JSON", _project_export, takes_optional_arg=True),
+        CommandSpec("project_export_all", "导出所有项目", _project_export_all),
+        CommandSpec("project_import", "从 JSON 导入项目", _project_import, takes_arg=True),
+        CommandSpec("project_template", "项目模板", _project_template, takes_optional_arg=True),
+        # Job Queue (P3.8)
+        CommandSpec("queue", "查看队列状态", _queue_status),
+        CommandSpec("queue_cancel", "取消队列任务", _queue_cancel, takes_arg=True),
+        CommandSpec("queue_clear", "清空队列", _queue_clear),
+        CommandSpec("queue_pause", "暂停队列", _queue_pause),
+        CommandSpec("queue_resume", "恢复队列", _queue_resume),
+        # Daily Briefing (P3.5)
+        CommandSpec("brief_today", "今日简报", _brief_today),
+        CommandSpec("brief_tomorrow", "明日简报", _brief_tomorrow),
+        CommandSpec("brief_settings", "简报设置状态", _brief_settings),
+        CommandSpec("brief_enable", "启用每日简报", _brief_enable, takes_optional_arg=True),
+        CommandSpec("brief_disable", "禁用每日简报 (需确认)", _brief_disable),
+        CommandSpec("brief_probe", "简报探针 (dry-run)", _brief_probe),
         CommandSpec("scheduler_status", "提醒调度器状态报告", _scheduler_status),
         CommandSpec("scheduler_probe", "调度器 dry-run 探测", _scheduler_probe),
         CommandSpec("scheduler_probe_live", "调度器实时投递测试 (需确认)", _scheduler_probe_live),
