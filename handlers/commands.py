@@ -408,6 +408,13 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "project.export_all": ("/project_export_all",),
     "project.import": ("/project_import",),
     "project.template": ("/project_template",),
+    # Web / Research (P4.1)
+    "web.fetch": ("/web_fetch",),
+    "web.text": ("/web_text",),
+    "web.headers": ("/web_headers",),
+    "web.search": ("/web_search",),
+    "research.run": ("/research",),
+    "research.project": ("/project_research",),
 }
 
 _TOOL_EXAMPLES: dict[str, str] = {
@@ -476,6 +483,13 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "project.export_all": "导出所有项目",
     "project.import": "导入项目",
     "project.template": "项目模板",
+    # Web / Research (P4.1)
+    "web.fetch": "获取网页",
+    "web.text": "网页文本",
+    "web.headers": "HTTP headers",
+    "web.search": "搜索",
+    "research.run": "研究",
+    "research.project": "项目研究",
 }
 
 
@@ -891,6 +905,56 @@ async def _project_template(msg, port, _runner, settings, arg):
     await port.reply(msg, await run_tool(settings, "project.template", arg))
 
 
+# Web Fetch / Search / Research (P4.1)
+
+async def _web_fetch(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /web_fetch <url>")
+        return
+    await port.reply(msg, await run_tool(settings, "web.fetch", arg))
+
+
+async def _web_text(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /web_text <url>")
+        return
+    await port.reply(msg, await run_tool(settings, "web.text", arg))
+
+
+async def _web_headers(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /web_headers <url>")
+        return
+    await port.reply(msg, await run_tool(settings, "web.headers", arg))
+
+
+async def _web_search(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /web_search <查询词>")
+        return
+    await port.reply(msg, await run_tool(settings, "web.search", arg))
+
+
+async def _research(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /research <问题>")
+        return
+    await port.reply(msg, await run_tool(settings, "research.run", arg))
+
+
+async def _project_research(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /project_research [项目ID] <问题>")
+        return
+    await port.reply(msg, await run_tool(settings, "research.project", arg, operator_id=msg.operator_id))
+
+
 async def _scheduler_status(msg, port, _runner, settings, _arg):
     from handlers.tools.runner import run_tool
     await port.reply(msg, await run_tool(settings, "scheduler_status"))
@@ -1207,6 +1271,14 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/project_import <JSON> — 从 JSON 导入项目\n"
     text += "/project_template [type] — 查看项目模板\n"
     text += "\n"
+    text += "Web / Research (P4.1):\n"
+    text += "/web_fetch <url> — 获取网页内容\n"
+    text += "/web_text <url> — 获取网页文本\n"
+    text += "/web_headers <url> — 获取 HTTP headers\n"
+    text += "/web_search <查询> — Web 搜索\n"
+    text += "/research <问题> — Web 研究\n"
+    text += "/project_research [id] <问题> — 项目研究\n"
+    text += "\n"
     text += "本机运维快路径 (bypass Codex):\n"
     text += "/load /vps — 主机负载/内存/磁盘快照\n"
     text += "/htop — top 风格的进程帧 (htop 是 TUI)\n"
@@ -1381,6 +1453,13 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("project_export_all", "导出所有项目", _project_export_all),
         CommandSpec("project_import", "从 JSON 导入项目", _project_import, takes_arg=True),
         CommandSpec("project_template", "项目模板", _project_template, takes_optional_arg=True),
+        # Web Fetch / Search / Research (P4.1)
+        CommandSpec("web_fetch", "获取网页内容", _web_fetch, takes_arg=True),
+        CommandSpec("web_text", "获取网页文本", _web_text, takes_arg=True),
+        CommandSpec("web_headers", "获取 HTTP headers", _web_headers, takes_arg=True),
+        CommandSpec("web_search", "Web 搜索", _web_search, takes_arg=True),
+        CommandSpec("research", "Web 研究", _research, takes_arg=True),
+        CommandSpec("project_research", "项目研究", _project_research, takes_arg=True),
         # Job Queue (P3.8)
         CommandSpec("queue", "查看队列状态", _queue_status),
         CommandSpec("queue_cancel", "取消队列任务", _queue_cancel, takes_arg=True),

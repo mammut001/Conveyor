@@ -279,6 +279,26 @@ _PROJECT_RELEASE_PATTERNS = (
     re.compile(r"(发布|release).*(清单|checklist)", re.IGNORECASE),
 )
 
+# Web / Research intent patterns (P4.1)
+_WEB_FETCH_PATTERNS = (
+    re.compile(r"(获取|抓取|fetch|打开|open).*(网页|页面|web|page|url)", re.IGNORECASE),
+    re.compile(r"(网页|页面|web|page).*(内容|content|看看)", re.IGNORECASE),
+    re.compile(r"(帮我|请).*(打开|看看|获取).*(http|www)", re.IGNORECASE),
+)
+_WEB_SEARCH_PATTERNS = (
+    re.compile(r"(搜索|搜|search|查|找).*(网上|web|网页|internet|谷歌|google)", re.IGNORECASE),
+    re.compile(r"(网上|web|internet).*(搜索|搜|search|查|找)", re.IGNORECASE),
+    re.compile(r"(搜一下|搜搜|search for|look up)", re.IGNORECASE),
+    re.compile(r"^搜索\s+\S+", re.IGNORECASE),  # "搜索 <query>" at start
+)
+_RESEARCH_PATTERNS = (
+    re.compile(r"(研究|调研|research|调查).*(一下|看看)", re.IGNORECASE),
+    re.compile(r"(帮我|请).*(研究|调研|research|查查|调查)", re.IGNORECASE),
+    re.compile(r"(深入了解|详细了解|learn about|find out about)", re.IGNORECASE),
+    re.compile(r"^研究\s+\S+", re.IGNORECASE),  # "研究 <query>" at start
+    re.compile(r"^research\s+(?:about|on)?\s*\S+", re.IGNORECASE),  # "research about <query>"
+)
+
 
 def route_intent(text: str) -> RouteResult:
     """Classify user text into deterministic / hybrid / llm path."""
@@ -397,6 +417,39 @@ def route_intent(text: str) -> RouteResult:
     for pat in _PROJECT_RELEASE_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("project.release_checklist",))
+
+    # Web / Research intent (P4.1)
+    for pat in _WEB_FETCH_PATTERNS:
+        if pat.search(body):
+            # Extract URL if present
+            m = re.search(r'(https?://\S+)', body)
+            arg = m.group(1) if m else ""
+            if arg:
+                return RouteResult(kind="deterministic", tools=("web.fetch",), arg=arg)
+            return RouteResult(kind="llm", question=(
+                "用户想获取网页内容，但没有提供 URL。请用中文问用户："
+                "「请提供要获取的网页 URL，用 `/web_fetch <url>` 的格式。」"
+            ))
+    for pat in _WEB_SEARCH_PATTERNS:
+        if pat.search(body):
+            # Extract search query
+            query = _extract_web_search_query(body)
+            if query:
+                return RouteResult(kind="deterministic", tools=("web.search",), arg=query)
+            return RouteResult(kind="llm", question=(
+                "用户想搜索网页，但没有提供搜索词。请用中文问用户："
+                "「请提供搜索词，用 `/web_search <查询>` 的格式。」"
+            ))
+    for pat in _RESEARCH_PATTERNS:
+        if pat.search(body):
+            # Extract research question
+            query = _extract_research_query(body)
+            if query:
+                return RouteResult(kind="deterministic", tools=("research.run",), arg=query)
+            return RouteResult(kind="llm", question=(
+                "用户想进行研究，但没有提供研究问题。请用中文问用户："
+                "「请提供研究问题，用 `/research <问题>` 的格式。」"
+            ))
 
     # Calendar intent (P3.4)
     for pat in _CALENDAR_TODAY_PATTERNS:
@@ -614,6 +667,56 @@ def _extract_github_query(body: str) -> str:
     if "所有" in body or "全部" in body:
         return "all"
     return "open"
+
+
+def _extract_web_search_query(body: str) -> str:
+    """Extract search query from natural language web search intent.
+
+    Examples:
+        "搜索 Python asyncio" → "Python asyncio"
+        "搜一下最新的 AI 新闻" → "最新的 AI 新闻"
+        "search web for machine learning" → "machine learning"
+    """
+    # Chinese: "搜索/搜/搜一下/搜搜 <query>"
+    m = re.search(r"(?:搜索|搜一下?|搜搜|search)\s*(?:网上|web|网页|internet|谷歌|google)?\s*(?:for|关于|关于)?\s*(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    # "网上搜索 <query>"
+    m = re.search(r"(?:网上|web|internet)\s*(?:搜索|搜|search|查|找)\s*(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    # English: "search for <query>" / "look up <query>"
+    m = re.search(r"(?:search\s+for|look\s+up)\s+(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _extract_research_query(body: str) -> str:
+    """Extract research question from natural language research intent.
+
+    Examples:
+        "研究一下 Python 异步编程" → "Python 异步编程"
+        "帮我调研一下 AI 编程助手" → "AI 编程助手"
+        "research about LLM agents" → "LLM agents"
+    """
+    # Chinese: "研究/调研/调查 一下 <query>"
+    m = re.search(r"(?:研究|调研|调查)\s*(?:一下|看看)?\s*(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    # "帮我研究/调研 <query>"
+    m = re.search(r"(?:帮我|请)\s*(?:研究|调研|调查|查查)\s*(?:一下|看看)?\s*(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    # "深入了解/详细了解 <query>"
+    m = re.search(r"(?:深入了解|详细了解)\s*(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    # English: "research about <query>" / "learn about <query>"
+    m = re.search(r"(?:research|learn|find\s+out)\s+(?:about|on)?\s*(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return ""
 
 
 def _match_explicit_tool(body: str) -> str | None:

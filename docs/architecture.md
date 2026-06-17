@@ -594,6 +594,112 @@ scripts/
 
 Smoke：`scripts/project_io_smoke.py`（15 项：导出单个/全部项目、无 ids/operator_id、有效 JSON 导入、跳过重复、设置活跃项目、验证 schema/类型、模板显示、命令注册、help 文本、无网络调用、输出 redacted）。
 
+**P4.1 Web 搜索 + 研究（Web Search + Research）**：为 Conveyor 添加外部 Web/研究能力。三层安全架构：Web Fetch → Web Search → Research。
+
+```
+personal_tools/
+  web_fetch.py               Web Fetch MVP（curl 包装器）
+  web_search.py              Web Search（多后端支持）
+  research.py                Research（混合搜索+获取+Codex 综合）
+handlers/
+  commands.py                Web/Research 命令
+scripts/
+  web_tools_smoke.py         Web 工具烟测
+  research_smoke.py          Research 烟测
+```
+
+**Phase A — Web Fetch MVP**：
+
+| 命令 | 说明 | Danger Level |
+|------|------|--------------|
+| `/web_fetch <url>` | 获取网页内容 | READ |
+| `/web_text <url>` | 获取网页文本 | READ |
+| `/web_headers <url>` | 获取 HTTP headers | READ |
+
+URL 验证：
+- 拒绝非 http/https 协议（file://, ftp:// 等）
+- 拒绝 localhost、127.0.0.0/8、0.0.0.0、::1
+- 拒绝私有 IP：10.0.0.0/8、172.16.0.0/12、192.168.0.0/16
+- 拒绝 169.254.0.0/16（特别是 169.254.169.254 元数据端点）
+- 解析主机名并拒绝私有 IP 结果
+
+Curl 安全：
+- `--fail --silent --show-error --location`
+- `--max-redirs`（默认 3）
+- `--connect-timeout 5`
+- `--max-time`（默认 10 秒）
+- `--max-filesize`（默认 2MB）
+- `--proto =http,https --proto-redir =http,https`
+- 无 cookies、无 auth headers、无文件写入
+- `shell=False`（subprocess 安全）
+
+**Phase B — Web Search**：
+
+| 命令 | 说明 | Danger Level |
+|------|------|--------------|
+| `/web_search <查询>` | Web 搜索 | READ |
+
+支持后端（`WEB_SEARCH_BACKEND`）：
+- `disabled`（默认）— 禁用搜索
+- `brave` — Brave Search API
+- `tavily` — Tavily Search API
+- `serper` — Serper.dev API
+- `searxng` — 自托管 SearXNG 实例
+
+**Phase C — Research**：
+
+| 命令 | 说明 | Danger Level |
+|------|------|--------------|
+| `/research <问题>` | Web 研究 | READ |
+| `/project_research [id] <问题>` | 项目相关研究 | READ |
+
+Research 流程：
+1. 运行 web.search 获取搜索结果
+2. 去重域名
+3. 获取 top N 安全 URL 的内容
+4. 构建证据包（source title/url/snippet/text excerpt）
+5. 构建研究提示词给 Codex 综合分析
+6. 不使用 WRITE 工具
+
+项目研究（`/project_research`）：
+- 使用项目名称、类型、描述、关键词、github_repo 作为搜索上下文
+- 不修改项目配置
+- 无活跃项目时优雅降级
+
+自然语言路由：
+- `搜索 Python asyncio` → web.search
+- `研究一下 AI 编程助手` → research.run
+- `获取网页 https://example.com` → web.fetch
+- 无 URL/查询时会用中文提示用户提供
+
+安全性：
+- 所有工具都是 READ-only
+- 不发送邮件、不创建日历事件、不写 GitHub
+- 无文件写入、无任意 curl、无 JS 执行
+- 所有输出经过 `redact_text()` + `truncate()` 处理
+- 不暴露 tokens、API keys、cookies、auth headers
+- Smoke 测试中无真实网络调用
+
+配置变量：
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `WEB_FETCH_ENABLED` | true | 启用 Web Fetch |
+| `WEB_FETCH_TIMEOUT_SECONDS` | 10 | 超时秒数 |
+| `WEB_FETCH_MAX_BYTES` | 2000000 | 最大字节数 |
+| `WEB_FETCH_MAX_REDIRECTS` | 3 | 最大重定向 |
+| `WEB_USER_AGENT` | ConveyorBot/0.1 | User-Agent |
+| `WEB_SEARCH_BACKEND` | disabled | 搜索后端 |
+| `WEB_SEARCH_API_KEY` | — | 搜索 API key |
+| `WEB_SEARCH_ENDPOINT` | — | 自定义端点 |
+| `WEB_SEARCH_MAX_RESULTS` | 8 | 最大结果数 |
+| `RESEARCH_MAX_SOURCES` | 5 | 最大来源数 |
+| `RESEARCH_FETCH_TOP_N` | 5 | 获取 top N |
+| `RESEARCH_MAX_CHARS_PER_SOURCE` | 6000 | 每来源最大字符 |
+
+Smoke：
+- `scripts/web_tools_smoke.py`（16 项：URL 验证、curl 安全、html_to_text、输出 redacted、工具 danger level、命令注册、help 文本、禁用降级）
+- `scripts/research_smoke.py`（12 项：搜索禁用降级、结果规范化、证据包、READ-only 工具、项目研究降级、域名去重、输出 redacted）
+
 ### 6.6 Telegram 实时烟测（手动）
 
 `scripts/telegram_live_helpers_smoke.py` 覆盖纯函数（`redact`、`validate_restart_target`），**已**进入 `make smoke`。

@@ -681,6 +681,32 @@ no ids/operator_id, valid import, skip duplicates, set active, validate
 schema/type, template display, command registration, help text, no
 network calls, output redacted).
 
+**P4.1 — Web Search + Research:** Adds external web/research capability
+with three-layer safety: Web Fetch → Web Search → Research.
+
+| Command | What it does |
+|---------|--------------|
+| `/web_fetch <url>` | Fetch web page content |
+| `/web_text <url>` | Fetch web page text |
+| `/web_headers <url>` | Fetch HTTP headers |
+| `/web_search <query>` | Web search (multi-backend) |
+| `/research <question>` | Web research with Codex synthesis |
+| `/project_research [id] <question>` | Project-context research |
+
+**Natural language examples:**
+- `search web for Python asyncio` → `/web_search Python asyncio`
+- `research about AI coding assistants` → `/research AI coding assistants`
+- `fetch https://example.com` → `/web_fetch https://example.com`
+
+Supported search backends (`WEB_SEARCH_BACKEND`):
+- `disabled` (default), `brave`, `tavily`, `serper`, `searxng`
+
+Safety: All tools are READ-only. URL validation rejects localhost,
+private IPs, and metadata endpoints. No file writes, no arbitrary
+curl, no JS execution. All output passes `redact_text()` + `truncate()`.
+
+Smoke: `scripts/web_tools_smoke.py` (16 cases), `scripts/research_smoke.py` (12 cases).
+
 **Telegram slash commands:** New ops/tool commands (`/load`, `/tools`,
 `/disk`, …) are registered in `COMMAND_TABLE` and reached via a
 generic `MessageHandler(filters.COMMAND, …)` fallback in `bot.py` (after

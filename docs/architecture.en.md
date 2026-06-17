@@ -705,6 +705,111 @@ no ids/operator_id, valid import, skip duplicates, set active, validate
 schema/type, template display, command registration, help text, no
 network calls, output redacted).
 
+**P4.1 Web Search + Research:** Adds external web/research capability
+with three-layer safety: Web Fetch → Web Search → Research.
+
+```
+personal_tools/
+  web_fetch.py               Web Fetch MVP (curl wrapper)
+  web_search.py              Web Search (multi-backend)
+  research.py                Research (hybrid search+fetch+Codex)
+handlers/
+  commands.py                Web/Research commands
+scripts/
+  web_tools_smoke.py         Web tools smoke tests
+  research_smoke.py          Research smoke tests
+```
+
+**Phase A — Web Fetch MVP**:
+
+| Command | Notes | Danger Level |
+|---------|-------|--------------|
+| `/web_fetch <url>` | Fetch web page content | READ |
+| `/web_text <url>` | Fetch web page text | READ |
+| `/web_headers <url>` | Fetch HTTP headers | READ |
+
+URL validation:
+- Rejects non-http/https schemes (file://, ftp://, etc.)
+- Rejects localhost, 127.0.0.0/8, 0.0.0.0, ::1
+- Rejects private IPs: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+- Rejects 169.254.0.0/16 (especially 169.254.169.254 metadata endpoint)
+- Resolves hostname and rejects private IP results
+
+Curl safety:
+- `--fail --silent --show-error --location`
+- `--max-redirs` (default 3), `--connect-timeout 5`
+- `--max-time` (default 10s), `--max-filesize` (default 2MB)
+- `--proto =http,https --proto-redir =http,https`
+- No cookies, no auth headers, no file writes
+- `shell=False` (subprocess safety)
+
+**Phase B — Web Search**:
+
+| Command | Notes | Danger Level |
+|---------|-------|--------------|
+| `/web_search <query>` | Web search | READ |
+
+Supported backends (`WEB_SEARCH_BACKEND`):
+- `disabled` (default) — search disabled
+- `brave` — Brave Search API
+- `tavily` — Tavily Search API
+- `serper` — Serper.dev API
+- `searxng` — Self-hosted SearXNG instance
+
+**Phase C — Research**:
+
+| Command | Notes | Danger Level |
+|---------|-------|--------------|
+| `/research <question>` | Web research | READ |
+| `/project_research [id] <question>` | Project research | READ |
+
+Research flow:
+1. Run web.search for search results
+2. Dedupe domains
+3. Fetch top N safe URLs
+4. Build evidence pack (source title/url/snippet/text excerpt)
+5. Build research prompt for Codex synthesis
+6. No WRITE tools used
+
+Project research (`/project_research`):
+- Uses project name, type, description, keywords, github_repo as search context
+- Does not mutate project profiles
+- Degrades gracefully without active project
+
+Natural language routing:
+- `search web for Python asyncio` → web.search
+- `research about AI coding assistants` → research.run
+- `fetch https://example.com` → web.fetch
+- Prompts user in Chinese when URL/query is missing
+
+Safety:
+- All tools are READ-only
+- No sending email, no creating calendar events, no GitHub writes
+- No file writes, no arbitrary curl, no JS execution
+- All output passes `redact_text()` + `truncate()`
+- Never exposes tokens, API keys, cookies, auth headers
+- No real network calls in smoke tests
+
+Config vars:
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `WEB_FETCH_ENABLED` | true | Enable Web Fetch |
+| `WEB_FETCH_TIMEOUT_SECONDS` | 10 | Timeout |
+| `WEB_FETCH_MAX_BYTES` | 2000000 | Max bytes |
+| `WEB_FETCH_MAX_REDIRECTS` | 3 | Max redirects |
+| `WEB_USER_AGENT` | ConveyorBot/0.1 | User-Agent |
+| `WEB_SEARCH_BACKEND` | disabled | Search backend |
+| `WEB_SEARCH_API_KEY` | — | Search API key |
+| `WEB_SEARCH_ENDPOINT` | — | Custom endpoint |
+| `WEB_SEARCH_MAX_RESULTS` | 8 | Max results |
+| `RESEARCH_MAX_SOURCES` | 5 | Max sources |
+| `RESEARCH_FETCH_TOP_N` | 5 | Fetch top N |
+| `RESEARCH_MAX_CHARS_PER_SOURCE` | 6000 | Chars per source |
+
+Smoke:
+- `scripts/web_tools_smoke.py` (16 cases: URL validation, curl safety, html_to_text, output redaction, tool danger levels, command registration, help text, disabled degradation)
+- `scripts/research_smoke.py` (12 cases: search disabled degradation, result normalization, evidence pack, READ-only tools, project research degradation, domain dedup, output redaction)
+
 ---
 
 ## 6.6 Telegram live smoke

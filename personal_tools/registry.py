@@ -20,6 +20,9 @@ from personal_tools import planner as planner_tools
 from personal_tools import projects as projects_tools
 from personal_tools import setup as setup_tools
 from personal_tools import project_io as project_io_tools
+from personal_tools import web_fetch as web_fetch_tools
+from personal_tools import web_search as web_search_tools
+from personal_tools import research as research_tools
 
 if TYPE_CHECKING:
     pass
@@ -506,6 +509,51 @@ def register_personal_tools() -> None:
         DangerLevel.READ,
         project_io_tools.project_template_adapter,
         keywords=("项目模板",),
+    )
+    # Web Fetch (P4.1 Phase A)
+    _register(
+        "web.fetch",
+        "获取网页内容",
+        DangerLevel.READ,
+        web_fetch_tools.web_fetch_adapter,
+        keywords=("网页", "fetch"),
+    )
+    _register(
+        "web.text",
+        "获取网页文本",
+        DangerLevel.READ,
+        web_fetch_tools.web_text_adapter,
+        keywords=("网页文本",),
+    )
+    _register(
+        "web.headers",
+        "获取 HTTP headers",
+        DangerLevel.READ,
+        web_fetch_tools.web_headers_adapter,
+        keywords=("headers",),
+    )
+    # Web Search (P4.1 Phase B)
+    _register(
+        "web.search",
+        "Web 搜索",
+        DangerLevel.READ,
+        web_search_tools.web_search_adapter,
+        keywords=("搜索", "search"),
+    )
+    # Research (P4.1 Phase C)
+    _register(
+        "research.run",
+        "Web 研究",
+        DangerLevel.READ,
+        research_tools.research_adapter,
+        keywords=("研究", "research"),
+    )
+    _register(
+        "research.project",
+        "项目相关研究",
+        DangerLevel.READ,
+        research_tools.project_research_adapter,
+        keywords=("项目研究",),
     )
 
 

@@ -29,6 +29,7 @@ SENSITIVE_FIELDS = frozenset({
     "telegram_bot_token", "lark_app_secret", "gmail_app_password",
     "google_client_secret_path",  # path may hint at project layout
     "github_token",
+    "web_search_api_key",
 })
 
 
@@ -95,6 +96,21 @@ class Settings:
     github_token: str | None = None  # GitHub Personal Access Token, never exposed
     github_default_repo: str | None = None  # e.g. "mammut001/Conveyor"
     github_api_base: str = "https://api.github.com"
+    # Web Fetch (P4.1). READ-only curl wrapper with strict URL validation.
+    web_fetch_enabled: bool = True
+    web_fetch_timeout_seconds: int = 10
+    web_fetch_max_bytes: int = 2000000
+    web_fetch_max_redirects: int = 3
+    web_user_agent: str = "ConveyorBot/0.1"
+    # Web Search (P4.1). Disabled by default; supports searxng/brave/tavily/serper.
+    web_search_backend: str = "disabled"  # disabled|searxng|brave|tavily|serper
+    web_search_api_key: str | None = None
+    web_search_endpoint: str | None = None
+    web_search_max_results: int = 8
+    # Research (P4.1). Hybrid web.search + fetch + Codex synthesis.
+    research_max_sources: int = 5
+    research_fetch_top_n: int = 5
+    research_max_chars_per_source: int = 6000
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -278,6 +294,21 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "github_token": os.getenv("GITHUB_TOKEN") or None,
         "github_default_repo": os.getenv("GITHUB_DEFAULT_REPO") or None,
         "github_api_base": os.getenv("GITHUB_API_BASE", "https://api.github.com"),
+        # Web Fetch (P4.1)
+        "web_fetch_enabled": os.getenv("WEB_FETCH_ENABLED", "true").strip().lower() in ("true", "1", "yes"),
+        "web_fetch_timeout_seconds": _int_env("WEB_FETCH_TIMEOUT_SECONDS", 10),
+        "web_fetch_max_bytes": _int_env("WEB_FETCH_MAX_BYTES", 2000000),
+        "web_fetch_max_redirects": _int_env("WEB_FETCH_MAX_REDIRECTS", 3),
+        "web_user_agent": os.getenv("WEB_USER_AGENT", "ConveyorBot/0.1"),
+        # Web Search (P4.1)
+        "web_search_backend": os.getenv("WEB_SEARCH_BACKEND", "disabled").strip().lower(),
+        "web_search_api_key": os.getenv("WEB_SEARCH_API_KEY") or None,
+        "web_search_endpoint": os.getenv("WEB_SEARCH_ENDPOINT") or None,
+        "web_search_max_results": _int_env("WEB_SEARCH_MAX_RESULTS", 8),
+        # Research (P4.1)
+        "research_max_sources": _int_env("RESEARCH_MAX_SOURCES", 5),
+        "research_fetch_top_n": _int_env("RESEARCH_FETCH_TOP_N", 5),
+        "research_max_chars_per_source": _int_env("RESEARCH_MAX_CHARS_PER_SOURCE", 6000),
     }
 
 

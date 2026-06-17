@@ -156,6 +156,13 @@ def _test_registry() -> CheckResult:
             "project.export_all",
             "project.import",
             "project.template",
+            # P4.1 Web/Research
+            "web.fetch",
+            "web.text",
+            "web.headers",
+            "web.search",
+            "research.run",
+            "research.project",
         }
         ok_names = expected == set(PERSONAL_TOOL_REGISTRY)
         add_level = PERSONAL_TOOL_REGISTRY["notes.add"].danger
@@ -203,6 +210,13 @@ def _test_registry() -> CheckResult:
         project_export_all_level = PERSONAL_TOOL_REGISTRY["project.export_all"].danger
         project_import_level = PERSONAL_TOOL_REGISTRY["project.import"].danger
         project_template_level = PERSONAL_TOOL_REGISTRY["project.template"].danger
+        # P4.1 Web/Research tools
+        web_fetch_level = PERSONAL_TOOL_REGISTRY["web.fetch"].danger
+        web_text_level = PERSONAL_TOOL_REGISTRY["web.text"].danger
+        web_headers_level = PERSONAL_TOOL_REGISTRY["web.headers"].danger
+        web_search_level = PERSONAL_TOOL_REGISTRY["web.search"].danger
+        research_run_level = PERSONAL_TOOL_REGISTRY["research.run"].danger
+        research_project_level = PERSONAL_TOOL_REGISTRY["research.project"].danger
         ok_levels = (
             add_level == DangerLevel.WRITE_SAFE
             and create_level == DangerLevel.WRITE_SAFE
@@ -249,6 +263,13 @@ def _test_registry() -> CheckResult:
             and project_export_all_level == DangerLevel.READ
             and project_import_level == DangerLevel.WRITE_SAFE
             and project_template_level == DangerLevel.READ
+            # P4.1 Web/Research tools levels
+            and web_fetch_level == DangerLevel.READ
+            and web_text_level == DangerLevel.READ
+            and web_headers_level == DangerLevel.READ
+            and web_search_level == DangerLevel.READ
+            and research_run_level == DangerLevel.READ
+            and research_project_level == DangerLevel.READ
         )
         return CheckResult(name, ok_names and ok_levels, f"names={ok_names} levels={ok_levels}")
     except Exception as exc:

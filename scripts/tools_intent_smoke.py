@@ -100,8 +100,32 @@ def _test_restart_intent() -> list[CheckResult]:
     return out
 
 
+# Web / Research intent routing (P4.1)
+_WEB_RESEARCH_CASES: list[tuple[str, str, tuple[str, ...], str]] = [
+    ("搜索 Python asyncio", "deterministic", ("web.search",), "Python asyncio"),
+    ("研究一下 AI 编程助手", "deterministic", ("research.run",), "AI 编程助手"),
+    ("获取网页 https://example.com", "deterministic", ("web.fetch",), "https://example.com"),
+    ("搜一下最新的 AI 新闻", "deterministic", ("web.search",), "最新的 AI 新闻"),
+    ("search web for machine learning", "deterministic", ("web.search",), "machine learning"),
+    ("research about LLM agents", "deterministic", ("research.run",), "LLM agents"),
+]
+
+
+def _test_web_research_intent() -> list[CheckResult]:
+    """Test web/research natural language routing."""
+    out: list[CheckResult] = []
+    for text, expected_kind, expected_tools, expected_arg in _WEB_RESEARCH_CASES:
+        route = route_intent(text)
+        ok = route.kind == expected_kind and route.tools == expected_tools and route.arg == expected_arg
+        detail = f"kind={route.kind!r} tools={route.tools!r} arg={route.arg!r}"
+        if not ok:
+            detail += f" expected kind={expected_kind!r} tools={expected_tools!r} arg={expected_arg!r}"
+        out.append(CheckResult(f"web/research({text!r})", ok, detail))
+    return out
+
+
 def main() -> int:
-    results = _test_routes() + _test_restart_intent()
+    results = _test_routes() + _test_restart_intent() + _test_web_research_intent()
     print_results(results)
     ok = all(r.ok for r in results)
     print("tools intent smoke ok" if ok else "tools intent smoke failed")

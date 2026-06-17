@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Web Search + Research (P4.1)
+- Web Fetch MVP: READ-only curl wrapper with strict URL validation
+- URL validation rejects localhost, private IPs, metadata endpoints
+- Web Search with multi-backend support (disabled, searxng, brave, tavily, serper)
+- Research tool: hybrid web.search + fetch + Codex synthesis
+- Project research: uses project context for better search results
+- Commands: /web_fetch, /web_text, /web_headers, /web_search, /research, /project_research
+- Config: WEB_FETCH_*, WEB_SEARCH_*, RESEARCH_* settings
+- Natural language routing: "搜索 Python asyncio", "研究一下 AI 编程助手", "获取网页 https://example.com"
+
 ## [0.1.0] - 2026-06-17
 
 ### Added

@@ -567,6 +567,29 @@ Smoke：`scripts/setup_smoke.py`（13 项：缺失集成、配置状态、项目
 
 Smoke：`scripts/project_io_smoke.py`（15 项：导出单个/全部项目、无 ids/operator_id、有效 JSON 导入、跳过重复、设置活跃项目、验证 schema/类型、模板显示、命令注册、help 文本、无网络调用、输出 redacted）。
 
+**P4.1 — Web 搜索 + 研究（Web Search + Research）：** 为 Conveyor 添加外部 Web/研究能力。三层安全架构：Web Fetch → Web Search → Research。
+
+| 命令 | 说明 |
+|------|------|
+| `/web_fetch <url>` | 获取网页内容 |
+| `/web_text <url>` | 获取网页文本 |
+| `/web_headers <url>` | 获取 HTTP headers |
+| `/web_search <查询>` | Web 搜索（多后端） |
+| `/research <问题>` | Web 研究 + Codex 综合 |
+| `/project_research [id] <问题>` | 项目相关研究 |
+
+**自然语言示例：**
+- `搜索 Python asyncio` → `/web_search Python asyncio`
+- `研究一下 AI 编程助手` → `/research AI 编程助手`
+- `获取网页 https://example.com` → `/web_fetch https://example.com`
+
+支持的搜索后端（`WEB_SEARCH_BACKEND`）：
+- `disabled`（默认）、`brave`、`tavily`、`serper`、`searxng`
+
+安全性：所有工具都是 READ-only。URL 验证拒绝 localhost、私有 IP 和元数据端点。无文件写入、无任意 curl、无 JS 执行。所有输出经过 `redact_text()` + `truncate()` 处理。
+
+Smoke：`scripts/web_tools_smoke.py`（16 项）、`scripts/research_smoke.py`（12 项）。
+
 **Telegram slash 命令：** 新 ops/tool 命令（`/load`、`/tools`、`/disk` 等）在 `COMMAND_TABLE` 注册，并通过 `bot.py` 中的通用 `MessageHandler(filters.COMMAND, …)` fallback 到达（位于显式 `CommandHandler` 之后、纯文本 handler 之前），确保未知 slash 命令仍能进入 `dispatch()` → `COMMAND_TABLE`。
 
 ### 本机运维快路径（legacy slash 命令）
