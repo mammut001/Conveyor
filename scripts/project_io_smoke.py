@@ -294,6 +294,50 @@ async def _test_outputs_redacted():
     assert "secret123" not in redact_text(text)
 
 
+async def _test_import_preserves_enabled():
+    """Import preserves enabled field."""
+    from personal_tools.project_io import project_import
+    from personal_tools.store import PersonalToolsStore
+
+    with tempfile.TemporaryDirectory() as td:
+        settings = _settings(Path(td))
+        # Import with enabled=false
+        import_data = {
+            "schema": "conveyor.project.v1",
+            "projects": [
+                {"name": "Disabled", "type": "generic", "description": "test", "enabled": False}
+            ]
+        }
+        result = project_import(settings, "op1", json.dumps(import_data))
+        assert result.ok
+        assert "成功导入" in result.text
+
+        # Check the imported project has enabled=False
+        store = PersonalToolsStore(settings)
+        projects = store.list_project_profiles("op1")
+        assert len(projects) == 1
+        assert projects[0].enabled is False
+
+
+async def _test_project_health_routing():
+    """/project_health routes to project.health, not planner.health."""
+    from handlers.commands import COMMAND_TABLE, _TOOL_SLASH
+
+    # Check that /project_health command exists and routes to project health
+    assert "project_health" in COMMAND_TABLE
+    spec = COMMAND_TABLE["project_health"]
+    assert spec.summary == "项目健康检查"
+
+    # Check that planner_health command exists
+    assert "planner_health" in COMMAND_TABLE
+    planner_spec = COMMAND_TABLE["planner_health"]
+    assert planner_spec.summary == "Planner 健康检查"
+
+    # Check _TOOL_SLASH mappings
+    assert _TOOL_SLASH["project.health"] == ("/project_health",)
+    assert _TOOL_SLASH["planner.health"] == ("/planner_health",)
+
+
 # ---- Runner ----
 
 _TESTS = {
@@ -307,6 +351,8 @@ _TESTS = {
     "import validates type": _test_import_validates_type,
     "template shows all types": _test_template_shows_all_types,
     "template specific type": _test_template_specific_type,
+    "import preserves enabled": _test_import_preserves_enabled,
+    "project_health routing": _test_project_health_routing,
     "tools correct danger": _test_tools_are_correct_danger,
     "command registration": _test_command_registration,
     "help includes commands": _test_help_includes_commands,

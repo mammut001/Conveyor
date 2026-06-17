@@ -384,7 +384,7 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "planner.list": ("/planners",),
     "planner.today": ("/plan_today",),
     "planner.dev": ("/plan_dev",),
-    "planner.health": ("/project_health",),
+    "planner.health": ("/planner_health",),
     "planner.triage": ("/inbox_triage",),
     "planner.schedule": ("/schedule_review",),
     "projects.list": ("/projects",),
@@ -393,7 +393,7 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "projects.show": ("/project_show",),
     "projects.remove": ("/project_remove",),
     "project.status": ("/project_status",),
-    "project.health": ("/project_health_v2",),
+    "project.health": ("/project_health",),
     "project.roadmap": ("/project_roadmap",),
     "project.next": ("/project_next",),
     "project.release_checklist": ("/project_release_checklist",),
@@ -1080,7 +1080,7 @@ async def _tools(msg, port, _runner, _settings, _arg):
         lines.append("  /auth_google /google_status /calendar_today /calendar_search /contacts_search")
         lines.append("  /brief_today /brief_tomorrow /brief_settings /brief_enable /brief_disable /brief_probe")
         lines.append("  /github_status /github_issues /github_prs /github_ci /github_create_issue /github_comment")
-        lines.append("  /plan_today /plan_dev /project_health /inbox_triage /schedule_review /planners")
+        lines.append("  /plan_today /plan_dev /planner_health /inbox_triage /schedule_review /planners")
         for name in sorted(PERSONAL_TOOL_REGISTRY):
             pspec = PERSONAL_TOOL_REGISTRY[name]
             lines.append(f"  {name} ({pspec.danger.value}): {pspec.summary}")
@@ -1175,7 +1175,7 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "Planner (智能规划, 需要 Codex 分析):\n"
     text += "/plan_today — 今日优先级分析\n"
     text += "/plan_dev — 开发计划\n"
-    text += "/project_health — 项目健康检查\n"
+    text += "/planner_health — Planner 健康检查\n"
     text += "/inbox_triage — 邮件分类整理\n"
     text += "/schedule_review — 日程审查\n"
     text += "/planners — 列出所有 Planner\n"
@@ -1352,7 +1352,7 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         # Planner (P3.7)
         CommandSpec("plan_today", "今日优先级分析", _plan_today),
         CommandSpec("plan_dev", "开发计划", _plan_dev),
-        CommandSpec("project_health", "项目健康检查", _plan_health),
+        CommandSpec("planner_health", "Planner 健康检查", _plan_health),
         CommandSpec("inbox_triage", "邮件分类整理", _plan_triage),
         CommandSpec("schedule_review", "日程审查", _plan_schedule),
         CommandSpec("planners", "列出 Planner Profiles", _planners),
@@ -1363,7 +1363,7 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("project_show", "查看项目详情", _project_show, takes_optional_arg=True),
         CommandSpec("project_remove", "删除项目 (需确认)", _project_remove, takes_arg=True),
         CommandSpec("project_status", "项目状态分析", _project_status, takes_optional_arg=True),
-        CommandSpec("project_health_v2", "项目健康检查 (v2)", _project_health, takes_optional_arg=True),
+        CommandSpec("project_health", "项目健康检查", _project_health, takes_optional_arg=True),
         CommandSpec("project_roadmap", "项目 Roadmap", _project_roadmap, takes_optional_arg=True),
         CommandSpec("project_next", "项目下一步行动", _project_next, takes_optional_arg=True),
         CommandSpec("project_release_checklist", "发布清单", _project_release_checklist, takes_optional_arg=True),

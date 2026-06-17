@@ -414,7 +414,7 @@ personal_tools/
 | planner.list | READ | `/planners` | 列出所有 Planner |
 | planner.today | READ | `/plan_today` | 今日优先级分析 |
 | planner.dev | READ | `/plan_dev` | 开发计划 |
-| planner.health | READ | `/project_health` | 项目健康检查 |
+| planner.health | READ | `/planner_health` | Planner 健康检查 |
 | planner.triage | READ | `/inbox_triage` | 邮件分类整理 |
 | planner.schedule | READ | `/schedule_review` | 日程审查 |
 

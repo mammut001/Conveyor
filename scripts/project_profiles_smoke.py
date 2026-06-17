@@ -370,7 +370,7 @@ async def _test_command_registration():
 
     expected_commands = [
         "projects", "project_add", "project_use", "project_show",
-        "project_remove", "project_status", "project_health_v2",
+        "project_remove", "project_status", "project_health",
         "project_roadmap", "project_next", "project_release_checklist",
         "project_brief",
     ]

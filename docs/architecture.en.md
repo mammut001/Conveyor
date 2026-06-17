@@ -494,7 +494,7 @@ personal_tools/
 | planner.list | READ | `/planners` | List all planner profiles |
 | planner.today | READ | `/plan_today` | Today's priority analysis |
 | planner.dev | READ | `/plan_dev` | Development plan |
-| planner.health | READ | `/project_health` | Project health check |
+| planner.health | READ | `/planner_health` | Planner health check |
 | planner.triage | READ | `/inbox_triage` | Email triage |
 | planner.schedule | READ | `/schedule_review` | Schedule review |
 

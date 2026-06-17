@@ -263,6 +263,7 @@ def project_import(settings: Settings, operator_id: str, json_str: str) -> ToolR
                 notes_query=proj.get("notes_query", ""),
                 gmail_query=proj.get("gmail_query", ""),
                 default_branch=proj.get("default_branch", ""),
+                enabled=proj.get("enabled", True),
             )
             imported.append(f"  ✅ #{row.id} {name} [{proj['type']}]")
             existing_names.add(name)

@@ -519,9 +519,11 @@ class PersonalToolsStore:
         notes_query: str = "",
         gmail_query: str = "",
         default_branch: str = "",
+        enabled: bool = True,
     ) -> ProjectProfileRow:
         now = _utc_now()
         keywords_json = json.dumps(list(keywords), ensure_ascii=False)
+        enabled_int = 1 if enabled else 0
         with _connect(self._settings) as conn:
             cur = conn.execute(
                 """
@@ -529,11 +531,11 @@ class PersonalToolsStore:
                     (operator_id, name, type, description, github_repo, appstore_url,
                      keywords, notes_query, gmail_query, default_branch, enabled,
                      created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (operator_id, name, project_type, description, github_repo,
                  appstore_url, keywords_json, notes_query, gmail_query,
-                 default_branch, now, now),
+                 default_branch, enabled_int, now, now),
             )
             conn.commit()
             row_id = int(cur.lastrowid)
@@ -541,7 +543,7 @@ class PersonalToolsStore:
             id=row_id, operator_id=operator_id, name=name, type=project_type,
             description=description, github_repo=github_repo, appstore_url=appstore_url,
             keywords=keywords, notes_query=notes_query, gmail_query=gmail_query,
-            default_branch=default_branch, enabled=True, created_at=now, updated_at=now,
+            default_branch=default_branch, enabled=enabled, created_at=now, updated_at=now,
         )
 
     def update_project_profile(
