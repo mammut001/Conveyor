@@ -732,8 +732,14 @@ URL validation:
 - Rejects non-http/https schemes (file://, ftp://, etc.)
 - Rejects localhost, 127.0.0.0/8, 0.0.0.0, ::1
 - Rejects private IPs: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-- Rejects 169.254.0.0/16 (especially 169.254.169.254 metadata endpoint)
-- Resolves hostname and rejects private IP results
+- Rejects carrier-grade NAT: 100.64.0.0/10
+- Rejects benchmark range: 198.18.0.0/15
+- Rejects multicast: 224.0.0.0/4, ff00::/8
+- Rejects reserved: 240.0.0.0/4
+- Rejects link-local: 169.254.0.0/16, fe80::/10
+- Rejects IPv6 ULA: fc00::/7
+- Explicit blocking for metadata endpoints: 169.254.169.254, metadata.google.internal
+- Resolves hostname and rejects private/reserved IP results
 
 Curl safety:
 - `--fail --silent --show-error --no-location` (redirects disabled)
@@ -741,9 +747,14 @@ Curl safety:
 - `--max-time` (default 10s), `--max-filesize` (default 2MB)
 - `--proto =http,https`
 - No cookies, no auth headers, no file writes
-- Content-Type validation: only text/*, application/json, application/xml
-- WEB_SEARCH_ENDPOINT validation: rejects localhost/private IPs
+- Content-Type validation: only text/*, application/json, application/xml (validated on both HEAD and GET responses)
+- WEB_SEARCH_ENDPOINT validation: rejects localhost/private/link-local/metadata endpoints
 - `shell=False` (subprocess safety)
+
+Web Search security (P4.1.1):
+- Uses urllib.request instead of curl subprocess to avoid exposing API keys in process argv
+- API keys passed via HTTP headers, not in URL or command-line args
+- All error messages pass through redact_text()
 
 **Phase B — Web Search**:
 
@@ -809,7 +820,7 @@ Config vars:
 | `RESEARCH_MAX_CHARS_PER_SOURCE` | 6000 | Chars per source |
 
 Smoke:
-- `scripts/web_tools_smoke.py` (23 cases: URL validation, curl safety, html_to_text, output redaction, tool danger levels, command registration, help text, disabled degradation, redirect safety, Content-Type validation, endpoint validation, URL encoding)
+- `scripts/web_tools_smoke.py` (31 cases: URL validation, curl safety, html_to_text, output redaction, tool danger levels, command registration, help text, disabled degradation, redirect safety, Content-Type validation, endpoint validation, URL encoding, API key safety, expanded IP blocking)
 - `scripts/research_smoke.py` (14 cases: search disabled degradation, result normalization, evidence pack, READ-only tools, project research degradation, domain dedup, output redaction, hybrid prompt)
 
 ---

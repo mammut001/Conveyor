@@ -22,12 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 #### Web Search + Research Hardening (P4.1.1)
-- Redirect safety: disabled automatic redirects (--no-location), each hop must be validated
-- Content-Type validation: only allows text/*, application/json, application/xml
-- WEB_SEARCH_ENDPOINT validation: rejects localhost/private/link-local/metadata endpoints
-- URL encoding: search queries are properly URL encoded for all backends
-- Research behavior: /research and /project_research now use Codex hybrid synthesis
-- Redaction: WEB_SEARCH_API_KEY never appears in errors, repr, audit, or chat output
+- **API key safety**: Replaced curl subprocess with urllib.request to avoid exposing API keys in process argv
+- **Redirect safety**: Disabled automatic redirects (--no-location), each hop must be validated
+- **Content-Type validation**: Only allows text/*, application/json, application/xml on both HEAD and GET
+- **IP blocking**: Expanded blocked ranges to include 100.64.0.0/10 (carrier-grade NAT), 198.18.0.0/15 (benchmark), multicast (224.0.0.0/4), reserved (240.0.0.0/4), IPv6 link-local (fe80::/10)
+- **Metadata endpoint**: Explicit blocking for 169.254.169.254 and metadata.google.internal
+- **WEB_SEARCH_ENDPOINT validation**: Rejects localhost/private/link-local/metadata endpoints
+- **URL encoding**: Search queries are properly URL encoded for all backends
+- **Research behavior**: /research and /project_research now use Codex hybrid synthesis
+- **Redaction**: WEB_SEARCH_API_KEY never appears in errors, repr, audit, or chat output
 
 ## [0.1.0] - 2026-06-17
 

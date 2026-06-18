@@ -706,14 +706,17 @@ private IPs, and metadata endpoints. No file writes, no arbitrary
 curl, no JS execution. All output passes `redact_text()` + `truncate()`.
 
 **Security Hardening (P4.1.1):**
-- Redirects disabled (--no-location), each hop validated separately
-- Content-Type validation: only text/*, application/json, application/xml allowed
-- WEB_SEARCH_ENDPOINT validation: rejects localhost/private IPs
-- URL encoding: search queries properly encoded for all backends
-- Research uses Codex hybrid synthesis ([HYBRID_PROMPT])
-- WEB_SEARCH_API_KEY never appears in errors, logs, or chat output
+- **API key safety**: Replaced curl subprocess with urllib.request to avoid exposing API keys in process argv
+- **Redirect safety**: Disabled automatic redirects (--no-location), each hop must be validated
+- **Content-Type validation**: Only text/*, application/json, application/xml allowed (validated on both HEAD and GET responses)
+- **IP blocking**: Expanded to include 100.64.0.0/10 (carrier-grade NAT), 198.18.0.0/15 (benchmark), multicast (224.0.0.0/4), reserved (240.0.0.0/4), IPv6 link-local (fe80::/10)
+- **Metadata endpoint**: Explicit blocking for 169.254.169.254 and metadata.google.internal
+- **WEB_SEARCH_ENDPOINT validation**: Rejects localhost/private/link-local/metadata endpoints
+- **URL encoding**: Search queries properly encoded for all backends
+- **Research uses Codex hybrid synthesis** ([HYBRID_PROMPT])
+- **WEB_SEARCH_API_KEY** never appears in errors, logs, or chat output
 
-Smoke: `scripts/web_tools_smoke.py` (23 cases), `scripts/research_smoke.py` (14 cases).
+Smoke: `scripts/web_tools_smoke.py` (31 cases), `scripts/research_smoke.py` (14 cases).
 
 **Telegram slash commands:** New ops/tool commands (`/load`, `/tools`,
 `/disk`, …) are registered in `COMMAND_TABLE` and reached via a

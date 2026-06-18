@@ -3,12 +3,17 @@
 Supports multiple backends: disabled, searxng, brave, tavily, serper.
 Degrades gracefully when backend is disabled or unconfigured.
 All output passes redact_text + truncate.
+
+Security: Uses urllib.request instead of subprocess to avoid exposing
+API keys in process command-line arguments.
 """
 from __future__ import annotations
 
 import json
 import logging
-import subprocess
+import ssl
+import urllib.request
+import urllib.error
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
@@ -42,35 +47,42 @@ def _normalize_result(raw: dict, rank: int, backend: str) -> SearchResult:
     )
 
 
-def _curl_json(url: str, settings: Settings, headers: dict[str, str] | None = None) -> tuple[int, dict | list | None, str]:
-    """Fetch JSON via curl. Returns (returncode, parsed_json, error)."""
-    argv = [
-        "curl",
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--no-location",  # No automatic redirects
-        "--connect-timeout", "5",
-        "--max-time", str(settings.web_fetch_timeout_seconds),
-        "--user-agent", settings.web_user_agent,
-    ]
+def _fetch_json(url: str, settings: Settings, headers: dict[str, str] | None = None, 
+                data: bytes | None = None, method: str = "GET") -> tuple[int, dict | list | None, str]:
+    """Fetch JSON via urllib.request (no subprocess, no API keys in argv).
+    
+    Returns (status_code, parsed_json, error).
+    """
+    req = urllib.request.Request(url, method=method)
+    req.add_header("User-Agent", settings.web_user_agent)
+    req.add_header("Accept", "application/json")
+    
     if headers:
         for k, v in headers.items():
-            argv.extend(["--header", f"{k}: {v}"])
-    argv.append(url)
-
+            req.add_header(k, v)
+    
+    if data is not None:
+        req.data = data
+        if "Content-Type" not in (headers or {}):
+            req.add_header("Content-Type", "application/json")
+    
+    # Create SSL context that verifies certificates
+    ctx = ssl.create_default_context()
+    
     try:
-        result = subprocess.run(argv, capture_output=True, text=True, shell=False, timeout=30)
-        if result.returncode != 0:
-            return result.returncode, None, redact_text(result.stderr)
-        try:
-            data = json.loads(result.stdout)
-            return 0, data, ""
-        except json.JSONDecodeError as exc:
-            return -1, None, f"JSON 解析失败: {exc}"
-    except FileNotFoundError:
-        return -1, None, "curl 未安装"
-    except subprocess.TimeoutExpired:
+        with urllib.request.urlopen(req, timeout=settings.web_fetch_timeout_seconds, context=ctx) as resp:
+            status = resp.status
+            body = resp.read()
+            try:
+                parsed = json.loads(body)
+                return status, parsed, ""
+            except json.JSONDecodeError as exc:
+                return status, None, f"JSON 解析失败: {exc}"
+    except urllib.error.HTTPError as exc:
+        return exc.code, None, f"HTTP 错误: {exc.code}"
+    except urllib.error.URLError as exc:
+        return -1, None, f"URL 错误: {redact_text(str(exc.reason))}"
+    except TimeoutError:
         return -1, None, "请求超时"
     except Exception as exc:
         return -1, None, redact_text(str(exc))
@@ -90,11 +102,10 @@ def _search_brave(settings: Settings, query: str, limit: int) -> tuple[list[Sear
     # URL encode query
     url = f"{endpoint}?{urlencode({'q': query, 'count': limit})}"
     headers = {
-        "Accept": "application/json",
         "X-Subscription-Token": settings.web_search_api_key,
     }
-    rc, data, err = _curl_json(url, settings, headers)
-    if rc != 0 or data is None:
+    rc, data, err = _fetch_json(url, settings, headers)
+    if rc != 200 or data is None:
         return [], f"Brave 搜索失败: {redact_text(err)}"
     results = data.get("web", {}).get("results", [])
     return [_normalize_result(r, i + 1, "brave") for i, r in enumerate(results[:limit])], ""
@@ -115,25 +126,13 @@ def _search_tavily(settings: Settings, query: str, limit: int) -> tuple[list[Sea
         "api_key": settings.web_search_api_key,
         "query": query,
         "max_results": limit,
-    })
-    argv = [
-        "curl", "--silent", "--fail", "--show-error",
-        "--no-location",  # No automatic redirects
-        "--connect-timeout", "5",
-        "--max-time", str(settings.web_fetch_timeout_seconds),
-        "--header", "Content-Type: application/json",
-        "--data", payload,
-        endpoint,
-    ]
-    try:
-        result = subprocess.run(argv, capture_output=True, text=True, shell=False, timeout=30)
-        if result.returncode != 0:
-            return [], f"Tavily 搜索失败: {redact_text(result.stderr)}"
-        data = json.loads(result.stdout)
-        results = data.get("results", [])
-        return [_normalize_result(r, i + 1, "tavily") for i, r in enumerate(results[:limit])], ""
-    except Exception as exc:
-        return [], f"Tavily 搜索异常: {redact_text(str(exc))}"
+    }).encode("utf-8")
+    
+    rc, data, err = _fetch_json(endpoint, settings, data=payload, method="POST")
+    if rc != 200 or data is None:
+        return [], f"Tavily 搜索失败: {redact_text(err)}"
+    results = data.get("results", [])
+    return [_normalize_result(r, i + 1, "tavily") for i, r in enumerate(results[:limit])], ""
 
 
 def _search_serper(settings: Settings, query: str, limit: int) -> tuple[list[SearchResult], str]:
@@ -147,26 +146,14 @@ def _search_serper(settings: Settings, query: str, limit: int) -> tuple[list[Sea
     if not ok:
         return [], f"Serper endpoint 无效: {err}"
     
-    payload = json.dumps({"q": query, "num": limit})
-    argv = [
-        "curl", "--silent", "--fail", "--show-error",
-        "--no-location",  # No automatic redirects
-        "--connect-timeout", "5",
-        "--max-time", str(settings.web_fetch_timeout_seconds),
-        "--header", f"X-API-KEY: {settings.web_search_api_key}",
-        "--header", "Content-Type: application/json",
-        "--data", payload,
-        endpoint,
-    ]
-    try:
-        result = subprocess.run(argv, capture_output=True, text=True, shell=False, timeout=30)
-        if result.returncode != 0:
-            return [], f"Serper 搜索失败: {redact_text(result.stderr)}"
-        data = json.loads(result.stdout)
-        results = data.get("organic", [])
-        return [_normalize_result(r, i + 1, "serper") for i, r in enumerate(results[:limit])], ""
-    except Exception as exc:
-        return [], f"Serper 搜索异常: {redact_text(str(exc))}"
+    payload = json.dumps({"q": query, "num": limit}).encode("utf-8")
+    headers = {"X-API-KEY": settings.web_search_api_key}
+    
+    rc, data, err = _fetch_json(endpoint, settings, headers=headers, data=payload, method="POST")
+    if rc != 200 or data is None:
+        return [], f"Serper 搜索失败: {redact_text(err)}"
+    results = data.get("organic", [])
+    return [_normalize_result(r, i + 1, "serper") for i, r in enumerate(results[:limit])], ""
 
 
 def _search_searxng(settings: Settings, query: str, limit: int) -> tuple[list[SearchResult], str]:
@@ -182,8 +169,8 @@ def _search_searxng(settings: Settings, query: str, limit: int) -> tuple[list[Se
     
     # URL encode query
     url = f"{endpoint}/search?{urlencode({'q': query, 'format': 'json', 'pageno': 1})}"
-    rc, data, err = _curl_json(url, settings)
-    if rc != 0 or data is None:
+    rc, data, err = _fetch_json(url, settings)
+    if rc != 200 or data is None:
         return [], f"SearXNG 搜索失败: {redact_text(err)}"
     results = data.get("results", [])
     return [_normalize_result(r, i + 1, "searxng") for i, r in enumerate(results[:limit])], ""

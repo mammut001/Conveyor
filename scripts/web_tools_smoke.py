@@ -13,6 +13,10 @@ Tests:
   - tools correct danger levels
   - command registration
   - no network calls
+  - API keys not in subprocess argv
+  - redirects not followed (--no-location)
+  - GET content-type validation
+  - expanded private/reserved IP rejection (100.64.x.x, 198.18.x.x, multicast)
 """
 from __future__ import annotations
 
@@ -58,31 +62,31 @@ async def _test_reject_localhost():
 
 
 async def _test_reject_127():
-    """URL validation rejects 127.0.0.1"""
+    """URL validation rejects 127.0.0.1 (loopback)."""
     ok, err = validate_url("http://127.0.0.1/secret")
     assert not ok
-    assert "私有 IP" in err or "拒绝" in err
+    assert "私有 IP" in err or "保留 IP" in err or "拒绝" in err
 
 
 async def _test_reject_private_10():
-    """URL validation rejects 10.x.x.x"""
+    """URL validation rejects 10.x.x.x (private network)."""
     ok, err = validate_url("http://10.0.0.1/secret")
     assert not ok
-    assert "私有 IP" in err or "拒绝" in err
+    assert "私有 IP" in err or "保留 IP" in err or "拒绝" in err
 
 
 async def _test_reject_private_192():
-    """URL validation rejects 192.168.x.x"""
+    """URL validation rejects 192.168.x.x (private network)."""
     ok, err = validate_url("http://192.168.1.1/secret")
     assert not ok
-    assert "私有 IP" in err or "拒绝" in err
+    assert "私有 IP" in err or "保留 IP" in err or "拒绝" in err
 
 
 async def _test_reject_metadata():
-    """URL validation rejects 169.254.169.254"""
+    """URL validation rejects 169.254.169.254 (metadata endpoint)."""
     ok, err = validate_url("http://169.254.169.254/metadata")
     assert not ok
-    assert "私有 IP" in err or "拒绝" in err
+    assert "元数据端点" in err or "私有 IP" in err or "保留 IP" in err or "拒绝" in err
 
 
 async def _test_curl_argv_shell_false():
@@ -94,6 +98,7 @@ async def _test_curl_argv_shell_false():
     assert "--silent" in argv
     assert "--fail" in argv
     assert "--no-location" in argv  # No automatic redirects
+    assert "--location" not in argv  # Redirects disabled
     assert "--proto" in argv
     assert "=http,https" in argv
 
@@ -199,6 +204,8 @@ async def _test_redirect_to_private_rejected():
     # Verify --no-location is in argv (no automatic redirects)
     assert "--no-location" in argv, f"Expected --no-location in argv: {argv}"
     assert "--location" not in argv, f"Should not have --location in argv: {argv}"
+    # Verify --max-redirs is NOT present (we don't follow redirects at all)
+    assert "--max-redirs" not in argv, f"Should not have --max-redirs in argv: {argv}"
 
 
 async def _test_content_type_validation():
@@ -213,13 +220,25 @@ async def _test_content_type_validation():
     assert ok
     ok, _ = _check_content_type("content-type: application/xml")
     assert ok
+    ok, _ = _check_content_type("content-type: application/xhtml+xml")
+    assert ok
+    ok, _ = _check_content_type("content-type: application/rss+xml")
+    assert ok
+    ok, _ = _check_content_type("content-type: application/atom+xml")
+    assert ok
     # Rejected types
     ok, err = _check_content_type("content-type: application/pdf")
     assert not ok
     assert "不支持" in err
     ok, err = _check_content_type("content-type: image/png")
     assert not ok
+    ok, err = _check_content_type("content-type: image/jpeg")
+    assert not ok
     ok, err = _check_content_type("content-type: application/zip")
+    assert not ok
+    ok, err = _check_content_type("content-type: application/octet-stream")
+    assert not ok
+    ok, err = _check_content_type("content-type: video/mp4")
     assert not ok
 
 
@@ -276,6 +295,80 @@ async def _test_natural_language_research():
     assert r.arg == "AI 编程助手", f"Expected question, got {r.arg}"
 
 
+async def _test_api_key_not_in_argv():
+    """API keys are not exposed in subprocess argv."""
+    from personal_tools.web_search import _search_brave, _search_tavily, _search_serper
+    # All search functions now use urllib.request, not subprocess
+    # Verify by checking that the functions don't call subprocess
+    import inspect
+    
+    # Check that _search_brave doesn't use subprocess
+    source = inspect.getsource(_search_brave)
+    assert "subprocess" not in source, "_search_brave should not use subprocess"
+    
+    # Check that _search_tavily doesn't use subprocess
+    source = inspect.getsource(_search_tavily)
+    assert "subprocess" not in source, "_search_tavily should not use subprocess"
+    
+    # Check that _search_serper doesn't use subprocess
+    source = inspect.getsource(_search_serper)
+    assert "subprocess" not in source, "_search_serper should not use subprocess"
+
+
+async def _test_redirects_not_followed():
+    """Redirects are not automatically followed (--no-location)."""
+    settings = _settings()
+    argv = _curl_argv("https://example.com", settings)
+    # Verify --no-location is present
+    assert "--no-location" in argv, f"Expected --no-location in argv: {argv}"
+    # Verify --location is NOT present
+    assert "--location" not in argv, f"Should not have --location in argv: {argv}"
+    # Verify --max-redirs is NOT present (since we don't follow redirects)
+    assert "--max-redirs" not in argv, f"Should not have --max-redirs in argv: {argv}"
+
+
+async def _test_reject_carrier_grade_nat():
+    """URL validation rejects 100.64.0.0/10 (carrier-grade NAT)."""
+    ok, err = validate_url("http://100.64.0.1/secret")
+    assert not ok
+    assert "私有 IP" in err or "保留 IP" in err or "拒绝" in err
+
+
+async def _test_reject_benchmark_range():
+    """URL validation rejects 198.18.0.0/15 (benchmark range)."""
+    ok, err = validate_url("http://198.18.0.1/secret")
+    assert not ok
+    assert "私有 IP" in err or "保留 IP" in err or "拒绝" in err
+
+
+async def _test_reject_multicast():
+    """URL validation rejects multicast addresses."""
+    ok, err = validate_url("http://224.0.0.1/secret")
+    assert not ok
+    assert "私有 IP" in err or "保留 IP" in err or "拒绝" in err
+
+
+async def _test_reject_reserved_240():
+    """URL validation rejects 240.0.0.0/4 (reserved)."""
+    ok, err = validate_url("http://240.0.0.1/secret")
+    assert not ok
+    assert "私有 IP" in err or "保留 IP" in err or "拒绝" in err
+
+
+async def _test_reject_link_local():
+    """URL validation rejects 169.254.x.x (link-local)."""
+    ok, err = validate_url("http://169.254.1.1/secret")
+    assert not ok
+    assert "私有 IP" in err or "保留 IP" in err or "拒绝" in err
+
+
+async def _test_reject_ipv6_link_local():
+    """URL validation rejects IPv6 link-local (fe80::)."""
+    ok, err = validate_url("http://[fe80::1]/secret")
+    assert not ok
+    assert "私有 IP" in err or "保留 IP" in err or "拒绝" in err
+
+
 # ---- Runner ----
 
 _TESTS = {
@@ -302,6 +395,14 @@ _TESTS = {
     "content-type validation": _test_content_type_validation,
     "search endpoint validation": _test_search_endpoint_validation,
     "url encode queries": _test_url_encode_search_queries,
+    "api key not in argv": _test_api_key_not_in_argv,
+    "redirects not followed": _test_redirects_not_followed,
+    "reject carrier-grade NAT": _test_reject_carrier_grade_nat,
+    "reject benchmark range": _test_reject_benchmark_range,
+    "reject multicast": _test_reject_multicast,
+    "reject reserved 240": _test_reject_reserved_240,
+    "reject link-local 169.254": _test_reject_link_local,
+    "reject IPv6 link-local": _test_reject_ipv6_link_local,
 }
 
 

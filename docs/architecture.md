@@ -620,8 +620,14 @@ URL 验证：
 - 拒绝非 http/https 协议（file://, ftp:// 等）
 - 拒绝 localhost、127.0.0.0/8、0.0.0.0、::1
 - 拒绝私有 IP：10.0.0.0/8、172.16.0.0/12、192.168.0.0/16
-- 拒绝 169.254.0.0/16（特别是 169.254.169.254 元数据端点）
-- 解析主机名并拒绝私有 IP 结果
+- 拒绝运营商级 NAT：100.64.0.0/10
+- 拒绝基准测试范围：198.18.0.0/15
+- 拒绝多播地址：224.0.0.0/4、ff00::/8
+- 拒绝保留地址：240.0.0.0/4
+- 拒绝链路本地：169.254.0.0/16、fe80::/10
+- 拒绝 IPv6 ULA：fc00::/7
+- 显式拦截元数据端点：169.254.169.254、metadata.google.internal
+- 解析主机名并拒绝私有/保留 IP 结果
 
 Curl 安全：
 - `--fail --silent --show-error --no-location`（禁用自动重定向）
@@ -630,11 +636,13 @@ Curl 安全：
 - `--max-filesize`（默认 2MB）
 - `--proto =http,https`（无 cookies、无 auth headers、无文件写入）
 - `shell=False`（subprocess 安全）
-- Content-Type 验证：仅允许 text/*、application/json、application/xml
-- WEB_SEARCH_ENDPOINT 验证：拒绝 localhost/私有 IP
-- `--proto =http,https --proto-redir =http,https`
-- 无 cookies、无 auth headers、无文件写入
-- `shell=False`（subprocess 安全）
+- Content-Type 验证：仅允许 text/*、application/json、application/xml（HEAD 和 GET 响应均验证）
+- WEB_SEARCH_ENDPOINT 验证：拒绝 localhost/私有 IP/链路本地/元数据端点
+
+Web Search 安全（P4.1.1）：
+- 使用 urllib.request 替代 curl 子进程，避免 API 密钥暴露在进程参数中
+- API 密钥通过 HTTP 头传递，不在 URL 或命令行参数中
+- 所有错误信息经过 redact_text() 处理
 
 **Phase B — Web Search**：
 
@@ -700,7 +708,7 @@ Research 流程：
 | `RESEARCH_MAX_CHARS_PER_SOURCE` | 6000 | 每来源最大字符 |
 
 Smoke：
-- `scripts/web_tools_smoke.py`（23 项：URL 验证、curl 安全、html_to_text、输出 redacted、工具 danger level、命令注册、help 文本、禁用降级、重定向安全、Content-Type 验证、endpoint 验证、URL 编码）
+- `scripts/web_tools_smoke.py`（31 项：URL 验证、curl 安全、html_to_text、输出 redacted、工具 danger level、命令注册、help 文本、禁用降级、重定向安全、Content-Type 验证、endpoint 验证、URL 编码、API 密钥安全、扩展 IP 拦截）
 - `scripts/research_smoke.py`（14 项：搜索禁用降级、结果规范化、证据包、READ-only 工具、项目研究降级、域名去重、输出 redacted、混合提示词）
 
 ### 6.6 Telegram 实时烟测（手动）
