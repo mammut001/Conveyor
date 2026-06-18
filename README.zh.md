@@ -588,7 +588,15 @@ Smoke：`scripts/project_io_smoke.py`（15 项：导出单个/全部项目、无
 
 安全性：所有工具都是 READ-only。URL 验证拒绝 localhost、私有 IP 和元数据端点。无文件写入、无任意 curl、无 JS 执行。所有输出经过 `redact_text()` + `truncate()` 处理。
 
-Smoke：`scripts/web_tools_smoke.py`（16 项）、`scripts/research_smoke.py`（12 项）。
+**安全加固（P4.1.1）：**
+- 禁用自动重定向（`--no-location`），每跳需单独验证
+- Content-Type 验证：仅允许 text/*、application/json、application/xml
+- WEB_SEARCH_ENDPOINT 验证：拒绝 localhost/私有 IP
+- 搜索查询 URL 编码：正确处理中文和特殊字符
+- 研究工具使用 Codex 混合合成（`[HYBRID_PROMPT]`）
+- WEB_SEARCH_API_KEY 永远不会出现在错误信息、日志或聊天输出中
+
+Smoke：`scripts/web_tools_smoke.py`（23 项）、`scripts/research_smoke.py`（14 项）。
 
 **Telegram slash 命令：** 新 ops/tool 命令（`/load`、`/tools`、`/disk` 等）在 `COMMAND_TABLE` 注册，并通过 `bot.py` 中的通用 `MessageHandler(filters.COMMAND, …)` fallback 到达（位于显式 `CommandHandler` 之后、纯文本 handler 之前），确保未知 slash 命令仍能进入 `dispatch()` → `COMMAND_TABLE`。
 

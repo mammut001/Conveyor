@@ -624,11 +624,14 @@ URL 验证：
 - 解析主机名并拒绝私有 IP 结果
 
 Curl 安全：
-- `--fail --silent --show-error --location`
-- `--max-redirs`（默认 3）
+- `--fail --silent --show-error --no-location`（禁用自动重定向）
 - `--connect-timeout 5`
 - `--max-time`（默认 10 秒）
 - `--max-filesize`（默认 2MB）
+- `--proto =http,https`（无 cookies、无 auth headers、无文件写入）
+- `shell=False`（subprocess 安全）
+- Content-Type 验证：仅允许 text/*、application/json、application/xml
+- WEB_SEARCH_ENDPOINT 验证：拒绝 localhost/私有 IP
 - `--proto =http,https --proto-redir =http,https`
 - 无 cookies、无 auth headers、无文件写入
 - `shell=False`（subprocess 安全）
@@ -658,7 +661,7 @@ Research 流程：
 2. 去重域名
 3. 获取 top N 安全 URL 的内容
 4. 构建证据包（source title/url/snippet/text excerpt）
-5. 构建研究提示词给 Codex 综合分析
+5. 返回 `[HYBRID_PROMPT]` 标记，由 Codex 混合合成生成研究报告
 6. 不使用 WRITE 工具
 
 项目研究（`/project_research`）：
@@ -697,8 +700,8 @@ Research 流程：
 | `RESEARCH_MAX_CHARS_PER_SOURCE` | 6000 | 每来源最大字符 |
 
 Smoke：
-- `scripts/web_tools_smoke.py`（16 项：URL 验证、curl 安全、html_to_text、输出 redacted、工具 danger level、命令注册、help 文本、禁用降级）
-- `scripts/research_smoke.py`（12 项：搜索禁用降级、结果规范化、证据包、READ-only 工具、项目研究降级、域名去重、输出 redacted）
+- `scripts/web_tools_smoke.py`（23 项：URL 验证、curl 安全、html_to_text、输出 redacted、工具 danger level、命令注册、help 文本、禁用降级、重定向安全、Content-Type 验证、endpoint 验证、URL 编码）
+- `scripts/research_smoke.py`（14 项：搜索禁用降级、结果规范化、证据包、READ-only 工具、项目研究降级、域名去重、输出 redacted、混合提示词）
 
 ### 6.6 Telegram 实时烟测（手动）
 

@@ -705,7 +705,15 @@ Safety: All tools are READ-only. URL validation rejects localhost,
 private IPs, and metadata endpoints. No file writes, no arbitrary
 curl, no JS execution. All output passes `redact_text()` + `truncate()`.
 
-Smoke: `scripts/web_tools_smoke.py` (16 cases), `scripts/research_smoke.py` (12 cases).
+**Security Hardening (P4.1.1):**
+- Redirects disabled (--no-location), each hop validated separately
+- Content-Type validation: only text/*, application/json, application/xml allowed
+- WEB_SEARCH_ENDPOINT validation: rejects localhost/private IPs
+- URL encoding: search queries properly encoded for all backends
+- Research uses Codex hybrid synthesis ([HYBRID_PROMPT])
+- WEB_SEARCH_API_KEY never appears in errors, logs, or chat output
+
+Smoke: `scripts/web_tools_smoke.py` (23 cases), `scripts/research_smoke.py` (14 cases).
 
 **Telegram slash commands:** New ops/tool commands (`/load`, `/tools`,
 `/disk`, …) are registered in `COMMAND_TABLE` and reached via a

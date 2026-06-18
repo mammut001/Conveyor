@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config: WEB_FETCH_*, WEB_SEARCH_*, RESEARCH_* settings
 - Natural language routing: "搜索 Python asyncio", "研究一下 AI 编程助手", "获取网页 https://example.com"
 
+### Fixed
+
+#### Web Search + Research Hardening (P4.1.1)
+- Redirect safety: disabled automatic redirects (--no-location), each hop must be validated
+- Content-Type validation: only allows text/*, application/json, application/xml
+- WEB_SEARCH_ENDPOINT validation: rejects localhost/private/link-local/metadata endpoints
+- URL encoding: search queries are properly URL encoded for all backends
+- Research behavior: /research and /project_research now use Codex hybrid synthesis
+- Redaction: WEB_SEARCH_API_KEY never appears in errors, repr, audit, or chat output
+
 ## [0.1.0] - 2026-06-17
 
 ### Added

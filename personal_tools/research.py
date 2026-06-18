@@ -112,7 +112,10 @@ def _build_research_prompt(question: str, evidence_pack: str) -> str:
 
 
 def research_collect(settings: Settings, question: str) -> ToolResult:
-    """Run research: search + fetch + build evidence pack."""
+    """Run research: search + fetch + build evidence pack.
+    
+    Returns [HYBRID_PROMPT] prefix for Codex synthesis.
+    """
     question = question.strip()
     if not question:
         return ToolResult(ok=False, text="⚠️ 用法: /research <问题>")
@@ -134,11 +137,11 @@ def research_collect(settings: Settings, question: str) -> ToolResult:
         settings.research_max_chars_per_source,
     )
 
-    # Step 4: Build evidence pack
+    # Step 4: Build evidence pack and return as hybrid prompt
     evidence_pack = _build_evidence_pack(evidence)
     prompt = _build_research_prompt(question, evidence_pack)
 
-    return ToolResult(ok=True, text=truncate(prompt))
+    return ToolResult(ok=True, text=f"[HYBRID_PROMPT]{prompt}")
 
 
 def project_research_collect(
@@ -147,7 +150,10 @@ def project_research_collect(
     question: str,
     project_id: str = "",
 ) -> ToolResult:
-    """Run research with project context."""
+    """Run research with project context.
+    
+    Returns [HYBRID_PROMPT] prefix for Codex synthesis.
+    """
     from personal_tools.store import PersonalToolsStore
 
     question = question.strip()
@@ -221,7 +227,7 @@ def project_research_collect(
         f"6. 💡 对项目的建议\n"
     )
 
-    return ToolResult(ok=True, text=truncate(prompt))
+    return ToolResult(ok=True, text=f"[HYBRID_PROMPT]{prompt}")
 
 
 # --- Adapters for personal_tools/registry.py ---

@@ -84,25 +84,55 @@ def validate_url(url: str) -> tuple[bool, str]:
 
 
 def _curl_argv(url: str, settings: Settings, *, headers_only: bool = False) -> list[str]:
-    """Build safe curl argv. Always uses shell=False."""
+    """Build safe curl argv. Always uses shell=False.
+    
+    MVP safety: no automatic redirects. Each redirect hop must be
+    validated separately by the caller (fetch_text/fetch_headers).
+    """
     argv = [
         "curl",
         "--fail",
         "--silent",
         "--show-error",
-        "--location",
-        "--max-redirs", str(settings.web_fetch_max_redirects),
+        "--no-location",  # No automatic redirects
         "--connect-timeout", "5",
         "--max-time", str(settings.web_fetch_timeout_seconds),
         "--max-filesize", str(settings.web_fetch_max_bytes),
         "--proto", "=http,https",
-        "--proto-redir", "=http,https",
         "--user-agent", settings.web_user_agent,
     ]
     if headers_only:
         argv.append("--head")
     argv.append(url)
     return argv
+
+
+def _check_content_type(headers_text: str) -> tuple[bool, str]:
+    """Check Content-Type header for allowed types.
+    
+    Allowed: text/*, application/json, application/xml.
+    Returns (ok, error_msg).
+    """
+    import re
+    allowed_types = (
+        "text/",
+        "application/json",
+        "application/xml",
+        "application/xhtml+xml",
+        "application/rss+xml",
+        "application/atom+xml",
+    )
+    # Extract Content-Type from headers
+    match = re.search(r"content-type:\s*(.+?)(?:\s*;|$)", headers_text, re.IGNORECASE)
+    if not match:
+        return True, ""  # No Content-Type header, allow (will be caught by content check)
+    
+    content_type = match.group(1).strip().lower()
+    for allowed in allowed_types:
+        if content_type.startswith(allowed):
+            return True, ""
+    
+    return False, f"不支持的内容类型: {content_type}"
 
 
 def _run_curl(argv: list[str]) -> tuple[int, str, str]:
@@ -150,6 +180,15 @@ def fetch_text(settings: Settings, url: str) -> ToolResult:
     if not ok:
         return ToolResult(ok=False, text=f"⚠️ URL 验证失败: {err}")
 
+    # First, check Content-Type via HEAD
+    head_argv = _curl_argv(url, settings, headers_only=True)
+    rc, head_out, head_err = _run_curl(head_argv)
+    if rc == 0:
+        ct_ok, ct_err = _check_content_type(head_out)
+        if not ct_ok:
+            return ToolResult(ok=False, text=f"⚠️ {ct_err}")
+
+    # Then fetch content
     argv = _curl_argv(url, settings, headers_only=False)
     rc, stdout, stderr = _run_curl(argv)
     if rc != 0:

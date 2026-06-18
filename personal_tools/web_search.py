@@ -10,9 +10,11 @@ import json
 import logging
 import subprocess
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
 from config import Settings
 from personal_tools.base import ToolResult
+from personal_tools.web_fetch import validate_url
 from redaction import redact_text, truncate
 
 logger = logging.getLogger(__name__)
@@ -47,8 +49,7 @@ def _curl_json(url: str, settings: Settings, headers: dict[str, str] | None = No
         "--fail",
         "--silent",
         "--show-error",
-        "--location",
-        "--max-redirs", "3",
+        "--no-location",  # No automatic redirects
         "--connect-timeout", "5",
         "--max-time", str(settings.web_fetch_timeout_seconds),
         "--user-agent", settings.web_user_agent,
@@ -61,7 +62,7 @@ def _curl_json(url: str, settings: Settings, headers: dict[str, str] | None = No
     try:
         result = subprocess.run(argv, capture_output=True, text=True, shell=False, timeout=30)
         if result.returncode != 0:
-            return result.returncode, None, result.stderr
+            return result.returncode, None, redact_text(result.stderr)
         try:
             data = json.loads(result.stdout)
             return 0, data, ""
@@ -72,7 +73,7 @@ def _curl_json(url: str, settings: Settings, headers: dict[str, str] | None = No
     except subprocess.TimeoutExpired:
         return -1, None, "请求超时"
     except Exception as exc:
-        return -1, None, str(exc)
+        return -1, None, redact_text(str(exc))
 
 
 def _search_brave(settings: Settings, query: str, limit: int) -> tuple[list[SearchResult], str]:
@@ -80,7 +81,14 @@ def _search_brave(settings: Settings, query: str, limit: int) -> tuple[list[Sear
     if not settings.web_search_api_key:
         return [], "Brave API key 未配置"
     endpoint = settings.web_search_endpoint or "https://api.search.brave.com/res/v1/web/search"
-    url = f"{endpoint}?q={query}&count={limit}"
+    
+    # Validate endpoint URL
+    ok, err = validate_url(endpoint)
+    if not ok:
+        return [], f"Brave endpoint 无效: {err}"
+    
+    # URL encode query
+    url = f"{endpoint}?{urlencode({'q': query, 'count': limit})}"
     headers = {
         "Accept": "application/json",
         "X-Subscription-Token": settings.web_search_api_key,
@@ -97,6 +105,12 @@ def _search_tavily(settings: Settings, query: str, limit: int) -> tuple[list[Sea
     if not settings.web_search_api_key:
         return [], "Tavily API key 未配置"
     endpoint = settings.web_search_endpoint or "https://api.tavily.com/search"
+    
+    # Validate endpoint URL
+    ok, err = validate_url(endpoint)
+    if not ok:
+        return [], f"Tavily endpoint 无效: {err}"
+    
     payload = json.dumps({
         "api_key": settings.web_search_api_key,
         "query": query,
@@ -104,7 +118,7 @@ def _search_tavily(settings: Settings, query: str, limit: int) -> tuple[list[Sea
     })
     argv = [
         "curl", "--silent", "--fail", "--show-error",
-        "--location", "--max-redirs", "3",
+        "--no-location",  # No automatic redirects
         "--connect-timeout", "5",
         "--max-time", str(settings.web_fetch_timeout_seconds),
         "--header", "Content-Type: application/json",
@@ -127,10 +141,16 @@ def _search_serper(settings: Settings, query: str, limit: int) -> tuple[list[Sea
     if not settings.web_search_api_key:
         return [], "Serper API key 未配置"
     endpoint = settings.web_search_endpoint or "https://google.serper.dev/search"
+    
+    # Validate endpoint URL
+    ok, err = validate_url(endpoint)
+    if not ok:
+        return [], f"Serper endpoint 无效: {err}"
+    
     payload = json.dumps({"q": query, "num": limit})
     argv = [
         "curl", "--silent", "--fail", "--show-error",
-        "--location", "--max-redirs", "3",
+        "--no-location",  # No automatic redirects
         "--connect-timeout", "5",
         "--max-time", str(settings.web_fetch_timeout_seconds),
         "--header", f"X-API-KEY: {settings.web_search_api_key}",
@@ -154,7 +174,14 @@ def _search_searxng(settings: Settings, query: str, limit: int) -> tuple[list[Se
     endpoint = settings.web_search_endpoint
     if not endpoint:
         return [], "SearXNG endpoint 未配置"
-    url = f"{endpoint}/search?q={query}&format=json&pageno=1"
+    
+    # Validate endpoint URL
+    ok, err = validate_url(endpoint)
+    if not ok:
+        return [], f"SearXNG endpoint 无效: {err}"
+    
+    # URL encode query
+    url = f"{endpoint}/search?{urlencode({'q': query, 'format': 'json', 'pageno': 1})}"
     rc, data, err = _curl_json(url, settings)
     if rc != 0 or data is None:
         return [], f"SearXNG 搜索失败: {redact_text(err)}"

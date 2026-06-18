@@ -736,11 +736,13 @@ URL validation:
 - Resolves hostname and rejects private IP results
 
 Curl safety:
-- `--fail --silent --show-error --location`
-- `--max-redirs` (default 3), `--connect-timeout 5`
+- `--fail --silent --show-error --no-location` (redirects disabled)
+- `--connect-timeout 5`
 - `--max-time` (default 10s), `--max-filesize` (default 2MB)
-- `--proto =http,https --proto-redir =http,https`
+- `--proto =http,https`
 - No cookies, no auth headers, no file writes
+- Content-Type validation: only text/*, application/json, application/xml
+- WEB_SEARCH_ENDPOINT validation: rejects localhost/private IPs
 - `shell=False` (subprocess safety)
 
 **Phase B — Web Search**:
@@ -768,7 +770,7 @@ Research flow:
 2. Dedupe domains
 3. Fetch top N safe URLs
 4. Build evidence pack (source title/url/snippet/text excerpt)
-5. Build research prompt for Codex synthesis
+5. Return `[HYBRID_PROMPT]` marker for Codex hybrid synthesis
 6. No WRITE tools used
 
 Project research (`/project_research`):
@@ -807,8 +809,8 @@ Config vars:
 | `RESEARCH_MAX_CHARS_PER_SOURCE` | 6000 | Chars per source |
 
 Smoke:
-- `scripts/web_tools_smoke.py` (16 cases: URL validation, curl safety, html_to_text, output redaction, tool danger levels, command registration, help text, disabled degradation)
-- `scripts/research_smoke.py` (12 cases: search disabled degradation, result normalization, evidence pack, READ-only tools, project research degradation, domain dedup, output redaction)
+- `scripts/web_tools_smoke.py` (23 cases: URL validation, curl safety, html_to_text, output redaction, tool danger levels, command registration, help text, disabled degradation, redirect safety, Content-Type validation, endpoint validation, URL encoding)
+- `scripts/research_smoke.py` (14 cases: search disabled degradation, result normalization, evidence pack, READ-only tools, project research degradation, domain dedup, output redaction, hybrid prompt)
 
 ---
 

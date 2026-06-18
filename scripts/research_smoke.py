@@ -171,6 +171,44 @@ async def _test_output_redacted():
     assert "secret123abc" not in redact_text(text)
 
 
+async def _test_research_returns_hybrid_prompt():
+    """Research returns [HYBRID_PROMPT] marker for Codex synthesis."""
+    from personal_tools.research import research_collect
+    # Mock search_web to return fake results
+    from unittest.mock import patch, MagicMock
+    from personal_tools.web_search import SearchResult
+    
+    fake_results = [
+        SearchResult("Test Title", "https://example.com", "Test snippet", "test", 1),
+    ]
+    
+    with patch("personal_tools.research.search_web", return_value=(fake_results, "")):
+        with patch("personal_tools.research.fetch_text", return_value=MagicMock(ok=True, text="Test content")):
+            settings = _settings()
+            result = research_collect(settings, "test question")
+            assert result.ok, f"Expected ok=True, got {result.ok}"
+            assert result.text.startswith("[HYBRID_PROMPT]"), f"Expected [HYBRID_PROMPT] prefix, got {result.text[:50]}"
+
+
+async def _test_project_research_returns_hybrid_prompt():
+    """Project research returns [HYBRID_PROMPT] marker for Codex synthesis."""
+    from personal_tools.research import project_research_collect
+    from unittest.mock import patch, MagicMock
+    from personal_tools.web_search import SearchResult
+    
+    fake_results = [
+        SearchResult("Test Title", "https://example.com", "Test snippet", "test", 1),
+    ]
+    
+    with tempfile.TemporaryDirectory() as td:
+        settings = _settings(Path(td))
+        with patch("personal_tools.research.search_web", return_value=(fake_results, "")):
+            with patch("personal_tools.research.fetch_text", return_value=MagicMock(ok=True, text="Test content")):
+                result = project_research_collect(settings, "op1", "test question")
+                assert result.ok, f"Expected ok=True, got {result.ok}"
+                assert result.text.startswith("[HYBRID_PROMPT]"), f"Expected [HYBRID_PROMPT] prefix, got {result.text[:50]}"
+
+
 # ---- Runner ----
 
 _TESTS = {
@@ -186,6 +224,8 @@ _TESTS = {
     "evidence pack": _test_evidence_pack,
     "dedupe domains": _test_dedupe_domains,
     "output redacted": _test_output_redacted,
+    "research returns hybrid prompt": _test_research_returns_hybrid_prompt,
+    "project research returns hybrid prompt": _test_project_research_returns_hybrid_prompt,
 }
 
 

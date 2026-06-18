@@ -939,20 +939,22 @@ async def _web_search(msg, port, _runner, settings, arg):
     await port.reply(msg, await run_tool(settings, "web.search", arg))
 
 
-async def _research(msg, port, _runner, settings, arg):
-    from handlers.tools.runner import run_tool
+async def _research(msg, port, runner, settings, arg):
+    from handlers.tools.runner import run_tool, handle_hybrid_project
     if not arg.strip():
         await port.reply(msg, "用法: /research <问题>")
         return
-    await port.reply(msg, await run_tool(settings, "research.run", arg))
+    # Use hybrid synthesis for research
+    await handle_hybrid_project(msg, port, runner, settings, "research.run", arg)
 
 
-async def _project_research(msg, port, _runner, settings, arg):
-    from handlers.tools.runner import run_tool
+async def _project_research(msg, port, runner, settings, arg):
+    from handlers.tools.runner import run_tool, handle_hybrid_project
     if not arg.strip():
         await port.reply(msg, "用法: /project_research [项目ID] <问题>")
         return
-    await port.reply(msg, await run_tool(settings, "research.project", arg, operator_id=msg.operator_id))
+    # Use hybrid synthesis for project research
+    await handle_hybrid_project(msg, port, runner, settings, "research.project", arg)
 
 
 async def _scheduler_status(msg, port, _runner, settings, _arg):

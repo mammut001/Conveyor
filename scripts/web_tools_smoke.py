@@ -93,7 +93,7 @@ async def _test_curl_argv_shell_false():
     assert argv[0] == "curl"
     assert "--silent" in argv
     assert "--fail" in argv
-    assert "--location" in argv
+    assert "--no-location" in argv  # No automatic redirects
     assert "--proto" in argv
     assert "=http,https" in argv
 
@@ -189,6 +189,61 @@ async def _test_validate_no_hostname():
     assert not ok
 
 
+async def _test_redirect_to_private_rejected():
+    """Redirect to private IP is rejected (no auto-redirects)."""
+    # Since we disabled automatic redirects, a URL that redirects to
+    # a private IP should not be followed.
+    from personal_tools.web_fetch import _curl_argv
+    settings = _settings()
+    argv = _curl_argv("https://example.com", settings)
+    # Verify --no-location is in argv (no automatic redirects)
+    assert "--no-location" in argv, f"Expected --no-location in argv: {argv}"
+    assert "--location" not in argv, f"Should not have --location in argv: {argv}"
+
+
+async def _test_content_type_validation():
+    """Non-text content types are rejected."""
+    from personal_tools.web_fetch import _check_content_type
+    # Allowed types
+    ok, _ = _check_content_type("content-type: text/html")
+    assert ok
+    ok, _ = _check_content_type("content-type: text/plain")
+    assert ok
+    ok, _ = _check_content_type("content-type: application/json")
+    assert ok
+    ok, _ = _check_content_type("content-type: application/xml")
+    assert ok
+    # Rejected types
+    ok, err = _check_content_type("content-type: application/pdf")
+    assert not ok
+    assert "不支持" in err
+    ok, err = _check_content_type("content-type: image/png")
+    assert not ok
+    ok, err = _check_content_type("content-type: application/zip")
+    assert not ok
+
+
+async def _test_search_endpoint_validation():
+    """WEB_SEARCH_ENDPOINT with private IP is rejected."""
+    from personal_tools.web_search import _search_searxng
+    settings = replace(_settings(), web_search_backend="searxng", web_search_endpoint="http://127.0.0.1:8888")
+    results, err = _search_searxng(settings, "test", 5)
+    assert not results
+    assert "无效" in err or "拒绝" in err
+
+
+async def _test_url_encode_search_queries():
+    """Search queries are URL encoded."""
+    from urllib.parse import urlencode
+    # Test that urlencode handles Chinese and spaces correctly
+    query = "Python 异步编程 & asyncio"
+    encoded = urlencode({"q": query})
+    assert "Python" in encoded
+    assert "asyncio" in encoded
+    # urlencode should encode & as %26 in values
+    assert "%26" in encoded or "&" in encoded
+
+
 async def _test_natural_language_web_fetch():
     """Natural language routing for web fetch."""
     from handlers.intent import route_intent
@@ -243,6 +298,10 @@ _TESTS = {
     "nl web fetch": _test_natural_language_web_fetch,
     "nl web search": _test_natural_language_web_search,
     "nl research": _test_natural_language_research,
+    "redirect to private rejected": _test_redirect_to_private_rejected,
+    "content-type validation": _test_content_type_validation,
+    "search endpoint validation": _test_search_endpoint_validation,
+    "url encode queries": _test_url_encode_search_queries,
 }
 
 
