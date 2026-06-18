@@ -430,13 +430,13 @@ def route_intent(text: str) -> RouteResult:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("project.release_checklist",))
 
-    # File Search / Knowledge Base intent (P4.2)
+    # File Search / Knowledge Base intent (P4.2 / P4.2.1)
+    # Routes to hybrid via kb.collect_facts which tries KB first, then file search.
     for pat in _FILE_SEARCH_PATTERNS:
         if pat.search(body):
-            # Extract search query
             query = _extract_file_search_query(body)
             if query:
-                return RouteResult(kind="hybrid", tools=("files.search",), question=query)
+                return RouteResult(kind="deterministic", tools=("kb.collect_facts",), arg=query)
             return RouteResult(kind="llm", question=(
                 "用户想搜索本地文件/文档，但没有提供搜索词。请用中文问用户："
                 "「请提供搜索关键词，用 `/files_search <关键词>` 的格式。」"

@@ -422,6 +422,7 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "kb.index": ("/kb_index",),
     "kb.status": ("/kb_status",),
     "kb.search": ("/kb_search",),
+    "kb.collect_facts": ("/kb_collect_facts",),
 }
 
 _TOOL_EXAMPLES: dict[str, str] = {
@@ -504,6 +505,7 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "kb.index": "索引知识库",
     "kb.status": "知识库状态",
     "kb.search": "知识库搜索",
+    "kb.collect_facts": "收集文档证据",
 }
 
 
@@ -965,7 +967,15 @@ async def _project_docs(msg, port, runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /project_docs <查询词>")
         return
-    await handle_hybrid_project(msg, port, runner, settings, "files.search", arg)
+    await handle_hybrid_project(msg, port, runner, settings, "kb.collect_facts", arg)
+
+
+async def _kb_collect_facts(msg, port, runner, settings, arg):
+    from handlers.tools.runner import handle_hybrid_project
+    if not arg.strip():
+        await port.reply(msg, "用法: /kb_collect_facts <查询词>")
+        return
+    await handle_hybrid_project(msg, port, runner, settings, "kb.collect_facts", arg)
 
 
 # Web Fetch / Search / Research (P4.1)
@@ -1343,6 +1353,7 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/kb_index — 索引知识库\n"
     text += "/kb_status — 知识库状态\n"
     text += "/kb_search <查询词> — 搜索知识库\n"
+    text += "/kb_collect_facts <查询词> — 收集本地文档证据 (KB优先)\n"
     text += "/project_docs <查询词> — 搜索项目文档\n"
     text += "自然语言: 「找一下文档里关于 deploy 的说明」「README 里有没有 Gmail 配置」\n"
     text += "\n"
@@ -1536,6 +1547,7 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("kb_status", "知识库状态", _kb_status),
         CommandSpec("kb_search", "搜索知识库", _kb_search, takes_arg=True),
         CommandSpec("project_docs", "搜索项目文档", _project_docs, takes_arg=True),
+        CommandSpec("kb_collect_facts", "收集本地文档证据", _kb_collect_facts, takes_arg=True),
         # Web Fetch / Search / Research (P4.1)
         CommandSpec("web_fetch", "获取网页内容", _web_fetch, takes_arg=True),
         CommandSpec("web_text", "获取网页文本", _web_text, takes_arg=True),

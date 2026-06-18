@@ -1,8 +1,11 @@
-"""personal_tools/file_search.py — File Search for Conveyor (P4.2).
+"""personal_tools/file_search.py — File Search for Conveyor (P4.2 / P4.2.1).
 
 Natural-language-first file search with strict safety boundaries.
 Only allows searching under configured roots, rejects secrets/sensitive files.
 All output passes redact_text + truncate.
+
+Internal functions return structured results with absolute paths for
+safe reading; display paths are for user-facing output only.
 """
 from __future__ import annotations
 
@@ -116,68 +119,69 @@ def list_roots(settings: Settings) -> ToolResult:
     return ToolResult(ok=True, text="\n".join(lines))
 
 
-def search_files(
+def _search_files_internal(
     settings: Settings,
     query: str,
-    *,
-    operator_id: str = "",
-) -> ToolResult:
-    """Search for files matching query in allowed roots."""
-    if not settings.file_search_enabled:
-        return ToolResult(ok=False, text="⚠️ 文件搜索已禁用")
-    
-    query = query.strip()
-    if not query:
-        return ToolResult(ok=False, text="⚠️ 用法: /files_search <查询词>")
-    
+) -> list[dict[str, object]]:
+    """Internal search returning structured results with absolute paths.
+
+    Each result dict has:
+      - absolute_path: resolved path safe for internal reading
+      - display_path: relative path for user-facing output
+      - size: file size in bytes
+      - matches: list of matching line previews
+    """
     allowed_roots = _get_allowed_roots(settings)
     extensions = set(settings.file_search_extensions.split(","))
     max_results = settings.file_search_max_results
     max_bytes = settings.file_search_max_file_bytes
-    
-    results = []
+
+    results: list[dict[str, object]] = []
     seen_paths: set[str] = set()
-    
+
     for root in allowed_roots:
         if not root.exists():
             continue
-        
+
         for path in root.rglob("*"):
             if len(results) >= max_results:
                 break
-            
+
             if not path.is_file():
                 continue
-            
+
             # Check extension
             if path.suffix not in extensions:
                 continue
-            
-            # Check blocked patterns
-            rel_path = str(path.relative_to(root))
+
+            # Check blocked patterns against relative path within root
+            try:
+                rel_path = str(path.relative_to(root))
+            except ValueError:
+                continue
             if _is_blocked_pattern(rel_path):
                 continue
-            
+
             # Check binary
             if _is_binary_file(path):
                 continue
-            
+
             # Check size
             if _is_too_large(path, max_bytes):
                 continue
-            
+
             # Check if already seen (dedup across roots)
             resolved = str(path.resolve())
             if resolved in seen_paths:
                 continue
             seen_paths.add(resolved)
-            
+
             # Search file content
             try:
                 content = path.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            
+
             # Simple case-insensitive search
             if query.lower() in content.lower() or query.lower() in path.name.lower():
                 # Find matching lines
@@ -187,23 +191,42 @@ def search_files(
                         matches.append(f"  L{i}: {line.strip()[:100]}")
                         if len(matches) >= 3:
                             break
-                
+
                 results.append({
-                    "path": str(path),
-                    "rel_path": rel_path,
+                    "absolute_path": resolved,
+                    "display_path": rel_path,
                     "size": path.stat().st_size,
                     "matches": matches,
                 })
-    
+
+    return results
+
+
+def search_files(
+    settings: Settings,
+    query: str,
+    *,
+    operator_id: str = "",
+) -> ToolResult:
+    """Search for files matching query in allowed roots."""
+    if not settings.file_search_enabled:
+        return ToolResult(ok=False, text="⚠️ 文件搜索已禁用")
+
+    query = query.strip()
+    if not query:
+        return ToolResult(ok=False, text="⚠️ 用法: /files_search <查询词>")
+
+    results = _search_files_internal(settings, query)
+
     if not results:
         return ToolResult(ok=True, text=f"未找到匹配 '{query}' 的文件")
-    
+
     lines = [f"搜索结果 ({len(results)} 个文件匹配 '{query}'):", ""]
     for r in results:
-        lines.append(f"📄 {r['rel_path']} ({r['size']} bytes)")
-        lines.extend(r["matches"])
+        lines.append(f"📄 {r['display_path']} ({r['size']} bytes)")
+        lines.extend(r["matches"])  # type: ignore[arg-type]
         lines.append("")
-    
+
     return ToolResult(ok=True, text=truncate(redact_text("\n".join(lines))))
 
 
@@ -260,60 +283,93 @@ def read_file(
     return ToolResult(ok=True, text=truncate(redact_text(content)))
 
 
+def _read_snippet_by_absolute_path(
+    settings: Settings,
+    absolute_path: str,
+    display_path: str,
+    query: str,
+) -> str:
+    """Read a safe snippet from an absolute path.
+
+    Returns a formatted evidence string with display_path, or empty string
+    on any safety/validation failure.
+    """
+    allowed_roots = _get_allowed_roots(settings)
+    path = Path(absolute_path)
+
+    # Verify path is still allowed (defense in depth)
+    if not _is_path_allowed(path, allowed_roots):
+        return ""
+
+    # Verify not blocked
+    if _is_blocked_pattern(display_path):
+        return ""
+
+    if not path.exists() or not path.is_file():
+        return ""
+
+    if _is_binary_file(path):
+        return ""
+
+    max_bytes = settings.file_search_max_file_bytes
+    if _is_too_large(path, max_bytes):
+        return ""
+
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+    # Extract relevant excerpt around first match
+    lines = content.splitlines()
+    for i, line in enumerate(lines):
+        if query.lower() in line.lower():
+            start = max(0, i - 2)
+            end = min(len(lines), i + 8)
+            excerpt = "\n".join(lines[start:end])
+            return f"## {display_path}\n{excerpt}"
+
+    return ""
+
+
 def collect_file_facts(
     settings: Settings,
     operator_id: str,
     query: str,
 ) -> str:
     """Collect file facts for hybrid synthesis.
-    
-    Searches files, reads top snippets, builds evidence pack.
-    Returns a hybrid prompt for Codex.
+
+    Searches files using absolute paths internally, reads top snippets
+    safely, and builds an evidence pack with display paths.
+    Returns an evidence string suitable for Codex synthesis.
     """
     if not settings.file_search_enabled:
         return ""
-    
+
     query = query.strip()
     if not query:
         return ""
-    
-    # Search files
-    search_result = search_files(settings, query, operator_id=operator_id)
-    if not search_result.ok:
+
+    # Use internal search that returns absolute paths
+    results = _search_files_internal(settings, query)
+    if not results:
         return ""
-    
-    # Extract file paths from search results
-    lines = search_result.text.split("\n")
-    file_paths = []
-    for line in lines:
-        if line.startswith("📄 "):
-            # Extract path from "📄 rel_path (size bytes)"
-            path_part = line[2:].split(" (")[0].strip()
-            file_paths.append(path_part)
-    
-    if not file_paths:
-        return ""
-    
-    # Read top snippets
+
+    # Read top snippets using absolute paths
     evidence = []
-    for path_str in file_paths[:3]:  # Top 3 files
-        read_result = read_file(settings, path_str, operator_id=operator_id)
-        if read_result.ok:
-            # Get just the relevant excerpt
-            content = read_result.text
-            # Find the matching section
-            for i, line in enumerate(content.splitlines()):
-                if query.lower() in line.lower():
-                    # Get context around the match
-                    start = max(0, i - 2)
-                    end = min(len(content.splitlines()), i + 5)
-                    excerpt = "\n".join(content.splitlines()[start:end])
-                    evidence.append(f"## {path_str}\n{excerpt}")
-                    break
-    
+    for r in results[:3]:
+        snippet = _read_snippet_by_absolute_path(
+            settings,
+            str(r["absolute_path"]),
+            str(r["display_path"]),
+            query,
+        )
+        if snippet:
+            evidence.append(snippet)
+
     if not evidence:
         return ""
-    
+
     return "\n\n".join(evidence)
 
 

@@ -601,6 +601,13 @@ def register_personal_tools() -> None:
         kb_tools.kb_search_adapter,
         keywords=("知识库搜索", "搜索知识库"),
     )
+    _register(
+        "kb.collect_facts",
+        "收集本地文档证据",
+        DangerLevel.READ,
+        kb_tools.kb_collect_facts_adapter,
+        keywords=("收集证据", "文档证据", "事实收集"),
+    )
 
 
 def get_personal_tool(name: str) -> PersonalToolSpec | None:

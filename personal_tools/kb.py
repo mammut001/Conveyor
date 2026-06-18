@@ -366,6 +366,35 @@ def collect_kb_facts(
     return "\n\n".join(evidence)
 
 
+def collect_evidence(
+    settings: Settings,
+    operator_id: str,
+    query: str,
+) -> str:
+    """Collect evidence for hybrid synthesis, preferring KB when available.
+
+    Strategy:
+    1. Try collect_kb_facts if KB index exists
+    2. Fallback to collect_file_facts
+    3. Return evidence pack suitable for Codex hybrid synthesis
+    """
+    if not settings.file_search_enabled:
+        return ""
+
+    query = query.strip()
+    if not query:
+        return ""
+
+    # Try KB first
+    kb_evidence = collect_kb_facts(settings, operator_id, query)
+    if kb_evidence:
+        return kb_evidence
+
+    # Fallback to direct file search
+    from personal_tools.file_search import collect_file_facts
+    return collect_file_facts(settings, operator_id, query)
+
+
 # --- Adapters for personal_tools/registry.py ---
 
 async def kb_index_adapter(settings: Settings, arg: str, **kw) -> ToolResult:
@@ -381,3 +410,26 @@ async def kb_status_adapter(settings: Settings, arg: str, **kw) -> ToolResult:
 async def kb_search_adapter(settings: Settings, arg: str, **kw) -> ToolResult:
     operator_id = kw.get("operator_id", "")
     return search_kb(settings, arg, operator_id=operator_id)
+
+
+async def kb_collect_facts_adapter(settings: Settings, arg: str, **kw) -> ToolResult:
+    """Adapter for kb.collect_facts tool.
+
+    Returns [HYBRID_PROMPT] prefix for Codex synthesis when evidence is found.
+    """
+    operator_id = kw.get("operator_id", "")
+    query = arg.strip()
+    if not query:
+        return ToolResult(ok=False, text="⚠️ 用法: /kb_collect_facts <查询词>")
+
+    evidence = collect_evidence(settings, operator_id, query)
+    if not evidence:
+        return ToolResult(ok=True, text=f"未找到匹配 '{query}' 的本地文档证据")
+
+    prompt = (
+        f"根据以下本地文档证据回答用户问题。\n"
+        f"问题: {query}\n\n"
+        f"---\n\n{evidence}\n\n---\n\n"
+        f"请基于以上证据给出简洁准确的回答，引用文件路径。如果证据不足请说明。"
+    )
+    return ToolResult(ok=True, text=f"[HYBRID_PROMPT]{prompt}")

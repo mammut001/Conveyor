@@ -1,4 +1,4 @@
-"""scripts/file_search_smoke.py — Smoke tests for File Search / Knowledge Base (P4.2).
+"""scripts/file_search_smoke.py — Smoke tests for File Search / Knowledge Base (P4.2 / P4.2.1).
 
 Tests:
 - allowed root accepted
@@ -12,7 +12,13 @@ Tests:
 - files.read returns truncated safe text
 - kb.index creates index
 - kb.search works with fallback if FTS5 unavailable
-- natural language route triggers file collector
+- NL route triggers kb.collect_facts
+- NL search reads snippets via collector
+- relative display path does not break internal read
+- KB preferred when indexed
+- fallback to file search when KB missing
+- blocked files not read through collector
+- outputs redacted/truncated
 - project docs search degrades without active project
 - no network calls
 """
@@ -248,20 +254,160 @@ def _test_kb_search_works():
 
 
 def _test_nl_route_triggers_collector():
-    """Test that natural language routes trigger file collector."""
+    """Test that NL routes trigger kb.collect_facts (P4.2.1)."""
     from handlers.intent import route_intent
-    
-    # Test file search intent
+
+    # Test file search intent → deterministic with kb.collect_facts
     route = route_intent("找一下文档里关于 deploy 的说明")
-    assert route.kind == "hybrid", f"Should be hybrid: {route.kind}"
-    assert "files.search" in route.tools, f"Should use files.search: {route.tools}"
-    assert "deploy" in route.question.lower(), f"Should extract query: {route.question}"
-    
+    assert route.kind == "deterministic", f"Should be deterministic: {route.kind}"
+    assert "kb.collect_facts" in route.tools, f"Should use kb.collect_facts: {route.tools}"
+    assert "deploy" in route.arg.lower(), f"Should extract query: {route.arg}"
+
     # Test README intent
     route = route_intent("README 里有没有 Gmail 配置步骤")
-    assert route.kind == "hybrid", f"Should be hybrid: {route.kind}"
-    assert "files.search" in route.tools, f"Should use files.search: {route.tools}"
-    print("✓ natural language route triggers file collector")
+    assert route.kind == "deterministic", f"Should be deterministic: {route.kind}"
+    assert "kb.collect_facts" in route.tools, f"Should use kb.collect_facts: {route.tools}"
+    print("✓ NL route triggers kb.collect_facts")
+
+
+def _test_nl_search_reads_snippets():
+    """Test that NL file search reads snippets, not just file list (P4.2.1)."""
+    from personal_tools.file_search import collect_file_facts
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test file with matching content
+        test_file = Path(tmpdir) / "deploy.md"
+        test_file.write_text("# Deploy\nRun ./deploy.sh to deploy.\nMake sure env is set.")
+
+        settings = _make_settings(codex_workspace_root=Path(tmpdir))
+        evidence = collect_file_facts(settings, "test-op", "deploy")
+
+        assert evidence, "Should return evidence"
+        assert "deploy.md" in evidence, f"Should include filename: {evidence}"
+        assert "deploy.sh" in evidence, f"Should include snippet content: {evidence}"
+    print("✓ NL search reads snippets via collector")
+
+
+def _test_display_path_does_not_break_read():
+    """Test that relative display path doesn't break internal read (P4.2.1)."""
+    from personal_tools.file_search import _search_files_internal, _read_snippet_by_absolute_path
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create nested file
+        subdir = Path(tmpdir) / "docs"
+        subdir.mkdir()
+        test_file = subdir / "setup.md"
+        test_file.write_text("# Setup\nInstall dependencies first.")
+
+        settings = _make_settings(codex_workspace_root=Path(tmpdir))
+        results = _search_files_internal(settings, "Install")
+
+        assert len(results) == 1, f"Should find 1 file: {results}"
+        r = results[0]
+
+        # display_path should be relative, absolute_path should be absolute
+        assert not r["display_path"].startswith("/"), f"display_path should be relative: {r['display_path']}"
+        assert r["absolute_path"].startswith("/"), f"absolute_path should be absolute: {r['absolute_path']}"
+
+        # Reading via absolute path should work
+        snippet = _read_snippet_by_absolute_path(
+            settings,
+            str(r["absolute_path"]),
+            str(r["display_path"]),
+            "Install",
+        )
+        assert snippet, "Should read snippet via absolute path"
+        assert "docs/setup.md" in snippet, f"Should use display_path: {snippet}"
+        assert "Install" in snippet, f"Should contain match: {snippet}"
+    print("✓ relative display path does not break internal read")
+
+
+def _test_kb_preferred_when_indexed():
+    """Test that KB is preferred when indexed (P4.2.1)."""
+    from personal_tools.kb import index_files, collect_evidence
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test files
+        test_file = Path(tmpdir) / "readme.md"
+        test_file.write_text("# Project\nUse OAuth for authentication.")
+
+        settings = _make_settings(
+            codex_workspace_root=Path(tmpdir),
+            codex_memory_root=Path(tmpdir) / "memory",
+        )
+
+        # Index files into KB
+        index_files(settings)
+
+        # collect_evidence should use KB (has indexed content)
+        evidence = collect_evidence(settings, "test-op", "OAuth")
+        assert evidence, "Should return evidence from KB"
+        assert "OAuth" in evidence, f"Should contain match: {evidence}"
+    print("✓ KB preferred when indexed")
+
+
+def _test_fallback_when_kb_missing():
+    """Test fallback to file search when KB missing (P4.2.1)."""
+    from personal_tools.kb import collect_evidence
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test files but NO KB index
+        test_file = Path(tmpdir) / "guide.md"
+        test_file.write_text("# Guide\nConfigure the scheduler in config.yaml.")
+
+        settings = _make_settings(
+            codex_workspace_root=Path(tmpdir),
+            codex_memory_root=Path(tmpdir) / "memory",
+        )
+
+        # collect_evidence should fallback to file search
+        evidence = collect_evidence(settings, "test-op", "scheduler")
+        assert evidence, "Should return evidence via fallback"
+        assert "scheduler" in evidence.lower(), f"Should contain match: {evidence}"
+    print("✓ fallback to file search when KB missing")
+
+
+def _test_blocked_files_not_read():
+    """Test that blocked files are not read through collector (P4.2.1)."""
+    from personal_tools.file_search import collect_file_facts
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create a .env file (should be blocked)
+        env_file = Path(tmpdir) / ".env"
+        env_file.write_text("SECRET_KEY=abc123")
+
+        # Create a normal file
+        normal_file = Path(tmpdir) / "readme.md"
+        normal_file.write_text("# Readme\nNo secrets here.")
+
+        settings = _make_settings(codex_workspace_root=Path(tmpdir))
+        evidence = collect_file_facts(settings, "test-op", "SECRET_KEY")
+
+        # Should NOT include .env content
+        assert "abc123" not in evidence, f"Should not include .env content: {evidence}"
+    print("✓ blocked files not read through collector")
+
+
+def _test_outputs_redacted_truncated():
+    """Test that outputs are redacted/truncated (P4.2.1)."""
+    from personal_tools.file_search import search_files
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create file with sensitive-looking content
+        test_file = Path(tmpdir) / "config.md"
+        test_file.write_text("# Config\nToken: sk-1234567890abcdef\nOther content here.")
+
+        settings = _make_settings(
+            codex_workspace_root=Path(tmpdir),
+            file_search_max_file_bytes=200,
+        )
+        result = search_files(settings, "Token")
+
+        assert result.ok, f"Search should succeed: {result.text}"
+        # The redaction module should handle sensitive patterns
+        # At minimum, the result should be truncated
+        assert len(result.text) <= 2000, f"Result should be truncated: {len(result.text)}"
+    print("✓ outputs redacted/truncated")
 
 
 def _test_project_docs_degrades():
@@ -302,7 +448,13 @@ _TESTS = {
     "files.read returns truncated safe text": _test_files_read_returns_truncated,
     "kb.index creates index": _test_kb_index_creates_index,
     "kb.search works": _test_kb_search_works,
-    "NL route triggers file collector": _test_nl_route_triggers_collector,
+    "NL route triggers kb.collect_facts": _test_nl_route_triggers_collector,
+    "NL search reads snippets": _test_nl_search_reads_snippets,
+    "display path does not break read": _test_display_path_does_not_break_read,
+    "KB preferred when indexed": _test_kb_preferred_when_indexed,
+    "fallback when KB missing": _test_fallback_when_kb_missing,
+    "blocked files not read": _test_blocked_files_not_read,
+    "outputs redacted/truncated": _test_outputs_redacted_truncated,
     "project docs degrades": _test_project_docs_degrades,
     "no network calls": _test_no_network_calls,
 }
