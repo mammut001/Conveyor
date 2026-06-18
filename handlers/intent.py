@@ -279,6 +279,18 @@ _PROJECT_RELEASE_PATTERNS = (
     re.compile(r"(发布|release).*(清单|checklist)", re.IGNORECASE),
 )
 
+# File Search / Knowledge Base intent patterns (P4.2)
+_FILE_SEARCH_PATTERNS = (
+    re.compile(r"(找一下|查找|搜索|搜|search).*(文档|文件|file|doc)", re.IGNORECASE),
+    re.compile(r"(文档|文件|file|doc).*(里|中|内).*(关于|about|有没有|怎么说|contains)", re.IGNORECASE),
+    re.compile(r"(README|文档|说明|doc).*(里|中).*(有没有|怎么说|关于|about)", re.IGNORECASE),
+    re.compile(r"(本地|local).*(文档|文件|file|search|搜索)", re.IGNORECASE),
+    re.compile(r"(根据|based on|from).*(本地|local|文档|doc).*(总结|总结|summarize)", re.IGNORECASE),
+    re.compile(r"(notes|笔记|备忘).*(里|中).*(关于|about|有没有|contains)", re.IGNORECASE),
+    re.compile(r"(知识库|kb|knowledge\s*base).*(里|中).*(搜索|search|关于|about)", re.IGNORECASE),
+    re.compile(r"^(搜索|search|找|查找)\s+(本地|local|文档|file|notes)", re.IGNORECASE),
+)
+
 # Web / Research intent patterns (P4.1)
 _WEB_FETCH_PATTERNS = (
     re.compile(r"(获取|抓取|fetch|打开|open).*(网页|页面|web|page|url)", re.IGNORECASE),
@@ -417,6 +429,18 @@ def route_intent(text: str) -> RouteResult:
     for pat in _PROJECT_RELEASE_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("project.release_checklist",))
+
+    # File Search / Knowledge Base intent (P4.2)
+    for pat in _FILE_SEARCH_PATTERNS:
+        if pat.search(body):
+            # Extract search query
+            query = _extract_file_search_query(body)
+            if query:
+                return RouteResult(kind="hybrid", tools=("files.search",), question=query)
+            return RouteResult(kind="llm", question=(
+                "用户想搜索本地文件/文档，但没有提供搜索词。请用中文问用户："
+                "「请提供搜索关键词，用 `/files_search <关键词>` 的格式。」"
+            ))
 
     # Web / Research intent (P4.1)
     for pat in _WEB_FETCH_PATTERNS:
@@ -714,6 +738,43 @@ def _extract_research_query(body: str) -> str:
         return m.group(1).strip()
     # English: "research about <query>" / "learn about <query>"
     m = re.search(r"(?:research|learn|find\s+out)\s+(?:about|on)?\s*(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _extract_file_search_query(body: str) -> str:
+    """Extract search query from natural language file search intent.
+
+    Examples:
+        "找一下文档里关于 deploy 的说明" → "deploy"
+        "README 里有没有 Gmail 配置步骤" → "Gmail 配置步骤"
+        "项目文档怎么说 scheduler" → "scheduler"
+        "根据本地文档总结安装流程" → "安装流程"
+        "查一下我 notes 里关于 OAuth 的内容" → "OAuth"
+    """
+    # Chinese: "找一下/查找/搜索 文档里关于 <query>"
+    m = re.search(r"(?:找一下|查找|搜索|搜)\s*(?:文档|文件|file|doc)?\s*(?:里|中|内)?\s*(?:关于|about)?\s*(.+)", body, re.IGNORECASE)
+    if m:
+        query = m.group(1).strip()
+        # Remove trailing "的说明/内容/步骤" etc.
+        query = re.sub(r"\s*(的|之|的说明|的内容|的步骤|的配置|contains)$", "", query, flags=re.IGNORECASE)
+        if query:
+            return query
+    # "README/文档 里有没有 <query>"
+    m = re.search(r"(?:README|文档|说明|doc)\s*(?:里|中)?\s*(?:有没有|怎么说|contains)\s*(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    # "notes/笔记 里关于 <query>"
+    m = re.search(r"(?:notes|笔记|备忘)\s*(?:里|中)?\s*(?:关于|about|有没有)\s*(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    # "知识库里搜索 <query>"
+    m = re.search(r"(?:知识库|kb|knowledge\s*base)\s*(?:里|中)?\s*(?:搜索|search|关于|about)\s*(.+)", body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    # "根据本地文档总结 <query>"
+    m = re.search(r"(?:根据|based\s+on|from)\s*(?:本地|local|文档|doc)\s*(?:总结|summarize)\s*(.+)", body, re.IGNORECASE)
     if m:
         return m.group(1).strip()
     return ""

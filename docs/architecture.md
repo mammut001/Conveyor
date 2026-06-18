@@ -711,6 +711,97 @@ Smoke：
 - `scripts/web_tools_smoke.py`（31 项：URL 验证、curl 安全、html_to_text、输出 redacted、工具 danger level、命令注册、help 文本、禁用降级、重定向安全、Content-Type 验证、endpoint 验证、URL 编码、API 密钥安全、扩展 IP 拦截）
 - `scripts/research_smoke.py`（14 项：搜索禁用降级、结果规范化、证据包、READ-only 工具、项目研究降级、域名去重、输出 redacted、混合提示词）
 
+**P4.2 文件搜索 + 知识库（File Search / Knowledge Base）**：自然语言优先的文件搜索，自动收集 READ-only 事实。斜杠命令作为后备/调试。
+
+```
+personal_tools/
+  file_search.py             文件搜索（安全边界）
+  kb.py                      知识库（SQLite FTS5）
+handlers/
+  commands.py                文件搜索/KB 命令
+  intent.py                  自然语言路由
+scripts/
+  file_search_smoke.py       文件搜索烟测
+```
+
+**文件搜索（files.search / files.read）：**
+
+| 命令 | 说明 | Danger Level |
+|------|------|--------------|
+| `/files_roots` | 列出搜索根目录 | READ |
+| `/files_search <查询词>` | 搜索文件 | READ |
+| `/files_read <文件路径>` | 读取文件 | READ |
+
+安全边界：
+- 仅允许搜索配置的根目录：CODEX_WORKSPACE_ROOT、CODEX_MEMORY_ROOT/notes、KB_ROOT、FILE_SEARCH_ALLOWED_ROOTS
+- 拒绝敏感文件：.env、secrets/、.ssh/、私钥、token 文件、google_token.json、client_secret.json
+- 拒绝二进制文件（.png、.pdf、.zip 等）
+- 拒绝超大文件（超过 FILE_SEARCH_MAX_FILE_BYTES）
+- 无路径遍历（使用 resolve() 验证）
+- 所有输出经过 redact_text() + truncate() 处理
+
+**知识库（kb.index / kb.search）：**
+
+| 命令 | 说明 | Danger Level |
+|------|------|--------------|
+| `/kb_index` | 索引知识库 | WRITE_SAFE |
+| `/kb_status` | 知识库状态 | READ |
+| `/kb_search <查询词>` | 搜索知识库 | READ |
+
+索引存储：
+- `indexed_files` 表：path, root, size, mtime, sha256, ext, updated_at
+- `file_chunks` 表：file_id, chunk_index, text, text_hash
+- 使用 SQLite FTS5（如果可用），否则 LIKE 回退
+- 增量索引：仅索引新/修改的文件（基于 SHA256）
+
+**项目文档搜索（/project_docs）：**
+
+| 命令 | 说明 | Danger Level |
+|------|------|--------------|
+| `/project_docs <查询词>` | 搜索项目文档 | READ |
+| `/project_kb_search [id] <查询词>` | 搜索项目知识库 | READ |
+
+- 使用项目名称、类型、描述、关键词作为搜索上下文
+- 不修改项目配置
+- 无活跃项目时优雅降级
+
+**自然语言路由：**
+- `找一下文档里关于 deploy 的说明` → files.search "deploy"
+- `README 里有没有 Gmail 配置步骤` → files.search "Gmail 配置步骤"
+- `项目文档怎么说 scheduler` → files.search "scheduler"
+- `根据本地文档总结安装流程` → files.search "安装流程"
+- `查一下我 notes 里关于 OAuth 的内容` → files.search "OAuth"
+- 无查询词时会用中文提示用户提供
+
+**自动事实收集（collect_file_facts）：**
+1. 先搜索 KB（如果已索引）
+2. 回退到直接文件搜索
+3. 读取 top N 安全代码片段
+4. 构建证据包（path + excerpt）
+5. 返回混合提示词给 Codex 综合
+
+安全性：
+- 所有文件/KB 分析命令为 READ-only
+- `kb.index` 为 WRITE_SAFE（审计）
+- 不暴露 secrets、tokens、API keys
+- 不包含完整大文件在提示词中
+- 不发送邮件、不创建 GitHub issues、不写日历事件
+- Smoke 测试中无真实网络调用
+
+配置变量：
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `FILE_SEARCH_ENABLED` | true | 启用文件搜索 |
+| `FILE_SEARCH_ALLOWED_ROOTS` | — | 额外允许的搜索根目录 |
+| `FILE_SEARCH_MAX_FILE_BYTES` | 1000000 | 最大文件大小 |
+| `FILE_SEARCH_MAX_RESULTS` | 10 | 最大结果数 |
+| `FILE_SEARCH_EXTENSIONS` | .md,.txt,.py,.ts,.tsx,.js,.json,.yaml,.yml,.toml | 允许的扩展名 |
+| `KB_ROOT` | CODEX_MEMORY_ROOT/kb | 知识库根目录 |
+| `KB_INDEX_PATH` | CODEX_MEMORY_ROOT/kb_index.sqlite | 索引数据库路径 |
+
+Smoke：
+- `scripts/file_search_smoke.py`（14 项：允许根目录、路径遍历拒绝、.env 拒绝、secrets 目录拒绝、私钥模式 redacted、二进制跳过、超大跳过、files.search 返回片段、files.read 返回截断、kb.index 创建索引、kb.search 工作、NL 路由触发收集器、项目文档降级、无网络调用）
+
 ### 6.6 Telegram 实时烟测（手动）
 
 `scripts/telegram_live_helpers_smoke.py` 覆盖纯函数（`redact`、`validate_restart_target`），**已**进入 `make smoke`。

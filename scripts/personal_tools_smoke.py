@@ -163,6 +163,13 @@ def _test_registry() -> CheckResult:
             "web.search",
             "research.run",
             "research.project",
+            # P4.2 File Search / Knowledge Base
+            "files.list_roots",
+            "files.search",
+            "files.read",
+            "kb.index",
+            "kb.status",
+            "kb.search",
         }
         ok_names = expected == set(PERSONAL_TOOL_REGISTRY)
         add_level = PERSONAL_TOOL_REGISTRY["notes.add"].danger

@@ -601,6 +601,38 @@ Smoke：`scripts/project_io_smoke.py`（15 项：导出单个/全部项目、无
 
 Smoke：`scripts/web_tools_smoke.py`（31 项）、`scripts/research_smoke.py`（14 项）。
 
+**P4.2 — 文件搜索 + 知识库（File Search / Knowledge Base）：** 自然语言优先的文件搜索，自动收集 READ-only 事实。斜杠命令作为后备/调试。
+
+| 命令 | 说明 |
+|------|------|
+| `/files_roots` | 列出搜索根目录 |
+| `/files_search <查询词>` | 搜索文件 |
+| `/files_read <文件路径>` | 读取文件 |
+| `/kb_index` | 索引知识库 |
+| `/kb_status` | 知识库状态 |
+| `/kb_search <查询词>` | 搜索知识库 |
+| `/project_docs <查询词>` | 搜索项目文档 |
+
+**自然语言示例：**
+- `找一下文档里关于 deploy 的说明` → 搜索文件 "deploy"
+- `README 里有没有 Gmail 配置步骤` → 搜索文件 "Gmail 配置步骤"
+- `项目文档怎么说 scheduler` → 搜索文件 "scheduler"
+- `根据本地文档总结安装流程` → 搜索文件 "安装流程"
+- `查一下我 notes 里关于 OAuth 的内容` → 搜索文件 "OAuth"
+
+配置（`FILE_SEARCH_*`、`KB_*`）：
+- `FILE_SEARCH_ENABLED=true` — 启用文件搜索
+- `FILE_SEARCH_ALLOWED_ROOTS` — 额外允许的搜索根目录（逗号分隔）
+- `FILE_SEARCH_MAX_FILE_BYTES=1000000` — 最大文件大小
+- `FILE_SEARCH_MAX_RESULTS=10` — 最大结果数
+- `FILE_SEARCH_EXTENSIONS=.md,.txt,.py,.ts,.tsx,.js,.json,.yaml,.yml,.toml`
+- `KB_ROOT` — 知识库根目录（默认：`CODEX_MEMORY_ROOT/kb`）
+- `KB_INDEX_PATH` — 索引数据库路径（默认：`CODEX_MEMORY_ROOT/kb_index.sqlite`）
+
+安全性：所有文件/KB 分析命令为 READ-only。`kb.index` 为 WRITE_SAFE（审计）。拒绝敏感文件（.env、secrets/、.ssh/、私钥、token 文件、google_token.json、client_secret.json、二进制文件、超大文件）。所有输出经过 `redact_text()` + `truncate()` 处理。无文件写入（除 KB 索引元数据/缓存）。无删除文件。无任意路径遍历。
+
+Smoke：`scripts/file_search_smoke.py`（14 项）。
+
 **Telegram slash 命令：** 新 ops/tool 命令（`/load`、`/tools`、`/disk` 等）在 `COMMAND_TABLE` 注册，并通过 `bot.py` 中的通用 `MessageHandler(filters.COMMAND, …)` fallback 到达（位于显式 `CommandHandler` 之后、纯文本 handler 之前），确保未知 slash 命令仍能进入 `dispatch()` → `COMMAND_TABLE`。
 
 ### 本机运维快路径（legacy slash 命令）

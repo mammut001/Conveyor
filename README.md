@@ -718,6 +718,38 @@ curl, no JS execution. All output passes `redact_text()` + `truncate()`.
 
 Smoke: `scripts/web_tools_smoke.py` (31 cases), `scripts/research_smoke.py` (14 cases).
 
+**P4.2 — File Search / Knowledge Base:** Natural-language-first file search with automatic READ-only fact collection. Slash commands are fallbacks for debugging.
+
+| Command | What it does |
+|---------|--------------|
+| `/files_roots` | List search root directories |
+| `/files_search <query>` | Search files |
+| `/files_read <path>` | Read file content |
+| `/kb_index` | Index knowledge base |
+| `/kb_status` | Knowledge base status |
+| `/kb_search <query>` | Search knowledge base |
+| `/project_docs <query>` | Search project docs |
+
+**Natural language examples:**
+- `find deploy instructions in docs` → search files for "deploy"
+- `does README have Gmail setup steps` → search files for "Gmail setup steps"
+- `what does project docs say about scheduler` → search files for "scheduler"
+- `summarize installation process from local docs` → search files for "installation process"
+- `check my notes for OAuth content` → search files for "OAuth"
+
+Configuration (`FILE_SEARCH_*`, `KB_*`):
+- `FILE_SEARCH_ENABLED=true` — Enable file search
+- `FILE_SEARCH_ALLOWED_ROOTS` — Extra allowed search roots (comma-separated)
+- `FILE_SEARCH_MAX_FILE_BYTES=1000000` — Max file size
+- `FILE_SEARCH_MAX_RESULTS=10` — Max results
+- `FILE_SEARCH_EXTENSIONS=.md,.txt,.py,.ts,.tsx,.js,.json,.yaml,.yml,.toml`
+- `KB_ROOT` — Knowledge base root (default: `CODEX_MEMORY_ROOT/kb`)
+- `KB_INDEX_PATH` — Index database path (default: `CODEX_MEMORY_ROOT/kb_index.sqlite`)
+
+Safety: All file/KB analysis commands are READ-only. `kb.index` is WRITE_SAFE (audited). Rejects sensitive files (.env, secrets/, .ssh/, private keys, token files, google_token.json, client_secret.json, binary files, oversized files). All output passes `redact_text()` + `truncate()`. No file writes except KB index metadata/cache. No file deletion. No arbitrary path traversal.
+
+Smoke: `scripts/file_search_smoke.py` (14 cases).
+
 **Telegram slash commands:** New ops/tool commands (`/load`, `/tools`,
 `/disk`, …) are registered in `COMMAND_TABLE` and reached via a
 generic `MessageHandler(filters.COMMAND, …)` fallback in `bot.py` (after

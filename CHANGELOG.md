@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### File Search / Knowledge Base (P4.2)
+- Natural-language-first file search with automatic READ-only fact collection
+- File search with strict safety boundaries (only configured roots allowed)
+- Knowledge Base with SQLite FTS5 for fast full-text search
+- Rejects sensitive files (.env, secrets/, .ssh/, private keys, tokens, binary files)
+- Commands: /files_roots, /files_search, /files_read, /kb_index, /kb_status, /kb_search, /project_docs
+- Config: FILE_SEARCH_*, KB_ROOT, KB_INDEX_PATH settings
+- Natural language routing: "找一下文档里关于 deploy 的说明", "README 里有没有 Gmail 配置", "根据本地文档总结安装流程"
+- Auto fact collection for hybrid synthesis
+
 #### Web Search + Research (P4.1)
 - Web Fetch MVP: READ-only curl wrapper with strict URL validation
 - URL validation rejects localhost, private IPs, metadata endpoints

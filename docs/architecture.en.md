@@ -823,6 +823,97 @@ Smoke:
 - `scripts/web_tools_smoke.py` (31 cases: URL validation, curl safety, html_to_text, output redaction, tool danger levels, command registration, help text, disabled degradation, redirect safety, Content-Type validation, endpoint validation, URL encoding, API key safety, expanded IP blocking)
 - `scripts/research_smoke.py` (14 cases: search disabled degradation, result normalization, evidence pack, READ-only tools, project research degradation, domain dedup, output redaction, hybrid prompt)
 
+**P4.2 File Search / Knowledge Base:** Natural-language-first file search with automatic READ-only fact collection. Slash commands are fallbacks for debugging.
+
+```
+personal_tools/
+  file_search.py             File search (safe boundaries)
+  kb.py                      Knowledge base (SQLite FTS5)
+handlers/
+  commands.py                File search/KB commands
+  intent.py                  Natural language routing
+scripts/
+  file_search_smoke.py       File search smoke tests
+```
+
+**File Search (files.search / files.read):**
+
+| Command | Notes | Danger Level |
+|---------|-------|--------------|
+| `/files_roots` | List search root directories | READ |
+| `/files_search <query>` | Search files | READ |
+| `/files_read <path>` | Read file content | READ |
+
+Safety boundaries:
+- Only allows searching under configured roots: CODEX_WORKSPACE_ROOT, CODEX_MEMORY_ROOT/notes, KB_ROOT, FILE_SEARCH_ALLOWED_ROOTS
+- Rejects sensitive files: .env, secrets/, .ssh/, private keys, token files, google_token.json, client_secret.json
+- Rejects binary files (.png, .pdf, .zip, etc.)
+- Rejects oversized files (exceeds FILE_SEARCH_MAX_FILE_BYTES)
+- No path traversal (uses resolve() validation)
+- All output passes `redact_text()` + `truncate()`
+
+**Knowledge Base (kb.index / kb.search):**
+
+| Command | Notes | Danger Level |
+|---------|-------|--------------|
+| `/kb_index` | Index knowledge base | WRITE_SAFE |
+| `/kb_status` | Knowledge base status | READ |
+| `/kb_search <query>` | Search knowledge base | READ |
+
+Index storage:
+- `indexed_files` table: path, root, size, mtime, sha256, ext, updated_at
+- `file_chunks` table: file_id, chunk_index, text, text_hash
+- Uses SQLite FTS5 (if available), otherwise LIKE fallback
+- Incremental indexing: only indexes new/modified files (based on SHA256)
+
+**Project Doc Search (/project_docs):**
+
+| Command | Notes | Danger Level |
+|---------|-------|--------------|
+| `/project_docs <query>` | Search project docs | READ |
+| `/project_kb_search [id] <query>` | Search project KB | READ |
+
+- Uses project name, type, description, keywords as search context
+- Does not mutate project profiles
+- Degrades gracefully without active project
+
+**Natural language routing:**
+- `find deploy instructions in docs` → files.search "deploy"
+- `does README have Gmail setup steps` → files.search "Gmail setup steps"
+- `what does project docs say about scheduler` → files.search "scheduler"
+- `summarize installation process from local docs` → files.search "installation process"
+- `check my notes for OAuth content` → files.search "OAuth"
+- Prompts user in Chinese when query is missing
+
+**Auto fact collection (collect_file_facts):**
+1. Search KB first (if indexed)
+2. Fallback to direct file search
+3. Read top N safe code snippets
+4. Build evidence pack (path + excerpt)
+5. Return hybrid prompt for Codex synthesis
+
+Safety:
+- All file/KB analysis commands are READ-only
+- `kb.index` is WRITE_SAFE (audited)
+- Never exposes secrets, tokens, API keys
+- Does not include full large files in prompts
+- No sending email, no creating GitHub issues, no writing calendar events
+- No real network calls in smoke tests
+
+Config vars:
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `FILE_SEARCH_ENABLED` | true | Enable file search |
+| `FILE_SEARCH_ALLOWED_ROOTS` | — | Extra allowed search roots |
+| `FILE_SEARCH_MAX_FILE_BYTES` | 1000000 | Max file size |
+| `FILE_SEARCH_MAX_RESULTS` | 10 | Max results |
+| `FILE_SEARCH_EXTENSIONS` | .md,.txt,.py,.ts,.tsx,.js,.json,.yaml,.yml,.toml | Allowed extensions |
+| `KB_ROOT` | CODEX_MEMORY_ROOT/kb | Knowledge base root |
+| `KB_INDEX_PATH` | CODEX_MEMORY_ROOT/kb_index.sqlite | Index database path |
+
+Smoke:
+- `scripts/file_search_smoke.py` (14 cases: allowed root, path traversal rejection, .env rejection, secrets directory rejection, private key redaction, binary skip, oversized skip, files.search snippets, files.read truncation, kb.index creation, kb.search fallback, NL route trigger, project docs degradation, no network calls)
+
 ---
 
 ## 6.6 Telegram live smoke

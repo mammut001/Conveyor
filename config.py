@@ -111,6 +111,14 @@ class Settings:
     research_max_sources: int = 5
     research_fetch_top_n: int = 5
     research_max_chars_per_source: int = 6000
+    # File Search / Knowledge Base (P4.2). Natural-language-first file search.
+    file_search_enabled: bool = True
+    file_search_allowed_roots: str | None = None  # comma-separated extra roots
+    file_search_max_file_bytes: int = 1000000
+    file_search_max_results: int = 10
+    file_search_extensions: str = ".md,.txt,.py,.ts,.tsx,.js,.json,.yaml,.yml,.toml"
+    kb_root: str | None = None  # default: codex_memory_root/kb
+    kb_index_path: str | None = None  # default: codex_memory_root/kb_index.sqlite
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -309,6 +317,14 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "research_max_sources": _int_env("RESEARCH_MAX_SOURCES", 5),
         "research_fetch_top_n": _int_env("RESEARCH_FETCH_TOP_N", 5),
         "research_max_chars_per_source": _int_env("RESEARCH_MAX_CHARS_PER_SOURCE", 6000),
+        # File Search / Knowledge Base (P4.2)
+        "file_search_enabled": os.getenv("FILE_SEARCH_ENABLED", "true").strip().lower() in ("true", "1", "yes"),
+        "file_search_allowed_roots": os.getenv("FILE_SEARCH_ALLOWED_ROOTS") or None,
+        "file_search_max_file_bytes": _int_env("FILE_SEARCH_MAX_FILE_BYTES", 1000000),
+        "file_search_max_results": _int_env("FILE_SEARCH_MAX_RESULTS", 10),
+        "file_search_extensions": os.getenv("FILE_SEARCH_EXTENSIONS", ".md,.txt,.py,.ts,.tsx,.js,.json,.yaml,.yml,.toml"),
+        "kb_root": os.getenv("KB_ROOT") or None,
+        "kb_index_path": os.getenv("KB_INDEX_PATH") or None,
     }
 
 

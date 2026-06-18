@@ -23,6 +23,8 @@ from personal_tools import project_io as project_io_tools
 from personal_tools import web_fetch as web_fetch_tools
 from personal_tools import web_search as web_search_tools
 from personal_tools import research as research_tools
+from personal_tools import file_search as file_search_tools
+from personal_tools import kb as kb_tools
 
 if TYPE_CHECKING:
     pass
@@ -554,6 +556,50 @@ def register_personal_tools() -> None:
         DangerLevel.READ,
         research_tools.project_research_adapter,
         keywords=("项目研究",),
+    )
+    # File Search (P4.2)
+    _register(
+        "files.list_roots",
+        "列出搜索根目录",
+        DangerLevel.READ,
+        file_search_tools.files_list_roots_adapter,
+        keywords=("搜索根目录", "文件根目录"),
+    )
+    _register(
+        "files.search",
+        "搜索文件",
+        DangerLevel.READ,
+        file_search_tools.files_search_adapter,
+        keywords=("搜索文件", "文件搜索"),
+    )
+    _register(
+        "files.read",
+        "读取文件",
+        DangerLevel.READ,
+        file_search_tools.files_read_adapter,
+        keywords=("读取文件",),
+    )
+    # Knowledge Base (P4.2)
+    _register(
+        "kb.index",
+        "索引知识库",
+        DangerLevel.WRITE_SAFE,
+        kb_tools.kb_index_adapter,
+        keywords=("索引", "index"),
+    )
+    _register(
+        "kb.status",
+        "知识库状态",
+        DangerLevel.READ,
+        kb_tools.kb_status_adapter,
+        keywords=("知识库状态",),
+    )
+    _register(
+        "kb.search",
+        "搜索知识库",
+        DangerLevel.READ,
+        kb_tools.kb_search_adapter,
+        keywords=("知识库搜索", "搜索知识库"),
     )
 
 

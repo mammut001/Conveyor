@@ -415,6 +415,13 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "web.search": ("/web_search",),
     "research.run": ("/research",),
     "research.project": ("/project_research",),
+    # File Search / Knowledge Base (P4.2)
+    "files.list_roots": ("/files_roots",),
+    "files.search": ("/files_search",),
+    "files.read": ("/files_read",),
+    "kb.index": ("/kb_index",),
+    "kb.status": ("/kb_status",),
+    "kb.search": ("/kb_search",),
 }
 
 _TOOL_EXAMPLES: dict[str, str] = {
@@ -490,6 +497,13 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "web.search": "搜索",
     "research.run": "研究",
     "research.project": "项目研究",
+    # File Search / Knowledge Base (P4.2)
+    "files.list_roots": "搜索根目录",
+    "files.search": "搜索文件",
+    "files.read": "读取文件",
+    "kb.index": "索引知识库",
+    "kb.status": "知识库状态",
+    "kb.search": "知识库搜索",
 }
 
 
@@ -905,6 +919,55 @@ async def _project_template(msg, port, _runner, settings, arg):
     await port.reply(msg, await run_tool(settings, "project.template", arg))
 
 
+# File Search / Knowledge Base (P4.2)
+
+async def _files_roots(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "files.list_roots"))
+
+
+async def _files_search(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /files_search <查询词>")
+        return
+    await port.reply(msg, await run_tool(settings, "files.search", arg))
+
+
+async def _files_read(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /files_read <文件路径>")
+        return
+    await port.reply(msg, await run_tool(settings, "files.read", arg))
+
+
+async def _kb_index(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(msg, port, settings, "kb.index", "")
+
+
+async def _kb_status(msg, port, _runner, settings, _arg):
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "kb.status"))
+
+
+async def _kb_search(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import run_tool
+    if not arg.strip():
+        await port.reply(msg, "用法: /kb_search <查询词>")
+        return
+    await port.reply(msg, await run_tool(settings, "kb.search", arg))
+
+
+async def _project_docs(msg, port, runner, settings, arg):
+    from handlers.tools.runner import handle_hybrid_project
+    if not arg.strip():
+        await port.reply(msg, "用法: /project_docs <查询词>")
+        return
+    await handle_hybrid_project(msg, port, runner, settings, "files.search", arg)
+
+
 # Web Fetch / Search / Research (P4.1)
 
 async def _web_fetch(msg, port, _runner, settings, arg):
@@ -1273,6 +1336,16 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/project_import <JSON> — 从 JSON 导入项目\n"
     text += "/project_template [type] — 查看项目模板\n"
     text += "\n"
+    text += "File Search / Knowledge Base (P4.2):\n"
+    text += "/files_roots — 列出搜索根目录\n"
+    text += "/files_search <查询词> — 搜索文件\n"
+    text += "/files_read <文件路径> — 读取文件\n"
+    text += "/kb_index — 索引知识库\n"
+    text += "/kb_status — 知识库状态\n"
+    text += "/kb_search <查询词> — 搜索知识库\n"
+    text += "/project_docs <查询词> — 搜索项目文档\n"
+    text += "自然语言: 「找一下文档里关于 deploy 的说明」「README 里有没有 Gmail 配置」\n"
+    text += "\n"
     text += "Web / Research (P4.1):\n"
     text += "/web_fetch <url> — 获取网页内容\n"
     text += "/web_text <url> — 获取网页文本\n"
@@ -1455,6 +1528,14 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("project_export_all", "导出所有项目", _project_export_all),
         CommandSpec("project_import", "从 JSON 导入项目", _project_import, takes_arg=True),
         CommandSpec("project_template", "项目模板", _project_template, takes_optional_arg=True),
+        # File Search / Knowledge Base (P4.2)
+        CommandSpec("files_roots", "列出搜索根目录", _files_roots),
+        CommandSpec("files_search", "搜索文件", _files_search, takes_arg=True),
+        CommandSpec("files_read", "读取文件", _files_read, takes_arg=True),
+        CommandSpec("kb_index", "索引知识库", _kb_index),
+        CommandSpec("kb_status", "知识库状态", _kb_status),
+        CommandSpec("kb_search", "搜索知识库", _kb_search, takes_arg=True),
+        CommandSpec("project_docs", "搜索项目文档", _project_docs, takes_arg=True),
         # Web Fetch / Search / Research (P4.1)
         CommandSpec("web_fetch", "获取网页内容", _web_fetch, takes_arg=True),
         CommandSpec("web_text", "获取网页文本", _web_text, takes_arg=True),
