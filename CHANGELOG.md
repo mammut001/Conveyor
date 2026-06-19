@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support tag legend explains what each tag means
 - 28 smoke tests covering catalog, routing, safety, categories, and /nl_help honesty
 
+#### NL Router Final Polish (P4.3.2)
+- `queue.status` registered in host TOOL_REGISTRY (previously only in personal tools)
+- `_build_catalog` now correctly propagates `nl_support` from `_DOMAIN_DEFS` to `ToolCatalogEntry`
+- `/nl_help` support tags now accurately reflect tool capabilities
+- 35 smoke tests covering all P4.3.1 + new queue.status registry, routing, and nl_support propagation
+
 #### File Search / Knowledge Base (P4.2)
 - Natural-language-first file search with automatic READ-only fact collection
 - File search with strict safety boundaries (only configured roots allowed)

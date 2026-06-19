@@ -513,6 +513,135 @@ def _test_nl_help_honest_tags():
     print("[pass] nl_help_honest_tags")
 
 
+# ---- Test 29: queue.status in host TOOL_REGISTRY ----------------------------
+
+def _test_queue_status_in_registry():
+    """queue.status exists in get_tool registry."""
+    from handlers.tools.registry import get_tool
+    tool = get_tool("queue.status")
+    if not tool:
+        _fail("queue_status_in_registry", "queue.status not in TOOL_REGISTRY")
+        return
+    from handlers.tools.registry import DangerLevel
+    if tool.danger != DangerLevel.READ:
+        _fail("queue_status_in_registry", f"danger={tool.danger}, expected READ")
+        return
+    print("[pass] queue_status_in_registry")
+
+
+# ---- Test 30: queue.status routes correctly ---------------------------------
+
+def _test_queue_status_routes():
+    """'队列状态' routes to queue.status and run_tool works."""
+    from handlers.intent import route_intent
+    result = route_intent("队列状态")
+    if result.kind != "deterministic":
+        _fail("queue_status_routes", f"kind={result.kind}")
+        return
+    if "queue.status" not in result.tools:
+        _fail("queue_status_routes", f"tools={result.tools}")
+        return
+    print("[pass] queue_status_routes")
+
+
+# ---- Test 31: scheduler_status does not route from "队列状态" ----------------
+
+def _test_scheduler_not_queue():
+    """'调度器状态' does NOT route to queue.status."""
+    from handlers.intent import route_intent
+    result = route_intent("调度器状态")
+    # scheduler_status is example-only, should go to llm
+    if result.kind == "deterministic" and result.tools and "queue.status" in result.tools:
+        _fail("scheduler_not_queue", "scheduler_status incorrectly routed to queue.status")
+        return
+    print("[pass] scheduler_not_queue")
+
+
+# ---- Test 32: /nl_help shows [示例] for example-only entries ----------------
+
+def _test_nl_help_example_tag():
+    """/nl_help shows [示例] for example-only entries like project.export."""
+    from handlers.nl_router import build_nl_help
+    text = build_nl_help()
+    # project.export is marked as example-only
+    if "导出项目" not in text:
+        _fail("nl_help_example_tag", "project.export example not in /nl_help")
+        return
+    # Find the line with "导出项目" and check for [示例] tag
+    for line in text.split("\n"):
+        if "导出项目" in line:
+            if "[示例]" not in line:
+                _fail("nl_help_example_tag", f"missing [示例] tag on line: {line}")
+                return
+            break
+    print("[pass] nl_help_example_tag")
+
+
+# ---- Test 33: /nl_help shows [会追问] for clarify entries -------------------
+
+def _test_nl_help_clarify_tag():
+    """/nl_help shows [会追问] for clarify entries like email.send."""
+    from handlers.nl_router import build_nl_help
+    text = build_nl_help()
+    # email.send is marked as clarify
+    if "发邮件给 x" not in text:
+        _fail("nl_help_clarify_tag", "email.send example not in /nl_help")
+        return
+    # Find the line with "发邮件给" and check for [会追问] tag
+    for line in text.split("\n"):
+        if "发邮件给" in line:
+            if "[会追问]" not in line:
+                _fail("nl_help_clarify_tag", f"missing [会追问] tag on line: {line}")
+                return
+            break
+    print("[pass] nl_help_clarify_tag")
+
+
+# ---- Test 34: /nl_help shows [需确认] for confirm entries -------------------
+
+def _test_nl_help_confirm_tag():
+    """/nl_help shows [需确认] for confirm entries like briefing.disable."""
+    from handlers.nl_router import build_nl_help
+    text = build_nl_help()
+    # briefing.disable is marked as confirm
+    if "禁用简报" not in text:
+        _fail("nl_help_confirm_tag", "briefing.disable example not in /nl_help")
+        return
+    # Find the line with "禁用简报" and check for [需确认] tag
+    for line in text.split("\n"):
+        if "禁用简报" in line:
+            if "[需确认]" not in line:
+                _fail("nl_help_confirm_tag", f"missing [需确认] tag on line: {line}")
+                return
+            break
+    print("[pass] nl_help_confirm_tag")
+
+
+# ---- Test 35: nl_support propagation verified --------------------------------
+
+def _test_nl_support_propagation():
+    """nl_support is correctly propagated from domain_def to ToolCatalogEntry."""
+    from handlers.nl_router import get_catalog
+    catalog = get_catalog()
+    # Check a few known entries
+    checks = [
+        ("project.export", "example"),
+        ("email.send", "clarify"),
+        ("briefing.disable", "confirm"),
+        ("reminders.create", "auto"),
+        ("gmail.status", "auto"),
+    ]
+    for tool_name, expected_support in checks:
+        entry = catalog.get(tool_name)
+        if not entry:
+            _fail("nl_support_propagation", f"{tool_name} not in catalog")
+            return
+        if entry.nl_support != expected_support:
+            _fail("nl_support_propagation", f"{tool_name} nl_support={entry.nl_support}, expected {expected_support}")
+            return
+    print("[pass] nl_support_propagation")
+
+
 # ---- Run all tests ----------------------------------------------------------
 
 _TESTS = [
@@ -544,6 +673,13 @@ _TESTS = [
     _test_nl_gmail_search,
     _test_write_safe_auto_category,
     _test_nl_help_honest_tags,
+    _test_queue_status_in_registry,
+    _test_queue_status_routes,
+    _test_scheduler_not_queue,
+    _test_nl_help_example_tag,
+    _test_nl_help_clarify_tag,
+    _test_nl_help_confirm_tag,
+    _test_nl_support_propagation,
 ]
 
 

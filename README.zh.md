@@ -692,7 +692,12 @@ Smoke：`scripts/file_search_smoke.py`（14 项）。
 - 自然语言"队列状态"路由到 `queue.status`
 - "调度器状态"无 NL 路由，使用 `/scheduler_status` 命令
 
-Smoke：`scripts/nl_router_smoke.py`（28 项）。
+Smoke：`scripts/nl_router_smoke.py`（35 项）。
+
+**P4.3.2 — NL 路由器最终修复：** 修复 P4.3.1 遗留问题。
+- `queue.status` 已注册到主 TOOL_REGISTRY（之前仅在 personal tools 中）
+- `_build_catalog` 现在正确从 `_DOMAIN_DEFS` 传播 `nl_support` 到 `ToolCatalogEntry`
+- `/nl_help` 支持级别标记现在准确反映工具能力
 
 **Telegram slash 命令：** 新 ops/tool 命令（`/load`、`/tools`、`/disk` 等）在 `COMMAND_TABLE` 注册，并通过 `bot.py` 中的通用 `MessageHandler(filters.COMMAND, …)` fallback 到达（位于显式 `CommandHandler` 之后、纯文本 handler 之前），确保未知 slash 命令仍能进入 `dispatch()` → `COMMAND_TABLE`。
 

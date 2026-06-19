@@ -809,7 +809,12 @@ Safety policy:
 - Ambiguous coding requests prefer Codex LLM
 - Missing arguments → natural language clarification (not slash format)
 
-Smoke: `scripts/nl_router_smoke.py` (28 cases).
+Smoke: `scripts/nl_router_smoke.py` (35 cases).
+
+**P4.3.2 — NL Router Final Polish:** Fixed remaining P4.3.1 issues.
+- `queue.status` registered in host TOOL_REGISTRY (previously only in personal tools)
+- `_build_catalog` now correctly propagates `nl_support` from `_DOMAIN_DEFS` to `ToolCatalogEntry`
+- `/nl_help` support tags now accurately reflect tool capabilities
 
 **Telegram slash commands:** New ops/tool commands (`/load`, `/tools`,
 `/disk`, …) are registered in `COMMAND_TABLE` and reached via a

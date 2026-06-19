@@ -179,6 +179,13 @@ async def exec_service_restart(_settings: Settings, arg: str) -> str:
     return _safe_truncate(body)
 
 
+async def exec_queue_status(_settings: Settings, _arg: str) -> str:
+    """Return Codex job queue status."""
+    from handlers.job_queue import get_job_queue
+    queue = get_job_queue()
+    return await queue.get_queue_status()
+
+
 def register_builtin_tools() -> None:
     """Populate TOOL_REGISTRY. Called once at import."""
     specs = [
@@ -258,6 +265,13 @@ def register_builtin_tools() -> None:
             danger=DangerLevel.WRITE,
             executor=exec_scheduler_probe_live,
             keywords=("probe live", "实时探针"),
+        ),
+        ToolSpec(
+            name="queue.status",
+            summary="Codex 任务队列状态",
+            danger=DangerLevel.READ,
+            executor=exec_queue_status,
+            keywords=("队列", "queue", "任务队列"),
         ),
     ]
     for spec in specs:

@@ -849,7 +849,7 @@ scripts/
 按领域分组列出自然语言示例，包括：运维、笔记、提醒、邮件、日历、联系人、简报、GitHub、规划、项目、设置、Web、研究、文件、知识库、调度。
 
 Smoke：
-- `scripts/nl_router_smoke.py`（25 项：目录构建、目录字段、NL 路由日历/邮件/GitHub/KB/研究/笔记/提醒/队列/设置、模糊编码走 LLM、确认消息无斜杠、/nl_help 输出、/nl_help 领域分组、/nl_help 注册、WRITE_SAFE 标记、READ 标记、项目模式、NL 示例、斜杠命令可导入、编码守卫、笔记添加、Web 搜索、Gmail 搜索）
+- `scripts/nl_router_smoke.py`（35 项：目录构建、目录字段、NL 路由日历/邮件/GitHub/KB/研究/笔记/提醒/队列/设置、模糊编码走 LLM、确认消息无斜杠、/nl_help 输出、/nl_help 领域分组、/nl_help 注册、WRITE_SAFE 标记、READ 标记、项目模式、NL 示例、斜杠命令可导入、编码守卫、笔记添加、Web 搜索、Gmail 搜索、WRITE_SAFE_AUTO 分类、/nl_help 诚实标记、queue.status 注册表、queue.status 路由、调度器非队列、/nl_help 示例标记、/nl_help 追问标记、/nl_help 确认标记、nl_support 传播）
 
 ### 6.6 Telegram 实时烟测（手动）
 

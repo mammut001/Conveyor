@@ -175,6 +175,7 @@ def _build_catalog() -> dict[str, ToolCatalogEntry]:
             examples_zh=tuple(domain_def.get("examples_zh", ())),
             examples_en=tuple(domain_def.get("examples_en", ())),
             domain=domain_def.get("domain", "其他"),
+            nl_support=domain_def.get("nl_support", "auto"),
         )
 
     # Add personal tools
@@ -190,6 +191,7 @@ def _build_catalog() -> dict[str, ToolCatalogEntry]:
             examples_zh=tuple(domain_def.get("examples_zh", ())),
             examples_en=tuple(domain_def.get("examples_en", ())),
             domain=domain_def.get("domain", "其他"),
+            nl_support=domain_def.get("nl_support", "auto"),
         )
 
     return _CATALOG

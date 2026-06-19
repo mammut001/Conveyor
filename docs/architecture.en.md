@@ -961,7 +961,7 @@ scripts/
 Groups examples by domain: Ops, Notes, Reminders, Email, Calendar, Contacts, Briefing, GitHub, Planner, Projects, Setup, Web, Research, Files, KB, Scheduler.
 
 Smoke:
-- `scripts/nl_router_smoke.py` (25 cases: catalog build, catalog fields, NL routing for calendar/email/GitHub/KB/research/notes/reminders/queue/setup, ambiguous coding → LLM, no slash in clarification, /nl_help output, /nl_help domains, /nl_help registered, WRITE_SAFE marking, READ marking, project patterns, NL examples, slash commands importable, coding guard, notes add, web search, gmail search)
+- `scripts/nl_router_smoke.py` (35 cases: catalog build, catalog fields, NL routing for calendar/email/GitHub/KB/research/notes/reminders/queue/setup, ambiguous coding → LLM, no slash in clarification, /nl_help output, /nl_help domains, /nl_help registered, WRITE_SAFE marking, READ marking, project patterns, NL examples, slash commands importable, coding guard, notes add, web search, gmail search, WRITE_SAFE_AUTO category, /nl_help honest tags, queue.status in registry, queue.status routing, scheduler not queue, /nl_help example tag, /nl_help clarify tag, /nl_help confirm tag, nl_support propagation)
 
 ---
 
