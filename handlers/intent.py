@@ -120,9 +120,10 @@ _EMAIL_SEND_PATTERNS = (
 
 # Calendar intent patterns (P3.4)
 _CALENDAR_TODAY_PATTERNS = (
-    re.compile(r"(今天|today).*(日程|日历|行程|calendar|schedule)", re.IGNORECASE),
+    re.compile(r"(今天|today).*(日程|日历|行程|calendar|schedule|安排)", re.IGNORECASE),
     re.compile(r"(看看|查|看).*(今天|今日).*(日程|行程|安排)", re.IGNORECASE),
     re.compile(r"(日程|日历|行程).*(今天|today)", re.IGNORECASE),
+    re.compile(r"(今天|today).*(有什么|有啥|啥事)", re.IGNORECASE),
 )
 _CALENDAR_TOMORROW_PATTERNS = (
     re.compile(r"(明天|tomorrow).*(日程|日历|行程|calendar|schedule|安排)", re.IGNORECASE),
@@ -348,7 +349,6 @@ def route_intent(text: str) -> RouteResult:
                     "用户发了重启请求但目标不明确，原文：\n"
                     f"{body}\n\n"
                     "请用简短中文反问「要重启 telegram、feishu 还是 maintain？」"
-                    "（可用 /restart telegram|feishu|maintain）。"
                     "不要调用任何工具，不要编造主机状态。"
                 ),
                 arg="",
@@ -382,7 +382,7 @@ def route_intent(text: str) -> RouteResult:
         if pat.search(body):
             return RouteResult(kind="llm", question=(
                 "用户想发邮件，但需要收件人、主题和正文。请用中文问用户："
-                "「请告诉我收件人地址、邮件主题和正文内容，用 `/email_send 收件人 | 主题 | 正文` 的格式发送。」"
+                "「发给谁？主题和正文分别是什么？」"
             ))
 
     # Planner intent (P3.7) — hybrid: collect facts, then Codex analysis
@@ -438,8 +438,8 @@ def route_intent(text: str) -> RouteResult:
             if query:
                 return RouteResult(kind="deterministic", tools=("kb.collect_facts",), arg=query)
             return RouteResult(kind="llm", question=(
-                "用户想搜索本地文件/文档，但没有提供搜索词。请用中文问用户："
-                "「请提供搜索关键词，用 `/files_search <关键词>` 的格式。」"
+                "用户想搜索本地文件/文档，但没有提供搜索词。请用简短中文问用户："
+                "「想搜什么关键词？」"
             ))
 
     # Web / Research intent (P4.1)
@@ -451,8 +451,8 @@ def route_intent(text: str) -> RouteResult:
             if arg:
                 return RouteResult(kind="deterministic", tools=("web.fetch",), arg=arg)
             return RouteResult(kind="llm", question=(
-                "用户想获取网页内容，但没有提供 URL。请用中文问用户："
-                "「请提供要获取的网页 URL，用 `/web_fetch <url>` 的格式。」"
+                "用户想获取网页内容，但没有提供 URL。请用简短中文问用户："
+                "「请提供要获取的网页地址。」"
             ))
     for pat in _WEB_SEARCH_PATTERNS:
         if pat.search(body):
@@ -461,8 +461,8 @@ def route_intent(text: str) -> RouteResult:
             if query:
                 return RouteResult(kind="deterministic", tools=("web.search",), arg=query)
             return RouteResult(kind="llm", question=(
-                "用户想搜索网页，但没有提供搜索词。请用中文问用户："
-                "「请提供搜索词，用 `/web_search <查询>` 的格式。」"
+                "用户想搜索网页，但没有提供搜索词。请用简短中文问用户："
+                "「想搜什么？」"
             ))
     for pat in _RESEARCH_PATTERNS:
         if pat.search(body):
@@ -471,8 +471,8 @@ def route_intent(text: str) -> RouteResult:
             if query:
                 return RouteResult(kind="deterministic", tools=("research.run",), arg=query)
             return RouteResult(kind="llm", question=(
-                "用户想进行研究，但没有提供研究问题。请用中文问用户："
-                "「请提供研究问题，用 `/research <问题>` 的格式。」"
+                "用户想进行研究，但没有提供研究问题。请用简短中文问用户："
+                "「想研究什么？」"
             ))
 
     # Calendar intent (P3.4)
@@ -492,9 +492,8 @@ def route_intent(text: str) -> RouteResult:
     for pat in _CALENDAR_CREATE_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="llm", question=(
-                "用户想创建日程，但需要标题、时间和描述。请用中文问用户："
-                "「请告诉我日程标题、时间（如`明天 14:00-15:00`）和可选描述，"
-                "用 `/calendar_create 标题 | 时间 | 描述` 的格式创建。」"
+                "用户想创建日程，但需要标题、时间和描述。请用简短中文问用户："
+                "「日程标题、时间（如明天 14:00-15:00）和可选描述分别是什么？」"
             ))
 
     # Contacts intent (P3.4)
@@ -555,14 +554,14 @@ def route_intent(text: str) -> RouteResult:
     for pat in _GITHUB_CREATE_ISSUE_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="llm", question=(
-                "用户想创建 GitHub Issue，但需要标题和正文。请用中文问用户："
-                "「请告诉我 Issue 标题和可选正文，用 `/github_create_issue 标题 | 正文` 的格式创建。」"
+                "用户想创建 GitHub Issue，但需要标题和正文。请用简短中文问用户："
+                "「Issue 标题和正文分别是什么？」"
             ))
     for pat in _GITHUB_COMMENT_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="llm", question=(
-                "用户想在 GitHub Issue/PR 上评论，但需要编号和评论内容。请用中文问用户："
-                "「请告诉我 Issue/PR 编号和评论内容，用 `/github_comment 编号 | 评论内容` 的格式发送。」"
+                "用户想在 GitHub Issue/PR 上评论，但需要编号和评论内容。请用简短中文问用户："
+                "「Issue/PR 编号是多少？评论内容是什么？」"
             ))
 
     tool_match = _match_explicit_tool(body)
@@ -600,6 +599,18 @@ def route_intent(text: str) -> RouteResult:
                 tools=_HYBRID_DEFAULT_TOOLS,
                 question=body,
             )
+
+    # NL router fallback (P4.3): handles additional domains not covered above.
+    from handlers.nl_router import classify_nl, NLCategory
+    nl = classify_nl(body)
+    if nl.category == NLCategory.READ_DETERMINISTIC and nl.tool_name:
+        return RouteResult(kind="deterministic", tools=(nl.tool_name,), arg=nl.arg)
+    if nl.category == NLCategory.READ_HYBRID and nl.tool_name:
+        return RouteResult(kind="deterministic", tools=(nl.tool_name,), arg=nl.arg)
+    if nl.category == NLCategory.WRITE_PREVIEW and nl.tool_name:
+        return RouteResult(kind="deterministic", tools=(nl.tool_name,), arg=nl.arg)
+    if nl.category == NLCategory.CLARIFY and nl.question:
+        return RouteResult(kind="llm", question=nl.question)
 
     return RouteResult(kind="llm")
 

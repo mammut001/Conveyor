@@ -126,7 +126,7 @@ async def handle_route(
         await port.reply(msg, "没有匹配的工具。")
         return
     if len(route.tools) == 1:
-        await _invoke_tool(msg, port, settings, route.tools[0], route.arg)
+        await _invoke_tool(msg, port, settings, route.tools[0], route.arg, runner=runner)
         return
     combined = await run_tools(settings, route.tools, route.arg)
     await port.reply(msg, combined)
@@ -199,6 +199,8 @@ async def _invoke_tool(
     settings: Settings,
     tool_name: str,
     arg: str,
+    *,
+    runner: CodexRunner | None = None,
 ) -> None:
     from personal_tools.registry import get_personal_tool
 
@@ -227,6 +229,11 @@ async def _invoke_tool(
             action="executed",
             result_preview=result,
         )
+    # If tool returns [HYBRID_PROMPT], send to Codex synthesis instead of replying raw.
+    if result.startswith("[HYBRID_PROMPT]") and runner is not None:
+        prompt = result[len("[HYBRID_PROMPT]"):]
+        await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=prompt)
+        return
     await port.reply(msg, result)
 
 

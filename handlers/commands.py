@@ -1384,7 +1384,15 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/queue_clear — 清空队列 (需确认)\n"
     text += "/queue_pause — 暂停队列自动出队\n"
     text += "/queue_resume — 恢复队列自动出队\n"
+    text += "\n"
+    text += "NL-first: 直接用自然语言描述需求即可，/nl_help 查看自然语言示例。"
     await port.reply(msg, text)
+
+
+async def _nl_help(msg, port, _runner, _settings, _arg):
+    """Show natural language command examples."""
+    from handlers.nl_router import build_nl_help
+    await port.reply(msg, build_nl_help())
 
 
 # P3.8: Queue commands
@@ -1576,6 +1584,7 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("context", "查看最近会话上下文", _context),
         CommandSpec("forget", "清除当前会话记录", _forget),
         CommandSpec("help", "帮助", _help),
+        CommandSpec("nl_help", "自然语言示例", _nl_help),
     ]
 }
 

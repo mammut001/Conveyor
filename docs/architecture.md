@@ -199,11 +199,13 @@ Conveyor 在 transport 之上增加了 **结构化 tool registry** 和 **轻量 
 | load, ps, htop, disk, logs, service_status, git_status | READ | 主机快照，0 token |
 | service_restart | WRITE | 重启 conveyor 单元，**需确认** |
 
-### Intent router (`handlers/intent.py`)
+### Intent router (`handlers/intent.py` + `handlers/nl_router.py`)
 
 - **Deterministic 优先**：显式 ops 请求（负载/htop/磁盘/日志）不走 hybrid
 - **Hybrid**：`为什么服务器慢` / `分析一下 vps` → 默认采集 load+ps+disk+service_status，再把 facts 注入 Codex prompt
 - **显式诊断**：`/diagnose [server|bot|logs|quick]`（`handlers/tools/diagnose.py` 定义各模式 tool 组合）；自然语言「诊断服务器」「帮我诊断 bot」保守匹配
+- **NL 路由器回退**（P4.3）：intent.py 的模式匹配未命中时，回退到 `nl_router.classify_nl()` 处理额外领域（笔记搜索、提醒创建、日历忙闲、队列状态、设置状态）
+- **工具目录**（P4.3）：`nl_router.get_catalog()` 从 host + personal registry 构建统一目录，用于路由和 `/nl_help`
 - **LLM fallback**：编码/调试类开放式任务
 
 ### 命令别名
@@ -801,6 +803,53 @@ scripts/
 
 Smoke：
 - `scripts/file_search_smoke.py`（14 项：允许根目录、路径遍历拒绝、.env 拒绝、secrets 目录拒绝、私钥模式 redacted、二进制跳过、超大跳过、files.search 返回片段、files.read 返回截断、kb.index 创建索引、kb.search 工作、NL 路由触发收集器、项目文档降级、无网络调用）
+
+**P4.3 自然语言 Agent 路由器（Natural Language Agent Router）**：自然语言优先，斜杠命令作为后备。用户可以用正常语言调用大多数注册工具。
+
+```
+handlers/
+  nl_router.py                 NL 路由层 + 工具目录
+  intent.py                    集成 nl_router 作为回退
+  commands.py                  /nl_help 命令
+scripts/
+  nl_router_smoke.py           NL 路由器烟测
+```
+
+**工具目录（Tool Catalog）：**
+- 从 host TOOL_REGISTRY + personal PERSONAL_TOOL_REGISTRY 构建
+- 每个条目包含：name, summary, danger, keywords, examples_zh, examples_en, domain
+- 用于路由匹配和 /nl_help 输出
+
+**路由分类：**
+
+| 分类 | 说明 | 执行策略 |
+|------|------|----------|
+| READ_DETERMINISTIC | 直接读取工具 | 自动执行 |
+| READ_HYBRID | 收集事实 + Codex 综合 | 自动收集，Codex 综合 |
+| WRITE_PREVIEW | 写入操作 | 预览 + 确认 |
+| CLARIFY | 缺少参数 | 自然语言追问 |
+| CODEX_LLM | 编码/开放任务 | Codex 处理 |
+
+**扩展 NL 覆盖（P4.3 新增）：**
+- 笔记搜索：`搜索笔记里的 deploy` → notes.search
+- 提醒创建：`提醒我明天9点开会` → reminders.create
+- 日历忙闲：`下午有空吗` → calendar.freebusy
+- 队列状态：`队列状态` → scheduler_status
+- 设置状态：`配置状态` → setup.status
+
+**安全策略：**
+- READ 工具可自动执行
+- WRITE_SAFE 工具（notes.add、reminders.create）自动执行但有审计日志
+- WRITE/DESTRUCTIVE 工具必须先预览再确认，不会自动执行
+- 模糊的编码请求优先走 Codex LLM
+- 缺少参数时用自然语言追问，不建议斜杠格式
+- 确认消息不包含斜杠命令格式建议
+
+**/nl_help 输出：**
+按领域分组列出自然语言示例，包括：运维、笔记、提醒、邮件、日历、联系人、简报、GitHub、规划、项目、设置、Web、研究、文件、知识库、调度。
+
+Smoke：
+- `scripts/nl_router_smoke.py`（25 项：目录构建、目录字段、NL 路由日历/邮件/GitHub/KB/研究/笔记/提醒/队列/设置、模糊编码走 LLM、确认消息无斜杠、/nl_help 输出、/nl_help 领域分组、/nl_help 注册、WRITE_SAFE 标记、READ 标记、项目模式、NL 示例、斜杠命令可导入、编码守卫、笔记添加、Web 搜索、Gmail 搜索）
 
 ### 6.6 Telegram 实时烟测（手动）
 

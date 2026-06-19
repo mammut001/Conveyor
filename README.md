@@ -750,6 +750,42 @@ Safety: All file/KB analysis commands are READ-only. `kb.index` is WRITE_SAFE (a
 
 Smoke: `scripts/file_search_smoke.py` (14 cases).
 
+**P4.3 — Natural Language Agent Router:** Natural-language-first routing for all registered tools. Slash commands remain as precise fallback/debug commands.
+
+Key features:
+- Unified tool catalog built from host + personal tool registries (name, summary, danger, keywords, examples, domain)
+- `/nl_help` command: lists NL examples grouped by domain
+- Extended NL coverage: notes search, reminders create, calendar freebusy, queue status, setup status
+- Clarification messages use natural language (no slash format suggestions)
+- Safety: WRITE/DESTRUCTIVE tools never auto-execute from NL
+- WRITE_SAFE tools (notes.add, reminders.create) audited when triggered by NL
+
+**Natural language examples by domain:**
+
+| Domain | Example | Routes to |
+|--------|---------|-----------|
+| Ops | `看看负载`、`磁盘空间` | load / disk |
+| Notes | `记一下 xxx`、`搜索笔记里的 deploy` | notes.add / notes.search |
+| Reminders | `提醒我明天9点开会` | reminders.create |
+| Email | `看看最近的邮件`、`搜索邮件关于发票` | gmail.recent / gmail.search |
+| Calendar | `今天有什么安排`、`下午有空吗` | calendar.today / freebusy |
+| Briefing | `今日简报`、`启用简报` | briefing.today / enable |
+| GitHub | `CI 挂了吗`、`看看 issue` | github.ci / issues |
+| Planner | `今天应该先干啥`、`帮我整理邮件` | planner.today / triage |
+| Projects | `项目列表`、`项目 roadmap` | projects.list / roadmap |
+| Web | `搜索 Python asyncio`、`研究一下 React Native` | web.search / research |
+| Files/KB | `找一下文档里关于 deploy` | kb.collect_facts |
+| Setup | `配置状态`、`检查清单` | setup.status / check |
+
+Safety policy:
+- READ tools run automatically
+- WRITE_SAFE tools (notes.add, reminders.create) run automatically but are audit-logged
+- WRITE/DESTRUCTIVE tools require preview + confirmation, never auto-execute
+- Ambiguous coding requests prefer Codex LLM
+- Missing arguments → natural language clarification (not slash format)
+
+Smoke: `scripts/nl_router_smoke.py` (25 cases).
+
 **Telegram slash commands:** New ops/tool commands (`/load`, `/tools`,
 `/disk`, …) are registered in `COMMAND_TABLE` and reached via a
 generic `MessageHandler(filters.COMMAND, …)` fallback in `bot.py` (after

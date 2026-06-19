@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Natural Language Agent Router (P4.3)
+- Natural-language-first routing: users can invoke most tools with normal language
+- Slash commands remain as precise fallback/debug commands
+- Unified tool catalog built from host + personal tool registries
+- Tool catalog includes: name, summary, danger level, keywords, examples, domain
+- `/nl_help` command: lists NL examples grouped by domain
+- Extended NL coverage: notes search, reminders create, calendar freebusy, queue status, setup status
+- Clarification messages use natural language (no slash format suggestions)
+- Safety: WRITE/DESTRUCTIVE tools never auto-execute from NL
+- WRITE_SAFE tools (notes.add, reminders.create) audited when triggered by NL
+- 25 smoke tests covering catalog, routing, safety, and /nl_help
+
 #### File Search / Knowledge Base (P4.2)
 - Natural-language-first file search with automatic READ-only fact collection
 - File search with strict safety boundaries (only configured roots allowed)

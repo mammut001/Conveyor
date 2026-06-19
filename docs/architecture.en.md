@@ -216,12 +216,14 @@ user message
 | `load`, `ps`, `htop`, `disk`, `logs`, `service_status`, `git_status` | READ | host snapshot, no token cost |
 | `service_restart` | WRITE | restart a whitelisted conveyor unit, **requires confirmation** |
 
-### Intent router (`handlers/intent.py`)
+### Intent router (`handlers/intent.py` + `handlers/nl_router.py`)
 
 - **Deterministic wins first**: explicit ops requests (load / htop / disk / logs) never go through hybrid.
 - **Hybrid**: "为什么服务器慢" / "分析一下 vps" — default to `load + ps + disk + service_status`, then inject facts into the Codex prompt.
 - **Explicit diagnose**: `/diagnose [server|bot|logs|quick]` (tool sets in `handlers/tools/diagnose.py`); natural-language "诊断服务器" / "帮我诊断 bot" is conservatively matched via `_DIAGNOSE_*_PATTERNS` with a `_CODING_GUARD` to avoid hijacking coding requests.
 - **Ambiguous restart**: natural-language restart with no resolvable target (e.g. "重启 bot") does **not** silently default to the Telegram bot. `route_intent` returns `kind="llm"` with a clarifying `route.question`; `handlers/dispatch.py` forwards that as the Codex prompt.
+- **NL router fallback** (P4.3): when intent.py's pattern matching doesn't match, falls back to `nl_router.classify_nl()` for additional domains (notes search, reminders create, calendar freebusy, queue status, setup status).
+- **Tool catalog** (P4.3): `nl_router.get_catalog()` builds a unified catalog from host + personal registries, used for routing and `/nl_help`.
 - **LLM fallback**: open-ended coding / debugging tasks.
 
 ### Slash commands and what they do
@@ -913,6 +915,53 @@ Config vars:
 
 Smoke:
 - `scripts/file_search_smoke.py` (14 cases: allowed root, path traversal rejection, .env rejection, secrets directory rejection, private key redaction, binary skip, oversized skip, files.search snippets, files.read truncation, kb.index creation, kb.search fallback, NL route trigger, project docs degradation, no network calls)
+
+**P4.3 Natural Language Agent Router:** Natural-language-first routing for all registered tools. Slash commands remain as precise fallback/debug commands.
+
+```
+handlers/
+  nl_router.py                 NL router layer + tool catalog
+  intent.py                    integrates nl_router as fallback
+  commands.py                  /nl_help command
+scripts/
+  nl_router_smoke.py           NL router smoke tests
+```
+
+**Tool Catalog:**
+- Built from host TOOL_REGISTRY + personal PERSONAL_TOOL_REGISTRY
+- Each entry: name, summary, danger, keywords, examples_zh, examples_en, domain
+- Used for route matching and /nl_help output
+
+**Route Classification:**
+
+| Category | Description | Execution Policy |
+|----------|-------------|------------------|
+| READ_DETERMINISTIC | Direct read tool | Auto-execute |
+| READ_HYBRID | Collect facts + Codex synthesis | Auto-collect, Codex synthesizes |
+| WRITE_PREVIEW | Write operation | Preview + confirmation |
+| CLARIFY | Missing argument | Natural language prompt |
+| CODEX_LLM | Coding/open task | Codex handles |
+
+**Extended NL Coverage (P4.3):**
+- Notes search: `搜索笔记里的 deploy` → notes.search
+- Reminders create: `提醒我明天9点开会` → reminders.create
+- Calendar freebusy: `下午有空吗` → calendar.freebusy
+- Queue status: `队列状态` → scheduler_status
+- Setup status: `配置状态` → setup.status
+
+**Safety Policy:**
+- READ tools run automatically
+- WRITE_SAFE tools (notes.add, reminders.create) run automatically but are audit-logged
+- WRITE/DESTRUCTIVE tools require preview + confirmation, never auto-execute
+- Ambiguous coding requests prefer Codex LLM
+- Missing arguments → natural language clarification (not slash format)
+- Confirmation messages don't include slash format suggestions
+
+**/nl_help output:**
+Groups examples by domain: Ops, Notes, Reminders, Email, Calendar, Contacts, Briefing, GitHub, Planner, Projects, Setup, Web, Research, Files, KB, Scheduler.
+
+Smoke:
+- `scripts/nl_router_smoke.py` (25 cases: catalog build, catalog fields, NL routing for calendar/email/GitHub/KB/research/notes/reminders/queue/setup, ambiguous coding → LLM, no slash in clarification, /nl_help output, /nl_help domains, /nl_help registered, WRITE_SAFE marking, READ marking, project patterns, NL examples, slash commands importable, coding guard, notes add, web search, gmail search)
 
 ---
 
