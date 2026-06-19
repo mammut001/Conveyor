@@ -13,13 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Natural-language-first routing: users can invoke most tools with normal language
 - Slash commands remain as precise fallback/debug commands
 - Unified tool catalog built from host + personal tool registries
-- Tool catalog includes: name, summary, danger level, keywords, examples, domain
-- `/nl_help` command: lists NL examples grouped by domain
+- Tool catalog includes: name, summary, danger level, keywords, examples, domain, nl_support
+- `/nl_help` command: lists NL examples grouped by domain with honest support tags
 - Extended NL coverage: notes search, reminders create, calendar freebusy, queue status, setup status
 - Clarification messages use natural language (no slash format suggestions)
 - Safety: WRITE/DESTRUCTIVE tools never auto-execute from NL
 - WRITE_SAFE tools (notes.add, reminders.create) audited when triggered by NL
-- 25 smoke tests covering catalog, routing, safety, and /nl_help
+
+#### NL Router Polish (P4.3.1)
+- Renamed NL categories: WRITE_SAFE_AUTO for low-risk audited actions, WRITE_CONFIRM_PREVIEW for WRITE/DESTRUCTIVE
+- Added `queue.status` READ tool: routes "队列状态" to job queue status (not scheduler_status)
+- `scheduler_status` reserved for "调度器状态" (reminder scheduler)
+- `/nl_help` now shows honest support tags: [自动], [需确认], [会追问], [示例]
+- Support tag legend explains what each tag means
+- 28 smoke tests covering catalog, routing, safety, categories, and /nl_help honesty
 
 #### File Search / Knowledge Base (P4.2)
 - Natural-language-first file search with automatic READ-only fact collection

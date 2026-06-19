@@ -636,29 +636,48 @@ Smoke：`scripts/file_search_smoke.py`（14 项）。
 **P4.3 — 自然语言 Agent 路由器（Natural Language Agent Router）：** 自然语言优先，斜杠命令作为后备。用户可以用正常语言调用大多数注册工具。
 
 核心特性：
-- 统一工具目录：从 host + personal tool registry 构建，包含工具名、摘要、危险级别、关键词、示例、领域
-- `/nl_help` 命令：按领域分组列出自然语言示例
+- 统一工具目录：从 host + personal tool registry 构建，包含工具名、摘要、危险级别、关键词、示例、领域、NL 支持级别
+- `/nl_help` 命令：按领域分组列出自然语言示例，带诚实的支持级别标记
 - 扩展 NL 覆盖：笔记搜索、提醒创建、日历忙闲、队列状态、设置状态
 - 确认消息使用自然语言（不建议用户使用斜杠格式）
 - 安全策略：WRITE/DESTRUCTIVE 工具永远不会从 NL 自动执行
 - WRITE_SAFE 工具（notes.add、reminders.create）触发时会被审计
 
-**自然语言示例（按领域）：**
+**NL 分类（P4.3.1 更新）：**
 
-| 领域 | 示例 | 路由目标 |
-|------|------|----------|
-| 运维 | `看看负载`、`磁盘空间`、`服务状态` | load / disk / service_status |
-| 笔记 | `记一下 xxx`、`搜索笔记里的 deploy` | notes.add / notes.search |
-| 提醒 | `提醒我明天9点开会` | reminders.create |
-| 邮件 | `看看最近的邮件`、`搜索邮件关于发票` | gmail.recent / gmail.search |
-| 日历 | `今天有什么安排`、`明天日程`、`下午有空吗` | calendar.today / tomorrow / freebusy |
-| 简报 | `今日简报`、`启用简报` | briefing.today / briefing.enable |
-| GitHub | `CI 挂了吗`、`看看 issue` | github.ci / github.issues |
-| 规划 | `今天应该先干啥`、`帮我整理邮件` | planner.today / planner.triage |
-| 项目 | `项目列表`、`项目 roadmap`、`项目下一步` | projects.list / project.roadmap / project.next |
-| Web | `搜索 Python asyncio`、`研究一下 React Native` | web.search / research.run |
-| 文件/KB | `找一下文档里关于 deploy 的说明` | kb.collect_facts |
-| 设置 | `配置状态`、`检查清单` | setup.status / setup.check |
+| 分类 | 说明 | 行为 |
+|------|------|------|
+| READ_DETERMINISTIC | 直接读取 | 自动执行 |
+| READ_HYBRID | 收集事实 + Codex 综合 | 自动收集，Codex 综合 |
+| WRITE_SAFE_AUTO | 低风险审计操作 | 自动执行（有审计日志） |
+| WRITE_CONFIRM_PREVIEW | WRITE/DESTRUCTIVE | 需要确认 |
+| CLARIFY | 缺少参数 | 用自然语言追问 |
+| CODEX_LLM | 编码/开放任务 | Codex 处理 |
+
+**自然语言示例（按领域，带支持级别标记）：**
+
+| 领域 | 示例 | 路由目标 | 支持级别 |
+|------|------|----------|----------|
+| 运维 | `看看负载`、`磁盘空间` | load / disk | 可直接执行 |
+| 笔记 | `记一下 xxx`、`搜索笔记里的 deploy` | notes.add / notes.search | 自动 / 可直接执行 |
+| 提醒 | `提醒我明天9点开会` | reminders.create | 自动（WRITE_SAFE） |
+| 邮件 | `看看最近的邮件`、`搜索邮件关于发票` | gmail.recent / gmail.search | 可直接执行 |
+| 日历 | `今天有什么安排`、`下午有空吗` | calendar.today / freebusy | 可直接执行 |
+| 简报 | `今日简报`、`启用简报` | briefing.today / enable | 可直接执行 |
+| GitHub | `CI 挂了吗`、`看看 issue` | github.ci / issues | 可直接执行 |
+| 规划 | `今天应该先干啥`、`帮我整理邮件` | planner.today / triage | 混合 |
+| 项目 | `项目列表`、`项目 roadmap` | projects.list / roadmap | 可直接执行 |
+| 队列 | `队列状态`、`看看队列` | queue.status | 可直接执行 |
+| Web | `搜索 Python asyncio`、`研究一下 React Native` | web.search / research | 可直接执行 |
+| 文件/KB | `找一下文档里关于 deploy` | kb.collect_facts | 可直接执行 |
+| 设置 | `配置状态` | setup.status | 可直接执行 |
+
+**`/nl_help` 支持级别标记：**
+- 无标记 = 可直接执行（READ）
+- [自动] = WRITE_SAFE 自动执行（有审计日志）
+- [需确认] = WRITE/DESTRUCTIVE 需要确认
+- [会追问] = 缺少参数，会用自然语言追问
+- [示例] = 仅作参考，暂无 NL 路由
 
 安全行为：
 - READ 工具可自动执行
@@ -667,7 +686,13 @@ Smoke：`scripts/file_search_smoke.py`（14 项）。
 - 模糊的编码请求优先走 Codex LLM
 - 缺少参数时用自然语言追问，不建议斜杠格式
 
-Smoke：`scripts/nl_router_smoke.py`（25 项）。
+**队列 vs 调度器区分（P4.3.1）：**
+- `queue.status` — 任务队列状态（Job Queue）
+- `scheduler_status` — 提醒调度器状态（Reminder Scheduler）
+- 自然语言"队列状态"路由到 `queue.status`
+- "调度器状态"无 NL 路由，使用 `/scheduler_status` 命令
+
+Smoke：`scripts/nl_router_smoke.py`（28 项）。
 
 **Telegram slash 命令：** 新 ops/tool 命令（`/load`、`/tools`、`/disk` 等）在 `COMMAND_TABLE` 注册，并通过 `bot.py` 中的通用 `MessageHandler(filters.COMMAND, …)` fallback 到达（位于显式 `CommandHandler` 之后、纯文本 handler 之前），确保未知 slash 命令仍能进入 `dispatch()` → `COMMAND_TABLE`。
 

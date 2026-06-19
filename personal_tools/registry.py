@@ -25,6 +25,7 @@ from personal_tools import web_search as web_search_tools
 from personal_tools import research as research_tools
 from personal_tools import file_search as file_search_tools
 from personal_tools import kb as kb_tools
+from personal_tools import queue_tools as queue_tools
 
 if TYPE_CHECKING:
     pass
@@ -607,6 +608,14 @@ def register_personal_tools() -> None:
         DangerLevel.READ,
         kb_tools.kb_collect_facts_adapter,
         keywords=("收集证据", "文档证据", "事实收集"),
+    )
+    # Queue status (P4.3.1)
+    _register(
+        "queue.status",
+        "查看任务队列状态",
+        DangerLevel.READ,
+        queue_tools.queue_status_adapter,
+        keywords=("队列", "queue"),
     )
 
 

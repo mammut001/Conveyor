@@ -171,6 +171,8 @@ def _test_registry() -> CheckResult:
             "kb.status",
             "kb.search",
             "kb.collect_facts",
+            # P4.3.1 Queue Status
+            "queue.status",
         }
         ok_names = expected == set(PERSONAL_TOOL_REGISTRY)
         add_level = PERSONAL_TOOL_REGISTRY["notes.add"].danger

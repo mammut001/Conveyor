@@ -607,7 +607,10 @@ def route_intent(text: str) -> RouteResult:
         return RouteResult(kind="deterministic", tools=(nl.tool_name,), arg=nl.arg)
     if nl.category == NLCategory.READ_HYBRID and nl.tool_name:
         return RouteResult(kind="deterministic", tools=(nl.tool_name,), arg=nl.arg)
-    if nl.category == NLCategory.WRITE_PREVIEW and nl.tool_name:
+    if nl.category == NLCategory.WRITE_SAFE_AUTO and nl.tool_name:
+        return RouteResult(kind="deterministic", tools=(nl.tool_name,), arg=nl.arg)
+    if nl.category == NLCategory.WRITE_CONFIRM_PREVIEW and nl.tool_name:
+        # WRITE/DESTRUCTIVE — route to tool which will handle confirmation
         return RouteResult(kind="deterministic", tools=(nl.tool_name,), arg=nl.arg)
     if nl.category == NLCategory.CLARIFY and nl.question:
         return RouteResult(kind="llm", question=nl.question)
