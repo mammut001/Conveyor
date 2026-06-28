@@ -885,12 +885,13 @@ TELEGRAM_LIVE_ALLOW_RESTART=1 \
    git clone https://github.com/mammut001/Conveyor.git /opt/conveyor
    ```
 2. 在 VPS 上创建 `.env`（永远不要提交）。
-3. 创建 `.venv` 并安装依赖：
+3. 创建 `.venv` 并安装初始依赖：
    ```bash
    cd /opt/conveyor
    python3 -m venv .venv
    .venv/bin/pip install -r requirements.txt
    ```
+   每次部署都会在 smoke 前从 `requirements.txt` 重新同步 `.venv` 依赖。
 4. 安装 systemd 服务：
    ```bash
    sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
@@ -923,6 +924,7 @@ ssh user@host 'bash /opt/conveyor/scripts/deploy_vps.sh'
    - 获取 `flock` 锁（防止并发部署）
    - `git fetch origin main && git reset --hard origin/main`
    - 重置前备份关键文件
+   - 从 `requirements.txt` 同步 `.venv` 依赖
    - 运行 `make smoke`
    - smoke 通过：重启 `conveyor-telegram-bot` + `conveyor-feishu-bot`
    - smoke 失败：退出非零，**不重启**服务
@@ -945,7 +947,8 @@ ssh user@host 'bash /opt/conveyor/scripts/deploy_vps.sh'
 
 - 实时 Telegram 烟测（`scripts/telegram_live_smoke.py`）**不会**自动运行 ——
   它需要真实 Telegram 凭据，仅限手动。
-- 部署脚本假设 VPS 上已有 `.venv`。如果需要初始化新 VPS，
+- 部署脚本假设 VPS 上已有 `.venv`，并会在每次部署时按
+  `requirements.txt` 同步依赖。如果需要初始化新 VPS，
   请先运行 `scripts/install-remote.sh`。
 - 回滚是有限的：重置前备份关键文件，如果重启后服务未启动，
   脚本会从备份恢复并重试。这不涵盖所有故障模式。

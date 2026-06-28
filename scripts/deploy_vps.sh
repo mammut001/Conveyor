@@ -14,7 +14,7 @@
 # Requirements on the VPS:
 #   - git repo already cloned at CONVEYOR_DEPLOY_PATH
 #   - .env exists only on VPS (never committed)
-#   - .venv exists with dependencies installed
+#   - .venv exists; this script syncs dependencies from requirements.txt
 #   - systemd services: conveyor-telegram-bot, conveyor-feishu-bot
 #   - deploy user has passwordless sudo for systemctl restart/status/is-active
 #
@@ -93,6 +93,12 @@ fi
 
 # ---- venv sanity ---------------------------------------------------------
 log "Python version: $(.venv/bin/python --version 2>&1)"
+
+# ---- dependency sync -----------------------------------------------------
+[[ -f requirements.txt ]] || die "requirements.txt not found"
+log "Syncing Python dependencies from requirements.txt..."
+PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 .venv/bin/python -m pip install -r requirements.txt
+log "Python dependencies synced."
 
 # ---- smoke ---------------------------------------------------------------
 log "Running smoke tests..."

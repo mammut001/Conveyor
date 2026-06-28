@@ -12,7 +12,7 @@
 # VPS one-time setup:
 #   1. Clone repo at /opt/conveyor
 #   2. Create .env on VPS (never committed)
-#   3. Create .venv with dependencies
+#   3. Create .venv (deploy syncs dependencies from requirements.txt)
 #   4. Install systemd services: conveyor-telegram-bot, conveyor-feishu-bot
 #   5. Grant deploy user passwordless sudo for:
 #        systemctl restart conveyor-telegram-bot

@@ -1029,12 +1029,13 @@ step. Smoke failure prevents the restart.
    git clone https://github.com/mammut001/Conveyor.git /opt/conveyor
    ```
 2. Create `.env` on the VPS (never commit it).
-3. Create `.venv` and install dependencies:
+3. Create `.venv` and install the initial dependencies:
    ```bash
    cd /opt/conveyor
    python3 -m venv .venv
    .venv/bin/pip install -r requirements.txt
    ```
+   Each deploy re-syncs `.venv` from `requirements.txt` before running smoke tests.
 4. Install systemd services:
    ```bash
    sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
@@ -1072,6 +1073,7 @@ ssh user@host 'bash /opt/conveyor/scripts/deploy_vps.sh'
    - acquires a `flock` lock (no concurrent deploys)
    - `git fetch origin main && git reset --hard origin/main`
    - backs up key files before reset
+   - syncs `.venv` from `requirements.txt`
    - runs `make smoke`
    - if smoke passes: restarts `conveyor-telegram-bot` + `conveyor-feishu-bot`
    - if smoke fails: exits nonzero, services are NOT restarted
@@ -1096,7 +1098,8 @@ Send `/deploy_status` to the bot to see:
 - The live Telegram smoke (`scripts/telegram_live_smoke.py`) is NOT
   run automatically — it needs real Telegram credentials and is
   manual-only.
-- The deploy script assumes `.venv` already exists on the VPS. If
+- The deploy script assumes `.venv` already exists on the VPS, then
+  keeps its packages synced from `requirements.txt` on each deploy. If
   you need to bootstrap a fresh VPS, run `scripts/install-remote.sh`
   first.
 - Rollback is minimal: key files are backed up before reset, and if
