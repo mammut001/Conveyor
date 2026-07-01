@@ -99,6 +99,11 @@ Conveyor:
 - 每日简报：`/brief_today` · `/brief_tomorrow` · `/brief_settings` ·
   `/brief_enable [HH:MM]` · `/brief_disable` · `/brief_probe`
 
+> **飞书用户：** Codex 任务开始 / 完成 / 失败、`/diff` 预览、危险操作
+> 确认都会渲染成交互式消息卡片，带可点击的按钮（Status / Diff /
+> Apply / Discard / Cancel / Confirm）。按钮只是对同一批命令的便捷
+> 封装——详见[飞书接入](#飞书接入)。
+
 ### 诊断与运维
 
 - `/health [full] [json] [nosecurity]` · `/doctor` · `/diag [since]`
@@ -298,6 +303,26 @@ sudo journalctl -u conveyor-feishu-bot -f
 - [ ] VPS systemd 单元装好且 active
 - [ ] `journalctl -u conveyor-feishu-bot -f` 显示 `wss://msg-frontier.feishu.cn/...` 已连
 - [ ] 给 bot 发私聊 → 收到 bootstrap 回信 → 把 `LARK_ALLOWED_OPEN_ID` 填进 `.env` → 重启
+
+### 可选：卡片回调事件
+
+Conveyor 在飞书用交互式消息卡片承载关键时刻：任务开始 / 完成 /
+失败、`/diff` 预览、危险操作确认。卡片按钮是同一批斜杠命令（`/status`、
+`/diff`、`/apply`、`/discard`、`/cancel`）和现有 token 确认机制的便捷
+封装。
+
+要启用按钮点击，**再多订阅一个事件**：
+
+- **应用身份**，事件：`card.action.trigger`（**卡片回调**）
+
+不开也能用：卡片正常渲染、聊天一切照旧，只是按钮点了 bot 收不到
+（降级到手敲斜杠命令或 `确认执行` / `取消`）。开了之后，点按钮和
+打字走同一套白名单和确认绑定——不受信的发送人点按钮也触发不了
+任何动作。
+
+如果飞书开发控制台在这个事件上报"回调地址无效"，那是它在要求
+HTTP webhook URL——那是老通道。Conveyor 走长连接，URL 留空就行，
+事件照常工作。
 
 ---
 

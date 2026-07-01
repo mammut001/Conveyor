@@ -90,6 +90,61 @@ class FeishuOutbound:
         result = await self._send_card(msg, text, reply_to=msg.message_id)
         return result
 
+    async def send_card(
+        self,
+        msg: InboundMessage,
+        card: dict,
+        *,
+        reply_to: str | None = None,
+    ) -> str | None:
+        """Send a pre-built interactive card (Feishu only).
+
+        ``card`` should be a Feishu interactive message dict
+        (see ``channel.feishu_cards``). On any error — API failure or
+        exception during send — the adapter falls back to plain text
+        with the card's title + first markdown block (truncated). The
+        fallback path is best-effort and never raises.
+        """
+        chat_id = msg.chat_id
+        if not chat_id:
+            return None
+        opts = {"reply_to": reply_to or msg.message_id} if (reply_to or msg.message_id) else None
+        try:
+            result = await self._channel.send(chat_id, card, opts)
+            if result.ok and result.message_id:
+                return result.message_id
+            logger.debug(
+                "Feishu card send failed, falling back to text: %s",
+                getattr(result, "error", ""),
+            )
+        except Exception:
+            logger.debug(
+                "Feishu card send exception, falling back to text",
+                exc_info=True,
+            )
+        # Fallback: flatten the card to a short text reply. Pull the
+        # header title + first markdown content so the user still
+        # sees something meaningful. The full structured UI is gone
+        # in this branch, but the text preserves the headline.
+        try:
+            header = card.get("header") or {}
+            title_obj = header.get("title") or {}
+            title = title_obj.get("content", "") if isinstance(title_obj, dict) else ""
+            body = ""
+            for el in card.get("elements") or []:
+                if isinstance(el, dict) and el.get("tag") == "markdown":
+                    body = el.get("content", "")
+                    break
+            text = (title + "\n" + body).strip() if title else body
+        except Exception:
+            text = "(card render failed)"
+        fallback = {"text": truncate(text or "(card render failed)")}
+        try:
+            await self._channel.send(chat_id, fallback, opts)
+        except Exception:
+            logger.debug("Feishu text fallback send failed", exc_info=True)
+        return None
+
     async def _send_card(
         self, msg: InboundMessage, text: str, *, reply_to: str | None
     ) -> str | None:

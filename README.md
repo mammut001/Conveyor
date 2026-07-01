@@ -103,6 +103,12 @@ agent tool layer (`Agent tool layer` — see `docs/architecture.en.md`).
 - Daily Briefing: `/brief_today` · `/brief_tomorrow` · `/brief_settings` ·
   `/brief_enable [HH:MM]` · `/brief_disable` · `/brief_probe`
 
+> **Feishu users:** Codex job starts, finishes, failures, `/diff`
+> previews, and dangerous-action confirmations render as interactive
+> message cards with tap-to-act buttons (Status / Diff / Apply /
+> Discard / Cancel / Confirm). The buttons are convenience wrappers
+> around the same commands — see [Feishu setup](#feishu-setup).
+
 ### Diagnostics & ops
 
 - `/health [full] [json] [nosecurity]` · `/doctor` · `/diag [since]`
@@ -315,6 +321,31 @@ effect on the live app until a new version is published.
 - [ ] VPS: systemd units installed and active
 - [ ] `journalctl -u conveyor-feishu-bot -f` shows `wss://msg-frontier.feishu.cn/...` connected
 - [ ] DM the bot, get bootstrap reply, paste `LARK_ALLOWED_OPEN_ID` into `.env`, restart
+
+### Optional: card action callback event
+
+Conveyor uses Feishu interactive message cards for high-value moments:
+job started / finished / failed, diff previews, and dangerous-action
+confirmations. The card buttons are convenience wrappers around the
+same slash commands (`/status`, `/diff`, `/apply`, `/discard`,
+`/cancel`) and the existing token-based confirmation system.
+
+To enable button clicks, add **one more event** to the subscription
+list above:
+
+- **应用身份**, event: `card.action.trigger` (**Card callback interaction**)
+
+Without it, cards still render and the chat is fully usable — only
+button clicks won't reach the bot (you'd fall back to typing the
+slash command or `确认执行` / `取消` text). With it, the same
+allowlist and confirmation binding that gates typed messages also
+gates card presses, so an unauthorized sender cannot trigger an
+action by tapping a button.
+
+If the developer console complains about an "invalid callback
+address" on this event, the Feishu console is asking for an HTTP
+webhook URL — that's the legacy channel. Conveyor uses the long
+connection, so leave the URL blank and the event still works.
 
 ---
 

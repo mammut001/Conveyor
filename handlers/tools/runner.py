@@ -285,6 +285,25 @@ async def _request_confirmation(
             {"text": "❌ 取消", "callback_data": f"{CALLBACK_CANCEL_PREFIX}{pending.token}"},
         ]]
         await port.reply_with_buttons(msg, text, buttons)
+    elif msg.channel == "feishu" and hasattr(port, "send_card"):
+        # Feishu confirmation: send a structured card with the
+        # existing token. The callback handler feeds the token back
+        # into the same confirmation binding, so the existing
+        # operator + chat + channel + TTL checks still apply.
+        try:
+            from channel.feishu_cards import confirm_action_card
+            card = confirm_action_card(
+                token=pending.token,
+                title="危险操作需确认",
+                body=text,
+                confirm_label="✅ 确认执行",
+                cancel_label="❌ 取消",
+            )
+            await port.send_card(msg, card)
+        except Exception:
+            logger.debug("Feishu confirm_action_card send failed", exc_info=True)
+            text += "\n\n回复「确认执行」执行，或「取消」放弃。"
+            await port.reply(msg, text)
     else:
         text += "\n\n回复「确认执行」执行，或「取消」放弃。"
         await port.reply(msg, text)

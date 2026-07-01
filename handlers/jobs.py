@@ -217,8 +217,41 @@ async def _execute_codex_job(
     try:
         job = await runner.start(mode, effective_body, progress)
     except Exception as exc:
+        # Failure to even start the job (e.g. invalid args, Codex
+        # missing). On Feishu, surface this as a card; Telegram keeps
+        # the existing text path.
+        if msg.channel == "feishu" and hasattr(port, "send_card"):
+            try:
+                from channel.feishu_cards import job_failed_card
+                await port.send_card(msg, job_failed_card(
+                    job_id="(start-failed)",
+                    error=f"现在不能开始：{truncate(str(exc), 1200)}",
+                ))
+                return
+            except Exception:
+                pass
         await port.reply(msg, f"现在不能开始：{truncate(str(exc), 1200)}")
         return
+
+    # On Feishu, send a structured "job started" card right after
+    # the runner accepts the job. The placeholder ("⏳ 收到，处理中…")
+    # already went out as an editable card via port.reply, so the
+    # started card is a fresh message — operator chat stays clean
+    # and the buttons let them jump to status / diff / cancel without
+    # retyping. Telegram ignores the new path and uses the existing
+    # final-summary flow.
+    if msg.channel == "feishu" and hasattr(port, "send_card"):
+        try:
+            from channel.feishu_cards import job_started_card
+            worktree = getattr(getattr(job, "worktree", None), "path", None) \
+                or getattr(job, "worktree_path", None)
+            await port.send_card(msg, job_started_card(
+                job_id=str(getattr(job, "id", "")),
+                prompt=body,
+                worktree=str(worktree) if worktree else None,
+            ))
+        except Exception:
+            logger.debug("Feishu job_started_card failed", exc_info=True)
 
     # Wait for completion (runner.start spawns the task; we await state
     # transitions to keep port lifecycle simple). The progress callback may
@@ -232,6 +265,8 @@ async def _execute_codex_job(
 
     # Determine the final assistant text for session recording.
     final_answer = ""
+    job_id = str(getattr(job, "id", ""))
+    is_feishu = msg.channel == "feishu" and hasattr(port, "send_card")
     if job.summary:
         summary = job.summary
         final_answer = summary
@@ -244,12 +279,34 @@ async def _execute_codex_job(
         # branches below.
         summary_truncated = truncate(summary)
         if summary_truncated.strip() != last_progress.strip():
-            await port.send_new(msg, summary)
+            if is_feishu:
+                try:
+                    from channel.feishu_cards import job_finished_card
+                    await port.send_card(msg, job_finished_card(
+                        job_id=job_id,
+                        summary=summary,
+                    ))
+                except Exception:
+                    logger.debug("Feishu job_finished_card failed", exc_info=True)
+                    await port.send_new(msg, summary)
+            else:
+                await port.send_new(msg, summary)
     elif job.error:
         err_truncated = truncate(job.error, 3500)
         final_answer = f"[error] {err_truncated}"
         if err_truncated.strip() != last_progress.strip():
-            await port.send_new(msg, err_truncated)
+            if is_feishu:
+                try:
+                    from channel.feishu_cards import job_failed_card
+                    await port.send_card(msg, job_failed_card(
+                        job_id=job_id,
+                        error=err_truncated,
+                    ))
+                except Exception:
+                    logger.debug("Feishu job_failed_card failed", exc_info=True)
+                    await port.send_new(msg, err_truncated)
+            else:
+                await port.send_new(msg, err_truncated)
     elif last_progress and last_progress != PLACEHOLDER_TEXT:
         final_answer = last_progress
         await port.send_new(msg, last_progress)

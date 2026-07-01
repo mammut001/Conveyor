@@ -244,6 +244,81 @@ def _test_reply_with_buttons_sends_card() -> CheckResult:
     return CheckResult(name, ok, f"out={out} calls={len(channel.send_calls)}")
 
 
+# ---- FeishuOutbound.send_card tests (interactive card layer) --------------
+
+
+def _test_send_card_returns_message_id_on_success() -> CheckResult:
+    name = "FeishuOutbound.send_card: returns message_id on success, no fallback"
+    channel = _FakeChannel()
+    port = FeishuOutbound(channel)
+    inbound = inbound_from_event(_fake_event(chat_id="oc_card", message_id="om_card"))
+    from channel.feishu_cards import job_started_card
+    out = asyncio.run(port.send_card(
+        inbound, job_started_card("job-1", "fix tests"),
+    ))
+    ok = (
+        out == "om_new_1"
+        and len(channel.send_calls) == 1
+        and channel.send_calls[0][0] == "oc_card"
+        and channel.send_calls[0][1].get("config", {}).get("wide_screen_mode") is True
+    )
+    return CheckResult(name, ok, f"out={out} calls={len(channel.send_calls)}")
+
+
+def _test_send_card_falls_back_to_text_on_failure() -> CheckResult:
+    name = "FeishuOutbound.send_card: card send fails → text fallback"
+    channel = _FailChannel()
+    port = FeishuOutbound(channel)
+    inbound = inbound_from_event(_fake_event(chat_id="oc_fb", message_id="om_fb"))
+    from channel.feishu_cards import job_finished_card
+    out = asyncio.run(port.send_card(
+        inbound, job_finished_card("job-1", "All green."),
+    ))
+    ok = (
+        out is None
+        and len(channel.send_calls) == 2
+        and isinstance(channel.send_calls[1][1], dict)
+        and "text" in channel.send_calls[1][1]
+        and "Codex job finished" in channel.send_calls[1][1]["text"]
+    )
+    return CheckResult(
+        name, ok,
+        f"out={out} calls={len(channel.send_calls)} text={channel.send_calls[1][1].get('text', '')[:80] if len(channel.send_calls) > 1 else None}",
+    )
+
+
+def _test_send_card_skips_when_chat_id_empty() -> CheckResult:
+    name = "FeishuOutbound.send_card: empty chat_id → no call, no fallback"
+    channel = _FakeChannel()
+    port = FeishuOutbound(channel)
+    inbound = inbound_from_event(_fake_event(chat_id=""))
+    from channel.feishu_cards import status_card
+    out = asyncio.run(port.send_card(
+        inbound, status_card("Status", [("k", "v")]),
+    ))
+    return CheckResult(name, out is None and channel.send_calls == [],
+                       f"out={out} calls={channel.send_calls}")
+
+
+def _test_send_card_with_no_message_id() -> CheckResult:
+    """Outbound events have no incoming message_id to reply to.
+    `opts` should be None in that case (not crash on `reply_to` lookup)."""
+    name = "FeishuOutbound.send_card: works when message_id is None"
+    channel = _FakeChannel()
+    port = FeishuOutbound(channel)
+    inbound = inbound_from_event(_fake_event(chat_id="oc_card", message_id=None))
+    from channel.feishu_cards import confirm_action_card
+    out = asyncio.run(port.send_card(
+        inbound, confirm_action_card("tk1", "Confirm?", "Do it"),
+    ))
+    ok = (
+        out == "om_new_1"
+        and len(channel.send_calls) == 1
+        and channel.send_calls[0][2] is None
+    )
+    return CheckResult(name, ok, f"out={out} opts={channel.send_calls[0][2] if channel.send_calls else None}")
+
+
 def main() -> int:
     results = [
         _test_inbound_basic(),
@@ -258,6 +333,10 @@ def main() -> int:
         _test_edit_progress_failure_returns_false(),
         _test_card_fallback_to_text(),
         _test_reply_with_buttons_sends_card(),
+        _test_send_card_returns_message_id_on_success(),
+        _test_send_card_falls_back_to_text_on_failure(),
+        _test_send_card_skips_when_chat_id_empty(),
+        _test_send_card_with_no_message_id(),
     ]
     print_results(results)
     ok = all(r.ok for r in results)

@@ -100,6 +100,25 @@ class TelegramOutbound:
             self._update, text, reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+    async def send_card(
+        self,
+        msg: InboundMessage,
+        card: dict,
+        *,
+        reply_to: str | None = None,
+    ) -> str | None:
+        """Telegram has no native card type: flatten the card to text
+        and send via ``reply``.
+
+        This keeps the handler-level interface symmetric with Feishu
+        (which sends the actual card) while leaving Telegram behavior
+        unchanged. If you want the card content verbatim in Telegram,
+        see ``channel.feishu_cards.flatten_card_to_text``.
+        """
+        from channel.feishu_cards import flatten_card_to_text  # lazy
+        text = flatten_card_to_text(card)
+        return await send_text(self._update, text)
+
 
 def make_outbound(update: Update) -> TelegramOutbound:
     return TelegramOutbound(update)

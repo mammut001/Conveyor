@@ -88,7 +88,20 @@ async def _cancel(msg, port, runner, _settings, _arg):
 
 
 async def _diff(msg, port, runner, _settings, _arg):
-    await port.reply(msg, await runner.diff_text())
+    full_diff = await runner.diff_text()
+    # On Feishu, send a structured card (Apply / Discard / Status)
+    # as a fresh message, then send the full diff as a follow-up
+    # text reply. Telegram still gets the original text-only path.
+    if msg.channel == "feishu" and hasattr(port, "send_card"):
+        try:
+            from channel.feishu_cards import diff_preview_card
+            await port.send_card(msg, diff_preview_card(
+                job_id=str(getattr(getattr(runner, "current_job", None), "id", "") or ""),
+                diff_summary=full_diff,
+            ))
+        except Exception:
+            pass
+    await port.reply(msg, full_diff)
 
 
 async def _discard(msg, port, runner, _settings, _arg):
