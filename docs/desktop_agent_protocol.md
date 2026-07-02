@@ -15,10 +15,12 @@ screenshot observe via `capture-screen-helper` and
 `desktop_agent.py --observe-once`. **P5.3** adds remote observe
 requests: chat creates pending requests, Mac agent polls
 `/desktop/observe/pending`, captures locally, and returns metadata
-only. Computer Use control remains future work. Deterministic tools:
+only. **P5.3.1** hardens the observe request store with a cross-process file lock.
+Computer Use control remains future work. Deterministic tools:
 `nodes.status`, `computer.status`, `desktop.screenshot.status`,
 `desktop.observe.request`, `desktop.observe.status`,
 `desktop.observe.cancel`.
+
 
 ---
 

@@ -161,7 +161,9 @@ In P5.1 and P5.1.1, the desktop agent registration and heartbeat endpoint has be
 * **Control Plane Binding**: By default, the control plane server binds to localhost `127.0.0.1`. Binding to `0.0.0.0` is disabled by default. Exposing this interface publicly requires secure routing (e.g. Tailscale, Cloudflare Tunnel, or a VPN) and HTTPS.
 * **File-backed Persistence Isolation**: Status info is shared across processes using `CODEX_MEMORY_ROOT/state/desktop_nodes.json`. This JSON state file is guaranteed to contain NO tokens, secrets, or request headers, and only stores general connection metadata (node ID, version, host summary). No screenshots, mouse, keyboard, or action data are written or stored.
 * **P5.2 observe**: Read-only screenshot capture is local-only through `capture-screen-helper`. Metadata JSON is stored under `CODEX_MEMORY_ROOT/desktop/screenshots/`; image bytes are not sent to the VPS.
+* **P5.3.1 request store hardening**: The observe request store is hardened with a cross-process file lock. This prevents lost updates when Telegram, Feishu, and `desktop_agent_server.py` read/write `CODEX_MEMORY_ROOT/state/desktop_observe_requests.json` concurrently.
 * **Safety Non-goals**: No mouse/keyboard control, browser automation, remote screenshot trigger, or Gemini Computer Use API calls are active. Computer Use control is still not implemented.
+
 
 
 

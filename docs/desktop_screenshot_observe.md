@@ -59,6 +59,11 @@ In Feishu:
 
 Request store: `CODEX_MEMORY_ROOT/state/desktop_observe_requests.json`
 
+P5.3.1 hardens the observe request store with a cross-process file lock.
+This prevents lost updates when Telegram, Feishu, and desktop_agent_server.py
+read/write CODEX_MEMORY_ROOT/state/desktop_observe_requests.json concurrently.
+
+
 Config:
 
 ```env

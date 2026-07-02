@@ -209,7 +209,9 @@ In P5.1, the desktop agent registration and heartbeat protocol is active:
 * **Status**: `/observe_status`, `/screenshot_status`, or NL like `截图状态`
 * **Cancel**: `/observe_cancel <request_id>` for pending/claimed requests
 * VPS stores pending requests at `CODEX_MEMORY_ROOT/state/desktop_observe_requests.json`
+* P5.3.1 hardens the observe request store with a cross-process file lock. This prevents lost updates when Telegram, Feishu, and `desktop_agent_server.py` read/write `CODEX_MEMORY_ROOT/state/desktop_observe_requests.json` concurrently.
 * Mac captures locally; only metadata crosses to VPS — **no image upload**
+
 
 **P5.3 does not support:** image upload, thumbnail preview, visual analysis, OCR, mouse/keyboard/browser control, Computer Use.
 

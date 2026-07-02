@@ -276,6 +276,79 @@ def _check_observe_request_store_transitions() -> None:
     _pass("observe_request_store")
 
 
+def _check_observe_lock_and_concurrency() -> None:
+    from desktop_observe_requests import observe_requests_lock_path, validate_observe_result
+    from runner.file_lock import file_lock
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["CODEX_MEMORY_ROOT"] = tmp
+        os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
+        settings = _settings("/usr/local/bin/fake-helper", Path(tmp))
+
+        # 1. observe request lock path check
+        lock_path = observe_requests_lock_path(settings)
+        expected_lock = Path(tmp) / "state" / "desktop_observe_requests.lock"
+        if lock_path.resolve() != expected_lock.resolve():
+            _fail("deploy_verify_lock_path", f"expected {expected_lock.resolve()}, got {lock_path.resolve()}")
+            return
+
+
+        with file_lock(lock_path):
+            if not lock_path.exists():
+                _fail("deploy_verify_lock_path_exists", "lock file not created")
+                return
+
+        # 2. metadata-only validation check
+        fake_result = {
+            "screenshot_id": "shot-1",
+            "path": "/tmp/shot.png",
+            "metadata_path": "/tmp/shot.json",
+            "sha256": "a" * 64,
+            "width": 1,
+            "height": 1,
+            "bytes": 1,
+            "node_id": "macbook-payton",
+        }
+        if validate_observe_result(fake_result) is None:
+            _fail("deploy_verify_validation_good", "rejected valid metadata")
+            return
+        if validate_observe_result({**fake_result, "base64": "data"}) is not None:
+            _fail("deploy_verify_validation_bad_base64", "accepted base64")
+            return
+        if validate_observe_result({**fake_result, "thumbnail": "data"}) is not None:
+            _fail("deploy_verify_validation_bad_thumbnail", "accepted thumbnail")
+            return
+
+        # 3. concurrent create mini-check
+        from nodes.state import register_desktop_node
+        from desktop_observe_requests import create_observe_request, load_observe_requests
+        from channel.types import InboundMessage
+        import threading
+
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+
+        msg = InboundMessage(
+            channel="feishu", operator_id="ou_test", chat_id="oc_test", message_id="om_test", text="test",
+        )
+
+        def task(idx: int):
+            create_observe_request(settings, msg, f"req-{idx}")
+
+        threads = [threading.Thread(target=task, args=(i,)) for i in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        store = load_observe_requests(settings)
+        if len(store) != 3:
+            _fail("deploy_verify_concurrent_create", f"expected 3, got {len(store)}")
+            return
+
+    _pass("observe_lock_and_concurrency")
+
+
 def _check_no_capture_in_status_executor() -> None:
     import asyncio
     from unittest import mock
@@ -311,6 +384,7 @@ def main() -> int:
     _check_observe_commands()
     _check_feishu_card_and_action()
     _check_observe_request_store_transitions()
+    _check_observe_lock_and_concurrency()
     _check_no_capture_in_status_executor()
 
     if FAILURES:

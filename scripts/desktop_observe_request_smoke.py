@@ -32,6 +32,9 @@ from desktop_observe_requests import (
     list_pending_observe_requests,
     load_observe_requests,
     validate_observe_result,
+    list_recent_observe_requests,
+    expire_old_observe_requests,
+    count_pending_requests,
 )
 from handlers.intent import route_intent
 from handlers.tools.observe_tools import exec_desktop_observe_status
@@ -39,9 +42,73 @@ from handlers.tools.observe_tools import exec_desktop_observe_status
 FAILURES: list[str] = []
 
 
+# Workers for multiprocessing concurrent smoke tests
+def run_concurrent_create(temp_dir: str, index: int) -> None:
+    os.environ["CODEX_MEMORY_ROOT"] = temp_dir
+    os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
+    from config import load_settings
+    from desktop_observe_requests import create_observe_request
+    from scripts.desktop_observe_request_smoke import _msg
+    settings = load_settings()
+    msg = _msg(f"request-{index}")
+    create_observe_request(settings, msg, f"user-request-{index}")
+
+
+def run_claim_worker(temp_dir: str, request_id: str, results_dir: str, worker_id: int) -> None:
+    os.environ["CODEX_MEMORY_ROOT"] = temp_dir
+    os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
+    from config import load_settings
+    from desktop_observe_requests import claim_observe_request
+    settings = load_settings()
+    res = claim_observe_request(settings, request_id, "macbook-payton")
+    res_path = Path(results_dir) / f"claim_{worker_id}.json"
+    res_path.write_text(json.dumps(res))
+
+
+def run_complete_worker(temp_dir: str, request_id: str, result_val: dict, results_dir: str) -> None:
+    os.environ["CODEX_MEMORY_ROOT"] = temp_dir
+    os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
+    from config import load_settings
+    from desktop_observe_requests import complete_observe_request
+    settings = load_settings()
+    res = complete_observe_request(settings, request_id, "macbook-payton", result_val)
+    (Path(results_dir) / "complete_result.json").write_text(json.dumps(res))
+
+
+def run_fail_worker(temp_dir: str, request_id: str, results_dir: str) -> None:
+    os.environ["CODEX_MEMORY_ROOT"] = temp_dir
+    os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
+    from config import load_settings
+    from desktop_observe_requests import fail_observe_request
+    settings = load_settings()
+    res = fail_observe_request(settings, request_id, "macbook-payton", "error_code", "error message")
+    (Path(results_dir) / "fail_result.json").write_text(json.dumps(res))
+
+
+def run_cancel_worker(temp_dir: str, request_id: str, results_dir: str) -> None:
+    os.environ["CODEX_MEMORY_ROOT"] = temp_dir
+    os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
+    from config import load_settings
+    from desktop_observe_requests import cancel_observe_request
+    settings = load_settings()
+    res = cancel_observe_request(settings, request_id)
+    (Path(results_dir) / "cancel_result.json").write_text(json.dumps(res))
+
+
+def run_claim_worker_t5(temp_dir: str, request_id: str, results_dir: str) -> None:
+    os.environ["CODEX_MEMORY_ROOT"] = temp_dir
+    os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
+    from config import load_settings
+    from desktop_observe_requests import claim_observe_request
+    settings = load_settings()
+    res = claim_observe_request(settings, request_id, "macbook-payton")
+    (Path(results_dir) / "claim_result.json").write_text(json.dumps(res))
+
+
 def _fail(name: str, detail: str) -> None:
     print(f"[fail] {name}: {detail}")
     FAILURES.append(name)
+
 
 
 def _msg(text: str = "截图看看我电脑现在是什么") -> InboundMessage:
@@ -278,11 +345,288 @@ def main() -> int:
     _test_feishu_card_buttons()
     _test_no_image_bytes_stored()
 
+    # New cross-process consistency/locking checks
+    _test_lock_path_exists()
+    _test_concurrent_create()
+    _test_concurrent_claim()
+    _test_complete_fail_conflict()
+    _test_cancel_claim_conflict()
+    _test_corrupt_json_recovery()
+    _test_no_nested_deadlock()
+
     if FAILURES:
         print(f"\n{len(FAILURES)} failure(s): {', '.join(FAILURES)}")
         return 1
     print("\nAll desktop observe request smoke checks passed.")
     return 0
+
+
+def _test_lock_path_exists() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _settings(tmp)
+        from desktop_observe_requests import observe_requests_lock_path
+        lock_p = observe_requests_lock_path(settings)
+        expected = Path(tmp) / "state" / "desktop_observe_requests.lock"
+        if lock_p.resolve() != expected.resolve():
+            _fail("lock_path", f"expected {expected.resolve()}, got {lock_p.resolve()}")
+            return
+        from runner.file_lock import file_lock
+        with file_lock(lock_p):
+            if not lock_p.exists():
+                _fail("lock_path_exists", "lock file was not created on disk")
+                return
+    print("[pass] lock_path_exists")
+
+
+def _test_concurrent_create() -> None:
+    import multiprocessing
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _settings(tmp, max_pending=20)
+        from nodes.state import register_desktop_node
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        
+        processes = []
+        for i in range(5):
+            p = multiprocessing.Process(target=run_concurrent_create, args=(tmp, i))
+            processes.append(p)
+            p.start()
+            
+        for p in processes:
+            p.join(timeout=5)
+            if p.is_alive():
+                p.terminate()
+                
+        store = load_observe_requests(settings)
+        if len(store) != 5:
+            _fail("concurrent_create", f"expected 5 requests, got {len(store)}: {store}")
+            return
+            
+        from desktop_observe_requests import save_observe_requests
+        try:
+            save_observe_requests(settings, store)
+        except Exception as exc:
+            _fail("concurrent_create_corrupt", f"failed to load/save store: {exc}")
+            return
+    print("[pass] concurrent_create")
+
+
+def _test_concurrent_claim() -> None:
+    import multiprocessing
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _settings(tmp)
+        from nodes.state import register_desktop_node
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        
+        created = create_observe_request(settings, _msg(), "claim test")
+        request_id = created["request"]["request_id"]
+        
+        results_dir = Path(tmp) / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        
+        processes = []
+        for i in range(5):
+            p = multiprocessing.Process(target=run_claim_worker, args=(tmp, request_id, str(results_dir), i))
+            processes.append(p)
+            p.start()
+            
+        for p in processes:
+            p.join(timeout=5)
+            if p.is_alive():
+                p.terminate()
+                
+        success_count = 0
+        conflicts = 0
+        for i in range(5):
+            res_file = results_dir / f"claim_{i}.json"
+            if res_file.exists():
+                res = json.loads(res_file.read_text())
+                if res.get("ok"):
+                    success_count += 1
+                else:
+                    conflicts += 1
+                    
+        store = load_observe_requests(settings)
+        final_status = store[request_id]["status"]
+        
+        if success_count != 1:
+            _fail("concurrent_claim", f"expected exactly 1 success, got {success_count} (conflicts: {conflicts})")
+            return
+        if final_status != "claimed":
+            _fail("concurrent_claim_status", f"expected final status claimed, got {final_status}")
+            return
+    print("[pass] concurrent_claim")
+
+
+def _test_complete_fail_conflict() -> None:
+    import multiprocessing
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _settings(tmp)
+        from nodes.state import register_desktop_node
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        
+        created = create_observe_request(settings, _msg(), "complete/fail test")
+        request_id = created["request"]["request_id"]
+        claim_observe_request(settings, request_id, "macbook-payton")
+        
+        results_dir = Path(tmp) / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        
+        p_comp = multiprocessing.Process(target=run_complete_worker, args=(tmp, request_id, _fake_result(), str(results_dir)))
+        p_fail = multiprocessing.Process(target=run_fail_worker, args=(tmp, request_id, str(results_dir)))
+        
+        p_comp.start()
+        p_fail.start()
+        
+        p_comp.join(timeout=5)
+        p_fail.join(timeout=5)
+        
+        if p_comp.is_alive(): p_comp.terminate()
+        if p_fail.is_alive(): p_fail.terminate()
+        
+        comp_ok = False
+        fail_ok = False
+        
+        comp_res_file = results_dir / "complete_result.json"
+        if comp_res_file.exists():
+            comp_ok = json.loads(comp_res_file.read_text()).get("ok", False)
+            
+        fail_res_file = results_dir / "fail_result.json"
+        if fail_res_file.exists():
+            fail_ok = json.loads(fail_res_file.read_text()).get("ok", False)
+            
+        store = load_observe_requests(settings)
+        final_status = store[request_id]["status"]
+        
+        if (comp_ok and fail_ok) or (not comp_ok and not fail_ok):
+            _fail("complete_fail_conflict", f"expected exactly one success: complete={comp_ok}, fail={fail_ok}")
+            return
+        if final_status not in ("completed", "failed"):
+            _fail("complete_fail_conflict_status", f"expected completed or failed status, got {final_status}")
+            return
+            
+        raw_json = (settings.codex_memory_root / "state" / "desktop_observe_requests.json").read_text()
+        for forbidden in ("png_bytes", "image_bytes", "base64", "thumbnail"):
+            if forbidden in raw_json:
+                _fail("complete_fail_conflict_data", f"Found forbidden field {forbidden} in JSON store")
+                return
+    print("[pass] complete_fail_conflict")
+
+
+def _test_cancel_claim_conflict() -> None:
+    import multiprocessing
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _settings(tmp)
+        from nodes.state import register_desktop_node
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        
+        created = create_observe_request(settings, _msg(), "cancel/claim test")
+        request_id = created["request"]["request_id"]
+        
+        results_dir = Path(tmp) / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        
+        p_cancel = multiprocessing.Process(target=run_cancel_worker, args=(tmp, request_id, str(results_dir)))
+        p_claim = multiprocessing.Process(target=run_claim_worker_t5, args=(tmp, request_id, str(results_dir)))
+        
+        p_cancel.start()
+        p_claim.start()
+        
+        p_cancel.join(timeout=5)
+        p_claim.join(timeout=5)
+        
+        if p_cancel.is_alive(): p_cancel.terminate()
+        if p_claim.is_alive(): p_claim.terminate()
+        
+        cancel_ok = False
+        claim_ok = False
+        
+        cancel_res_file = results_dir / "cancel_result.json"
+        if cancel_res_file.exists():
+            cancel_ok = json.loads(cancel_res_file.read_text()).get("ok", False)
+            
+        claim_res_file = results_dir / "claim_result.json"
+        if claim_res_file.exists():
+            claim_ok = json.loads(claim_res_file.read_text()).get("ok", False)
+            
+        store = load_observe_requests(settings)
+        final_status = store[request_id]["status"]
+        
+        if not cancel_ok and not claim_ok:
+            _fail("cancel_claim_conflict", f"expected at least one success: cancel={cancel_ok}, claim={claim_ok}")
+            return
+        if final_status not in ("cancelled", "claimed"):
+            _fail("cancel_claim_conflict_status", f"expected cancelled or claimed status, got {final_status}")
+            return
+    print("[pass] cancel_claim_conflict")
+
+
+def _test_corrupt_json_recovery() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _settings(tmp)
+        from nodes.state import register_desktop_node
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        
+        path = settings.codex_memory_root / "state" / "desktop_observe_requests.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{corrupt-json", encoding="utf-8")
+        
+        try:
+            pending = list_pending_observe_requests(settings, "macbook-payton")
+            recent = list_recent_observe_requests(settings)
+            count = count_pending_requests(settings, "macbook-payton")
+        except Exception as exc:
+            _fail("corrupt_json_recovery_crash", f"read functions crashed on corrupt JSON: {exc}")
+            return
+            
+        if pending or recent or count != 0:
+            _fail("corrupt_json_recovery_empty", f"expected empty, got pending={pending}, recent={recent}, count={count}")
+            return
+            
+        try:
+            created = create_observe_request(settings, _msg(), "re-created")
+        except Exception as exc:
+            _fail("corrupt_json_recovery_create_crash", f"create request crashed on corrupt JSON: {exc}")
+            return
+            
+        if not created.get("ok"):
+            _fail("corrupt_json_recovery_create_ok", f"create request failed: {created}")
+            return
+            
+        store = load_observe_requests(settings)
+        if len(store) != 1 or "re-created" not in json.dumps(store):
+            _fail("corrupt_json_recovery_valid_store", f"store not successfully repaired/written: {store}")
+            return
+    print("[pass] corrupt_json_recovery")
+
+
+def _test_no_nested_deadlock() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _settings(tmp)
+        from nodes.state import register_desktop_node
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        
+        import signal
+        has_alarm = hasattr(signal, "alarm")
+        if has_alarm:
+            signal.signal(signal.SIGALRM, lambda sig, frame: (_fail("nested_deadlock", "timeout reached"), sys.exit(1)))
+            signal.alarm(3)
+            
+        try:
+            created = create_observe_request(settings, _msg(), "seq")
+            request_id = created["request"]["request_id"]
+            
+            list_pending_observe_requests(settings, "macbook-payton")
+            claim_observe_request(settings, request_id, "macbook-payton")
+            complete_observe_request(settings, request_id, "macbook-payton", _fake_result())
+            list_recent_observe_requests(settings)
+            expire_old_observe_requests(settings)
+        except Exception as exc:
+            _fail("nested_deadlock_execution", f"sequence failed: {exc}")
+            return
+        finally:
+            if has_alarm:
+                signal.alarm(0)
+    print("[pass] no_nested_deadlock")
 
 
 if __name__ == "__main__":
