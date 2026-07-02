@@ -1,6 +1,7 @@
 """desktop_agent_server.py — minimal HTTP server for Conveyor control plane."""
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -51,9 +52,15 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
         """Authenticate request. Returns True if authorized, False otherwise."""
         auth_header = self.headers.get("Authorization", "")
         expected_token = settings.conveyor_desktop_agent_token
-        if not auth_header.startswith("Bearer ") or auth_header[7:].strip() != expected_token:
+        if not auth_header.startswith("Bearer "):
             self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "Unauthorized: Invalid or missing token"})
             return False
+
+        provided = auth_header[7:].strip()
+        if not expected_token or not hmac.compare_digest(provided, expected_token):
+            self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "Unauthorized: Invalid or missing token"})
+            return False
+
         return True
 
     def check_enabled(self) -> bool:
@@ -69,7 +76,26 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
         if not self.authenticate():
             return
 
-        content_length = int(self.headers.get("Content-Length", 0))
+        content_length_str = self.headers.get("Content-Length")
+        if content_length_str is None:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Missing Content-Length header"})
+            return
+
+        try:
+            content_length = int(content_length_str)
+        except ValueError:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid Content-Length header"})
+            return
+
+        if content_length < 0:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Negative Content-Length"})
+            return
+
+        MAX_BODY_BYTES = 16 * 1024
+        if content_length > MAX_BODY_BYTES:
+            self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"ok": False, "error": "Payload Too Large"})
+            return
+
         post_data = self.rfile.read(content_length)
         try:
             body = json.loads(post_data)
@@ -77,16 +103,58 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid JSON body"})
             return
 
+        expected_node_id = settings.conveyor_desktop_node_id or "macbook-payton"
+
         if self.path == "/desktop/register":
             node_id = body.get("node_id")
             display_name = body.get("display_name")
             agent_version = body.get("agent_version")
             host = body.get("host")
-            if not all([node_id, display_name, agent_version, host]):
-                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Missing required registration fields"})
+
+            if not isinstance(node_id, str) or not node_id.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing node_id"})
                 return
 
-            register_desktop_node(settings, node_id, display_name, agent_version, host)
+            if node_id != expected_node_id:
+                self.send_json(HTTPStatus.BAD_REQUEST, {
+                    "ok": False,
+                    "error": "node_id mismatch",
+                    "expected_node_id": expected_node_id
+                })
+                return
+
+            if not isinstance(display_name, str) or not display_name.strip() or len(display_name) > 100:
+                self.send_json(HTTPStatus.BAD_REQUEST, {
+                    "ok": False, 
+                    "error": "Invalid display_name: must be a non-empty string <= 100 chars"
+                })
+                return
+
+            if not isinstance(agent_version, str) or not agent_version.strip() or len(agent_version) > 64:
+                self.send_json(HTTPStatus.BAD_REQUEST, {
+                    "ok": False, 
+                    "error": "Invalid agent_version: must be a non-empty string <= 64 chars"
+                })
+                return
+
+            if not isinstance(host, dict):
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid host details: must be a dictionary"})
+                return
+
+            if len(host) > 10:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Host details dictionary too large"})
+                return
+
+            sanitized_host = {}
+            for k in ["platform", "hostname", "arch"]:
+                v = host.get(k)
+                if v is not None:
+                    if not isinstance(v, str):
+                        self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": f"Host field {k} must be a string"})
+                        return
+                    sanitized_host[k] = v[:128]
+
+            register_desktop_node(settings, node_id, display_name, agent_version, sanitized_host)
             self.send_json(HTTPStatus.OK, {
                 "ok": True,
                 "node_id": node_id,
@@ -99,9 +167,33 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
             node_id = body.get("node_id")
             agent_state = body.get("agent_state")
             last_action = body.get("last_action")
-            if not node_id or not agent_state:
-                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Missing node_id or agent_state"})
+
+            if not isinstance(node_id, str) or not node_id.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing node_id"})
                 return
+
+            if node_id != expected_node_id:
+                self.send_json(HTTPStatus.BAD_REQUEST, {
+                    "ok": False,
+                    "error": "node_id mismatch",
+                    "expected_node_id": expected_node_id
+                })
+                return
+
+            if not isinstance(agent_state, str) or not agent_state.strip() or len(agent_state) > 64:
+                self.send_json(HTTPStatus.BAD_REQUEST, {
+                    "ok": False, 
+                    "error": "Invalid agent_state: must be a non-empty string <= 64 chars"
+                })
+                return
+
+            if last_action is not None:
+                if not isinstance(last_action, str) or len(last_action) > 128:
+                    self.send_json(HTTPStatus.BAD_REQUEST, {
+                        "ok": False, 
+                        "error": "Invalid last_action: must be a string <= 128 chars"
+                    })
+                    return
 
             node_info = record_heartbeat(settings, node_id, agent_state, last_action)
 

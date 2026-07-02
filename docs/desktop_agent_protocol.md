@@ -204,8 +204,14 @@ export CONVEYOR_DESKTOP_NODE_NAME="Payton MacBook"
 .venv/bin/python desktop_agent.py
 ```
 
+> [!IMPORTANT]
+> The local agent `CONVEYOR_DESKTOP_NODE_ID` must match the VPS `CONVEYOR_DESKTOP_NODE_ID` (default is `macbook-payton`). Mismatched node IDs will be rejected by the server with HTTP 400. This mismatch check prevents situations where the agent is running but the `/nodes` panel shows the expected MacBook as offline.
+>
+> Pinging a heartbeat only proves that the agent daemon is alive and connected. Screenshots, cursor/keyboard controls, and Gemini Computer Use are not implemented.
+
 Chat query routing:
 * `/nodes` or `MacBook 在线吗` will report the online/offline status, last seen time, and agent state.
 * `computer use status` or `/computer_status` will report connection details.
 * Note: Screenshot capture, click, type, and Gemini Computer Use control remain future work.
+
 

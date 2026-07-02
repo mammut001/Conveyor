@@ -20,6 +20,25 @@ from nodes.types import (
 _lock = threading.Lock()
 
 
+def _safe_str(value: Any, max_len: int) -> str:
+    """Ensure value is a string and is truncated to max_len."""
+    if not isinstance(value, str):
+        value = str(value) if value is not None else ""
+    return value[:max_len]
+
+
+def _safe_host_info(host: Any) -> dict[str, str]:
+    """Sanitize host dictionary to contain only safe string fields platform/hostname/arch."""
+    if not isinstance(host, dict):
+        return {}
+    sanitized = {}
+    for k in ["platform", "hostname", "arch"]:
+        v = host.get(k)
+        if v is not None:
+            sanitized[k] = _safe_str(v, 128)
+    return sanitized
+
+
 def desktop_state_path(settings: Settings) -> Path:
     """Return the Path to the shared desktop nodes JSON file."""
     return settings.codex_memory_root / "state" / "desktop_nodes.json"
@@ -89,31 +108,37 @@ def register_desktop_node(
     if now is None:
         now = time.time()
 
+    # Sanitize inputs
+    node_id_str = _safe_str(node_id, 128)
+    display_name_str = _safe_str(display_name, 100)
+    agent_version_str = _safe_str(agent_version, 64)
+    sanitized_host = _safe_host_info(host_info)
+
     with _lock:
         state = load_desktop_state(settings)
         node_state = {
-            "node_id": node_id,
-            "display_name": display_name,
-            "agent_version": agent_version,
-            "host": host_info,
+            "node_id": node_id_str,
+            "display_name": display_name_str,
+            "agent_version": agent_version_str,
+            "host": sanitized_host,
             "last_seen_at": now,
             "agent_state": "registered",
             "last_action": "register",
         }
-        state[node_id] = node_state
+        state[node_id_str] = node_state
         save_desktop_state(settings, state)
 
     return NodeInfo(
-        node_id=node_id,
-        display_name=display_name,
+        node_id=node_id_str,
+        display_name=display_name_str,
         node_type=NodeType.DESKTOP,
         status=NodeStatus.ONLINE,
         last_seen_at=now,
         capabilities=DESKTOP_STUB_CAPABILITIES,
         trust_level=TrustLevel.LOCAL_DESKTOP,
         metadata={
-            "agent_version": agent_version,
-            "host": host_info,
+            "agent_version": agent_version_str,
+            "host": sanitized_host,
             "agent_state": "registered",
             "last_action": "register",
         },
@@ -143,28 +168,32 @@ def record_heartbeat(
     if now is None:
         now = time.time()
 
+    node_id_str = _safe_str(node_id, 128)
+    agent_state_str = _safe_str(agent_state, 64)
+    last_action_str = _safe_str(last_action, 128) if last_action is not None else None
+
     with _lock:
         state = load_desktop_state(settings)
-        node_state = state.get(node_id)
-        if node_state is None:
+        node_state = state.get(node_id_str)
+        if not isinstance(node_state, dict):
             return None
 
         node_state["last_seen_at"] = now
-        node_state["agent_state"] = agent_state
-        if last_action is not None:
-            node_state["last_action"] = last_action
+        node_state["agent_state"] = agent_state_str
+        if last_action_str is not None:
+            node_state["last_action"] = last_action_str
         else:
             node_state["last_action"] = "heartbeat"
 
         save_desktop_state(settings, state)
 
-        display_name = node_state["display_name"]
-        agent_version = node_state["agent_version"]
-        host_info = node_state["host"]
+        display_name = _safe_str(node_state.get("display_name"), 100)
+        agent_version = _safe_str(node_state.get("agent_version"), 64)
+        host_info = _safe_host_info(node_state.get("host"))
         last_action_val = node_state["last_action"]
 
     return NodeInfo(
-        node_id=node_id,
+        node_id=node_id_str,
         display_name=display_name,
         node_type=NodeType.DESKTOP,
         status=NodeStatus.ONLINE,
@@ -174,7 +203,7 @@ def record_heartbeat(
         metadata={
             "agent_version": agent_version,
             "host": host_info,
-            "agent_state": agent_state,
+            "agent_state": agent_state_str,
             "last_action": last_action_val,
         },
     )
@@ -193,10 +222,12 @@ def get_desktop_runtime(
         settings = load_settings()
         target_node_id = settings_or_node_id
 
+    target_node_id_str = _safe_str(target_node_id, 128)
+
     with _lock:
         state = load_desktop_state(settings)
-        node_state = state.get(target_node_id)
-        if node_state is None:
+        node_state = state.get(target_node_id_str)
+        if not isinstance(node_state, dict):
             return None
         return dict(node_state)
 
@@ -207,29 +238,39 @@ def is_desktop_online(
     **kwargs
 ) -> bool:
     """True if the node has registered and its last seen time is within the TTL."""
-    if isinstance(settings_or_node_id, Settings):
-        settings = settings_or_node_id
-        node_id = args[0] if len(args) > 0 else kwargs.pop("node_id")
-        now = args[1] if len(args) > 1 else kwargs.get("now", None)
-        ttl_seconds = args[2] if len(args) > 2 else kwargs.get("ttl_seconds", None)
-    else:
-        from config import load_settings
-        settings = load_settings()
-        node_id = settings_or_node_id
-        now = args[0] if len(args) > 0 else kwargs.get("now", None)
-        ttl_seconds = args[1] if len(args) > 1 else kwargs.get("ttl_seconds", None)
+    try:
+        if isinstance(settings_or_node_id, Settings):
+            settings = settings_or_node_id
+            node_id = args[0] if len(args) > 0 else kwargs.pop("node_id")
+            now = args[1] if len(args) > 1 else kwargs.get("now", None)
+            ttl_seconds = args[2] if len(args) > 2 else kwargs.get("ttl_seconds", None)
+        else:
+            from config import load_settings
+            settings = load_settings()
+            node_id = settings_or_node_id
+            now = args[0] if len(args) > 0 else kwargs.get("now", None)
+            ttl_seconds = args[1] if len(args) > 1 else kwargs.get("ttl_seconds", None)
 
-    if now is None:
-        now = time.time()
-    if ttl_seconds is None:
-        ttl_seconds = float(settings.conveyor_desktop_heartbeat_ttl_seconds)
+        if now is None:
+            now = time.time()
+        if ttl_seconds is None:
+            ttl_seconds = float(settings.conveyor_desktop_heartbeat_ttl_seconds)
 
-    with _lock:
-        state = load_desktop_state(settings)
-        node_state = state.get(node_id)
-        if node_state is None:
-            return False
-        return (now - node_state["last_seen_at"]) <= ttl_seconds
+        node_id_str = _safe_str(node_id, 128)
+
+        with _lock:
+            state = load_desktop_state(settings)
+            node_state = state.get(node_id_str)
+            if not isinstance(node_state, dict):
+                return False
+            last_seen = node_state.get("last_seen_at")
+            try:
+                last_seen_val = float(last_seen)
+            except (TypeError, ValueError):
+                return False
+            return (now - last_seen_val) <= ttl_seconds
+    except Exception:
+        return False
 
 
 def list_runtime_nodes(settings: Settings, now: float | None = None) -> list[NodeInfo]:
@@ -249,29 +290,39 @@ def list_runtime_nodes(settings: Settings, now: float | None = None) -> list[Nod
     computer_use_mode = settings.conveyor_computer_use_default_mode or "observe_only"
     ttl_seconds = settings.conveyor_desktop_heartbeat_ttl_seconds
 
-    state = get_desktop_runtime(settings, node_id)
-    if state is None:
+    node_id_str = _safe_str(node_id, 128)
+    state = get_desktop_runtime(settings, node_id_str)
+    if not isinstance(state, dict):
         nodes.append(build_stub_desktop_node(
-            node_id=node_id,
+            node_id=node_id_str,
             display_name=display_name,
             computer_use_mode=computer_use_mode,
         ))
     else:
-        online = is_desktop_online(settings, node_id, now=now, ttl_seconds=float(ttl_seconds))
+        online = is_desktop_online(settings, node_id_str, now=now, ttl_seconds=float(ttl_seconds))
         status = NodeStatus.ONLINE if online else NodeStatus.OFFLINE
+        
+        disp_name = _safe_str(state.get("display_name"), 100) or display_name
+        
+        last_seen = state.get("last_seen_at")
+        try:
+            last_seen_val = float(last_seen)
+        except (TypeError, ValueError):
+            last_seen_val = 0.0
+
         nodes.append(NodeInfo(
-            node_id=node_id,
-            display_name=state["display_name"],
+            node_id=node_id_str,
+            display_name=disp_name,
             node_type=NodeType.DESKTOP,
             status=status,
-            last_seen_at=state["last_seen_at"],
+            last_seen_at=last_seen_val if last_seen_val > 0 else None,
             capabilities=DESKTOP_STUB_CAPABILITIES,
             trust_level=TrustLevel.LOCAL_DESKTOP,
             metadata={
-                "agent_version": state["agent_version"],
-                "host": state["host"],
-                "agent_state": state["agent_state"],
-                "last_action": state["last_action"],
+                "agent_version": _safe_str(state.get("agent_version"), 64),
+                "host": _safe_host_info(state.get("host")),
+                "agent_state": _safe_str(state.get("agent_state"), 64),
+                "last_action": _safe_str(state.get("last_action"), 128),
                 "computer_use_mode": computer_use_mode,
             },
         ))

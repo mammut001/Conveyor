@@ -1,15 +1,11 @@
 """nodes/registry.py — read-only registry of execution nodes.
 
-Phase 0 scope: build a deterministic list of nodes from
-:class:`config.Settings`. The VPS node is always present. The
-desktop node is opt-in via env vars and defaults to absent so
-Telegram/Feishu-only and VPS-only deploys continue to work without
-configuration changes.
+The VPS node is always present and online. The desktop node is opt-in.
+When settings are provided, the runtime state for execution nodes comes from
+nodes/state.py, which dynamically resolves status by reading the shared
+desktop heartbeat state file stored at `CODEX_MEMORY_ROOT/state/desktop_nodes.json`.
 
-The registry is **process-local** and does not start any network
-listener. Future Computer Use support will add a heartbeat path,
-but in this task the desktop node is offline regardless of
-whether it is registered — there is no agent that could be online.
+Computer Use control actions (screenshots, keyboard, mouse) are still not implemented.
 
 Allowed imports: stdlib, ``config``. MUST NOT import the Telegram
 SDK, lark_oapi, or anything from ``handlers/`` (it is consumed by

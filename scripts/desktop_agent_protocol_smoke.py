@@ -314,6 +314,104 @@ def main() -> int:
             except Exception as e:
                 _fail("corrupt_json_crash", f"raised: {e}")
 
+        # 19. Register with wrong node_id
+        print("Testing register with wrong node_id...")
+        bad_reg_body = reg_body.copy()
+        bad_reg_body["node_id"] = "wrong-macbook"
+        req = urllib.request.Request(reg_url, data=json.dumps(bad_reg_body).encode(), headers=headers, method="POST")
+        try:
+            urllib.request.urlopen(req)
+            _fail("wrong_node_id_register_accepted", "register with wrong node_id succeeded when it should fail with 400")
+        except urllib.error.HTTPError as e:
+            if e.code != 400:
+                _fail("wrong_node_id_register_error_code", f"status={e.code}")
+            else:
+                body_err = json.loads(e.read().decode())
+                if body_err.get("expected_node_id") != "macbook-payton" or body_err.get("error") != "node_id mismatch":
+                    _fail("wrong_node_id_register_response", f"body={body_err}")
+                else:
+                    print("[pass] register_wrong_node_id_rejected")
+
+        # 20. Heartbeat with wrong node_id
+        print("Testing heartbeat with wrong node_id...")
+        bad_hb_body = hb_body.copy()
+        bad_hb_body["node_id"] = "wrong-macbook"
+        req = urllib.request.Request(hb_url, data=json.dumps(bad_hb_body).encode(), headers=headers, method="POST")
+        try:
+            urllib.request.urlopen(req)
+            _fail("wrong_node_id_heartbeat_accepted", "heartbeat with wrong node_id succeeded when it should fail with 400")
+        except urllib.error.HTTPError as e:
+            if e.code != 400:
+                _fail("wrong_node_id_heartbeat_error_code", f"status={e.code}")
+            else:
+                body_err = json.loads(e.read().decode())
+                if body_err.get("expected_node_id") != "macbook-payton" or body_err.get("error") != "node_id mismatch":
+                    _fail("wrong_node_id_heartbeat_response", f"body={body_err}")
+                else:
+                    print("[pass] heartbeat_wrong_node_id_rejected")
+
+        # 21. Oversized body (> 16 KB)
+        print("Testing oversized body rejection...")
+        large_body = {
+            "node_id": "macbook-payton",
+            "display_name": "Payton MacBook",
+            "agent_version": "0.1.0",
+            "host": {
+                "platform": "macOS",
+                "hostname": "A" * 20000, # make body larger than 16 KB
+                "arch": "arm64"
+            }
+        }
+        req = urllib.request.Request(reg_url, data=json.dumps(large_body).encode(), headers=headers, method="POST")
+        try:
+            urllib.request.urlopen(req)
+            _fail("oversized_body_accepted", "oversized body succeeded when it should fail with 413")
+        except urllib.error.HTTPError as e:
+            if e.code != 413:
+                _fail("oversized_body_error_code", f"status={e.code}")
+            else:
+                print("[pass] oversized_body_rejected")
+
+        # 22. Malformed JSON
+        print("Testing malformed JSON rejection...")
+        req = urllib.request.Request(reg_url, data=b"{malformed_json_bytes", headers=headers, method="POST")
+        try:
+            urllib.request.urlopen(req)
+            _fail("malformed_json_accepted", "malformed JSON succeeded when it should fail with 400")
+        except urllib.error.HTTPError as e:
+            if e.code != 400:
+                _fail("malformed_json_error_code", f"status={e.code}")
+            else:
+                print("[pass] malformed_json_rejected")
+
+        # 23. Host payload is sanitized
+        print("Testing host payload sanitization...")
+        host_extra_body = {
+            "node_id": "macbook-payton",
+            "display_name": "Payton MacBook",
+            "agent_version": "0.1.0",
+            "host": {
+                "platform": "macOS",
+                "hostname": "Paytons-MacBook",
+                "arch": "arm64",
+                "extra_bad_field": "some-value",
+                "another_ignored_field": 123
+            }
+        }
+        # First register with the extra field
+        req = urllib.request.Request(reg_url, data=json.dumps(host_extra_body).encode(), headers=headers, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            pass
+        # Load from state and check host content
+        runtime_state = get_desktop_runtime(desktop_agent_server.settings, "macbook-payton")
+        host_saved = runtime_state.get("host", {})
+        if "extra_bad_field" in host_saved or "another_ignored_field" in host_saved:
+            _fail("host_sanitization_failed", f"Ignored fields were saved: {host_saved}")
+        elif host_saved.get("platform") != "macOS" or host_saved.get("hostname") != "Paytons-MacBook":
+            _fail("host_sanitization_data_loss", f"Valid fields were not saved correctly: {host_saved}")
+        else:
+            print("[pass] host_payload_sanitized")
+
     finally:
         # Shutdown server
         print("Shutting down test server...")
@@ -321,7 +419,7 @@ def main() -> int:
         httpd.server_close()
         server_thread.join()
 
-    total_tests = 16
+    total_tests = 23
     failed = len(FAILURES)
     passed = total_tests - failed
     print(f"\n{'=' * 60}")

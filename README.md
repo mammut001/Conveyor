@@ -183,6 +183,8 @@ In P5.1, the desktop agent registration and heartbeat protocol is active:
   ```
 
 * **Cross-Process Status Sharing**: The agent server and the bot listeners share the heartbeat state through the JSON file at `CODEX_MEMORY_ROOT/state/desktop_nodes.json`. This stores *only* connection metadata; no tokens, secrets, or screenshots are written.
+* **Node ID Validation**: The MacBook agent's `CONVEYOR_DESKTOP_NODE_ID` must match the VPS `CONVEYOR_DESKTOP_NODE_ID` (default is `macbook-payton`). Mismatching requests will be rejected with HTTP 400.
+
 
 > **Computer Use control loop remains future work.** Screenshot capture, click, type, and Gemini Computer Use remain future tasks. See `docs/desktop_agent_protocol.md` and `docs/desktop_security.md`.
 

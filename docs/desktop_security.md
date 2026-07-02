@@ -148,11 +148,15 @@ document and re-validate the audit + blast-radius sections.
 
 ## 6. P5.1 Desktop agent heartbeat Security
 
-In P5.1, the desktop agent registration and heartbeat endpoint has been secured:
+In P5.1 and P5.1.1, the desktop agent registration and heartbeat endpoint has been secured:
 * **Token Authentication**: The shared secret `CONVEYOR_DESKTOP_AGENT_TOKEN` is required to be passed as a Bearer token in the `Authorization` header. If it's missing or invalid, the control plane rejects it with `401 Unauthorized`.
+* **Constant-Time Token Comparison**: Direct string equality check for tokens was replaced with `hmac.compare_digest` to prevent timing attacks.
+* **Request Hardening & Payload Size Enforcement**: Overly large payload requests are rejected immediately; bodies are capped at 16 KB and unbounded body streams are not read.
+* **Input Sanitization and Validation**: Strict validations are performed on registration and heartbeat fields (e.g. max key sizes, expected `node_id` matching, host parameter keys platform/hostname/arch parsing), preventing arbitrary JSON bloat.
 * **Token Redaction**: The shared secret token is listed under `SENSITIVE_FIELDS` in `config.py` and is never printed in server logs or application runtime logs.
 * **Control Plane Binding**: By default, the control plane server binds to localhost `127.0.0.1`. Binding to `0.0.0.0` is disabled by default. Exposing this interface publicly requires secure routing (e.g. Tailscale, Cloudflare Tunnel, or a VPN) and HTTPS.
 * **File-backed Persistence Isolation**: Status info is shared across processes using `CODEX_MEMORY_ROOT/state/desktop_nodes.json`. This JSON state file is guaranteed to contain NO tokens, secrets, or request headers, and only stores general connection metadata (node ID, version, host summary). No screenshots, mouse, keyboard, or action data are written or stored.
 * **Safety Non-goals**: No screenshot capture, mouse/keyboard control, or Gemini Computer Use API calls are active in this phase. The control plane remains in stub-only execution safety mode.
+
 
 
