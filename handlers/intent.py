@@ -314,7 +314,7 @@ _NODES_STATUS_PATTERNS = (
     re.compile(r"(我的节点|机器状态|主机状态|node\s*status|nodes\s*status|执行节点|节点状态|(?:macbook|mac|电脑|本机)\s*在线)", re.IGNORECASE),
 )
 
-# P5.2.1: screenshot metadata/status queries.
+# P5.2.1 / P5.3: screenshot metadata/status queries (no capture).
 _SCREENSHOT_STATUS_PATTERNS = (
     re.compile(r"截图状态", re.IGNORECASE),
     re.compile(r"最近的截图", re.IGNORECASE),
@@ -322,21 +322,26 @@ _SCREENSHOT_STATUS_PATTERNS = (
     re.compile(r"desktop\s*screenshot\s*status", re.IGNORECASE),
     re.compile(r"latest\s*desktop\s*screenshot", re.IGNORECASE),
     re.compile(r"mac\s*截图状态", re.IGNORECASE),
+    re.compile(r"observe\s*status", re.IGNORECASE),
 )
 
-# P5.2: read-only screenshot observe phrases. These route to
-# ``desktop.screenshot.status`` instead of Codex or control stubs.
-_SCREENSHOT_OBSERVE_PATTERNS = (
-    re.compile(r"截图", re.IGNORECASE),
-    re.compile(r"截屏", re.IGNORECASE),
+# P5.3: remote observe request phrases (create pending request).
+_OBSERVE_REQUEST_PATTERNS = (
+    re.compile(r"截图看看我电脑现在是什么", re.IGNORECASE),
+    re.compile(r"帮我截一下\s*mac\s*屏幕", re.IGNORECASE),
+    re.compile(r"看一下\s*(macbook|mac|电脑)\s*屏幕", re.IGNORECASE),
+    re.compile(r"take\s+a\s+screenshot\s+on\s+my\s+desktop", re.IGNORECASE),
+    re.compile(r"request\s+desktop\s+screenshot", re.IGNORECASE),
+    re.compile(r"capture\s+my\s+mac\s+screen", re.IGNORECASE),
+    re.compile(r"看一下.*(屏幕|桌面|screen)", re.IGNORECASE),
+    re.compile(r"看看.*(屏幕|桌面|screen)", re.IGNORECASE),
     re.compile(r"take\s+a\s+screenshot", re.IGNORECASE),
     re.compile(
         r"screenshot\s*(on|of)\s*(my\s*)?(mac|macbook|desktop|laptop|screen)",
         re.IGNORECASE,
     ),
-    re.compile(r"看一下.*(屏幕|桌面|screen)", re.IGNORECASE),
-    re.compile(r"看看.*(屏幕|桌面|screen)", re.IGNORECASE),
-    re.compile(r"看一下\s*(macbook|mac|电脑)\s*屏幕", re.IGNORECASE),
+    re.compile(r"截图", re.IGNORECASE),
+    re.compile(r"截屏", re.IGNORECASE),
 )
 
 
@@ -445,10 +450,10 @@ def route_intent(text: str) -> RouteResult:
             return RouteResult(kind="deterministic", tools=("nodes.status",))
     for pat in _SCREENSHOT_STATUS_PATTERNS:
         if pat.search(body):
-            return RouteResult(kind="deterministic", tools=("desktop.screenshot.status",))
-    for pat in _SCREENSHOT_OBSERVE_PATTERNS:
+            return RouteResult(kind="deterministic", tools=("desktop.observe.status",))
+    for pat in _OBSERVE_REQUEST_PATTERNS:
         if pat.search(body):
-            return RouteResult(kind="deterministic", tools=("desktop.screenshot.status",))
+            return RouteResult(kind="deterministic", tools=("desktop.observe.request",))
     for pat in _COMPUTER_USE_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("computer.status",))

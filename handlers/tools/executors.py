@@ -250,6 +250,10 @@ def _format_latest_screenshot_block(latest: dict | None) -> list[str]:
     return lines
 
 
+async def _observe_tool_stub(_settings: Settings, _arg: str) -> str:
+    return "Observe tool must be invoked via chat routing."
+
+
 async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
     """Read-only desktop screenshot observe status (P5.2)."""
     import time
@@ -262,15 +266,18 @@ async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
     from nodes.registry import list_nodes
     from nodes.types import NodeStatus, NodeType
 
+    from desktop_observe_requests import list_recent_observe_requests
+
     disclaimer = [
         "This command does not capture a screenshot.",
-        "Run `python desktop_agent.py --observe-once` on the Mac to capture one local screenshot.",
-        "Remote screenshot trigger is not implemented yet.",
-        "Upload is disabled in P5.2.",
+        "Run `python desktop_agent.py --observe-once` on the Mac for local one-shot capture.",
+        "Use /observe_request to create a remote observe request (P5.3).",
+        "Mac agent must run `python desktop_agent.py --poll-observe` to fulfill requests.",
+        "Upload is disabled in P5.2/P5.3.",
     ]
 
     lines = [
-        "Desktop Screenshot Observe (P5.2)",
+        "Desktop Screenshot Observe (P5.3)",
         "",
         *disclaimer,
         "",
@@ -330,6 +337,14 @@ async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
     else:
         lines.append("Desktop node: not enabled")
     lines.append("")
+
+    recent = list_recent_observe_requests(settings, limit=3)
+    if recent:
+        lines.append("Recent observe requests:")
+        from handlers.tools.observe_tools import _format_request_summary
+        for record in recent:
+            lines.extend(_format_request_summary(record))
+        lines.append("")
 
     latest = latest_screenshot_metadata(settings)
     lines.extend(_format_latest_screenshot_block(latest))
@@ -505,6 +520,27 @@ def register_builtin_tools() -> None:
             danger=DangerLevel.READ,
             executor=exec_desktop_screenshot_status,
             keywords=("screenshot observe", "桌面截图", "截屏状态", "screenshot status"),
+        ),
+        ToolSpec(
+            name="desktop.observe.request",
+            summary="Create remote desktop observe request (P5.3 metadata only)",
+            danger=DangerLevel.WRITE_SAFE,
+            executor=_observe_tool_stub,
+            keywords=("observe request", "request screenshot", "remote screenshot"),
+        ),
+        ToolSpec(
+            name="desktop.observe.status",
+            summary="Recent observe requests and screenshot metadata (P5.3)",
+            danger=DangerLevel.READ,
+            executor=_observe_tool_stub,
+            keywords=("observe status", "observe requests"),
+        ),
+        ToolSpec(
+            name="desktop.observe.cancel",
+            summary="Cancel pending/claimed observe request (P5.3)",
+            danger=DangerLevel.WRITE_SAFE,
+            executor=_observe_tool_stub,
+            keywords=("cancel observe", "observe cancel"),
         ),
         ToolSpec(
             name="computer.status",

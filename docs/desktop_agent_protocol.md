@@ -12,10 +12,13 @@ discovering the design later.
 
 P5.1 wired register + heartbeat. **P5.2** adds local read-only
 screenshot observe via `capture-screen-helper` and
-`desktop_agent.py --observe-once`. Remote `desktop.screenshot.*`
-messages and Computer Use control remain future work. Deterministic
-tools today: `nodes.status`, `computer.status`,
-`desktop.screenshot.status`.
+`desktop_agent.py --observe-once`. **P5.3** adds remote observe
+requests: chat creates pending requests, Mac agent polls
+`/desktop/observe/pending`, captures locally, and returns metadata
+only. Computer Use control remains future work. Deterministic tools:
+`nodes.status`, `computer.status`, `desktop.screenshot.status`,
+`desktop.observe.request`, `desktop.observe.status`,
+`desktop.observe.cancel`.
 
 ---
 

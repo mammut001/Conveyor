@@ -251,5 +251,9 @@ def should_inject_for_command(cmd_name: str | None) -> bool:
         "clean", "maintain", "deploy_status", "deploy_verify", "tools",
         "note", "notes", "remind", "reminders",
         "context", "forget", "help",
+        "screenshot_status", "desktop_screenshot_status",
+        "observe_request", "screenshot_request", "request_screenshot",
+        "observe_status", "observe_cancel",
+        "nodes", "node_status", "computer_status",
     }
     return cmd_name not in _SKIP_COMMANDS

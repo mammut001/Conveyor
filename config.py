@@ -136,6 +136,10 @@ class Settings:
     conveyor_desktop_screenshot_dir: str | None = None
     conveyor_desktop_screenshot_max_bytes: int = 5000000
     conveyor_desktop_screenshot_allow_upload: bool = False
+    # P5.3 remote observe request (metadata only; no upload).
+    conveyor_desktop_observe_request_ttl_seconds: int = 300
+    conveyor_desktop_observe_poll_interval_seconds: int = 5
+    conveyor_desktop_observe_max_pending: int = 3
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -363,6 +367,16 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_desktop_screenshot_allow_upload": os.getenv(
             "CONVEYOR_DESKTOP_SCREENSHOT_ALLOW_UPLOAD", "false"
         ).strip().lower() in ("true", "1", "yes"),
+        # P5.3 remote observe request
+        "conveyor_desktop_observe_request_ttl_seconds": _int_env(
+            "CONVEYOR_DESKTOP_OBSERVE_REQUEST_TTL_SECONDS", 300,
+        ),
+        "conveyor_desktop_observe_poll_interval_seconds": _int_env(
+            "CONVEYOR_DESKTOP_OBSERVE_POLL_INTERVAL_SECONDS", 5,
+        ),
+        "conveyor_desktop_observe_max_pending": _int_env(
+            "CONVEYOR_DESKTOP_OBSERVE_MAX_PENDING", 3,
+        ),
     }
 
 

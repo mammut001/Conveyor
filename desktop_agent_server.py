@@ -10,11 +10,18 @@ import time
 import socketserver
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlparse
 
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 from config import load_settings
+from desktop_observe_requests import (
+    claim_observe_request,
+    complete_observe_request,
+    fail_observe_request,
+    list_pending_observe_requests,
+)
 from nodes.state import register_desktop_node, record_heartbeat
 from nodes.registry import list_nodes
 
@@ -37,6 +44,9 @@ if settings.conveyor_desktop_node_enabled:
     token = settings.conveyor_desktop_agent_token
     if not token or not token.strip():
         sys.exit("Configuration error: CONVEYOR_DESKTOP_AGENT_TOKEN must not be empty when desktop node is enabled.")
+
+
+MAX_BODY_BYTES = 16 * 1024
 
 
 class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
@@ -70,37 +80,59 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
             return False
         return True
 
-    def do_POST(self):
-        if not self.check_enabled():
-            return
-        if not self.authenticate():
-            return
-
+    def _read_json_body(self) -> dict | None:
         content_length_str = self.headers.get("Content-Length")
         if content_length_str is None:
             self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Missing Content-Length header"})
-            return
+            return None
 
         try:
             content_length = int(content_length_str)
         except ValueError:
             self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid Content-Length header"})
-            return
+            return None
 
         if content_length < 0:
             self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Negative Content-Length"})
-            return
+            return None
 
-        MAX_BODY_BYTES = 16 * 1024
         if content_length > MAX_BODY_BYTES:
             self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"ok": False, "error": "Payload Too Large"})
-            return
+            return None
 
         post_data = self.rfile.read(content_length)
         try:
             body = json.loads(post_data)
         except Exception:
             self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid JSON body"})
+            return None
+        if not isinstance(body, dict):
+            self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "JSON body must be an object"})
+            return None
+        return body
+
+    def _validate_node_id(self, node_id: object) -> str | None:
+        expected_node_id = settings.conveyor_desktop_node_id or "macbook-payton"
+        if not isinstance(node_id, str) or not node_id.strip():
+            self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing node_id"})
+            return None
+        if node_id != expected_node_id:
+            self.send_json(HTTPStatus.BAD_REQUEST, {
+                "ok": False,
+                "error": "node_id mismatch",
+                "expected_node_id": expected_node_id,
+            })
+            return None
+        return node_id
+
+    def do_POST(self):
+        if not self.check_enabled():
+            return
+        if not self.authenticate():
+            return
+
+        body = self._read_json_body()
+        if body is None:
             return
 
         expected_node_id = settings.conveyor_desktop_node_id or "macbook-payton"
@@ -207,17 +239,80 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                 "status": "online",
                 "server_time": int(time.time())
             })
+
+        elif self.path == "/desktop/observe/claim":
+            node_id = self._validate_node_id(body.get("node_id"))
+            if node_id is None:
+                return
+            request_id = body.get("request_id")
+            if not isinstance(request_id, str) or not request_id.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing request_id"})
+                return
+            result = claim_observe_request(settings, request_id.strip(), node_id)
+            status = HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT
+            self.send_json(status, result)
+
+        elif self.path == "/desktop/observe/complete":
+            node_id = self._validate_node_id(body.get("node_id"))
+            if node_id is None:
+                return
+            request_id = body.get("request_id")
+            if not isinstance(request_id, str) or not request_id.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing request_id"})
+                return
+            observe_result = body.get("result")
+            if not isinstance(observe_result, dict):
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid result: must be an object"})
+                return
+            result = complete_observe_request(
+                settings, request_id.strip(), node_id, observe_result,
+            )
+            status = HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT
+            self.send_json(status, result)
+
+        elif self.path == "/desktop/observe/fail":
+            node_id = self._validate_node_id(body.get("node_id"))
+            if node_id is None:
+                return
+            request_id = body.get("request_id")
+            if not isinstance(request_id, str) or not request_id.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing request_id"})
+                return
+            error = body.get("error")
+            if not isinstance(error, str) or not error.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing error"})
+                return
+            message = body.get("message")
+            if message is not None and not isinstance(message, str):
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid message"})
+                return
+            result = fail_observe_request(
+                settings,
+                request_id.strip(),
+                node_id,
+                error.strip(),
+                message=message,
+            )
+            status = HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT
+            self.send_json(status, result)
+
         elif self.path == "/desktop/observe/request":
             self.send_json(HTTPStatus.NOT_IMPLEMENTED, {
                 "ok": False,
                 "error": "not_implemented",
-                "message": "Remote screenshot observe trigger is not implemented in P5.2.",
+                "message": (
+                    "External observe request creation is disabled. "
+                    "Create requests via chat (/observe_request) or internal control-plane API."
+                ),
             })
         else:
             self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Endpoint not found"})
 
     def do_GET(self):
-        if self.path == "/desktop/status":
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/desktop/status":
             if not self.check_enabled():
                 return
             if not self.authenticate():
@@ -240,6 +335,22 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "nodes": serialized_nodes
             })
+
+        elif path == "/desktop/observe/pending":
+            if not self.check_enabled():
+                return
+            if not self.authenticate():
+                return
+
+            query = parse_qs(parsed.query)
+            node_id_list = query.get("node_id", [])
+            node_id = node_id_list[0] if node_id_list else None
+            validated = self._validate_node_id(node_id)
+            if validated is None:
+                return
+            requests = list_pending_observe_requests(settings, validated, limit=1)
+            self.send_json(HTTPStatus.OK, {"ok": True, "requests": requests})
+
         else:
             self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Endpoint not found"})
 

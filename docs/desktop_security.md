@@ -26,12 +26,15 @@ audited change that re-validates this document.
    `CONVEYOR_COMPUTER_USE_DEFAULT_MODE` env var is whitelisted
    to `observe_only` and `off` — a typo falls back to
    `observe_only` with a logged warning.
-4. **P5.2 adds read-only local screenshot observe only** via
-   `capture-screen-helper` and `desktop_agent.py --observe-once`.
-   Screenshots stay on the Mac by default; no upload, no OCR, no
-   LLM visual analysis. **Click, typing, browser control, password
-   entry, payment action, file deletion, and form submission remain
-   unimplemented.** See `docs/desktop_screenshot_observe.md`.
+4. **P5.2/P5.3 add read-only screenshot observe only** via
+   `capture-screen-helper`. Local: `desktop_agent.py --observe-once`.
+   Remote (P5.3): chat creates observe requests; Mac agent polls
+   with `--poll-observe` and returns **metadata only** — no image
+   bytes cross the network. Screenshots stay on the Mac by default;
+   no upload, no OCR, no LLM visual analysis. **Click, typing,
+   browser control, password entry, payment action, file deletion,
+   and form submission remain unimplemented.** See
+   `docs/desktop_screenshot_observe.md`.
 5. **Future desktop actions must require step-by-step
    confirmation by default.** The current chat-level confirmation
    token is the minimum; the agent must additionally refuse to

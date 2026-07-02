@@ -297,7 +297,7 @@ def _test_intent_screenshot_observe_routes() -> None:
         if result.kind != "deterministic":
             _fail("intent_screenshot_observe_routes", f"{phrase!r} kind={result.kind}")
             return
-        if "desktop.screenshot.status" not in result.tools:
+        if "desktop.observe.request" not in result.tools:
             _fail("intent_screenshot_observe_routes", f"{phrase!r} tools={result.tools}")
             return
     print("[pass] intent_screenshot_observe_routes")

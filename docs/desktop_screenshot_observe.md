@@ -1,7 +1,7 @@
-# Desktop Screenshot Observe — P5.2 / P5.2.1 / P5.2.2
+# Desktop Screenshot Observe — P5.2 / P5.2.1 / P5.2.2 / P5.3
 
-> **Status**: Implemented (local-first, read-only).
-> **Not implemented**: Computer Use control, remote trigger queue, upload, thumbnail preview, OCR, LLM visual analysis.
+> **Status**: Implemented (local-first, read-only; P5.3 adds remote observe requests with metadata-only results).
+> **Not implemented**: Computer Use control, upload, thumbnail preview, OCR, LLM visual analysis, mouse/keyboard/browser control.
 
 P5.2 adds **read-only screenshot observe** on the operator's MacBook. Screenshots stay on disk by default. The VPS control plane receives metadata only when future remote wiring lands; in P5.2 it does not receive image bytes.
 
@@ -13,9 +13,63 @@ P5.2 adds **read-only screenshot observe** on the operator's MacBook. Screenshot
 - Absolute-path validation for `CONVEYOR_DESKTOP_SCREENSHOT_HELPER`
 - Atomic metadata writes and latest-metadata status output
 
-## P5.2.1 does not support
+## P5.3 Remote Observe Request
 
-- Remote screenshot trigger from Feishu/Telegram chat
+**Supported:**
+
+- Chat creates a pending observe request (`/observe_request`, NL phrases like `截图看看我电脑现在是什么`)
+- Mac desktop agent polls the VPS (`python desktop_agent.py --poll-observe`)
+- Mac captures one local screenshot via `capture-screen-helper`
+- Mac returns **metadata only** to the VPS (no image bytes, no base64)
+- Chat shows metadata/status (`/observe_status`, `/screenshot_status`)
+
+**Not supported:**
+
+- Image upload, thumbnail preview, visual analysis, OCR
+- Mouse, keyboard, browser, or app automation
+- Computer Use action execution
+- Continuous screen streaming
+
+**Setup:**
+
+On VPS:
+
+```bash
+export CONVEYOR_DESKTOP_NODE_ENABLED=true
+export CONVEYOR_DESKTOP_AGENT_TOKEN=...
+python desktop_agent_server.py
+```
+
+On Mac:
+
+```bash
+export CONVEYOR_CONTROL_PLANE_URL=https://your-control-plane.example.com
+export CONVEYOR_DESKTOP_AGENT_TOKEN=...
+export CONVEYOR_DESKTOP_SCREENSHOT_HELPER=/usr/local/bin/capture-screen-helper
+python desktop_agent.py --poll-observe
+```
+
+In Feishu:
+
+```text
+截图看看我电脑现在是什么
+/observe_status
+/screenshot_status
+```
+
+Request store: `CODEX_MEMORY_ROOT/state/desktop_observe_requests.json`
+
+Config:
+
+```env
+CONVEYOR_DESKTOP_OBSERVE_REQUEST_TTL_SECONDS=300
+CONVEYOR_DESKTOP_OBSERVE_POLL_INTERVAL_SECONDS=5
+CONVEYOR_DESKTOP_OBSERVE_MAX_PENDING=3
+```
+
+## P5.2.1 does not support (still true for control features)
+
+- Remote desktop control from chat
 - Screenshot or thumbnail upload
 - Image preview in Feishu cards
 - Gemini / GPT visual analysis
@@ -70,12 +124,20 @@ These commands show helper/desktop-agent status and the latest local metadata. T
 - `/deploy_verify` — deployment-readiness summary (also does not capture)
 - Natural language: `截图状态`, `最近的截图`, `desktop screenshot status`
 
-Capture phrases such as `截图看看我电脑现在是什么` also route to the status tool and return an honest message that remote screenshot trigger is not implemented yet.
+Capture phrases such as `截图看看我电脑现在是什么` route to `desktop.observe.request` and create a remote observe request (async — the Mac agent completes via polling).
 
-Local capture remains:
+Status phrases such as `截图状态` route to `desktop.observe.status`.
+
+Local one-shot capture remains:
 
 ```bash
 python desktop_agent.py --observe-once
+```
+
+Remote observe polling:
+
+```bash
+python desktop_agent.py --poll-observe
 ```
 
 No base64, OCR text, window titles, secrets, or prompt content are stored.
@@ -134,9 +196,17 @@ This is a **manual test** — automated smokes do not request Screen Recording p
 
 Phrases such as `截图看看我电脑现在是什么`, `看一下 MacBook 屏幕`, and `take a screenshot on my desktop` route to `desktop.screenshot.status`. They do **not** start Codex and do **not** claim a screenshot was captured unless one actually was.
 
-## Remote trigger
+## Remote observe HTTP API (agent polling)
 
-`POST /desktop/observe/request` returns `501 not implemented` in P5.2. Remote screenshot observe is documented for a future phase.
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/desktop/observe/pending?node_id=...` | GET | Agent fetches pending requests |
+| `/desktop/observe/claim` | POST | Agent claims a pending request |
+| `/desktop/observe/complete` | POST | Agent submits metadata-only result |
+| `/desktop/observe/fail` | POST | Agent reports capture failure |
+| `/desktop/observe/request` | POST | **Disabled (501)** — chat creates requests internally |
+
+All endpoints require Bearer token authentication.
 
 ## Safety
 

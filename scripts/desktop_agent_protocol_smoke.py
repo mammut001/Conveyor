@@ -412,6 +412,178 @@ def main() -> int:
         else:
             print("[pass] host_payload_sanitized")
 
+        # 24. POST /desktop/observe/request returns 501
+        print("Testing observe request external creation disabled...")
+        observe_req_url = f"http://{server_host}:{server_port}/desktop/observe/request"
+        req = urllib.request.Request(
+            observe_req_url,
+            data=json.dumps({"node_id": "macbook-payton"}).encode(),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(req)
+            _fail("observe_request_external", "expected 501")
+        except urllib.error.HTTPError as e:
+            if e.code != 501:
+                _fail("observe_request_external", f"status={e.code}")
+            else:
+                print("[pass] observe_request_external_disabled")
+
+        # 25–28. Observe pending / claim / complete / fail
+        print("Testing observe pending/claim/complete/fail flow...")
+        from desktop_observe_requests import save_observe_requests
+
+        observe_store_path = (
+            desktop_agent_server.settings.codex_memory_root
+            / "state"
+            / "desktop_observe_requests.json"
+        )
+        observe_store_path.parent.mkdir(parents=True, exist_ok=True)
+        test_request_id = "obs_20260702T120000Z_test1234"
+        save_observe_requests(desktop_agent_server.settings, {
+            test_request_id: {
+                "request_id": test_request_id,
+                "node_id": "macbook-payton",
+                "status": "pending",
+                "created_at": "2026-07-02T12:00:00Z",
+                "updated_at": "2026-07-02T12:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "user_request": "test observe",
+                "result": None,
+                "error": None,
+            },
+        })
+
+        pending_url = (
+            f"http://{server_host}:{server_port}/desktop/observe/pending"
+            "?node_id=macbook-payton"
+        )
+        req = urllib.request.Request(pending_url, headers=headers, method="GET")
+        with urllib.request.urlopen(req) as resp:
+            pending_data = json.loads(resp.read().decode())
+        if not pending_data.get("ok") or not pending_data.get("requests"):
+            _fail("observe_pending", f"body={pending_data}")
+        elif pending_data["requests"][0]["request_id"] != test_request_id:
+            _fail("observe_pending", f"requests={pending_data['requests']}")
+        else:
+            print("[pass] observe_pending")
+
+        claim_url = f"http://{server_host}:{server_port}/desktop/observe/claim"
+        claim_body = {"request_id": test_request_id, "node_id": "macbook-payton"}
+        req = urllib.request.Request(
+            claim_url, data=json.dumps(claim_body).encode(), headers=headers, method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            claim_data = json.loads(resp.read().decode())
+        if not claim_data.get("ok") or claim_data.get("request", {}).get("status") != "claimed":
+            _fail("observe_claim", f"body={claim_data}")
+        else:
+            print("[pass] observe_claim")
+
+        complete_url = f"http://{server_host}:{server_port}/desktop/observe/complete"
+        complete_body = {
+            "request_id": test_request_id,
+            "node_id": "macbook-payton",
+            "result": {
+                "screenshot_id": "shot-test",
+                "path": "/tmp/shot-test.png",
+                "metadata_path": "/tmp/shot-test.json",
+                "sha256": "a" * 64,
+                "width": 100,
+                "height": 50,
+                "display_id": 1,
+                "created_at": "2026-07-02T12:01:00Z",
+                "bytes": 1234,
+                "helper_version": "0.1.0",
+            },
+        }
+        req = urllib.request.Request(
+            complete_url, data=json.dumps(complete_body).encode(), headers=headers, method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            complete_data = json.loads(resp.read().decode())
+        if not complete_data.get("ok") or complete_data.get("request", {}).get("status") != "completed":
+            _fail("observe_complete", f"body={complete_data}")
+        else:
+            print("[pass] observe_complete")
+
+        fail_request_id = "obs_20260702T120100Z_fail1234"
+        save_observe_requests(desktop_agent_server.settings, {
+            fail_request_id: {
+                "request_id": fail_request_id,
+                "node_id": "macbook-payton",
+                "status": "pending",
+                "created_at": "2026-07-02T12:01:00Z",
+                "updated_at": "2026-07-02T12:01:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "user_request": "fail test",
+                "result": None,
+                "error": None,
+            },
+        })
+        req = urllib.request.Request(
+            claim_url, data=json.dumps({
+                "request_id": fail_request_id, "node_id": "macbook-payton",
+            }).encode(), headers=headers, method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            pass
+        fail_url = f"http://{server_host}:{server_port}/desktop/observe/fail"
+        fail_body = {
+            "request_id": fail_request_id,
+            "node_id": "macbook-payton",
+            "error": "screen_recording_permission_required",
+            "message": "Screen Recording permission is required.",
+        }
+        req = urllib.request.Request(
+            fail_url, data=json.dumps(fail_body).encode(), headers=headers, method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            fail_data = json.loads(resp.read().decode())
+        if not fail_data.get("ok") or fail_data.get("request", {}).get("status") != "failed":
+            _fail("observe_fail", f"body={fail_data}")
+        else:
+            print("[pass] observe_fail")
+
+        # 29. Complete rejects base64 in result
+        print("Testing observe complete rejects image fields...")
+        bad_request_id = "obs_20260702T120200Z_bad1234"
+        save_observe_requests(desktop_agent_server.settings, {
+            bad_request_id: {
+                "request_id": bad_request_id,
+                "node_id": "macbook-payton",
+                "status": "claimed",
+                "created_at": "2026-07-02T12:02:00Z",
+                "updated_at": "2026-07-02T12:02:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "user_request": "bad result",
+                "result": None,
+                "error": None,
+            },
+        })
+        bad_complete = {
+            "request_id": bad_request_id,
+            "node_id": "macbook-payton",
+            "result": {
+                "screenshot_id": "shot-bad",
+                "path": "/tmp/shot-bad.png",
+                "sha256": "b" * 64,
+                "base64": "data",
+            },
+        }
+        req = urllib.request.Request(
+            complete_url, data=json.dumps(bad_complete).encode(), headers=headers, method="POST",
+        )
+        try:
+            urllib.request.urlopen(req)
+            _fail("observe_complete_rejects_base64", "expected conflict")
+        except urllib.error.HTTPError as e:
+            if e.code != 409:
+                _fail("observe_complete_rejects_base64", f"status={e.code}")
+            else:
+                print("[pass] observe_complete_rejects_base64")
+
     finally:
         # Shutdown server
         print("Shutting down test server...")
@@ -419,7 +591,7 @@ def main() -> int:
         httpd.server_close()
         server_thread.join()
 
-    total_tests = 23
+    total_tests = 29
     failed = len(FAILURES)
     passed = total_tests - failed
     print(f"\n{'=' * 60}")

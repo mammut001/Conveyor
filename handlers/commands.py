@@ -440,6 +440,9 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "nodes.status": ("/nodes", "/node_status"),
     "computer.status": ("/computer_status",),
     "desktop.screenshot.status": ("/desktop_screenshot_status", "/screenshot_status"),
+    "desktop.observe.request": ("/observe_request", "/screenshot_request", "/request_screenshot"),
+    "desktop.observe.status": ("/observe_status",),
+    "desktop.observe.cancel": ("/observe_cancel",),
 }
 
 _TOOL_EXAMPLES: dict[str, str] = {
@@ -528,6 +531,9 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "computer.status": "Computer Use 状态",
     "desktop.screenshot.status": "桌面截图 observe 状态",
     "screenshot_status": "桌面截图状态",
+    "desktop.observe.request": "创建远程截图 observe 请求",
+    "desktop.observe.status": "observe 请求状态",
+    "desktop.observe.cancel": "取消 observe 请求",
 }
 
 
@@ -1181,7 +1187,7 @@ async def _deploy_verify(msg, port, _runner, settings, _arg):
     from nodes.registry import list_nodes
     from nodes.types import NodeStatus, NodeType
 
-    lines = ["P5.2 Deploy Verify", ""]
+    lines = ["P5.2/P5.3 Deploy Verify", ""]
 
     try:
         sha = subprocess.check_output(
@@ -1225,12 +1231,18 @@ async def _deploy_verify(msg, port, _runner, settings, _arg):
     else:
         lines.append("Desktop node: not enabled")
 
+    from desktop_observe_requests import observe_requests_path
+
+    observe_path = observe_requests_path(settings)
+    lines.append(f"Observe request store: {observe_path}")
+
     lines.extend([
         "",
         "This command does not capture a screenshot.",
-        "Run on Mac: python desktop_agent.py --observe-once",
+        "Local one-shot: python desktop_agent.py --observe-once",
+        "Remote observe: /observe_request (chat) + python desktop_agent.py --poll-observe (Mac)",
         "",
-        "── Screenshot status detail ──",
+        "── Screenshot / observe status detail ──",
     ])
 
     status_text = await exec_desktop_screenshot_status(settings, "")
@@ -1282,16 +1294,32 @@ async def _computer_status(msg, port, _runner, settings, _arg):
 
 
 async def _desktop_screenshot_status(msg, port, _runner, settings, _arg):
-    """Read-only desktop screenshot observe status (P5.2)."""
-    from handlers.tools.runner import run_tool
-    text = await run_tool(settings, "desktop.screenshot.status", _arg or "")
-    if msg.channel == "feishu" and hasattr(port, "send_card"):
-        try:
-            from channel.feishu_cards import desktop_screenshot_status_card
-            await port.send_card(msg, desktop_screenshot_status_card(text))
-        except Exception:
-            pass
-    await port.reply(msg, text)
+    """Read-only desktop screenshot observe status (P5.2/P5.3)."""
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(
+        msg, port, settings, "desktop.screenshot.status", _arg or "", runner=_runner,
+    )
+
+
+async def _observe_request(msg, port, runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(
+        msg, port, settings, "desktop.observe.request", arg or msg.text.strip(), runner=runner,
+    )
+
+
+async def _observe_status(msg, port, runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(
+        msg, port, settings, "desktop.observe.status", arg or "", runner=runner,
+    )
+
+
+async def _observe_cancel(msg, port, runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(
+        msg, port, settings, "desktop.observe.cancel", arg or "", runner=runner,
+    )
 
 
 
@@ -1526,9 +1554,12 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "执行节点 (P5.0 phase 0 foundation):\n"
     text += "/nodes /node_status — VPS + 可选 desktop stub 状态\n"
     text += "/computer_status — Computer Use stub 状态\n"
-    text += "/desktop_screenshot_status /screenshot_status — 桌面截图 observe 元数据/状态（不截屏）\n"
+    text += "/desktop_screenshot_status /screenshot_status — 截图元数据/状态（不截屏）\n"
+    text += "/observe_request /screenshot_request — 创建远程 observe 请求（P5.3，仅元数据）\n"
+    text += "/observe_status — 最近 observe 请求与截图元数据\n"
+    text += "/observe_cancel <id> — 取消 pending/claimed 请求\n"
     text += "自然语言: '我的节点' / '机器状态' / 'MacBook 在线吗' / 'computer use status'\n"
-    text += "本地只读截图 observe 已支持；远程触发、上传、鼠标、键盘、浏览器控制仍是未来工作。\n"
+    text += "本地只读截图 observe 已支持；P5.3 远程 observe 请求已支持（元数据回传）；上传、鼠标、键盘、浏览器控制仍是未来工作。\n"
     text += "\n"
     text += "任务队列 (P3.8):\n"
     text += "/queue — 查看队列状态\n"
@@ -1648,6 +1679,35 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
             "screenshot_status",
             "Desktop screenshot observe status (alias)",
             _desktop_screenshot_status,
+        ),
+        CommandSpec(
+            "observe_request",
+            "Create remote desktop observe request (P5.3)",
+            _observe_request,
+            takes_optional_arg=True,
+        ),
+        CommandSpec(
+            "screenshot_request",
+            "Create remote desktop observe request (alias)",
+            _observe_request,
+            takes_optional_arg=True,
+        ),
+        CommandSpec(
+            "request_screenshot",
+            "Create remote desktop observe request (alias)",
+            _observe_request,
+            takes_optional_arg=True,
+        ),
+        CommandSpec(
+            "observe_status",
+            "Recent observe requests and metadata (P5.3)",
+            _observe_status,
+        ),
+        CommandSpec(
+            "observe_cancel",
+            "Cancel pending/claimed observe request (P5.3)",
+            _observe_cancel,
+            takes_arg=True,
         ),
         CommandSpec("diagnose", "Hybrid 主机诊断", _diagnose, takes_optional_arg=True),
         CommandSpec("restart", "重启 Conveyor 服务 (需确认)", _restart, takes_arg=True),

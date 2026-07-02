@@ -164,7 +164,8 @@ browser control, and Computer Use are **not** implemented.
   `帮我在 Mac 上打开 Xcode` route to a deterministic stub reply
   instead of falling through to Codex. Screenshot observe phrases
   like `take a screenshot on my desktop` route to
-  `desktop.screenshot.status` (status only — no remote capture).
+  `desktop.observe.request` (P5.3 remote observe — metadata only).
+  Status phrases like `截图状态` route to `desktop.observe.status`.
 
 ### P5.1 Desktop Agent Heartbeat
 
@@ -199,9 +200,37 @@ In P5.1, the desktop agent registration and heartbeat protocol is active:
 
 **P5.2.1 supports:** local one-shot capture on Mac, metadata status commands, Feishu status card.
 
-**P5.2.1 does not support:** remote screenshot trigger from chat, upload, thumbnail preview, visual analysis, mouse/keyboard/browser control, Computer Use.
+**P5.2.1 does not support:** upload, thumbnail preview, visual analysis, mouse/keyboard/browser control, Computer Use.
+
+### P5.3 Remote Observe Request (metadata only)
+
+* **Chat request**: `/observe_request`, `/screenshot_request`, or NL like `截图看看我电脑现在是什么`
+* **Mac polling**: `python desktop_agent.py --poll-observe` (register + heartbeat + observe poll loop)
+* **Status**: `/observe_status`, `/screenshot_status`, or NL like `截图状态`
+* **Cancel**: `/observe_cancel <request_id>` for pending/claimed requests
+* VPS stores pending requests at `CODEX_MEMORY_ROOT/state/desktop_observe_requests.json`
+* Mac captures locally; only metadata crosses to VPS — **no image upload**
+
+**P5.3 does not support:** image upload, thumbnail preview, visual analysis, OCR, mouse/keyboard/browser control, Computer Use.
 
 **Deployment (VPS):**
+
+```bash
+export CONVEYOR_DESKTOP_NODE_ENABLED=true
+export CONVEYOR_DESKTOP_AGENT_TOKEN=...
+python desktop_agent_server.py
+```
+
+**Deployment (Mac polling):**
+
+```bash
+export CONVEYOR_CONTROL_PLANE_URL=https://your-control-plane.example.com
+export CONVEYOR_DESKTOP_AGENT_TOKEN=...
+export CONVEYOR_DESKTOP_SCREENSHOT_HELPER=/usr/local/bin/capture-screen-helper
+python desktop_agent.py --poll-observe
+```
+
+**Deployment (VPS bot update):**
 
 ```bash
 cd /opt/conveyor

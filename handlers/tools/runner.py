@@ -211,12 +211,24 @@ async def _invoke_tool(
     if _requires_confirmation(tool_name):
         await _request_confirmation(msg, port, settings, tool_name, arg)
         return
-    result = await run_tool(
-        settings, tool_name, arg,
-        operator_id=msg.operator_id,
-        channel=msg.channel,
-        chat_id=msg.chat_id,
-    )
+    if tool_name == "desktop.observe.request":
+        from handlers.tools.observe_tools import exec_desktop_observe_request
+        result = await exec_desktop_observe_request(
+            settings, msg, arg or msg.text.strip(),
+        )
+    elif tool_name == "desktop.observe.status":
+        from handlers.tools.observe_tools import exec_desktop_observe_status
+        result = await exec_desktop_observe_status(settings, arg)
+    elif tool_name == "desktop.observe.cancel":
+        from handlers.tools.observe_tools import exec_desktop_observe_cancel
+        result = await exec_desktop_observe_cancel(settings, arg)
+    else:
+        result = await run_tool(
+            settings, tool_name, arg,
+            operator_id=msg.operator_id,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+        )
     if _should_audit_no_confirm(tool_name):
         audit_tool_event(
             settings,
@@ -234,6 +246,19 @@ async def _invoke_tool(
         prompt = result[len("[HYBRID_PROMPT]"):]
         await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=prompt)
         return
+    if msg.channel == "feishu" and hasattr(port, "send_card"):
+        try:
+            if tool_name == "desktop.observe.request":
+                from channel.feishu_cards import desktop_observe_request_card
+                await port.send_card(msg, desktop_observe_request_card(result))
+            elif tool_name in (
+                "desktop.observe.status",
+                "desktop.screenshot.status",
+            ):
+                from channel.feishu_cards import desktop_observe_status_card
+                await port.send_card(msg, desktop_observe_status_card(result))
+        except Exception:
+            pass
     await port.reply(msg, result)
 
 

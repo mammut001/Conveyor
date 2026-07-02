@@ -50,6 +50,8 @@ ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "nodes_status",
     "computer_status",
     "desktop_screenshot_status",
+    "desktop_observe_status",
+    "desktop_observe_cancel",
 })
 
 #: Maximum number of action buttons rendered in a single card row.
@@ -139,6 +141,7 @@ def parse_action(value: Any) -> dict[str, Any] | None:
         # P5.0: execution-node refreshes are also slash-style
         # (no token, no job_id, no extra state).
         "nodes_status", "computer_status", "desktop_screenshot_status",
+        "desktop_observe_status", "desktop_observe_cancel",
     )
     if action in slash_actions and "token" in payload:
         return None
@@ -437,6 +440,56 @@ def node_status_card(summary_text: str) -> dict[str, Any]:
     }
 
 
+def _observe_readonly_preamble() -> str:
+    return (
+        "**Read-only · status only**\n"
+        "Metadata only. No upload, no preview, or Computer Use control from this card."
+    )
+
+
+def desktop_observe_request_card(summary_text: str) -> dict[str, Any]:
+    """Card for remote observe request creation (P5.3)."""
+    preamble = (
+        "**Desktop Observe Request**\n"
+        "Metadata only — no upload, no preview, no Computer Use control."
+    )
+    body = preamble
+    if summary_text.strip():
+        body = f"{preamble}\n\n{summary_text.strip()}"
+    buttons: list[dict[str, Any]] = [
+        _button("Refresh status", {"action": "desktop_observe_status"}),
+        _button("Nodes", {"action": "nodes_status"}),
+    ]
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": _header("Desktop Observe Request", "turquoise"),
+        "elements": [
+            _markdown(_truncate(body, 1500)),
+            _actions_row(buttons),
+        ],
+    }
+
+
+def desktop_observe_status_card(summary_text: str) -> dict[str, Any]:
+    """Card for observe status / recent requests (P5.3)."""
+    preamble = _observe_readonly_preamble()
+    body = preamble
+    if summary_text.strip():
+        body = f"{preamble}\n\n{summary_text.strip()}"
+    buttons: list[dict[str, Any]] = [
+        _button("Refresh", {"action": "desktop_observe_status"}),
+        _button("Nodes", {"action": "nodes_status"}),
+    ]
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": _header("Desktop Observe Status", "turquoise"),
+        "elements": [
+            _markdown(_truncate(body, 1500)),
+            _actions_row(buttons),
+        ],
+    }
+
+
 def desktop_screenshot_status_card(summary_text: str) -> dict[str, Any]:
     """Card for ``/desktop_screenshot_status`` / ``/screenshot_status``.
 
@@ -545,6 +598,8 @@ def action_to_command(action: str) -> str | None:
         "nodes_status": "nodes",
         "computer_status": "computer_status",
         "desktop_screenshot_status": "desktop_screenshot_status",
+        "desktop_observe_status": "observe_status",
+        "desktop_observe_cancel": "observe_cancel",
     }
     return mapping.get(action)
 

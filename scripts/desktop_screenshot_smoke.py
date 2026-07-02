@@ -241,7 +241,7 @@ def _test_nl_routes_to_desktop_screenshot_status() -> None:
         if route.kind != "deterministic":
             _fail("nl_routes_screenshot_observe", f"{phrase!r} kind={route.kind}")
             return
-        if "desktop.screenshot.status" not in route.tools:
+        if "desktop.observe.request" not in route.tools:
             _fail("nl_routes_screenshot_observe", f"{phrase!r} tools={route.tools}")
             return
         if "computer.status" in route.tools:
@@ -363,7 +363,7 @@ def _test_status_shows_truncated_sha_and_no_capture() -> None:
         if "This command does not capture a screenshot." not in text:
             _fail("status_truncated_sha", "missing no-capture disclaimer")
             return
-        if "Upload is disabled in P5.2." not in text:
+        if "Upload is disabled in P5.2/P5.3." not in text:
             _fail("status_truncated_sha", "missing upload disclaimer")
             return
     print("[pass] status_truncated_sha")
@@ -380,7 +380,10 @@ def _test_nl_status_phrases_route() -> None:
     ]
     for phrase in phrases:
         route = route_intent(phrase)
-        if route.kind != "deterministic" or "desktop.screenshot.status" not in route.tools:
+        if route.kind != "deterministic":
+            _fail("nl_status_phrases_route", f"{phrase!r} -> {route}")
+            return
+        if "desktop.observe.status" not in route.tools and "desktop.screenshot.status" not in route.tools:
             _fail("nl_status_phrases_route", f"{phrase!r} -> {route}")
             return
     print("[pass] nl_status_phrases_route")

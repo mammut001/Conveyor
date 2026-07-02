@@ -9,6 +9,7 @@ Run: .venv/bin/python scripts/deploy_verify_p5_2.py
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import subprocess
 import sys
@@ -147,10 +148,30 @@ def _check_tool_registry() -> None:
     import handlers.tools.executors  # noqa: F401 — populate TOOL_REGISTRY
     from handlers.tools.registry import TOOL_REGISTRY
 
-    if "desktop.screenshot.status" not in TOOL_REGISTRY:
-        _fail("tool_registry", "desktop.screenshot.status missing")
-        return
+    required = (
+        "desktop.screenshot.status",
+        "desktop.observe.request",
+        "desktop.observe.status",
+        "desktop.observe.cancel",
+    )
+    for name in required:
+        if name not in TOOL_REGISTRY:
+            _fail("tool_registry", f"{name} missing")
+            return
     _pass("tool_registry")
+
+
+def _check_observe_commands() -> None:
+    from handlers.commands import COMMAND_TABLE
+
+    for name in (
+        "observe_request", "observe_status", "observe_cancel",
+        "screenshot_request", "request_screenshot",
+    ):
+        if name not in COMMAND_TABLE:
+            _fail("observe_commands", f"missing {name}")
+            return
+    _pass("observe_commands")
 
 
 def _check_feishu_card_and_action() -> None:
@@ -198,6 +219,63 @@ def _check_feishu_card_and_action() -> None:
     _pass("feishu_card_and_action")
 
 
+def _check_observe_request_store_transitions() -> None:
+    import tempfile
+    from unittest import mock
+
+    from channel.types import InboundMessage
+    from desktop_observe_requests import (
+        claim_observe_request,
+        complete_observe_request,
+        create_observe_request,
+        load_observe_requests,
+    )
+
+    msg = InboundMessage(
+        channel="feishu",
+        operator_id="ou_test",
+        chat_id="oc_test",
+        message_id="om_test",
+        text="test",
+    )
+    fake_result = {
+        "screenshot_id": "shot-1",
+        "path": "/tmp/shot.png",
+        "metadata_path": "/tmp/shot.json",
+        "sha256": "a" * 64,
+        "width": 1,
+        "height": 1,
+        "bytes": 1,
+        "node_id": "macbook-payton",
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["CODEX_MEMORY_ROOT"] = tmp
+        os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
+        os.environ["CONVEYOR_DESKTOP_SCREENSHOT_HELPER"] = "/usr/local/bin/fake-helper"
+        settings = _settings("/usr/local/bin/fake-helper", Path(tmp))
+        with mock.patch("nodes.state.is_desktop_online", return_value=True):
+            created = create_observe_request(settings, msg, "test request")
+        if not created.get("ok"):
+            _fail("observe_store_create", str(created))
+            return
+        request_id = created["request"]["request_id"]
+        claim = claim_observe_request(settings, request_id, "macbook-payton")
+        if not claim.get("ok"):
+            _fail("observe_store_claim", str(claim))
+            return
+        complete = complete_observe_request(
+            settings, request_id, "macbook-payton", fake_result,
+        )
+        if not complete.get("ok"):
+            _fail("observe_store_complete", str(complete))
+            return
+        raw = load_observe_requests(settings)
+        if "base64" in json.dumps(raw).lower():
+            _fail("observe_store_no_image", "image data in store")
+            return
+    _pass("observe_request_store")
+
+
 def _check_no_capture_in_status_executor() -> None:
     import asyncio
     from unittest import mock
@@ -211,8 +289,8 @@ def _check_no_capture_in_status_executor() -> None:
             capture_mock.assert_not_called()
         for phrase in (
             "This command does not capture a screenshot.",
-            "Remote screenshot trigger is not implemented yet.",
-            "Upload is disabled in P5.2.",
+            "Use /observe_request to create a remote observe request (P5.3).",
+            "Upload is disabled in P5.2/P5.3.",
         ):
             if phrase not in text:
                 _fail("status_executor_wording", f"missing {phrase!r}")
@@ -221,7 +299,7 @@ def _check_no_capture_in_status_executor() -> None:
 
 
 def main() -> int:
-    print("P5.2 deploy verify")
+    print("P5.2/P5.3 deploy verify")
     _check_git_sha_printed()
     _check_run_py_imports_file_lock()
     _check_desktop_screenshot_import()
@@ -230,13 +308,15 @@ def main() -> int:
     _check_absolute_helper_accepted()
     _check_screenshot_status_command()
     _check_tool_registry()
+    _check_observe_commands()
     _check_feishu_card_and_action()
+    _check_observe_request_store_transitions()
     _check_no_capture_in_status_executor()
 
     if FAILURES:
         print(f"\n{len(FAILURES)} failure(s): {', '.join(FAILURES)}")
         return 1
-    print("\nAll P5.2 deploy verify checks passed.")
+    print("\nAll P5.2/P5.3 deploy verify checks passed.")
     return 0
 
 
