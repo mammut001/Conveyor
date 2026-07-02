@@ -245,6 +245,8 @@ def _format_latest_screenshot_block(latest: dict | None) -> list[str]:
         lines.append(f"- sha256: {sha[:12]}...")
     if latest.get("path"):
         lines.append(f"- path: {_truncate_display_path(str(latest['path']))}")
+    if latest.get("metadata_path"):
+        lines.append(f"- metadata: {_truncate_display_path(str(latest['metadata_path']))}")
     return lines
 
 
@@ -260,10 +262,17 @@ async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
     from nodes.registry import list_nodes
     from nodes.types import NodeStatus, NodeType
 
+    disclaimer = [
+        "This command does not capture a screenshot.",
+        "Run `python desktop_agent.py --observe-once` on the Mac to capture one local screenshot.",
+        "Remote screenshot trigger is not implemented yet.",
+        "Upload is disabled in P5.2.",
+    ]
+
     lines = [
         "Desktop Screenshot Observe (P5.2)",
         "",
-        "Read-only local screenshot capture. No mouse, keyboard, browser control, upload, or LLM visual analysis.",
+        *disclaimer,
         "",
     ]
 
@@ -274,9 +283,6 @@ async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
             "",
             "Set CONVEYOR_DESKTOP_SCREENSHOT_HELPER to an absolute path, for example:",
             "  /usr/local/bin/capture-screen-helper",
-            "",
-            "Remote screenshot trigger is not implemented yet.",
-            "No screenshot was captured by this status check.",
         ])
         return _safe_truncate("\n".join(lines))
 
@@ -286,9 +292,6 @@ async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
             "",
             "CONVEYOR_DESKTOP_SCREENSHOT_HELPER must be an absolute path.",
             "Relative helper paths are refused for safety.",
-            "",
-            "Remote screenshot trigger is not implemented yet.",
-            "No screenshot was captured by this status check.",
         ])
         return _safe_truncate("\n".join(lines))
 
@@ -300,7 +303,7 @@ async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
         (
             "Upload: enabled in config but ignored in P5.2"
             if settings.conveyor_desktop_screenshot_allow_upload
-            else "Upload: disabled"
+            else "Upload: disabled in P5.2"
         ),
         "",
     ])
@@ -330,14 +333,6 @@ async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
 
     latest = latest_screenshot_metadata(settings)
     lines.extend(_format_latest_screenshot_block(latest))
-    lines.extend([
-        "",
-        "Local one-shot capture:",
-        "  python desktop_agent.py --observe-once",
-        "",
-        "Remote screenshot trigger: not implemented yet.",
-        "No screenshot was captured by this status check.",
-    ])
     return _safe_truncate("\n".join(lines))
 
 

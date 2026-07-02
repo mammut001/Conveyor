@@ -1,9 +1,26 @@
-# Desktop Screenshot Observe — P5.2 / P5.2.1
+# Desktop Screenshot Observe — P5.2 / P5.2.1 / P5.2.2
 
 > **Status**: Implemented (local-first, read-only).
-> **Not implemented**: Computer Use control, remote trigger queue, upload, OCR, LLM visual analysis.
+> **Not implemented**: Computer Use control, remote trigger queue, upload, thumbnail preview, OCR, LLM visual analysis.
 
 P5.2 adds **read-only screenshot observe** on the operator's MacBook. Screenshots stay on disk by default. The VPS control plane receives metadata only when future remote wiring lands; in P5.2 it does not receive image bytes.
+
+## P5.2.1 supports
+
+- Local one-shot screenshot capture on Mac via `python desktop_agent.py --observe-once`
+- Metadata listing through `/desktop_screenshot_status` and `/screenshot_status`
+- Feishu read-only status card (metadata only; no capture/upload/preview buttons)
+- Absolute-path validation for `CONVEYOR_DESKTOP_SCREENSHOT_HELPER`
+- Atomic metadata writes and latest-metadata status output
+
+## P5.2.1 does not support
+
+- Remote screenshot trigger from Feishu/Telegram chat
+- Screenshot or thumbnail upload
+- Image preview in Feishu cards
+- Gemini / GPT visual analysis
+- Mouse, keyboard, browser, or app automation
+- Computer Use control
 
 ## Components
 
@@ -13,6 +30,7 @@ P5.2 adds **read-only screenshot observe** on the operator's MacBook. Screenshot
 | `desktop_screenshot.py` | `Conveyor` | Validates helper output, stores metadata JSON |
 | `desktop_agent.py --observe-once` | `Conveyor` | Local one-shot capture entry point |
 | `desktop.screenshot.status` | `Conveyor` | Deterministic tool / NL route for observe status |
+| `scripts/deploy_verify_p5_2.py` | `Conveyor` | Deployment-readiness checks (no capture) |
 
 ## Configuration
 
@@ -49,6 +67,7 @@ These commands show helper/desktop-agent status and the latest local metadata. T
 
 - `/desktop_screenshot_status`
 - `/screenshot_status`
+- `/deploy_verify` — deployment-readiness summary (also does not capture)
 - Natural language: `截图状态`, `最近的截图`, `desktop screenshot status`
 
 Capture phrases such as `截图看看我电脑现在是什么` also route to the status tool and return an honest message that remote screenshot trigger is not implemented yet.
@@ -61,6 +80,44 @@ python desktop_agent.py --observe-once
 
 No base64, OCR text, window titles, secrets, or prompt content are stored.
 
+## Deployment checklist
+
+### On VPS
+
+```bash
+cd /opt/conveyor
+git fetch origin
+git reset --hard origin/main
+git rev-parse HEAD
+.venv/bin/python scripts/deploy_verify_p5_2.py
+sudo systemctl restart conveyor-telegram-bot conveyor-feishu-bot
+```
+
+### On Mac
+
+```bash
+cd /path/to/capture-your-screen
+bash scripts/build_helper.sh
+sudo cp build/Release/capture-screen-helper /usr/local/bin/capture-screen-helper
+
+cd /path/to/Conveyor
+export CONVEYOR_DESKTOP_SCREENSHOT_HELPER=/usr/local/bin/capture-screen-helper
+export CONVEYOR_DESKTOP_SCREENSHOT_DIR="$HOME/.codex/desktop/screenshots"
+python desktop_agent.py --observe-once
+```
+
+### In Feishu
+
+```text
+/screenshot_status
+```
+
+Expected:
+
+- Latest local screenshot metadata is shown
+- No image is uploaded
+- No remote capture is attempted
+
 ## Screen Recording permission
 
 macOS requires **Screen Recording** permission for `capture-screen-helper`. Grant it under **System Settings → Privacy & Security → Screen Recording**.
@@ -70,6 +127,8 @@ Check without capturing:
 ```bash
 capture-screen-helper --check-permission --json
 ```
+
+This is a **manual test** — automated smokes do not request Screen Recording permission.
 
 ## Natural language routing
 

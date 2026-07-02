@@ -32,6 +32,7 @@ from channel.feishu_cards import (  # noqa: E402
     action_to_command,
     computer_status_card,
     confirm_action_card,
+    desktop_screenshot_status_card,
     diff_preview_card,
     flatten_card_to_text,
     job_failed_card,
@@ -219,6 +220,22 @@ def _test_computer_status_card() -> list[CheckResult]:
     )
 
 
+def _test_desktop_screenshot_status_card() -> list[CheckResult]:
+    card = desktop_screenshot_status_card("Helper configured")
+    results = _check_card_shape(card, "desktop_screenshot_status_card")
+    results += _check_button_values(
+        card, {"desktop_screenshot_status", "nodes_status"},
+        "desktop_screenshot_status_card",
+    )
+    text = flatten_card_to_text(card).lower()
+    results.append(CheckResult(
+        "desktop_screenshot_status_card: read-only status-only wording",
+        "read-only" in text and "does not capture" in text,
+        f"text={text[:200]!r}",
+    ))
+    return results
+
+
 # ---- Action parsing tests --------------------------------------------------
 
 
@@ -282,6 +299,7 @@ def _test_parse_action_accepts_node_actions() -> list[CheckResult]:
     cases = [
         ({"action": "nodes_status"}, {"action": "nodes_status"}),
         ({"action": "computer_status"}, {"action": "computer_status"}),
+        ({"action": "desktop_screenshot_status"}, {"action": "desktop_screenshot_status"}),
     ]
     results: list[CheckResult] = []
     for raw, expected in cases:
@@ -314,6 +332,7 @@ def _test_action_to_command_mapping() -> list[CheckResult]:
         # P5.0: execution-node actions
         ("nodes_status", "nodes"),
         ("computer_status", "computer_status"),
+        ("desktop_screenshot_status", "desktop_screenshot_status"),
         ("unknown", None),
     ]
     return [
@@ -531,6 +550,7 @@ def main() -> int:
     results += _test_status_card()
     results += _test_node_status_card()
     results += _test_computer_status_card()
+    results += _test_desktop_screenshot_status_card()
     results += _test_parse_action_accepts_known_shapes()
     results += _test_parse_action_accepts_node_actions()
     results += _test_parse_action_rejects_unknown()

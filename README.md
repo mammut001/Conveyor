@@ -191,13 +191,29 @@ In P5.1, the desktop agent registration and heartbeat protocol is active:
 ### P5.2 Desktop Screenshot Observe (read-only)
 
 * **Helper**: Build `capture-screen-helper` from the `capture-your-screen` repo and set `CONVEYOR_DESKTOP_SCREENSHOT_HELPER` to an absolute path.
-* **Local capture**: `.venv/bin/python desktop_agent.py --observe-once`
-* **Status/metadata only**: `/desktop_screenshot_status`, `/screenshot_status`, or phrases like `截图状态` / `最近的截图`. These do not capture a screenshot.
-* **Natural language capture phrases** (e.g. `截图看看我电脑现在是什么`) route to the same status tool and explain that remote trigger is not implemented yet.
-* Screenshots stay under `CODEX_MEMORY_ROOT/desktop/screenshots/` by default. Upload is disabled.
-* Screen Recording permission is required on macOS.
+* **Local capture (Mac)**: `python desktop_agent.py --observe-once`
+* **Status/metadata only**: `/desktop_screenshot_status`, `/screenshot_status`, or phrases like `截图状态` / `最近的截图`. These do **not** capture a screenshot.
+* **Deploy verify**: `/deploy_verify` or `scripts/deploy_verify_p5_2.py` — readiness checks without capture.
+* **Feishu**: read-only status card (Refresh / Nodes only; no capture, upload, or preview).
+* Screenshots stay under `CODEX_MEMORY_ROOT/desktop/screenshots/` by default. Upload is disabled in P5.2.
 
-> **Computer Use control is still not implemented.** P5.2 observe does not move the mouse, type, or run Gemini Computer Use. See `docs/desktop_screenshot_observe.md`, `docs/desktop_agent_protocol.md`, and `docs/desktop_security.md`.
+**P5.2.1 supports:** local one-shot capture on Mac, metadata status commands, Feishu status card.
+
+**P5.2.1 does not support:** remote screenshot trigger from chat, upload, thumbnail preview, visual analysis, mouse/keyboard/browser control, Computer Use.
+
+**Deployment (VPS):**
+
+```bash
+cd /opt/conveyor
+git fetch origin && git reset --hard origin/main
+git rev-parse HEAD
+.venv/bin/python scripts/deploy_verify_p5_2.py
+sudo systemctl restart conveyor-telegram-bot conveyor-feishu-bot
+```
+
+**Deployment (Mac):** build `capture-screen-helper`, set absolute `CONVEYOR_DESKTOP_SCREENSHOT_HELPER`, run `python desktop_agent.py --observe-once`. Screen Recording permission is a manual macOS step.
+
+> **Computer Use control is still not implemented.** See `docs/desktop_screenshot_observe.md`, `docs/desktop_agent_protocol.md`, and `docs/desktop_security.md`.
 
 
 

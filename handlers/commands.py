@@ -1168,6 +1168,76 @@ async def _deploy_status(msg, port, _runner, settings, _arg):
     await port.reply(msg, "\n".join(lines))
 
 
+async def _deploy_verify(msg, port, _runner, settings, _arg):
+    """P5.2 deployment-readiness check for desktop screenshot observe."""
+    import subprocess
+    from desktop_screenshot import (
+        helper_configuration_error,
+        latest_screenshot_metadata,
+        resolve_helper_path,
+        resolve_screenshot_dir,
+    )
+    from handlers.tools.executors import exec_desktop_screenshot_status
+    from nodes.registry import list_nodes
+    from nodes.types import NodeStatus, NodeType
+
+    lines = ["P5.2 Deploy Verify", ""]
+
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL, timeout=5,
+        ).strip()
+        lines.append(f"Git SHA: {sha}")
+    except Exception:
+        lines.append("Git SHA: (unknown)")
+
+    helper_error = helper_configuration_error(settings)
+    if helper_error == "screenshot_helper_not_configured":
+        lines.append("Helper: not configured")
+    elif helper_error == "screenshot_helper_path_not_absolute":
+        lines.append("Helper: configured but path is not absolute")
+    else:
+        helper = resolve_helper_path(settings)
+        lines.append(f"Helper: configured ({helper})")
+
+    screenshot_dir = resolve_screenshot_dir(settings)
+    lines.append(
+        f"Screenshot dir: {'exists' if screenshot_dir.is_dir() else 'missing'} "
+        f"({screenshot_dir})"
+    )
+
+    latest = latest_screenshot_metadata(settings)
+    if latest:
+        lines.append(f"Latest metadata: {latest.get('screenshot_id', '?')}")
+        if latest.get("created_at"):
+            lines.append(f"  created: {latest['created_at']}")
+        if latest.get("bytes") is not None:
+            lines.append(f"  bytes: {latest['bytes']}")
+    else:
+        lines.append("Latest metadata: (none)")
+
+    desktop_nodes = [n for n in list_nodes(settings) if n.node_type == NodeType.DESKTOP]
+    if desktop_nodes:
+        node = desktop_nodes[0]
+        state = "online" if node.status == NodeStatus.ONLINE else "offline"
+        lines.append(f"Desktop node: {state} ({node.node_id})")
+    else:
+        lines.append("Desktop node: not enabled")
+
+    lines.extend([
+        "",
+        "This command does not capture a screenshot.",
+        "Run on Mac: python desktop_agent.py --observe-once",
+        "",
+        "── Screenshot status detail ──",
+    ])
+
+    status_text = await exec_desktop_screenshot_status(settings, "")
+    lines.append(status_text)
+    await port.reply(msg, truncate("\n".join(lines), 3500))
+
+
 async def _tool_disk(msg, port, _runner, settings, arg):
     from handlers.tools.runner import run_tool
     await port.reply(msg, await run_tool(settings, "disk", arg))
@@ -1449,14 +1519,16 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/restart telegram|feishu|maintain — 重启服务 (需确认)\n"
     text += "/audit_tools [n] — 查看危险工具审计日志\n"
     text += "/deploy_status — 查看最近部署状态\n"
+    text += "/deploy_verify — P5.2 桌面截图 observe 部署就绪检查（不截屏）\n"
     text += "/context — 查看最近会话上下文\n"
     text += "/forget — 清除当前会话记录\n"
     text += "\n"
     text += "执行节点 (P5.0 phase 0 foundation):\n"
     text += "/nodes /node_status — VPS + 可选 desktop stub 状态\n"
     text += "/computer_status — Computer Use stub 状态\n"
+    text += "/desktop_screenshot_status /screenshot_status — 桌面截图 observe 元数据/状态（不截屏）\n"
     text += "自然语言: '我的节点' / '机器状态' / 'MacBook 在线吗' / 'computer use status'\n"
-    text += "真实截屏 / 鼠标 / 键盘 / 浏览器控制仍是未来工作。\n"
+    text += "本地只读截图 observe 已支持；远程触发、上传、鼠标、键盘、浏览器控制仍是未来工作。\n"
     text += "\n"
     text += "任务队列 (P3.8):\n"
     text += "/queue — 查看队列状态\n"
@@ -1675,6 +1747,11 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("scheduler_probe_live", "调度器实时投递测试 (需确认)", _scheduler_probe_live),
         CommandSpec("audit_tools", "危险工具审计日志", _audit_tools, takes_optional_arg=True),
         CommandSpec("deploy_status", "部署状态", _deploy_status),
+        CommandSpec(
+            "deploy_verify",
+            "P5.2 desktop screenshot observe deploy readiness (read-only)",
+            _deploy_verify,
+        ),
         CommandSpec("context", "查看最近会话上下文", _context),
         CommandSpec("forget", "清除当前会话记录", _forget),
         CommandSpec("help", "帮助", _help),

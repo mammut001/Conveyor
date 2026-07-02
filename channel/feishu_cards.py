@@ -440,8 +440,16 @@ def node_status_card(summary_text: str) -> dict[str, Any]:
 def desktop_screenshot_status_card(summary_text: str) -> dict[str, Any]:
     """Card for ``/desktop_screenshot_status`` / ``/screenshot_status``.
 
-    Read-only refresh only — no capture button, no image preview.
+    Read-only status only — no capture, upload, preview, or analyze buttons.
     """
+    preamble = (
+        "**Read-only · status only**\n"
+        "This card shows local screenshot metadata. "
+        "It does not capture, upload, or preview images."
+    )
+    body = preamble
+    if summary_text.strip():
+        body = f"{preamble}\n\n{summary_text.strip()}"
     buttons: list[dict[str, Any]] = [
         _button("Refresh", {"action": "desktop_screenshot_status"}),
         _button("Nodes", {"action": "nodes_status"}),
@@ -450,7 +458,7 @@ def desktop_screenshot_status_card(summary_text: str) -> dict[str, Any]:
         "config": {"wide_screen_mode": True, "update_multi": True},
         "header": _header("Desktop Screenshot Observe", "turquoise"),
         "elements": [
-            _markdown(_truncate(summary_text, 1500)),
+            _markdown(_truncate(body, 1500)),
             _actions_row(buttons),
         ],
     }

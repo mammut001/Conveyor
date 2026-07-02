@@ -360,8 +360,11 @@ def _test_status_shows_truncated_sha_and_no_capture() -> None:
         if "status-shot" not in text:
             _fail("status_truncated_sha", "missing screenshot id")
             return
-        if "No screenshot was captured by this status check" not in text:
+        if "This command does not capture a screenshot." not in text:
             _fail("status_truncated_sha", "missing no-capture disclaimer")
+            return
+        if "Upload is disabled in P5.2." not in text:
+            _fail("status_truncated_sha", "missing upload disclaimer")
             return
     print("[pass] status_truncated_sha")
 

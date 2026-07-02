@@ -214,10 +214,12 @@ export CONVEYOR_DESKTOP_NODE_NAME="Payton MacBook"
 Chat query routing:
 * `/nodes` or `MacBook 在线吗` will report the online/offline status, last seen time, and agent state.
 * `computer use status` or `/computer_status` will report connection details.
-* `/desktop_screenshot_status` and `/screenshot_status` show helper/agent status and latest local metadata only.
+* `/desktop_screenshot_status` and `/screenshot_status` show helper/agent status and latest local metadata only (they do **not** capture a screenshot).
+* `/deploy_verify` reports P5.2 deployment readiness (git SHA, helper config, latest metadata; no capture).
 * Screenshot observe phrases route to `desktop.screenshot.status` (status only in chat; no remote capture).
-* Local capture: `python desktop_agent.py --observe-once`
+* Local capture on Mac: `python desktop_agent.py --observe-once`
 * `CONVEYOR_DESKTOP_SCREENSHOT_HELPER` must be an absolute path.
 * Remote `POST /desktop/observe/request` returns not implemented in P5.2.
+* P5.2.1 supports local observe + metadata status; it does **not** support remote trigger, upload, preview, visual analysis, or Computer Use control.
 
 

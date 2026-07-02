@@ -248,7 +248,7 @@ def should_inject_for_command(cmd_name: str | None) -> bool:
         "git_status", "status", "last", "diff", "cancel", "jobs",
         "memory", "journal", "health", "doctor", "audit", "security",
         "ratelimit", "metrics", "log", "meta", "smoke", "editcheck",
-        "clean", "maintain", "deploy_status", "tools",
+        "clean", "maintain", "deploy_status", "deploy_verify", "tools",
         "note", "notes", "remind", "reminders",
         "context", "forget", "help",
     }
