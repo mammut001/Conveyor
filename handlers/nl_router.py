@@ -162,8 +162,8 @@ def _build_catalog() -> dict[str, ToolCatalogEntry]:
         # --- Desktop screenshot observe (P5.2) ---
         "desktop.screenshot.status": {
             "domain": "桌面",
-            "examples_zh": ["截图看看我电脑现在是什么", "看一下 MacBook 屏幕"],
-            "examples_en": ["take a screenshot on my desktop"],
+            "examples_zh": ["截图状态", "最近的截图", "截图看看我电脑现在是什么"],
+            "examples_en": ["desktop screenshot status", "take a screenshot on my desktop"],
         },
         # --- Queue ---
         "queue.status": {"domain": "队列", "examples_zh": ["队列状态", "看看队列"], "examples_en": ["queue status"]},

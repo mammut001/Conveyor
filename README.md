@@ -190,9 +190,10 @@ In P5.1, the desktop agent registration and heartbeat protocol is active:
 
 ### P5.2 Desktop Screenshot Observe (read-only)
 
-* **Helper**: Build `capture-screen-helper` from the `capture-your-screen` repo and set `CONVEYOR_DESKTOP_SCREENSHOT_HELPER`.
+* **Helper**: Build `capture-screen-helper` from the `capture-your-screen` repo and set `CONVEYOR_DESKTOP_SCREENSHOT_HELPER` to an absolute path.
 * **Local capture**: `.venv/bin/python desktop_agent.py --observe-once`
-* **Status**: `/desktop_screenshot_status` or natural language screenshot phrases.
+* **Status/metadata only**: `/desktop_screenshot_status`, `/screenshot_status`, or phrases like `截图状态` / `最近的截图`. These do not capture a screenshot.
+* **Natural language capture phrases** (e.g. `截图看看我电脑现在是什么`) route to the same status tool and explain that remote trigger is not implemented yet.
 * Screenshots stay under `CODEX_MEMORY_ROOT/desktop/screenshots/` by default. Upload is disabled.
 * Screen Recording permission is required on macOS.
 

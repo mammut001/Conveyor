@@ -1,4 +1,4 @@
-# Desktop Screenshot Observe — P5.2
+# Desktop Screenshot Observe — P5.2 / P5.2.1
 
 > **Status**: Implemented (local-first, read-only).
 > **Not implemented**: Computer Use control, remote trigger queue, upload, OCR, LLM visual analysis.
@@ -15,6 +15,8 @@ P5.2 adds **read-only screenshot observe** on the operator's MacBook. Screenshot
 | `desktop.screenshot.status` | `Conveyor` | Deterministic tool / NL route for observe status |
 
 ## Configuration
+
+`CONVEYOR_DESKTOP_SCREENSHOT_HELPER` must be an **absolute path**. Relative helper paths are refused.
 
 ```env
 CONVEYOR_DESKTOP_SCREENSHOT_HELPER=/usr/local/bin/capture-screen-helper
@@ -39,7 +41,23 @@ On success the agent prints safe JSON and writes:
 - `.../desktop/screenshots/<screenshot_id>.png`
 - `.../desktop/screenshots/<screenshot_id>.json`
 
-Metadata fields: `screenshot_id`, `path`, `sha256`, `width`, `height`, `display_id`, `created_at`, `node_id`, `helper_version`.
+Metadata fields: `screenshot_id`, `path`, `sha256`, `width`, `height`, `display_id`, `created_at`, `node_id`, `helper_version`, `bytes`.
+
+## Status commands (metadata only)
+
+These commands show helper/desktop-agent status and the latest local metadata. They do **not** capture a screenshot:
+
+- `/desktop_screenshot_status`
+- `/screenshot_status`
+- Natural language: `截图状态`, `最近的截图`, `desktop screenshot status`
+
+Capture phrases such as `截图看看我电脑现在是什么` also route to the status tool and return an honest message that remote screenshot trigger is not implemented yet.
+
+Local capture remains:
+
+```bash
+python desktop_agent.py --observe-once
+```
 
 No base64, OCR text, window titles, secrets, or prompt content are stored.
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import subprocess
 import uuid
 from datetime import datetime, timezone
@@ -13,6 +14,22 @@ from config import Settings
 
 logger = logging.getLogger("conveyor.desktop_screenshot")
 
+SCREENSHOT_DIR_MODE = 0o700
+
+_METADATA_FIELDS = (
+    "screenshot_id",
+    "path",
+    "metadata_path",
+    "sha256",
+    "width",
+    "height",
+    "display_id",
+    "created_at",
+    "node_id",
+    "helper_version",
+    "bytes",
+)
+
 
 def resolve_screenshot_dir(settings: Settings) -> Path:
     configured = (settings.conveyor_desktop_screenshot_dir or "").strip()
@@ -21,12 +38,120 @@ def resolve_screenshot_dir(settings: Settings) -> Path:
     return (settings.codex_memory_root / "desktop" / "screenshots").resolve()
 
 
+def resolve_helper_path(settings: Settings) -> Path | None:
+    """Return absolute helper path, or None if unset."""
+    raw = (settings.conveyor_desktop_screenshot_helper or "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        return None
+    return path.resolve()
+
+
+def helper_configuration_error(settings: Settings) -> str | None:
+    """Return a safe error code when helper path is invalid, else None."""
+    raw = (settings.conveyor_desktop_screenshot_helper or "").strip()
+    if not raw:
+        return "screenshot_helper_not_configured"
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        return "screenshot_helper_path_not_absolute"
+    return None
+
+
+def ensure_screenshot_dir(settings: Settings) -> Path:
+    screenshot_dir = resolve_screenshot_dir(settings)
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        screenshot_dir.chmod(SCREENSHOT_DIR_MODE)
+    except OSError:
+        logger.debug("could not chmod screenshot dir to 0o700: %s", screenshot_dir)
+    return screenshot_dir
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(65536), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _parse_created_at(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _normalize_metadata_record(data: dict, metadata_path: Path) -> dict | None:
+    if not isinstance(data, dict):
+        return None
+    screenshot_id = data.get("screenshot_id")
+    if not isinstance(screenshot_id, str) or not screenshot_id.strip():
+        screenshot_id = metadata_path.stem
+    record = {
+        "screenshot_id": screenshot_id,
+        "path": data.get("path") if isinstance(data.get("path"), str) else None,
+        "metadata_path": str(metadata_path.resolve()),
+        "sha256": data.get("sha256") if isinstance(data.get("sha256"), str) else None,
+        "width": data.get("width"),
+        "height": data.get("height"),
+        "display_id": data.get("display_id"),
+        "created_at": data.get("created_at") if isinstance(data.get("created_at"), str) else None,
+        "node_id": data.get("node_id") if isinstance(data.get("node_id"), str) else None,
+        "helper_version": data.get("helper_version") if isinstance(data.get("helper_version"), str) else None,
+        "bytes": data.get("bytes"),
+    }
+    if record["bytes"] is None and isinstance(record["path"], str):
+        png_path = Path(record["path"])
+        if png_path.is_file():
+            record["bytes"] = png_path.stat().st_size
+    return record
+
+
+def list_screenshot_metadata(settings: Settings, *, limit: int = 5) -> list[dict]:
+    """List safe screenshot metadata JSON records, newest first."""
+    screenshot_dir = resolve_screenshot_dir(settings)
+    if not screenshot_dir.is_dir():
+        return []
+
+    candidates: list[tuple[datetime, float, dict]] = []
+    for metadata_path in screenshot_dir.glob("*.json"):
+        if metadata_path.name.endswith(".tmp"):
+            continue
+        try:
+            raw = metadata_path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError):
+            continue
+        record = _normalize_metadata_record(data, metadata_path)
+        if record is None:
+            continue
+        created = _parse_created_at(record.get("created_at"))
+        if created is not None:
+            sort_key = created
+        else:
+            try:
+                sort_key = datetime.fromtimestamp(metadata_path.stat().st_mtime, tz=timezone.utc)
+            except OSError:
+                sort_key = datetime.min.replace(tzinfo=timezone.utc)
+        candidates.append((sort_key, metadata_path.stat().st_mtime, record))
+
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [record for _, _, record in candidates[: max(0, limit)]]
+
+
+def latest_screenshot_metadata(settings: Settings) -> dict | None:
+    records = list_screenshot_metadata(settings, limit=1)
+    return records[0] if records else None
 
 
 def validate_helper_payload(
@@ -110,6 +235,14 @@ def validate_helper_payload(
     }
 
 
+def _write_metadata_atomic(metadata_path: Path, metadata: dict) -> None:
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = metadata_path.with_name(metadata_path.name + ".tmp")
+    payload = json.dumps(metadata, indent=2, sort_keys=True) + "\n"
+    tmp_path.write_text(payload, encoding="utf-8")
+    os.replace(tmp_path, metadata_path)
+
+
 def write_screenshot_metadata(
     settings: Settings,
     *,
@@ -117,8 +250,7 @@ def write_screenshot_metadata(
     capture: dict,
     node_id: str,
 ) -> Path:
-    screenshot_dir = resolve_screenshot_dir(settings)
-    screenshot_dir.mkdir(parents=True, exist_ok=True)
+    screenshot_dir = ensure_screenshot_dir(settings)
     metadata = {
         "screenshot_id": screenshot_id,
         "path": capture.get("path"),
@@ -130,31 +262,35 @@ def write_screenshot_metadata(
         or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "node_id": node_id,
         "helper_version": capture.get("helper_version"),
+        "bytes": capture.get("bytes"),
     }
     metadata_path = screenshot_dir / f"{screenshot_id}.json"
-    metadata_path.write_text(
-        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    _write_metadata_atomic(metadata_path, metadata)
     return metadata_path
 
 
 def capture_screenshot_once(settings: Settings) -> dict:
     """Capture one screenshot via the local helper CLI. Read-only, local-only."""
-    helper = (settings.conveyor_desktop_screenshot_helper or "").strip()
-    if not helper:
-        logger.info("desktop observe skipped: screenshot helper not configured")
+    helper_error = helper_configuration_error(settings)
+    if helper_error:
+        logger.info("desktop observe skipped: %s", helper_error)
+        if helper_error == "screenshot_helper_path_not_absolute":
+            return {
+                "ok": False,
+                "error": helper_error,
+                "message": "CONVEYOR_DESKTOP_SCREENSHOT_HELPER must be an absolute path.",
+            }
         return {
             "ok": False,
-            "error": "screenshot_helper_not_configured",
+            "error": helper_error,
             "message": "Desktop screenshot helper is not configured.",
         }
 
+    helper = str(resolve_helper_path(settings))
     if settings.conveyor_desktop_screenshot_allow_upload:
         logger.warning("CONVEYOR_DESKTOP_SCREENSHOT_ALLOW_UPLOAD=true ignored in P5.2")
 
-    screenshot_dir = resolve_screenshot_dir(settings)
-    screenshot_dir.mkdir(parents=True, exist_ok=True)
+    screenshot_dir = ensure_screenshot_dir(settings)
 
     screenshot_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     output_path = (screenshot_dir / f"{screenshot_id}.png").resolve()

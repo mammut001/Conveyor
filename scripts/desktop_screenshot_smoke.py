@@ -18,9 +18,18 @@ os.environ.setdefault("CODEX_WORKSPACE_ROOT", "/tmp/test_desktop_screenshot_work
 os.environ.setdefault("CODEX_MEMORY_ROOT", "/tmp/test_desktop_screenshot_memory")
 os.environ.setdefault("TELEGRAM_ALLOWED_USER_ID", "1")
 
+import asyncio
+from unittest import mock
+
 from config import Settings
-from desktop_screenshot import capture_screenshot_once, validate_helper_payload
+from desktop_screenshot import (
+    capture_screenshot_once,
+    latest_screenshot_metadata,
+    list_screenshot_metadata,
+    validate_helper_payload,
+)
 from handlers.intent import route_intent
+from handlers.tools.executors import exec_desktop_screenshot_status
 
 FAILURES: list[str] = []
 
@@ -241,6 +250,139 @@ def _test_nl_routes_to_desktop_screenshot_status() -> None:
     print("[pass] nl_routes_screenshot_observe")
 
 
+def _test_relative_helper_path_refused() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _settings("bin/capture-screen-helper", Path(tmp))
+        result = capture_screenshot_once(settings)
+        if result.get("ok"):
+            _fail("relative_helper_path_refused", f"result={result}")
+            return
+        if result.get("error") != "screenshot_helper_path_not_absolute":
+            _fail("relative_helper_path_refused", f"error={result.get('error')}")
+            return
+    print("[pass] relative_helper_path_refused")
+
+
+def _test_subprocess_uses_list_args_no_shell() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        helper = tmp_path / "fake_helper.py"
+        _make_fake_helper(helper, "success")
+        settings = _settings(str(helper), tmp_path / "shots")
+        with mock.patch("desktop_screenshot.subprocess.run") as run_mock:
+            run_mock.return_value = mock.Mock(stdout='{"ok": false, "error": "stopped"}', stderr="")
+            capture_screenshot_once(settings)
+            if not run_mock.called:
+                _fail("subprocess_no_shell", "subprocess.run not called")
+                return
+            _, kwargs = run_mock.call_args
+            if kwargs.get("shell"):
+                _fail("subprocess_no_shell", "shell=True was used")
+                return
+            cmd = run_mock.call_args.args[0]
+            if not isinstance(cmd, list):
+                _fail("subprocess_no_shell", f"cmd type={type(cmd)}")
+                return
+    print("[pass] subprocess_no_shell")
+
+
+def _test_metadata_listing_and_latest() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        settings = _settings(None, tmp_path)
+        old = {
+            "screenshot_id": "old-shot",
+            "created_at": "2026-07-01T10:00:00Z",
+            "sha256": "a" * 64,
+            "width": 1,
+            "height": 1,
+            "bytes": 10,
+        }
+        new = {
+            "screenshot_id": "new-shot",
+            "created_at": "2026-07-02T12:00:00Z",
+            "sha256": "b" * 64,
+            "width": 2,
+            "height": 2,
+            "bytes": 20,
+        }
+        (tmp_path / "old-shot.json").write_text(json.dumps(old), encoding="utf-8")
+        (tmp_path / "new-shot.json").write_text(json.dumps(new), encoding="utf-8")
+        (tmp_path / "bad.json").write_text("{not-json", encoding="utf-8")
+
+        records = list_screenshot_metadata(settings, limit=5)
+        if len(records) != 2:
+            _fail("metadata_listing_and_latest", f"records={records}")
+            return
+        latest = latest_screenshot_metadata(settings)
+        if not latest or latest.get("screenshot_id") != "new-shot":
+            _fail("metadata_listing_and_latest", f"latest={latest}")
+            return
+    print("[pass] metadata_listing_and_latest")
+
+
+def _test_metadata_missing_dir_empty() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _settings(None, Path(tmp) / "missing")
+        if list_screenshot_metadata(settings):
+            _fail("metadata_missing_dir_empty", "expected empty list")
+            return
+        if latest_screenshot_metadata(settings) is not None:
+            _fail("metadata_missing_dir_empty", "expected None latest")
+            return
+    print("[pass] metadata_missing_dir_empty")
+
+
+def _test_status_shows_truncated_sha_and_no_capture() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        helper = tmp_path / "fake_helper.py"
+        _make_fake_helper(helper, "success")
+        settings = _settings(str(helper), tmp_path / "shots")
+        meta = {
+            "screenshot_id": "status-shot",
+            "created_at": "2026-07-02T04:30:00Z",
+            "sha256": "abcd1234efgh5678" + "0" * 48,
+            "width": 3024,
+            "height": 1964,
+            "bytes": 1234567,
+            "path": str(tmp_path / "shots" / "status-shot.png"),
+        }
+        (tmp_path / "shots").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "shots" / "status-shot.json").write_text(json.dumps(meta), encoding="utf-8")
+
+        with mock.patch("desktop_screenshot.capture_screenshot_once") as capture_mock:
+            text = asyncio.run(exec_desktop_screenshot_status(settings, ""))
+            capture_mock.assert_not_called()
+        if "abcd1234efgh" not in text or "..." not in text:
+            _fail("status_truncated_sha", f"text={text}")
+            return
+        if "status-shot" not in text:
+            _fail("status_truncated_sha", "missing screenshot id")
+            return
+        if "No screenshot was captured by this status check" not in text:
+            _fail("status_truncated_sha", "missing no-capture disclaimer")
+            return
+    print("[pass] status_truncated_sha")
+
+
+def _test_nl_status_phrases_route() -> None:
+    phrases = [
+        "截图状态",
+        "最近的截图",
+        "看看最近截图",
+        "desktop screenshot status",
+        "latest desktop screenshot",
+        "Mac 截图状态",
+    ]
+    for phrase in phrases:
+        route = route_intent(phrase)
+        if route.kind != "deterministic" or "desktop.screenshot.status" not in route.tools:
+            _fail("nl_status_phrases_route", f"{phrase!r} -> {route}")
+            return
+    print("[pass] nl_status_phrases_route")
+
+
 def _test_validate_sha256_helper() -> None:
     data = b"\x89PNG\r\n\x1a\nok"
     digest = hashlib.sha256(data).hexdigest()
@@ -263,13 +405,19 @@ def _test_validate_sha256_helper() -> None:
 
 def main() -> int:
     _test_helper_not_configured()
+    _test_relative_helper_path_refused()
+    _test_subprocess_uses_list_args_no_shell()
     _test_fake_helper_success()
     _test_fake_helper_permission_error()
     _test_fake_helper_sha_mismatch()
     _test_validate_relative_path()
     _test_validate_direct_relative_payload()
+    _test_metadata_listing_and_latest()
+    _test_metadata_missing_dir_empty()
+    _test_status_shows_truncated_sha_and_no_capture()
     _test_validate_sha256_helper()
     _test_nl_routes_to_desktop_screenshot_status()
+    _test_nl_status_phrases_route()
 
     if FAILURES:
         print(f"\n{len(FAILURES)} failure(s): {', '.join(FAILURES)}")

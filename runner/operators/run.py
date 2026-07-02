@@ -23,6 +23,7 @@ from uuid import uuid4
 
 # Project root for codex --add-dir and CODEX_RUNNER_HOME env.
 from runner._paths import RUNNER_HOME
+from runner.file_lock import file_lock
 from runner.types import Job, JobMode, JobState, ProgressCallback
 from redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
@@ -94,8 +95,6 @@ THINKING_THRESHOLD_SECONDS = 1.0
 TOOL_PULSE_THRESHOLD_SECONDS = 4.0
 TOOL_PULSE_INTERVAL_SECONDS = 4.0
 MEMO_ENV_SKIP_DIRS = (".venv", "venv", "env", "node_modules", "__pycache__")
-
-from runner.file_lock import file_lock
 
 async def validate(self) -> None:
     root = self.settings.codex_workspace_root

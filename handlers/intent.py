@@ -314,6 +314,16 @@ _NODES_STATUS_PATTERNS = (
     re.compile(r"(我的节点|机器状态|主机状态|node\s*status|nodes\s*status|执行节点|节点状态|(?:macbook|mac|电脑|本机)\s*在线)", re.IGNORECASE),
 )
 
+# P5.2.1: screenshot metadata/status queries.
+_SCREENSHOT_STATUS_PATTERNS = (
+    re.compile(r"截图状态", re.IGNORECASE),
+    re.compile(r"最近的截图", re.IGNORECASE),
+    re.compile(r"看看最近截图", re.IGNORECASE),
+    re.compile(r"desktop\s*screenshot\s*status", re.IGNORECASE),
+    re.compile(r"latest\s*desktop\s*screenshot", re.IGNORECASE),
+    re.compile(r"mac\s*截图状态", re.IGNORECASE),
+)
+
 # P5.2: read-only screenshot observe phrases. These route to
 # ``desktop.screenshot.status`` instead of Codex or control stubs.
 _SCREENSHOT_OBSERVE_PATTERNS = (
@@ -433,6 +443,9 @@ def route_intent(text: str) -> RouteResult:
     for pat in _NODES_STATUS_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("nodes.status",))
+    for pat in _SCREENSHOT_STATUS_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("desktop.screenshot.status",))
     for pat in _SCREENSHOT_OBSERVE_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("desktop.screenshot.status",))

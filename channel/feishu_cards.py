@@ -49,6 +49,7 @@ ALLOWED_ACTIONS: frozenset[str] = frozenset({
     # /computer_status commands in :func:`action_to_command`.
     "nodes_status",
     "computer_status",
+    "desktop_screenshot_status",
 })
 
 #: Maximum number of action buttons rendered in a single card row.
@@ -137,7 +138,7 @@ def parse_action(value: Any) -> dict[str, Any] | None:
         "status", "diff", "apply", "discard", "cancel",
         # P5.0: execution-node refreshes are also slash-style
         # (no token, no job_id, no extra state).
-        "nodes_status", "computer_status",
+        "nodes_status", "computer_status", "desktop_screenshot_status",
     )
     if action in slash_actions and "token" in payload:
         return None
@@ -436,6 +437,25 @@ def node_status_card(summary_text: str) -> dict[str, Any]:
     }
 
 
+def desktop_screenshot_status_card(summary_text: str) -> dict[str, Any]:
+    """Card for ``/desktop_screenshot_status`` / ``/screenshot_status``.
+
+    Read-only refresh only — no capture button, no image preview.
+    """
+    buttons: list[dict[str, Any]] = [
+        _button("Refresh", {"action": "desktop_screenshot_status"}),
+        _button("Nodes", {"action": "nodes_status"}),
+    ]
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": _header("Desktop Screenshot Observe", "turquoise"),
+        "elements": [
+            _markdown(_truncate(summary_text, 1500)),
+            _actions_row(buttons),
+        ],
+    }
+
+
 def computer_status_card(summary_text: str) -> dict[str, Any]:
     """Card sent in response to ``/computer_status`` on Feishu.
 
@@ -516,6 +536,7 @@ def action_to_command(action: str) -> str | None:
         # P5.0: Execution nodes
         "nodes_status": "nodes",
         "computer_status": "computer_status",
+        "desktop_screenshot_status": "desktop_screenshot_status",
     }
     return mapping.get(action)
 

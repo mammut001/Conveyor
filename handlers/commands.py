@@ -439,7 +439,7 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     # Execution nodes (P5.0)
     "nodes.status": ("/nodes", "/node_status"),
     "computer.status": ("/computer_status",),
-    "desktop.screenshot.status": ("/desktop_screenshot_status",),
+    "desktop.screenshot.status": ("/desktop_screenshot_status", "/screenshot_status"),
 }
 
 _TOOL_EXAMPLES: dict[str, str] = {
@@ -527,6 +527,7 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "nodes.status": "节点状态",
     "computer.status": "Computer Use 状态",
     "desktop.screenshot.status": "桌面截图 observe 状态",
+    "screenshot_status": "桌面截图状态",
 }
 
 
@@ -1214,6 +1215,12 @@ async def _desktop_screenshot_status(msg, port, _runner, settings, _arg):
     """Read-only desktop screenshot observe status (P5.2)."""
     from handlers.tools.runner import run_tool
     text = await run_tool(settings, "desktop.screenshot.status", _arg or "")
+    if msg.channel == "feishu" and hasattr(port, "send_card"):
+        try:
+            from channel.feishu_cards import desktop_screenshot_status_card
+            await port.send_card(msg, desktop_screenshot_status_card(text))
+        except Exception:
+            pass
     await port.reply(msg, text)
 
 
@@ -1563,6 +1570,11 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec(
             "desktop_screenshot_status",
             "Desktop screenshot observe status (P5.2 read-only)",
+            _desktop_screenshot_status,
+        ),
+        CommandSpec(
+            "screenshot_status",
+            "Desktop screenshot observe status (alias)",
             _desktop_screenshot_status,
         ),
         CommandSpec("diagnose", "Hybrid 主机诊断", _diagnose, takes_optional_arg=True),
