@@ -25,16 +25,7 @@ except ImportError:  # pragma: no cover - production installs python-dotenv
 logger = logging.getLogger("conveyor.config")
 
 
-SENSITIVE_FIELDS = frozenset({
-    "telegram_bot_token", "lark_app_secret", "gmail_app_password",
-    "google_client_secret_path",  # path may hint at project layout
-    "github_token",
-    "web_search_api_key",
-    # Future shared secret for a local desktop agent. Never echoed
-    # in repr/chat/logs even though it is optional. The value is
-    # only consulted when ``conveyor_desktop_node_enabled`` is true.
-    "conveyor_desktop_agent_token",
-})
+from security.secrets import SENSITIVE_SETTING_FIELDS as SENSITIVE_FIELDS
 
 
 @dataclass(frozen=True)
@@ -81,6 +72,9 @@ class Settings:
     conveyor_session_enabled: bool = True
     conveyor_session_max_turns: int = 20
     conveyor_session_inject_turns: int = 5
+    conveyor_apply_allow_high_risk: bool = False
+    conveyor_apply_max_untracked_bytes: int = 1048576
+    conveyor_feishu_require_allowlist: bool = False
     # Gmail App Password backend (P3.3). All optional; gmail.status reports
     # missing config gracefully. OAuth is a future phase.
     gmail_backend: str | None = None  # "imap_smtp" or None
@@ -302,6 +296,9 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_session_enabled": os.getenv("CONVEYOR_SESSION_ENABLED", "true").strip().lower() in ("true", "1", "yes"),
         "conveyor_session_max_turns": _int_env("CONVEYOR_SESSION_MAX_TURNS", 20),
         "conveyor_session_inject_turns": _int_env("CONVEYOR_SESSION_INJECT_TURNS", 5),
+        "conveyor_apply_allow_high_risk": os.getenv("CONVEYOR_APPLY_ALLOW_HIGH_RISK", "false").strip().lower() in ("true", "1", "yes"),
+        "conveyor_apply_max_untracked_bytes": _int_env("CONVEYOR_APPLY_MAX_UNTRACKED_BYTES", 1048576),
+        "conveyor_feishu_require_allowlist": os.getenv("CONVEYOR_FEISHU_REQUIRE_ALLOWLIST", "false").strip().lower() in ("true", "1", "yes"),
         # Gmail App Password backend (P3.3)
         "gmail_backend": os.getenv("GMAIL_BACKEND") or None,
         "gmail_address": os.getenv("GMAIL_ADDRESS") or None,

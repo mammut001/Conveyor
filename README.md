@@ -223,6 +223,8 @@ multi-tenant SaaS. The model is intentionally simple and honest:
   you must not expose the bot to untrusted people.
 - **No commit, no push, no merge.** Apply is always an explicit `/apply` after
   you review `/diff`. The bot never touches `main` without you saying so.
+- **Safe Apply & Isolation Pass.** Per-job isolated worktrees, strict changed-file allowlist/denylist checks, session prompt injection guards, and Feishu strict mode are enforced. See [Apply Safety Policy](docs/apply_safety.md) for full details.
+- **No Computer Use.** Desktop control, mouse/keyboard actions, screenshot capture, and Gemini Computer Use calls are intentionally *not* implemented.
 
 This is personal infrastructure, not a public chatbot. Treat it accordingly.
 

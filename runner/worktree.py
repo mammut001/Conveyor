@@ -28,12 +28,19 @@ DAILY_WORKTREE_PREFIX = "day-"
 # Module-level constants (also on CodexRunner class shell)
 
 MEMORY_FILENAME = "MEMORY.md"
+from runner.types import Job
 from config import Settings, load_settings
 from redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
+
+def _job_worktree_path(self, job: Job) -> Path:
+    # Ensure job id is safe and contains only alphanumeric, dash, and underscore
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", job.id)
+    return self.settings.codex_task_root / "worktrees" / safe_id
+
 async def _create_worktree(self, job: Job) -> Path:
     root = self.settings.codex_workspace_root
-    worktree = self._today_worktree_path()
+    worktree = self._job_worktree_path(job)
     if not worktree.exists():
         await self._git(["worktree", "add", "--detach", str(worktree), "HEAD"], cwd=root)
     return worktree.resolve()

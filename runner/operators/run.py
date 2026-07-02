@@ -95,6 +95,8 @@ TOOL_PULSE_THRESHOLD_SECONDS = 4.0
 TOOL_PULSE_INTERVAL_SECONDS = 4.0
 MEMO_ENV_SKIP_DIRS = (".venv", "venv", "env", "node_modules", "__pycache__")
 
+from runner.file_lock import file_lock
+
 async def validate(self) -> None:
     root = self.settings.codex_workspace_root
     if not root.exists() or not root.is_dir():
@@ -123,11 +125,27 @@ async def start(
     async with self._lock:
         if self.current_job and self.current_job.state == JobState.RUNNING:
             raise RuntimeError(f"Job {self.current_job.id} is already running.")
-        sandbox = mode.sandbox
-        job = Job(id=self._new_job_id(), mode=mode, prompt=prompt, sandbox=sandbox)
-        job.max_attempts = 1 + len(self.settings.codex_retry_429_delays_seconds)
-        self.current_job = job
-        self.last_job = job
+        
+        lock_path = self.settings.codex_task_root / "locks" / "run.lock"
+        with file_lock(lock_path):
+            # Check other running jobs across processes
+            for record in self.job_records(100):
+                if record.state == "running":
+                    raise RuntimeError(f"Job {record.id} is already running.")
+
+            sandbox = mode.sandbox
+            job = Job(id=self._new_job_id(), mode=mode, prompt=prompt, sandbox=sandbox)
+            job.max_attempts = 1 + len(self.settings.codex_retry_429_delays_seconds)
+            
+            # Write initial metadata synchronously so other processes see it immediately
+            logs_dir = self.settings.codex_task_root / "logs" / job.id
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            job.metadata_path = logs_dir / "job.json"
+            self._write_job_metadata(job)
+            
+            self.current_job = job
+            self.last_job = job
+            
         asyncio.create_task(self._run_job(job, on_progress))
         return job
 
@@ -151,12 +169,11 @@ async def cancel(self) -> str:
 async def _run_job(self, job: Job, on_progress: ProgressCallback) -> None:
     try:
         await self.validate()
-        logs_dir = self.settings.codex_task_root / "logs" / job.id
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        job.metadata_path = logs_dir / "job.json"
-        self._write_job_metadata(job)
-        job.worktree_path = await self._create_worktree(job)
-        self._write_job_metadata(job)
+        
+        lock_path = self.settings.codex_task_root / "locks" / "run.lock"
+        with file_lock(lock_path):
+            job.worktree_path = await self._create_worktree(job)
+            self._write_job_metadata(job)
         if job.cancel_requested:
             job.error = "cancelled"
             job.state = JobState.CANCELLED
@@ -425,12 +442,8 @@ def _codex_command(self, job: Job) -> list[str]:
 
 
 def _child_env(self) -> dict[str, str]:
-    allowed_prefixes = ("CODEX_", "OPENAI_", "AZURE_OPENAI_", "MINIMAX_", "ANTHROPIC_")
-    keep = {"HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "SHELL", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"}
-    env: dict[str, str] = {}
-    for key, value in os.environ.items():
-        if key in keep or key.startswith(allowed_prefixes):
-            env[key] = value
+    from security.secrets import child_env_from
+    env = child_env_from(os.environ)
     env["CODEX_TELEGRAM_JOB"] = "1"
     env["CODEX_RUNNER_HOME"] = str(RUNNER_HOME)
     return env

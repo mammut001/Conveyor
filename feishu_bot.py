@@ -144,6 +144,17 @@ async def main() -> None:
     if not settings.lark_app_id or not settings.lark_app_secret:
         raise RuntimeError("LARK_APP_ID and LARK_APP_SECRET are required")
 
+    if settings.conveyor_feishu_require_allowlist and not settings.lark_allowed_open_id:
+        logger.error("Production Safety Error: CONVEYOR_FEISHU_REQUIRE_ALLOWLIST is true, but LARK_ALLOWED_OPEN_ID is unset.")
+        raise RuntimeError("Production Safety Error: LARK_ALLOWED_OPEN_ID must be configured when strict mode is enabled.")
+
+    if not settings.lark_allowed_open_id:
+        logger.warning("=" * 80)
+        logger.warning("WARNING: LARK_ALLOWED_OPEN_ID is unset. Feishu bot is running in bootstrap mode.")
+        logger.warning("The bot will accept messages from any user and display their open_id.")
+        logger.warning("To secure the bot, configure LARK_ALLOWED_OPEN_ID in your .env file.")
+        logger.warning("=" * 80)
+
     await runner.validate()
 
     channel = FeishuChannel(

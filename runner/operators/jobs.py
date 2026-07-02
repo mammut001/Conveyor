@@ -98,43 +98,87 @@ async def discard_last_job(self) -> str:
 
 
 async def apply_last_job(self) -> str:
+    from runner.file_lock import file_lock
+    from runner.apply_policy import validate_apply_paths, collect_tracked_changed_files, collect_untracked_files
+
     worktree_path = self._last_worktree_path()
     job_id = self._last_job_id()
     if not worktree_path or not worktree_path.exists():
         return "No job worktree to apply."
 
-    root_status = await self._git(["status", "--short"], cwd=self.settings.codex_workspace_root, check=False)
-    if root_status.strip():
-        return "Main workspace has uncommitted changes. I will not apply over a dirty repo."
+    lock_path = self.settings.codex_task_root / "locks" / "apply.lock"
+    with file_lock(lock_path):
+        root_status = await self._git(["status", "--short"], cwd=self.settings.codex_workspace_root, check=False)
+        if root_status.strip():
+            return "Main workspace has uncommitted changes. I will not apply over a dirty repo."
 
-    status = await self._git(["status", "--short"], cwd=worktree_path, check=False)
-    # Exclude MEMORY.md from the diff we apply; it is per-day working memory
-    # that should never be merged into the main repo.
-    memory_pathspec = f":(exclude){MEMORY_FILENAME}"
-    status_no_memory = await self._git(
-        ["status", "--short", "--", ".", memory_pathspec], cwd=worktree_path, check=False
-    )
-    if not status_no_memory.strip():
-        return f"Job {job_id} has no changes to apply."
+        # Collect tracked changed files
+        tracked_files = collect_tracked_changed_files(worktree_path)
+        # Collect untracked files
+        untracked_files = collect_untracked_files(worktree_path)
 
-    patch = await self._git(
-        ["diff", "--binary", "HEAD", "--", ".", memory_pathspec], cwd=worktree_path, check=False
-    )
-    if patch.strip():
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            "apply",
-            "--binary",
-            "-",
-            cwd=self.settings.codex_workspace_root,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        # Validate tracked paths
+        if tracked_files:
+            val_tracked = validate_apply_paths(tracked_files, kind="tracked", settings=self.settings, worktree_path=worktree_path)
+            if not val_tracked.allowed:
+                return f"Refused to apply job {job_id}: blocked high-risk paths: {val_tracked.reason}"
+
+        # Validate untracked paths
+        if untracked_files:
+            val_untracked = validate_apply_paths(untracked_files, kind="untracked", settings=self.settings, worktree_path=worktree_path)
+            if not val_untracked.allowed:
+                return f"Refused to apply job {job_id}: blocked high-risk paths: {val_untracked.reason}"
+
+        # Exclude MEMORY.md from the diff we apply; it is per-day working memory
+        # that should never be merged into the main repo.
+        memory_pathspec = f":(exclude){MEMORY_FILENAME}"
+        status_no_memory = await self._git(
+            ["status", "--short", "--", ".", memory_pathspec], cwd=worktree_path, check=False
         )
-        stdout, stderr = await process.communicate(patch.encode("utf-8"))
-        if process.returncode != 0:
-            detail = (stderr or stdout).decode("utf-8", errors="replace").strip()
-            return f"Could not apply tracked diff for {job_id}: {truncate(detail, 1200)}"
+        # Also verify if there are actually any tracked or untracked changes to apply
+        has_tracked = len(tracked_files) > 0
+        has_untracked = len(untracked_files) > 0
+        if not has_tracked and not has_untracked:
+            return f"Job {job_id} has no changes to apply."
 
-    copied = await self._copy_untracked_files(worktree_path)
-    return f"Applied {job_id}. Copied {copied} new files. Review main repo before committing."
+        patch = await self._git(
+            ["diff", "--binary", "HEAD", "--", ".", memory_pathspec], cwd=worktree_path, check=False
+        )
+        if patch.strip():
+            # Recheck dirty main repo (TOCTOU safety)
+            root_status_pre = await self._git(["status", "--short"], cwd=self.settings.codex_workspace_root, check=False)
+            if root_status_pre.strip():
+                return "Main workspace has uncommitted changes. I will not apply over a dirty repo."
+
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "apply",
+                "--binary",
+                "-",
+                cwd=self.settings.codex_workspace_root,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate(patch.encode("utf-8"))
+            if process.returncode != 0:
+                detail = (stderr or stdout).decode("utf-8", errors="replace").strip()
+                return f"Could not apply tracked diff for {job_id}: {truncate(detail, 1200)}"
+
+        # Double check overwrite of untracked files before copying
+        for relative in untracked_files:
+            if relative == MEMORY_FILENAME or relative.startswith(MEMORY_FILENAME + "/"):
+                continue
+            target = self.settings.codex_workspace_root / relative
+            if target.exists():
+                return f"Could not apply job {job_id}: Refusing to overwrite existing untracked target: {relative}"
+
+        copied = await self._copy_untracked_files(worktree_path)
+        
+        status_summary = await self._git(["status", "--short"], cwd=self.settings.codex_workspace_root, check=False)
+        safe_summary = redact_text(status_summary.strip())
+        
+        return (
+            f"Applied {job_id}. Copied {copied} new files. Review main repo before committing.\n\n"
+            f"Workspace status:\n{safe_summary}"
+        )

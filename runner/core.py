@@ -68,7 +68,7 @@ from runner.streaming import (
     _event_summary,
 )
 
-from runner.worktree import _create_worktree, _user_today, _today_worktree_path, _memory_path, _memory_context_text, _ensure_today_worktree, _remove_worktree, _copy_untracked_files, _git, cleanup_job_worktree
+from runner.worktree import _job_worktree_path, _create_worktree, _user_today, _today_worktree_path, _memory_path, _memory_context_text, _ensure_today_worktree, _remove_worktree, _copy_untracked_files, _git, cleanup_job_worktree
 
 # Attach the free functions as methods via the
 # descriptor protocol. setattr on the class
@@ -133,6 +133,7 @@ for _name, _func in [
     ("_read_stderr", _read_stderr),
     ("_capture_usage", _capture_usage),
     ("_event_summary", _event_summary),
+    ("_job_worktree_path", _job_worktree_path),
     ("_create_worktree", _create_worktree),
     ("_user_today", _user_today),
     ("_today_worktree_path", _today_worktree_path),
