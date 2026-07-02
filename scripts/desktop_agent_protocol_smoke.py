@@ -584,6 +584,203 @@ def main() -> int:
             else:
                 print("[pass] observe_complete_rejects_base64")
 
+        # 30-38. Upload pending / claim / fail / complete validations
+        print("Testing upload integration endpoints...")
+        from desktop_upload_requests import save_upload_requests
+        test_upload_id = "upl_20260702T120000Z_test1234"
+        save_upload_requests(desktop_agent_server.settings, {
+            test_upload_id: {
+                "upload_id": test_upload_id,
+                "screenshot_id": "scr_test_screenshot_id_123",
+                "node_id": "macbook-payton",
+                "status": "pending",
+                "created_at": "2026-07-02T12:00:00Z",
+                "updated_at": "2026-07-02T12:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "max_width": 1280,
+                "max_height": 800,
+                "max_bytes": 750000,
+                "delivered": False,
+                "result": None,
+                "error": None,
+            }
+        })
+
+        # 30. GET /desktop/upload/pending
+        pending_upload_url = f"http://{server_host}:{server_port}/desktop/upload/pending?node_id=macbook-payton"
+        req = urllib.request.Request(pending_upload_url, headers=headers, method="GET")
+        with urllib.request.urlopen(req) as resp:
+            pending_up_data = json.loads(resp.read().decode())
+        if not pending_up_data.get("ok") or not pending_up_data.get("requests") or pending_up_data["requests"][0]["upload_id"] != test_upload_id:
+            _fail("upload_pending", f"body={pending_up_data}")
+        else:
+            print("[pass] upload_pending")
+
+        # 31. POST /desktop/upload/claim
+        claim_upload_url = f"http://{server_host}:{server_port}/desktop/upload/claim"
+        req = urllib.request.Request(
+            claim_upload_url, data=json.dumps({"upload_id": test_upload_id, "node_id": "macbook-payton"}).encode(),
+            headers=headers, method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            claim_up_data = json.loads(resp.read().decode())
+        if not claim_up_data.get("ok") or claim_up_data.get("request", {}).get("status") != "claimed":
+            _fail("upload_claim", f"body={claim_up_data}")
+        else:
+            print("[pass] upload_claim")
+
+        # Enable upload settings for the complete test
+        import dataclasses
+        orig_upload_enabled = desktop_agent_server.settings.conveyor_desktop_upload_enabled
+        desktop_agent_server.settings = dataclasses.replace(
+            desktop_agent_server.settings,
+            conveyor_desktop_upload_enabled=True,
+        )
+
+        # 32. POST /desktop/upload/complete disabled check
+        desktop_agent_server.settings = dataclasses.replace(
+            desktop_agent_server.settings,
+            conveyor_desktop_upload_enabled=False,
+        )
+        import hashlib
+        png_data = b"\x89PNG\r\n\x1a\nvalid_png_content"
+        png_sha = hashlib.sha256(png_data).hexdigest()
+        complete_up_url = (
+            f"http://{server_host}:{server_port}/desktop/upload/complete"
+            f"?upload_id={test_upload_id}&node_id=macbook-payton"
+            f"&sha256={png_sha}&bytes={len(png_data)}&width=100&height=100"
+        )
+        req = urllib.request.Request(complete_up_url, data=png_data, headers={**headers, "Content-Type": "image/png", "Content-Length": str(len(png_data))}, method="POST")
+        try:
+            urllib.request.urlopen(req)
+            _fail("upload_complete_disabled", "expected forbidden")
+        except urllib.error.HTTPError as e:
+            if e.code != 403:
+                _fail("upload_complete_disabled", f"status={e.code}")
+            else:
+                print("[pass] upload_complete_disabled")
+        desktop_agent_server.settings = dataclasses.replace(
+            desktop_agent_server.settings,
+            conveyor_desktop_upload_enabled=True,
+        )
+
+        # 33. POST /desktop/upload/complete invalid png check (no PNG magic)
+        bad_png_data = b"bad_content_no_png_magic"
+        bad_png_sha = hashlib.sha256(bad_png_data).hexdigest()
+        bad_complete_up_url = (
+            f"http://{server_host}:{server_port}/desktop/upload/complete"
+            f"?upload_id={test_upload_id}&node_id=macbook-payton"
+            f"&sha256={bad_png_sha}&bytes={len(bad_png_data)}&width=100&height=100"
+        )
+        req = urllib.request.Request(bad_complete_up_url, data=bad_png_data, headers={**headers, "Content-Type": "image/png", "Content-Length": str(len(bad_png_data))}, method="POST")
+        try:
+            urllib.request.urlopen(req)
+            _fail("upload_complete_invalid_png", "expected bad request")
+        except urllib.error.HTTPError as e:
+            if e.code != 400:
+                _fail("upload_complete_invalid_png", f"status={e.code}")
+            else:
+                print("[pass] upload_complete_invalid_png")
+
+        # 34. POST /desktop/upload/complete traversal check
+        traversal_up_url = (
+            f"http://{server_host}:{server_port}/desktop/upload/complete"
+            f"?upload_id=upl_../test&node_id=macbook-payton"
+            f"&sha256={png_sha}&bytes={len(png_data)}&width=100&height=100"
+        )
+        req = urllib.request.Request(traversal_up_url, data=png_data, headers={**headers, "Content-Type": "image/png", "Content-Length": str(len(png_data))}, method="POST")
+        try:
+            urllib.request.urlopen(req)
+            _fail("upload_complete_traversal", "expected bad request")
+        except urllib.error.HTTPError as e:
+            if e.code != 400:
+                _fail("upload_complete_traversal", f"status={e.code}")
+            else:
+                print("[pass] upload_complete_traversal")
+
+        # 35. POST /desktop/upload/complete sha mismatch check
+        sha_mismatch_up_url = (
+            f"http://{server_host}:{server_port}/desktop/upload/complete"
+            f"?upload_id={test_upload_id}&node_id=macbook-payton"
+            f"&sha256=wrong_sha_value&bytes={len(png_data)}&width=100&height=100"
+        )
+        req = urllib.request.Request(sha_mismatch_up_url, data=png_data, headers={**headers, "Content-Type": "image/png", "Content-Length": str(len(png_data))}, method="POST")
+        try:
+            urllib.request.urlopen(req)
+            _fail("upload_complete_sha_mismatch", "expected bad request")
+        except urllib.error.HTTPError as e:
+            if e.code != 400:
+                _fail("upload_complete_sha_mismatch", f"status={e.code}")
+            else:
+                print("[pass] upload_complete_sha_mismatch")
+
+        # 36. POST /desktop/upload/complete success
+        req = urllib.request.Request(complete_up_url, data=png_data, headers={**headers, "Content-Type": "image/png", "Content-Length": str(len(png_data))}, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            complete_up_data = json.loads(resp.read().decode())
+        if not complete_up_data.get("ok") or complete_up_data.get("request", {}).get("status") != "completed":
+            _fail("upload_complete_success", f"body={complete_up_data}")
+        else:
+            print("[pass] upload_complete_success")
+
+        # 37. Verify that source_screenshot_id is correctly mapped to screenshot_id (not upload_id)
+        saved_req_record = complete_up_data.get("request", {})
+        saved_result = saved_req_record.get("result", {})
+        if saved_result.get("source_screenshot_id") != "scr_test_screenshot_id_123":
+            _fail("upload_complete_source_screenshot_id_fixed", f"source_screenshot_id={saved_result.get('source_screenshot_id')}")
+        else:
+            print("[pass] upload_complete_source_screenshot_id_fixed")
+
+        # Restore upload enabled settings
+        desktop_agent_server.settings = dataclasses.replace(
+            desktop_agent_server.settings,
+            conveyor_desktop_upload_enabled=orig_upload_enabled,
+        )
+
+        # 38. POST /desktop/upload/fail
+        fail_upload_id = "upl_20260702T120100Z_fail1234"
+        save_upload_requests(desktop_agent_server.settings, {
+            fail_upload_id: {
+                "upload_id": fail_upload_id,
+                "screenshot_id": "scr_124",
+                "node_id": "macbook-payton",
+                "status": "pending",
+                "created_at": "2026-07-02T12:01:00Z",
+                "updated_at": "2026-07-02T12:01:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "max_width": 1280,
+                "max_height": 800,
+                "max_bytes": 750000,
+                "delivered": False,
+                "result": None,
+                "error": None,
+            }
+        })
+        # claim first
+        req = urllib.request.Request(
+            claim_upload_url, data=json.dumps({"upload_id": fail_upload_id, "node_id": "macbook-payton"}).encode(),
+            headers=headers, method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            pass
+        # fail it
+        fail_upload_url = f"http://{server_host}:{server_port}/desktop/upload/fail"
+        fail_up_body = {
+            "upload_id": fail_upload_id,
+            "node_id": "macbook-payton",
+            "error": "invalid_screenshot_source",
+            "message": "Local screenshot source validation failed.",
+        }
+        req = urllib.request.Request(
+            fail_upload_url, data=json.dumps(fail_up_body).encode(), headers=headers, method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            fail_up_data = json.loads(resp.read().decode())
+        if not fail_up_data.get("ok") or fail_up_data.get("request", {}).get("status") != "failed":
+            _fail("upload_fail", f"body={fail_up_data}")
+        else:
+            print("[pass] upload_fail")
+
     finally:
         # Shutdown server
         print("Shutting down test server...")
@@ -591,7 +788,7 @@ def main() -> int:
         httpd.server_close()
         server_thread.join()
 
-    total_tests = 29
+    total_tests = 38
     failed = len(FAILURES)
     passed = total_tests - failed
     print(f"\n{'=' * 60}")

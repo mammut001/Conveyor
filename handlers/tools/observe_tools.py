@@ -166,11 +166,26 @@ async def exec_desktop_observe_cancel(settings: Settings, arg: str) -> str:
     )
 
 
+def upload_temp_dir_configuration_error(settings: Settings) -> str | None:
+    raw = (settings.conveyor_desktop_upload_temp_dir or "").strip()
+    if not raw:
+        return None
+    import os
+    from pathlib import Path
+    path = Path(os.path.expanduser(raw))
+    if not path.is_absolute():
+        return "CONVEYOR_DESKTOP_UPLOAD_TEMP_DIR must be an absolute path."
+    return None
+
+
 def resolve_upload_temp_dir(settings: Settings) -> Path:
+    import os
     from pathlib import Path
     raw = (settings.conveyor_desktop_upload_temp_dir or "").strip()
     if raw:
-        return Path(raw).expanduser()
+        path = Path(os.path.expanduser(raw))
+        if path.is_absolute():
+            return path
     return settings.codex_memory_root / "desktop" / "uploads"
 
 
@@ -196,6 +211,20 @@ def _format_upload_summary(record: dict) -> list[str]:
     return lines
 
 
+def _parse_iso(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    from datetime import datetime, timezone
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 async def exec_desktop_upload_request(
     settings: Settings,
     msg: InboundMessage,
@@ -203,6 +232,10 @@ async def exec_desktop_upload_request(
 ) -> str:
     from desktop_observe_requests import load_observe_requests
     from desktop_upload_requests import create_upload_request
+
+    temp_dir_err = upload_temp_dir_configuration_error(settings)
+    if temp_dir_err:
+        return _safe_truncate(f"Desktop upload request failed\n\nReason: invalid_upload_temp_dir\n{temp_dir_err}")
 
     observe_store = load_observe_requests(settings)
     observe_record = None
@@ -281,15 +314,16 @@ async def exec_desktop_upload_status(
 ) -> str:
     from desktop_upload_requests import (
         load_upload_requests,
-        save_upload_requests,
         list_recent_upload_requests,
+        mark_upload_delivered,
     )
     from nodes.registry import list_nodes
     from nodes.types import NodeStatus, NodeType
 
-    if port is not None and msg is not None:
+    temp_dir_err = upload_temp_dir_configuration_error(settings)
+
+    if temp_dir_err is None and port is not None and msg is not None:
         store = load_upload_requests(settings)
-        changed = False
         for upload_id, record in store.items():
             if record.get("status") == "completed" and not record.get("delivered"):
                 result = record.get("result")
@@ -300,17 +334,21 @@ async def exec_desktop_upload_status(
                         try:
                             if hasattr(port, "send_image"):
                                 caption = f"Thumbnail for observe {record.get('observe_request_id')}"
+                                target_chat_id = record.get("created_by_chat_id", msg.chat_id)
+                                target_channel = record.get("created_by_channel", msg.channel)
                                 await port.send_image(
-                                    chat_id=record.get("created_by_chat_id", msg.chat_id),
+                                    chat_id=target_chat_id,
                                     image_path=thumbnail_path,
                                     caption=caption,
                                 )
-                                record["delivered"] = True
-                                changed = True
+                                mark_upload_delivered(
+                                    settings,
+                                    upload_id,
+                                    channel=target_channel,
+                                    chat_id=target_chat_id,
+                                )
                         except Exception:
                             pass
-        if changed:
-            save_upload_requests(settings, store)
 
     lines = [
         "Desktop Upload Status (P5.4)",
@@ -319,6 +357,9 @@ async def exec_desktop_upload_status(
         "Mac agent must run: python desktop_agent.py --poll-observe",
         "",
     ]
+    if temp_dir_err:
+        lines.append(f"Configuration Error: {temp_dir_err}")
+        lines.append("")
 
     desktop_nodes = [n for n in list_nodes(settings) if n.node_type == NodeType.DESKTOP]
     if desktop_nodes:
@@ -362,17 +403,30 @@ async def exec_desktop_upload_cancel(settings: Settings, arg: str) -> str:
 
 
 async def exec_desktop_upload_cleanup(settings: Settings, _arg: str) -> str:
+    temp_dir_err = upload_temp_dir_configuration_error(settings)
+    if temp_dir_err:
+        return f"Refusing cleanup: {temp_dir_err}"
+
     upload_dir = resolve_upload_temp_dir(settings)
     if not upload_dir.exists():
         return "No upload temp directory exists."
-    
+
+    upload_dir = upload_dir.resolve()
     retention = settings.conveyor_desktop_upload_retention_seconds
     now = time.time()
     deleted_count = 0
     total_size = 0
-    
+
     for p in upload_dir.iterdir():
+        if p.is_symlink():
+            continue
         if p.is_file():
+            # Check directory traversal safety
+            try:
+                p.resolve().relative_to(upload_dir)
+            except ValueError:
+                continue
+
             mtime = p.stat().st_mtime
             if now - mtime > retention:
                 total_size += p.stat().st_size

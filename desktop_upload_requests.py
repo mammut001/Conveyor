@@ -421,3 +421,58 @@ def list_recent_upload_requests(settings: Settings, limit: int = 5) -> list[dict
             for _, _, record in items[:limit]:
                 results.append(dict(record))
             return results
+
+
+def get_upload_request(settings: Settings, upload_id: str) -> dict | None:
+    store = load_upload_requests(settings)
+    return store.get(upload_id)
+
+
+def mark_upload_delivered(
+    settings: Settings,
+    upload_id: str,
+    *,
+    channel: str | None = None,
+    chat_id: str | None = None,
+    delivered_at: datetime | None = None,
+) -> dict:
+    now = _utc_now(delivered_at)
+    with _lock:
+        with file_lock(upload_requests_lock_path(settings)):
+            store = _load_unlocked(settings)
+            record = store.get(upload_id)
+            if not isinstance(record, dict):
+                return {"ok": False, "error": "request_not_found"}
+            if record.get("status") != "completed":
+                return {"ok": False, "error": "invalid_status", "status": record.get("status")}
+            record["delivered"] = True
+            record["delivered_at"] = _iso_z(now)
+            if channel is not None:
+                record["delivered_channel"] = channel
+            if chat_id is not None:
+                record["delivered_chat_id"] = chat_id
+            _save_unlocked(settings, store)
+            return {"ok": True, "request": dict(record)}
+
+
+def mark_upload_delivery_failed(
+    settings: Settings,
+    upload_id: str,
+    error: str,
+    *,
+    message: str | None = None,
+) -> dict:
+    with _lock:
+        with file_lock(upload_requests_lock_path(settings)):
+            store = _load_unlocked(settings)
+            record = store.get(upload_id)
+            if not isinstance(record, dict):
+                return {"ok": False, "error": "request_not_found"}
+            if record.get("status") != "completed":
+                return {"ok": False, "error": "invalid_status", "status": record.get("status")}
+            record["delivery_failed"] = True
+            record["delivery_error"] = _truncate_text(error, 128)
+            if message:
+                record["delivery_error_message"] = _truncate_text(message, 500)
+            _save_unlocked(settings, store)
+            return {"ok": True, "request": dict(record)}

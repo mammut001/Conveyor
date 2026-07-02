@@ -247,6 +247,27 @@ sudo systemctl restart conveyor-telegram-bot conveyor-feishu-bot
 > **Computer Use control is still not implemented.** See `docs/desktop_screenshot_observe.md`, `docs/desktop_agent_protocol.md`, and `docs/desktop_security.md`.
 
 
+### P5.4 Manual Screenshot Thumbnail Upload
+
+* **Explicit Request Flow**: Operator manually requests preview/thumbnail upload via `/observe_upload <request_id>` or `/screenshot_upload <screenshot_id>`, or using natural language phrases like `发一下刚才的截图` or `把刚才截图发我`.
+* **Thumbnail Scaling & Resizing**: The Mac agent generates a downscaled thumbnail from the original screenshot using macOS native `sips` tool (scaled to maximum 1280x800, under 750 KB size limit). The full-resolution screenshot remains strictly local on the MacBook.
+* **VPS Outbound Port Delivery**: Once a completed thumbnail is received, the control plane sends the preview image to the original chat via the Feishu/Telegram outbound port `send_image` API.
+* **Cleanup Control**: Temporary VPS upload files can be cleaned up using `/upload_cleanup` which deletes files older than `CONVEYOR_DESKTOP_UPLOAD_RETENTION_SECONDS`.
+* **State Persistence**: Pending, claimed, and completed requests are tracked in `CODEX_MEMORY_ROOT/state/desktop_upload_requests.json`.
+
+### P5.4.1 Hardening & Validation Constraints
+
+P5.4.1 adds a hardening pass with strict validation checks:
+* **File Type Magic Validation**: The control plane checks that files uploaded to `/desktop/upload/complete` have a PNG magic header (`\x89PNG\r\n\x1a\n`) and either `application/octet-stream` or `image/png` content-types before writing.
+* **Absolute Temp Directory Enforcement**: If `CONVEYOR_DESKTOP_UPLOAD_TEMP_DIR` is configured, it must be an absolute path. Relative paths are rejected and fallback to default safe absolute directory (`CODEX_MEMORY_ROOT/desktop/uploads`).
+* **Symlink and Path Traversal Protections**: 
+  - **VPS Upload Directory**: Temp files are written atomically (`.tmp` replacement) to a filename derived strictly from the server-side `upload_id` and verified to reside inside the upload directory.
+  - **VPS Cleanup**: The cleanup loop rejects relative or invalid directories, refuses to follow symlinks, skips directories, and verifies that the resolved paths of files to delete are strictly within the resolved temporary upload directory.
+  - **Mac Agent Local Screenshot Source**: Resolving the source screenshot path (`resolve_local_screenshot_source`) checks that `screenshot_id` is safe (alphanumeric/hyphen/dots, length <= 128, no `..` or `/`). It requires the resolved path to be absolute, reside strictly within `conveyor_desktop_screenshot_dir`, be a regular file, not be a symlink, and match the metadata SHA-256 (if metadata exists).
+* **Correct `source_screenshot_id` mapping**: The VPS looks up the screenshot ID from the upload request database using the `upload_id` parameter to record it as `source_screenshot_id`, preventing the upload ID from being used incorrectly as the screenshot ID.
+* **Atomic Delivery Marking**: Outbound image delivery is decoupled from long-lived database locks to prevent blocking concurrent network I/O. Upon successful delivery, the status is marked atomically using lock-guarded helper functions.
+
+
 
 Every feature above is already shipped in this repo. If a capability is not
 listed here, it does not exist yet.

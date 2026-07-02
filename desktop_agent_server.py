@@ -135,6 +135,10 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
 
         # Intercept complete binary upload before reading body as JSON
         if self.path.startswith("/desktop/upload/complete"):
+            if not settings.conveyor_desktop_upload_enabled:
+                self.send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "upload_disabled"})
+                return
+
             parsed_url = urlparse(self.path)
             query = parse_qs(parsed_url.query)
             
@@ -155,6 +159,11 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Missing query parameters"})
                 return
 
+            # Safe simple upload_id check
+            if not upload_id.startswith("upl_") or "/" in upload_id or ".." in upload_id or len(upload_id) > 128:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid upload_id format"})
+                return
+
             validated_node_id = self._validate_node_id(node_id)
             if validated_node_id is None:
                 return
@@ -165,6 +174,10 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                 height = int(height_str) if height_str else 0
             except ValueError:
                 self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid integer parameters"})
+                return
+
+            if expected_bytes <= 0:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Expected bytes must be positive"})
                 return
 
             max_bytes = settings.conveyor_desktop_upload_max_bytes
@@ -186,7 +199,50 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Content-Length does not match bytes parameter"})
                 return
 
+            # Content-type checks
+            content_type = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            if content_type not in ("application/octet-stream", "image/png"):
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid Content-Type"})
+                return
+
+            # Verify upload request exists and is claimed BEFORE reading/writing large body
+            from desktop_upload_requests import load_upload_requests
+            store = load_upload_requests(settings)
+            upload_req = store.get(upload_id)
+            if not upload_req or not isinstance(upload_req, dict):
+                self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "request_not_found"})
+                return
+            if upload_req.get("node_id") != node_id:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "node_id_mismatch"})
+                return
+            if upload_req.get("status") != "claimed":
+                self.send_json(HTTPStatus.CONFLICT, {
+                    "ok": False,
+                    "error": "invalid_status",
+                    "status": upload_req.get("status"),
+                })
+                return
+            screenshot_id = upload_req.get("screenshot_id")
+            if not screenshot_id:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "missing_screenshot_id"})
+                return
+
+            from handlers.tools.observe_tools import upload_temp_dir_configuration_error, resolve_upload_temp_dir
+            temp_dir_err = upload_temp_dir_configuration_error(settings)
+            if temp_dir_err:
+                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "invalid_upload_temp_dir", "message": temp_dir_err})
+                return
+
             binary_data = self.rfile.read(content_length)
+
+            if len(binary_data) == 0:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Empty bytes"})
+                return
+
+            # Validate PNG magic bytes
+            if not binary_data.startswith(b"\x89PNG\r\n\x1a\n"):
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_thumbnail_format"})
+                return
 
             import hashlib
             hasher = hashlib.sha256()
@@ -196,7 +252,6 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "SHA-256 mismatch"})
                 return
 
-            from handlers.tools.observe_tools import resolve_upload_temp_dir
             dest_dir = resolve_upload_temp_dir(settings)
             dest_dir.mkdir(parents=True, exist_ok=True)
             try:
@@ -212,6 +267,11 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                 os.replace(tmp_path, dest_path)
             except Exception as e:
                 self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "write_failed", "message": str(e)})
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except Exception:
+                        pass
                 return
 
             from desktop_upload_requests import complete_upload_request
@@ -223,11 +283,19 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                 "width": width,
                 "height": height,
                 "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "source_screenshot_id": upload_id,
+                "source_screenshot_id": screenshot_id,
                 "node_id": node_id,
             }
             result = complete_upload_request(settings, upload_id, node_id, result_meta)
-            status = HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT
+            if not result.get("ok"):
+                if dest_path.exists():
+                    try:
+                        dest_path.unlink()
+                    except Exception:
+                        pass
+                status = HTTPStatus.CONFLICT
+            else:
+                status = HTTPStatus.OK
             self.send_json(status, result)
             return
 

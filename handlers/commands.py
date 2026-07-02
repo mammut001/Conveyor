@@ -1217,6 +1217,17 @@ async def _deploy_verify(msg, port, _runner, settings, _arg):
         f"({screenshot_dir})"
     )
 
+    from handlers.tools.observe_tools import upload_temp_dir_configuration_error, resolve_upload_temp_dir
+    temp_dir_err = upload_temp_dir_configuration_error(settings)
+    upload_dir = resolve_upload_temp_dir(settings)
+    if temp_dir_err:
+        lines.append(f"Upload temp dir: invalid ({temp_dir_err})")
+    else:
+        lines.append(
+            f"Upload temp dir: {'exists' if upload_dir.is_dir() else 'missing'} "
+            f"({upload_dir})"
+        )
+
     latest = latest_screenshot_metadata(settings)
     if latest:
         lines.append(f"Latest metadata: {latest.get('screenshot_id', '?')}")

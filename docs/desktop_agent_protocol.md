@@ -260,3 +260,27 @@ In P5.4, we implemented the manual screenshot thumbnail upload mechanism:
   - Computer Use controls (mouse, keyboard, app control, or vision analysis) remain completely out of scope.
 
 
+## 8. P5.4.1 Hardening & Validation Constraints
+
+P5.4.1 adds a hardening pass with strict validation checks:
+
+* **File Type Magic Validation**:
+  - The control plane checks that files uploaded to `/desktop/upload/complete` have a PNG magic header (`\x89PNG\r\n\x1a\n`) and either `application/octet-stream` or `image/png` content-types before writing.
+
+* **Absolute Temp Directory Enforcement**:
+  - If `CONVEYOR_DESKTOP_UPLOAD_TEMP_DIR` is configured, it must be an absolute path (checked via `upload_temp_dir_configuration_error`).
+  - Relative temp directories are rejected; the control plane will fallback to the default safe absolute directory (`CODEX_MEMORY_ROOT/desktop/uploads`) for all write, status, and cleanup operations.
+
+* **Traversal and Symlink Protections**:
+  - **VPS Upload Directory**: Temp files are written atomically (`.tmp` replacement) to a filename derived strictly from the server-side `upload_id` and verified to reside inside the upload directory.
+  - **VPS Cleanup**: The cleanup loop rejects relative or invalid directories, refuses to follow symlinks, skips directories, and verifies that the resolved paths of files to delete are strictly within the resolved temporary upload directory.
+  - **Mac Agent Local Screenshot Source**: Resolving the source screenshot path (`resolve_local_screenshot_source`) checks that `screenshot_id` is safe (alphanumeric/hyphen/dots, length <= 128, no `..` or `/`). It requires the resolved path to be absolute, reside strictly within `conveyor_desktop_screenshot_dir`, be a regular file, not be a symlink, and match the metadata SHA-256 (if metadata exists).
+
+* **Correct `source_screenshot_id` mapping**:
+  - The VPS looks up the screenshot ID from the upload request database using the `upload_id` parameter to record it as `source_screenshot_id`, preventing the upload ID from being used incorrectly as the screenshot ID.
+
+* **Atomic Delivery Marking**:
+  - Outbound image delivery is decoupled from long-lived database locks to prevent blocking concurrent network I/O.
+  - Upon successful delivery, the status is marked atomically using lock-guarded helper functions (`mark_upload_delivered`, `mark_upload_delivery_failed`).
+
+

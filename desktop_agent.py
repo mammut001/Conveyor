@@ -232,6 +232,93 @@ def generate_thumbnail(
     return False
 
 
+def resolve_local_screenshot_source(
+    settings: Settings,
+    screenshot_id: str,
+) -> Path | None:
+    import os
+    import json
+    import hashlib
+    from pathlib import Path
+    from desktop_screenshot import resolve_screenshot_dir
+
+    if not screenshot_id or not isinstance(screenshot_id, str):
+        return None
+    screenshot_id = screenshot_id.strip()
+    if not screenshot_id or "/" in screenshot_id or ".." in screenshot_id or len(screenshot_id) > 128:
+        return None
+
+    screenshot_dir = resolve_screenshot_dir(settings)
+    if not screenshot_dir.is_dir():
+        return None
+
+    screenshot_dir = screenshot_dir.resolve()
+
+    meta_path = (screenshot_dir / f"{screenshot_id}.json").resolve()
+    try:
+        meta_path.relative_to(screenshot_dir)
+    except ValueError:
+        return None
+
+    source_path = None
+    expected_sha = None
+
+    if meta_path.is_file() and not meta_path.is_symlink():
+        try:
+            meta_data = json.loads(meta_path.read_text(encoding="utf-8"))
+            p = meta_data.get("path")
+            if p:
+                path_obj = Path(p)
+                if path_obj.is_absolute():
+                    resolved_p = path_obj.resolve()
+                    resolved_p.relative_to(screenshot_dir)
+                    if resolved_p.is_file() and not resolved_p.is_symlink() and resolved_p.suffix == ".png":
+                        source_path = resolved_p
+                        expected_sha = meta_data.get("sha256")
+        except Exception:
+            pass
+
+    if source_path is None:
+        fallback_p = (screenshot_dir / f"{screenshot_id}.png").resolve()
+        try:
+            fallback_p.relative_to(screenshot_dir)
+            if fallback_p.is_file() and not fallback_p.is_symlink():
+                source_path = fallback_p
+                if not expected_sha and meta_path.is_file() and not meta_path.is_symlink():
+                    try:
+                        meta_data = json.loads(meta_path.read_text(encoding="utf-8"))
+                        expected_sha = meta_data.get("sha256")
+                    except Exception:
+                        pass
+        except (ValueError, Exception):
+            pass
+
+    if source_path is None:
+        return None
+
+    if not source_path.is_absolute():
+        return None
+    if not source_path.is_file():
+        return None
+    if source_path.is_symlink() or os.path.islink(source_path):
+        return None
+    if source_path.suffix != ".png":
+        return None
+
+    if expected_sha:
+        try:
+            hasher = hashlib.sha256()
+            with source_path.open("rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    hasher.update(chunk)
+            if hasher.hexdigest() != expected_sha:
+                return None
+        except Exception:
+            return None
+
+    return source_path
+
+
 def poll_upload_once(settings: Settings) -> None:
     token = (settings.conveyor_desktop_agent_token or "").strip()
     if not token:
@@ -285,29 +372,9 @@ def poll_upload_once(settings: Settings) -> None:
         return
 
     logger.info("Upload request claimed: %s", upload_id)
-
-    from desktop_screenshot import resolve_screenshot_dir
-    from pathlib import Path
-    screenshot_dir = resolve_screenshot_dir(settings)
-    source_img_path = None
-    
-    meta_path = screenshot_dir / f"{screenshot_id}.json"
-    if meta_path.is_file():
-        try:
-            meta_data = json.loads(meta_path.read_text(encoding="utf-8"))
-            p = meta_data.get("path")
-            if p and os.path.exists(p):
-                source_img_path = Path(p)
-        except Exception:
-            pass
-
+    source_img_path = resolve_local_screenshot_source(settings, screenshot_id)
     if not source_img_path:
-        p = screenshot_dir / f"{screenshot_id}.png"
-        if p.is_file():
-            source_img_path = p
-
-    if not source_img_path or not source_img_path.is_file():
-        logger.error("Local screenshot file not found for screenshot_id=%s", screenshot_id)
+        logger.error("Local screenshot source validation failed for screenshot_id=%s", screenshot_id)
         try:
             post_json(
                 f"{control_plane_url}/desktop/upload/fail",
@@ -315,13 +382,16 @@ def poll_upload_once(settings: Settings) -> None:
                 {
                     "upload_id": upload_id,
                     "node_id": node_id,
-                    "error": "screenshot_not_found",
-                    "message": f"Local screenshot file not found for ID {screenshot_id}.",
+                    "error": "invalid_screenshot_source",
+                    "message": "Local screenshot source validation failed.",
                 },
             )
         except Exception as exc:
             logger.info("upload fail report failed: %s", exc)
         return
+
+    from desktop_screenshot import resolve_screenshot_dir
+    screenshot_dir = resolve_screenshot_dir(settings)
 
     thumb_path = screenshot_dir / f"thumb_{upload_id}.png"
     ok = generate_thumbnail(source_img_path, thumb_path, max_width, max_height, max_bytes)
