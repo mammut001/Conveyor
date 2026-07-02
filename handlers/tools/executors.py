@@ -189,38 +189,46 @@ async def exec_queue_status(_settings: Settings, _arg: str) -> str:
 async def exec_nodes_status(_settings: Settings, _arg: str) -> str:
     """List known execution nodes and their capabilities.
 
-    Phase 0 read-only snapshot. The VPS node is always listed.
-    The desktop node is listed only when the operator opted in
-    via ``CONVEYOR_DESKTOP_NODE_ENABLED`` — and it is offline
-    regardless, because no local agent is wired up in this task.
+    Integrates live heartbeat status for the desktop node if available.
     """
+    import time
     from nodes.registry import list_nodes
-    from nodes.types import format_node_block
+    from nodes.types import format_node_block, NodeStatus, NodeType
 
     nodes = list_nodes(_settings)
     if not nodes:
         return "🖥  执行节点\n\n(没有可用节点)"
     lines = ["🖥  Execution nodes", ""]
+    
+    desktop_node = None
     for node in nodes:
         lines.append(format_node_block(node))
+        if node.node_type == NodeType.DESKTOP:
+            desktop_node = node
+            if node.status == NodeStatus.ONLINE:
+                now = time.time()
+                if node.last_seen_at is not None:
+                    seconds_ago = max(0, int(now - node.last_seen_at))
+                    lines.append(f"  last_seen: {seconds_ago}s ago")
+                agent_state = node.metadata.get("agent_state", "idle")
+                lines.append(f"  agent_state: {agent_state}")
         lines.append("")
-    lines.append(
-        "说明: VPS 是当前控制平面; Desktop 节点为 stub, 真实截屏/鼠标/键盘/"
-        "Computer Use 仍是未来工作。"
-    )
+
+    if desktop_node is not None:
+        if desktop_node.status == NodeStatus.OFFLINE:
+            lines.append("说明: Desktop node is configured but no fresh heartbeat has been received.")
+
     return _safe_truncate("\n".join(lines))
 
 
 async def exec_computer_status(_settings: Settings, _arg: str) -> str:
     """Stub tool for Computer Use requests.
 
-    Real desktop control is not implemented in this task. The
-    tool exists so natural-language phrases like
-    ``帮我在 Mac 上打开 Xcode`` route to a deterministic
-    stub reply instead of falling through to Codex (which
-    cannot see the operator's laptop from the VPS).
+    Real desktop control is not implemented in this task.
     """
+    import time
     from nodes.registry import is_stub_environment, list_nodes
+    from nodes.types import NodeStatus
 
     if is_stub_environment(_settings):
         desktop_nodes = [
@@ -236,23 +244,36 @@ async def exec_computer_status(_settings: Settings, _arg: str) -> str:
             )
         else:
             node = desktop_nodes[0]
-            body = (
-                f"🖥  Computer Use: 已配置但未运行\n\n"
-                f"节点: {node.node_id} · {node.display_name}\n"
-                f"状态: {node.status.value}\n"
-                f"模式: {node.metadata.get('computer_use_mode', 'observe_only')}\n\n"
-                "真实截屏 / 鼠标 / 键盘 / 浏览器控制 / Gemini Computer Use "
-                "**尚未实现**。\n"
-                "当前仅显示节点配置信息，没有触发任何桌面动作。\n\n"
-                "下一步: 部署一个本地 desktop agent，然后让它向本服务发送 "
-                "heartbeat (未来工作)。"
-            )
+            if node.status == NodeStatus.ONLINE:
+                now = time.time()
+                last_seen_str = "unknown"
+                if node.last_seen_at is not None:
+                    seconds_ago = max(0, int(now - node.last_seen_at))
+                    last_seen_str = f"{seconds_ago}s ago"
+                agent_state = node.metadata.get("agent_state", "idle")
+                body = (
+                    "Computer Use: desktop agent online, control not enabled\n\n"
+                    f"Node: {node.node_id} · {node.display_name}\n"
+                    f"Status: online\n"
+                    f"Agent state: {agent_state}\n"
+                    f"Last seen: {last_seen_str}\n\n"
+                    "This phase only supports register + heartbeat. "
+                    "Screenshot, mouse, keyboard, browser control, and Gemini Computer Use remain future work."
+                )
+            else:
+                body = (
+                    f"🖥  Computer Use: 已配置但未运行\n\n"
+                    f"节点: {node.node_id} · {node.display_name}\n"
+                    f"状态: {node.status.value}\n"
+                    f"模式: {node.metadata.get('computer_use_mode', 'observe_only')}\n\n"
+                    "真实截屏 / 鼠标 / 键盘 / 浏览器控制 / Gemini Computer Use "
+                    "**尚未实现**。\n"
+                    "当前仅显示节点配置信息，没有触发任何桌面动作。\n\n"
+                    "下一步: 部署一个本地 desktop agent，然后让它向本服务发送 "
+                    "heartbeat (未来工作)。"
+                )
         return _safe_truncate(body)
 
-    # Future branch: when is_stub_environment flips to False, this
-    # tool can return a real status from the agent's heartbeat.
-    # Left as an explicit dead branch so a future implementer
-    # does not silently fall through to a default.
     return _safe_truncate(
         "🖥  Computer Use: unknown\n\n"
         "Stub 环境标志为 False 但未实现真实状态读取。请更新 is_stub_environment "

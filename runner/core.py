@@ -31,9 +31,16 @@ class CodexRunner:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._lock = asyncio.Lock()
+        self._lock_obj: asyncio.Lock | None = None
         self.current_job: "Job | None" = None
         self.last_job: "Job | None" = None
+
+    @property
+    def _lock(self) -> asyncio.Lock:
+        if self._lock_obj is None:
+            self._lock_obj = asyncio.Lock()
+        return self._lock_obj
+
 
 from runner.day_brief import _day_brief_state_path, _day_brief_recent_jobs, _day_brief_text
 

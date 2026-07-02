@@ -311,8 +311,9 @@ _WEB_FETCH_PATTERNS = (
 # talking to *their* machine, not to the VPS. A vague "open Xcode"
 # without "my Mac" / "我的 Mac" / "MacBook" is left to Codex.
 _NODES_STATUS_PATTERNS = (
-    re.compile(r"(我的节点|机器状态|主机状态|node\s*status|nodes\s*status|执行节点|节点状态)", re.IGNORECASE),
+    re.compile(r"(我的节点|机器状态|主机状态|node\s*status|nodes\s*status|执行节点|节点状态|(?:macbook|mac|电脑|本机)\s*在线)", re.IGNORECASE),
 )
+
 
 # Computer Use / desktop action intent. The first match wins and
 # routes to the ``computer.status`` stub. We intentionally do NOT

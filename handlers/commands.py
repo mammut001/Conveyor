@@ -1198,7 +1198,15 @@ async def _computer_status(msg, port, _runner, settings, _arg):
     operator can probe the layer without triggering a Codex job.
     """
     from handlers.tools.runner import run_tool
-    await port.reply(msg, await run_tool(settings, "computer.status", _arg or ""))
+    text = await run_tool(settings, "computer.status", _arg or "")
+    if msg.channel == "feishu" and hasattr(port, "send_card"):
+        try:
+            from channel.feishu_cards import computer_status_card
+            await port.send_card(msg, computer_status_card(text))
+        except Exception:
+            pass
+    await port.reply(msg, text)
+
 
 
 async def _tool_logs(msg, port, _runner, settings, arg):

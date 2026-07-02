@@ -77,11 +77,18 @@ class JobQueue:
     def __init__(self, max_length: int = DEFAULT_MAX_QUEUE_LENGTH) -> None:
         self._queue: list[QueuedJob] = []
         self._max_length = max_length
-        self._lock = asyncio.Lock()
+        self._lock_obj: asyncio.Lock | None = None
         self._paused: bool = False
         self._counter: int = 0
         # Callback to start a job (set by the integration layer)
         self._start_callback: Callable[[QueuedJob], Awaitable[None]] | None = None
+
+    @property
+    def _lock(self) -> asyncio.Lock:
+        if self._lock_obj is None:
+            self._lock_obj = asyncio.Lock()
+        return self._lock_obj
+
 
     @property
     def is_paused(self) -> bool:

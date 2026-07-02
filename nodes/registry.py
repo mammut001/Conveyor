@@ -74,28 +74,45 @@ DEFAULT_COMPUTER_USE_MODE = "observe_only"
 COMPUTER_USE_MODE_ENV = "CONVEYOR_COMPUTER_USE_DEFAULT_MODE"
 
 
-def _is_desktop_enabled(env: Mapping[str, str] | None = None) -> bool:
+def _is_desktop_enabled(settings: Settings | None = None, env: Mapping[str, str] | None = None) -> bool:
     """True when the desktop node should appear in the registry."""
-    source = env if env is not None else os.environ
-    raw = source.get(DESKTOP_ENABLE_ENV, "").strip().lower()
+    if env is not None:
+        raw = env.get(DESKTOP_ENABLE_ENV, "").strip().lower()
+        return raw in ("true", "1", "yes", "on")
+    if settings is not None:
+        return settings.conveyor_desktop_node_enabled
+    raw = os.environ.get(DESKTOP_ENABLE_ENV, "").strip().lower()
     return raw in ("true", "1", "yes", "on")
 
 
-def _resolve_desktop_id(env: Mapping[str, str] | None = None) -> str:
-    source = env if env is not None else os.environ
-    raw = source.get(DESKTOP_ID_ENV, "").strip()
+def _resolve_desktop_id(settings: Settings | None = None, env: Mapping[str, str] | None = None) -> str:
+    if env is not None:
+        raw = env.get(DESKTOP_ID_ENV, "").strip()
+        return raw or DEFAULT_DESKTOP_NODE_ID
+    if settings is not None:
+        return settings.conveyor_desktop_node_id or DEFAULT_DESKTOP_NODE_ID
+    raw = os.environ.get(DESKTOP_ID_ENV, "").strip()
     return raw or DEFAULT_DESKTOP_NODE_ID
 
 
-def _resolve_desktop_name(env: Mapping[str, str] | None = None) -> str:
-    source = env if env is not None else os.environ
-    raw = source.get(DESKTOP_NAME_ENV, "").strip()
+def _resolve_desktop_name(settings: Settings | None = None, env: Mapping[str, str] | None = None) -> str:
+    if env is not None:
+        raw = env.get(DESKTOP_NAME_ENV, "").strip()
+        return raw or DEFAULT_DESKTOP_NODE_NAME
+    if settings is not None:
+        return settings.conveyor_desktop_node_name or DEFAULT_DESKTOP_NODE_NAME
+    raw = os.environ.get(DESKTOP_NAME_ENV, "").strip()
     return raw or DEFAULT_DESKTOP_NODE_NAME
 
 
-def _resolve_computer_use_mode(env: Mapping[str, str] | None = None) -> str:
-    source = env if env is not None else os.environ
-    raw = source.get(COMPUTER_USE_MODE_ENV, "").strip().lower()
+def _resolve_computer_use_mode(settings: Settings | None = None, env: Mapping[str, str] | None = None) -> str:
+    if env is not None:
+        raw = env.get(COMPUTER_USE_MODE_ENV, "").strip().lower()
+    elif settings is not None:
+        raw = settings.conveyor_computer_use_default_mode.strip().lower()
+    else:
+        raw = os.environ.get(COMPUTER_USE_MODE_ENV, "").strip().lower()
+
     if not raw:
         return DEFAULT_COMPUTER_USE_MODE
     # Whitelist future modes to a known set so a typo in .env
@@ -171,7 +188,7 @@ def list_nodes(
     *,
     env: Mapping[str, str] | None = None,
 ) -> list[NodeInfo]:
-    """Return the static list of nodes known to this process.
+    """Return the list of nodes known to this process.
 
     Order is stable: VPS first, then (optional) desktop. The
     function never raises; an invalid config produces a registry
@@ -179,13 +196,17 @@ def list_nodes(
     the project: deploys that did not opt into a feature are not
     broken by it).
     """
+    if env is None and settings is not None:
+        from nodes.state import list_runtime_nodes
+        return list_runtime_nodes(settings)
+
     nodes: list[NodeInfo] = [build_default_vps_node()]
-    if not _is_desktop_enabled(env):
+    if not _is_desktop_enabled(settings, env):
         return nodes
     nodes.append(build_stub_desktop_node(
-        node_id=_resolve_desktop_id(env),
-        display_name=_resolve_desktop_name(env),
-        computer_use_mode=_resolve_computer_use_mode(env),
+        node_id=_resolve_desktop_id(settings, env),
+        display_name=_resolve_desktop_name(settings, env),
+        computer_use_mode=_resolve_computer_use_mode(settings, env),
     ))
     return nodes
 

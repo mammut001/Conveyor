@@ -154,32 +154,39 @@ up in `/nodes` only when you opt in, and it is always
 `offline`. Real screenshot, mouse, keyboard, browser control, and
 Computer Use are **not** implemented yet.
 
-- `/nodes` · `/node_status` — list known execution nodes and their
-  capabilities.
-- `/computer_status` — show Computer Use status (always
-  "configured but not running" / "not enabled" in this phase).
+- `/nodes` · `/node_status` — list known execution nodes, their
+  capabilities, and dynamic online/offline status.
+- `/computer_status` — show Computer Use status (online when desktop agent is running).
 - Natural language: `我的节点`, `机器状态`, `主机状态`,
   `MacBook 在线吗`, `desktop node`, `nodes status`,
   `computer use status`. Desktop-target phrases like
   `帮我在 Mac 上打开 Xcode` / `take a screenshot on my desktop`
   route to a deterministic stub reply instead of falling through
-  to Codex (which cannot see your laptop from the VPS).
+  to Codex.
 
-Configure the desktop node in `.env` (all optional):
+### P5.1 Desktop Agent Heartbeat
 
-```dotenv
-CONVEYOR_DESKTOP_NODE_ENABLED=false   # opt in
-CONVEYOR_DESKTOP_NODE_ID=macbook-payton
-CONVEYOR_DESKTOP_NODE_NAME=Payton MacBook
-CONVEYOR_DESKTOP_AGENT_TOKEN=replace_me_with_long_random_string
-CONVEYOR_COMPUTER_USE_DEFAULT_MODE=observe_only   # observe_only | off
-```
+In P5.1, the desktop agent registration and heartbeat protocol is active:
+* **VPS**: Binds to `127.0.0.1:8766` by default. Start server with:
+  ```bash
+  export CONVEYOR_DESKTOP_NODE_ENABLED=true
+  export CONVEYOR_DESKTOP_AGENT_TOKEN=...
+  .venv/bin/python desktop_agent_server.py
+  ```
+* **MacBook Node**: Actively registers and heartbeats to VPS. Start agent with:
+  ```bash
+  export CONVEYOR_CONTROL_PLANE_URL=https://your-control-plane.example.com
+  export CONVEYOR_DESKTOP_AGENT_TOKEN=...
+  export CONVEYOR_DESKTOP_NODE_ID=macbook-payton
+  export CONVEYOR_DESKTOP_NODE_NAME="Payton MacBook"
+  .venv/bin/python desktop_agent.py
+  ```
 
-> **Computer Use foundation added; real desktop agent and
-> screenshot/action loop remain future work.** See
-> `docs/desktop_agent_protocol.md` for the planned protocol and
-> `docs/desktop_security.md` for the safety contract a future
-> agent must satisfy.
+* **Cross-Process Status Sharing**: The agent server and the bot listeners share the heartbeat state through the JSON file at `CODEX_MEMORY_ROOT/state/desktop_nodes.json`. This stores *only* connection metadata; no tokens, secrets, or screenshots are written.
+
+> **Computer Use control loop remains future work.** Screenshot capture, click, type, and Gemini Computer Use remain future tasks. See `docs/desktop_agent_protocol.md` and `docs/desktop_security.md`.
+
+
 
 Every feature above is already shipped in this repo. If a capability is not
 listed here, it does not exist yet.

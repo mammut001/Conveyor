@@ -135,6 +135,7 @@ class Settings:
     conveyor_desktop_node_name: str | None = None
     conveyor_desktop_agent_token: str | None = None  # SENSITIVE
     conveyor_computer_use_default_mode: str = "observe_only"
+    conveyor_desktop_heartbeat_ttl_seconds: int = 90
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -351,6 +352,7 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_computer_use_default_mode": os.getenv(
             "CONVEYOR_COMPUTER_USE_DEFAULT_MODE", "observe_only",
         ).strip().lower() or "observe_only",
+        "conveyor_desktop_heartbeat_ttl_seconds": _int_env("CONVEYOR_DESKTOP_HEARTBEAT_TTL_SECONDS", 90),
     }
 
 

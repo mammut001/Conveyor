@@ -164,3 +164,48 @@ operator sees a working button.
   The registry already supports `nodes.status` listing them; the
   routing layer would need a "target node" hint in the natural
   language intent.
+
+---
+
+## 6. P5.1 Desktop agent heartbeat
+
+In P5.1, we implemented the heartbeat mechanism between the VPS control plane and the local MacBook agent:
+
+* **VPS (Control Plane)**: Binds to `127.0.0.1:8766` by default. It exposes endpoints:
+  - `POST /desktop/register` to register the agent node ID, display name, agent version, and host info.
+  - `POST /desktop/heartbeat` to receive periodic heartbeats (default every 30s) and record the last seen time + agent state.
+  - `GET /desktop/status` to view runtime status details of registered nodes.
+  - Authentication requires header: `Authorization: Bearer <CONVEYOR_DESKTOP_AGENT_TOKEN>`.
+* **MacBook (Local Agent)**: Actively connects to the VPS. Periodically posts registration and heartbeats.
+* **Online/Offline state**: If no heartbeat is received within `CONVEYOR_DESKTOP_HEARTBEAT_TTL_SECONDS` (default: 90s), `/nodes` or `/node_status` shows the desktop node as `offline`.
+* **Cross-Process Status Sharing**: Because the desktop agent server (`desktop_agent_server.py`) and the bot listeners (e.g. `conveyor-feishu-bot`, `conveyor-telegram-bot`) run as separate processes, the runtime status is persisted to a shared JSON file at `settings.codex_memory_root / "state" / "desktop_nodes.json"`.
+  - The file contains *only* basic metadata like `node_id`, `display_name`, `agent_version`, `host`, `last_seen_at`, `agent_state`, and `last_action`.
+  - **Security Guarantee**: It does *not* contain the token, secrets, screenshots, or any control action data.
+  - State updates are written atomically (via a temporary file replacement), and corrupt JSON files are handled gracefully by treating them as empty.
+
+### Deployment & Security
+
+
+Exposing the HTTP server publicly is **strongly discouraged** without proper authentication, HTTPS reverse proxy, Tailscale, or VPN tunnels. Always use a strong, unique `CONVEYOR_DESKTOP_AGENT_TOKEN` token.
+
+Example startup command on VPS:
+```bash
+export CONVEYOR_DESKTOP_NODE_ENABLED=true
+export CONVEYOR_DESKTOP_AGENT_TOKEN=...
+.venv/bin/python desktop_agent_server.py
+```
+
+Example startup command on MacBook:
+```bash
+export CONVEYOR_CONTROL_PLANE_URL=https://your-control-plane.example.com
+export CONVEYOR_DESKTOP_AGENT_TOKEN=...
+export CONVEYOR_DESKTOP_NODE_ID=macbook-payton
+export CONVEYOR_DESKTOP_NODE_NAME="Payton MacBook"
+.venv/bin/python desktop_agent.py
+```
+
+Chat query routing:
+* `/nodes` or `MacBook 在线吗` will report the online/offline status, last seen time, and agent state.
+* `computer use status` or `/computer_status` will report connection details.
+* Note: Screenshot capture, click, type, and Gemini Computer Use control remain future work.
+
