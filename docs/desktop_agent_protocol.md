@@ -228,3 +228,35 @@ Chat query routing:
 * P5.2.1 supports local observe + metadata status; it does **not** support remote trigger, upload, preview, visual analysis, or Computer Use control.
 
 
+---
+
+## 7. P5.4 Manual Screenshot Thumbnail Upload
+
+In P5.4, we implemented the manual screenshot thumbnail upload mechanism:
+
+* **Explicit Request Flow**:
+  - The operator requests a preview/thumbnail of a previously captured screenshot by sending `/observe_upload <request_id>` or `/screenshot_upload <screenshot_id>`, or using natural language phrases like `发一下刚才的截图` or `把刚才截图发我`.
+  - The VPS control plane verifies that screenshot upload is enabled (`CONVEYOR_DESKTOP_UPLOAD_ENABLED=true`), creates a pending upload request, and persists it to `CODEX_MEMORY_ROOT/state/desktop_upload_requests.json` using a cross-process file lock.
+  - The MacBook desktop agent polls pending upload requests (`GET /desktop/upload/pending`).
+  - If a pending upload request is claimed successfully (`POST /desktop/upload/claim`), the MacBook agent locates the local screenshot on its filesystem (using the screenshot ID metadata).
+  - The MacBook agent generates a resized thumbnail from the original screenshot using macOS native `sips` tool (scaled to maximum 1280x800, under 750 KB size limit).
+  - The MacBook agent uploads the binary bytes to the VPS control plane (`POST /desktop/upload/complete` using `Content-Type: application/octet-stream`).
+  - The VPS control plane validates the upload size, calculates/verifies the SHA-256 of the received bytes, atomically writes the thumbnail file to the temp upload directory (`CONVEYOR_DESKTOP_UPLOAD_TEMP_DIR` or defaulting to `CODEX_MEMORY_ROOT/desktop/uploads`), and marks the upload request as completed.
+  - When the operator queries `/upload_status`, or automatically upon detecting a completed but undelivered request, the bot sends the thumbnail image to the original chat via the Feishu/Telegram bot outbound `send_image` API, and marks it as `delivered: true`.
+  - Temporary uploaded thumbnails on the VPS can be cleaned up using `/upload_cleanup` which deletes files older than `CONVEYOR_DESKTOP_UPLOAD_RETENTION_SECONDS`.
+
+* **New Slash Commands**:
+  - `/observe_upload <request_id>` — Create a pending thumbnail upload request for an observe request ID.
+  - `/screenshot_upload <screenshot_id>` — Create a pending thumbnail upload request for a screenshot ID.
+  - `/upload_status` — List recent upload requests and statuses, and trigger delivery of completed thumbnails to the original chat.
+  - `/upload_cancel <upload_id>` — Cancel a pending or claimed upload request.
+  - `/upload_cleanup` — Clean up expired VPS temporary upload files.
+
+* **Security & Privacy Guarantees**:
+  - Upload is only triggered on explicit operator request.
+  - Only a low-resolution thumbnail is uploaded; the full-resolution screenshot remains strictly local on the MacBook.
+  - No raw base64 or binary data is logged or stored in the metadata databases (enforced by forbidden fields validation).
+  - Delivered thumbnails are sent only to the original chat that initiated the request.
+  - Computer Use controls (mouse, keyboard, app control, or vision analysis) remain completely out of scope.
+
+

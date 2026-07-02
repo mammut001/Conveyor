@@ -443,6 +443,10 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "desktop.observe.request": ("/observe_request", "/screenshot_request", "/request_screenshot"),
     "desktop.observe.status": ("/observe_status",),
     "desktop.observe.cancel": ("/observe_cancel",),
+    "desktop.upload.request": ("/observe_upload", "/screenshot_upload"),
+    "desktop.upload.status": ("/upload_status",),
+    "desktop.upload.cancel": ("/upload_cancel",),
+    "desktop.upload.cleanup": ("/upload_cleanup",),
 }
 
 _TOOL_EXAMPLES: dict[str, str] = {
@@ -1322,6 +1326,41 @@ async def _observe_cancel(msg, port, runner, settings, arg):
     )
 
 
+async def _observe_upload(msg, port, runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(
+        msg, port, settings, "desktop.upload.request", arg or "", runner=runner,
+    )
+
+
+async def _screenshot_upload(msg, port, runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(
+        msg, port, settings, "desktop.upload.request", arg or "", runner=runner,
+    )
+
+
+async def _upload_status(msg, port, runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(
+        msg, port, settings, "desktop.upload.status", arg or "", runner=runner,
+    )
+
+
+async def _upload_cancel(msg, port, runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(
+        msg, port, settings, "desktop.upload.cancel", arg or "", runner=runner,
+    )
+
+
+async def _upload_cleanup(msg, port, runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(
+        msg, port, settings, "desktop.upload.cleanup", arg or "", runner=runner,
+    )
+
+
 
 async def _tool_logs(msg, port, _runner, settings, arg):
     from handlers.tools.runner import run_tool
@@ -1558,8 +1597,13 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/observe_request /screenshot_request — 创建远程 observe 请求（P5.3，仅元数据）\n"
     text += "/observe_status — 最近 observe 请求与截图元数据\n"
     text += "/observe_cancel <id> — 取消 pending/claimed 请求\n"
+    text += "/observe_upload <id> — 申请手动上传截图的缩略图/预览 (P5.4)\n"
+    text += "/screenshot_upload <id> — 申请手动上传指定截图的缩略图/预览 (P5.4)\n"
+    text += "/upload_status — 最近上传请求与状态列表 (P5.4)\n"
+    text += "/upload_cancel <id> — 取消 pending/claimed 上传请求 (P5.4)\n"
+    text += "/upload_cleanup — 清理 VPS 上的临时上传文件 (P5.4)\n"
     text += "自然语言: '我的节点' / '机器状态' / 'MacBook 在线吗' / 'computer use status'\n"
-    text += "本地只读截图 observe 已支持；P5.3 远程 observe 请求已支持（元数据回传）；上传、鼠标、键盘、浏览器控制仍是未来工作。\n"
+    text += "本地只读截图 observe 与手动缩略图上传已支持；鼠标、键盘、浏览器控制仍是未来工作。\n"
     text += "\n"
     text += "任务队列 (P3.8):\n"
     text += "/queue — 查看队列状态\n"
@@ -1708,6 +1752,34 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
             "Cancel pending/claimed observe request (P5.3)",
             _observe_cancel,
             takes_arg=True,
+        ),
+        CommandSpec(
+            "observe_upload",
+            "Request manual thumbnail upload for observe request (P5.4)",
+            _observe_upload,
+            takes_arg=True,
+        ),
+        CommandSpec(
+            "screenshot_upload",
+            "Request manual thumbnail upload for screenshot ID (P5.4)",
+            _screenshot_upload,
+            takes_arg=True,
+        ),
+        CommandSpec(
+            "upload_status",
+            "Show recent upload requests and status (P5.4)",
+            _upload_status,
+        ),
+        CommandSpec(
+            "upload_cancel",
+            "Cancel pending/claimed upload request (P5.4)",
+            _upload_cancel,
+            takes_arg=True,
+        ),
+        CommandSpec(
+            "upload_cleanup",
+            "Clean up VPS temporary uploaded thumbnails (P5.4)",
+            _upload_cleanup,
         ),
         CommandSpec("diagnose", "Hybrid 主机诊断", _diagnose, takes_optional_arg=True),
         CommandSpec("restart", "重启 Conveyor 服务 (需确认)", _restart, takes_arg=True),

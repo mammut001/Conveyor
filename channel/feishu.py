@@ -145,6 +145,27 @@ class FeishuOutbound:
             logger.debug("Feishu text fallback send failed", exc_info=True)
         return None
 
+    async def send_image(
+        self,
+        chat_id: str,
+        image_path: str,
+        *,
+        caption: str | None = None,
+    ) -> None:
+        """Upload and send an image resource to Feishu chat."""
+        from lark_oapi.channel import MediaSource
+        from lark_oapi.channel.types import OutboundImage
+        try:
+            media_source = MediaSource(kind="file", path=image_path)
+            image_key = await self._channel.upload_media(media_source, kind="image")
+            msg = OutboundImage(
+                source=MediaSource(kind="key", key=image_key),
+                caption=caption,
+            )
+            await self._channel.send(chat_id, msg)
+        except Exception:
+            logger.exception("Failed to send Feishu image")
+
     async def _send_card(
         self, msg: InboundMessage, text: str, *, reply_to: str | None
     ) -> str | None:

@@ -131,6 +131,106 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
         if not self.authenticate():
             return
 
+        expected_node_id = settings.conveyor_desktop_node_id or "macbook-payton"
+
+        # Intercept complete binary upload before reading body as JSON
+        if self.path.startswith("/desktop/upload/complete"):
+            parsed_url = urlparse(self.path)
+            query = parse_qs(parsed_url.query)
+            
+            upload_id_list = query.get("upload_id", [])
+            upload_id = upload_id_list[0] if upload_id_list else None
+            node_id_list = query.get("node_id", [])
+            node_id = node_id_list[0] if node_id_list else None
+            sha256_list = query.get("sha256", [])
+            sha256 = sha256_list[0] if sha256_list else None
+            width_list = query.get("width", [])
+            width_str = width_list[0] if width_list else None
+            height_list = query.get("height", [])
+            height_str = height_list[0] if height_list else None
+            bytes_list = query.get("bytes", [])
+            bytes_str = bytes_list[0] if bytes_list else None
+
+            if not upload_id or not node_id or not sha256 or not bytes_str:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Missing query parameters"})
+                return
+
+            validated_node_id = self._validate_node_id(node_id)
+            if validated_node_id is None:
+                return
+
+            try:
+                expected_bytes = int(bytes_str)
+                width = int(width_str) if width_str else 0
+                height = int(height_str) if height_str else 0
+            except ValueError:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid integer parameters"})
+                return
+
+            max_bytes = settings.conveyor_desktop_upload_max_bytes
+            if expected_bytes > max_bytes:
+                self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"ok": False, "error": "Payload Too Large"})
+                return
+
+            content_length_str = self.headers.get("Content-Length")
+            if content_length_str is None:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Missing Content-Length"})
+                return
+            try:
+                content_length = int(content_length_str)
+            except ValueError:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid Content-Length"})
+                return
+
+            if content_length != expected_bytes:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Content-Length does not match bytes parameter"})
+                return
+
+            binary_data = self.rfile.read(content_length)
+
+            import hashlib
+            hasher = hashlib.sha256()
+            hasher.update(binary_data)
+            calculated_sha = hasher.hexdigest()
+            if calculated_sha != sha256:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "SHA-256 mismatch"})
+                return
+
+            from handlers.tools.observe_tools import resolve_upload_temp_dir
+            dest_dir = resolve_upload_temp_dir(settings)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(dest_dir, 0o700)
+            except Exception:
+                pass
+
+            dest_path = dest_dir / f"{upload_id}.png"
+            tmp_path = dest_path.with_name(f"{dest_path.name}.{os.getpid()}.tmp")
+            try:
+                from datetime import datetime, timezone
+                tmp_path.write_bytes(binary_data)
+                os.replace(tmp_path, dest_path)
+            except Exception as e:
+                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "write_failed", "message": str(e)})
+                return
+
+            from desktop_upload_requests import complete_upload_request
+            result_meta = {
+                "upload_id": upload_id,
+                "thumbnail_path": str(dest_path),
+                "sha256": sha256,
+                "bytes": len(binary_data),
+                "width": width,
+                "height": height,
+                "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "source_screenshot_id": upload_id,
+                "node_id": node_id,
+            }
+            result = complete_upload_request(settings, upload_id, node_id, result_meta)
+            status = HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT
+            self.send_json(status, result)
+            return
+
         body = self._read_json_body()
         if body is None:
             return
@@ -296,6 +396,46 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
             status = HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT
             self.send_json(status, result)
 
+        elif self.path == "/desktop/upload/claim":
+            node_id = self._validate_node_id(body.get("node_id"))
+            if node_id is None:
+                return
+            upload_id = body.get("upload_id")
+            if not isinstance(upload_id, str) or not upload_id.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing upload_id"})
+                return
+            from desktop_upload_requests import claim_upload_request
+            result = claim_upload_request(settings, upload_id.strip(), node_id)
+            status = HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT
+            self.send_json(status, result)
+
+        elif self.path == "/desktop/upload/fail":
+            node_id = self._validate_node_id(body.get("node_id"))
+            if node_id is None:
+                return
+            upload_id = body.get("upload_id")
+            if not isinstance(upload_id, str) or not upload_id.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing upload_id"})
+                return
+            error = body.get("error")
+            if not isinstance(error, str) or not error.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing error"})
+                return
+            message = body.get("message")
+            if message is not None and not isinstance(message, str):
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid message"})
+                return
+            from desktop_upload_requests import fail_upload_request
+            result = fail_upload_request(
+                settings,
+                upload_id.strip(),
+                node_id,
+                error.strip(),
+                message=message,
+            )
+            status = HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT
+            self.send_json(status, result)
+
         elif self.path == "/desktop/observe/request":
             self.send_json(HTTPStatus.NOT_IMPLEMENTED, {
                 "ok": False,
@@ -349,6 +489,22 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
             if validated is None:
                 return
             requests = list_pending_observe_requests(settings, validated, limit=1)
+            self.send_json(HTTPStatus.OK, {"ok": True, "requests": requests})
+
+        elif path == "/desktop/upload/pending":
+            if not self.check_enabled():
+                return
+            if not self.authenticate():
+                return
+
+            query = parse_qs(parsed.query)
+            node_id_list = query.get("node_id", [])
+            node_id = node_id_list[0] if node_id_list else None
+            validated = self._validate_node_id(node_id)
+            if validated is None:
+                return
+            from desktop_upload_requests import list_pending_upload_requests
+            requests = list_pending_upload_requests(settings, validated, limit=1)
             self.send_json(HTTPStatus.OK, {"ok": True, "requests": requests})
 
         else:

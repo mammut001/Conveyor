@@ -164,3 +164,221 @@ async def exec_desktop_observe_cancel(settings: Settings, arg: str) -> str:
     return _safe_truncate(
         f"Observe request cancelled: {record.get('request_id', request_id)}"
     )
+
+
+def resolve_upload_temp_dir(settings: Settings) -> Path:
+    from pathlib import Path
+    raw = (settings.conveyor_desktop_upload_temp_dir or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return settings.codex_memory_root / "desktop" / "uploads"
+
+
+def _format_upload_summary(record: dict) -> list[str]:
+    lines = [
+        f"- {record.get('upload_id', '?')}: {record.get('status', '?')}",
+    ]
+    if record.get("created_at"):
+        lines.append(f"  created: {record['created_at']}")
+    if record.get("observe_request_id"):
+        lines.append(f"  observe_id: {record['observe_request_id']}")
+    result = record.get("result")
+    if isinstance(result, dict) and record.get("status") == "completed":
+        lines.append(f"  size: {result.get('width', '?')}x{result.get('height', '?')}")
+        lines.append(f"  bytes: {result.get('bytes', '?')}")
+        if record.get("delivered"):
+            lines.append("  status: delivered to chat")
+        else:
+            lines.append("  status: pending delivery")
+    error = record.get("error")
+    if error and record.get("status") == "failed":
+        lines.append(f"  error: {error}")
+    return lines
+
+
+async def exec_desktop_upload_request(
+    settings: Settings,
+    msg: InboundMessage,
+    arg: str,
+) -> str:
+    from desktop_observe_requests import load_observe_requests
+    from desktop_upload_requests import create_upload_request
+
+    observe_store = load_observe_requests(settings)
+    observe_record = None
+
+    arg = (arg or "").strip()
+    if not arg:
+        latest_completed = None
+        latest_time = None
+        for record in observe_store.values():
+            if record.get("status") == "completed":
+                created = _parse_iso(record.get("created_at"))
+                if created is not None:
+                    if latest_time is None or created > latest_time:
+                        latest_time = created
+                        latest_completed = record
+        if latest_completed:
+            observe_record = latest_completed
+        else:
+            return _safe_truncate("错误: 找不到任何已完成的 observe 截图请求。")
+    elif arg.startswith("obs_"):
+        observe_record = observe_store.get(arg)
+    else:
+        for record in observe_store.values():
+            result = record.get("result")
+            if isinstance(result, dict) and result.get("screenshot_id") == arg:
+                observe_record = record
+                break
+
+    if not observe_record:
+        return _safe_truncate(f"错误: 找不到对应的 observe 请求或截图 ID: {arg}")
+
+    if observe_record.get("status") != "completed":
+        return _safe_truncate(f"错误: observe 请求状态为 {observe_record.get('status')}，必须为 completed 才能申请上传预览。")
+
+    result = create_upload_request(settings, observe_record, msg)
+    if not result.get("ok"):
+        error = result.get("error", "upload_unavailable")
+        message = result.get("message") or "Remote upload is unavailable."
+        lines = [
+            "Desktop upload request failed",
+            "",
+            f"Reason: {error}",
+            message,
+            "",
+            "Checks:",
+            "- Desktop upload enabled",
+            "- Source observe completed",
+            "- Pending upload count below limit",
+        ]
+        return _safe_truncate("\n".join(lines))
+
+    record = result.get("request") or {}
+    ttl_minutes = max(1, settings.conveyor_desktop_upload_ttl_seconds // 60)
+    lines = [
+        "🖼️ Thumbnail upload requested",
+        "",
+        f"Upload: {record.get('upload_id', '?')}",
+        f"Source observe request: {record.get('observe_request_id', '?')}",
+        "Mode: thumbnail only",
+        f"Limit: {record.get('max_width')}x{record.get('max_height')}, {record.get('max_bytes') // 1000} KB",
+        f"Expires: {ttl_minutes} minutes",
+        "",
+        "The Mac agent will generate a small preview and send it to this chat.",
+        "No full-resolution screenshot will be uploaded.",
+        "Computer Use control is not implemented.",
+    ]
+    return _safe_truncate("\n".join(lines))
+
+
+async def exec_desktop_upload_status(
+    settings: Settings,
+    arg: str,
+    *,
+    port: Any = None,
+    msg: InboundMessage | None = None,
+) -> str:
+    from desktop_upload_requests import (
+        load_upload_requests,
+        save_upload_requests,
+        list_recent_upload_requests,
+    )
+    from nodes.registry import list_nodes
+    from nodes.types import NodeStatus, NodeType
+
+    if port is not None and msg is not None:
+        store = load_upload_requests(settings)
+        changed = False
+        for upload_id, record in store.items():
+            if record.get("status") == "completed" and not record.get("delivered"):
+                result = record.get("result")
+                if isinstance(result, dict) and result.get("thumbnail_path"):
+                    thumbnail_path = result.get("thumbnail_path")
+                    from pathlib import Path
+                    if Path(thumbnail_path).exists():
+                        try:
+                            if hasattr(port, "send_image"):
+                                caption = f"Thumbnail for observe {record.get('observe_request_id')}"
+                                await port.send_image(
+                                    chat_id=record.get("created_by_chat_id", msg.chat_id),
+                                    image_path=thumbnail_path,
+                                    caption=caption,
+                                )
+                                record["delivered"] = True
+                                changed = True
+                        except Exception:
+                            pass
+        if changed:
+            save_upload_requests(settings, store)
+
+    lines = [
+        "Desktop Upload Status (P5.4)",
+        "",
+        "This command shows status and triggers pending thumbnail deliveries.",
+        "Mac agent must run: python desktop_agent.py --poll-observe",
+        "",
+    ]
+
+    desktop_nodes = [n for n in list_nodes(settings) if n.node_type == NodeType.DESKTOP]
+    if desktop_nodes:
+        node = desktop_nodes[0]
+        state = "online" if node.status == NodeStatus.ONLINE else "offline"
+        lines.append(f"Desktop agent: {state} ({node.node_id})")
+        if node.status == NodeStatus.ONLINE and node.last_seen_at is not None:
+            lines.append(f"Last seen: {max(0, int(time.time() - node.last_seen_at))}s ago")
+    else:
+        lines.append("Desktop node: not enabled")
+    lines.append("")
+
+    recent = list_recent_upload_requests(settings, limit=5)
+    if recent:
+        lines.append("Recent upload requests:")
+        for record in recent:
+            lines.extend(_format_upload_summary(record))
+        lines.append("")
+    else:
+        lines.append("Recent upload requests: (none)")
+        lines.append("")
+
+    return _safe_truncate("\n".join(lines))
+
+
+async def exec_desktop_upload_cancel(settings: Settings, arg: str) -> str:
+    from desktop_upload_requests import cancel_upload_request
+    upload_id = (arg or "").strip()
+    if not upload_id:
+        return "用法: /upload_cancel <upload_id>"
+    result = cancel_upload_request(settings, upload_id)
+    if not result.get("ok"):
+        return _safe_truncate(
+            f"Cancel failed: {result.get('error', 'unknown')} "
+            f"(status={result.get('status', '?')})"
+        )
+    record = result.get("request") or {}
+    return _safe_truncate(
+        f"Upload request cancelled: {record.get('upload_id', upload_id)}"
+    )
+
+
+async def exec_desktop_upload_cleanup(settings: Settings, _arg: str) -> str:
+    upload_dir = resolve_upload_temp_dir(settings)
+    if not upload_dir.exists():
+        return "No upload temp directory exists."
+    
+    retention = settings.conveyor_desktop_upload_retention_seconds
+    now = time.time()
+    deleted_count = 0
+    total_size = 0
+    
+    for p in upload_dir.iterdir():
+        if p.is_file():
+            mtime = p.stat().st_mtime
+            if now - mtime > retention:
+                total_size += p.stat().st_size
+                try:
+                    p.unlink()
+                    deleted_count += 1
+                except Exception:
+                    pass
+    return f"Cleanup completed. Deleted {deleted_count} file(s) ({total_size} bytes)."

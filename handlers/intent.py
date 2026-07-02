@@ -325,6 +325,17 @@ _SCREENSHOT_STATUS_PATTERNS = (
     re.compile(r"observe\s*status", re.IGNORECASE),
 )
 
+# P5.4: remote upload request phrases.
+_DESKTOP_UPLOAD_PATTERNS = (
+    re.compile(r"把刚才截图发我", re.IGNORECASE),
+    re.compile(r"发一下刚才的截图", re.IGNORECASE),
+    re.compile(r"上传刚才截图", re.IGNORECASE),
+    re.compile(r"给我看看刚才截图预览", re.IGNORECASE),
+    re.compile(r"send\s+the\s+latest\s+screenshot\s+preview", re.IGNORECASE),
+    re.compile(r"upload\s+screenshot\s+preview", re.IGNORECASE),
+)
+
+
 # P5.3: remote observe request phrases (create pending request).
 _OBSERVE_REQUEST_PATTERNS = (
     re.compile(r"截图看看我电脑现在是什么", re.IGNORECASE),
@@ -451,6 +462,9 @@ def route_intent(text: str) -> RouteResult:
     for pat in _SCREENSHOT_STATUS_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("desktop.observe.status",))
+    for pat in _DESKTOP_UPLOAD_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("desktop.upload.request",))
     for pat in _OBSERVE_REQUEST_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("desktop.observe.request",))

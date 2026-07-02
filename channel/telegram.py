@@ -119,6 +119,25 @@ class TelegramOutbound:
         text = flatten_card_to_text(card)
         return await send_text(self._update, text)
 
+    async def send_image(
+        self,
+        chat_id: str,
+        image_path: str,
+        *,
+        caption: str | None = None,
+    ) -> None:
+        """Send a photo/image file on Telegram."""
+        bot = self._update.get_bot()
+        try:
+            with open(image_path, "rb") as f:
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=f,
+                    caption=caption,
+                )
+        except Exception:
+            logger.exception("Failed to send Telegram photo")
+
 
 def make_outbound(update: Update) -> TelegramOutbound:
     return TelegramOutbound(update)

@@ -222,6 +222,18 @@ async def _invoke_tool(
     elif tool_name == "desktop.observe.cancel":
         from handlers.tools.observe_tools import exec_desktop_observe_cancel
         result = await exec_desktop_observe_cancel(settings, arg)
+    elif tool_name == "desktop.upload.request":
+        from handlers.tools.observe_tools import exec_desktop_upload_request
+        result = await exec_desktop_upload_request(settings, msg, arg)
+    elif tool_name == "desktop.upload.status":
+        from handlers.tools.observe_tools import exec_desktop_upload_status
+        result = await exec_desktop_upload_status(settings, arg, port=port, msg=msg)
+    elif tool_name == "desktop.upload.cancel":
+        from handlers.tools.observe_tools import exec_desktop_upload_cancel
+        result = await exec_desktop_upload_cancel(settings, arg)
+    elif tool_name == "desktop.upload.cleanup":
+        from handlers.tools.observe_tools import exec_desktop_upload_cleanup
+        result = await exec_desktop_upload_cleanup(settings, arg)
     else:
         result = await run_tool(
             settings, tool_name, arg,
@@ -257,6 +269,12 @@ async def _invoke_tool(
             ):
                 from channel.feishu_cards import desktop_observe_status_card
                 await port.send_card(msg, desktop_observe_status_card(result))
+            elif tool_name == "desktop.upload.request":
+                from channel.feishu_cards import desktop_upload_request_card
+                await port.send_card(msg, desktop_upload_request_card(result))
+            elif tool_name == "desktop.upload.status":
+                from channel.feishu_cards import desktop_upload_status_card
+                await port.send_card(msg, desktop_upload_status_card(result))
         except Exception:
             pass
     await port.reply(msg, result)

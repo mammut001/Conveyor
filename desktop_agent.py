@@ -204,6 +204,231 @@ def poll_observe_once(settings: Settings) -> None:
         logger.info("observe fail report failed request_id=%s: %s", request_id, exc)
 
 
+def generate_thumbnail(
+    source_path: Path,
+    dest_path: Path,
+    max_width: int,
+    max_height: int,
+    max_bytes: int,
+) -> bool:
+    import subprocess
+    from pathlib import Path
+    dim = max_width
+    for attempt in range(4):
+        cmd = ["sips", "-Z", str(dim), str(source_path), "--out", str(dest_path)]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if res.returncode == 0 and dest_path.is_file():
+                size = dest_path.stat().st_size
+                if size <= max_bytes:
+                    return True
+                else:
+                    dim = int(dim * 0.8)
+            else:
+                logger.error("sips failure: %s %s", res.stdout, res.stderr)
+        except Exception as e:
+            logger.error("sips execution failed: %s", e)
+            break
+    return False
+
+
+def poll_upload_once(settings: Settings) -> None:
+    token = (settings.conveyor_desktop_agent_token or "").strip()
+    if not token:
+        return
+
+    control_plane_url = _control_plane_url()
+    node_id = settings.conveyor_desktop_node_id or "macbook-payton"
+    pending_url = (
+        f"{control_plane_url}/desktop/upload/pending?"
+        f"{urllib.parse.urlencode({'node_id': node_id})}"
+    )
+
+    try:
+        payload = get_json(pending_url, token)
+    except Exception as exc:
+        logger.info("upload poll failed: %s", exc)
+        return
+
+    requests = payload.get("requests") if isinstance(payload, dict) else None
+    if not isinstance(requests, list) or not requests:
+        return
+
+    pending = requests[0]
+    if not isinstance(pending, dict):
+        return
+    upload_id = pending.get("upload_id")
+    screenshot_id = pending.get("screenshot_id")
+    max_width = pending.get("max_width") or 1280
+    max_height = pending.get("max_height") or 800
+    max_bytes = pending.get("max_bytes") or 750000
+
+    if not isinstance(upload_id, str) or not upload_id:
+        return
+
+    try:
+        claim_res = post_json(
+            f"{control_plane_url}/desktop/upload/claim",
+            token,
+            {"upload_id": upload_id, "node_id": node_id},
+        )
+    except Exception as exc:
+        logger.info("upload claim failed upload_id=%s: %s", upload_id, exc)
+        return
+
+    if not claim_res.get("ok"):
+        logger.info(
+            "upload claim rejected upload_id=%s error=%s",
+            upload_id,
+            claim_res.get("error"),
+        )
+        return
+
+    logger.info("Upload request claimed: %s", upload_id)
+
+    from desktop_screenshot import resolve_screenshot_dir
+    from pathlib import Path
+    screenshot_dir = resolve_screenshot_dir(settings)
+    source_img_path = None
+    
+    meta_path = screenshot_dir / f"{screenshot_id}.json"
+    if meta_path.is_file():
+        try:
+            meta_data = json.loads(meta_path.read_text(encoding="utf-8"))
+            p = meta_data.get("path")
+            if p and os.path.exists(p):
+                source_img_path = Path(p)
+        except Exception:
+            pass
+
+    if not source_img_path:
+        p = screenshot_dir / f"{screenshot_id}.png"
+        if p.is_file():
+            source_img_path = p
+
+    if not source_img_path or not source_img_path.is_file():
+        logger.error("Local screenshot file not found for screenshot_id=%s", screenshot_id)
+        try:
+            post_json(
+                f"{control_plane_url}/desktop/upload/fail",
+                token,
+                {
+                    "upload_id": upload_id,
+                    "node_id": node_id,
+                    "error": "screenshot_not_found",
+                    "message": f"Local screenshot file not found for ID {screenshot_id}.",
+                },
+            )
+        except Exception as exc:
+            logger.info("upload fail report failed: %s", exc)
+        return
+
+    thumb_path = screenshot_dir / f"thumb_{upload_id}.png"
+    ok = generate_thumbnail(source_img_path, thumb_path, max_width, max_height, max_bytes)
+    
+    if not ok or not thumb_path.is_file():
+        logger.error("Thumbnail generation failed for upload_id=%s", upload_id)
+        try:
+            post_json(
+                f"{control_plane_url}/desktop/upload/fail",
+                token,
+                {
+                    "upload_id": upload_id,
+                    "node_id": node_id,
+                    "error": "thumbnail_generation_failed",
+                    "message": "Failed to generate thumbnail via sips.",
+                },
+            )
+        except Exception as exc:
+            logger.info("upload fail report failed: %s", exc)
+        return
+
+    try:
+        thumb_bytes = thumb_path.read_bytes()
+    except Exception as e:
+        logger.error("Failed to read generated thumbnail: %s", e)
+        if thumb_path.exists():
+            try:
+                thumb_path.unlink()
+            except Exception:
+                pass
+        try:
+            post_json(
+                f"{control_plane_url}/desktop/upload/fail",
+                token,
+                {
+                    "upload_id": upload_id,
+                    "node_id": node_id,
+                    "error": "thumbnail_read_failed",
+                    "message": str(e),
+                },
+            )
+        except Exception as exc:
+            logger.info("upload fail report failed: %s", exc)
+        return
+
+    width = max_width
+    height = max_height
+    try:
+        import subprocess
+        res = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(thumb_path)], capture_output=True, text=True, check=False)
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                if "pixelWidth:" in line:
+                    width = int(line.split(":")[-1].strip())
+                elif "pixelHeight:" in line:
+                    height = int(line.split(":")[-1].strip())
+    except Exception:
+        pass
+
+    import hashlib
+    hasher = hashlib.sha256()
+    hasher.update(thumb_bytes)
+    sha256 = hasher.hexdigest()
+
+    query_params = {
+        'upload_id': upload_id,
+        'node_id': node_id,
+        'sha256': sha256,
+        'width': str(width),
+        'height': str(height),
+        'bytes': str(len(thumb_bytes)),
+    }
+    complete_url = f"{control_plane_url}/desktop/upload/complete?{urllib.parse.urlencode(query_params)}"
+
+    try:
+        req = urllib.request.Request(
+            complete_url,
+            data=thumb_bytes,
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Authorization": f"Bearer {token}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            complete_res = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        logger.error("Upload complete request failed: %s", exc)
+        if thumb_path.exists():
+            try:
+                thumb_path.unlink()
+            except Exception:
+                pass
+        return
+
+    if thumb_path.exists():
+        try:
+            thumb_path.unlink()
+        except Exception:
+            pass
+
+    if complete_res.get("ok"):
+        logger.info("Upload completed successfully: %s", upload_id)
+    else:
+        logger.error("Upload complete rejected: %s", complete_res.get("error"))
+
+
 def heartbeat_loop(settings: Settings, *, poll_observe: bool = False) -> None:
     token = (settings.conveyor_desktop_agent_token or "").strip()
     if not token:
@@ -251,6 +476,7 @@ def heartbeat_loop(settings: Settings, *, poll_observe: bool = False) -> None:
 
         if poll_observe and now - last_poll >= poll_interval:
             poll_observe_once(settings)
+            poll_upload_once(settings)
             last_poll = now
 
         time.sleep(sleep_seconds)

@@ -58,3 +58,13 @@ class OutboundPort(Protocol):
         """Optional. Reply with an inline button grid.
         Each button dict: {"text": ..., "callback_data": ...}."""
         ...
+
+    async def send_image(
+        self,
+        chat_id: str,
+        image_path: str,
+        *,
+        caption: str | None = None,
+    ) -> None:
+        """Send an image file to the specified chat/user."""
+        ...

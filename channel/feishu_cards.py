@@ -517,6 +517,53 @@ def desktop_screenshot_status_card(summary_text: str) -> dict[str, Any]:
     }
 
 
+def desktop_upload_request_card(summary_text: str) -> dict[str, Any]:
+    """Card for manual screenshot thumbnail upload request (P5.4)."""
+    preamble = (
+        "**Thumbnail Upload Request**\n"
+        "Manual thumbnail preview only — no full-resolution upload, no Computer Use control."
+    )
+    body = preamble
+    if summary_text.strip():
+        body = f"{preamble}\n\n{summary_text.strip()}"
+    buttons: list[dict[str, Any]] = [
+        _button("Refresh status", {"action": "desktop_upload_status"}),
+        _button("Nodes", {"action": "nodes_status"}),
+    ]
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": _header("Thumbnail Upload Request", "orange"),
+        "elements": [
+            _markdown(_truncate(body, 1500)),
+            _actions_row(buttons),
+        ],
+    }
+
+
+def desktop_upload_status_card(summary_text: str) -> dict[str, Any]:
+    """Card for upload status / recent requests (P5.4)."""
+    preamble = (
+        "**Thumbnail Upload Status**\n"
+        "Shows recent thumbnail upload requests. "
+        "Thumbnail only — no full-resolution upload, no Computer Use control."
+    )
+    body = preamble
+    if summary_text.strip():
+        body = f"{preamble}\n\n{summary_text.strip()}"
+    buttons: list[dict[str, Any]] = [
+        _button("Refresh status", {"action": "desktop_upload_status"}),
+        _button("Nodes", {"action": "nodes_status"}),
+    ]
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": _header("Thumbnail Upload Status", "orange"),
+        "elements": [
+            _markdown(_truncate(body, 1500)),
+            _actions_row(buttons),
+        ],
+    }
+
+
 def computer_status_card(summary_text: str) -> dict[str, Any]:
     """Card sent in response to ``/computer_status`` on Feishu.
 
@@ -600,6 +647,8 @@ def action_to_command(action: str) -> str | None:
         "desktop_screenshot_status": "desktop_screenshot_status",
         "desktop_observe_status": "observe_status",
         "desktop_observe_cancel": "observe_cancel",
+        "desktop_upload_status": "upload_status",
+        "desktop_upload_cancel": "upload_cancel",
     }
     return mapping.get(action)
 

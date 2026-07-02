@@ -140,6 +140,15 @@ class Settings:
     conveyor_desktop_observe_request_ttl_seconds: int = 300
     conveyor_desktop_observe_poll_interval_seconds: int = 5
     conveyor_desktop_observe_max_pending: int = 3
+    # P5.4 remote upload request
+    conveyor_desktop_upload_enabled: bool = False
+    conveyor_desktop_upload_kind: str = "thumbnail"
+    conveyor_desktop_upload_max_bytes: int = 750000
+    conveyor_desktop_upload_max_width: int = 1280
+    conveyor_desktop_upload_max_height: int = 800
+    conveyor_desktop_upload_ttl_seconds: int = 300
+    conveyor_desktop_upload_temp_dir: str | None = None
+    conveyor_desktop_upload_retention_seconds: int = 600
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -377,6 +386,14 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_desktop_observe_max_pending": _int_env(
             "CONVEYOR_DESKTOP_OBSERVE_MAX_PENDING", 3,
         ),
+        "conveyor_desktop_upload_enabled": os.getenv("CONVEYOR_DESKTOP_UPLOAD_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on"),
+        "conveyor_desktop_upload_kind": os.getenv("CONVEYOR_DESKTOP_UPLOAD_KIND", "thumbnail").strip().lower(),
+        "conveyor_desktop_upload_max_bytes": _int_env("CONVEYOR_DESKTOP_UPLOAD_MAX_BYTES", 750000),
+        "conveyor_desktop_upload_max_width": _int_env("CONVEYOR_DESKTOP_UPLOAD_MAX_WIDTH", 1280),
+        "conveyor_desktop_upload_max_height": _int_env("CONVEYOR_DESKTOP_UPLOAD_MAX_HEIGHT", 800),
+        "conveyor_desktop_upload_ttl_seconds": _int_env("CONVEYOR_DESKTOP_UPLOAD_TTL_SECONDS", 300),
+        "conveyor_desktop_upload_temp_dir": os.getenv("CONVEYOR_DESKTOP_UPLOAD_TEMP_DIR") or None,
+        "conveyor_desktop_upload_retention_seconds": _int_env("CONVEYOR_DESKTOP_UPLOAD_RETENTION_SECONDS", 600),
     }
 
 
