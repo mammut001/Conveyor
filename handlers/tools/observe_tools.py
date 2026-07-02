@@ -203,6 +203,13 @@ def _format_upload_summary(record: dict) -> list[str]:
         lines.append(f"  bytes: {result.get('bytes', '?')}")
         if record.get("delivered"):
             lines.append("  status: delivered to chat")
+        elif record.get("delivery_error"):
+            lines.append("  status: delivery failed")
+            lines.append(f"  error: {record['delivery_error']}")
+            if record.get("delivery_failed_at"):
+                lines.append(f"  failed_at: {record['delivery_failed_at']}")
+        elif record.get("delivery_failed"):
+            lines.append("  status: delivery failed")
         else:
             lines.append("  status: pending delivery")
     error = record.get("error")
@@ -310,45 +317,85 @@ async def exec_desktop_upload_status(
     arg: str,
     *,
     port: Any = None,
-    msg: InboundMessage | None = None,
+    msg: Any = None,
 ) -> str:
+    import logging
+    from pathlib import Path
     from desktop_upload_requests import (
         load_upload_requests,
         list_recent_upload_requests,
         mark_upload_delivered,
+        mark_upload_delivery_failed,
     )
     from nodes.registry import list_nodes
     from nodes.types import NodeStatus, NodeType
 
+    logger = logging.getLogger("conveyor.observe_tools")
     temp_dir_err = upload_temp_dir_configuration_error(settings)
 
     if temp_dir_err is None and port is not None and msg is not None:
         store = load_upload_requests(settings)
         for upload_id, record in store.items():
-            if record.get("status") == "completed" and not record.get("delivered"):
+            if record.get("status") == "completed" and not record.get("delivered") and not record.get("delivery_error"):
                 result = record.get("result")
-                if isinstance(result, dict) and result.get("thumbnail_path"):
-                    thumbnail_path = result.get("thumbnail_path")
-                    from pathlib import Path
-                    if Path(thumbnail_path).exists():
-                        try:
-                            if hasattr(port, "send_image"):
-                                caption = f"Thumbnail for observe {record.get('observe_request_id')}"
-                                target_chat_id = record.get("created_by_chat_id", msg.chat_id)
-                                target_channel = record.get("created_by_channel", msg.channel)
-                                await port.send_image(
-                                    chat_id=target_chat_id,
-                                    image_path=thumbnail_path,
-                                    caption=caption,
-                                )
-                                mark_upload_delivered(
-                                    settings,
-                                    upload_id,
-                                    channel=target_channel,
-                                    chat_id=target_chat_id,
-                                )
-                        except Exception:
-                            pass
+                if not isinstance(result, dict) or not result.get("thumbnail_path"):
+                    continue
+                thumbnail_path = result.get("thumbnail_path")
+                if not Path(thumbnail_path).exists():
+                    logger.warning(
+                        "upload_status: thumbnail_missing upload_id=%s path=%s",
+                        upload_id,
+                        thumbnail_path,
+                    )
+                    mark_upload_delivery_failed(
+                        settings,
+                        upload_id,
+                        "thumbnail_missing",
+                        message="Thumbnail temp file not found on VPS.",
+                    )
+                    continue
+                if not hasattr(port, "send_image"):
+                    continue
+                caption = f"Thumbnail for observe {record.get('observe_request_id')}"
+                target_chat_id = record.get("created_by_chat_id") or msg.chat_id
+                target_channel = record.get("created_by_channel") or msg.channel
+                logger.debug(
+                    "upload_status: sending upload_id=%s to channel=%s chat_id=%s...",
+                    upload_id,
+                    target_channel,
+                    (target_chat_id or "")[:8],
+                )
+                try:
+                    await port.send_image(
+                        chat_id=target_chat_id,
+                        image_path=thumbnail_path,
+                        caption=caption,
+                    )
+                    mark_upload_delivered(
+                        settings,
+                        upload_id,
+                        channel=target_channel,
+                        chat_id=target_chat_id,
+                    )
+                    logger.info(
+                        "upload_status: delivered upload_id=%s to channel=%s",
+                        upload_id,
+                        target_channel,
+                    )
+                except Exception as exc:
+                    error_name = type(exc).__name__
+                    error_msg = str(exc)[:200]
+                    logger.exception(
+                        "upload_status: delivery failed upload_id=%s error=%s",
+                        upload_id,
+                        error_name,
+                    )
+                    mark_upload_delivery_failed(
+                        settings,
+                        upload_id,
+                        error_name,
+                        message=error_msg,
+                    )
 
     lines = [
         "Desktop Upload Status (P5.4)",
@@ -400,6 +447,127 @@ async def exec_desktop_upload_cancel(settings: Settings, arg: str) -> str:
     return _safe_truncate(
         f"Upload request cancelled: {record.get('upload_id', upload_id)}"
     )
+
+
+async def exec_desktop_upload_resend(
+    settings: Settings,
+    arg: str,
+    *,
+    port: Any = None,
+    msg: Any = None,
+) -> str:
+    """Resend a completed upload thumbnail to chat (P5.4.2).
+
+    Resets delivery tracking fields, then re-attempts send_image.
+    Accepts an upload_id argument. Without argument, looks for the
+    most recent completed-but-undelivered or delivery-failed request.
+    """
+    import logging
+    from pathlib import Path
+    from desktop_upload_requests import (
+        get_upload_request,
+        list_recent_upload_requests,
+        mark_upload_delivered,
+        mark_upload_delivery_failed,
+        reset_upload_delivery,
+    )
+
+    logger = logging.getLogger("conveyor.observe_tools")
+    upload_id = (arg or "").strip()
+
+    # Find the target record
+    record = None
+    if upload_id:
+        record = get_upload_request(settings, upload_id)
+        if not record:
+            return _safe_truncate(f"Upload request not found: {upload_id}")
+    else:
+        # Use most recent completed request
+        for r in list_recent_upload_requests(settings, limit=10):
+            if r.get("status") == "completed":
+                record = r
+                upload_id = r.get("upload_id", "")
+                break
+        if not record:
+            return _safe_truncate("No completed upload request found to resend.")
+
+    if record.get("status") != "completed":
+        return _safe_truncate(
+            f"Upload {upload_id} is not completed (status={record.get('status')}). "
+            "Only completed uploads can be resent."
+        )
+
+    result = record.get("result")
+    if not isinstance(result, dict) or not result.get("thumbnail_path"):
+        return _safe_truncate(
+            f"Upload {upload_id}: no thumbnail path in completed result."
+        )
+
+    thumbnail_path = result["thumbnail_path"]
+    if not Path(thumbnail_path).exists():
+        return _safe_truncate(
+            f"Upload {upload_id}: thumbnail file missing (already cleaned up?). "
+            "Create a new upload request."
+        )
+
+    if port is None or not hasattr(port, "send_image"):
+        return _safe_truncate(
+            "Cannot resend: no outbound port with send_image available."
+        )
+
+    # Reset delivery tracking before resend
+    reset_result = reset_upload_delivery(settings, upload_id)
+    if not reset_result.get("ok"):
+        return _safe_truncate(
+            f"Reset failed: {reset_result.get('error', 'unknown')}"
+        )
+
+    if msg is None:
+        return _safe_truncate("Cannot resend: no inbound message context.")
+
+    caption = f"Thumbnail for observe {record.get('observe_request_id')}"
+    target_chat_id = record.get("created_by_chat_id") or msg.chat_id
+    target_channel = record.get("created_by_channel") or msg.channel
+    logger.debug(
+        "upload_resend: sending upload_id=%s to channel=%s chat_id=%s...",
+        upload_id,
+        target_channel,
+        (target_chat_id or "")[:8],
+    )
+    try:
+        await port.send_image(
+            chat_id=target_chat_id,
+            image_path=thumbnail_path,
+            caption=caption,
+        )
+        mark_upload_delivered(
+            settings,
+            upload_id,
+            channel=target_channel,
+            chat_id=target_chat_id,
+        )
+        logger.info("upload_resend: delivered upload_id=%s", upload_id)
+        return _safe_truncate(
+            f"✅ Thumbnail resent and marked delivered.\n"
+            f"Upload: {upload_id}\n"
+            f"Channel: {target_channel}\n"
+            f"Run /upload_status to confirm."
+        )
+    except Exception as exc:
+        error_name = type(exc).__name__
+        error_msg = str(exc)[:200]
+        logger.exception("upload_resend: delivery failed upload_id=%s", upload_id)
+        mark_upload_delivery_failed(
+            settings,
+            upload_id,
+            error_name,
+            message=error_msg,
+        )
+        return _safe_truncate(
+            f"❌ Resend failed for upload {upload_id}.\n"
+            f"Error: {error_name}\n"
+            f"Run /upload_status for details."
+        )
 
 
 async def exec_desktop_upload_cleanup(settings: Settings, _arg: str) -> str:

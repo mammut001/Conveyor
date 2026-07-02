@@ -126,7 +126,23 @@ class TelegramOutbound:
         *,
         caption: str | None = None,
     ) -> None:
-        """Send a photo/image file on Telegram."""
+        """Send a photo/image file on Telegram.
+
+        Raises on any failure so callers can mark delivery_failed instead of
+        falsely marking the request as delivered.
+        """
+        import os
+        file_size = 0
+        try:
+            file_size = os.path.getsize(image_path)
+        except OSError:
+            pass
+        logger.debug(
+            "Telegram send_image: chat_id=%s... path=%s size=%d bytes",
+            (chat_id or "")[:8],
+            image_path,
+            file_size,
+        )
         bot = self._update.get_bot()
         try:
             with open(image_path, "rb") as f:
@@ -135,8 +151,14 @@ class TelegramOutbound:
                     photo=f,
                     caption=caption,
                 )
+            logger.debug("Telegram send_image: send completed successfully")
         except Exception:
-            logger.exception("Failed to send Telegram photo")
+            logger.exception(
+                "Failed to send Telegram photo: chat_id=%s... size=%d",
+                (chat_id or "")[:8],
+                file_size,
+            )
+            raise
 
 
 def make_outbound(update: Update) -> TelegramOutbound:

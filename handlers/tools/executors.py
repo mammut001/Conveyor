@@ -564,6 +564,13 @@ def register_builtin_tools() -> None:
             keywords=("cancel upload", "upload cancel"),
         ),
         ToolSpec(
+            name="desktop.upload.resend",
+            summary="Resend a completed thumbnail upload to chat (P5.4.2)",
+            danger=DangerLevel.WRITE_SAFE,
+            executor=_observe_tool_stub,
+            keywords=("resend upload", "upload resend", "retry upload"),
+        ),
+        ToolSpec(
             name="desktop.upload.cleanup",
             summary="Clean up VPS temporary uploaded thumbnails (P5.4)",
             danger=DangerLevel.WRITE_SAFE,

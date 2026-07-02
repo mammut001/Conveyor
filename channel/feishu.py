@@ -152,19 +152,61 @@ class FeishuOutbound:
         *,
         caption: str | None = None,
     ) -> None:
-        """Upload and send an image resource to Feishu chat."""
-        from lark_oapi.channel import MediaSource
-        from lark_oapi.channel.types import OutboundImage
+        """Upload and send an image resource to Feishu chat.
+
+        Raises on any failure so callers can mark delivery_failed instead of
+        falsely marking the request as delivered.
+        """
+        import os
+        file_size = 0
         try:
+            file_size = os.path.getsize(image_path)
+        except OSError:
+            pass
+        logger.debug(
+            "Feishu send_image: chat_id=%s... path=%s size=%d bytes caption=%s",
+            (chat_id or "")[:8],
+            image_path,
+            file_size,
+            caption,
+        )
+        try:
+            from lark_oapi.channel import MediaSource
+            from lark_oapi.channel.types import OutboundImage
             media_source = MediaSource(kind="file", path=image_path)
             image_key = await self._channel.upload_media(media_source, kind="image")
+            logger.debug("Feishu send_image: uploaded image_key obtained")
             msg = OutboundImage(
                 source=MediaSource(kind="key", key=image_key),
                 caption=caption,
             )
             await self._channel.send(chat_id, msg)
+            logger.debug("Feishu send_image: send completed successfully")
+        except ImportError:
+            # MediaSource/OutboundImage not available in this SDK version.
+            # Fall back to plain image message dict if supported.
+            logger.warning(
+                "Feishu send_image: MediaSource/OutboundImage not available, "
+                "falling back to image message dict"
+            )
+            try:
+                import aiofiles
+                async with aiofiles.open(image_path, "rb") as f:
+                    image_bytes = await f.read()
+                img_msg = {"image": image_bytes, "caption": caption}
+                await self._channel.send(chat_id, img_msg)
+            except Exception as fallback_exc:
+                logger.exception(
+                    "Feishu send_image fallback also failed: %s", fallback_exc
+                )
+                raise
         except Exception:
-            logger.exception("Failed to send Feishu image")
+            logger.exception(
+                "Failed to send Feishu image: chat_id=%s... size=%d",
+                (chat_id or "")[:8],
+                file_size,
+            )
+            raise
 
     async def _send_card(
         self, msg: InboundMessage, text: str, *, reply_to: str | None

@@ -445,6 +445,7 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "desktop.observe.cancel": ("/observe_cancel",),
     "desktop.upload.request": ("/observe_upload", "/screenshot_upload"),
     "desktop.upload.status": ("/upload_status",),
+    "desktop.upload.resend": ("/upload_resend",),
     "desktop.upload.cancel": ("/upload_cancel",),
     "desktop.upload.cleanup": ("/upload_cleanup",),
 }
@@ -1358,6 +1359,13 @@ async def _upload_status(msg, port, runner, settings, arg):
     )
 
 
+async def _upload_resend(msg, port, runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(
+        msg, port, settings, "desktop.upload.resend", arg or "", runner=runner,
+    )
+
+
 async def _upload_cancel(msg, port, runner, settings, arg):
     from handlers.tools.runner import _invoke_tool
     await _invoke_tool(
@@ -1780,6 +1788,12 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
             "upload_status",
             "Show recent upload requests and status (P5.4)",
             _upload_status,
+        ),
+        CommandSpec(
+            "upload_resend",
+            "Resend a completed thumbnail upload to chat (P5.4.2)",
+            _upload_resend,
+            takes_optional_arg=True,
         ),
         CommandSpec(
             "upload_cancel",

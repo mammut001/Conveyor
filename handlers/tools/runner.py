@@ -228,6 +228,9 @@ async def _invoke_tool(
     elif tool_name == "desktop.upload.status":
         from handlers.tools.observe_tools import exec_desktop_upload_status
         result = await exec_desktop_upload_status(settings, arg, port=port, msg=msg)
+    elif tool_name == "desktop.upload.resend":
+        from handlers.tools.observe_tools import exec_desktop_upload_resend
+        result = await exec_desktop_upload_resend(settings, arg, port=port, msg=msg)
     elif tool_name == "desktop.upload.cancel":
         from handlers.tools.observe_tools import exec_desktop_upload_cancel
         result = await exec_desktop_upload_cancel(settings, arg)

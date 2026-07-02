@@ -278,6 +278,173 @@ def run_tests():
         assert resolved_fb == fallback_png.resolve()
         print("✓ Local screenshot validation: fallback works if no metadata file")
 
+        # ----------------------------------------------------
+        # P5.4.2 Delivery correctness tests
+        # ----------------------------------------------------
+        from desktop_upload_requests import (
+            mark_upload_delivered,
+            mark_upload_delivery_failed,
+            reset_upload_delivery,
+        )
+        import asyncio
+
+        # Build a minimal fake observe record for upload creation
+        fake_obs_record = {
+            "request_id": "obs_delivery_test_001",
+            "node_id": "macbook-payton",
+            "status": "completed",
+            "created_at": "2026-07-02T12:00:00Z",
+            "updated_at": "2026-07-02T12:00:00Z",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "user_request": "test",
+            "result": {"screenshot_id": "scr_delivery_test_001"},
+            "error": None,
+        }
+        fake_msg = type("FakeMsg", (), {"chat_id": "chat_delivery_test", "channel": "feishu", "operator_id": "op1"})()
+
+        create_res = create_upload_request(settings, fake_obs_record, fake_msg)
+        assert create_res.get("ok"), f"create failed: {create_res}"
+        delivery_upload_id = create_res["request"]["upload_id"]
+
+        # Advance to completed state
+        claim_res = claim_upload_request(settings, delivery_upload_id, "macbook-payton")
+        assert claim_res.get("ok")
+        thumb_path = tmp_path / "desktop" / "uploads" / f"{delivery_upload_id}.png"
+        thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        thumb_data = b"\x89PNG\r\n\x1a\ntest_thumbnail"
+        thumb_path.write_bytes(thumb_data)
+        thumb_sha = hashlib.sha256(thumb_data).hexdigest()
+        complete_res = complete_upload_request(settings, delivery_upload_id, "macbook-payton", {
+            "upload_id": delivery_upload_id,
+            "source_screenshot_id": "scr_delivery_test_001",
+            "thumbnail_path": str(thumb_path),
+            "sha256": thumb_sha,
+            "width": 100,
+            "height": 100,
+            "bytes": len(thumb_data),
+        })
+        assert complete_res.get("ok"), f"complete failed: {complete_res}"
+
+        # Test 1: mark_upload_delivered correctly sets delivered=True and clears error fields
+        deliver_res = mark_upload_delivered(settings, delivery_upload_id, channel="feishu", chat_id="chat_test")
+        assert deliver_res.get("ok")
+        record = deliver_res["request"]
+        assert record["delivered"] is True
+        assert record["delivered_channel"] == "feishu"
+        assert record["delivered_chat_id"] == "chat_test"
+        assert record["delivery_error"] is None
+        assert record["delivery_failed_at"] is None
+        print("✓ P5.4.2: mark_upload_delivered sets delivered=True and clears error fields")
+
+        # Test 2: reset_upload_delivery clears all delivery fields
+        reset_res = reset_upload_delivery(settings, delivery_upload_id)
+        assert reset_res.get("ok")
+        record = reset_res["request"]
+        assert record["delivered"] is False
+        assert record["delivered_at"] is None
+        assert record["delivery_error"] is None
+        assert record["delivery_failed_at"] is None
+        print("✓ P5.4.2: reset_upload_delivery clears all delivery tracking fields")
+
+        # Test 3: mark_upload_delivery_failed sets error fields and delivered=False
+        fail_res = mark_upload_delivery_failed(
+            settings, delivery_upload_id,
+            "FeishuAPIError",
+            message="upload_media returned 403"
+        )
+        assert fail_res.get("ok")
+        record = fail_res["request"]
+        assert record["delivered"] is False
+        assert record["delivery_error"] == "FeishuAPIError"
+        assert record["delivery_error_message"] == "upload_media returned 403"
+        assert record["delivery_failed_at"] is not None
+        print("✓ P5.4.2: mark_upload_delivery_failed records error and delivered=False")
+
+        # Test 4: Fake port — send_image succeeds → upload_status marks delivered
+        reset_upload_delivery(settings, delivery_upload_id)
+
+        class FakeSuccessPort:
+            send_image_called = False
+            async def send_image(self, chat_id, image_path, *, caption=None):
+                FakeSuccessPort.send_image_called = True
+
+        from handlers.tools.observe_tools import exec_desktop_upload_status
+        status_text = asyncio.get_event_loop().run_until_complete(
+            exec_desktop_upload_status(settings, "", port=FakeSuccessPort(), msg=fake_msg)
+        )
+        assert FakeSuccessPort.send_image_called, "send_image should have been called"
+        assert "delivered to chat" in status_text, f"Expected delivered status, got: {status_text}"
+        print("✓ P5.4.2: send_image success → upload_status marks delivered")
+
+        # Test 5: Fake port — send_image raises → upload_status marks delivery_failed, not delivered
+        reset_upload_delivery(settings, delivery_upload_id)
+
+        class FakeFailPort:
+            send_image_called = False
+            async def send_image(self, chat_id, image_path, *, caption=None):
+                FakeFailPort.send_image_called = True
+                raise RuntimeError("Feishu API error: 403 forbidden")
+
+        status_text2 = asyncio.get_event_loop().run_until_complete(
+            exec_desktop_upload_status(settings, "", port=FakeFailPort(), msg=fake_msg)
+        )
+        assert FakeFailPort.send_image_called, "send_image should have been called"
+        assert "delivery failed" in status_text2, f"Expected delivery failed, got: {status_text2}"
+        assert "RuntimeError" in status_text2, f"Expected error name, got: {status_text2}"
+        print("✓ P5.4.2: send_image raises → upload_status marks delivery_failed, not delivered")
+
+        # Test 6: Already-delivered upload is not re-sent by upload_status
+        mark_upload_delivered(settings, delivery_upload_id, channel="feishu", chat_id="chat_test")
+
+        class FakeResendPort:
+            send_image_called = False
+            async def send_image(self, chat_id, image_path, *, caption=None):
+                FakeResendPort.send_image_called = True
+
+        status_text3 = asyncio.get_event_loop().run_until_complete(
+            exec_desktop_upload_status(settings, "", port=FakeResendPort(), msg=fake_msg)
+        )
+        assert not FakeResendPort.send_image_called, "send_image should NOT be called for already-delivered upload"
+        print("✓ P5.4.2: already-delivered upload is not re-sent by upload_status")
+
+        # Test 7: Missing thumbnail file → delivery_failed with thumbnail_missing
+        reset_upload_delivery(settings, delivery_upload_id)
+        thumb_path.unlink()  # Remove the thumbnail
+
+        class FakeMissingThumbPort:
+            send_image_called = False
+            async def send_image(self, chat_id, image_path, *, caption=None):
+                FakeMissingThumbPort.send_image_called = True
+
+        status_text4 = asyncio.get_event_loop().run_until_complete(
+            exec_desktop_upload_status(settings, "", port=FakeMissingThumbPort(), msg=fake_msg)
+        )
+        assert not FakeMissingThumbPort.send_image_called, "send_image should NOT be called when thumbnail missing"
+        assert "thumbnail_missing" in status_text4, f"Expected thumbnail_missing, got: {status_text4}"
+        print("✓ P5.4.2: missing thumbnail → delivery_failed with thumbnail_missing, send_image not called")
+
+        # Test 8: /upload_resend re-delivers a delivery-failed request (after recreating thumb file)
+        thumb_path.write_bytes(thumb_data)  # Recreate the thumbnail
+        reset_upload_delivery(settings, delivery_upload_id)
+        mark_upload_delivery_failed(settings, delivery_upload_id, "PreviousError")
+
+        from handlers.tools.observe_tools import exec_desktop_upload_resend
+
+        class FakeResendSuccessPort:
+            send_image_called = False
+            async def send_image(self, chat_id, image_path, *, caption=None):
+                FakeResendSuccessPort.send_image_called = True
+
+        resend_text = asyncio.get_event_loop().run_until_complete(
+            exec_desktop_upload_resend(
+                settings, delivery_upload_id,
+                port=FakeResendSuccessPort(), msg=fake_msg
+            )
+        )
+        assert FakeResendSuccessPort.send_image_called, "send_image should be called on resend"
+        assert "delivered" in resend_text.lower(), f"Expected delivered in resend response, got: {resend_text}"
+        print("✓ P5.4.2: upload_resend re-delivers a delivery-failed request")
+
     print("\nAll upload request store tests PASSED!")
 
 if __name__ == "__main__":

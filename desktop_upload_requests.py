@@ -451,6 +451,9 @@ def mark_upload_delivered(
                 record["delivered_channel"] = channel
             if chat_id is not None:
                 record["delivered_chat_id"] = chat_id
+            record["delivery_error"] = None
+            record["delivery_error_message"] = None
+            record["delivery_failed_at"] = None
             _save_unlocked(settings, store)
             return {"ok": True, "request": dict(record)}
 
@@ -461,7 +464,9 @@ def mark_upload_delivery_failed(
     error: str,
     *,
     message: str | None = None,
+    failed_at: datetime | None = None,
 ) -> dict:
+    now = _utc_now(failed_at)
     with _lock:
         with file_lock(upload_requests_lock_path(settings)):
             store = _load_unlocked(settings)
@@ -470,9 +475,34 @@ def mark_upload_delivery_failed(
                 return {"ok": False, "error": "request_not_found"}
             if record.get("status") != "completed":
                 return {"ok": False, "error": "invalid_status", "status": record.get("status")}
+            record["delivered"] = False
             record["delivery_failed"] = True
+            record["delivery_failed_at"] = _iso_z(now)
             record["delivery_error"] = _truncate_text(error, 128)
             if message:
                 record["delivery_error_message"] = _truncate_text(message, 500)
+            else:
+                record["delivery_error_message"] = None
+            _save_unlocked(settings, store)
+            return {"ok": True, "request": dict(record)}
+
+
+def reset_upload_delivery(settings: Settings, upload_id: str) -> dict:
+    with _lock:
+        with file_lock(upload_requests_lock_path(settings)):
+            store = _load_unlocked(settings)
+            record = store.get(upload_id)
+            if not isinstance(record, dict):
+                return {"ok": False, "error": "request_not_found"}
+            if record.get("status") != "completed":
+                return {"ok": False, "error": "invalid_status", "status": record.get("status")}
+            record["delivered"] = False
+            record["delivered_at"] = None
+            record["delivered_channel"] = None
+            record["delivered_chat_id"] = None
+            record["delivery_failed"] = False
+            record["delivery_error"] = None
+            record["delivery_error_message"] = None
+            record["delivery_failed_at"] = None
             _save_unlocked(settings, store)
             return {"ok": True, "request": dict(record)}
