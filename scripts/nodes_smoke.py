@@ -262,12 +262,10 @@ def _test_intent_computer_use_routes_to_stub() -> None:
 
     cases = [
         "帮我在 Mac 上打开 Xcode",
-        "截图看看我电脑现在是什么",
         "操作我的电脑",
         "用我的 Mac 打开浏览器",
         "看一下我 MacBook 上的 Xcode",
         "computer use my Mac",
-        "take a screenshot on my desktop",
     ]
     for phrase in cases:
         result = route_intent(phrase)
@@ -284,6 +282,25 @@ def _test_intent_computer_use_routes_to_stub() -> None:
             )
             return
     print("[pass] intent_computer_use_routes_to_stub")
+
+
+def _test_intent_screenshot_observe_routes() -> None:
+    from handlers.intent import route_intent
+
+    cases = [
+        "截图看看我电脑现在是什么",
+        "看一下 MacBook 屏幕",
+        "take a screenshot on my desktop",
+    ]
+    for phrase in cases:
+        result = route_intent(phrase)
+        if result.kind != "deterministic":
+            _fail("intent_screenshot_observe_routes", f"{phrase!r} kind={result.kind}")
+            return
+        if "desktop.screenshot.status" not in result.tools:
+            _fail("intent_screenshot_observe_routes", f"{phrase!r} tools={result.tools}")
+            return
+    print("[pass] intent_screenshot_observe_routes")
 
 
 def _test_intent_ambiguous_open_xcode_not_hijacked() -> None:
@@ -450,6 +467,7 @@ def main() -> int:
     _test_exec_computer_status_stub()
     _test_intent_nodes_status_routes()
     _test_intent_computer_use_routes_to_stub()
+    _test_intent_screenshot_observe_routes()
     _test_intent_ambiguous_open_xcode_not_hijacked()
     _test_node_status_card_shape()
     _test_computer_status_card_shape()

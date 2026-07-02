@@ -240,7 +240,7 @@ def main() -> int:
         # 10. computer.status does not claim screenshot/control works
         print("Testing computer.status output...")
         text_comp = asyncio.run(exec_computer_status(desktop_agent_server.settings, ""))
-        if "desktop agent online, control not enabled" not in text_comp or "Screenshot, mouse" not in text_comp:
+        if "desktop agent online, control not enabled" not in text_comp or "not implemented" not in text_comp.lower():
             _fail("computer_status_online_text", f"text={text_comp}")
         else:
             print("[pass] computer_status_online_text")

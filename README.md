@@ -151,8 +151,9 @@ Conveyor is becoming a private control plane for your VPS and,
 eventually, your local desktop. The control plane always runs on
 the VPS. The desktop node is a **stub** in this phase: it shows
 up in `/nodes` only when you opt in, and it is always
-`offline`. Real screenshot, mouse, keyboard, browser control, and
-Computer Use are **not** implemented yet.
+`offline` until heartbeats arrive. **P5.2** adds read-only local
+screenshot observe via `capture-screen-helper`; mouse, keyboard,
+browser control, and Computer Use are **not** implemented.
 
 - `/nodes` · `/node_status` — list known execution nodes, their
   capabilities, and dynamic online/offline status.
@@ -160,9 +161,10 @@ Computer Use are **not** implemented yet.
 - Natural language: `我的节点`, `机器状态`, `主机状态`,
   `MacBook 在线吗`, `desktop node`, `nodes status`,
   `computer use status`. Desktop-target phrases like
-  `帮我在 Mac 上打开 Xcode` / `take a screenshot on my desktop`
-  route to a deterministic stub reply instead of falling through
-  to Codex.
+  `帮我在 Mac 上打开 Xcode` route to a deterministic stub reply
+  instead of falling through to Codex. Screenshot observe phrases
+  like `take a screenshot on my desktop` route to
+  `desktop.screenshot.status` (status only — no remote capture).
 
 ### P5.1 Desktop Agent Heartbeat
 
@@ -186,7 +188,15 @@ In P5.1, the desktop agent registration and heartbeat protocol is active:
 * **Node ID Validation**: The MacBook agent's `CONVEYOR_DESKTOP_NODE_ID` must match the VPS `CONVEYOR_DESKTOP_NODE_ID` (default is `macbook-payton`). Mismatching requests will be rejected with HTTP 400.
 
 
-> **Computer Use control loop remains future work.** Screenshot capture, click, type, and Gemini Computer Use remain future tasks. See `docs/desktop_agent_protocol.md` and `docs/desktop_security.md`.
+### P5.2 Desktop Screenshot Observe (read-only)
+
+* **Helper**: Build `capture-screen-helper` from the `capture-your-screen` repo and set `CONVEYOR_DESKTOP_SCREENSHOT_HELPER`.
+* **Local capture**: `.venv/bin/python desktop_agent.py --observe-once`
+* **Status**: `/desktop_screenshot_status` or natural language screenshot phrases.
+* Screenshots stay under `CODEX_MEMORY_ROOT/desktop/screenshots/` by default. Upload is disabled.
+* Screen Recording permission is required on macOS.
+
+> **Computer Use control is still not implemented.** P5.2 observe does not move the mouse, type, or run Gemini Computer Use. See `docs/desktop_screenshot_observe.md`, `docs/desktop_agent_protocol.md`, and `docs/desktop_security.md`.
 
 
 
@@ -224,7 +234,7 @@ multi-tenant SaaS. The model is intentionally simple and honest:
 - **No commit, no push, no merge.** Apply is always an explicit `/apply` after
   you review `/diff`. The bot never touches `main` without you saying so.
 - **Safe Apply & Isolation Pass.** Per-job isolated worktrees, strict changed-file allowlist/denylist checks, session prompt injection guards, and Feishu strict mode are enforced. See [Apply Safety Policy](docs/apply_safety.md) for full details.
-- **No Computer Use.** Desktop control, mouse/keyboard actions, screenshot capture, and Gemini Computer Use calls are intentionally *not* implemented.
+- **No Computer Use control.** P5.2 adds read-only local screenshot observe only. Mouse/keyboard/browser automation and Gemini Computer Use calls are intentionally *not* implemented.
 
 This is personal infrastructure, not a public chatbot. Treat it accordingly.
 

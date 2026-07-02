@@ -439,6 +439,7 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     # Execution nodes (P5.0)
     "nodes.status": ("/nodes", "/node_status"),
     "computer.status": ("/computer_status",),
+    "desktop.screenshot.status": ("/desktop_screenshot_status",),
 }
 
 _TOOL_EXAMPLES: dict[str, str] = {
@@ -525,6 +526,7 @@ _TOOL_EXAMPLES: dict[str, str] = {
     # Execution nodes (P5.0)
     "nodes.status": "节点状态",
     "computer.status": "Computer Use 状态",
+    "desktop.screenshot.status": "桌面截图 observe 状态",
 }
 
 
@@ -1208,6 +1210,13 @@ async def _computer_status(msg, port, _runner, settings, _arg):
     await port.reply(msg, text)
 
 
+async def _desktop_screenshot_status(msg, port, _runner, settings, _arg):
+    """Read-only desktop screenshot observe status (P5.2)."""
+    from handlers.tools.runner import run_tool
+    text = await run_tool(settings, "desktop.screenshot.status", _arg or "")
+    await port.reply(msg, text)
+
+
 
 async def _tool_logs(msg, port, _runner, settings, arg):
     from handlers.tools.runner import run_tool
@@ -1551,6 +1560,11 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("nodes", "Execution nodes (VPS + desktop stub)", _nodes),
         CommandSpec("node_status", "Execution nodes (alias of /nodes)", _node_status),
         CommandSpec("computer_status", "Computer Use (desktop agent) stub status", _computer_status),
+        CommandSpec(
+            "desktop_screenshot_status",
+            "Desktop screenshot observe status (P5.2 read-only)",
+            _desktop_screenshot_status,
+        ),
         CommandSpec("diagnose", "Hybrid 主机诊断", _diagnose, takes_optional_arg=True),
         CommandSpec("restart", "重启 Conveyor 服务 (需确认)", _restart, takes_arg=True),
         CommandSpec("note", "添加本地笔记 (立即执行, 审计)", _note, takes_arg=True),

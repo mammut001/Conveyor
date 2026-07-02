@@ -26,11 +26,12 @@ audited change that re-validates this document.
    `CONVEYOR_COMPUTER_USE_DEFAULT_MODE` env var is whitelisted
    to `observe_only` and `off` — a typo falls back to
    `observe_only` with a logged warning.
-4. **No screenshot, click, typing, browser control, password
-   entry, payment action, file deletion, or form submission
-   is implemented in this task.** The protocol design in
-   `docs/desktop_agent_protocol.md` lists the future surface;
-   none of it is in code.
+4. **P5.2 adds read-only local screenshot observe only** via
+   `capture-screen-helper` and `desktop_agent.py --observe-once`.
+   Screenshots stay on the Mac by default; no upload, no OCR, no
+   LLM visual analysis. **Click, typing, browser control, password
+   entry, payment action, file deletion, and form submission remain
+   unimplemented.** See `docs/desktop_screenshot_observe.md`.
 5. **Future desktop actions must require step-by-step
    confirmation by default.** The current chat-level confirmation
    token is the minimum; the agent must additionally refuse to
@@ -156,7 +157,8 @@ In P5.1 and P5.1.1, the desktop agent registration and heartbeat endpoint has be
 * **Token Redaction**: The shared secret token is listed under `SENSITIVE_FIELDS` in `config.py` and is never printed in server logs or application runtime logs.
 * **Control Plane Binding**: By default, the control plane server binds to localhost `127.0.0.1`. Binding to `0.0.0.0` is disabled by default. Exposing this interface publicly requires secure routing (e.g. Tailscale, Cloudflare Tunnel, or a VPN) and HTTPS.
 * **File-backed Persistence Isolation**: Status info is shared across processes using `CODEX_MEMORY_ROOT/state/desktop_nodes.json`. This JSON state file is guaranteed to contain NO tokens, secrets, or request headers, and only stores general connection metadata (node ID, version, host summary). No screenshots, mouse, keyboard, or action data are written or stored.
-* **Safety Non-goals**: No screenshot capture, mouse/keyboard control, or Gemini Computer Use API calls are active in this phase. The control plane remains in stub-only execution safety mode.
+* **P5.2 observe**: Read-only screenshot capture is local-only through `capture-screen-helper`. Metadata JSON is stored under `CODEX_MEMORY_ROOT/desktop/screenshots/`; image bytes are not sent to the VPS.
+* **Safety Non-goals**: No mouse/keyboard control, browser automation, remote screenshot trigger, or Gemini Computer Use API calls are active. Computer Use control is still not implemented.
 
 
 

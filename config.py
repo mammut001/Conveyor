@@ -130,6 +130,12 @@ class Settings:
     conveyor_desktop_agent_token: str | None = None  # SENSITIVE
     conveyor_computer_use_default_mode: str = "observe_only"
     conveyor_desktop_heartbeat_ttl_seconds: int = 90
+    # Desktop screenshot observe (P5.2). Read-only local capture via
+    # capture-screen-helper; no upload, no Computer Use control.
+    conveyor_desktop_screenshot_helper: str | None = None
+    conveyor_desktop_screenshot_dir: str | None = None
+    conveyor_desktop_screenshot_max_bytes: int = 5000000
+    conveyor_desktop_screenshot_allow_upload: bool = False
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -350,6 +356,13 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
             "CONVEYOR_COMPUTER_USE_DEFAULT_MODE", "observe_only",
         ).strip().lower() or "observe_only",
         "conveyor_desktop_heartbeat_ttl_seconds": _int_env("CONVEYOR_DESKTOP_HEARTBEAT_TTL_SECONDS", 90),
+        # Desktop screenshot observe (P5.2)
+        "conveyor_desktop_screenshot_helper": os.getenv("CONVEYOR_DESKTOP_SCREENSHOT_HELPER") or None,
+        "conveyor_desktop_screenshot_dir": os.getenv("CONVEYOR_DESKTOP_SCREENSHOT_DIR") or None,
+        "conveyor_desktop_screenshot_max_bytes": _int_env("CONVEYOR_DESKTOP_SCREENSHOT_MAX_BYTES", 5000000),
+        "conveyor_desktop_screenshot_allow_upload": os.getenv(
+            "CONVEYOR_DESKTOP_SCREENSHOT_ALLOW_UPLOAD", "false"
+        ).strip().lower() in ("true", "1", "yes"),
     }
 
 

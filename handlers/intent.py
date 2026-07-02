@@ -314,6 +314,21 @@ _NODES_STATUS_PATTERNS = (
     re.compile(r"(我的节点|机器状态|主机状态|node\s*status|nodes\s*status|执行节点|节点状态|(?:macbook|mac|电脑|本机)\s*在线)", re.IGNORECASE),
 )
 
+# P5.2: read-only screenshot observe phrases. These route to
+# ``desktop.screenshot.status`` instead of Codex or control stubs.
+_SCREENSHOT_OBSERVE_PATTERNS = (
+    re.compile(r"截图", re.IGNORECASE),
+    re.compile(r"截屏", re.IGNORECASE),
+    re.compile(r"take\s+a\s+screenshot", re.IGNORECASE),
+    re.compile(
+        r"screenshot\s*(on|of)\s*(my\s*)?(mac|macbook|desktop|laptop|screen)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"看一下.*(屏幕|桌面|screen)", re.IGNORECASE),
+    re.compile(r"看看.*(屏幕|桌面|screen)", re.IGNORECASE),
+    re.compile(r"看一下\s*(macbook|mac|电脑)\s*屏幕", re.IGNORECASE),
+)
+
 
 # Computer Use / desktop action intent. The first match wins and
 # routes to the ``computer.status`` stub. We intentionally do NOT
@@ -329,7 +344,7 @@ _NODES_STATUS_PATTERNS = (
 #   1. verb + machine: "打开 我的 Mac", "take a screenshot on my desktop"
 #   2. machine + verb: "我的 Mac 打开 Xcode", "我的 MacBook 上的 Xcode"
 #   3. machine + 在/上 + verb: "在 Mac 上打开", "我 MacBook 上的截图"
-_ASCII_VERBS = r"(?:screenshot|click|launch|control)"
+_ASCII_VERBS = r"(?:click|launch|control)"
 _CJK_VERBS = r"(?:\u6253\u5f00|\u8fd0\u884c|\u542f\u52a8|\u70b9|\u64cd\u4f5c|\u622a\u56fe|\u770b\u4e00\u4e0b|\u770b\u770b|\u622a\u5c4f)"
 _VERB_GROUP = rf"(?:{_CJK_VERBS}|{_ASCII_VERBS})"
 _CJK_NOUN = r"(?:\u6211\u7684?\s*mac|\u6211\u7684?\s*macbook|\u672c\u673a|\u7535\u8111)"
@@ -386,11 +401,6 @@ _COMPUTER_USE_PATTERNS = (
         r"computer\s*use\s*(my\s*)?(mac|macbook|desktop|laptop)?",
         re.IGNORECASE,
     ),
-    # English: "take a screenshot on my desktop"
-    re.compile(
-        r"take\s+a\s+screenshot\s*(on|of)\s*(my\s*)?(mac|macbook|desktop|laptop|screen)",
-        re.IGNORECASE,
-    ),
 )
 _WEB_SEARCH_PATTERNS = (
     re.compile(r"(搜索|搜|search|查|找).*(网上|web|网页|internet|谷歌|google)", re.IGNORECASE),
@@ -423,6 +433,9 @@ def route_intent(text: str) -> RouteResult:
     for pat in _NODES_STATUS_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("nodes.status",))
+    for pat in _SCREENSHOT_OBSERVE_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("desktop.screenshot.status",))
     for pat in _COMPUTER_USE_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("computer.status",))

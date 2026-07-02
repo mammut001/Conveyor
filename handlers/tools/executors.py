@@ -221,6 +221,84 @@ async def exec_nodes_status(_settings: Settings, _arg: str) -> str:
     return _safe_truncate("\n".join(lines))
 
 
+async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
+    """Read-only desktop screenshot observe status (P5.2)."""
+    import time
+    from nodes.registry import list_nodes
+    from nodes.types import NodeStatus, NodeType
+
+    helper = (settings.conveyor_desktop_screenshot_helper or "").strip()
+    screenshot_dir = settings.conveyor_desktop_screenshot_dir
+    if screenshot_dir:
+        dir_display = screenshot_dir
+    else:
+        dir_display = str(settings.codex_memory_root / "desktop" / "screenshots")
+
+    lines = [
+        "Desktop Screenshot Observe (P5.2)",
+        "",
+        "Read-only local screenshot capture. No mouse, keyboard, browser control, upload, or LLM visual analysis.",
+        "",
+    ]
+
+    if not helper:
+        lines.extend([
+            "Status: helper not configured",
+            "",
+            "Set CONVEYOR_DESKTOP_SCREENSHOT_HELPER to the capture-screen-helper binary path.",
+            "Example: /usr/local/bin/capture-screen-helper",
+            "",
+            "Remote screenshot trigger is not implemented yet.",
+            "No screenshot was captured.",
+        ])
+        return _safe_truncate("\n".join(lines))
+
+    lines.append(f"Helper: configured ({helper})")
+    lines.append(f"Screenshot dir: {dir_display}")
+    lines.append(
+        f"Upload: {'enabled in config but ignored in P5.2' if settings.conveyor_desktop_screenshot_allow_upload else 'disabled'}"
+    )
+    lines.append("")
+
+    desktop_nodes = [n for n in list_nodes(settings) if n.node_type == NodeType.DESKTOP]
+    if not desktop_nodes:
+        lines.extend([
+            "Desktop node: not enabled",
+            "",
+            "Local capture works without the control plane:",
+            "  python desktop_agent.py --observe-once",
+            "",
+            "Remote screenshot trigger is not implemented yet.",
+            "No screenshot was captured.",
+        ])
+        return _safe_truncate("\n".join(lines))
+
+    node = desktop_nodes[0]
+    if node.status == NodeStatus.ONLINE:
+        last_seen = "unknown"
+        if node.last_seen_at is not None:
+            last_seen = f"{max(0, int(time.time() - node.last_seen_at))}s ago"
+        lines.extend([
+            f"Desktop agent: online ({node.node_id})",
+            f"Last seen: {last_seen}",
+        ])
+    else:
+        lines.extend([
+            f"Desktop agent: offline ({node.node_id})",
+            "Heartbeat has not been received recently.",
+        ])
+
+    lines.extend([
+        "",
+        "Local one-shot capture:",
+        "  python desktop_agent.py --observe-once",
+        "",
+        "Remote screenshot trigger: not implemented yet.",
+        "No screenshot was captured by this status check.",
+    ])
+    return _safe_truncate("\n".join(lines))
+
+
 async def exec_computer_status(_settings: Settings, _arg: str) -> str:
     """Stub tool for Computer Use requests.
 
@@ -251,14 +329,21 @@ async def exec_computer_status(_settings: Settings, _arg: str) -> str:
                     seconds_ago = max(0, int(now - node.last_seen_at))
                     last_seen_str = f"{seconds_ago}s ago"
                 agent_state = node.metadata.get("agent_state", "idle")
+                helper_configured = bool((_settings.conveyor_desktop_screenshot_helper or "").strip())
+                observe_line = (
+                    "P5.2 read-only screenshot observe is available locally via "
+                    "`python desktop_agent.py --observe-once` when capture-screen-helper is configured."
+                    if helper_configured
+                    else "P5.2 screenshot observe helper is not configured."
+                )
                 body = (
                     "Computer Use: desktop agent online, control not enabled\n\n"
                     f"Node: {node.node_id} · {node.display_name}\n"
                     f"Status: online\n"
                     f"Agent state: {agent_state}\n"
                     f"Last seen: {last_seen_str}\n\n"
-                    "This phase only supports register + heartbeat. "
-                    "Screenshot, mouse, keyboard, browser control, and Gemini Computer Use remain future work."
+                    f"{observe_line}\n"
+                    "Mouse, keyboard, browser control, and Gemini Computer Use are not implemented."
                 )
             else:
                 body = (
@@ -378,8 +463,15 @@ def register_builtin_tools() -> None:
             keywords=("节点", "nodes", "host status", "vps + desktop"),
         ),
         ToolSpec(
+            name="desktop.screenshot.status",
+            summary="Desktop screenshot observe 状态 (P5.2 read-only)",
+            danger=DangerLevel.READ,
+            executor=exec_desktop_screenshot_status,
+            keywords=("screenshot observe", "桌面截图", "截屏状态", "screenshot status"),
+        ),
+        ToolSpec(
             name="computer.status",
-            summary="Computer Use (desktop agent) 状态 — 当前为 stub",
+            summary="Computer Use (desktop agent) 状态 — control not implemented",
             danger=DangerLevel.READ,
             executor=exec_computer_status,
             keywords=("computer use", "桌面", "desktop status", "截屏 status"),

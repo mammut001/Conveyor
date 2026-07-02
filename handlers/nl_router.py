@@ -159,6 +159,12 @@ def _build_catalog() -> dict[str, ToolCatalogEntry]:
         "kb.status": {"domain": "知识库", "examples_zh": ["知识库状态"], "examples_en": ["KB status"], "nl_support": "example"},
         "kb.search": {"domain": "知识库", "examples_zh": ["知识库里搜索 OAuth"], "examples_en": ["search KB for OAuth"]},
         "kb.collect_facts": {"domain": "知识库", "examples_zh": ["收集文档证据关于 deploy"], "examples_en": ["collect evidence about deploy"]},
+        # --- Desktop screenshot observe (P5.2) ---
+        "desktop.screenshot.status": {
+            "domain": "桌面",
+            "examples_zh": ["截图看看我电脑现在是什么", "看一下 MacBook 屏幕"],
+            "examples_en": ["take a screenshot on my desktop"],
+        },
         # --- Queue ---
         "queue.status": {"domain": "队列", "examples_zh": ["队列状态", "看看队列"], "examples_en": ["queue status"]},
         "scheduler_status": {"domain": "调度", "examples_zh": ["调度器状态", "提醒调度器状态"], "examples_en": ["scheduler status"], "nl_support": "example"},

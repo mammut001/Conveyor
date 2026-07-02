@@ -10,10 +10,12 @@ so future work has a single source of truth and so the phase-0
 registry's `capabilities` list can be checked against it without
 discovering the design later.
 
-Nothing in this file is wired up in code yet. The only thing that
-exists today is the deterministic stub tool `computer.status` that
-returns a "not implemented" message and the `nodes.status` tool
-that lists the registered nodes.
+P5.1 wired register + heartbeat. **P5.2** adds local read-only
+screenshot observe via `capture-screen-helper` and
+`desktop_agent.py --observe-once`. Remote `desktop.screenshot.*`
+messages and Computer Use control remain future work. Deterministic
+tools today: `nodes.status`, `computer.status`,
+`desktop.screenshot.status`.
 
 ---
 
@@ -207,11 +209,13 @@ export CONVEYOR_DESKTOP_NODE_NAME="Payton MacBook"
 > [!IMPORTANT]
 > The local agent `CONVEYOR_DESKTOP_NODE_ID` must match the VPS `CONVEYOR_DESKTOP_NODE_ID` (default is `macbook-payton`). Mismatched node IDs will be rejected by the server with HTTP 400. This mismatch check prevents situations where the agent is running but the `/nodes` panel shows the expected MacBook as offline.
 >
-> Pinging a heartbeat only proves that the agent daemon is alive and connected. Screenshots, cursor/keyboard controls, and Gemini Computer Use are not implemented.
+> P5.2 adds local read-only screenshot observe via `desktop_agent.py --observe-once` when `capture-screen-helper` is configured. Cursor/keyboard controls and Gemini Computer Use are not implemented.
 
 Chat query routing:
 * `/nodes` or `MacBook 在线吗` will report the online/offline status, last seen time, and agent state.
 * `computer use status` or `/computer_status` will report connection details.
-* Note: Screenshot capture, click, type, and Gemini Computer Use control remain future work.
+* Screenshot observe phrases route to `desktop.screenshot.status` (status only in chat; no remote capture).
+* Local capture: `python desktop_agent.py --observe-once`
+* Remote `POST /desktop/observe/request` returns not implemented in P5.2.
 
 

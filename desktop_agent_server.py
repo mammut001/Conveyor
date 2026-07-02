@@ -207,6 +207,12 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                 "status": "online",
                 "server_time": int(time.time())
             })
+        elif self.path == "/desktop/observe/request":
+            self.send_json(HTTPStatus.NOT_IMPLEMENTED, {
+                "ok": False,
+                "error": "not_implemented",
+                "message": "Remote screenshot observe trigger is not implemented in P5.2.",
+            })
         else:
             self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Endpoint not found"})
 
