@@ -319,8 +319,16 @@ def create_observe_request(
     settings: Settings,
     msg: InboundMessage,
     user_request: str,
+    *,
+    auto_upload_thumbnail: bool = False,
+    auto_delivery: bool = False,
 ) -> dict:
-    """Create a pending observe request. Returns {ok, ...} or {ok: False, error}."""
+    """Create a pending observe request. Returns {ok, ...} or {ok: False, error}.
+
+    P5.4.3: supports auto_upload_thumbnail and auto_delivery for preview mode
+    after explicit screenshot requests. Defaults remain metadata-only for
+    status-only / internal calls.
+    """
     if not settings.conveyor_desktop_node_enabled:
         return {
             "ok": False,
@@ -365,6 +373,10 @@ def create_observe_request(
         "expires_at": _iso_z(now + timedelta(seconds=ttl)),
         "result": None,
         "error": None,
+        # P5.4.3 auto thumbnail preview support (only after explicit consent)
+        "preview_mode": "thumb" if auto_upload_thumbnail else None,
+        "auto_upload_thumbnail": bool(auto_upload_thumbnail),
+        "auto_delivery": bool(auto_delivery),
     }
 
     with _lock:

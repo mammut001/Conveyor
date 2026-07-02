@@ -445,6 +445,25 @@ def run_tests():
         assert "delivered" in resend_text.lower(), f"Expected delivered in resend response, got: {resend_text}"
         print("✓ P5.4.2: upload_resend re-delivers a delivery-failed request")
 
+        # P5.4.3 idempotent ensure
+        from desktop_upload_requests import ensure_upload_request_for_observe
+        os.environ["CONVEYOR_DESKTOP_UPLOAD_ENABLED"] = "true"
+        settings = load_settings()
+        obs_e = {"request_id": "obs_e_1", "node_id": "macbook-payton", "status": "completed", "result": {"screenshot_id": "s1"}}
+        fm = type("M", (), {"chat_id": "c", "channel": "feishu", "operator_id": None})()
+        r1 = ensure_upload_request_for_observe(settings, obs_e, created_by_channel="feishu", created_by_chat_id="c")
+        assert r1.get("ok")
+        u1 = r1["request"]["upload_id"]
+        r2 = ensure_upload_request_for_observe(settings, obs_e, created_by_channel="feishu", created_by_chat_id="c")
+        assert r2["request"]["upload_id"] == u1
+        print("✓ P5.4.3: ensure idempotent no dup")
+
+        os.environ["CONVEYOR_DESKTOP_UPLOAD_ENABLED"] = "false"
+        s_off = load_settings()
+        roff = ensure_upload_request_for_observe(s_off, obs_e, created_by_channel="f", created_by_chat_id="c")
+        assert not roff.get("ok")
+        print("✓ P5.4.3: ensure no create if upload disabled")
+
     print("\nAll upload request store tests PASSED!")
 
 if __name__ == "__main__":

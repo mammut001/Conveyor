@@ -40,17 +40,30 @@ def _format_request_summary(record: dict) -> list[str]:
 def format_observe_request_created(record: dict, settings: Settings) -> str:
     ttl_minutes = max(1, settings.conveyor_desktop_observe_request_ttl_seconds // 60)
     node_id = record.get("node_id") or settings.conveyor_desktop_node_id or "macbook-payton"
-    lines = [
-        "📸 Desktop observe request created",
-        "",
-        f"Request: {record.get('request_id', '?')}",
-        f"Target: {node_id}",
-        f"Expires: {ttl_minutes} minutes",
-        "",
-        "The Mac desktop agent will capture one local screenshot and return metadata only.",
-        "No image will be uploaded.",
-        "Computer Use control is not implemented.",
-    ]
+    auto = bool(record.get("auto_upload_thumbnail"))
+    if auto:
+        lines = [
+            "📸 Screenshot requested",
+            "",
+            f"Request: {record.get('request_id', '?')}",
+            f"Target: {node_id}",
+            "",
+            "I’ll send a thumbnail preview here when it is ready.",
+            "Full-resolution screenshot stays local on the Mac.",
+            "Computer Use control is not implemented.",
+        ]
+    else:
+        lines = [
+            "📸 Desktop observe request created",
+            "",
+            f"Request: {record.get('request_id', '?')}",
+            f"Target: {node_id}",
+            f"Expires: {ttl_minutes} minutes",
+            "",
+            "The Mac desktop agent will capture one local screenshot and return metadata only.",
+            "No image will be uploaded.",
+            "Computer Use control is not implemented.",
+        ]
     return _safe_truncate("\n".join(lines))
 
 
@@ -87,8 +100,74 @@ async def exec_desktop_observe_request(
     settings: Settings,
     msg: InboundMessage,
     user_request: str,
+    *,
+    port: Any = None,
 ) -> str:
-    result = create_observe_request(settings, msg, user_request)
+    """Create observe request, optionally with auto thumbnail delivery (P5.4.3).
+
+    - Natural language capture phrases (e.g. 截图看看我电脑现在是什么) trigger preview if enabled.
+    - /observe_request --preview forces auto thumbnail.
+    - /observe_request --metadata-only forces metadata only.
+    - Plain /observe_request follows CONVEYOR_DESKTOP_AUTO_THUMBNAIL_ON_OBSERVE.
+    - If preview: polls briefly for observe complete + creates upload via ensure + polls + delivers via send_image.
+    - Returns user-friendly text; does not lie about delivery. Timeout says "still processing".
+    """
+    import asyncio
+    import re
+    from desktop_observe_requests import (
+        create_observe_request,
+        get_observe_request,
+    )
+    from desktop_upload_requests import ensure_upload_request_for_observe, get_upload_request
+
+    text = (user_request or "").strip()
+    # Parse flags (support from slash arg or embedded in NL text)
+    preview_flag = False
+    metadata_only = False
+    if re.search(r"--preview\b", text, re.IGNORECASE):
+        preview_flag = True
+    if re.search(r"--metadata(?:-only)?\b", text, re.IGNORECASE):
+        metadata_only = True
+        preview_flag = False
+    # clean for record
+    clean_text = re.sub(r"\s*--(?:preview|metadata(?:-only)?)\b", "", text, flags=re.IGNORECASE).strip() or text
+
+    # Decide auto
+    upload_enabled = bool(getattr(settings, "conveyor_desktop_upload_enabled", False))
+    auto_on = bool(getattr(settings, "conveyor_desktop_auto_thumbnail_on_observe", True))
+
+    # Heuristic for natural language screenshot request phrases (explicit consent)
+    nl_capture_patterns = [
+        r"截图看看我电脑现在是什么",
+        r"帮我截一下.*mac",
+        r"看一下.*(macbook|mac|电脑|屏幕)",
+        r"take a screenshot",
+        r"request.*screenshot",
+        r"capture.*(screen|desktop|mac)",
+        r"screenshot.*(my|on).* (mac|desktop|screen)",
+        r"截图",
+        r"截屏",
+    ]
+    is_nl_capture = any(re.search(p, text, re.IGNORECASE) for p in nl_capture_patterns)
+
+    auto_upload = False
+    if metadata_only:
+        auto_upload = False
+    elif preview_flag:
+        auto_upload = upload_enabled
+    elif is_nl_capture:
+        auto_upload = upload_enabled and auto_on
+    else:
+        # plain /observe_request or other
+        auto_upload = upload_enabled and auto_on
+
+    auto_delivery = auto_upload
+
+    result = create_observe_request(
+        settings, msg, clean_text,
+        auto_upload_thumbnail=auto_upload,
+        auto_delivery=auto_delivery,
+    )
     if not result.get("ok"):
         error = result.get("error", "observe_unavailable")
         message = result.get("message") or "Remote observe is unavailable."
@@ -105,8 +184,106 @@ async def exec_desktop_observe_request(
             "- Pending request count below limit",
         ]
         return _safe_truncate("\n".join(lines))
+
     record = result.get("request") or {}
-    return format_observe_request_created(record, settings)
+    req_id = record.get("request_id")
+
+    if not auto_upload:
+        # metadata only path (or upload disabled)
+        if upload_enabled is False and auto_on:
+            # created but auto disabled by config
+            base = format_observe_request_created(record, settings)
+            return _safe_truncate(base + "\n\nThumbnail auto-delivery is disabled (CONVEYOR_DESKTOP_UPLOAD_ENABLED=false).")
+        return format_observe_request_created(record, settings)
+
+    # Preview path: if upload still disabled here (race?), fallback
+    if not upload_enabled:
+        base = format_observe_request_created(record, settings)
+        return _safe_truncate(base + "\n\nThumbnail auto-delivery is disabled (upload feature off).")
+
+    # Now attempt wait-for-complete + auto upload + deliver (Option 1)
+    # Do not block forever.
+    timeout = int(getattr(settings, "conveyor_desktop_auto_thumbnail_timeout_seconds", 45) or 45)
+    start = time.time()
+    completed_obs = None
+    while time.time() - start < timeout:
+        cur = get_observe_request(settings, req_id) if req_id else None
+        if cur and cur.get("status") == "completed":
+            completed_obs = cur
+            break
+        if cur and cur.get("status") in ("failed", "expired", "cancelled"):
+            return _safe_truncate(
+                f"Observe request {req_id} ended with status={cur.get('status')}. "
+                "No thumbnail sent."
+            )
+        await asyncio.sleep(0.8)
+    if not completed_obs:
+        base = format_observe_request_created(record, settings)
+        return _safe_truncate(
+            base + "\n\nScreenshot request is still processing.\n"
+            "Use /observe_status or /upload_status to check progress."
+        )
+
+    # Create (idempotent) upload request
+    upl_res = ensure_upload_request_for_observe(
+        settings,
+        completed_obs,
+        created_by_channel=msg.channel,
+        created_by_chat_id=msg.chat_id,
+        created_by_operator_id=msg.operator_id,
+    )
+    if not upl_res.get("ok"):
+        base = format_observe_request_created(record, settings)
+        return _safe_truncate(
+            base + f"\n\nObserve completed but upload request not created: {upl_res.get('error')}. "
+            "Use /observe_upload to retry."
+        )
+    upl = upl_res.get("request") or {}
+    upl_id = upl.get("upload_id")
+
+    # Poll upload complete briefly (agent will process via its poll loop)
+    upload_poll_start = time.time()
+    upload_poll_timeout = min(30, max(5, timeout - int(time.time() - start)))
+    completed_upl = None
+    while time.time() - upload_poll_start < upload_poll_timeout:
+        cur_u = get_upload_request(settings, upl_id) if upl_id else None
+        if cur_u and cur_u.get("status") == "completed":
+            completed_upl = cur_u
+            break
+        if cur_u and cur_u.get("status") in ("failed", "expired", "cancelled"):
+            return _safe_truncate(
+                f"Upload {upl_id} for {req_id} ended with {cur_u.get('status')}. "
+                "Thumbnail not sent. Use /upload_status."
+            )
+        await asyncio.sleep(0.8)
+
+    base_msg = format_observe_request_created(record, settings)
+
+    if not completed_upl:
+        # Upload request created, will be processed by agent; delivery may happen later via status or next event
+        return _safe_truncate(
+            base_msg + "\n\nI’ll send a thumbnail preview here when it is ready."
+        )
+
+    # Try immediate delivery using helper (only to this chat)
+    if port is not None:
+        try:
+            delivered = await deliver_completed_uploads(
+                settings,
+                port=port,
+                msg=msg,
+                only_chat_id=msg.chat_id,
+                limit=1,
+            )
+            if delivered:
+                return _safe_truncate(base_msg + "\n\n✅ Thumbnail delivered.")
+        except Exception:
+            # delivery failure will be marked by helper; fall through to will-send
+            pass
+
+    return _safe_truncate(
+        base_msg + "\n\nI’ll send a thumbnail preview here when it is ready."
+    )
 
 
 async def exec_desktop_observe_status(settings: Settings, _arg: str) -> str:
@@ -115,12 +292,14 @@ async def exec_desktop_observe_status(settings: Settings, _arg: str) -> str:
     from nodes.types import NodeStatus, NodeType
 
     lines = [
-        "Desktop Observe Status (P5.3)",
+        "Desktop Observe Status (P5.4)",
         "",
-        "This command does not capture a screenshot.",
+        "This command does not capture a screenshot or upload.",
         "Use /observe_request (or NL capture phrases) to create a remote observe request.",
+        "Use /observe_preview or screenshot phrases (e.g. 截图看看我电脑现在是什么) for auto thumbnail.",
         "Mac agent must run: python desktop_agent.py --poll-observe",
-        "Upload is disabled in P5.2/P5.3.",
+        "P5.4 thumbnail upload available when CONVEYOR_DESKTOP_UPLOAD_ENABLED=true.",
+        "Auto thumbnail on explicit request: CONVEYOR_DESKTOP_AUTO_THUMBNAIL_ON_OBSERVE (default true).",
         "",
     ]
 
@@ -604,3 +783,100 @@ async def exec_desktop_upload_cleanup(settings: Settings, _arg: str) -> str:
                 except Exception:
                     pass
     return f"Cleanup completed. Deleted {deleted_count} file(s) ({total_size} bytes)."
+
+
+async def deliver_completed_uploads(
+    settings: Settings,
+    *,
+    port: Any,
+    msg: Any,
+    only_chat_id: str | None = None,
+    limit: int = 3,
+) -> list[dict]:
+    """Deliver undelivered completed thumbnail uploads to their original chat.
+
+    - Only sends to created_by_chat_id (scoped by only_chat_id if provided).
+    - Calls send_image then mark only on success; on fail marks delivery_failed.
+    - Does not hold upload lock across network I/O.
+    - Reuses P5.4.2 delivery correctness (no false delivered, safe paths).
+    - Never sends full paths or to wrong chat.
+    """
+    import logging
+    from pathlib import Path
+    from desktop_upload_requests import (
+        load_upload_requests,
+        mark_upload_delivered,
+        mark_upload_delivery_failed,
+    )
+
+    logger = logging.getLogger("conveyor.observe_tools")
+    if port is None or not hasattr(port, "send_image"):
+        return []
+
+    store = load_upload_requests(settings)
+    candidates: list[tuple[str, dict, str]] = []
+    for upload_id, record in list(store.items()):
+        if not isinstance(record, dict):
+            continue
+        if record.get("status") != "completed":
+            continue
+        if record.get("delivered") or record.get("delivery_failed"):
+            continue
+        if only_chat_id and record.get("created_by_chat_id") != only_chat_id:
+            continue
+        result = record.get("result")
+        if not isinstance(result, dict) or not result.get("thumbnail_path"):
+            continue
+        thumb_path = result["thumbnail_path"]
+        candidates.append((upload_id, record, thumb_path))
+        if len(candidates) >= limit:
+            break
+
+    delivered: list[dict] = []
+    for upload_id, record, thumb_path in candidates:
+        p = Path(thumb_path)
+        if not p.exists():
+            mark_upload_delivery_failed(
+                settings,
+                upload_id,
+                "thumbnail_missing",
+                message="Thumbnail temp file not found on VPS.",
+            )
+            continue
+        caption = f"Thumbnail for observe {record.get('observe_request_id')}"
+        target_chat_id = record.get("created_by_chat_id") or (getattr(msg, "chat_id", None) if msg else None)
+        target_channel = record.get("created_by_channel") or (getattr(msg, "channel", None) if msg else None)
+        if not target_chat_id:
+            continue
+        logger.debug(
+            "deliver_completed_uploads: sending upload_id=%s to channel=%s chat=%s",
+            upload_id,
+            target_channel,
+            (target_chat_id or "")[:8],
+        )
+        try:
+            await port.send_image(
+                chat_id=target_chat_id,
+                image_path=str(thumb_path),
+                caption=caption,
+            )
+            mark_upload_delivered(
+                settings,
+                upload_id,
+                channel=target_channel,
+                chat_id=target_chat_id,
+            )
+            delivered.append(dict(record))
+            logger.info("deliver_completed_uploads: delivered upload_id=%s", upload_id)
+        except Exception as exc:
+            error_name = type(exc).__name__
+            error_msg = str(exc)[:200]
+            logger.exception("deliver_completed_uploads: delivery failed upload_id=%s", upload_id)
+            mark_upload_delivery_failed(
+                settings,
+                upload_id,
+                error_name,
+                message=error_msg,
+            )
+            # do not mark delivered; do not include in returned list
+    return delivered

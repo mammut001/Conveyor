@@ -361,9 +361,9 @@ def _check_no_capture_in_status_executor() -> None:
             text = asyncio.run(exec_desktop_screenshot_status(settings, ""))
             capture_mock.assert_not_called()
         for phrase in (
-            "This command does not capture a screenshot.",
-            "Use /observe_request to create a remote observe request (P5.3).",
-            "Upload is disabled in P5.2/P5.3.",
+            "This command does not capture a screenshot or upload.",
+            "Use /observe_request to create a remote observe request (P5.3+).",
+            "P5.4 thumbnail upload is available when CONVEYOR_DESKTOP_UPLOAD_ENABLED=true.",
         ):
             if phrase not in text:
                 _fail("status_executor_wording", f"missing {phrase!r}")

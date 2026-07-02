@@ -253,6 +253,7 @@ def should_inject_for_command(cmd_name: str | None) -> bool:
         "context", "forget", "help",
         "screenshot_status", "desktop_screenshot_status",
         "observe_request", "screenshot_request", "request_screenshot",
+        "observe_preview", "screenshot_preview",
         "observe_status", "observe_cancel",
         "nodes", "node_status", "computer_status",
     }

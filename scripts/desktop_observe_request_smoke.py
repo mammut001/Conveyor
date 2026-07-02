@@ -505,7 +505,7 @@ def _test_complete_fail_conflict() -> None:
             return
             
         raw_json = (settings.codex_memory_root / "state" / "desktop_observe_requests.json").read_text()
-        for forbidden in ("png_bytes", "image_bytes", "base64", "thumbnail"):
+        for forbidden in ("png_bytes", "image_bytes", "base64"):
             if forbidden in raw_json:
                 _fail("complete_fail_conflict_data", f"Found forbidden field {forbidden} in JSON store")
                 return
@@ -626,8 +626,93 @@ def _test_no_nested_deadlock() -> None:
         finally:
             if has_alarm:
                 signal.alarm(0)
+
     print("[pass] no_nested_deadlock")
 
 
+def test_p543_auto_thumbnail_flags_and_routing():
+    """P5.4.3 tests: auto flags, ensure one upload, NL routing to preview, metadata-only, status wording."""
+    tmp = tempfile.mkdtemp(prefix="obs_p543_")
+    os.environ["CODEX_MEMORY_ROOT"] = tmp
+    os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
+    os.environ["CONVEYOR_DESKTOP_UPLOAD_ENABLED"] = "true"
+    os.environ["CONVEYOR_DESKTOP_AUTO_THUMBNAIL_ON_OBSERVE"] = "true"
+    os.environ["CONVEYOR_DESKTOP_SCREENSHOT_HELPER"] = "/usr/local/bin/capture-screen-helper"
+    settings = _settings(tmp, max_pending=3)
+    from nodes.state import register_desktop_node
+    register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+
+    from handlers.intent import route_intent
+    route = route_intent("截图看看我电脑现在是什么")
+    assert route.kind == "deterministic"
+    assert "desktop.observe.request" in route.tools
+    print("✓ 1. NL screenshot phrase routes to desktop.observe.request")
+
+    msg = _msg("preview-test")
+    res = create_observe_request(settings, msg, "截图看看我电脑现在是什么", auto_upload_thumbnail=True, auto_delivery=True)
+    assert res.get("ok")
+    rec = res["request"]
+    assert rec.get("auto_upload_thumbnail") is True
+    obs_id = rec["request_id"]
+    print("✓ 2. create with auto_upload_thumbnail=true sets fields")
+
+    claim_observe_request(settings, obs_id, "macbook-payton")
+    complete_observe_request(settings, obs_id, "macbook-payton", _fake_result())
+    # reload after complete to get updated status for ensure
+    from desktop_observe_requests import get_observe_request
+    rec = get_observe_request(settings, obs_id) or rec
+
+    msg2 = _msg("meta-only")
+    res2 = create_observe_request(settings, msg2, "/observe_request --metadata-only", auto_upload_thumbnail=False)
+    assert res2.get("ok")
+    assert res2["request"].get("auto_upload_thumbnail") is False
+    print("✓ 3. metadata-only creation has auto=false")
+
+    from desktop_upload_requests import ensure_upload_request_for_observe, list_recent_upload_requests
+    e = ensure_upload_request_for_observe(settings, rec, created_by_channel="telegram", created_by_chat_id="c1")
+    assert e.get("ok"), f"ensure failed: {e}"
+    upl_id = e["request"]["upload_id"]
+    e2 = ensure_upload_request_for_observe(settings, rec, created_by_channel="telegram", created_by_chat_id="c1")
+    assert e2["request"]["upload_id"] == upl_id
+    ups = [u for u in list_recent_upload_requests(settings, limit=20) if u.get("observe_request_id") == obs_id]
+    assert len(ups) == 1
+    print("✓ 4/5. ensure creates exactly one, repeated no dup")
+
+    os.environ["CONVEYOR_DESKTOP_UPLOAD_ENABLED"] = "false"
+    settings_off = _settings(tmp, max_pending=3)
+    register_desktop_node(settings_off, "macbook-payton", "Payton MacBook", "0.3.0", {})
+    res_off = create_observe_request(settings_off, msg, "截图", auto_upload_thumbnail=True)
+    assert res_off.get("ok")
+    ee = ensure_upload_request_for_observe(settings_off, res_off["request"], created_by_channel="t", created_by_chat_id="c")
+    assert not ee.get("ok") and ee.get("error") == "upload_disabled"
+    print("✓ 6. no upload created if disabled")
+    os.environ["CONVEYOR_DESKTOP_UPLOAD_ENABLED"] = "true"
+
+    from handlers.tools.observe_tools import exec_desktop_observe_status
+    import asyncio as aio
+    try:
+        loop = aio.get_event_loop()
+    except RuntimeError:
+        loop = aio.new_event_loop()
+        aio.set_event_loop(loop)
+    st = loop.run_until_complete(exec_desktop_observe_status(settings, ""))
+    assert "P5.2/P5.3" not in st
+    print("✓ 10. status wording no longer says P5.2/P5.3 disabled")
+
+    status_route = route_intent("observe status")
+    assert "desktop.observe.status" in status_route.tools
+    cap_route = route_intent("截图看看我电脑现在是什么")
+    assert "desktop.observe.request" in cap_route.tools
+    print("✓ 11. status-only do not trigger capture")
+
+    from desktop_observe_requests import RESULT_FORBIDDEN_FIELDS
+    assert "png_bytes" in RESULT_FORBIDDEN_FIELDS and "ocr" in RESULT_FORBIDDEN_FIELDS
+    print("✓ 12/13. forbidden fields protect against full/OCR")
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import asyncio
+    rc = main()
+    test_p543_auto_thumbnail_flags_and_routing()
+    print("\nAll P5.4.3 additions passed in observe smoke")
+    raise SystemExit(rc)

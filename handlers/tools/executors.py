@@ -269,15 +269,17 @@ async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
     from desktop_observe_requests import list_recent_observe_requests
 
     disclaimer = [
-        "This command does not capture a screenshot.",
+        "This command does not capture a screenshot or upload.",
         "Run `python desktop_agent.py --observe-once` on the Mac for local one-shot capture.",
-        "Use /observe_request to create a remote observe request (P5.3).",
+        "Use /observe_request to create a remote observe request (P5.3+).",
+        "Use /observe_preview or natural language like `截图看看我电脑现在是什么` for auto thumbnail delivery (P5.4.3).",
         "Mac agent must run `python desktop_agent.py --poll-observe` to fulfill requests.",
-        "Upload is disabled in P5.2/P5.3.",
+        "P5.4 thumbnail upload is available when CONVEYOR_DESKTOP_UPLOAD_ENABLED=true.",
+        "This status command itself does not capture or upload.",
     ]
 
     lines = [
-        "Desktop Screenshot Observe (P5.3)",
+        "Desktop Screenshot Observe (P5.4)",
         "",
         *disclaimer,
         "",

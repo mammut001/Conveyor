@@ -149,6 +149,9 @@ class Settings:
     conveyor_desktop_upload_ttl_seconds: int = 300
     conveyor_desktop_upload_temp_dir: str | None = None
     conveyor_desktop_upload_retention_seconds: int = 600
+    # P5.4.3 auto thumbnail on explicit observe
+    conveyor_desktop_auto_thumbnail_on_observe: bool = True
+    conveyor_desktop_auto_thumbnail_timeout_seconds: int = 45
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -394,6 +397,13 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_desktop_upload_ttl_seconds": _int_env("CONVEYOR_DESKTOP_UPLOAD_TTL_SECONDS", 300),
         "conveyor_desktop_upload_temp_dir": os.getenv("CONVEYOR_DESKTOP_UPLOAD_TEMP_DIR") or None,
         "conveyor_desktop_upload_retention_seconds": _int_env("CONVEYOR_DESKTOP_UPLOAD_RETENTION_SECONDS", 600),
+        # P5.4.3 auto thumbnail delivery after explicit observe/screenshot request
+        "conveyor_desktop_auto_thumbnail_on_observe": os.getenv(
+            "CONVEYOR_DESKTOP_AUTO_THUMBNAIL_ON_OBSERVE", "true"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "conveyor_desktop_auto_thumbnail_timeout_seconds": _int_env(
+            "CONVEYOR_DESKTOP_AUTO_THUMBNAIL_TIMEOUT_SECONDS", 45,
+        ),
     }
 
 

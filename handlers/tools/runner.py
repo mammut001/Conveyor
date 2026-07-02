@@ -215,6 +215,7 @@ async def _invoke_tool(
         from handlers.tools.observe_tools import exec_desktop_observe_request
         result = await exec_desktop_observe_request(
             settings, msg, arg or msg.text.strip(),
+            port=port,
         )
     elif tool_name == "desktop.observe.status":
         from handlers.tools.observe_tools import exec_desktop_observe_status

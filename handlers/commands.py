@@ -440,7 +440,7 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "nodes.status": ("/nodes", "/node_status"),
     "computer.status": ("/computer_status",),
     "desktop.screenshot.status": ("/desktop_screenshot_status", "/screenshot_status"),
-    "desktop.observe.request": ("/observe_request", "/screenshot_request", "/request_screenshot"),
+    "desktop.observe.request": ("/observe_request", "/screenshot_request", "/request_screenshot", "/observe_preview", "/screenshot_preview"),
     "desktop.observe.status": ("/observe_status",),
     "desktop.observe.cancel": ("/observe_cancel",),
     "desktop.upload.request": ("/observe_upload", "/screenshot_upload"),
@@ -536,7 +536,7 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "computer.status": "Computer Use 状态",
     "desktop.screenshot.status": "桌面截图 observe 状态",
     "screenshot_status": "桌面截图状态",
-    "desktop.observe.request": "创建远程截图 observe 请求",
+    "desktop.observe.request": "创建远程截图 observe 请求 (P5.4.3 支持 --preview 自动缩略图)",
     "desktop.observe.status": "observe 请求状态",
     "desktop.observe.cancel": "取消 observe 请求",
 }
@@ -1310,7 +1310,7 @@ async def _computer_status(msg, port, _runner, settings, _arg):
 
 
 async def _desktop_screenshot_status(msg, port, _runner, settings, _arg):
-    """Read-only desktop screenshot observe status (P5.2/P5.3)."""
+    """Read-only desktop screenshot observe status (P5.4)."""
     from handlers.tools.runner import _invoke_tool
     await _invoke_tool(
         msg, port, settings, "desktop.screenshot.status", _arg or "", runner=_runner,
@@ -1321,6 +1321,19 @@ async def _observe_request(msg, port, runner, settings, arg):
     from handlers.tools.runner import _invoke_tool
     await _invoke_tool(
         msg, port, settings, "desktop.observe.request", arg or msg.text.strip(), runner=runner,
+    )
+
+
+async def _observe_preview(msg, port, runner, settings, arg):
+    """Handler for /observe_preview and /screenshot_preview (P5.4.3 auto thumbnail)."""
+    from handlers.tools.runner import _invoke_tool
+    preview_arg = (arg or "").strip()
+    if preview_arg:
+        preview_arg = f"--preview {preview_arg}"
+    else:
+        preview_arg = "--preview"
+    await _invoke_tool(
+        msg, port, settings, "desktop.observe.request", preview_arg, runner=runner,
     )
 
 
@@ -1613,7 +1626,8 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/nodes /node_status — VPS + 可选 desktop stub 状态\n"
     text += "/computer_status — Computer Use stub 状态\n"
     text += "/desktop_screenshot_status /screenshot_status — 截图元数据/状态（不截屏）\n"
-    text += "/observe_request /screenshot_request — 创建远程 observe 请求（P5.3，仅元数据）\n"
+    text += "/observe_request /screenshot_request — 创建远程 observe 请求（支持 --preview 自动缩略图）\n"
+    text += "/observe_preview /screenshot_preview — 显式请求并自动发送缩略图预览 (P5.4.3)\n"
     text += "/observe_status — 最近 observe 请求与截图元数据\n"
     text += "/observe_cancel <id> — 取消 pending/claimed 请求\n"
     text += "/observe_upload <id> — 申请手动上传截图的缩略图/预览 (P5.4)\n"
@@ -1745,7 +1759,7 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         ),
         CommandSpec(
             "observe_request",
-            "Create remote desktop observe request (P5.3)",
+            "Create remote desktop observe request (P5.4.3 supports --preview / auto thumbnail)",
             _observe_request,
             takes_optional_arg=True,
         ),
@@ -1759,6 +1773,18 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
             "request_screenshot",
             "Create remote desktop observe request (alias)",
             _observe_request,
+            takes_optional_arg=True,
+        ),
+        CommandSpec(
+            "observe_preview",
+            "Create remote desktop observe request with auto thumbnail preview (P5.4.3)",
+            _observe_preview,
+            takes_optional_arg=True,
+        ),
+        CommandSpec(
+            "screenshot_preview",
+            "Create remote desktop observe request with auto thumbnail preview (alias)",
+            _observe_preview,
             takes_optional_arg=True,
         ),
         CommandSpec(

@@ -257,45 +257,53 @@ def create_upload_request(
             "error": "missing_screenshot_id",
             "message": "Source observe request has no screenshot ID.",
         }
-    
-    now = _utc_now()
-    ttl = settings.conveyor_desktop_upload_ttl_seconds
-    upload_id = _new_upload_id(now)
+    observe_id = observe_record.get("request_id")
 
-    record = {
-        "upload_id": upload_id,
-        "observe_request_id": observe_record.get("request_id"),
-        "screenshot_id": screenshot_id,
-        "node_id": node_id,
-        "status": "pending",
-        "kind": kind,
-        "created_at": _iso_z(now),
-        "updated_at": _iso_z(now),
-        "created_by_channel": msg.channel,
-        "created_by_chat_id": msg.chat_id,
-        "created_by_operator_id": msg.operator_id,
-        "expires_at": _iso_z(now + timedelta(seconds=ttl)),
-        "max_width": settings.conveyor_desktop_upload_max_width,
-        "max_height": settings.conveyor_desktop_upload_max_height,
-        "max_bytes": settings.conveyor_desktop_upload_max_bytes,
-        "result": None,
-        "error": None,
-    }
-
+    # Dedup: if a thumbnail upload for this observe already exists, return it (idempotent)
+    # Prevents duplicate uploads from repeated /observe_upload or auto chains.
     with _lock:
         with file_lock(upload_requests_lock_path(settings)):
             store = _load_unlocked(settings)
-            _expire_old_unlocked(store, now)
+            _expire_old_unlocked(store)
+            for rec in store.values():
+                if (isinstance(rec, dict) and
+                        rec.get("observe_request_id") == observe_id and
+                        rec.get("kind") == kind and
+                        rec.get("screenshot_id") == screenshot_id):
+                    return {"ok": True, "request": dict(rec), "existing": True}
+            # now proceed to create new
             if _count_pending_unlocked(store, node_id) >= 3:
                 return {
                     "ok": False,
                     "error": "too_many_pending_uploads",
                     "message": "Too many pending upload requests. Wait for one to complete or expire.",
                 }
+            now = _utc_now()
+            ttl = settings.conveyor_desktop_upload_ttl_seconds
+            upload_id = _new_upload_id(now)
+
+            record = {
+                "upload_id": upload_id,
+                "observe_request_id": observe_id,
+                "screenshot_id": screenshot_id,
+                "node_id": node_id,
+                "status": "pending",
+                "kind": kind,
+                "created_at": _iso_z(now),
+                "updated_at": _iso_z(now),
+                "created_by_channel": msg.channel,
+                "created_by_chat_id": msg.chat_id,
+                "created_by_operator_id": msg.operator_id,
+                "expires_at": _iso_z(now + timedelta(seconds=ttl)),
+                "max_width": settings.conveyor_desktop_upload_max_width,
+                "max_height": settings.conveyor_desktop_upload_max_height,
+                "max_bytes": settings.conveyor_desktop_upload_max_bytes,
+                "result": None,
+                "error": None,
+            }
             store[upload_id] = record
             _save_unlocked(settings, store)
-
-    return {"ok": True, "request": dict(record)}
+            return {"ok": True, "request": dict(record)}
 
 
 def claim_upload_request(settings: Settings, upload_id: str, node_id: str) -> dict:
@@ -506,3 +514,49 @@ def reset_upload_delivery(settings: Settings, upload_id: str) -> dict:
             record["delivery_failed_at"] = None
             _save_unlocked(settings, store)
             return {"ok": True, "request": dict(record)}
+
+
+def ensure_upload_request_for_observe(
+    settings: Settings,
+    observe_record: dict,
+    *,
+    created_by_channel: str,
+    created_by_chat_id: str,
+    created_by_operator_id: str | None = None,
+) -> dict:
+    """Idempotent helper: create (or return existing) thumbnail upload for a completed observe.
+
+    - Returns existing if one for the observe_request_id + thumbnail kind already exists.
+    - Only creates for completed observe with screenshot_id.
+    - Respects CONVEYOR_DESKTOP_UPLOAD_ENABLED.
+    - File-lock safe (delegates to create which now dedups under lock).
+    - Preserves original chat/channel from caller (used for delivery target).
+    - Does not create duplicates on repeated calls.
+    """
+    if not settings.conveyor_desktop_upload_enabled:
+        return {
+            "ok": False,
+            "error": "upload_disabled",
+            "message": "Screenshot upload is disabled. Set CONVEYOR_DESKTOP_UPLOAD_ENABLED=true to allow thumbnail auto-delivery.",
+        }
+
+    if not isinstance(observe_record, dict):
+        return {"ok": False, "error": "invalid_observe_record"}
+
+    if observe_record.get("status") != "completed":
+        return {"ok": False, "error": "observe_not_completed"}
+
+    observe_id = observe_record.get("request_id")
+    result = observe_record.get("result") or {}
+    screenshot_id = result.get("screenshot_id") if isinstance(result, dict) else None
+    if not observe_id or not screenshot_id:
+        return {"ok": False, "error": "missing_screenshot_id"}
+
+    # Build a proxy InboundMessage-like for create (channel/chat preserved for delivery)
+    class _ProxyMsg:
+        channel = created_by_channel
+        chat_id = created_by_chat_id
+        operator_id = created_by_operator_id
+
+    proxy = _ProxyMsg()
+    return create_upload_request(settings, observe_record, proxy, kind="thumbnail")
