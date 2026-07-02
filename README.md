@@ -104,10 +104,11 @@ agent tool layer (`Agent tool layer` — see `docs/architecture.en.md`).
   `/brief_enable [HH:MM]` · `/brief_disable` · `/brief_probe`
 
 > **Feishu users:** Codex job starts, finishes, failures, `/diff`
-> previews, and dangerous-action confirmations render as interactive
-> message cards with tap-to-act buttons (Status / Diff / Apply /
-> Discard / Cancel / Confirm). The buttons are convenience wrappers
-> around the same commands — see [Feishu setup](#feishu-setup).
+> previews, dangerous-action confirmations, and execution-node
+> status render as interactive message cards with tap-to-act buttons
+> (Status / Diff / Apply / Discard / Cancel / Confirm / Refresh).
+> The buttons are convenience wrappers around the same commands —
+> see [Feishu setup](#feishu-setup).
 
 ### Diagnostics & ops
 
@@ -143,6 +144,42 @@ agent tool layer (`Agent tool layer` — see `docs/architecture.en.md`).
 - **Natural-language routing** — most of the above also works as plain
   language: `看看负载`, `为什么服务器慢`, `搜一下 GitHub issue`, etc. Try
   `/nl_help` for the full list.
+
+### Execution nodes (VPS + desktop stub)
+
+Conveyor is becoming a private control plane for your VPS and,
+eventually, your local desktop. The control plane always runs on
+the VPS. The desktop node is a **stub** in this phase: it shows
+up in `/nodes` only when you opt in, and it is always
+`offline`. Real screenshot, mouse, keyboard, browser control, and
+Computer Use are **not** implemented yet.
+
+- `/nodes` · `/node_status` — list known execution nodes and their
+  capabilities.
+- `/computer_status` — show Computer Use status (always
+  "configured but not running" / "not enabled" in this phase).
+- Natural language: `我的节点`, `机器状态`, `主机状态`,
+  `MacBook 在线吗`, `desktop node`, `nodes status`,
+  `computer use status`. Desktop-target phrases like
+  `帮我在 Mac 上打开 Xcode` / `take a screenshot on my desktop`
+  route to a deterministic stub reply instead of falling through
+  to Codex (which cannot see your laptop from the VPS).
+
+Configure the desktop node in `.env` (all optional):
+
+```dotenv
+CONVEYOR_DESKTOP_NODE_ENABLED=false   # opt in
+CONVEYOR_DESKTOP_NODE_ID=macbook-payton
+CONVEYOR_DESKTOP_NODE_NAME=Payton MacBook
+CONVEYOR_DESKTOP_AGENT_TOKEN=replace_me_with_long_random_string
+CONVEYOR_COMPUTER_USE_DEFAULT_MODE=observe_only   # observe_only | off
+```
+
+> **Computer Use foundation added; real desktop agent and
+> screenshot/action loop remain future work.** See
+> `docs/desktop_agent_protocol.md` for the planned protocol and
+> `docs/desktop_security.md` for the safety contract a future
+> agent must satisfy.
 
 Every feature above is already shipped in this repo. If a capability is not
 listed here, it does not exist yet.
@@ -416,6 +453,7 @@ documented in [`docs/architecture.en.md`](docs/architecture.en.md).
 | Self-check | `/smoke`, `/editcheck` |
 | Maintenance | `/maintain [keep]`, `/clean [keep]`, `/restart telegram\|feishu\|maintain` |
 | Session | `/context`, `/forget` |
+| **Execution nodes (P5.0 phase 0)** | `/nodes`, `/node_status`, `/computer_status` |
 | Help | `/help` |
 
 For danger levels (READ / WRITE_SAFE / WRITE / DESTRUCTIVE) and tool internals
@@ -463,6 +501,15 @@ CODEX_TASK_ROOT=/srv/conveyor
 # CODEX_RETRY_429_DELAYS_SECONDS=300,900,1800
 # CODEX_MODEL=
 # CODEX_TIMEOUT_SECONDS=3600
+
+# --- Optional: Execution Nodes (P5.0 phase 0) ---
+# All four are optional. The desktop node is a stub and is offline
+# regardless. See docs/desktop_agent_protocol.md and docs/desktop_security.md.
+# CONVEYOR_DESKTOP_NODE_ENABLED=false
+# CONVEYOR_DESKTOP_NODE_ID=macbook-payton
+# CONVEYOR_DESKTOP_NODE_NAME=Payton MacBook
+# CONVEYOR_DESKTOP_AGENT_TOKEN=replace_me_with_long_random_string
+# CONVEYOR_COMPUTER_USE_DEFAULT_MODE=observe_only
 ```
 
 `CODEX_WORKSPACE_ROOT` must be the top-level directory of a git repository.
@@ -494,6 +541,7 @@ conveyor/
   channel/
     types.py              # InboundMessage, OutboundPort
     auth.py               # is_allowed per channel
+    feishu_cards.py       # Feishu interactive message card builders
   handlers/
     dispatch.py           # single entry: auth → command/memo/codex
     commands.py           # COMMAND_TABLE
@@ -502,6 +550,7 @@ conveyor/
     intent.py             # route_intent (deterministic | hybrid | llm)
     nl_router.py          # natural-language catalog and routing
     tools/                # agent tool layer: registry, executors, audit
+  nodes/                  # execution nodes (VPS + desktop stub, P5.0)
   personal_tools/         # notes, reminders, gmail, google, github, …
   scripts/                # CLI tools, harnesses, smokes
   Makefile
@@ -509,6 +558,8 @@ conveyor/
   docs/
     architecture.md       # 设计 (中文)
     architecture.en.md    # Architecture & design (English)
+    desktop_agent_protocol.md  # future local desktop agent (P5.x)
+    desktop_security.md   # desktop / Computer Use safety contract
 ```
 
 `docs/` is the only documentation shipped in the repo. Anything not in

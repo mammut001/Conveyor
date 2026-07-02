@@ -298,6 +298,99 @@ _WEB_FETCH_PATTERNS = (
     re.compile(r"(网页|页面|web|page).*(内容|content|看看)", re.IGNORECASE),
     re.compile(r"(帮我|请).*(打开|看看|获取).*(http|www)", re.IGNORECASE),
 )
+
+# ---- Execution nodes / Computer Use intent (P5.0 phase 0) ----------------
+#
+# These patterns detect desktop-target requests. They NEVER trigger
+# real desktop control in this task — they route to the
+# ``nodes.status`` / ``computer.status`` stubs so the user gets a
+# clear "not implemented" message instead of Codex hallucinating
+# what is on the operator's screen.
+#
+# Conservative matching: a phrase must look like the user is
+# talking to *their* machine, not to the VPS. A vague "open Xcode"
+# without "my Mac" / "我的 Mac" / "MacBook" is left to Codex.
+_NODES_STATUS_PATTERNS = (
+    re.compile(r"(我的节点|机器状态|主机状态|node\s*status|nodes\s*status|执行节点|节点状态)", re.IGNORECASE),
+)
+
+# Computer Use / desktop action intent. The first match wins and
+# routes to the ``computer.status`` stub. We intentionally do NOT
+# match vague "open x" or "click y" — those are coding requests
+# unless the user clearly anchors the target to their machine.
+#
+# Word-boundary note: ``\b`` does not match between two CJK
+# characters in Python's ``re`` (only around ``\w``). For the
+# CJK verb / noun tokens we use look-around patterns instead
+# (``(?<![a-z])`` / ``(?![a-z])``) so "操作我的电脑" still
+# matches as a verb-then-machine sequence. The patterns cover
+# the three orderings we expect:
+#   1. verb + machine: "打开 我的 Mac", "take a screenshot on my desktop"
+#   2. machine + verb: "我的 Mac 打开 Xcode", "我的 MacBook 上的 Xcode"
+#   3. machine + 在/上 + verb: "在 Mac 上打开", "我 MacBook 上的截图"
+_ASCII_VERBS = r"(?:screenshot|click|launch|control)"
+_CJK_VERBS = r"(?:\u6253\u5f00|\u8fd0\u884c|\u542f\u52a8|\u70b9|\u64cd\u4f5c|\u622a\u56fe|\u770b\u4e00\u4e0b|\u770b\u770b|\u622a\u5c4f)"
+_VERB_GROUP = rf"(?:{_CJK_VERBS}|{_ASCII_VERBS})"
+_CJK_NOUN = r"(?:\u6211\u7684?\s*mac|\u6211\u7684?\s*macbook|\u672c\u673a|\u7535\u8111)"
+_ASCII_NOUN = r"(?:macbook|mac|desktop|laptop)"
+_NOUN_GROUP = rf"(?:{_CJK_NOUN}|{_ASCII_NOUN})"
+
+_COMPUTER_USE_PATTERNS = (
+    # verb + machine  (English verb can use \b; CJK verb cannot)
+    re.compile(
+        rf"(?:{_ASCII_VERBS})(?!\w).*?(?:{_CJK_NOUN})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"{_CJK_VERBS}.*?{_CJK_NOUN}",
+        re.IGNORECASE,
+    ),
+    # CJK verb + ASCII noun (e.g. "操作 my desktop")
+    re.compile(
+        rf"{_CJK_VERBS}.*?{_ASCII_NOUN}",
+        re.IGNORECASE,
+    ),
+    # machine + verb  (CJK side; \b not used between CJK)
+    re.compile(
+        rf"(?:{_CJK_NOUN}).*?{_CJK_VERBS}",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"(?:{_ASCII_NOUN})(?!\w).*?(?:{_ASCII_VERBS})(?!\w)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"(?:{_ASCII_NOUN})(?!\w).*?{_CJK_VERBS}",
+        re.IGNORECASE,
+    ),
+    # 在 (我的) mac/macbook/desktop (上)?  +  verb
+    re.compile(
+        rf"\u5728\s*(?:\u6211\u7684?\s*)?(?:{_ASCII_NOUN})(?:\s*\u4e0a)?(?!\w).*?"
+        rf"(?:{_ASCII_VERBS})(?!\w)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\u5728\s*(?:\u6211\u7684?\s*)?(?:{_ASCII_NOUN})(?:\s*\u4e0a)?(?!\w).*?"
+        rf"{_CJK_VERBS}",
+        re.IGNORECASE,
+    ),
+    # (我的) mac/macbook + 上的 + verb  (e.g. "我的 MacBook 上的截图")
+    re.compile(
+        rf"(?:\u6211\u7684?\s*mac|\u6211\u7684?\s*macbook|macbook)\s*\u4e0a\u768e?"
+        rf".*?{_CJK_VERBS}",
+        re.IGNORECASE,
+    ),
+    # English: "computer use my mac"
+    re.compile(
+        r"computer\s*use\s*(my\s*)?(mac|macbook|desktop|laptop)?",
+        re.IGNORECASE,
+    ),
+    # English: "take a screenshot on my desktop"
+    re.compile(
+        r"take\s+a\s+screenshot\s*(on|of)\s*(my\s*)?(mac|macbook|desktop|laptop|screen)",
+        re.IGNORECASE,
+    ),
+)
 _WEB_SEARCH_PATTERNS = (
     re.compile(r"(搜索|搜|search|查|找).*(网上|web|网页|internet|谷歌|google)", re.IGNORECASE),
     re.compile(r"(网上|web|internet).*(搜索|搜|search|查|找)", re.IGNORECASE),
@@ -318,6 +411,20 @@ def route_intent(text: str) -> RouteResult:
     body = (text or "").strip()
     if not body:
         return RouteResult(kind="llm")
+
+    # P5.0: execution-node patterns run BEFORE the generic
+    # ``detect_ops_intent`` (``机器状态``/``主机状态`` would
+    # otherwise match the load snapshot pattern). The desktop
+    # layer is stub-only, so a phrase that names a target
+    # machine (Mac / MacBook / 本机 / desktop / computer) is
+    # almost always a nodes.status or computer.status query,
+    # not a load query.
+    for pat in _NODES_STATUS_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("nodes.status",))
+    for pat in _COMPUTER_USE_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("computer.status",))
 
     # Explicit ops/tool requests win over hybrid diagnosis patterns.
     # "帮我运行 htop 看看我的 vps" is a snapshot request, not analysis.

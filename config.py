@@ -30,6 +30,10 @@ SENSITIVE_FIELDS = frozenset({
     "google_client_secret_path",  # path may hint at project layout
     "github_token",
     "web_search_api_key",
+    # Future shared secret for a local desktop agent. Never echoed
+    # in repr/chat/logs even though it is optional. The value is
+    # only consulted when ``conveyor_desktop_node_enabled`` is true.
+    "conveyor_desktop_agent_token",
 })
 
 
@@ -119,6 +123,18 @@ class Settings:
     file_search_extensions: str = ".md,.txt,.py,.ts,.tsx,.js,.json,.yaml,.yml,.toml"
     kb_root: str | None = None  # default: codex_memory_root/kb
     kb_index_path: str | None = None  # default: codex_memory_root/kb_index.sqlite
+    # Execution nodes: phase-0 foundation. The VPS node is always
+    # online (the control plane runs on it). The desktop node is
+    # opt-in: setting ``conveyor_desktop_node_enabled=True`` makes
+    # the registry list it, but it is still ``offline`` until a
+    # future local desktop agent is wired up. Real screenshot /
+    # mouse / keyboard / Computer Use is intentionally not
+    # implemented in this task — see ``docs/desktop_security.md``.
+    conveyor_desktop_node_enabled: bool = False
+    conveyor_desktop_node_id: str | None = None
+    conveyor_desktop_node_name: str | None = None
+    conveyor_desktop_agent_token: str | None = None  # SENSITIVE
+    conveyor_computer_use_default_mode: str = "observe_only"
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -325,6 +341,16 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "file_search_extensions": os.getenv("FILE_SEARCH_EXTENSIONS", ".md,.txt,.py,.ts,.tsx,.js,.json,.yaml,.yml,.toml"),
         "kb_root": os.getenv("KB_ROOT") or None,
         "kb_index_path": os.getenv("KB_INDEX_PATH") or None,
+        # Execution nodes (phase 0). All optional; default is
+        # VPS-only with Computer Use stubbed. None of these affect
+        # existing Telegram/Feishu/Codex behaviour.
+        "conveyor_desktop_node_enabled": os.getenv("CONVEYOR_DESKTOP_NODE_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on"),
+        "conveyor_desktop_node_id": os.getenv("CONVEYOR_DESKTOP_NODE_ID") or None,
+        "conveyor_desktop_node_name": os.getenv("CONVEYOR_DESKTOP_NODE_NAME") or None,
+        "conveyor_desktop_agent_token": os.getenv("CONVEYOR_DESKTOP_AGENT_TOKEN") or None,
+        "conveyor_computer_use_default_mode": os.getenv(
+            "CONVEYOR_COMPUTER_USE_DEFAULT_MODE", "observe_only",
+        ).strip().lower() or "observe_only",
     }
 
 

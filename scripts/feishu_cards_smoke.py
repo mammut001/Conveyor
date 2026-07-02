@@ -30,12 +30,14 @@ from scripts.harness_common import CheckResult, print_results  # noqa: E402
 from channel.feishu_cards import (  # noqa: E402
     ALLOWED_ACTIONS,
     action_to_command,
+    computer_status_card,
     confirm_action_card,
     diff_preview_card,
     flatten_card_to_text,
     job_failed_card,
     job_finished_card,
     job_started_card,
+    node_status_card,
     parse_action,
     status_card,
 )
@@ -194,6 +196,29 @@ def _test_status_card() -> list[CheckResult]:
     )]
 
 
+# ---- P5.0 execution-node card builders -----------------------------------
+
+
+def _test_node_status_card() -> list[CheckResult]:
+    card = node_status_card(
+        "vps-main · Conveyor VPS · vps · online\n  capabilities: codex.run, ...",
+    )
+    results = _check_card_shape(card, "node_status_card")
+    return results + _check_button_values(
+        card, {"nodes_status", "computer_status"}, "node_status_card",
+    )
+
+
+def _test_computer_status_card() -> list[CheckResult]:
+    card = computer_status_card(
+        "🖥  Computer Use: 未启用 (stub)",
+    )
+    results = _check_card_shape(card, "computer_status_card")
+    return results + _check_button_values(
+        card, {"computer_status", "nodes_status"}, "computer_status_card",
+    )
+
+
 # ---- Action parsing tests --------------------------------------------------
 
 
@@ -237,6 +262,10 @@ def _test_parse_action_rejects_unknown() -> list[CheckResult]:
         {"action": "status", "token": "abc"},  # slash actions reject token
         {"action": "confirm"},                  # confirm requires token
         {"action": "diff", "extra": "x"},       # unknown field rejected
+        # P5.0: nodes_status and computer_status are slash-style;
+        # a token on them must be rejected by symmetry.
+        {"action": "nodes_status", "token": "abc"},
+        {"action": "computer_status", "token": "abc"},
     ]
     results: list[CheckResult] = []
     for raw in cases:
@@ -245,6 +274,22 @@ def _test_parse_action_rejects_unknown() -> list[CheckResult]:
             f"parse_action rejects {raw!r}",
             out is None,
             f"got={out!r}",
+        ))
+    return results
+
+
+def _test_parse_action_accepts_node_actions() -> list[CheckResult]:
+    cases = [
+        ({"action": "nodes_status"}, {"action": "nodes_status"}),
+        ({"action": "computer_status"}, {"action": "computer_status"}),
+    ]
+    results: list[CheckResult] = []
+    for raw, expected in cases:
+        out = parse_action(raw)
+        results.append(CheckResult(
+            f"parse_action accepts {raw!r}",
+            out == expected,
+            f"got={out!r} expected={expected!r}",
         ))
     return results
 
@@ -266,6 +311,9 @@ def _test_action_to_command_mapping() -> list[CheckResult]:
         ("cancel", "cancel"),
         ("confirm", None),
         ("cancel_confirm", None),
+        # P5.0: execution-node actions
+        ("nodes_status", "nodes"),
+        ("computer_status", "computer_status"),
         ("unknown", None),
     ]
     return [
@@ -331,6 +379,9 @@ def _test_dispatch_known_actions() -> list[CheckResult]:
         ({"action": "cancel", "job_id": "abc"}, "cancel"),
         ({"action": "confirm", "token": "tk1"}, "confirm"),
         ({"action": "cancel_confirm", "token": "tk1"}, "cancel_confirm"),
+        # P5.0: execution-node actions
+        ({"action": "nodes_status"}, "nodes_status"),
+        ({"action": "computer_status"}, "computer_status"),
     ]
     results: list[CheckResult] = []
     for value, label in cases:
@@ -478,7 +529,10 @@ def main() -> int:
     results += _test_diff_preview_card()
     results += _test_confirm_action_card()
     results += _test_status_card()
+    results += _test_node_status_card()
+    results += _test_computer_status_card()
     results += _test_parse_action_accepts_known_shapes()
+    results += _test_parse_action_accepts_node_actions()
     results += _test_parse_action_rejects_unknown()
     results.append(_test_action_allowlist_is_frozen())
     results += _test_action_to_command_mapping()

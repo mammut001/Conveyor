@@ -43,6 +43,12 @@ ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "cancel",
     "confirm",
     "cancel_confirm",
+    # P5.0: Execution-node layer actions. Both are read-only
+    # refreshes — no token, no command argument, no chat-changing
+    # behavior. They are mapped to the existing /nodes and
+    # /computer_status commands in :func:`action_to_command`.
+    "nodes_status",
+    "computer_status",
 })
 
 #: Maximum number of action buttons rendered in a single card row.
@@ -127,7 +133,13 @@ def parse_action(value: Any) -> dict[str, Any] | None:
     # token on slash actions since it's meaningless.
     if action in ("confirm", "cancel_confirm") and "token" not in payload:
         return None
-    if action in ("status", "diff", "apply", "discard", "cancel") and "token" in payload:
+    slash_actions = (
+        "status", "diff", "apply", "discard", "cancel",
+        # P5.0: execution-node refreshes are also slash-style
+        # (no token, no job_id, no extra state).
+        "nodes_status", "computer_status",
+    )
+    if action in slash_actions and "token" in payload:
         return None
     return payload
 
@@ -394,6 +406,59 @@ def status_card(
     }
 
 
+# ---- P5.0: Execution-node card builders ---------------------------------
+
+
+def node_status_card(summary_text: str) -> dict[str, Any]:
+    """Card sent in response to ``/nodes`` on Feishu.
+
+    ``summary_text`` is the same body the text fallback would
+    deliver (the ``nodes.status`` tool's output). The card keeps
+    it as a single markdown block and adds a refresh button so
+    the operator can re-poll without typing.
+
+    Buttons are limited to read-only refreshes. Anything that
+    would change state on a node (start a Codex job, restart a
+    service, attempt a desktop action) intentionally has no
+    shortcut on this card.
+    """
+    buttons: list[dict[str, Any]] = [
+        _button("Refresh", {"action": "nodes_status"}),
+        _button("Computer Use", {"action": "computer_status"}),
+    ]
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": _header("Execution nodes", "blue"),
+        "elements": [
+            _markdown(_truncate(summary_text, 1500)),
+            _actions_row(buttons),
+        ],
+    }
+
+
+def computer_status_card(summary_text: str) -> dict[str, Any]:
+    """Card sent in response to ``/computer_status`` on Feishu.
+
+    Same shape as :func:`node_status_card` but with a Computer
+    Use header tone and a refresh button. The body is the same
+    "stub / not implemented" content — this card exists so the
+    operator gets the same UX whether they type the command or
+    click the button on the nodes card.
+    """
+    buttons: list[dict[str, Any]] = [
+        _button("Refresh", {"action": "computer_status"}),
+        _button("Back to nodes", {"action": "nodes_status"}),
+    ]
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": _header("Computer Use", "wathet"),
+        "elements": [
+            _markdown(_truncate(summary_text, 1500)),
+            _actions_row(buttons),
+        ],
+    }
+
+
 # ---- Public introspection (test helpers) ------------------------------------
 
 
@@ -438,7 +503,9 @@ def action_to_command(action: str) -> str | None:
 
     Confirmation actions (confirm / cancel_confirm) do not map to a
     slash command — they reuse the existing token-based confirmation
-    system, not the dispatch command table.
+    system, not the dispatch command table. Execution-node actions
+    (P5.0) map to the same /nodes and /computer_status commands the
+    operator could type.
     """
     mapping = {
         "status": "status",
@@ -446,6 +513,9 @@ def action_to_command(action: str) -> str | None:
         "apply": "apply",
         "discard": "discard",
         "cancel": "cancel",
+        # P5.0: Execution nodes
+        "nodes_status": "nodes",
+        "computer_status": "computer_status",
     }
     return mapping.get(action)
 

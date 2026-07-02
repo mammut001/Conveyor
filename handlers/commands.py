@@ -436,6 +436,9 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "kb.status": ("/kb_status",),
     "kb.search": ("/kb_search",),
     "kb.collect_facts": ("/kb_collect_facts",),
+    # Execution nodes (P5.0)
+    "nodes.status": ("/nodes", "/node_status"),
+    "computer.status": ("/computer_status",),
 }
 
 _TOOL_EXAMPLES: dict[str, str] = {
@@ -519,6 +522,9 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "kb.status": "知识库状态",
     "kb.search": "知识库搜索",
     "kb.collect_facts": "收集文档证据",
+    # Execution nodes (P5.0)
+    "nodes.status": "节点状态",
+    "computer.status": "Computer Use 状态",
 }
 
 
@@ -1164,6 +1170,37 @@ async def _tool_disk(msg, port, _runner, settings, arg):
     await port.reply(msg, await run_tool(settings, "disk", arg))
 
 
+# ---- P5.0: Execution nodes (VPS + desktop stub) -------------------------
+
+async def _nodes(msg, port, _runner, settings, _arg):
+    """List known execution nodes (VPS + optional desktop stub)."""
+    from handlers.tools.runner import run_tool
+    text = await run_tool(settings, "nodes.status", "")
+    if msg.channel == "feishu" and hasattr(port, "send_card"):
+        try:
+            from channel.feishu_cards import node_status_card
+            await port.send_card(msg, node_status_card(text))
+        except Exception:
+            pass
+    await port.reply(msg, text)
+
+
+async def _node_status(msg, port, _runner, settings, _arg):
+    """Alias of /nodes. Same text + same Feishu card."""
+    await _nodes(msg, port, _runner, settings, _arg)
+
+
+async def _computer_status(msg, port, _runner, settings, _arg):
+    """Stub status for Computer Use (desktop agent) requests.
+
+    Real desktop control is not implemented in this task — see
+    ``docs/desktop_security.md``. The slash command exists so the
+    operator can probe the layer without triggering a Codex job.
+    """
+    from handlers.tools.runner import run_tool
+    await port.reply(msg, await run_tool(settings, "computer.status", _arg or ""))
+
+
 async def _tool_logs(msg, port, _runner, settings, arg):
     from handlers.tools.runner import run_tool
     await port.reply(msg, await run_tool(settings, "logs", arg))
@@ -1391,6 +1428,12 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/context — 查看最近会话上下文\n"
     text += "/forget — 清除当前会话记录\n"
     text += "\n"
+    text += "执行节点 (P5.0 phase 0 foundation):\n"
+    text += "/nodes /node_status — VPS + 可选 desktop stub 状态\n"
+    text += "/computer_status — Computer Use stub 状态\n"
+    text += "自然语言: '我的节点' / '机器状态' / 'MacBook 在线吗' / 'computer use status'\n"
+    text += "真实截屏 / 鼠标 / 键盘 / 浏览器控制仍是未来工作。\n"
+    text += "\n"
     text += "任务队列 (P3.8):\n"
     text += "/queue — 查看队列状态\n"
     text += "/queue_cancel <id> — 取消队列任务\n"
@@ -1496,6 +1539,10 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("logs", "服务 journal 日志", _tool_logs, takes_optional_arg=True),
         CommandSpec("service_status", "Conveyor 服务状态", _tool_service_status),
         CommandSpec("git_status", "Workspace git status", _tool_git_status),
+        # P5.0: Execution nodes
+        CommandSpec("nodes", "Execution nodes (VPS + desktop stub)", _nodes),
+        CommandSpec("node_status", "Execution nodes (alias of /nodes)", _node_status),
+        CommandSpec("computer_status", "Computer Use (desktop agent) stub status", _computer_status),
         CommandSpec("diagnose", "Hybrid 主机诊断", _diagnose, takes_optional_arg=True),
         CommandSpec("restart", "重启 Conveyor 服务 (需确认)", _restart, takes_arg=True),
         CommandSpec("note", "添加本地笔记 (立即执行, 审计)", _note, takes_arg=True),

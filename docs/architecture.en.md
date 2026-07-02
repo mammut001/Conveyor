@@ -1,8 +1,8 @@
 # Conveyor — Architecture & Design (EN)
 
 > **Status**: Active
-> **Date**: 2026-06-11
-> **Applies to**: Channel-decoupling P0+P1, agent tool layer, Telegram live smoke
+> **Date**: 2026-07-01
+> **Applies to**: Channel-decoupling P0+P1, agent tool layer, Telegram live smoke, Feishu interactive cards, **P5.0 phase-0 execution nodes**
 
 ---
 
@@ -1142,6 +1142,9 @@ statically by `import_boundary_smoke.py`.
 | P2.4 Single-process dual-channel | backlog | — |
 | P2.4 Session summary | done | (this task) |
 | P2.5 Audit log rotation | done | (this task) |
+| Feishu interactive cards (job / diff / confirm + `card.action.trigger`) | done | `ffc47b7` |
+| **P5.0 Execution nodes (VPS + desktop stub)** | **done (phase 0)** | **(this task)** |
+| **P5.1 Computer Use (real local agent + screenshot/click loop)** | **backlog** | **—** |
 | Auto VPS deploy (GitHub Actions) | done | `fa93606` |
 
 ---
@@ -1222,12 +1225,87 @@ picked up opportunistically.
   lists existing rotated files for future `/audit_tools` extensions.
 - Smoke: `audit_rotation_smoke.py` (5 tests).
 
+### P5.0 Execution nodes — phase 0 foundation (done)
+
+- `nodes/types.py` — `NodeType` (`vps` / `desktop`), `NodeStatus`
+  (`online` / `offline` / `unknown`), `TrustLevel`
+  (`server` / `local_desktop`), `NodeInfo` dataclass, well-known
+  capability constants, `format_node_line` / `format_node_block`.
+- `nodes/registry.py` — process-local, read-only. The VPS node is
+  always present; the desktop node is opt-in via
+  `CONVEYOR_DESKTOP_NODE_ENABLED` and is **offline** regardless.
+  No network listener, no heartbeat, no agent binary.
+- `Settings` extended with `conveyor_desktop_node_enabled`,
+  `conveyor_desktop_node_id`, `conveyor_desktop_node_name`,
+  `conveyor_desktop_agent_token` (added to `SENSITIVE_FIELDS`),
+  `conveyor_computer_use_default_mode` (whitelisted to
+  `observe_only` / `off`, falls back to `observe_only` with a
+  warning on typo).
+- Tool layer: two deterministic READ tools
+  - `nodes.status` — list known execution nodes + capabilities.
+  - `computer.status` — stub. Returns an explicit
+    "not implemented" message so natural-language phrases
+    ("帮我在 Mac 上打开 Xcode", "take a screenshot on my
+    desktop", …) do not fall through to Codex and produce a
+    fabricated answer.
+- Slash commands: `/nodes`, `/node_status` (alias),
+  `/computer_status`. Both `/nodes` and `/computer_status`
+  work in plain text everywhere and render as a Feishu card
+  on Feishu with read-only Refresh / Computer Use buttons.
+- Intent layer: `handlers/intent.py` gains
+  `_NODES_STATUS_PATTERNS` (我的节点 / 机器状态 / 主机状态 /
+  nodes status / node status) and `_COMPUTER_USE_PATTERNS`
+  (Mac / MacBook / 本机 / desktop anchored to a desktop action
+  verb, plus explicit English "computer use my mac" / "take a
+  screenshot on my desktop"). Both routes run before the
+  calendar / GitHub / KB patterns so phrases like "我的 Mac
+  在线吗" reach the node layer first.
+- Card surface: `channel/feishu_cards.py` gains
+  `node_status_card` / `computer_status_card`; the
+  `ALLOWED_ACTIONS` allowlist gains `nodes_status` and
+  `computer_status`; `action_to_command` maps them to `/nodes`
+  and `/computer_status`. `parse_action` rejects a `token` on
+  these slash-style actions for symmetry with the existing
+  rule. **No** new destructive action; **no** token-binding
+  path; the existing Feishu card handler routes the click
+  through `is_allowed` unchanged.
+- Docs: `docs/desktop_agent_protocol.md` (planned message
+  surface for the future local agent) and
+  `docs/desktop_security.md` (hard rules, audit log contract,
+  blast-radius limits).
+- Smoke: `scripts/nodes_smoke.py` (registry, intent, executor,
+  card builder, env-var isolation); added to `make smoke`.
+
+### P5.1 Computer Use (real local agent) (backlog)
+
+- Local desktop agent (Python or Swift, runs as the operator,
+  not root). It registers with the VPS over a long-lived
+  WebSocket / HTTPS connection authenticated by
+  `CONVEYOR_DESKTOP_AGENT_TOKEN`.
+- Implements the message surface in
+  `docs/desktop_agent_protocol.md` (screenshot, observe,
+  step-propose / step-confirm loop).
+- Flips `nodes.registry.is_stub_environment()` to `False` and
+  replaces the stub capability surface
+  (`screen.screenshot`, `desktop.observe`, `computer_use.stub`)
+  with the full desktop surface
+  (`browser.control`, `mouse.click`, `keyboard.type`,
+  `computer_use.step`).
+- Per-step confirmation uses the existing
+  `handlers.tools.confirm` token binding **plus** a new
+  `desktop.step.confirm` round trip; both are required.
+- Audit log: `audit/desktop.log` with the schema in
+  `docs/desktop_security.md` § 2.
+- Out of scope for P5.1: clipboard, camera/microphone,
+  payment flows, password manager windows.
+
 ---
 
 ## 10. Change log
 
 | Version | Date | Notes |
 |---|---|---|
+| **3.0** | **2026-07-01** | **P5.0 execution nodes (VPS + desktop stub). Adds `nodes/` package, `nodes.status` + `computer.status` deterministic tools, `/nodes` / `/node_status` / `/computer_status` commands, Feishu `node_status_card` / `computer_status_card`, natural-language routing for desktop / Computer Use phrases that previously fell through to Codex, and the `docs/desktop_agent_protocol.md` / `docs/desktop_security.md` design stubs. No real desktop control is implemented in this task; the desktop node is offline regardless of configuration. See section § P5.0 above.** |
 | 2.1 | 2026-06-11 | Added `CONVEYOR_PROGRESS_MODE` (verbose/compact/quiet); compact mode fixes the Feishu progress chain; section 6.7 + harness + backlog updated. |
 | 2.2 | 2026-06-11 | Added auto VPS deploy (GitHub Actions + deploy_vps.sh). |
 | 2.3 | 2026-06-11 | Deploy hardening (flock/smoke/rollback/.deploy-status.json); added `/deploy_status` command. |

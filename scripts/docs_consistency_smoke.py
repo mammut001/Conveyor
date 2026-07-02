@@ -36,6 +36,11 @@ ARCH_ANCHORS = (
     "danger-full-access",
     "telegram_live_smoke.py",
     "telegram_live_helpers_smoke.py",
+    # P5.0: execution nodes (VPS + desktop stub). The P5.0
+    # marker is in both the English and the Chinese arch doc
+    # and forces a future doc rewrite to acknowledge the
+    # VPS / desktop split instead of quietly dropping it.
+    "P5.0",
 )
 
 # Anchors the READMEs must each reference.

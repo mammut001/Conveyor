@@ -100,9 +100,9 @@ Conveyor:
   `/brief_enable [HH:MM]` · `/brief_disable` · `/brief_probe`
 
 > **飞书用户：** Codex 任务开始 / 完成 / 失败、`/diff` 预览、危险操作
-> 确认都会渲染成交互式消息卡片，带可点击的按钮（Status / Diff /
-> Apply / Discard / Cancel / Confirm）。按钮只是对同一批命令的便捷
-> 封装——详见[飞书接入](#飞书接入)。
+> 确认、节点状态都会渲染成交互式消息卡片，带可点击的按钮
+>（Status / Diff / Apply / Discard / Cancel / Confirm / Refresh）。
+> 按钮只是对同一批命令的便捷封装——详见[飞书接入](#飞书接入)。
 
 ### 诊断与运维
 
@@ -132,6 +132,37 @@ Conveyor:
   `/project_release_checklist` · `/plan_today` · `/plan_dev` · `/inbox_triage`
 - **自然语言路由** —— 上面大多数都能用人话说：`看看负载`、
   `为什么服务器慢`、`搜一下 GitHub issue`…… 完整列表跑一下 `/nl_help`。
+
+### 执行节点（VPS + desktop stub）
+
+Conveyor 正在变成 VPS + 以后本地桌面的私有控制面。控制面永远跑
+在 VPS 上。desktop 节点在这一阶段还是 **stub**：只在 `.env` 里
+显式开启时才会出现在 `/nodes` 里，而且永远 `offline`。真实的
+截屏、鼠标、键盘、浏览器控制、Computer Use **都还没实现**。
+
+- `/nodes` · `/node_status` —— 列出已知执行节点 + 各自能力。
+- `/computer_status` —— Computer Use 状态（这一阶段永远显示
+  「已配置但未运行」/「未启用」）。
+- 自然语言：`我的节点`、`机器状态`、`主机状态`、
+  `MacBook 在线吗`、`desktop node`、`nodes status`、
+  `computer use status`。带桌面目标的人话（`帮我在 Mac 上打开
+  Xcode` / `take a screenshot on my desktop`）会走确定性 stub
+  回复，不会穿透到 Codex 让它编你屏幕上的内容（Codex 在 VPS
+  上根本看不到你的 MacBook）。
+
+`.env` 里的桌面节点配置（全部可选）：
+
+```dotenv
+CONVEYOR_DESKTOP_NODE_ENABLED=false   # 显式开启才生效
+CONVEYOR_DESKTOP_NODE_ID=macbook-payton
+CONVEYOR_DESKTOP_NODE_NAME=Payton MacBook
+CONVEYOR_DESKTOP_AGENT_TOKEN=replace_me_with_long_random_string
+CONVEYOR_COMPUTER_USE_DEFAULT_MODE=observe_only   # observe_only | off
+```
+
+> **Computer Use 基础设施已加好；真本地 agent 和截屏/动作闭环
+> 仍是未来工作。** 协议草案见 `docs/desktop_agent_protocol.md`，
+> 未来 agent 必须满足的安全契约见 `docs/desktop_security.md`。
 
 上面列出的每一条都是仓库里已经实现的功能。没列在表里的 = 暂时还没有。
 
@@ -389,6 +420,7 @@ Telegram 和飞书共用同一份命令表。Channel-specific 行为见
 | 自检 | `/smoke`、`/editcheck` |
 | 维护 | `/maintain [keep]`、`/clean [keep]`、`/restart telegram\|feishu\|maintain` |
 | 会话 | `/context`、`/forget` |
+| **执行节点（P5.0 phase 0）** | `/nodes`、`/node_status`、`/computer_status` |
 | 帮助 | `/help` |
 
 危险等级（READ / WRITE_SAFE / WRITE / DESTRUCTIVE）和工具实现细节见
@@ -434,6 +466,15 @@ CODEX_TASK_ROOT=/srv/conveyor
 # CODEX_RETRY_429_DELAYS_SECONDS=300,900,1800
 # CODEX_MODEL=
 # CODEX_TIMEOUT_SECONDS=3600
+
+# --- 可选：执行节点（P5.0 phase 0）---
+# 全部可选。desktop 节点是 stub，无论怎么配都是 offline。
+# 协议草案见 docs/desktop_agent_protocol.md，安全契约见 docs/desktop_security.md。
+# CONVEYOR_DESKTOP_NODE_ENABLED=false
+# CONVEYOR_DESKTOP_NODE_ID=macbook-payton
+# CONVEYOR_DESKTOP_NODE_NAME=Payton MacBook
+# CONVEYOR_DESKTOP_AGENT_TOKEN=replace_me_with_long_random_string
+# CONVEYOR_COMPUTER_USE_DEFAULT_MODE=observe_only
 ```
 
 `CODEX_WORKSPACE_ROOT` 必须是 git 仓库的根目录。bot 会为每天创建一个
@@ -464,6 +505,7 @@ conveyor/
   channel/
     types.py              # InboundMessage, OutboundPort
     auth.py               # 各 channel is_allowed
+    feishu_cards.py       # 飞书交互式消息卡片
   handlers/
     dispatch.py           # 单一入口：auth → command/memo/codex
     commands.py           # COMMAND_TABLE
@@ -472,6 +514,7 @@ conveyor/
     intent.py             # route_intent (deterministic | hybrid | llm)
     nl_router.py          # 自然语言目录与路由
     tools/                # agent 工具层：registry、executors、audit
+  nodes/                  # 执行节点（VPS + desktop stub, P5.0）
   personal_tools/         # 笔记、提醒、gmail、google、github、…
   scripts/                # CLI 工具、harness、smoke
   Makefile
@@ -480,6 +523,8 @@ conveyor/
   docs/
     architecture.md       # 架构与设计（中文）
     architecture.en.md    # Architecture & design (English)
+    desktop_agent_protocol.md  # 未来本地 desktop agent 协议（P5.x）
+    desktop_security.md   # desktop / Computer Use 安全契约
 ```
 
 `docs/` 是仓库里**唯一**自带的文档目录。除了 `README.md` 和

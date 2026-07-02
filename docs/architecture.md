@@ -976,6 +976,9 @@ P2.1 已完成：两个 channel adapter 各自落在 `channel/telegram.py` 和
 | P2.3 onboarding 移入 `handlers/onboarding.py` | ✅ | （本次） |
 | P2.4 Session 摘要（多轮接着聊） | ✅ | （本次） |
 | P2.5 审计日志轮转 | ✅ | （本次） |
+| 飞书交互卡片（job / diff / confirm + `card.action.trigger`） | ✅ | `ffc47b7` |
+| **P5.0 执行节点（VPS + desktop stub）** | **✅（phase 0）** | **（本次）** |
+| **P5.1 Computer Use（真本地 agent + 截屏/点击闭环）** | **backlog** | **—** |
 | 自动 VPS 部署（GitHub Actions） | ✅ | `fa93606` |
 
 ---
@@ -1038,12 +1041,78 @@ P2.1 已完成：两个 channel adapter 各自落在 `channel/telegram.py` 和
   已有轮转文件供 `/audit_tools` 扩展使用。
 - Smoke：`audit_rotation_smoke.py`（5 个测试）。
 
+### P5.0 执行节点 — phase 0 基础（已完成）
+
+- `nodes/types.py` — `NodeType`（`vps` / `desktop`）、
+  `NodeStatus`（`online` / `offline` / `unknown`）、
+  `TrustLevel`（`server` / `local_desktop`）、`NodeInfo` 数据类、
+  已知的 capability 常量、`format_node_line` /
+  `format_node_block` 文本渲染。
+- `nodes/registry.py` — 进程内、只读。VPS 节点永远存在；
+  desktop 节点通过 `CONVEYOR_DESKTOP_NODE_ENABLED` 显式开启，
+  无论如何都标记为 `offline`。**没有**网络监听、**没有**
+  heartbeat、**没有** agent 二进制。
+- `Settings` 新增 `conveyor_desktop_node_enabled`、
+  `conveyor_desktop_node_id`、`conveyor_desktop_node_name`、
+  `conveyor_desktop_agent_token`（已加入 `SENSITIVE_FIELDS`）、
+  `conveyor_computer_use_default_mode`（白名单仅 `observe_only`
+  / `off`，拼错回落到 `observe_only` 并 warn）。
+- 工具层：两个确定性 READ 工具
+  - `nodes.status` — 列出已知执行节点 + 能力。
+  - `computer.status` — stub。明确返回「未实现」文案，避免
+    「帮我在 Mac 上打开 Xcode」/「take a screenshot on my
+    desktop」之类的自然语言穿透到 Codex 编造答案。
+- 斜杠命令：`/nodes`、`/node_status`（别名）、
+  `/computer_status`。Telegram / 飞书两端都走纯文本；
+  飞书额外渲染只读卡片，带 Refresh / Computer Use 按钮。
+- Intent 层：`handlers/intent.py` 新增
+  `_NODES_STATUS_PATTERNS`（我的节点 / 机器状态 / 主机状态 /
+  nodes status / node status）和 `_COMPUTER_USE_PATTERNS`
+  （Mac / MacBook / 本机 / desktop 配合桌面动作动词；外加
+  显式英文 "computer use my mac" / "take a screenshot on my
+  desktop"）。这两层在 calendar / GitHub / KB 之前匹配，
+  保证「我的 Mac 在线吗」优先落到节点层。
+- 卡片：`channel/feishu_cards.py` 新增 `node_status_card` /
+  `computer_status_card`；`ALLOWED_ACTIONS` 加入
+  `nodes_status`、`computer_status`；`action_to_command` 把
+  它们映射到 `/nodes`、`/computer_status`。`parse_action`
+  在这两类 slash-style action 上也拒绝带 `token`，与现有
+  规则保持一致。**没有**新增破坏性 action；**没有**改
+  token 绑定路径；现有飞书卡片 handler 走 `is_allowed`
+  不变。
+- 文档：`docs/desktop_agent_protocol.md`（未来本地 agent
+  协议草案）和 `docs/desktop_security.md`（硬性规则 +
+  审计日志契约 + 影响半径上限）。
+- Smoke：`scripts/nodes_smoke.py`（registry / intent /
+  executor / 卡片构造 / 环境变量隔离），加入 `make smoke`。
+
+### P5.1 Computer Use（真本地 agent）（backlog）
+
+- 本地 desktop agent（Python 或 Swift，以普通用户身份运行，
+  不用 root）。通过长连接 WebSocket / HTTPS 注册到 VPS，
+  用 `CONVEYOR_DESKTOP_AGENT_TOKEN` 做认证。
+- 实现 `docs/desktop_agent_protocol.md` 里的消息面
+  （screenshot / observe / step-propose / step-confirm 闭环）。
+- 把 `nodes.registry.is_stub_environment()` 翻成 `False`，
+  并把 stub capability（`screen.screenshot`、
+  `desktop.observe`、`computer_use.stub`）替换成完整桌面
+  surface（`browser.control`、`mouse.click`、
+  `keyboard.type`、`computer_use.step`）。
+- 每一步必须经过现有 `handlers.tools.confirm` token 绑定
+  **加** 一轮新的 `desktop.step.confirm` 双向校验，两个都
+  缺一不可。
+- 审计日志：`audit/desktop.log`，schema 见
+  `docs/desktop_security.md` § 2。
+- 暂不纳入 P5.1：剪贴板、相机/麦克风、支付流程、密码
+  管理器窗口。
+
 ---
 
 ## 9. 变更记录
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| **3.0** | **2026-07-01** | **P5.0 执行节点（VPS + desktop stub）。新增 `nodes/` 包、`nodes.status` + `computer.status` 确定性工具、`/nodes` / `/node_status` / `/computer_status` 命令、飞书 `node_status_card` / `computer_status_card`、把过去会穿透到 Codex 的桌面 / Computer Use 自然语言拦截到 stub，以及 `docs/desktop_agent_protocol.md` / `docs/desktop_security.md` 两份设计稿。**本任务没有真实桌面控制能力**，desktop 节点无论怎么配置都是 offline。详见上文 P5.0 节。 |
 | 2.0 | 2026-06-11 | 加 agent 工具层、Telegram live smoke、backlog；中英同步 |
 | 2.1 | 2026-06-11 | 加 `CONVEYOR_PROGRESS_MODE`（verbose/compact/quiet）；compact 修 Feishu progress 链；同步 6.7 节、harness、backlog |
 | 2.2 | 2026-06-11 | 加自动 VPS 部署（GitHub Actions + deploy_vps.sh） |
