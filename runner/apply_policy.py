@@ -105,6 +105,30 @@ class ApplyValidationResult:
         self.blocked_paths = blocked_paths
         self.reason = reason
 
+
+class CollectResult:
+    """Result of collecting changed/untracked paths from a worktree.
+
+    ``ok=False`` means the underlying git command failed (or returned an
+    unexpected payload). For apply safety the caller MUST treat a failed
+    collection as "could not collect paths safely" and refuse the apply
+    rather than silently behaving as if there were no paths. ``error`` is a
+    short, safe, non-leaking reason string for logs/messages; it must not
+    include raw repo paths or secrets.
+    """
+    def __init__(self, *, ok: bool, paths: list[str], error: str = ""):
+        self.ok = ok
+        self.paths = paths
+        self.error = error
+
+    @staticmethod
+    def success(paths: list[str]) -> "CollectResult":
+        return CollectResult(ok=True, paths=list(paths), error="")
+
+    @staticmethod
+    def failure(error: str) -> "CollectResult":
+        return CollectResult(ok=False, paths=[], error=error)
+
 class ApplyPolicy:
     def __init__(self, settings: Any) -> None:
         self.settings = settings
@@ -213,35 +237,59 @@ class ApplyPolicy:
 
         return "not in allowlist"
 
-def collect_tracked_changed_files(worktree_path: Path) -> list[str]:
-    """Run git diff --name-only HEAD to collect all tracked changes."""
+def collect_tracked_changed_files(worktree_path: Path) -> CollectResult:
+    """Run ``git diff --name-only HEAD`` to collect all tracked changes.
+
+    Fail closed: on any subprocess error, non-zero exit, or a non-existing
+    worktree, returns ``CollectResult(ok=False, ...)``. The caller must
+    refuse the apply on a failed collection instead of treating it as "no
+    paths to validate".
+    """
     import subprocess
+    if not worktree_path or not Path(worktree_path).exists():
+        return CollectResult.failure("worktree not available")
     try:
         res = subprocess.run(
             ["git", "diff", "--name-only", "HEAD", "--", ".", ":(exclude)MEMORY.md"],
-            cwd=worktree_path,
+            cwd=str(worktree_path),
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
-        return [line.strip() for line in res.stdout.splitlines() if line.strip()]
+    except (OSError, subprocess.SubprocessError) as exc:
+        # Do not include str(exc) verbatim; it may carry repo paths or
+        # environment details. Return a safe, fixed reason.
+        return CollectResult.failure("git diff failed")
     except Exception:
-        return []
+        return CollectResult.failure("git diff failed")
+    paths = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+    return CollectResult.success(paths)
 
-def collect_untracked_files(worktree_path: Path) -> list[str]:
-    """Run git ls-files to collect untracked files."""
+def collect_untracked_files(worktree_path: Path) -> CollectResult:
+    """Run ``git ls-files`` to collect untracked files.
+
+    Fail closed: on any subprocess error, non-zero exit, or a non-existing
+    worktree, returns ``CollectResult(ok=False, ...)``. The caller must
+    refuse the apply on a failed collection instead of treating it as "no
+    untracked paths to validate".
+    """
     import subprocess
+    if not worktree_path or not Path(worktree_path).exists():
+        return CollectResult.failure("worktree not available")
     try:
         res = subprocess.run(
             ["git", "ls-files", "--others", "--exclude-standard", "-z"],
-            cwd=worktree_path,
+            cwd=str(worktree_path),
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
-        return [p for p in res.stdout.split("\0") if p.strip()]
+    except (OSError, subprocess.SubprocessError):
+        return CollectResult.failure("git ls-files failed")
     except Exception:
-        return []
+        return CollectResult.failure("git ls-files failed")
+    paths = [p for p in res.stdout.split("\0") if p.strip()]
+    return CollectResult.success(paths)
 
 def validate_apply_paths(paths: list[str], *, kind: str, settings: Any, worktree_path: Path | None = None) -> ApplyValidationResult:
     """Validate a batch of paths of the same kind."""

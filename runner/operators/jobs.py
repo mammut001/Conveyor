@@ -112,10 +112,18 @@ async def apply_last_job(self) -> str:
         if root_status.strip():
             return "Main workspace has uncommitted changes. I will not apply over a dirty repo."
 
-        # Collect tracked changed files
-        tracked_files = collect_tracked_changed_files(worktree_path)
-        # Collect untracked files
-        untracked_files = collect_untracked_files(worktree_path)
+        # Collect tracked changed files. Fail closed: a collection error
+        # must never look like "no paths to validate".
+        tracked_result = collect_tracked_changed_files(worktree_path)
+        if not tracked_result.ok:
+            return f"Refused to apply job {job_id}: could not collect changed files safely."
+        # Collect untracked files, same fail-closed contract.
+        untracked_result = collect_untracked_files(worktree_path)
+        if not untracked_result.ok:
+            return f"Refused to apply job {job_id}: could not collect changed files safely."
+
+        tracked_files = tracked_result.paths
+        untracked_files = untracked_result.paths
 
         # Validate tracked paths
         if tracked_files:
@@ -128,6 +136,10 @@ async def apply_last_job(self) -> str:
             val_untracked = validate_apply_paths(untracked_files, kind="untracked", settings=self.settings, worktree_path=worktree_path)
             if not val_untracked.allowed:
                 return f"Refused to apply job {job_id}: blocked high-risk paths: {val_untracked.reason}"
+
+        # Snapshot the validated untracked set so we can detect any drift
+        # before the copy step (TOCTOU inside the worktree).
+        validated_untracked = set(untracked_files)
 
         # Exclude MEMORY.md from the diff we apply; it is per-day working memory
         # that should never be merged into the main repo.
@@ -165,19 +177,29 @@ async def apply_last_job(self) -> str:
                 detail = (stderr or stdout).decode("utf-8", errors="replace").strip()
                 return f"Could not apply tracked diff for {job_id}: {truncate(detail, 1200)}"
 
-        # Double check overwrite of untracked files before copying
-        for relative in untracked_files:
-            if relative == MEMORY_FILENAME or relative.startswith(MEMORY_FILENAME + "/"):
-                continue
-            target = self.settings.codex_workspace_root / relative
-            if target.exists():
-                return f"Could not apply job {job_id}: Refusing to overwrite existing untracked target: {relative}"
+        # Recheck the untracked list immediately before copy, while apply.lock
+        # is held. If the set changed since validation (a new untracked file
+        # appeared, or one disappeared), refuse: the validated snapshot no
+        # longer matches the worktree, so copying could let an unvalidated
+        # file through or miss one the user reviewed in /diff.
+        recheck_result = collect_untracked_files(worktree_path)
+        if not recheck_result.ok:
+            return f"Refused to apply job {job_id}: could not collect changed files safely."
+        current_untracked = set(recheck_result.paths)
+        if current_untracked != validated_untracked:
+            return (
+                f"Refused to apply job {job_id}: untracked files changed during apply. "
+                "Please rerun /diff and /apply."
+            )
 
-        copied = await self._copy_untracked_files(worktree_path)
-        
+        # Copy only the validated untracked files. The safe helper does NOT
+        # re-list the worktree, so a file that appeared between the recheck
+        # above and the copy cannot slip in.
+        copied = await self._copy_validated_untracked_files(worktree_path, list(validated_untracked))
+
         status_summary = await self._git(["status", "--short"], cwd=self.settings.codex_workspace_root, check=False)
         safe_summary = redact_text(status_summary.strip())
-        
+
         return (
             f"Applied {job_id}. Copied {copied} new files. Review main repo before committing.\n\n"
             f"Workspace status:\n{safe_summary}"

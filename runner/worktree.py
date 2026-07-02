@@ -112,22 +112,103 @@ async def _remove_worktree(self, worktree_path: Path) -> None:
         shutil.rmtree(worktree_path, ignore_errors=True)
 
 
-async def _copy_untracked_files(self, worktree_path: Path) -> int:
-    raw = await self._git(["ls-files", "--others", "--exclude-standard", "-z"], cwd=worktree_path, check=False)
+async def _copy_validated_untracked_files(self, worktree_path: Path, relative_paths: list[str]) -> int:
+    """Copy only the explicitly provided, already-validated untracked files.
+
+    This is the apply-safe copy path. The caller (``apply_last_job``)
+    collects the untracked paths and validates them through
+    ``validate_apply_paths`` first, then hands the exact validated list
+    here. We do NOT re-list the worktree, so a file that appeared after
+    validation cannot slip through.
+
+    Defense in depth: each path is re-checked with ``ApplyPolicy`` (deny
+    patterns, symlink/dir/binary/size limits) right before the copy. The
+    per-path safety checks below are kept even if the policy is bypassed:
+
+      * skip ``MEMORY.md`` (per-day working memory, never merged)
+      * reject overwrite if the target already exists
+      * reject symlinks
+      * reject directories
+      * reject missing files
+      * enforce the untracked size limit
+    """
+    from runner.apply_policy import ApplyPolicy
+
+    policy = ApplyPolicy(self.settings)
+    max_untracked_bytes = policy.max_untracked_bytes
+    root = self.settings.codex_workspace_root
     copied = 0
-    for relative in [part for part in raw.split("\0") if part]:
+    for relative in relative_paths:
+        # Always skip MEMORY.md regardless of what was validated; it is
+        # per-day working memory that must never land in the main repo.
         if relative == MEMORY_FILENAME or relative.startswith(MEMORY_FILENAME + "/"):
             continue
+
+        # Defense in depth: re-validate through ApplyPolicy. A validated
+        # list should always pass; if it ever does not, refuse this one
+        # file rather than copying something unsafe.
+        reason = policy.validate_path(relative, kind="untracked", worktree_path=worktree_path)
+        if reason is not None:
+            raise RuntimeError(f"Refusing to copy untracked file that failed policy: {relative}")
+
         source = worktree_path / relative
-        target = self.settings.codex_workspace_root / relative
-        if not source.is_file():
-            continue
+        # Reject missing files (do not silently skip; the caller asserted
+        # these paths exist from a fresh listing).
+        if not source.exists():
+            raise RuntimeError(f"Refusing to copy untracked file that is missing: {relative}")
+        # Reject symlinks.
+        if source.is_symlink():
+            raise RuntimeError(f"Refusing to copy symlink untracked file: {relative}")
+        # Reject directories.
+        if source.is_dir():
+            raise RuntimeError(f"Refusing to copy directory untracked file: {relative}")
+
+        # Enforce size limit even though validate_path already checks it;
+        # a TOCTOU growth between validation and copy is caught here.
+        try:
+            size = source.stat().st_size
+        except OSError as exc:
+            raise RuntimeError(f"Cannot stat untracked file: {relative}") from exc
+        if size > max_untracked_bytes:
+            raise RuntimeError(f"Refusing to copy oversized untracked file: {relative}")
+
+        target = root / relative
+        # Reject overwrite if the target already exists.
         if target.exists():
             raise RuntimeError(f"Refusing to overwrite existing untracked target: {relative}")
+        # Defense in depth: never follow a symlink on the target side.
+        if target.is_symlink():
+            raise RuntimeError(f"Refusing to overwrite existing symlink target: {relative}")
+
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
         copied += 1
     return copied
+
+
+async def _copy_untracked_files(self, worktree_path: Path) -> int:
+    """LEGACY untracked-file copy.
+
+    Kept for backward compatibility with older callers. The active apply
+    path must use ``_copy_validated_untracked_files`` instead, because
+    this helper would otherwise re-list and copy whatever is currently
+    untracked without knowing which paths were validated. To stay safe,
+    it now collects and validates the paths itself first, then delegates
+    to the safe helper. If collection or validation fails, it refuses
+    rather than copying unvalidated files.
+    """
+    from runner.apply_policy import collect_untracked_files, validate_apply_paths
+
+    collected = collect_untracked_files(worktree_path)
+    if not collected.ok:
+        raise RuntimeError(f"Refusing to copy untracked files: {collected.error}")
+    # Validate every collected path before delegating to the safe helper.
+    val = validate_apply_paths(
+        collected.paths, kind="untracked", settings=self.settings, worktree_path=worktree_path
+    )
+    if not val.allowed:
+        raise RuntimeError(f"Refusing to copy untracked files: blocked paths: {val.reason}")
+    return await self._copy_validated_untracked_files(worktree_path, collected.paths)
 
 
 async def _git(self, args: list[str], cwd: Path, check: bool = True) -> str:
