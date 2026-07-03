@@ -127,6 +127,24 @@ def list_screenshot_metadata(settings: Settings, *, limit: int = 5) -> list[dict
     for metadata_path in screenshot_dir.glob("*.json"):
         if metadata_path.name.endswith(".tmp"):
             continue
+        if metadata_path.is_symlink():
+            continue
+        try:
+            resolved_metadata_path = metadata_path.resolve()
+            resolved_dir = screenshot_dir.resolve()
+            try:
+                is_relative = resolved_metadata_path.is_relative_to(resolved_dir)
+            except AttributeError:
+                try:
+                    resolved_metadata_path.relative_to(resolved_dir)
+                    is_relative = True
+                except ValueError:
+                    is_relative = False
+            if not is_relative:
+                continue
+        except Exception:
+            continue
+
         try:
             raw = metadata_path.read_text(encoding="utf-8")
             data = json.loads(raw)

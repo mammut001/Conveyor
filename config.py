@@ -75,6 +75,9 @@ class Settings:
     conveyor_apply_allow_high_risk: bool = False
     conveyor_apply_max_untracked_bytes: int = 1048576
     conveyor_feishu_require_allowlist: bool = False
+    conveyor_max_worktrees_bytes: int = 500 * 1024 * 1024
+    conveyor_max_pending_jobs: int = 20
+    conveyor_max_jobs_per_hour: int = 60
     # Gmail App Password backend (P3.3). All optional; gmail.status reports
     # missing config gracefully. OAuth is a future phase.
     gmail_backend: str | None = None  # "imap_smtp" or None
@@ -321,6 +324,9 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_apply_allow_high_risk": os.getenv("CONVEYOR_APPLY_ALLOW_HIGH_RISK", "false").strip().lower() in ("true", "1", "yes"),
         "conveyor_apply_max_untracked_bytes": _int_env("CONVEYOR_APPLY_MAX_UNTRACKED_BYTES", 1048576),
         "conveyor_feishu_require_allowlist": os.getenv("CONVEYOR_FEISHU_REQUIRE_ALLOWLIST", "false").strip().lower() in ("true", "1", "yes"),
+        "conveyor_max_worktrees_bytes": _int_env("CONVEYOR_MAX_WORKTREES_BYTES", 500 * 1024 * 1024),
+        "conveyor_max_pending_jobs": _int_env("CONVEYOR_MAX_PENDING_JOBS", 20),
+        "conveyor_max_jobs_per_hour": _int_env("CONVEYOR_MAX_JOBS_PER_HOUR", 60),
         # Gmail App Password backend (P3.3)
         "gmail_backend": os.getenv("GMAIL_BACKEND") or None,
         "gmail_address": os.getenv("GMAIL_ADDRESS") or None,

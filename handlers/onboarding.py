@@ -35,15 +35,33 @@ def save_operator_profile(settings: Settings, data: dict) -> bool:
     dropped."""
     path = operator_profile_path(settings)
     try:
+        import os
+        import tempfile
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(
-                {k: data[k] for k in OPERATOR_PROFILE_FIELDS if k in data},
-                indent=2,
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
+        try:
+            path.parent.chmod(0o700)
+        except OSError:
+            pass
+
+        fd, tmp_file_path = tempfile.mkstemp(dir=str(path.parent), prefix=".operator.json.tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(
+                    {k: data[k] for k in OPERATOR_PROFILE_FIELDS if k in data},
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(tmp_file_path, 0o600)
+            os.replace(tmp_file_path, str(path))
+        except BaseException:
+            try:
+                os.unlink(tmp_file_path)
+            except OSError:
+                pass
+            raise
         return True
     except OSError:
         logger.exception("Failed to write operator.json")

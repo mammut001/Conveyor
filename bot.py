@@ -27,7 +27,7 @@ from handlers.onboarding import (
     save_operator_profile,
 )
 from handlers.tools.runner import cancel_pending, execute_confirmed, parse_tool_callback
-from redaction import redact_text
+from redaction import redact_text, SecretRedactingFilter
 from runner import CodexRunner
 
 
@@ -37,21 +37,11 @@ logging.basicConfig(
 )
 
 
-class SecretRedactingFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str):
-            record.msg = redact_text(record.msg)
-        if isinstance(record.args, tuple):
-            record.args = tuple(redact_text(arg) if isinstance(arg, str) else arg for arg in record.args)
-        elif isinstance(record.args, dict):
-            record.args = {key: redact_text(value) if isinstance(value, str) else value for key, value in record.args.items()}
-        return True
-
-
 for handler in logging.getLogger().handlers:
     handler.addFilter(SecretRedactingFilter())
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
+for name in ("urllib3", "googleapiclient", "google_auth_httplib2", "lark_oapi", "httpx", "httpcore"):
+    logging.getLogger(name).setLevel(logging.WARNING)
+
 
 logger = logging.getLogger("conveyor.telegram")
 

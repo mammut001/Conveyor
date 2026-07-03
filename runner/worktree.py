@@ -38,7 +38,32 @@ def _job_worktree_path(self, job: Job) -> Path:
     safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", job.id)
     return self.settings.codex_task_root / "worktrees" / safe_id
 
+def _get_dir_size(path: Path) -> int:
+    total = 0
+    if not path.exists():
+        return 0
+    for root_dir, _, files in os.walk(path):
+        for f in files:
+            fp = os.path.join(root_dir, f)
+            try:
+                if not os.path.islink(fp):
+                    total += os.path.getsize(fp)
+            except OSError:
+                pass
+    return total
+
+
 async def _create_worktree(self, job: Job) -> Path:
+    import logging
+    logger = logging.getLogger("conveyor.worktree")
+    
+    worktrees_dir = self.settings.codex_task_root / "worktrees"
+    current_size = _get_dir_size(worktrees_dir)
+    max_bytes = self.settings.conveyor_max_worktrees_bytes
+    if current_size > max_bytes:
+        logger.warning("Worktree size limit exceeded: %d bytes (limit: %d bytes)", current_size, max_bytes)
+        raise RuntimeError(f"Worktree quota exceeded: total size of active worktrees ({current_size} bytes) exceeds limit ({max_bytes} bytes)")
+
     root = self.settings.codex_workspace_root
     worktree = self._job_worktree_path(job)
     if not worktree.exists():

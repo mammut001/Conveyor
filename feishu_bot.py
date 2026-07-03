@@ -29,17 +29,24 @@ from channel.types import InboundMessage
 from config import load_feishu_settings
 from handlers import dispatch
 from handlers.tools.runner import cancel_pending, execute_confirmed
-from redaction import redact_text
+from redaction import redact_text, SecretRedactingFilter
 from runner import CodexRunner
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
     level=logging.INFO,
 )
+
+for handler in logging.getLogger().handlers:
+    handler.addFilter(SecretRedactingFilter())
+for name in ("urllib3", "googleapiclient", "google_auth_httplib2", "lark_oapi", "httpx", "httpcore"):
+    logging.getLogger(name).setLevel(logging.WARNING)
+
 logger = logging.getLogger("codex_feishu_bot")
 
 settings = load_feishu_settings()
 runner = CodexRunner(settings)
+
 
 
 def _extract_card_action_event(msg: Any) -> tuple[InboundMessage, dict] | None:
@@ -140,6 +147,10 @@ def _get_channel() -> Any:
     return _channel_holder.get("channel")
 
 
+class ConfigurationError(RuntimeError):
+    pass
+
+
 async def main() -> None:
     if not settings.lark_app_id or not settings.lark_app_secret:
         raise RuntimeError("LARK_APP_ID and LARK_APP_SECRET are required")
@@ -149,11 +160,8 @@ async def main() -> None:
         raise RuntimeError("Production Safety Error: LARK_ALLOWED_OPEN_ID must be configured when strict mode is enabled.")
 
     if not settings.lark_allowed_open_id:
-        logger.warning("=" * 80)
-        logger.warning("WARNING: LARK_ALLOWED_OPEN_ID is unset. Feishu bot is running in bootstrap mode.")
-        logger.warning("The bot will accept messages from any user and display their open_id.")
-        logger.warning("To secure the bot, configure LARK_ALLOWED_OPEN_ID in your .env file.")
-        logger.warning("=" * 80)
+        logger.error("Feishu bootstrap error: LARK_ALLOWED_OPEN_ID or CONVEYOR_FEISHU_ALLOWED_USERS is missing.")
+        raise ConfigurationError("Feishu bootstrap error: LARK_ALLOWED_OPEN_ID or CONVEYOR_FEISHU_ALLOWED_USERS is missing.")
 
     await runner.validate()
 

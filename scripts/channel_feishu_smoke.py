@@ -319,6 +319,36 @@ def _test_send_card_with_no_message_id() -> CheckResult:
     return CheckResult(name, ok, f"out={out} opts={channel.send_calls[0][2] if channel.send_calls else None}")
 
 
+def _test_feishu_bootstrap_fail_closed() -> CheckResult:
+    name = "feishu_bot: fails closed during bootstrap when lark_allowed_open_id is missing"
+    import os
+    os.environ.setdefault("LARK_APP_ID", "test-app-id")
+    os.environ.setdefault("LARK_APP_SECRET", "test-app-secret")
+    import feishu_bot
+    from unittest import mock
+    
+    mock_settings = SimpleNamespace(
+        lark_app_id="app-1",
+        lark_app_secret="sec-1",
+        lark_allowed_open_id=None,
+        conveyor_feishu_require_allowlist=False,
+    )
+    
+    with mock.patch("feishu_bot.settings", mock_settings):
+        try:
+            asyncio.run(feishu_bot.main())
+            ok = False
+            detail = "main() did not raise ConfigurationError"
+        except feishu_bot.ConfigurationError as exc:
+            ok = "missing" in str(exc) or "bootstrap" in str(exc)
+            detail = f"raised expected ConfigurationError: {exc}"
+        except Exception as exc:
+            ok = False
+            detail = f"raised unexpected exception: {exc}"
+            
+    return CheckResult(name, ok, detail)
+
+
 def main() -> int:
     results = [
         _test_inbound_basic(),
@@ -337,6 +367,7 @@ def main() -> int:
         _test_send_card_falls_back_to_text_on_failure(),
         _test_send_card_skips_when_chat_id_empty(),
         _test_send_card_with_no_message_id(),
+        _test_feishu_bootstrap_fail_closed(),
     ]
     print_results(results)
     ok = all(r.ok for r in results)

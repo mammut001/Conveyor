@@ -229,9 +229,10 @@ async def _run_job(self, job: Job, on_progress: ProgressCallback) -> None:
                 continue
     except Exception as exc:
         job.state = JobState.FAILED
-        job.error = str(exc)
+        redacted_exc = redact_text(str(exc))
+        job.error = redacted_exc
         self._write_job_metadata(job)
-        await on_progress(f"这次没跑成：{truncate(str(exc), 2500)}")
+        await on_progress(f"这次没跑成：{truncate(redacted_exc, 2500)}")
     finally:
         job.finished_at = datetime.now(timezone.utc)
         self._write_job_metadata(job)

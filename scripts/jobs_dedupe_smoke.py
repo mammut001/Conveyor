@@ -121,6 +121,8 @@ def _fake_runner(*, summary: str | None, progress_text: str | None) -> mock.Mock
         codex_memory_root=Path("/tmp/codex-dedupe-mem"),
         conveyor_progress_mode="verbose",
         conveyor_session_enabled=False,
+        conveyor_max_jobs_per_hour=60,
+        conveyor_max_pending_jobs=20,
     )
     return runner, job
 

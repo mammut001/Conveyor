@@ -32,11 +32,18 @@ SECRET_KEY_RE = re.compile(
 SECRET_VALUE_PATTERNS = [
     re.compile(r"(api\.telegram\.org/bot)[A-Za-z0-9:_-]+"),
     re.compile(r"(bot)\d+:[A-Za-z0-9_-]{20,}"),
+    re.compile(r"\b(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
+    re.compile(r"\b(ya29\.)[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\b(AIza)[A-Za-z0-9_-]{30,}\b"),
+    re.compile(r"\b(cli_)[a-z0-9]{16}\b"),
+    re.compile(r"\b(t-)[a-zA-Z0-9_-]{20,}\b"),
+    re.compile(r"\b(sk-ant-api)[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
     re.compile(r"xox[baprs]-[A-Za-z0-9-]{20,}"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{16,}"),
     re.compile(r"(?i)(authorization:\s*)[^\s]+"),
-    re.compile(r"(?i)(token|secret|password|api[_-]?key)\s*[:=]\s*['\"]?[^'\"\s]+"),
+    re.compile(r"(?i)\b(token|secret|password|api[_-]?key)\b\s*[:=]\s*['\"]?[^'\"\s]+"),
 ]
 
 # Env variables allowed to pass through to child processes exactly
@@ -90,19 +97,50 @@ def redact_obj(value: Any) -> Any:
         return [redact_obj(item) for item in value]
     return value
 
+DENYLIST_KEYS = frozenset({
+    "TELEGRAM_BOT_TOKEN",
+    "LARK_APP_SECRET",
+    "GMAIL_APP_PASSWORD",
+    "GITHUB_TOKEN",
+    "CONVEYOR_DESKTOP_AGENT_TOKEN",
+    "WEB_SEARCH_API_KEY",
+})
+
+
 def child_env_from(os_environ: Mapping[str, str]) -> dict[str, str]:
     """Filter environment for child executions, adding support for CONVEYOR_CHILD_ENV_PREFIXES."""
-    custom_prefixes_str = os_environ.get("CONVEYOR_CHILD_ENV_PREFIXES")
-    allowed_prefixes = set(ALLOWED_CHILD_ENV_PREFIXES)
-    if custom_prefixes_str:
-        for part in custom_prefixes_str.split(","):
-            part = part.strip()
-            if part:
-                allowed_prefixes.add(part)
-                
+    explicit_prefixes = set()
+    for env_var in ("CONVEYOR_CHILD_ENV_PREFIXES", "CONVEYOR_CHILD_ENV_EXTRA_PREFIXES"):
+        val = os_environ.get(env_var)
+        if val:
+            for part in val.split(","):
+                part = part.strip()
+                if part:
+                    explicit_prefixes.add(part)
+
+    allowed_prefixes = set(ALLOWED_CHILD_ENV_PREFIXES) | explicit_prefixes
     allowed_prefixes_tuple = tuple(allowed_prefixes)
+    
     env: dict[str, str] = {}
+    stripped: list[str] = []
+    
     for key, value in os_environ.items():
-        if key in ALLOWED_CHILD_ENV_EXACT or key.startswith(allowed_prefixes_tuple):
-            env[key] = value
+        # Check if it matches allowed exact/prefix list
+        is_allowed = (key in ALLOWED_CHILD_ENV_EXACT or key.startswith(allowed_prefixes_tuple))
+        if is_allowed:
+            # Denylist check: block if key in DENYLIST_KEYS or starts with GOOGLE_,
+            # unless the prefix was explicitly configured by the user.
+            is_explicit = any(key.startswith(pref) for pref in explicit_prefixes)
+            is_blocked = (key in DENYLIST_KEYS or key.startswith("GOOGLE_")) and not is_explicit
+            if is_blocked:
+                stripped.append(key)
+            else:
+                env[key] = value
+                
+    audit_enabled = os_environ.get("CONVEYOR_CHILD_ENV_AUDIT", "true").lower() in ("true", "1", "yes")
+    if audit_enabled and stripped:
+        import logging
+        logger = logging.getLogger("conveyor.security")
+        logger.info("Stripped %d sensitive keys from child environment: %s", len(stripped), ", ".join(sorted(stripped)))
+        
     return env

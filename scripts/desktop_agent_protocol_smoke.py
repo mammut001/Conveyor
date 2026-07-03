@@ -52,6 +52,11 @@ def _fail(name: str, detail: str) -> None:
 
 
 def main() -> int:
+    import dataclasses
+    desktop_agent_server.settings = dataclasses.replace(
+        desktop_agent_server.settings,
+        conveyor_desktop_screenshot_dir="/tmp"
+    )
     # Spin up ThreadingHTTPServer in background thread
     from desktop_agent_server import ThreadingHTTPServer
     httpd = ThreadingHTTPServer((server_host, server_port), desktop_agent_server.DesktopAgentHTTPHandler)

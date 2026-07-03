@@ -322,7 +322,7 @@ async def _read_stderr(self, job: Job, process: asyncio.subprocess.Process) -> N
             break
         chunks.append(line.decode("utf-8", errors="replace"))
     if chunks and not job.error:
-        job.error = truncate("".join(chunks), 3000)
+        job.error = truncate(redact_text("".join(chunks)), 3000)
     if job.return_code is not None and job.return_code < 0:
         job.error = "cancelled"
 

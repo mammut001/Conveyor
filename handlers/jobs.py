@@ -34,11 +34,12 @@ single-concurrency.
 from __future__ import annotations
 
 import logging
+import time
+from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from channel.types import InboundMessage, OutboundPort
-from config import Settings
-from redaction import truncate
+from redaction import truncate, redact_text
 from runner import CodexRunner, JobMode, JobState
 
 if TYPE_CHECKING:
@@ -57,6 +58,29 @@ COMPACT_FALLBACK_TEXT = "仍在处理..."
 _TOOL_INDICATOR_PREFIX = ("🔧", "\U0001f527")
 _THOUGHT_INDICATOR_PREFIX = ("💭", "\U0001f4ad")
 _TOOL_PULSE_PREFIX = ("🔧", "\U0001f527")
+
+
+# Hourly rate limiting tracking
+JOB_SUBMISSION_TIMESTAMPS: dict[str, list[float]] = defaultdict(list)
+
+
+def check_rate_limit(operator_id: str, max_per_hour: int) -> bool:
+    """Return True if rate limit is exceeded, False otherwise."""
+    now = time.time()
+    one_hour_ago = now - 3600
+    timestamps = JOB_SUBMISSION_TIMESTAMPS[operator_id]
+    
+    # Filter out timestamps older than 1 hour
+    active_timestamps = [t for t in timestamps if t > one_hour_ago]
+    JOB_SUBMISSION_TIMESTAMPS[operator_id] = active_timestamps
+    
+    if len(active_timestamps) >= max_per_hour:
+        return True
+    return False
+
+
+def record_job_submission(operator_id: str) -> None:
+    JOB_SUBMISSION_TIMESTAMPS[operator_id].append(time.time())
 
 
 def _is_prose_progress_text(text: str) -> bool:
@@ -96,12 +120,23 @@ async def handle_codex_job(
         await port.reply(msg, "Usage: /run <prompt>")
         return
 
+    operator_id = msg.operator_id or "unknown"
+    if check_rate_limit(operator_id, runner.settings.conveyor_max_jobs_per_hour):
+        await port.reply(msg, "提交失败：已达到每小时最大任务数限制")
+        return
+
     # P3.8: Check if a job is already running and queue if needed
     from handlers.job_queue import get_job_queue
     queue = get_job_queue()
 
     if runner.current_job and runner.current_job.state == JobState.RUNNING:
+        # Check queue limit before attempting to enqueue
+        if queue.queue_length >= runner.settings.conveyor_max_pending_jobs:
+            await port.reply(msg, f"无法排队：队列已满（最多 {runner.settings.conveyor_max_pending_jobs} 个任务）")
+            return
+
         # Job is running, queue this one
+        record_job_submission(operator_id)
         success, queue_msg, queued_job = await queue.enqueue(
             mode=mode.value,
             prompt=body,
@@ -117,6 +152,7 @@ async def handle_codex_job(
         return
 
     # No job running, execute immediately
+    record_job_submission(operator_id)
     await _execute_codex_job(msg, port, runner, mode, body)
 
 
@@ -220,17 +256,18 @@ async def _execute_codex_job(
         # Failure to even start the job (e.g. invalid args, Codex
         # missing). On Feishu, surface this as a card; Telegram keeps
         # the existing text path.
+        redacted_exc = redact_text(str(exc))
         if msg.channel == "feishu" and hasattr(port, "send_card"):
             try:
                 from channel.feishu_cards import job_failed_card
                 await port.send_card(msg, job_failed_card(
                     job_id="(start-failed)",
-                    error=f"现在不能开始：{truncate(str(exc), 1200)}",
+                    error=f"现在不能开始：{truncate(redacted_exc, 1200)}",
                 ))
                 return
             except Exception:
                 pass
-        await port.reply(msg, f"现在不能开始：{truncate(str(exc), 1200)}")
+        await port.reply(msg, f"现在不能开始：{truncate(redacted_exc, 1200)}")
         return
 
     # On Feishu, send a structured "job started" card right after
@@ -292,7 +329,7 @@ async def _execute_codex_job(
             else:
                 await port.send_new(msg, summary)
     elif job.error:
-        err_truncated = truncate(job.error, 3500)
+        err_truncated = truncate(redact_text(job.error), 3500)
         final_answer = f"[error] {err_truncated}"
         if err_truncated.strip() != last_progress.strip():
             if is_feishu:

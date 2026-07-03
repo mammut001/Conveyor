@@ -26,8 +26,33 @@ def check_env_permissions(env_path: Path) -> CheckResult:
     if not env_path.exists():
         return CheckResult("env permissions", False, f"{env_path} missing")
     mode = _mode(env_path)
-    ok = mode & 0o077 == 0
-    return CheckResult("env permissions", ok, f"{env_path} mode={mode:o}")
+    ok = (mode & 0o077) == 0
+    detail = f"{env_path} mode={mode:o}"
+    if not ok:
+        detail += f" (suggest: chmod 0600 {env_path})"
+    return CheckResult("env permissions", ok, detail)
+
+
+def check_file_private(path: Path) -> CheckResult:
+    if not path.exists():
+        return CheckResult(f"private file: {path.name}", True, f"{path} not present")
+    mode = _mode(path)
+    ok = (mode & 0o077) == 0
+    detail = f"{path} mode={mode:o}"
+    if not ok:
+        detail += f" (suggest: chmod 0600 {path})"
+    return CheckResult(f"private file: {path.name}", ok, detail)
+
+
+def check_dir_private(path: Path) -> CheckResult:
+    if not path.exists():
+        return CheckResult(f"private dir: {path.name}", True, f"{path} not present")
+    mode = _mode(path)
+    ok = (mode & 0o077) == 0
+    detail = f"{path} mode={mode:o}"
+    if not ok:
+        detail += f" (suggest: chmod 0700 {path})"
+    return CheckResult(f"private dir: {path.name}", ok, detail)
 
 
 def check_repo_secret_patterns(root: Path) -> CheckResult:
@@ -72,6 +97,23 @@ def check_service_hardening(service_name: str) -> list[CheckResult]:
         results.append(CheckResult(f"{service_name} {key}", actual == value, f"{key}={actual or 'unknown'}"))
     protect_system = _systemctl_show(service_name, "ProtectSystem")
     results.append(CheckResult(f"{service_name} ProtectSystem", protect_system in {"full", "strict"}, f"ProtectSystem={protect_system or 'unknown'}"))
+
+    rw_paths = _systemctl_show(service_name, "ReadWritePaths")
+    user = _systemctl_show(service_name, "User") or "ubuntu"
+    broad_home = f"/home/{user}"
+    
+    has_broad = False
+    for p in rw_paths.split():
+        clean_p = p.lstrip("-+:")
+        if clean_p == broad_home:
+            has_broad = True
+            break
+            
+    results.append(CheckResult(
+        f"{service_name} ReadWritePaths",
+        not has_broad,
+        f"ReadWritePaths={rw_paths or 'none'} (contains broad {broad_home})" if has_broad else f"ReadWritePaths={rw_paths or 'none'}"
+    ))
     return results
 
 
@@ -90,6 +132,46 @@ def run_security_audit(env_file: str, service_name: str, since: str) -> list[Che
         results.extend(check_service_hardening(maintain_service))
     task_mode = _mode(settings.codex_task_root) if settings.codex_task_root.exists() else 0
     results.append(CheckResult("task root permissions", bool(task_mode), f"{settings.codex_task_root} mode={task_mode:o}" if task_mode else f"{settings.codex_task_root} missing"))
+
+    # Check repo .desktop-agent.env if present
+    repo_desktop_env = root / ".desktop-agent.env"
+    if repo_desktop_env.exists():
+        results.append(check_file_private(repo_desktop_env))
+
+    # Check ~/.local/share/conveyor/desktop-agent.env if present
+    local_desktop_env = Path("~/.local/share/conveyor/desktop-agent.env").expanduser()
+    if local_desktop_env.exists():
+        results.append(check_file_private(local_desktop_env))
+
+    # Check GOOGLE_TOKEN_PATH if configured
+    if settings.google_token_path:
+        results.append(check_file_private(Path(settings.google_token_path).expanduser().resolve()))
+
+    # Check codex_memory_root mode 0700 or stricter
+    memory_root = settings.codex_memory_root
+    results.append(check_dir_private(memory_root))
+
+    # Check codex_memory_root/secrets mode 0700 and token files 0600
+    secrets_dir = memory_root / "secrets"
+    if secrets_dir.exists():
+        results.append(check_dir_private(secrets_dir))
+        for token_file in secrets_dir.glob("*"):
+            if token_file.is_file():
+                results.append(check_file_private(token_file))
+
+    # Check codex_memory_root/audit/tools.log mode 0600 if present
+    tools_log = memory_root / "audit" / "tools.log"
+    if tools_log.exists():
+        results.append(check_file_private(tools_log))
+
+    # Check codex_memory_root/desktop/uploads and screenshots mode 0700 if present
+    uploads_dir = memory_root / "desktop" / "uploads"
+    if uploads_dir.exists():
+        results.append(check_dir_private(uploads_dir))
+    screenshots_dir = memory_root / "desktop" / "screenshots"
+    if screenshots_dir.exists():
+        results.append(check_dir_private(screenshots_dir))
+
     return results
 
 

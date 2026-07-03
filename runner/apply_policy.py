@@ -50,6 +50,17 @@ HIGH_RISK_PATTERNS = [
     "**/deploy_vps.sh",
     "**/*deploy*",
     "**/*auth*",
+    "requirements.txt",
+    "**/requirements.txt",
+    "**/*requirements.txt",
+    "setup.py",
+    "**/setup.py",
+    "security/**",
+    "**/security/**",
+    "redaction.py",
+    "**/redaction.py",
+    "runner/apply_policy.py",
+    "**/apply_policy.py",
 ]
 
 # Allowed patterns
@@ -294,6 +305,25 @@ def collect_untracked_files(worktree_path: Path) -> CollectResult:
 def validate_apply_paths(paths: list[str], *, kind: str, settings: Any, worktree_path: Path | None = None) -> ApplyValidationResult:
     """Validate a batch of paths of the same kind."""
     policy = ApplyPolicy(settings)
+    
+    # Check total size limit of untracked files
+    if kind == "untracked" and worktree_path is not None:
+        total_size = 0
+        for path in paths:
+            norm_path = path.replace("\\", "/").strip()
+            full_path = worktree_path / norm_path
+            if full_path.exists() and not full_path.is_symlink() and full_path.is_file():
+                try:
+                    total_size += full_path.stat().st_size
+                except OSError:
+                    pass
+        if total_size > policy.max_untracked_bytes:
+            return ApplyValidationResult(
+                False,
+                paths,
+                f"total size of untracked files ({total_size} bytes) exceeds limit ({policy.max_untracked_bytes} bytes)"
+            )
+
     blocked_paths = []
     reasons = []
     

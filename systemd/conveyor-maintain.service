@@ -20,4 +20,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/opt/conveyor /srv /home/ubuntu
+# Specific writable paths:
+# - /opt/conveyor: installation directory (logs, state, etc.)
+# - /srv: workspace task directories
+# - /home/ubuntu/.codex: memory root storage
+# - /home/ubuntu/.local/share/conveyor: local configuration and token files
+ReadWritePaths=/opt/conveyor /srv /home/ubuntu/.codex /home/ubuntu/.local/share/conveyor

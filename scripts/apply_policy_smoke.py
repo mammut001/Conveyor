@@ -95,10 +95,37 @@ def test_apply_policy() -> list[CheckResult]:
         # But secrets must still be denied even when allow_high_risk is true
         res = policy_high.validate_path(".env", kind="tracked")
         results.append(CheckResult("env_still_denied_when_high_risk_true", res is not None, f"res={res}"))
+
+        # 10a. setup.py, requirements.txt, security/helper.py, redaction.py, apply_policy.py are blocked by default
+        res = policy.validate_path("setup.py", kind="tracked")
+        results.append(CheckResult("setup_py_blocked_by_default", res is not None and "high-risk file rejected" in res, f"res={res}"))
+        res = policy.validate_path("security/helper.py", kind="tracked")
+        results.append(CheckResult("security_dir_blocked_by_default", res is not None and "high-risk file rejected" in res, f"res={res}"))
+        res = policy.validate_path("redaction.py", kind="tracked")
+        results.append(CheckResult("redaction_py_blocked_by_default", res is not None and "high-risk file rejected" in res, f"res={res}"))
+        res = policy.validate_path("runner/apply_policy.py", kind="tracked")
+        results.append(CheckResult("apply_policy_py_blocked_by_default", res is not None and "high-risk file rejected" in res, f"res={res}"))
         
         # 11. validate_apply_paths batch check
         batch_res = validate_apply_paths(["runner/worktree.py", ".env"], kind="tracked", settings=settings)
         results.append(CheckResult("batch_validation_fails_if_any_denied", batch_res.allowed is False and len(batch_res.blocked_paths) == 1, f"allowed={batch_res.allowed}, blocked={batch_res.blocked_paths}"))
+
+        # 12. total size limit of untracked files in batch check
+        wt_batch = tmp / "wt_batch"
+        wt_batch.mkdir(parents=True, exist_ok=True)
+        (wt_batch / "docs").mkdir(parents=True, exist_ok=True)
+        (wt_batch / "docs" / "file1.txt").write_text("12345") # 5 bytes
+        (wt_batch / "docs" / "file2.txt").write_text("67890") # 5 bytes
+        
+        # total size 10 bytes, limit 15 bytes -> allowed
+        settings_ok = _fake_settings(tmp, max_untracked_bytes=15)
+        batch_ok = validate_apply_paths(["docs/file1.txt", "docs/file2.txt"], kind="untracked", settings=settings_ok, worktree_path=wt_batch)
+        results.append(CheckResult("batch_untracked_total_size_allowed", batch_ok.allowed is True, f"allowed={batch_ok.allowed} reason={batch_ok.reason}"))
+        
+        # total size 10 bytes, limit 8 bytes -> blocked
+        settings_fail = _fake_settings(tmp, max_untracked_bytes=8)
+        batch_fail = validate_apply_paths(["docs/file1.txt", "docs/file2.txt"], kind="untracked", settings=settings_fail, worktree_path=wt_batch)
+        results.append(CheckResult("batch_untracked_total_size_exceeded", batch_fail.allowed is False and "exceeds limit" in batch_fail.reason, f"allowed={batch_fail.allowed} reason={batch_fail.reason}"))
         
         return results
 

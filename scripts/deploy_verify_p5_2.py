@@ -238,20 +238,21 @@ def _check_observe_request_store_transitions() -> None:
         message_id="om_test",
         text="test",
     )
-    fake_result = {
-        "screenshot_id": "shot-1",
-        "path": "/tmp/shot.png",
-        "metadata_path": "/tmp/shot.json",
-        "sha256": "a" * 64,
-        "width": 1,
-        "height": 1,
-        "bytes": 1,
-        "node_id": "macbook-payton",
-    }
     with tempfile.TemporaryDirectory() as tmp:
+        fake_result = {
+            "screenshot_id": "shot-1",
+            "path": str(Path(tmp) / "shot.png"),
+            "metadata_path": str(Path(tmp) / "shot.json"),
+            "sha256": "a" * 64,
+            "width": 1,
+            "height": 1,
+            "bytes": 1,
+            "node_id": "macbook-payton",
+        }
         os.environ["CODEX_MEMORY_ROOT"] = tmp
         os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
         os.environ["CONVEYOR_DESKTOP_SCREENSHOT_HELPER"] = "/usr/local/bin/fake-helper"
+        os.environ["CONVEYOR_DESKTOP_SCREENSHOT_DIR"] = "/tmp"
         settings = _settings("/usr/local/bin/fake-helper", Path(tmp))
         with mock.patch("nodes.state.is_desktop_online", return_value=True):
             created = create_observe_request(settings, msg, "test request")
@@ -302,21 +303,21 @@ def _check_observe_lock_and_concurrency() -> None:
         # 2. metadata-only validation check
         fake_result = {
             "screenshot_id": "shot-1",
-            "path": "/tmp/shot.png",
-            "metadata_path": "/tmp/shot.json",
+            "path": str(Path(tmp) / "shot.png"),
+            "metadata_path": str(Path(tmp) / "shot.json"),
             "sha256": "a" * 64,
             "width": 1,
             "height": 1,
             "bytes": 1,
             "node_id": "macbook-payton",
         }
-        if validate_observe_result(fake_result) is None:
+        if validate_observe_result(fake_result, Path(tmp)) is None:
             _fail("deploy_verify_validation_good", "rejected valid metadata")
             return
-        if validate_observe_result({**fake_result, "base64": "data"}) is not None:
+        if validate_observe_result({**fake_result, "base64": "data"}, Path(tmp)) is not None:
             _fail("deploy_verify_validation_bad_base64", "accepted base64")
             return
-        if validate_observe_result({**fake_result, "thumbnail": "data"}) is not None:
+        if validate_observe_result({**fake_result, "thumbnail": "data"}, Path(tmp)) is not None:
             _fail("deploy_verify_validation_bad_thumbnail", "accepted thumbnail")
             return
 

@@ -95,7 +95,18 @@ def _new_request_id(now: datetime | None = None) -> str:
     return f"obs_{ts}_{uuid.uuid4().hex[:8]}"
 
 
-def validate_observe_result(result: object) -> dict | None:
+def _is_relative_to(path: Path, other: Path) -> bool:
+    try:
+        return path.is_relative_to(other)
+    except AttributeError:
+        try:
+            path.relative_to(other)
+            return True
+        except ValueError:
+            return False
+
+
+def validate_observe_result(result: object, screenshot_dir: Path | None = None) -> dict | None:
     if not isinstance(result, dict):
         return None
     for key in result:
@@ -112,11 +123,34 @@ def validate_observe_result(result: object) -> dict | None:
     path = result.get("path")
     if not isinstance(path, str) or not path.startswith("/"):
         return None
-    metadata_path = result.get("metadata_path")
-    if metadata_path is not None and (
-        not isinstance(metadata_path, str) or not metadata_path.startswith("/")
-    ):
+
+    # Ensure screenshot has a .png extension
+    if not path.lower().endswith(".png"):
         return None
+
+    p = Path(path)
+    if p.is_symlink():
+        return None
+
+    metadata_path = result.get("metadata_path")
+    if metadata_path is not None:
+        if not isinstance(metadata_path, str) or not metadata_path.startswith("/"):
+            return None
+        mp = Path(metadata_path)
+        if mp.is_symlink():
+            return None
+
+    if screenshot_dir is not None:
+        try:
+            resolved_dir = screenshot_dir.resolve()
+            if not _is_relative_to(p.resolve(), resolved_dir):
+                return None
+            if metadata_path is not None:
+                if not _is_relative_to(Path(metadata_path).resolve(), resolved_dir):
+                    return None
+        except Exception:
+            return None
+
     cleaned: dict[str, Any] = {
         "screenshot_id": screenshot_id.strip(),
         "path": path,
@@ -434,7 +468,9 @@ def complete_observe_request(
     node_id: str,
     result: dict,
 ) -> dict:
-    validated = validate_observe_result(result)
+    from desktop_screenshot import resolve_screenshot_dir
+    screenshot_dir = resolve_screenshot_dir(settings)
+    validated = validate_observe_result(result, screenshot_dir)
     if validated is None:
         return {"ok": False, "error": "invalid_result", "message": "Result must be metadata only."}
 

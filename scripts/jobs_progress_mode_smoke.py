@@ -108,6 +108,8 @@ def _fake_runner(*, summary: str, progress_text: str | None,
         conveyor_progress_mode=progress_mode,
         codex_memory_root=Path("/tmp/codex-progress-mem"),
         conveyor_session_enabled=False,
+        conveyor_max_jobs_per_hour=60,
+        conveyor_max_pending_jobs=20,
     )
 
     class _Stub:
@@ -365,6 +367,8 @@ def _test_compact_tool_indicator_fallback() -> CheckResult:
         conveyor_progress_mode="compact",
         codex_memory_root=Path("/tmp/codex-progress-mem"),
         conveyor_session_enabled=False,
+        conveyor_max_jobs_per_hour=60,
+        conveyor_max_pending_jobs=20,
     )
 
     call_count = {"n": 0}
@@ -399,6 +403,8 @@ def _test_quiet_no_fallback_after_edit_failure() -> CheckResult:
         conveyor_progress_mode="quiet",
         codex_memory_root=Path("/tmp/codex-progress-mem"),
         conveyor_session_enabled=False,
+        conveyor_max_jobs_per_hour=60,
+        conveyor_max_pending_jobs=20,
     )
 
     class _Stub:

@@ -93,6 +93,10 @@ def _check_config(settings: Settings) -> str | None:
 def _save_token(token_data: dict, path: Path) -> None:
     """Save token JSON with chmod 600."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.chmod(0o700)
+    except OSError:
+        pass
     path.write_text(json.dumps(token_data, indent=2), encoding="utf-8")
     os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 600
 

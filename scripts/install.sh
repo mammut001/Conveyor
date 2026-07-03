@@ -65,6 +65,14 @@ setup_directory() {
     log_info "Setting up $CONVEYOR_DIR..."
     mkdir -p "$CONVEYOR_DIR"
     chown "$CONVEYOR_USER:$CONVEYOR_GROUP" "$CONVEYOR_DIR"
+
+    # Create and secure ~/.codex and ~/.local/share/conveyor for the target user
+    local user_home
+    user_home=$(eval echo "~$CONVEYOR_USER")
+    log_info "Creating secure directories for $CONVEYOR_USER in $user_home..."
+    mkdir -p "$user_home/.codex" "$user_home/.local/share/conveyor"
+    chown -R "$CONVEYOR_USER:$CONVEYOR_GROUP" "$user_home/.codex" "$user_home/.local/share/conveyor"
+    chmod 700 "$user_home/.codex" "$user_home/.local/share/conveyor"
 }
 
 sync_source() {
@@ -123,6 +131,8 @@ setup_env() {
 
 install_systemd_units() {
     log_info "Installing systemd units..."
+    local user_home
+    user_home=$(eval echo "~$CONVEYOR_USER")
     local units=(
         "conveyor-telegram-bot.service"
         "conveyor-feishu-bot.service"
@@ -136,7 +146,7 @@ install_systemd_units() {
         local dst="/etc/systemd/system/$unit"
         if [[ -f "$src" ]]; then
             # Replace /opt/conveyor with actual CONVEYOR_DIR
-            sed "s|/opt/conveyor|$CONVEYOR_DIR|g; s|User=ubuntu|User=$CONVEYOR_USER|g; s|Group=ubuntu|Group=$CONVEYOR_GROUP|g" "$src" > "$dst"
+            sed "s|/opt/conveyor|$CONVEYOR_DIR|g; s|User=ubuntu|User=$CONVEYOR_USER|g; s|Group=ubuntu|Group=$CONVEYOR_GROUP|g; s|/home/ubuntu|$user_home|g" "$src" > "$dst"
             log_ok "Installed $unit"
         fi
     done

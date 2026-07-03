@@ -191,6 +191,8 @@ def _test_dispatch_load_phrase_skips_codex() -> CheckResult:
             conveyor_progress_mode="verbose",
             codex_memory_root=Path("/tmp/codex-ops-mem"),
             conveyor_session_enabled=False,
+            conveyor_max_jobs_per_hour=60,
+            conveyor_max_pending_jobs=20,
         )
         asyncio.run(dispatch(_msg("看看我的负载"), port, _settings(), runner))
         runner.start.assert_not_called()
@@ -213,6 +215,8 @@ def _test_dispatch_htop_phrase_skips_codex() -> CheckResult:
             conveyor_progress_mode="verbose",
             codex_memory_root=Path("/tmp/codex-ops-mem"),
             conveyor_session_enabled=False,
+            conveyor_max_jobs_per_hour=60,
+            conveyor_max_pending_jobs=20,
         )
         asyncio.run(dispatch(_msg("帮我运行 htop 看看我的vps"), port, _settings(), runner))
         runner.start.assert_not_called()
@@ -244,6 +248,8 @@ def _test_dispatch_coding_request_calls_codex() -> CheckResult:
             conveyor_progress_mode="verbose",
             codex_memory_root=Path("/tmp/codex-ops-mem"),
             conveyor_session_enabled=False,
+            conveyor_max_jobs_per_hour=60,
+            conveyor_max_pending_jobs=20,
         )
         asyncio.run(dispatch(_msg("写个 quicksort"), port, _settings(), runner))
         # Codex reply path: placeholder + possibly send_new final.
@@ -264,6 +270,8 @@ def _test_dispatch_slash_load_routes_to_command_table() -> CheckResult:
             conveyor_progress_mode="verbose",
             codex_memory_root=Path("/tmp/codex-ops-mem"),
             conveyor_session_enabled=False,
+            conveyor_max_jobs_per_hour=60,
+            conveyor_max_pending_jobs=20,
         )
         asyncio.run(dispatch(_msg("/load"), port, _settings(), runner))
         runner.start.assert_not_called()

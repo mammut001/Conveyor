@@ -124,14 +124,22 @@ def _msg(text: str = "截图看看我电脑现在是什么") -> InboundMessage:
 def _settings(tmp: str, *, max_pending: int = 3) -> object:
     os.environ["CODEX_MEMORY_ROOT"] = tmp
     os.environ["CONVEYOR_DESKTOP_OBSERVE_MAX_PENDING"] = str(max_pending)
+    os.environ["CONVEYOR_DESKTOP_SCREENSHOT_DIR"] = str(Path(tmp) / "desktop" / "screenshots")
     return load_settings()
 
 
-def _fake_result() -> dict:
+def _fake_result(screenshot_dir: Path | str | None = None) -> dict:
+    if screenshot_dir is None:
+        mem_root = os.environ.get("CODEX_MEMORY_ROOT")
+        if mem_root:
+            screenshot_dir = Path(mem_root) / "desktop" / "screenshots"
+        else:
+            screenshot_dir = "/Users/test/.codex/desktop/screenshots"
+    screenshot_dir = Path(screenshot_dir)
     return {
         "screenshot_id": "20260702T123500Z_abcd1234",
-        "path": "/Users/test/.codex/desktop/screenshots/20260702T123500Z_abcd1234.png",
-        "metadata_path": "/Users/test/.codex/desktop/screenshots/20260702T123500Z_abcd1234.json",
+        "path": str(screenshot_dir / "20260702T123500Z_abcd1234.png"),
+        "metadata_path": str(screenshot_dir / "20260702T123500Z_abcd1234.json"),
         "sha256": "abcd1234efgh5678" + "0" * 48,
         "width": 3024,
         "height": 1964,
@@ -162,6 +170,9 @@ def _test_create_and_pending() -> None:
 def _test_claim_complete() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
+        print("DEBUG IN TEST: tmp =", tmp)
+        print("DEBUG IN TEST: env =", os.environ.get("CODEX_MEMORY_ROOT"))
+        print("DEBUG IN TEST: settings.codex_memory_root =", settings.codex_memory_root)
         with mock.patch("nodes.state.is_desktop_online", return_value=True):
             created = create_observe_request(settings, _msg(), "test")
         request_id = created["request"]["request_id"]
@@ -239,11 +250,13 @@ def _test_too_many_pending() -> None:
 
 
 def _test_result_validation() -> None:
-    good = validate_observe_result(_fake_result())
+    import pathlib
+    test_dir = pathlib.Path("/Users/test/.codex/desktop/screenshots")
+    good = validate_observe_result(_fake_result(test_dir), test_dir)
     if good is None:
         _fail("result_validation_good", "rejected valid metadata")
         return
-    bad = validate_observe_result({**_fake_result(), "base64": "data"})
+    bad = validate_observe_result({**_fake_result(test_dir), "base64": "data"}, test_dir)
     if bad is not None:
         _fail("result_validation_bad", "accepted forbidden field")
         return
