@@ -17,6 +17,7 @@ enum NotificationManager {
         content.title = title
         content.body = body
         content.sound = .default
+
         let req = UNNotificationRequest(
             identifier: UUID().uuidString,
             content: content,

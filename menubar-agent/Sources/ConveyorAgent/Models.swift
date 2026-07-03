@@ -49,10 +49,34 @@ struct AppHealth: Equatable {
     let sshTunnel: ServiceStatus
     let desktopAgent: ServiceStatus
 
-    var overallEmoji: String {
+    /// Coarse health bucket. Mirrors the menu-bar icon states.
+    var overall: OverallHealth {
         let states = [sshTunnel.state, desktopAgent.state]
-        if states.allSatisfy({ $0 == .running }) { return "🟢" }
-        if states.allSatisfy({ $0 == .stopped }) { return "🔴" }
-        return "🟡"
+        let runningCount = states.filter { $0 == .running }.count
+        if runningCount == states.count { return .healthy }
+        if runningCount == 0 {
+            // 没有 running — 如果全是 unknown,显示 unknown;否则 down
+            if states.allSatisfy({ $0 == .unknown }) { return .unknown }
+            return .down
+        }
+        return .partial
     }
+
+    var overallEmoji: String {
+        switch overall {
+        case .healthy: return "🟢"
+        case .partial: return "🟡"
+        case .down:    return "🔴"
+        case .unknown: return "⚪️"
+        }
+    }
+}
+
+/// Coarse health bucket — drives the menu-bar icon state.
+/// 四种状态:healthy / partial / down / unknown
+enum OverallHealth: String {
+    case healthy  // both services running
+    case partial  // exactly one running
+    case down     // nothing running (且不是 unknown)
+    case unknown  // no signal yet
 }

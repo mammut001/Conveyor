@@ -4,6 +4,7 @@ import AppKit
 @main
 struct ConveyorAgentApp: App {
     @StateObject private var monitor = HealthMonitor.shared
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
         MenuBarExtra {
@@ -11,9 +12,27 @@ struct ConveyorAgentApp: App {
                 .environmentObject(monitor)
                 .frame(width: 280)
         } label: {
-            Text("\(monitor.health.overallEmoji) C")
+            // 主动放大尺寸让机器人在菜单栏里更醒目
+            // 菜单栏默认 18pt;我们用 28pt,系统会按比例缩放但优先保留我们的尺寸
+            Image(nsImage: IconCatalog.image(for: monitor.health.overall))
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 32, height: 24)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// Sets the running app's icon at launch. For LSUIElement apps the Dock icon is
+/// hidden, but the notification daemon (usernoted) renders the banner's left
+/// icon slot from the running process's icon; without pinning it explicitly,
+/// locally-signed UI-element apps fall back to the generic placeholder.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let img = NSImage(contentsOf: url) {
+            NSApp.applicationIconImage = img
+        }
     }
 }
 
