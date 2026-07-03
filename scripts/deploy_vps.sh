@@ -13,7 +13,10 @@
 #
 # Requirements on the VPS:
 #   - git repo already cloned at CONVEYOR_DEPLOY_PATH
-#   - .env exists only on VPS (never committed)
+#   - .env exists only on VPS (never committed); must be readable by BOTH the
+#     deploy user (this script runs smoke tests that load it) AND the systemd
+#     service user. Recommended ownership: `ubuntu:deploy` mode 640, so the
+#     ubuntu service user owns it and the deploy group can read it.
 #   - .venv exists; this script syncs dependencies from requirements.txt
 #   - systemd services: conveyor-telegram-bot, conveyor-feishu-bot
 #   - deploy user has passwordless sudo for systemctl restart/status/is-active
