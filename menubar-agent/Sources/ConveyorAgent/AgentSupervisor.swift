@@ -193,11 +193,26 @@ final class AgentSupervisor: ObservableObject {
 
     // MARK: - Env parsing
 
-    /// Merge `.desktop-agent.env` (if present) over the current process env.
+    /// Build a minimal child env for the python agent.
+    ///
+    /// Do NOT pass through the menu-bar app's full environment: inherited
+    /// `__CFBundleIdentifier` / XPC keys can cause capture-screen-helper to
+    /// fail Screen Recording checks when spawned from a long-running poller.
     private func mergedEnvironment(fromDir dir: String) -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
-        // Force unbuffered child output so the log streams in real time.
+        let parent = ProcessInfo.processInfo.environment
+        let passthrough = [
+            "HOME", "PATH", "USER", "LOGNAME", "TMPDIR", "LANG", "SHELL",
+            "SSH_AUTH_SOCK", "LC_ALL", "LC_CTYPE",
+        ]
+        var env: [String: String] = [:]
+        for key in passthrough {
+            if let v = parent[key] { env[key] = v }
+        }
+        if env["PATH"] == nil || env["PATH"]?.isEmpty == true {
+            env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        }
         env["PYTHONUNBUFFERED"] = "1"
+
         let path = "\(dir)/.desktop-agent.env"
         guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return env }
         for line in content.split(separator: "\n") {

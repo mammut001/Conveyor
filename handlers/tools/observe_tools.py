@@ -18,12 +18,12 @@ from handlers.tools.executors import (
 
 _OBSERVE_ERROR_HINTS_ZH: dict[str, tuple[str, list[str]]] = {
     "screen_recording_permission_required": (
-        "Mac 还没有「屏幕录制」权限（或授权后未重启 agent）。",
+        "Mac 还没有「屏幕录制」权限（或授权后 agent 未重启）。",
         [
-            "在 Mac 菜单栏打开 Conveyor Agent → 点击「开启屏幕录制权限」",
-            "在系统设置里打开 capture-screen-helper 的开关",
+            "系统设置 → 隐私与安全性 → 屏幕录制：同时打开 Conveyor Agent 和 capture-screen-helper",
+            "菜单栏 Conveyor Agent →「开启屏幕录制权限…」（会自动定位两个程序）",
             "若弹出提示，选择「退出并重新打开」",
-            "回到菜单栏点 Restart All，再在飞书重试截图",
+            "菜单栏点 Restart All，再在飞书重试截图",
         ],
     ),
     "screenshot_helper_not_configured": (

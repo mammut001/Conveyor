@@ -40,7 +40,8 @@ enum PermissionHelper {
         }
 
         let helperURL = URL(fileURLWithPath: helperPath)
-        NSWorkspace.shared.activateFileViewerSelecting([helperURL])
+        let appURL = Bundle.main.bundleURL
+        NSWorkspace.shared.activateFileViewerSelecting([helperURL, appURL])
         NSWorkspace.shared.open(screenRecordingSettingsURL)
 
         NSPasteboard.general.clearContents()
@@ -49,17 +50,18 @@ enum PermissionHelper {
         let alert = NSAlert()
         alert.messageText = "开启屏幕录制权限"
         alert.informativeText = """
-        已为你打开两件事：
+        已为你打开：
         1. 系统设置 → 屏幕录制
-        2. Finder 已定位 capture-screen-helper（路径已复制到剪贴板）
+        2. Finder 里的 capture-screen-helper 和 Conveyor Agent.app
 
-        请在系统设置点击 +，选中 Finder 里的 capture-screen-helper，打开开关。
+        请在屏幕录制列表里把这两项都打开（没有就点 + 添加）。
         若提示退出应用，请选择「退出并重新打开」。
-        完成后回到本菜单，点 Restart All，再在飞书重试截图。
+        点「好的」后会自动 Restart All，再在飞书重试截图。
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "好的")
         alert.runModal()
+        AgentSupervisor.shared.restart()
         return nil
     }
 }

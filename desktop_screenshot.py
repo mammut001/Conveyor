@@ -5,6 +5,8 @@ import hashlib
 import json
 import logging
 import os
+import platform
+import shlex
 import subprocess
 import uuid
 from datetime import datetime, timezone
@@ -287,6 +289,68 @@ def write_screenshot_metadata(
     return metadata_path
 
 
+def _helper_stdout_indicates_permission_denied(stdout: str) -> bool:
+    if not stdout.strip():
+        return False
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return payload.get("error") == "screen_recording_permission_required"
+
+
+def _run_helper_detached(cmd: list[str], *, timeout: int) -> subprocess.CompletedProcess:
+    """Run helper outside the menu-bar app's TCC attribution chain."""
+    shell_cmd = " ".join(shlex.quote(part) for part in cmd)
+    tmp_path: str | None = None
+    try:
+        tmp = Path(os.environ.get("TMPDIR", "/tmp")) / f"conveyor-capture-{uuid.uuid4().hex}.sh"
+        tmp.write_text(f"#!/bin/bash\nset -euo pipefail\n{shell_cmd}\n", encoding="utf-8")
+        tmp.chmod(0o700)
+        tmp_path = str(tmp)
+        return subprocess.run(
+            ["launchctl", "asuser", str(os.getuid()), tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    finally:
+        if tmp_path is not None:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                logger.debug("could not remove temp capture script: %s", tmp_path)
+
+
+def _run_helper_command(cmd: list[str], *, timeout: int = 60) -> subprocess.CompletedProcess:
+    helper_env = {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME": os.environ.get("HOME", ""),
+        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+        "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+    }
+    completed = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        env=helper_env,
+    )
+    if (
+        platform.system() == "Darwin"
+        and _helper_stdout_indicates_permission_denied(completed.stdout or "")
+    ):
+        logger.info(
+            "desktop observe: direct helper denied Screen Recording; retrying detached",
+        )
+        return _run_helper_detached(cmd, timeout=timeout)
+    return completed
+
+
 def capture_screenshot_once(settings: Settings) -> dict:
     """Capture one screenshot via the local helper CLI. Read-only, local-only."""
     helper_error = helper_configuration_error(settings)
@@ -335,13 +399,7 @@ def capture_screenshot_once(settings: Settings) -> dict:
     )
 
     try:
-        completed = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
+        completed = _run_helper_command(cmd, timeout=60)
     except FileNotFoundError:
         return {
             "ok": False,
@@ -357,6 +415,9 @@ def capture_screenshot_once(settings: Settings) -> dict:
 
     stdout = (completed.stdout or "").strip()
     if not stdout:
+        stderr = (completed.stderr or "").strip()
+        if stderr:
+            logger.info("desktop observe helper stderr: %s", stderr[:500])
         return {
             "ok": False,
             "error": "helper_empty_output",
@@ -385,6 +446,9 @@ def capture_screenshot_once(settings: Settings) -> dict:
         max_bytes=settings.conveyor_desktop_screenshot_max_bytes,
     )
     if not validated.get("ok"):
+        stderr = (completed.stderr or "").strip()
+        if stderr:
+            logger.info("desktop observe helper stderr: %s", stderr[:500])
         logger.info(
             "desktop observe failed: error=%s screenshot_id=%s",
             validated.get("error"),

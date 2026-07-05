@@ -22,6 +22,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("desktop_agent")
 
+# Supervisor restarts the child when observe fails due to stale Screen Recording
+# consent in a long-running poll-observe process (grant in Settings, then exit).
+_PERMISSION_RESTART_EXIT_CODE = 42
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -202,6 +206,13 @@ def poll_observe_once(settings: Settings) -> None:
         )
     except Exception as exc:
         logger.info("observe fail report failed request_id=%s: %s", request_id, exc)
+
+    if error_code == "screen_recording_permission_required":
+        logger.info(
+            "Screen Recording permission missing or stale in poll-observe; "
+            "exiting for supervisor restart (grant permission, then retry observe)."
+        )
+        raise SystemExit(_PERMISSION_RESTART_EXIT_CODE)
 
 
 def generate_thumbnail(
