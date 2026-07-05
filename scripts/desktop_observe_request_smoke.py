@@ -305,13 +305,21 @@ def _test_feishu_card_buttons() -> None:
         flatten_card_to_text,
     )
 
+    card = desktop_observe_request_card("📸 已创建桌面截图请求（仅元数据）\n不上传图片")
+    text = flatten_card_to_text(card)
+    if not (("元数据" in text or "metadata" in text.lower())
+            and ("不上传" in text or "no upload" in text.lower())):
+        _fail("feishu_card_wording", text[:200])
+        return
+    status_card = desktop_observe_status_card("pending request obs_test")
+    status_text = flatten_card_to_text(status_card).lower()
+    for phrase in ("metadata", "no upload", "no preview"):
+        if phrase not in status_text:
+            _fail("feishu_card_wording_status", f"missing {phrase}")
+            return
     for builder in (desktop_observe_request_card, desktop_observe_status_card):
-        card = builder("pending request obs_test")
-        text = flatten_card_to_text(card).lower()
-        for phrase in ("metadata", "no upload", "no preview"):
-            if phrase not in text:
-                _fail("feishu_card_wording", f"missing {phrase}")
-                return
+        card = builder("pending request obs_test") if builder is desktop_observe_status_card else desktop_observe_request_card("📸 已发起截图请求")
+        text = flatten_card_to_text(card)
         actions = []
         for el in card.get("elements") or []:
             if el.get("tag") == "action":
@@ -721,6 +729,19 @@ def test_p543_auto_thumbnail_flags_and_routing():
     from desktop_observe_requests import RESULT_FORBIDDEN_FIELDS
     assert "png_bytes" in RESULT_FORBIDDEN_FIELDS and "ocr" in RESULT_FORBIDDEN_FIELDS
     print("✓ 12/13. forbidden fields protect against full/OCR")
+
+    from handlers.tools.observe_tools import format_observe_failure
+    fail_text = format_observe_failure({
+        "request_id": "obs_test",
+        "status": "failed",
+        "error": "screen_recording_permission_required",
+        "user_request": "截图看看我电脑现在是什么",
+    })
+    assert "截图失败" in fail_text
+    assert "屏幕录制" in fail_text
+    assert "Observe request" not in fail_text
+    assert "No thumbnail sent" not in fail_text
+    print("✓ 14. failure message is user-friendly Chinese")
 
 
 if __name__ == "__main__":

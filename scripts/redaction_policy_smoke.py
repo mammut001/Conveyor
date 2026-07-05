@@ -55,6 +55,19 @@ def test_redaction_policy() -> list[CheckResult]:
     red_feishu_cli = redact_text(t_feishu_cli)
     results.append(CheckResult("feishu_cli_redacts", "cli_[REDACTED]" in red_feishu_cli and "a1b2c3" not in red_feishu_cli, f"got={red_feishu_cli}"))
 
+    # New broader cli_ checks
+    t_cli_short = "cli_12345678"
+    red_cli_short = redact_text(t_cli_short)
+    results.append(CheckResult("cli_short_redacts", red_cli_short == "cli_[REDACTED]", f"got={red_cli_short}"))
+
+    t_cli_mixed = "cli_ABCdef_123456"
+    red_cli_mixed = redact_text(t_cli_mixed)
+    results.append(CheckResult("cli_mixed_redacts", red_cli_mixed == "cli_[REDACTED]", f"got={red_cli_mixed}"))
+
+    t_cli_normal = "this client is a cyclist"
+    red_cli_normal = redact_text(t_cli_normal)
+    results.append(CheckResult("cli_normal_unredacted", red_cli_normal == t_cli_normal, f"got={red_cli_normal}"))
+
     t_feishu_t = "feishu token t-1234567890abcdef1234567890abcdef"
     red_feishu_t = redact_text(t_feishu_t)
     results.append(CheckResult("feishu_t_redacts", "t-[REDACTED]" in red_feishu_t and "123456" not in red_feishu_t, f"got={red_feishu_t}"))

@@ -223,17 +223,27 @@ def _test_computer_status_card() -> list[CheckResult]:
 
 
 def _test_desktop_observe_request_card() -> list[CheckResult]:
-    card = desktop_observe_request_card("Request: obs_test pending")
+    card = desktop_observe_request_card("📸 已创建桌面截图请求（仅元数据）\n不上传图片")
     results = _check_card_shape(card, "desktop_observe_request_card")
     results += _check_button_values(
         card, {"desktop_observe_status", "nodes_status"},
         "desktop_observe_request_card",
     )
-    text = flatten_card_to_text(card).lower()
+    text = flatten_card_to_text(card)
     results.append(CheckResult(
         "desktop_observe_request_card: metadata-only safety wording",
-        "metadata" in text and "no upload" in text,
+        ("元数据" in text or "metadata" in text.lower())
+        and ("不上传" in text or "no upload" in text.lower()),
         f"text={text[:200]!r}",
+    ))
+    fail_card = desktop_observe_request_card(
+        "❌ 截图失败\n\n原因：Mac 还没有「屏幕录制」权限"
+    )
+    fail_text = flatten_card_to_text(fail_card)
+    results.append(CheckResult(
+        "desktop_observe_request_card: failure wording",
+        "截图失败" in fail_text and "屏幕录制" in fail_text,
+        f"text={fail_text[:200]!r}",
     ))
     forbidden = {"capture", "upload", "preview", "analyze"}
     labels = set()

@@ -122,6 +122,8 @@ struct MenuBarView: View {
             Divider().padding(.vertical, 6)
             logButtons
             Divider().padding(.vertical, 6)
+            permissionButton
+            Divider().padding(.vertical, 6)
             preferencesButton
             Divider().padding(.vertical, 6)
             testNotificationButton
@@ -237,6 +239,20 @@ struct MenuBarView: View {
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.plain)
         }
+    }
+
+    private var permissionButton: some View {
+        Button("🎥  开启屏幕录制权限…") {
+            let prefs = PreferencesStore.shared
+            let dir = prefs.conveyorDir.isEmpty ? Config.repoDir() : prefs.conveyorDir
+            let err = PermissionHelper.guideScreenRecordingPermission(conveyorDir: dir)
+            if let err {
+                monitor.lastError = err
+            }
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 3)
     }
 
     private var preferencesButton: some View {

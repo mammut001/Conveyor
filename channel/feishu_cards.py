@@ -447,22 +447,34 @@ def _observe_readonly_preamble() -> str:
     )
 
 
+def _desktop_observe_card_context(summary_text: str) -> tuple[str, str, str]:
+    """Return (title, color, body) for observe result cards."""
+    text = (summary_text or "").strip()
+    if text.startswith("❌") or "截图失败" in text[:120]:
+        return "截图失败", "red", text
+    if text.startswith("⏱️") or "已过期" in text[:80]:
+        return "截图已过期", "orange", text
+    if text.startswith("🚫") or "已取消" in text[:80]:
+        return "截图已取消", "grey", text
+    if "仅元数据" in text or "不上传图片" in text:
+        preamble = "**只读 · 仅元数据**\n不会上传图片或缩略图预览。"
+        body = f"{preamble}\n\n{text}" if text else preamble
+        return "桌面截图请求", "turquoise", body
+    if text:
+        return "桌面截图", "blue", text
+    return "桌面截图", "blue", "已创建截图请求，请稍候。"
+
+
 def desktop_observe_request_card(summary_text: str) -> dict[str, Any]:
-    """Card for remote observe request creation (P5.3)."""
-    preamble = (
-        "**Desktop Observe Request**\n"
-        "Metadata only — no upload, no preview, no Computer Use control."
-    )
-    body = preamble
-    if summary_text.strip():
-        body = f"{preamble}\n\n{summary_text.strip()}"
+    """Card for remote observe request creation (P5.3+)."""
+    title, color, body = _desktop_observe_card_context(summary_text)
     buttons: list[dict[str, Any]] = [
-        _button("Refresh status", {"action": "desktop_observe_status"}),
-        _button("Nodes", {"action": "nodes_status"}),
+        _button("刷新状态", {"action": "desktop_observe_status"}),
+        _button("节点状态", {"action": "nodes_status"}),
     ]
     return {
         "config": {"wide_screen_mode": True, "update_multi": True},
-        "header": _header("Desktop Observe Request", "turquoise"),
+        "header": _header(title, color),
         "elements": [
             _markdown(_truncate(body, 1500)),
             _actions_row(buttons),

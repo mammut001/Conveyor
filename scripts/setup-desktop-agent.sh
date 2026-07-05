@@ -64,7 +64,7 @@ export CONVEYOR_DESKTOP_NODE_ENABLED=true
 export CONVEYOR_DESKTOP_NODE_ID="$NODE_ID"
 export CONVEYOR_DESKTOP_NODE_NAME="$NODE_NAME"
 export CONVEYOR_DESKTOP_SCREENSHOT_HELPER="$HELPER_PATH"
-export CONVEYOR_DESKTOP_SCREENSHOT_DIR="\$HOME/.codex/desktop/screenshots"
+export CONVEYOR_DESKTOP_SCREENSHOT_DIR="$(cd ~ && pwd)/.codex/desktop/screenshots"
 export CONVEYOR_DESKTOP_UPLOAD_ENABLED=true
 export CONVEYOR_DESKTOP_AUTO_THUMBNAIL_ON_OBSERVE=true
 EOF
@@ -109,8 +109,10 @@ fi
 echo ""
 echo "=== Next steps ==="
 echo "1. SSH tunnel: handled by launchd (if you said y above)."
-echo "2. Desktop agent: install + run the menu bar app (see above). Grant it"
-echo "   Full Disk Access + Screen Recording so it can read ~/Documents and capture."
+echo "2. Desktop agent: install + run the menu bar app (see above)."
+echo "   Screen Recording: bash scripts/grant-screen-recording.sh"
+echo "   or menu bar → 开启屏幕录制权限…"
+echo "   Grant Full Disk Access to Conveyor Agent.app if repo is under ~/Documents."
 echo "3. On VPS, make sure desktop_agent_server.py is running if not using systemd."
 echo ""
 echo "For the full one-click feel on VPS: use scripts/install-remote.sh from your laptop."

@@ -36,7 +36,7 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
     re.compile(r"\b(ya29\.)[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\b(AIza)[A-Za-z0-9_-]{30,}\b"),
-    re.compile(r"\b(cli_)[a-z0-9]{16}\b"),
+    re.compile(r"\b(cli_)[A-Za-z0-9_-]{8,}\b"),
     re.compile(r"\b(t-)[a-zA-Z0-9_-]{20,}\b"),
     re.compile(r"\b(sk-ant-api)[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),

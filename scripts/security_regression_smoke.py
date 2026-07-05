@@ -39,6 +39,9 @@ def test_exception_traceback_redaction() -> CheckResult:
     filt = SecretRedactingFilter()
     filt.filter(record)
     
+    # Assert record.exc_info is cleared
+    ok_exc_info_cleared = (record.exc_info is None)
+    
     # Format the record
     formatter = logging.Formatter("%(message)s\n%(exc_text)s")
     formatted = formatter.format(record)
@@ -46,11 +49,14 @@ def test_exception_traceback_redaction() -> CheckResult:
     # Check that secrets are redacted from both record msg and exception text
     ok_msg = "bot12345:" not in record.msg or "[REDACTED]" in record.msg
     ok_exc = "sk-" not in formatted or "[REDACTED]" in formatted
+    ok_raw_secret_absent = "sk-abcdefghijklmnopqrstuvwx" not in formatted
+    
+    ok = ok_msg and ok_exc and ok_exc_info_cleared and ok_raw_secret_absent
     
     return CheckResult(
         "exception_traceback_redaction",
-        ok_msg and ok_exc,
-        f"msg_redacted={ok_msg} exc_redacted={ok_exc} formatted={formatted.strip()}"
+        ok,
+        f"msg_redacted={ok_msg} exc_redacted={ok_exc} exc_info_cleared={ok_exc_info_cleared} raw_absent={ok_raw_secret_absent} formatted={formatted.strip()}"
     )
 
 

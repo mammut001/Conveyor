@@ -37,11 +37,13 @@ class SecretRedactingFilter(logging.Filter):
         elif isinstance(record.args, dict):
             record.args = {key: redact_text(value) if isinstance(value, str) else value for key, value in record.args.items()}
         
-        if record.exc_info and not record.exc_text:
-            try:
-                record.exc_text = redact_text("".join(traceback.format_exception(*record.exc_info)))
-            except Exception:
-                pass
+        if record.exc_info:
+            if not record.exc_text:
+                try:
+                    record.exc_text = redact_text("".join(traceback.format_exception(*record.exc_info)))
+                except Exception:
+                    pass
+            record.exc_info = None
         
         if isinstance(record.exc_text, str):
             record.exc_text = redact_text(record.exc_text)
