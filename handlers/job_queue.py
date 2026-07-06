@@ -118,7 +118,12 @@ class JobQueue:
         if self._settings and hasattr(self._settings, "codex_memory_root"):
             root = Path(self._settings.codex_memory_root)
         else:
-            root = Path(os.getenv("CODEX_MEMORY_ROOT", "~/.codex")).expanduser().resolve()
+            try:
+                from config import load_settings
+                settings = load_settings()
+                root = Path(settings.codex_memory_root)
+            except Exception:
+                root = Path(os.getenv("CODEX_MEMORY_ROOT", "~/.codex")).expanduser().resolve()
         return root / "state" / "job_queue.sqlite3"
 
     def _get_conn(self) -> sqlite3.Connection:
