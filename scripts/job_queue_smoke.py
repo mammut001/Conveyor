@@ -40,7 +40,11 @@ from scripts.harness_common import CheckResult, print_results  # noqa: E402
 
 def clean_db():
     """Clean the SQLite database file to ensure test case isolation."""
-    db_file = Path(TMP_DIR) / "state" / "job_queue.sqlite3"
+    import getpass
+    username = getpass.getuser()
+    root = Path(TMP_DIR)
+    isolated_root = root.parent / f"{root.name}-{username}"
+    db_file = isolated_root / "state" / "job_queue.sqlite3"
     if db_file.exists():
         try:
             db_file.unlink()
@@ -519,6 +523,13 @@ def main() -> int:
     print_results(results)
     
     # Cleanup temp directory
+    try:
+        import getpass
+        username = getpass.getuser()
+        isolated_root = Path(TMP_DIR).parent / f"{Path(TMP_DIR).name}-{username}"
+        shutil.rmtree(str(isolated_root))
+    except OSError:
+        pass
     try:
         shutil.rmtree(TMP_DIR)
     except OSError:
