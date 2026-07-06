@@ -94,3 +94,5 @@ When upgrading to version v0.1.1, operators must perform the following security 
   ```bash
   chmod 0700 /path/to/codex_memory_root
   ```
+
+
