@@ -538,8 +538,11 @@ handlers/
 | `/queue_resume` | Resume automatic dequeue |
 
 Queue behavior:
-- In-memory FIFO queue (lost on bot restart).
-- Max queue length: 10 jobs.
+- Persistent SQLite FIFO queue (stored at `codex_memory_root/state/job_queue.sqlite3`, surviving bot restarts, deployments, and VPS reboots).
+- Startup recovery: any job marked running during a previous process is automatically transitioned to `interrupted` on boot (preventing blind auto-resumption).
+- Auto-resume: queued jobs automatically continue executing sequentially after bot boot and configuration.
+- Pause state persistence: the paused/resumed state survives bot restarts.
+- Max queue length: configured via `conveyor_max_pending_jobs` setting (defaulting to 10 jobs).
 - When a job completes, automatically starts the next queued job.
 - Queue only stores prompt text and routing metadata (no secrets).
 - Queue display is redacted/truncated via `redact_text()` + `truncate()`.
@@ -551,9 +554,9 @@ via `/queue_pause`; completed jobs do not auto-start next when paused.
 
 Deterministic READ tools bypass the queue and execute immediately.
 
-Smoke: `scripts/job_queue_smoke.py` (10 cases: enqueue/dequeue,
+Smoke: `scripts/job_queue_smoke.py` (13 cases: enqueue/dequeue,
 FIFO order, max length, cancel, clear, pause/resume, status display,
-commands registered, help text, redaction).
+commands registered, help text, redaction, persistence & recovery, configuration & callbacks, start failure handling).
 
 **P3.9 Generic Project Profiles:** A project skills layer that works
 for any user's projects. Users define project profiles and run generic

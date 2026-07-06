@@ -450,8 +450,11 @@ handlers/
 | `/queue_resume` | 恢复队列自动出队 |
 
 队列行为：
-- 内存 FIFO 队列（bot 重启后丢失）。
-- 最大队列长度：10 个任务。
+- 持久化 SQLite FIFO 队列（存储在 `codex_memory_root/state/job_queue.sqlite3`，在 bot 重启/部署/VPS 重启后仍会保留）。
+- 启动恢复：任何在上次进程退出前处于运行中（running）状态的任务会自动变为中断（interrupted）状态，不会盲目自动重新执行。
+- 自动恢复：排队中（queued）状态的任务在 bot 启动并配置好后会自动继续依次执行。
+- 暂停状态持久化：暂停/恢复状态（paused）在重启后依然保留。
+- 最大队列长度：由配置中的 `conveyor_max_pending_jobs` 限制（默认 10 个任务）。
 - 当任务完成时，自动启动下一个队列任务。
 - 队列仅存储 prompt 文本和路由元数据（无密钥）。
 - 队列显示经过 `redact_text()` + `truncate()` 处理。
@@ -462,7 +465,7 @@ handlers/
 
 确定性 READ 工具绕过队列，直接执行。
 
-Smoke：`scripts/job_queue_smoke.py`（10 项：enqueue/dequeue、FIFO 顺序、最大长度、cancel、clear、pause/resume、状态显示、命令注册、help 文本、脱敏）。
+Smoke：`scripts/job_queue_smoke.py`（13 项：enqueue/dequeue、FIFO 顺序、最大长度、cancel、clear、pause/resume、状态显示、命令注册、help 文本、脱敏、持久化与恢复、配置加载与回调、启动失败自动标记失败）。
 
 **P3.9 通用项目管理（Project Profiles）**：通用的项目技能层，适用于任何用户的项目。用户定义项目配置文件，并运行通用项目命令。复用现有 Gmail、Calendar、GitHub、Notes、Reminders 工具。
 

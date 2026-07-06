@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Persistent Job Queue (P4.4)**:
+  - Persistent SQLite DB store under `codex_memory_root/state/job_queue.sqlite3` with columns for ID, operator, channel, mode, prompt, state, timings, errors, and metadata.
+  - Queue `queued`/`running` states and `paused` status persist across bot restarts and VPS reboots.
+  - Startup recovery: automatic transition of any previously `running` jobs to `interrupted`.
+  - Background auto-resume of `queued` jobs on startup if bot is configured.
+  - Exception handling: mark running queue row as failed if job fails to start.
+  - Updated `/queue_clear` command to directly cancel all queued jobs and aligned the help text.
+
+
 ## [0.1.1] - 2026-07-06 (Security Hardening)
 
 ### Security Hardening & Fixes

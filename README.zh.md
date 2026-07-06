@@ -85,7 +85,7 @@ Conveyor:
 - `/apply` — 把 worktree 合回主分支（仅当主分支干净时）。
 - `/discard` · `/cancel` — 丢掉 worktree 或杀掉正在跑的进程。
 - `/queue` · `/queue_cancel` · `/queue_clear` · `/queue_pause` · `/queue_resume`
-  — Codex 任务的单并发 FIFO 队列。
+  — 基于 SQLite 的持久化单并发 FIFO Codex 任务队列（bot 重启/部署/VPS 重启后依然保留；运行中的任务在启动时自动标为中断，排队中的任务自动恢复，且暂停状态持久化）。
 
 ### 个人记忆
 

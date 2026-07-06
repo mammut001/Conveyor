@@ -100,9 +100,12 @@ class JobQueue:
     def queue_length(self) -> int:
         """Number of active queued jobs."""
         conn = self._get_conn()
-        with conn:
-            cur = conn.execute("SELECT COUNT(*) FROM queued_jobs WHERE state = 'queued'")
-            return cur.fetchone()[0]
+        try:
+            with conn:
+                cur = conn.execute("SELECT COUNT(*) FROM queued_jobs WHERE state = 'queued'")
+                return cur.fetchone()[0]
+        finally:
+            conn.close()
 
     def set_start_callback(self, callback: Callable[[QueuedJob], Awaitable[None]]) -> None:
         """Set the callback to start a queued job."""
@@ -112,6 +115,8 @@ class JobQueue:
         """Configure settings and runner, and load/recover database."""
         self._settings = settings
         self._runner = runner
+        if hasattr(settings, "conveyor_max_pending_jobs"):
+            self._max_length = settings.conveyor_max_pending_jobs
         self.recover_and_load()
 
     def _db_path(self) -> Path:
@@ -186,28 +191,31 @@ class JobQueue:
         """Recover interrupted running jobs and reload paused state and counter."""
         conn = self._get_conn()
         now_str = datetime.now(timezone.utc).isoformat()
-        with conn:
-            # 1. Update running jobs to interrupted on startup
-            conn.execute(
-                "UPDATE queued_jobs SET state = 'interrupted', finished_at = ?, position = 0 WHERE state = 'running'",
-                (now_str,)
-            )
-            
-            # 2. Load paused state
-            cur = conn.execute("SELECT value FROM queue_metadata WHERE key = 'paused'")
-            row = cur.fetchone()
-            if row:
-                self._paused = (row[0] == 'true')
-            else:
-                self._paused = False
+        try:
+            with conn:
+                # 1. Update running jobs to interrupted on startup
+                conn.execute(
+                    "UPDATE queued_jobs SET state = 'interrupted', finished_at = ?, position = 0 WHERE state = 'running'",
+                    (now_str,)
+                )
                 
-            # 3. Load counter
-            cur = conn.execute("SELECT value FROM queue_metadata WHERE key = 'counter'")
-            row = cur.fetchone()
-            if row:
-                self._counter = int(row[0])
-            else:
-                self._counter = 0
+                # 2. Load paused state
+                cur = conn.execute("SELECT value FROM queue_metadata WHERE key = 'paused'")
+                row = cur.fetchone()
+                if row:
+                    self._paused = (row[0] == 'true')
+                else:
+                    self._paused = False
+                    
+                # 3. Load counter
+                cur = conn.execute("SELECT value FROM queue_metadata WHERE key = 'counter'")
+                row = cur.fetchone()
+                if row:
+                    self._counter = int(row[0])
+                else:
+                    self._counter = 0
+        finally:
+            conn.close()
         logger.info("JobQueue recovered and loaded (paused=%s, counter=%d)", self._paused, self._counter)
 
     def _next_id(self, conn: sqlite3.Connection) -> str:
@@ -271,32 +279,35 @@ class JobQueue:
         """Add a job to the queue."""
         async with self._lock:
             conn = self._get_conn()
-            with conn:
-                cur = conn.execute("SELECT COUNT(*) FROM queued_jobs WHERE state = 'queued'")
-                count = cur.fetchone()[0]
-                if count >= self._max_length:
-                    return False, f"队列已满（最多 {self._max_length} 个任务）", None
+            try:
+                with conn:
+                    cur = conn.execute("SELECT COUNT(*) FROM queued_jobs WHERE state = 'queued'")
+                    count = cur.fetchone()[0]
+                    if count >= self._max_length:
+                        return False, f"队列已满（最多 {self._max_length} 个任务）", None
 
-                job_id = self._next_id(conn)
-                now_str = datetime.now(timezone.utc).isoformat()
-                metadata_json = json.dumps({"original_text": original_text or msg.text})
-                
-                conn.execute(
-                    """
-                    INSERT INTO queued_jobs (
-                        id, operator_id, channel, chat_id, mode, prompt, state, created_at, updated_at, position, metadata_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
-                    """,
-                    (
-                        job_id, msg.operator_id, msg.channel, msg.chat_id, mode, prompt,
-                        now_str, now_str, count + 1, metadata_json
+                    job_id = self._next_id(conn)
+                    now_str = datetime.now(timezone.utc).isoformat()
+                    metadata_json = json.dumps({"original_text": original_text or msg.text})
+                    
+                    conn.execute(
+                        """
+                        INSERT INTO queued_jobs (
+                            id, operator_id, channel, chat_id, mode, prompt, state, created_at, updated_at, position, metadata_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+                        """,
+                        (
+                            job_id, msg.operator_id, msg.channel, msg.chat_id, mode, prompt,
+                            now_str, now_str, count + 1, metadata_json
+                        )
                     )
-                )
-                self._recalculate_positions(conn)
-                
-                cur = conn.execute("SELECT * FROM queued_jobs WHERE id = ?", (job_id,))
-                row = cur.fetchone()
-                queued_job = self._row_to_job(row, msg, port, runner)
+                    self._recalculate_positions(conn)
+                    
+                    cur = conn.execute("SELECT * FROM queued_jobs WHERE id = ?", (job_id,))
+                    row = cur.fetchone()
+                    queued_job = self._row_to_job(row, msg, port, runner)
+            finally:
+                conn.close()
 
             # Store memory references for live session processing
             self._memory_references[job_id] = {"msg": msg, "port": port, "runner": runner}
@@ -317,22 +328,25 @@ class JobQueue:
             if self._paused:
                 return None
             conn = self._get_conn()
-            with conn:
-                cur = conn.execute("SELECT * FROM queued_jobs WHERE state = 'queued' ORDER BY position ASC, created_at ASC LIMIT 1")
-                row = cur.fetchone()
-                if not row:
-                    return None
-                
-                job_id = row["id"]
-                now_str = datetime.now(timezone.utc).isoformat()
-                conn.execute(
-                    "UPDATE queued_jobs SET state = 'running', started_at = ?, position = 0 WHERE id = ?",
-                    (now_str, job_id)
-                )
-                self._recalculate_positions(conn)
-                
-                cur = conn.execute("SELECT * FROM queued_jobs WHERE id = ?", (job_id,))
-                updated_row = cur.fetchone()
+            try:
+                with conn:
+                    cur = conn.execute("SELECT * FROM queued_jobs WHERE state = 'queued' ORDER BY position ASC, created_at ASC LIMIT 1")
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                    
+                    job_id = row["id"]
+                    now_str = datetime.now(timezone.utc).isoformat()
+                    conn.execute(
+                        "UPDATE queued_jobs SET state = 'running', started_at = ?, position = 0 WHERE id = ?",
+                        (now_str, job_id)
+                    )
+                    self._recalculate_positions(conn)
+                    
+                    cur = conn.execute("SELECT * FROM queued_jobs WHERE id = ?", (job_id,))
+                    updated_row = cur.fetchone()
+            finally:
+                conn.close()
                 
             refs = self._memory_references.get(job_id, {})
             job = self._row_to_job(
@@ -341,29 +355,40 @@ class JobQueue:
                 port=refs.get("port"),
                 runner=refs.get("runner") or self._runner
             )
-            logger.info("Job %s dequeued (remaining queued count: %d)", job.id, self._get_queued_count(conn))
+            logger.info("Job %s dequeued (remaining queued count: %d)", job.id, self._get_queued_count())
             return job
 
-    def _get_queued_count(self, conn: sqlite3.Connection) -> int:
-        cur = conn.execute("SELECT COUNT(*) FROM queued_jobs WHERE state = 'queued'")
-        return cur.fetchone()[0]
+    def _get_queued_count(self, conn: sqlite3.Connection | None = None) -> int:
+        if conn is not None:
+            cur = conn.execute("SELECT COUNT(*) FROM queued_jobs WHERE state = 'queued'")
+            return cur.fetchone()[0]
+        conn = self._get_conn()
+        try:
+            with conn:
+                cur = conn.execute("SELECT COUNT(*) FROM queued_jobs WHERE state = 'queued'")
+                return cur.fetchone()[0]
+        finally:
+            conn.close()
 
     async def cancel(self, job_id: str) -> tuple[bool, str]:
         """Cancel a queued job by ID."""
         async with self._lock:
             conn = self._get_conn()
-            with conn:
-                cur = conn.execute("SELECT * FROM queued_jobs WHERE id = ? AND state = 'queued'", (job_id,))
-                row = cur.fetchone()
-                if not row:
-                    return False, f"未找到队列任务 {job_id}"
-                
-                now_str = datetime.now(timezone.utc).isoformat()
-                conn.execute(
-                    "UPDATE queued_jobs SET state = 'cancelled', finished_at = ?, position = 0 WHERE id = ?",
-                    (now_str, job_id)
-                )
-                self._recalculate_positions(conn)
+            try:
+                with conn:
+                    cur = conn.execute("SELECT * FROM queued_jobs WHERE id = ? AND state = 'queued'", (job_id,))
+                    row = cur.fetchone()
+                    if not row:
+                        return False, f"未找到队列任务 {job_id}"
+                    
+                    now_str = datetime.now(timezone.utc).isoformat()
+                    conn.execute(
+                        "UPDATE queued_jobs SET state = 'cancelled', finished_at = ?, position = 0 WHERE id = ?",
+                        (now_str, job_id)
+                    )
+                    self._recalculate_positions(conn)
+            finally:
+                conn.close()
                 
             self._memory_references.pop(job_id, None)
             logger.info("Job %s cancelled from queue", job_id)
@@ -374,15 +399,18 @@ class JobQueue:
         async with self._lock:
             conn = self._get_conn()
             now_str = datetime.now(timezone.utc).isoformat()
-            with conn:
-                cur = conn.execute("SELECT id FROM queued_jobs WHERE state = 'queued'")
-                queued_ids = [r[0] for r in cur.fetchall()]
-                if not queued_ids:
-                    return 0
-                conn.execute(
-                    "UPDATE queued_jobs SET state = 'cancelled', finished_at = ?, position = 0 WHERE state = 'queued'",
-                    (now_str,)
-                )
+            try:
+                with conn:
+                    cur = conn.execute("SELECT id FROM queued_jobs WHERE state = 'queued'")
+                    queued_ids = [r[0] for r in cur.fetchall()]
+                    if not queued_ids:
+                        return 0
+                    conn.execute(
+                        "UPDATE queued_jobs SET state = 'cancelled', finished_at = ?, position = 0 WHERE state = 'queued'",
+                        (now_str,)
+                    )
+            finally:
+                conn.close()
             for job_id in queued_ids:
                 self._memory_references.pop(job_id, None)
             logger.info("Queue cleared (%d jobs removed)", len(queued_ids))
@@ -393,10 +421,13 @@ class JobQueue:
         async with self._lock:
             self._paused = True
             conn = self._get_conn()
-            with conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO queue_metadata (key, value) VALUES ('paused', 'true')"
-                )
+            try:
+                with conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO queue_metadata (key, value) VALUES ('paused', 'true')"
+                    )
+            finally:
+                conn.close()
             logger.info("Queue paused")
 
     async def resume(self) -> None:
@@ -404,26 +435,32 @@ class JobQueue:
         async with self._lock:
             self._paused = False
             conn = self._get_conn()
-            with conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO queue_metadata (key, value) VALUES ('paused', 'false')"
-                )
+            try:
+                with conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO queue_metadata (key, value) VALUES ('paused', 'false')"
+                    )
+            finally:
+                conn.close()
             logger.info("Queue resumed")
 
     async def get_queue_status(self) -> str:
         """Get a formatted queue status string with summaries and queued jobs."""
         async with self._lock:
             conn = self._get_conn()
-            with conn:
-                cur = conn.execute("SELECT state, COUNT(*) FROM queued_jobs GROUP BY state")
-                counts = {state: 0 for state in ["queued", "running", "interrupted", "completed", "failed", "cancelled"]}
-                for row in cur.fetchall():
-                    state_val = row[0]
-                    if state_val in counts:
-                        counts[state_val] = row[1]
-                
-                cur = conn.execute("SELECT * FROM queued_jobs WHERE state = 'queued' ORDER BY position ASC, created_at ASC")
-                queued_rows = cur.fetchall()
+            try:
+                with conn:
+                    cur = conn.execute("SELECT state, COUNT(*) FROM queued_jobs GROUP BY state")
+                    counts = {state: 0 for state in ["queued", "running", "interrupted", "completed", "failed", "cancelled"]}
+                    for row in cur.fetchall():
+                        state_val = row[0]
+                        if state_val in counts:
+                            counts[state_val] = row[1]
+                    
+                    cur = conn.execute("SELECT * FROM queued_jobs WHERE state = 'queued' ORDER BY position ASC, created_at ASC")
+                    queued_rows = cur.fetchall()
+            finally:
+                conn.close()
                 
             lines = [
                 f"📋 任务队列状态",
@@ -457,11 +494,14 @@ class JobQueue:
         """Get a queued job by ID."""
         async with self._lock:
             conn = self._get_conn()
-            with conn:
-                cur = conn.execute("SELECT * FROM queued_jobs WHERE id = ?", (job_id,))
-                row = cur.fetchone()
-                if not row:
-                    return None
+            try:
+                with conn:
+                    cur = conn.execute("SELECT * FROM queued_jobs WHERE id = ?", (job_id,))
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+            finally:
+                conn.close()
             refs = self._memory_references.get(job_id, {})
             return self._row_to_job(
                 row,
@@ -469,6 +509,56 @@ class JobQueue:
                 port=refs.get("port"),
                 runner=refs.get("runner") or self._runner
             )
+
+    async def mark_running_failed(self, error_message: str) -> None:
+        """Mark the currently running job as failed and trigger the next queued job."""
+        conn = self._get_conn()
+        now_str = datetime.now(timezone.utc).isoformat()
+        redacted_err = redact_text(error_message)
+        
+        try:
+            async with self._lock:
+                with conn:
+                    cur = conn.execute("SELECT id FROM queued_jobs WHERE state = 'running' LIMIT 1")
+                    row = cur.fetchone()
+                    if row:
+                        running_id = row[0]
+                        conn.execute(
+                            "UPDATE queued_jobs SET state = ?, finished_at = ?, error = ? WHERE id = ?",
+                            (QueueJobState.FAILED.value, now_str, redacted_err, running_id)
+                        )
+                        self._memory_references.pop(running_id, None)
+                        logger.info("Marked running job %s as failed (start-failed)", running_id)
+        finally:
+            conn.close()
+
+        # Trigger next job
+        if self._paused:
+            logger.debug("Queue paused, not starting next job")
+            return
+
+        next_job = await self.dequeue()
+        if next_job is None:
+            return
+
+        if self._start_callback is None:
+            logger.warning("No start callback set, cannot start queued job %s", next_job.id)
+            return
+
+        logger.info("Starting queued job %s", next_job.id)
+        try:
+            await self._start_callback(next_job)
+        except Exception as exc:
+            logger.exception("Failed to start queued job %s", next_job.id)
+            conn = self._get_conn()
+            try:
+                with conn:
+                    conn.execute(
+                        "UPDATE queued_jobs SET state = 'failed', finished_at = ?, error = ? WHERE id = ?",
+                        (now_str, str(exc), next_job.id)
+                    )
+            finally:
+                conn.close()
 
     async def on_job_completed(self, job_id: str | None = None) -> None:
         """Called when a Codex job completes. Starts the next queued job if any."""
@@ -486,16 +576,19 @@ class JobQueue:
                 elif current_job.state == JobState.FAILED:
                     state = QueueJobState.FAILED
         
-        with conn:
-            cur = conn.execute("SELECT id FROM queued_jobs WHERE state = 'running' LIMIT 1")
-            row = cur.fetchone()
-            if row:
-                running_id = row[0]
-                conn.execute(
-                    "UPDATE queued_jobs SET state = ?, finished_at = ?, error = ? WHERE id = ?",
-                    (state.value, now_str, error_msg, running_id)
-                )
-                self._memory_references.pop(running_id, None)
+        try:
+            with conn:
+                cur = conn.execute("SELECT id FROM queued_jobs WHERE state = 'running' LIMIT 1")
+                row = cur.fetchone()
+                if row:
+                    running_id = row[0]
+                    conn.execute(
+                        "UPDATE queued_jobs SET state = ?, finished_at = ?, error = ? WHERE id = ?",
+                        (state.value, now_str, error_msg, running_id)
+                    )
+                    self._memory_references.pop(running_id, None)
+        finally:
+            conn.close()
 
         if self._paused:
             logger.debug("Queue paused, not starting next job")
@@ -514,11 +607,15 @@ class JobQueue:
             await self._start_callback(next_job)
         except Exception as exc:
             logger.exception("Failed to start queued job %s", next_job.id)
-            with conn:
-                conn.execute(
-                    "UPDATE queued_jobs SET state = 'failed', finished_at = ?, error = ? WHERE id = ?",
-                    (now_str, str(exc), next_job.id)
-                )
+            conn = self._get_conn()
+            try:
+                with conn:
+                    conn.execute(
+                        "UPDATE queued_jobs SET state = 'failed', finished_at = ?, error = ? WHERE id = ?",
+                        (now_str, str(exc), next_job.id)
+                    )
+            finally:
+                conn.close()
 
 
 # Global job queue instance

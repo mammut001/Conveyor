@@ -40,11 +40,8 @@ from scripts.harness_common import CheckResult, print_results  # noqa: E402
 
 def clean_db():
     """Clean the SQLite database file to ensure test case isolation."""
-    import getpass
-    username = getpass.getuser()
-    root = Path(TMP_DIR)
-    isolated_root = root.parent / f"{root.name}-{username}"
-    db_file = isolated_root / "state" / "job_queue.sqlite3"
+    queue = JobQueue()
+    db_file = queue._db_path()
     if db_file.exists():
         try:
             db_file.unlink()
@@ -494,6 +491,112 @@ def _check_queue_persistence_and_recovery():
                 os.environ.pop("CODEX_MEMORY_ROOT", None)
 
 
+def _check_queue_recovery_callback():
+    """Verify that after restart (new JobQueue instance + configure), a recovered job starts and its callback can resolve runner/settings."""
+    clean_db()
+    
+    # 1. First run: configure and enqueue a job (do not dequeue/start yet)
+    queue1 = JobQueue(max_length=5)
+    settings = load_settings()
+    runner = CodexRunner(settings)
+    
+    # We need a start callback that saves what runner/settings it received
+    received_runner = None
+    received_settings = None
+    
+    async def mock_callback(job):
+        nonlocal received_runner, received_settings
+        from handlers.job_queue import get_job_queue
+        q = get_job_queue()
+        received_runner = job._runner or q._runner
+        received_settings = received_runner.settings if received_runner else q._settings
+        
+    queue1.set_start_callback(mock_callback)
+    
+    msg = _msg("telegram", "123", "test prompt")
+    port = FakeOutbound()
+    
+    async def run_test():
+        success, _, job = await queue1.enqueue("run", "test prompt", msg, port, runner)
+        if not success or job is None:
+            return False, "Failed to enqueue job"
+            
+        from handlers.job_queue import reset_job_queue, get_job_queue
+        reset_job_queue()
+        
+        new_queue = get_job_queue()
+        new_queue.configure(settings, runner)
+        new_queue.set_start_callback(mock_callback)
+        
+        dequeued = await new_queue.dequeue()
+        if dequeued is None:
+            return False, "Failed to dequeue job after restart"
+            
+        await new_queue._start_callback(dequeued)
+        
+        if received_runner is not runner:
+            return False, "Callback did not receive the correct configured runner"
+        if received_settings is not settings:
+            return False, "Callback did not receive the correct configured settings"
+            
+        return True, "Recovered job correctly resolved configured runner and settings"
+
+    ok, detail = asyncio.run(run_test())
+    return CheckResult(
+        "queue: recovered job starts with configured runner and settings",
+        ok,
+        detail,
+    )
+
+
+def _check_queue_start_failed():
+    """Verify that if runner.start raises an exception, the running queue row is marked failed."""
+    clean_db()
+    queue = JobQueue(max_length=5)
+    settings = load_settings()
+    
+    from unittest import mock
+    runner = mock.Mock(spec=CodexRunner)
+    runner.settings = settings
+    runner.current_job = None
+    
+    async def mock_start(mode, body, progress):
+        raise RuntimeError("Codex API error: invalid API key")
+        
+    runner.start = mock_start
+    
+    msg = _msg("telegram", "123", "test start fail prompt")
+    port = FakeOutbound()
+    
+    queue.configure(settings, runner)
+    
+    from handlers.jobs import handle_codex_job
+    from runner import JobMode
+    
+    async def run_test():
+        await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt="test start fail prompt")
+        
+        conn = queue._get_conn()
+        with conn:
+            cur = conn.execute("SELECT state, error FROM queued_jobs WHERE prompt = 'test start fail prompt' LIMIT 1")
+            row = cur.fetchone()
+            if not row:
+                return False, "Job not found in database"
+            state, error = row[0], row[1]
+            if state != QueueJobState.FAILED:
+                return False, f"Expected state FAILED, got {state}"
+            if "Codex API error" not in error:
+                return False, f"Expected error to contain 'Codex API error', got {error}"
+            return True, "Job correctly marked as FAILED with error message"
+
+    ok, detail = asyncio.run(run_test())
+    return CheckResult(
+        "queue: start failure marks running queue row failed",
+        ok,
+        detail,
+    )
+
+
 CHECKS = [
     _check_queue_enqueue_dequeue,
     _check_queue_fifo_order,
@@ -506,6 +609,8 @@ CHECKS = [
     _check_queue_help_text,
     _check_queue_redaction_in_display,
     _check_queue_persistence_and_recovery,
+    _check_queue_recovery_callback,
+    _check_queue_start_failed,
 ]
 
 
@@ -524,11 +629,17 @@ def main() -> int:
     
     # Cleanup temp directory
     try:
-        import getpass
-        username = getpass.getuser()
-        isolated_root = Path(TMP_DIR).parent / f"{Path(TMP_DIR).name}-{username}"
-        shutil.rmtree(str(isolated_root))
-    except OSError:
+        queue = JobQueue()
+        db_path = queue._db_path()
+        if db_path.exists():
+            db_path.unlink()
+        state_dir = db_path.parent
+        if state_dir.exists():
+            state_dir.rmdir()
+        mem_dir = state_dir.parent
+        if mem_dir.exists():
+            shutil.rmtree(str(mem_dir))
+    except Exception:
         pass
     try:
         shutil.rmtree(TMP_DIR)

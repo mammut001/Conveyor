@@ -89,7 +89,7 @@ agent tool layer (`Agent tool layer` — see `docs/architecture.en.md`).
 - `/apply` — merge the worktree back to main (only when main is clean).
 - `/discard` · `/cancel` — drop the worktree or kill the running process.
 - `/queue` · `/queue_cancel` · `/queue_clear` · `/queue_pause` · `/queue_resume`
-  — single-concurrency FIFO for Codex jobs.
+  — persistent single-concurrency FIFO job queue for Codex using SQLite (survives bot restarts and VPS reboots; previously running jobs become interrupted on startup, queued jobs auto-resume, and pause state persists).
 
 ### Personal memory
 

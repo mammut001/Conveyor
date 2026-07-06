@@ -1641,7 +1641,7 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "任务队列 (P3.8):\n"
     text += "/queue — 查看队列状态\n"
     text += "/queue_cancel <id> — 取消队列任务\n"
-    text += "/queue_clear — 清空队列 (需确认)\n"
+    text += "/queue_clear — 取消所有排队中的任务\n"
     text += "/queue_pause — 暂停队列自动出队\n"
     text += "/queue_resume — 恢复队列自动出队\n"
     text += "\n"
@@ -1677,7 +1677,7 @@ async def _queue_cancel(msg, port, _runner, _settings, arg):
 
 
 async def _queue_clear(msg, port, _runner, _settings, _arg):
-    """Clear all queued jobs (requires confirmation)."""
+    """Cancel all queued jobs directly."""
     from handlers.job_queue import get_job_queue
     queue = get_job_queue()
     count = queue.queue_length
@@ -1686,7 +1686,7 @@ async def _queue_clear(msg, port, _runner, _settings, _arg):
         return
     # For now, clear directly (WRITE operation)
     cleared = await queue.clear()
-    await port.reply(msg, f"已清空队列 ({cleared} 个任务)")
+    await port.reply(msg, f"已取消所有排队中的任务 ({cleared} 个)")
 
 
 async def _queue_pause(msg, port, _runner, _settings, _arg):
@@ -1915,7 +1915,7 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         # Job Queue (P3.8)
         CommandSpec("queue", "查看队列状态", _queue_status),
         CommandSpec("queue_cancel", "取消队列任务", _queue_cancel, takes_arg=True),
-        CommandSpec("queue_clear", "清空队列", _queue_clear),
+        CommandSpec("queue_clear", "取消所有排队中的任务", _queue_clear),
         CommandSpec("queue_pause", "暂停队列", _queue_pause),
         CommandSpec("queue_resume", "恢复队列", _queue_resume),
         # Daily Briefing (P3.5)

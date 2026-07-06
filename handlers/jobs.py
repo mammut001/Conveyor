@@ -256,7 +256,11 @@ async def _execute_codex_job(
         job = await runner.start(mode, effective_body, progress)
     except Exception as exc:
         # Failure to even start the job (e.g. invalid args, Codex
-        # missing). On Feishu, surface this as a card; Telegram keeps
+        # missing). Mark running queue row as failed.
+        from handlers.job_queue import get_job_queue
+        await get_job_queue().mark_running_failed(str(exc))
+
+        # On Feishu, surface this as a card; Telegram keeps
         # the existing text path.
         redacted_exc = redact_text(str(exc))
         if msg.channel == "feishu" and hasattr(port, "send_card"):
