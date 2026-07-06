@@ -16,6 +16,9 @@ Conveyor 把一个私有的 Telegram / 飞书会话变成一台
 
 [English](README.md) · [架构文档](docs/architecture.md) · [License](LICENSE)
 
+> [!IMPORTANT]
+> **v0.1.1 安全加固版本**：Conveyor v0.1.1 是一次安全加固更新，解决了最近安全审计中发现的问题。升级后，系统管理员/Operators 应运行 `make smoke`。由于 systemd unit 配置文件收窄了 `ReadWritePaths` 配置，您**必须重新安装并重新加载** systemd unit 服务。详见部署部分的更新指令。
+
 ---
 
 ## 为什么需要它
@@ -720,6 +723,22 @@ smoke 测试，重启服务 —— 一步到位。smoke 失败则不重启。
 
 ```bash
 ssh user@host 'bash /opt/conveyor/scripts/deploy_vps.sh'
+```
+
+### 手动 VPS 更新 (v0.1.1 升级)
+
+若要手动升级您的 VPS 并应用 v0.1.1 的安全加固更新，请执行以下命令：
+
+```bash
+cd /opt/conveyor
+git pull
+make smoke
+sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
+sudo cp systemd/conveyor-maintain.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart conveyor-telegram-bot
+sudo systemctl restart conveyor-maintain.timer
+python scripts/security_audit.py --env /opt/conveyor/.env --service conveyor-telegram-bot --since "24 hours ago"
 ```
 
 ### 工作流程

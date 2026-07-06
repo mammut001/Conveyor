@@ -59,3 +59,38 @@ When applying worktree changes back to the main repository, Conveyor validates a
 * **High-Risk File Blocks:** Any modification to high-risk files (such as `requirements.txt`, `setup.py`, `redaction.py`, files inside the `security/` directory, systemd configurations, or deployment scripts) blocks `/apply` unless `CONVEYOR_APPLY_ALLOW_HIGH_RISK=true` is explicitly set in settings.
 * **Untracked Bytes Limit:** The total size of all untracked files being applied in a single batch is limited to `CONVEYOR_APPLY_MAX_UNTRACKED_BYTES` (default: 1MB).
 * **Always Denied:** Certain files, such as `.env` files, private keys (`*.pem`, `*.key`), and files containing the words `token`, `secret`, or `password`, are always blocked and can never be applied.
+
+---
+
+## v0.1.1 Hardening Checklist
+
+When upgrading to version v0.1.1, operators must perform the following security hardening checklist on the VPS:
+
+- **Pull latest code**: Run `git pull` to fetch the latest changes.
+- **Run make smoke**: Run `make smoke` to ensure all tests pass.
+- **Reinstall systemd units**: Reinstall systemd unit files (since `ReadWritePaths` configurations changed):
+  ```bash
+  sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
+  sudo cp systemd/conveyor-maintain.service /etc/systemd/system/
+  ```
+- **Sudo systemctl daemon-reload**: Reload systemd configurations:
+  ```bash
+  sudo systemctl daemon-reload
+  ```
+- **Restart conveyor services**: Restart telegram bot and maintain services:
+  ```bash
+  sudo systemctl restart conveyor-telegram-bot
+  sudo systemctl restart conveyor-maintain.timer
+  ```
+- **Run scripts/security_audit.py**: Audit the system environment and logs:
+  ```bash
+  python scripts/security_audit.py --env /opt/conveyor/.env --service conveyor-telegram-bot --since "24 hours ago"
+  ```
+- **Verify .env and token files are mode 0600**: Restrict read/write permissions for sensitive files:
+  ```bash
+  chmod 0600 /opt/conveyor/.env
+  ```
+- **Verify codex_memory_root is mode 0700**: Restrict read/write/executable permissions on the memory directory:
+  ```bash
+  chmod 0700 /path/to/codex_memory_root
+  ```

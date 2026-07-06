@@ -17,6 +17,9 @@ interface to their own private developer tools.
 
 [中文文档 / Chinese](README.zh.md) · [Architecture](docs/architecture.en.md) · [License](LICENSE)
 
+> [!IMPORTANT]
+> **v0.1.1 Security Hardening Release**: Conveyor v0.1.1 is a security hardening release that addresses recent security audit recommendations. Operators should run `make smoke` after updating. Because systemd unit files now have narrowed `ReadWritePaths` configuration, you **must reinstall and reload** systemd units upon upgrade. See the deployment section for exact commands.
+
 ---
 
 ## Why this exists
@@ -789,6 +792,22 @@ failure prevents the restart.
 
 ```bash
 ssh user@host 'bash /opt/conveyor/scripts/deploy_vps.sh'
+```
+
+### Manual VPS Update (v0.1.1 Upgrade)
+
+To upgrade your VPS manually and apply the v0.1.1 security hardening updates:
+
+```bash
+cd /opt/conveyor
+git pull
+make smoke
+sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
+sudo cp systemd/conveyor-maintain.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart conveyor-telegram-bot
+sudo systemctl restart conveyor-maintain.timer
+python scripts/security_audit.py --env /opt/conveyor/.env --service conveyor-telegram-bot --since "24 hours ago"
 ```
 
 ### How it works

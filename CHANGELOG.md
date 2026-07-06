@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-06 (Security Hardening)
+
+### Security Hardening & Fixes
+- **Redaction coverage expanded**: Expanded secret redaction patterns to prevent token/key leakage in logs.
+- **Exception/stderr/job error redaction**: Hardened `SecretRedactingFilter` to redact exception text, clear `exc_info`, and redact stderr, job errors, and start-failed exceptions before user-facing display.
+- **Child env secret stripping**: Stripped sensitive application secrets (like bot tokens, app passwords, search keys) from Codex child process execution environment.
+- **Desktop observe path validation**: Validated desktop observe result paths under the screenshots directory.
+- **Systemd ReadWritePaths narrowing**: Narrowed systemd `ReadWritePaths` configuration from broad `/home/ubuntu`.
+- **Security audit permission checks**: Registered `queue.status` as a `READ` tool, checked security audit parameters.
+- **Apply policy high-risk hardening**: Hardened apply policy checks for high-risk files.
+- **Security regression smoke suite**: Added `scripts/security_regression_smoke.py` to `make smoke`.
+- **NL router fixes**: Fixed `queue.status` and `nl_support` propagation in the NL router.
+
 ### Added
 
 #### Natural Language Agent Router (P4.3)
@@ -154,5 +167,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No network calls in smoke tests
 - Redaction verification in all outputs
 
-[Unreleased]: https://github.com/mammut001/conveyor/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/mammut001/conveyor/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/mammut001/conveyor/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/mammut001/conveyor/releases/tag/v0.1.0
