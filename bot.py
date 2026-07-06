@@ -48,6 +48,9 @@ logger = logging.getLogger("conveyor.telegram")
 settings = load_settings()
 runner = CodexRunner(settings)
 
+from handlers.job_queue import get_job_queue
+get_job_queue().configure(settings, runner)
+
 # YYYY-MM-DD, used to slice a specific day's archived journal.
 DATE_ARG_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 

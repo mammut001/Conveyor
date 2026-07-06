@@ -47,6 +47,9 @@ logger = logging.getLogger("codex_feishu_bot")
 settings = load_feishu_settings()
 runner = CodexRunner(settings)
 
+from handlers.job_queue import get_job_queue
+get_job_queue().configure(settings, runner)
+
 
 
 def _extract_card_action_event(msg: Any) -> tuple[InboundMessage, dict] | None:

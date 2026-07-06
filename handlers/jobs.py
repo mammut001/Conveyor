@@ -129,31 +129,33 @@ async def handle_codex_job(
     from handlers.job_queue import get_job_queue
     queue = get_job_queue()
 
-    if runner.current_job and runner.current_job.state == JobState.RUNNING:
-        # Check queue limit before attempting to enqueue
-        if queue.queue_length >= runner.settings.conveyor_max_pending_jobs:
-            await port.reply(msg, f"无法排队：队列已满（最多 {runner.settings.conveyor_max_pending_jobs} 个任务）")
-            return
+    # Check queue limit before attempting to enqueue
+    if queue.queue_length >= runner.settings.conveyor_max_pending_jobs:
+        await port.reply(msg, f"无法排队：队列已满（最多 {runner.settings.conveyor_max_pending_jobs} 个任务）")
+        return
 
-        # Job is running, queue this one
-        record_job_submission(operator_id)
-        success, queue_msg, queued_job = await queue.enqueue(
-            mode=mode.value,
-            prompt=body,
-            msg=msg,
-            port=port,
-            runner=runner,
-            original_text=msg.text,
-        )
-        if success:
-            await port.reply(msg, queue_msg)
-        else:
-            await port.reply(msg, f"无法排队：{queue_msg}")
+    record_job_submission(operator_id)
+    success, queue_msg, queued_job = await queue.enqueue(
+        mode=mode.value,
+        prompt=body,
+        msg=msg,
+        port=port,
+        runner=runner,
+        original_text=msg.text,
+    )
+    if not success:
+        await port.reply(msg, f"无法排队：{queue_msg}")
+        return
+
+    if runner.current_job and runner.current_job.state == JobState.RUNNING:
+        # Job is running, so this one remains queued
+        await port.reply(msg, queue_msg)
         return
 
     # No job running, execute immediately
-    record_job_submission(operator_id)
-    await _execute_codex_job(msg, port, runner, mode, body)
+    dequeued_job = await queue.dequeue()
+    if dequeued_job:
+        await _execute_codex_job(msg, port, runner, mode, body)
 
 
 async def _execute_codex_job(
@@ -360,3 +362,91 @@ async def _execute_codex_job(
 async def _sleep(seconds: float) -> None:
     import asyncio
     await asyncio.sleep(seconds)
+
+
+class RecoveredOutboundPort:
+    """OutboundPort that sends messages back to the operator for recovered jobs after a process restart."""
+    def __init__(self, channel: str, chat_id: str, settings: "Settings") -> None:
+        self.channel = channel
+        self.chat_id = chat_id
+        self.settings = settings
+
+    async def reply(self, msg: InboundMessage, text: str) -> str | None:
+        return await self.send_new(msg, text)
+
+    async def send_new(self, msg: InboundMessage, text: str) -> str | None:
+        if self.channel == "telegram":
+            from scripts.telegram_api import send_message
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, send_message, self.settings, text, int(self.chat_id))
+                return "recovered-msg-id"
+            except Exception:
+                logger.exception("Failed to send recovered telegram message")
+                return None
+        elif self.channel == "feishu":
+            try:
+                from feishu_bot import _get_channel
+                feishu_channel = _get_channel()
+                if feishu_channel:
+                    from channel.feishu import FeishuOutbound
+                    port = FeishuOutbound(feishu_channel)
+                    return await port.send_new(msg, text)
+                else:
+                    logger.warning("Feishu channel not initialized, cannot send recovered feishu message")
+            except Exception:
+                logger.exception("Failed to send recovered feishu message")
+        return None
+
+    async def edit_progress(self, msg: InboundMessage, placeholder_id: Any, text: str) -> bool:
+        return False
+
+    async def send_card(self, msg: InboundMessage, card: dict, *, reply_to: str | None = None) -> str | None:
+        if self.channel == "feishu":
+            try:
+                from feishu_bot import _get_channel
+                feishu_channel = _get_channel()
+                if feishu_channel:
+                    from channel.feishu import FeishuOutbound
+                    port = FeishuOutbound(feishu_channel)
+                    return await port.send_card(msg, card, reply_to=reply_to)
+            except Exception:
+                logger.exception("Failed to send recovered feishu card")
+        from channel.feishu_cards import flatten_card_to_text
+        text = flatten_card_to_text(card)
+        return await self.send_new(msg, text)
+
+
+async def _start_queued_job_callback(queued_job: QueuedJob) -> None:
+    import asyncio
+    from handlers.job_queue import get_job_queue
+    queue = get_job_queue()
+    runner = queued_job._runner or queue._runner
+    settings = runner.settings if runner else queue._settings
+    
+    if runner is None or settings is None:
+        logger.error("Runner or settings not configured in queue, cannot start queued job %s", queued_job.id)
+        return
+        
+    msg = queued_job._msg
+    if msg is None:
+        from channel.types import InboundMessage
+        msg = InboundMessage(
+            channel=queued_job.channel,
+            operator_id=queued_job.operator_id,
+            chat_id=queued_job.chat_id,
+            message_id=None,
+            text=queued_job.prompt,
+        )
+        
+    port = queued_job._port
+    if port is None:
+        port = RecoveredOutboundPort(queued_job.channel, queued_job.chat_id, settings)
+        
+    mode = JobMode.FIX if queued_job.mode == "fix" else JobMode.RUN
+    
+    asyncio.create_task(_execute_codex_job(msg, port, runner, mode, queued_job.prompt))
+
+from handlers.job_queue import get_job_queue
+get_job_queue().set_start_callback(_start_queued_job_callback)

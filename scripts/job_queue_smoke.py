@@ -18,10 +18,17 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import sys
+import tempfile
+import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Setup global temp memory root for the entire test run to isolate from production
+TMP_DIR = tempfile.mkdtemp()
+os.environ["CODEX_MEMORY_ROOT"] = TMP_DIR
 
 from config import load_settings  # noqa: E402
 from handlers import dispatch  # noqa: E402
@@ -29,6 +36,16 @@ from handlers.job_queue import JobQueue, QueuedJob, QueueJobState, get_job_queue
 from channel.types import InboundMessage  # noqa: E402
 from runner import CodexRunner, JobState  # noqa: E402
 from scripts.harness_common import CheckResult, print_results  # noqa: E402
+
+
+def clean_db():
+    """Clean the SQLite database file to ensure test case isolation."""
+    db_file = Path(TMP_DIR) / "state" / "job_queue.sqlite3"
+    if db_file.exists():
+        try:
+            db_file.unlink()
+        except OSError:
+            pass
 
 
 @dataclass
@@ -68,6 +85,7 @@ def _msg(channel, operator_id, text, **kw):
 
 def _check_queue_enqueue_dequeue():
     """Test basic enqueue and dequeue operations."""
+    clean_db()
     queue = JobQueue(max_length=5)
     settings = load_settings()
     runner = CodexRunner(settings)
@@ -115,6 +133,7 @@ def _check_queue_enqueue_dequeue():
 
 def _check_queue_fifo_order():
     """Test FIFO ordering."""
+    clean_db()
     queue = JobQueue(max_length=5)
     settings = load_settings()
     runner = CodexRunner(settings)
@@ -151,6 +170,7 @@ def _check_queue_fifo_order():
 
 def _check_queue_max_length():
     """Test max queue length enforcement."""
+    clean_db()
     queue = JobQueue(max_length=3)
     settings = load_settings()
     runner = CodexRunner(settings)
@@ -187,6 +207,7 @@ def _check_queue_max_length():
 
 def _check_queue_cancel():
     """Test cancelling a queued job."""
+    clean_db()
     queue = JobQueue(max_length=5)
     settings = load_settings()
     runner = CodexRunner(settings)
@@ -224,6 +245,7 @@ def _check_queue_cancel():
 
 def _check_queue_clear():
     """Test clearing the queue."""
+    clean_db()
     queue = JobQueue(max_length=5)
     settings = load_settings()
     runner = CodexRunner(settings)
@@ -254,6 +276,7 @@ def _check_queue_clear():
 
 def _check_queue_pause_resume():
     """Test pause and resume."""
+    clean_db()
     queue = JobQueue(max_length=5)
 
     async def _test():
@@ -282,6 +305,7 @@ def _check_queue_pause_resume():
 
 def _check_queue_status_display():
     """Test queue status display."""
+    clean_db()
     queue = JobQueue(max_length=5)
     settings = load_settings()
     runner = CodexRunner(settings)
@@ -362,6 +386,7 @@ def _check_queue_help_text():
 
 def _check_queue_redaction_in_display():
     """Test that secrets are redacted in queue display."""
+    clean_db()
     queue = JobQueue(max_length=5)
     settings = load_settings()
     runner = CodexRunner(settings)
@@ -402,6 +427,69 @@ def _check_queue_redaction_in_display():
     )
 
 
+def _check_queue_persistence_and_recovery():
+    """Test database persistence across new instances and recovery states."""
+    import tempfile
+    import os
+    import shutil
+    
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        orig_env = os.environ.get("CODEX_MEMORY_ROOT")
+        os.environ["CODEX_MEMORY_ROOT"] = tmp_dir
+        
+        try:
+            # 1. Create a queue instance and enqueue a job
+            queue1 = JobQueue(max_length=5)
+            settings = load_settings()
+            runner = CodexRunner(settings)
+            port = FakeOutbound()
+            msg = _msg("telegram", "123", "persist test prompt")
+            
+            async def run_enqueue():
+                return await queue1.enqueue("run", "persist test prompt", msg, port, runner)
+            success, _, job = asyncio.run(run_enqueue())
+            if not success or job is None:
+                return CheckResult("queue: persistence and recovery", False, "failed to enqueue on instance 1")
+                
+            job_id = job.id
+            
+            # 2. Dequeue it on the first queue instance
+            async def run_dequeue():
+                return await queue1.dequeue()
+            dequeued = asyncio.run(run_dequeue())
+            if dequeued is None or dequeued.state != QueueJobState.RUNNING:
+                return CheckResult("queue: persistence and recovery", False, "failed to dequeue/mark running on instance 1")
+                
+            # Pause the first queue to verify paused state persists
+            async def run_pause():
+                await queue1.pause()
+            asyncio.run(run_pause())
+            
+            # 3. Create a second queue instance (representing restart) and configure it
+            queue2 = JobQueue(max_length=5)
+            queue2.configure(settings, runner)
+            
+            # The running job should now be interrupted
+            async def check_recovered_job():
+                return await queue2.get_job(job_id)
+            recovered = asyncio.run(check_recovered_job())
+            if recovered is None:
+                return CheckResult("queue: persistence and recovery", False, "recovered job not found")
+            if recovered.state != QueueJobState.INTERRUPTED:
+                return CheckResult("queue: persistence and recovery", False, f"recovered job state {recovered.state} != INTERRUPTED")
+                
+            # Paused state should survive
+            if not queue2.is_paused:
+                return CheckResult("queue: persistence and recovery", False, "paused state did not survive restart")
+                
+            return CheckResult("queue: persistence and recovery", True, "job state recovered to interrupted, paused state survived")
+        finally:
+            if orig_env is not None:
+                os.environ["CODEX_MEMORY_ROOT"] = orig_env
+            else:
+                os.environ.pop("CODEX_MEMORY_ROOT", None)
+
+
 CHECKS = [
     _check_queue_enqueue_dequeue,
     _check_queue_fifo_order,
@@ -413,6 +501,7 @@ CHECKS = [
     _check_queue_commands_registered,
     _check_queue_help_text,
     _check_queue_redaction_in_display,
+    _check_queue_persistence_and_recovery,
 ]
 
 
@@ -428,6 +517,13 @@ def main() -> int:
             results.append(CheckResult(check.__name__, False, f"raised: {exc!r}"))
 
     print_results(results)
+    
+    # Cleanup temp directory
+    try:
+        shutil.rmtree(TMP_DIR)
+    except OSError:
+        pass
+        
     return 0 if all(r.ok for r in results) else 1
 
 
