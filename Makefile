@@ -14,7 +14,7 @@ help:
 	@echo 'make smoke-all    also run memo_smoke (requires .env)'
 
 smoke:
-	@set -e; for s in $(SMOKE_FREE); do echo '>>>' $$s; $(PY) $$s; done
+	@set -e; for s in $(SMOKE_FREE); do echo '>>>' $$s; CONVEYOR_ENV_FILE=.env.test $(PY) $$s; done
 
 smoke-all: smoke
 	@echo '>>> scripts/memo_smoke.py (requires .env)'

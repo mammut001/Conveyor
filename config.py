@@ -267,6 +267,10 @@ def load_operator_profile(memory_root: Path) -> dict[str, str | None]:
 
 
 def load_settings(env_file: str | Path = ".env") -> Settings:
+    if env_file == ".env":
+        alt = os.getenv("CONVEYOR_ENV_FILE")
+        if alt and Path(alt).exists():
+            env_file = alt
     codex = _load_codex_fields(env_file)
     return Settings(
         telegram_bot_token=_required("TELEGRAM_BOT_TOKEN"),
@@ -277,6 +281,10 @@ def load_settings(env_file: str | Path = ".env") -> Settings:
 
 def _load_codex_fields(env_file: str | Path = ".env") -> dict:
     """Shared Codex/operator fields for Telegram and Feishu bots."""
+    if env_file == ".env":
+        alt = os.getenv("CONVEYOR_ENV_FILE")
+        if alt and Path(alt).exists():
+            env_file = alt
     load_dotenv(env_file)
 
     workspace_root = Path(_required("CODEX_WORKSPACE_ROOT")).expanduser().resolve()
