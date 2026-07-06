@@ -34,6 +34,10 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
+# Setup global temp memory root for the entire test run to isolate from production/other tests
+TMP_DIR = tempfile.mkdtemp()
+os.environ["CODEX_MEMORY_ROOT"] = TMP_DIR
+
 from channel import InboundMessage  # noqa: E402
 from config import (  # noqa: E402
     DEFAULT_PROGRESS_MODE,
@@ -567,14 +571,40 @@ CHECKS = [
     _test_streaming_compact_drops_prose,
 ]
 
-
 def main() -> int:
     # Clear CONVEYOR_PROGRESS_MODE so env-var tests exercise
     # the loader with predictable values, not whatever the
     # developer's .env has.
     os.environ.pop("CONVEYOR_PROGRESS_MODE", None)
+    
+    # Reset job queue singleton before run
+    from handlers.job_queue import reset_job_queue
+    reset_job_queue()
+    
     results = [t() for t in CHECKS]
     print_results(results)
+    
+    # Cleanup temp directory
+    import shutil
+    try:
+        from handlers.job_queue import JobQueue
+        queue = JobQueue()
+        db_path = queue._db_path()
+        if db_path.exists():
+            db_path.unlink()
+        state_dir = db_path.parent
+        if state_dir.exists():
+            state_dir.rmdir()
+        mem_dir = state_dir.parent
+        if mem_dir.exists():
+            shutil.rmtree(str(mem_dir))
+    except Exception:
+        pass
+    try:
+        shutil.rmtree(TMP_DIR)
+    except OSError:
+        pass
+        
     ok = all(r.ok for r in results)
     print("jobs progress mode smoke ok" if ok else "jobs progress mode smoke failed")
     return 0 if ok else 1
