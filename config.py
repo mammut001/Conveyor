@@ -155,6 +155,27 @@ class Settings:
     # P5.4.3 auto thumbnail on explicit observe
     conveyor_desktop_auto_thumbnail_on_observe: bool = True
     conveyor_desktop_auto_thumbnail_timeout_seconds: int = 45
+    # P5.6 Direct Computer Use (Cua backend). All disabled by default.
+    # Hands-free desktop control is opt-in and gated behind multiple
+    # kill switches (see docs/desktop_security.md).
+    conveyor_computer_use_enabled: bool = False
+    conveyor_computer_direct_enabled: bool = False
+    conveyor_computer_always_direct: bool = False
+    conveyor_computer_max_steps: int = 20
+    conveyor_computer_max_seconds: int = 600
+    conveyor_cua_driver_cmd: str = "cua-driver mcp"
+    conveyor_computer_allowed_actions: tuple[str, ...] = (
+        "observe", "click", "type", "hotkey", "scroll", "wait",
+    )
+    conveyor_computer_blocked_keywords: tuple[str, ...] = (
+        "password", "passcode", "bank", "payment", "crypto",
+        "keychain", "system settings", "delete account",
+    )
+    # Internal/test-only transport switch. "http" (default) drives the
+    # real Mac desktop agent over the authenticated control plane;
+    # "fake" executes actions against an in-process fake Cua driver so
+    # the loop can be smoke-tested with no network and no real Cua.
+    conveyor_computer_backend: str = "http"
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -418,6 +439,40 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_desktop_auto_thumbnail_timeout_seconds": _int_env(
             "CONVEYOR_DESKTOP_AUTO_THUMBNAIL_TIMEOUT_SECONDS", 45,
         ),
+        # P5.6 Direct Computer Use (Cua backend). All disabled by default.
+        "conveyor_computer_use_enabled": os.getenv(
+            "CONVEYOR_COMPUTER_USE_ENABLED", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "conveyor_computer_direct_enabled": os.getenv(
+            "CONVEYOR_COMPUTER_DIRECT_ENABLED", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "conveyor_computer_always_direct": os.getenv(
+            "CONVEYOR_COMPUTER_ALWAYS_DIRECT", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "conveyor_computer_max_steps": _int_env("CONVEYOR_COMPUTER_MAX_STEPS", 20),
+        "conveyor_computer_max_seconds": _int_env("CONVEYOR_COMPUTER_MAX_SECONDS", 600),
+        "conveyor_cua_driver_cmd": os.getenv(
+            "CONVEYOR_CUA_DRIVER_CMD", "cua-driver mcp"
+        ).strip(),
+        "conveyor_computer_allowed_actions": tuple(
+            a.strip().lower()
+            for a in os.getenv(
+                "CONVEYOR_COMPUTER_ALLOWED_ACTIONS",
+                "observe,click,type,hotkey,scroll,wait",
+            ).split(",")
+            if a.strip()
+        ),
+        "conveyor_computer_blocked_keywords": tuple(
+            k.strip().lower()
+            for k in os.getenv(
+                "CONVEYOR_COMPUTER_BLOCKED_KEYWORDS",
+                "password,passcode,bank,payment,crypto,keychain,system settings,delete account",
+            ).split(",")
+            if k.strip()
+        ),
+        "conveyor_computer_backend": os.getenv(
+            "CONVEYOR_COMPUTER_BACKEND", "http"
+        ).strip().lower(),
     }
 
 

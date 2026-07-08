@@ -439,6 +439,9 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     # Execution nodes (P5.0)
     "nodes.status": ("/nodes", "/node_status"),
     "computer.status": ("/computer_status",),
+    "computer.task": ("/computer_task",),
+    "computer.stop": ("/computer_stop",),
+    "computer.observe": ("/computer_screenshot",),
     "desktop.screenshot.status": ("/desktop_screenshot_status", "/screenshot_status"),
     "desktop.observe.request": ("/observe_request", "/screenshot_request", "/request_screenshot", "/observe_preview", "/screenshot_preview"),
     "desktop.observe.status": ("/observe_status",),
@@ -534,6 +537,9 @@ _TOOL_EXAMPLES: dict[str, str] = {
     # Execution nodes (P5.0)
     "nodes.status": "节点状态",
     "computer.status": "Computer Use 状态",
+    "computer.task": "操作电脑完成任务",
+    "computer.stop": "停止电脑任务",
+    "computer.observe": "电脑截图观察",
     "desktop.screenshot.status": "桌面截图 observe 状态",
     "screenshot_status": "桌面截图状态",
     "desktop.observe.request": "创建远程截图 observe 请求 (P5.4.3 支持 --preview 自动缩略图)",
@@ -1309,6 +1315,117 @@ async def _computer_status(msg, port, _runner, settings, _arg):
     await port.reply(msg, text)
 
 
+async def _computer_task(msg, port, _runner, settings, _arg):
+    """Run a hands-free Computer Use task via Codex + local cua-driver.
+
+    Requires Direct mode (armed via /computer_arm or CONVEYOR_COMPUTER_ALWAYS_DIRECT=true).
+    """
+    from handlers.tools.runner import run_tool
+    goal = (_arg or "").strip()
+    if not goal:
+        await port.reply(
+            msg,
+            "用法: /computer_task <目标>\n例如: /computer_task 打开 Chrome 并访问 conveyor.dev",
+        )
+        return
+    text = await run_tool(settings, "computer.task", goal)
+    await port.reply(msg, text)
+
+
+async def _computer_stop(msg, port, _runner, settings, _arg):
+    """Cancel the active Computer Use task immediately (kill switch)."""
+    from handlers.tools.runner import run_tool
+    text = await run_tool(settings, "computer.stop", _arg or "")
+    await port.reply(msg, text)
+
+
+async def _computer_screenshot(msg, port, _runner, settings, _arg):
+    """One-off observe/screenshot of the desktop via computer-use backend."""
+    from handlers.tools.runner import run_tool
+    text = await run_tool(settings, "computer.observe", _arg or "")
+    await port.reply(msg, text)
+
+
+async def _computer_arm(msg, port, _runner, settings, _arg):
+    """Arm Direct (hands-free) mode for a TTL.
+
+    No effect if CONVEYOR_COMPUTER_ALWAYS_DIRECT=true (already always-on).
+    """
+    from desktop_computer_requests import (
+        arm_direct_mode,
+        arm_remaining_seconds,
+        direct_mode_source,
+    )
+
+    if not settings.conveyor_computer_use_enabled:
+        await port.reply(
+            msg,
+            "⚠️ Computer Use 功能未启用 (CONVEYOR_COMPUTER_USE_ENABLED=false)。\n"
+            "先在 .env 或环境开启后再 arm。",
+        )
+        return
+    if settings.conveyor_computer_always_direct:
+        await port.reply(
+            msg,
+            "✅ Always-Direct 已启用 (CONVEYOR_COMPUTER_ALWAYS_DIRECT=true)，无需 arm。\n"
+            "/computer_task 现在即可直接操作电脑。",
+        )
+        return
+
+    minutes = 30
+    raw = (_arg or "").strip()
+    if raw.isdigit():
+        minutes = max(1, min(1440, int(raw)))
+    res = arm_direct_mode(settings, minutes)
+    if res.get("ok"):
+        await port.reply(
+            msg,
+            f"🔓 Direct 模式已启用，TTL {minutes} 分钟 (约 {arm_remaining_seconds(settings)}s 剩余)。\n"
+            "/computer_task 现在可直接操作电脑，到期自动失效。",
+        )
+    else:
+        await port.reply(msg, f"⚠️ 启用 Direct 模式失败: {res.get('error', '未知错误')}")
+
+
+async def _computer_log(msg, port, _runner, settings, _arg):
+    """Show Computer Use task trajectory / recent tasks."""
+    from desktop_computer_requests import (
+        get_computer_task,
+        list_recent_computer_tasks,
+    )
+
+    task_id = (_arg or "").strip()
+    if task_id:
+        task = get_computer_task(settings, task_id)
+        if not task:
+            await port.reply(msg, f"未找到任务 {task_id}")
+            return
+        lines = [
+            f"任务 {task_id}",
+            f"状态: {task.get('status')}",
+            f"目标: {task.get('goal')}",
+            "",
+            "轨迹:",
+        ]
+        for step in task.get("trajectory", []) or []:
+            ts = step.get("ts", "")
+            atype = step.get("action_type", "?")
+            redacted = step.get("action_redacted", {})
+            result = step.get("result", "")
+            lines.append(f"  [{ts}] {atype} {redacted} -> {result}")
+        await port.reply(msg, "\n".join(lines))
+        return
+
+    tasks = list_recent_computer_tasks(settings, limit=10)
+    if not tasks:
+        await port.reply(msg, "暂无 computer 任务记录。先 /computer_arm 再 /computer_task。")
+        return
+    lines = ["最近 computer 任务:"]
+    for t in tasks:
+        lines.append(f"  {t.get('task_id')} {t.get('status')} — {t.get('goal')}")
+    await port.reply(msg, "\n".join(lines))
+
+
 async def _desktop_screenshot_status(msg, port, _runner, settings, _arg):
     """Read-only desktop screenshot observe status (P5.4)."""
     from handlers.tools.runner import _invoke_tool
@@ -1622,9 +1739,14 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/context — 查看最近会话上下文\n"
     text += "/forget — 清除当前会话记录\n"
     text += "\n"
-    text += "执行节点 (P5.0 phase 0 foundation):\n"
-    text += "/nodes /node_status — VPS + 可选 desktop stub 状态\n"
-    text += "/computer_status — Computer Use stub 状态\n"
+    text += "执行节点 (P5.0 + P5.6 Computer Use):\n"
+    text += "/nodes /node_status — VPS + 可选 desktop 状态\n"
+    text += "/computer_status — Computer Use 状态 (功能开关 / Direct 模式 / 允许动作)\n"
+    text += "/computer_arm [分钟] — 启用 Direct (免确认) 模式，TTL 默认 30 分钟\n"
+    text += "/computer_task <目标> — 运行免确认 Computer Use 任务 (需 Direct 模式)\n"
+    text += "/computer_stop — 立即停止当前电脑任务 (kill switch)\n"
+    text += "/computer_screenshot — 一次性 observe/截图当前桌面\n"
+    text += "/computer_log [task_id] — 查看任务轨迹或最近任务列表\n"
     text += "/desktop_screenshot_status /screenshot_status — 截图元数据/状态（不截屏）\n"
     text += "/observe_request /screenshot_request — 创建远程 observe 请求（支持 --preview 自动缩略图）\n"
     text += "/observe_preview /screenshot_preview — 显式请求并自动发送缩略图预览 (P5.4.3)\n"
@@ -1636,7 +1758,9 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/upload_cancel <id> — 取消 pending/claimed 上传请求 (P5.4)\n"
     text += "/upload_cleanup — 清理 VPS 上的临时上传文件 (P5.4)\n"
     text += "自然语言: '我的节点' / '机器状态' / 'MacBook 在线吗' / 'computer use status'\n"
-    text += "本地只读截图 observe 与手动缩略图上传已支持；鼠标、键盘、浏览器控制仍是未来工作。\n"
+    text += "P5.6 直接 Computer Use: Telegram/Feishu → Codex → 本地 cua-driver 实际控制鼠标键盘。\n"
+    text += "默认全部关闭；需先 /computer_arm 或 CONVEYOR_COMPUTER_ALWAYS_DIRECT=true，且存在本地 cua-driver。\n"
+    text += "敏感上下文 (密码/银行/支付/密钥串/系统设置/删除账户) 会被拦截并停止。\n"
     text += "\n"
     text += "任务队列 (P3.8):\n"
     text += "/queue — 查看队列状态\n"
@@ -1747,6 +1871,35 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("nodes", "Execution nodes (VPS + desktop stub)", _nodes),
         CommandSpec("node_status", "Execution nodes (alias of /nodes)", _node_status),
         CommandSpec("computer_status", "Computer Use (desktop agent) stub status", _computer_status),
+        CommandSpec(
+            "computer_arm",
+            "Arm Direct (hands-free) Computer Use mode for a TTL [minutes]",
+            _computer_arm,
+            takes_optional_arg=True,
+        ),
+        CommandSpec(
+            "computer_task",
+            "Run a hands-free Computer Use task via Codex + local cua-driver",
+            _computer_task,
+            takes_arg=True,
+        ),
+        CommandSpec(
+            "computer_stop",
+            "Cancel the active Computer Use task immediately (kill switch)",
+            _computer_stop,
+        ),
+        CommandSpec(
+            "computer_screenshot",
+            "One-off desktop observe/screenshot via computer-use backend",
+            _computer_screenshot,
+            takes_optional_arg=True,
+        ),
+        CommandSpec(
+            "computer_log",
+            "Show Computer Use task trajectory or recent tasks [task_id]",
+            _computer_log,
+            takes_optional_arg=True,
+        ),
         CommandSpec(
             "desktop_screenshot_status",
             "Desktop screenshot observe status (P5.2 read-only)",

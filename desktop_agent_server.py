@@ -22,6 +22,15 @@ from desktop_observe_requests import (
     fail_observe_request,
     list_pending_observe_requests,
 )
+from desktop_computer_requests import (
+    claim_computer_step,
+    complete_computer_step,
+    fail_computer_step,
+    is_direct_mode_active,
+    arm_remaining_seconds,
+    get_active_task,
+    list_pending_computer_steps,
+)
 from nodes.state import register_desktop_node, record_heartbeat
 from nodes.registry import list_nodes
 
@@ -513,6 +522,59 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                     "Create requests via chat (/observe_request) or internal control-plane API."
                 ),
             })
+        # ---- P5.6 Direct Computer Use --------------------------------------
+        # The Mac agent claims a pending step, executes it locally via
+        # the Cua driver, then reports the (allow-listed) result back.
+        # Cua itself is never exposed to the network.
+        elif self.path == "/desktop/computer/task/step/claim":
+            node_id = self._validate_node_id(body.get("node_id"))
+            if node_id is None:
+                return
+            step_id = body.get("step_id")
+            if not isinstance(step_id, str) or not step_id.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing step_id"})
+                return
+            result = claim_computer_step(settings, step_id.strip(), node_id)
+            status = HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT
+            self.send_json(status, result)
+
+        elif self.path == "/desktop/computer/task/step/complete":
+            node_id = self._validate_node_id(body.get("node_id"))
+            if node_id is None:
+                return
+            step_id = body.get("step_id")
+            if not isinstance(step_id, str) or not step_id.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing step_id"})
+                return
+            comp_result = body.get("result")
+            if not isinstance(comp_result, dict):
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid result: must be an object"})
+                return
+            result = complete_computer_step(settings, step_id.strip(), node_id, comp_result)
+            status = HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT
+            self.send_json(status, result)
+
+        elif self.path == "/desktop/computer/task/step/fail":
+            node_id = self._validate_node_id(body.get("node_id"))
+            if node_id is None:
+                return
+            step_id = body.get("step_id")
+            if not isinstance(step_id, str) or not step_id.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing step_id"})
+                return
+            error = body.get("error")
+            if not isinstance(error, str) or not error.strip():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing error"})
+                return
+            message = body.get("message")
+            if message is not None and not isinstance(message, str):
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid message"})
+                return
+            result = fail_computer_step(
+                settings, step_id.strip(), node_id, error.strip(), message=message,
+            )
+            status = HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT
+            self.send_json(status, result)
         else:
             self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Endpoint not found"})
 
@@ -575,6 +637,42 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
             requests = list_pending_upload_requests(settings, validated, limit=1)
             self.send_json(HTTPStatus.OK, {"ok": True, "requests": requests})
 
+        # ---- P5.6 Direct Computer Use --------------------------------------
+        elif path == "/desktop/computer/task/pending":
+            if not self.check_enabled():
+                return
+            if not self.authenticate():
+                return
+            query = parse_qs(parsed.query)
+            node_id_list = query.get("node_id", [])
+            node_id = node_id_list[0] if node_id_list else None
+            validated = self._validate_node_id(node_id)
+            if validated is None:
+                return
+            steps = list_pending_computer_steps(settings, limit=1)
+            self.send_json(HTTPStatus.OK, {"ok": True, "steps": steps})
+
+        elif path == "/desktop/computer/status":
+            if not self.check_enabled():
+                return
+            if not self.authenticate():
+                return
+            active = get_active_task(settings)
+            active_summary = None
+            if isinstance(active, dict):
+                active_summary = {
+                    "task_id": active.get("task_id"),
+                    "status": active.get("status"),
+                    "goal": active.get("goal"),
+                    "step_seq": active.get("step_seq"),
+                    "direct_mode": active.get("direct_mode"),
+                }
+            self.send_json(HTTPStatus.OK, {
+                "ok": True,
+                "direct_mode_active": is_direct_mode_active(settings),
+                "arm_remaining_seconds": arm_remaining_seconds(settings),
+                "active_task": active_summary,
+            })
         else:
             self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Endpoint not found"})
 

@@ -10,12 +10,24 @@ from typing import Any
 
 from config import Settings
 from nodes.types import (
+    DESKTOP_DIRECT_CAPABILITIES,
     DESKTOP_STUB_CAPABILITIES,
     NodeInfo,
     NodeStatus,
     NodeType,
     TrustLevel,
 )
+
+
+def _desktop_capabilities(settings: Settings) -> tuple[str, ...]:
+    """Return the desktop node capability set for the current config.
+
+    Stub unless CONVEYOR_COMPUTER_USE_ENABLED is set; the direct
+    surface is never advertised implicitly.
+    """
+    if getattr(settings, "conveyor_computer_use_enabled", False):
+        return DESKTOP_DIRECT_CAPABILITIES
+    return DESKTOP_STUB_CAPABILITIES
 
 _lock = threading.Lock()
 
@@ -134,7 +146,7 @@ def register_desktop_node(
         node_type=NodeType.DESKTOP,
         status=NodeStatus.ONLINE,
         last_seen_at=now,
-        capabilities=DESKTOP_STUB_CAPABILITIES,
+        capabilities=_desktop_capabilities(settings),
         trust_level=TrustLevel.LOCAL_DESKTOP,
         metadata={
             "agent_version": agent_version_str,
@@ -198,7 +210,7 @@ def record_heartbeat(
         node_type=NodeType.DESKTOP,
         status=NodeStatus.ONLINE,
         last_seen_at=now,
-        capabilities=DESKTOP_STUB_CAPABILITIES,
+        capabilities=_desktop_capabilities(settings),
         trust_level=TrustLevel.LOCAL_DESKTOP,
         metadata={
             "agent_version": agent_version,
@@ -316,7 +328,7 @@ def list_runtime_nodes(settings: Settings, now: float | None = None) -> list[Nod
             node_type=NodeType.DESKTOP,
             status=status,
             last_seen_at=last_seen_val if last_seen_val > 0 else None,
-            capabilities=DESKTOP_STUB_CAPABILITIES,
+            capabilities=_desktop_capabilities(settings),
             trust_level=TrustLevel.LOCAL_DESKTOP,
             metadata={
                 "agent_version": _safe_str(state.get("agent_version"), 64),

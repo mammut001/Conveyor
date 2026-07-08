@@ -5,6 +5,7 @@ timeouts, redact_text + truncate. Never prints env vars or secrets.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import socket
@@ -353,71 +354,210 @@ async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
     return _safe_truncate("\n".join(lines))
 
 
-async def exec_computer_status(_settings: Settings, _arg: str) -> str:
-    """Stub tool for Computer Use requests.
+def _format_loop_result(result: dict) -> str:
+    if not result.get("ok"):
+        return f"❌ {result.get('error')}: {result.get('message')}"
+    lines = [f"🖥 Computer Use 任务 {result.get('task_id')}", ""]
+    lines.append(f"状态: {result.get('status')}")
+    lines.append(f"步数: {result.get('steps_used')}")
+    if result.get("summary"):
+        lines.append(f"摘要: {result.get('summary')}")
+    if result.get("blocked_reason"):
+        lines.append(f"停止原因: {result.get('blocked_reason')}")
+    return _safe_truncate("\n".join(lines))
 
-    Real desktop control is not implemented in this task.
-    """
-    import time
-    from nodes.registry import is_stub_environment, list_nodes
-    from nodes.types import NodeStatus
 
-    if is_stub_environment(_settings):
-        desktop_nodes = [
-            n for n in list_nodes(_settings) if n.node_type.value == "desktop"
-        ]
-        if not desktop_nodes:
-            body = (
-                "🖥  Computer Use: 未启用\n\n"
-                "Desktop 节点未在 .env 中启用 (CONVEYOR_DESKTOP_NODE_ENABLED=false)。\n"
-                "当前没有触发任何桌面动作。\n\n"
-                "下一步: 在 .env 里把 CONVEYOR_DESKTOP_NODE_ENABLED 设为 true，"
-                "再部署一个本地 desktop agent（未来工作）。"
-            )
-        else:
-            node = desktop_nodes[0]
-            if node.status == NodeStatus.ONLINE:
-                now = time.time()
-                last_seen_str = "unknown"
-                if node.last_seen_at is not None:
-                    seconds_ago = max(0, int(now - node.last_seen_at))
-                    last_seen_str = f"{seconds_ago}s ago"
-                agent_state = node.metadata.get("agent_state", "idle")
-                helper_configured = bool((_settings.conveyor_desktop_screenshot_helper or "").strip())
-                observe_line = (
-                    "P5.2 read-only screenshot observe is available locally via "
-                    "`python desktop_agent.py --observe-once` when capture-screen-helper is configured."
-                    if helper_configured
-                    else "P5.2 screenshot observe helper is not configured."
-                )
-                body = (
-                    "Computer Use: desktop agent online, control not enabled\n\n"
-                    f"Node: {node.node_id} · {node.display_name}\n"
-                    f"Status: online\n"
-                    f"Agent state: {agent_state}\n"
-                    f"Last seen: {last_seen_str}\n\n"
-                    f"{observe_line}\n"
-                    "Mouse, keyboard, browser control, and Gemini Computer Use are not implemented."
-                )
-            else:
-                body = (
-                    f"🖥  Computer Use: 已配置但未运行\n\n"
-                    f"节点: {node.node_id} · {node.display_name}\n"
-                    f"状态: {node.status.value}\n"
-                    f"模式: {node.metadata.get('computer_use_mode', 'observe_only')}\n\n"
-                    "真实截屏 / 鼠标 / 键盘 / 浏览器控制 / Gemini Computer Use "
-                    "**尚未实现**。\n"
-                    "当前仅显示节点配置信息，没有触发任何桌面动作。\n\n"
-                    "下一步: 部署一个本地 desktop agent，然后让它向本服务发送 "
-                    "heartbeat (未来工作)。"
-                )
-        return _safe_truncate(body)
-
-    return _safe_truncate(
-        "🖥  Computer Use: unknown\n\n"
-        "Stub 环境标志为 False 但未实现真实状态读取。请更新 is_stub_environment "
-        "或实现 heart beat 路径。"
+async def exec_computer_status(settings: Settings, _arg: str) -> str:
+    """P5.6 Computer Use status: enabled flag, direct-mode source, Cua probe."""
+    from desktop_computer_requests import (
+        arm_remaining_seconds,
+        direct_mode_source,
+        get_active_task,
+        is_direct_mode_active,
     )
+    from desktop_cua import probe_cua_driver
+
+    enabled = settings.conveyor_computer_use_enabled
+    source = direct_mode_source(settings) if enabled else None
+    lines = ["🖥 Computer Use (P5.6 Direct)", ""]
+    lines.append(f"启用: {'是' if enabled else '否 (CONVEYOR_COMPUTER_USE_ENABLED=false)'}")
+    if source:
+        lines.append(f"Direct 模式: 启用 ({source})")
+        if source == "armed":
+            lines.append(f"剩余: {arm_remaining_seconds(settings)}s")
+    else:
+        lines.append("Direct 模式: 未启用 (需 /computer_arm 或 CONVEYOR_COMPUTER_ALWAYS_DIRECT=true)")
+    lines.append(f"Always-Direct: {'是' if settings.conveyor_computer_always_direct else '否'}")
+    lines.append(
+        f"Max steps: {settings.conveyor_computer_max_steps}, "
+        f"Max seconds: {settings.conveyor_computer_max_seconds}"
+    )
+    if enabled:
+        probe = probe_cua_driver(settings.conveyor_cua_driver_cmd, settings=settings)
+        if probe.get("available"):
+            lines.append(f"Cua driver: 可用 ({probe.get('path')})")
+            perms = probe.get("permissions")
+            if isinstance(perms, dict):
+                status = perms.get("status") or "unknown"
+                daemon = perms.get("daemon_running")
+                daemon_text = "yes" if daemon is True else "no" if daemon is False else "unknown"
+                lines.append(f"Cua permissions: {status} (daemon: {daemon_text})")
+                reason = perms.get("reason")
+                if status != "granted" and isinstance(reason, str) and reason.strip():
+                    lines.append(f"Cua permissions note: {reason[:320]}")
+        else:
+            lines.append(f"Cua driver: 未找到 ({probe.get('error')}) — 仅 Mac 端需要")
+    active = get_active_task(settings)
+    lines.append("")
+    if active:
+        lines.append(f"运行中任务: {active.get('task_id')} (step {active.get('step_seq')})")
+        lines.append(f"目标: {active.get('goal')}")
+    else:
+        lines.append("运行中任务: 无")
+    return _safe_truncate("\n".join(lines))
+
+
+async def exec_computer_observe(settings: Settings, arg: str) -> str:
+    """Trigger one desktop observation (screenshot/state metadata)."""
+    from desktop_computer_requests import (
+        contains_blocked_keyword,
+        is_direct_mode_active,
+    )
+    from desktop_computer_planner import ScriptedPlanner
+    from desktop_computer_loop import build_backend, run_computer_loop
+
+    if not settings.conveyor_computer_use_enabled:
+        return "⚠️ Computer Use 未启用 (CONVEYOR_COMPUTER_USE_ENABLED=false)。"
+    if contains_blocked_keyword(settings, arg or ""):
+        return "⛔ 含受限关键词，已拒绝。"
+    if not is_direct_mode_active(settings):
+        return "⚠️ Direct 模式未启用。先 /computer_arm [分钟] 或设置 CONVEYOR_COMPUTER_ALWAYS_DIRECT=true。"
+    planner = ScriptedPlanner([{"action": "observe"}, {"action": "done", "summary": "observed"}])
+    backend = build_backend(settings)
+    result = await run_computer_loop(
+        settings, "observe desktop", planner=planner, backend=backend,
+        max_steps=2, max_seconds=30, direct_mode=True,
+    )
+    if not result.get("ok"):
+        return _format_loop_result(result)
+    # Surface the last observation metadata from the trajectory.
+    from desktop_computer_requests import get_computer_task
+    task = get_computer_task(settings, result["task_id"]) or {}
+    last = None
+    for entry in task.get("trajectory", []):
+        if isinstance(entry, dict) and entry.get("screenshot_id"):
+            last = entry
+    if last:
+        return _safe_truncate(
+            f"🖥 桌面观察完成\n\n"
+            f"screenshot_id: {last.get('screenshot_id')}\n"
+            f"动作步数: {result.get('steps_used')}"
+        )
+    return _format_loop_result(result)
+
+
+async def exec_computer_action(settings: Settings, arg: str) -> str:
+    """Execute a single desktop action from a JSON action payload."""
+    from desktop_computer_requests import (
+        append_trajectory,
+        contains_blocked_keyword,
+        create_computer_step,
+        create_computer_task,
+        is_action_allowed,
+        is_direct_mode_active,
+        normalize_action,
+        redact_computer_action,
+        set_task_status,
+    )
+    from desktop_computer_loop import build_backend
+
+    if not settings.conveyor_computer_use_enabled:
+        return "⚠️ Computer Use 未启用 (CONVEYOR_COMPUTER_USE_ENABLED=false)。"
+    if not is_direct_mode_active(settings):
+        return "⚠️ Direct 模式未启用。先 /computer_arm [分钟] 或设置 CONVEYOR_COMPUTER_ALWAYS_DIRECT=true。"
+    try:
+        action = json.loads(arg)
+    except Exception:
+        return '参数需为 JSON action，例如: {"action":"click","x":100,"y":100}'
+    if not isinstance(action, dict) or "action" not in action:
+        return "缺少 action 字段。"
+    if not is_action_allowed(settings, action):
+        return f"不允许的动作: {action.get('action')}"
+    if contains_blocked_keyword(settings, json.dumps(action)):
+        return "⛔ 含受限关键词，已拒绝。"
+
+    backend = build_backend(settings)
+    node_id = settings.conveyor_desktop_node_id or "macbook-payton"
+    created = create_computer_task(
+        settings, "single action", direct_mode=True,
+        max_steps=1, max_seconds=30, operator_id="", chat_id="", channel="",
+    )
+    if not created.get("ok"):
+        return _format_loop_result(created)
+    task_id = created["task_id"]
+    step = create_computer_step(settings, task_id, action)
+    step_id = step["step_id"]
+    try:
+        result = await backend.execute_step(settings, task_id, step_id, normalize_action(action))
+        append_trajectory(settings, task_id, {
+            "action_type": action.get("action"),
+            "action_redacted": redact_computer_action(action),
+            "result_ok": True,
+            "screenshot_id": (result or {}).get("screenshot_id"),
+        })
+        set_task_status(settings, task_id, "done", summary="single action executed")
+        res_str = json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else str(result)
+        return _safe_truncate(f"✅ 动作已执行: {action.get('action')}\n结果: {res_str}")
+    except Exception as exc:
+        set_task_status(settings, task_id, "error", blocked_reason=str(exc))
+        return f"动作执行失败: {type(exc).__name__}"
+
+
+async def exec_computer_task(settings: Settings, arg: str) -> str:
+    """Run the Codex action loop to complete a desktop goal (hands-free)."""
+    from desktop_computer_requests import (
+        contains_blocked_keyword,
+        is_direct_mode_active,
+    )
+    from desktop_computer_planner import CodexPlanner
+    from desktop_computer_loop import build_backend, run_computer_loop
+
+    if not settings.conveyor_computer_use_enabled:
+        return "⚠️ Computer Use 未启用 (CONVEYOR_COMPUTER_USE_ENABLED=false)。"
+    goal = (arg or "").strip()
+    if not goal:
+        return "用法: /computer_task <目标>\n例如: /computer_task 打开 Chrome 并访问 conveyor.dev"
+    if contains_blocked_keyword(settings, goal):
+        return "⛔ 目标含受限关键词，已拒绝执行任何桌面动作。"
+    if not is_direct_mode_active(settings):
+        return (
+            "⚠️ Direct 模式未启用，无法自动执行。\n"
+            "先 /computer_arm [分钟] 启用(或设置 CONVEYOR_COMPUTER_ALWAYS_DIRECT=true)。"
+        )
+    planner = CodexPlanner(settings)
+    backend = build_backend(settings)
+    result = await run_computer_loop(
+        settings, goal, planner=planner, backend=backend,
+        max_steps=settings.conveyor_computer_max_steps,
+        max_seconds=settings.conveyor_computer_max_seconds,
+        direct_mode=True,
+    )
+    return _format_loop_result(result)
+
+
+async def exec_computer_stop(settings: Settings, _arg: str) -> str:
+    """Immediately cancel the active Computer Use task."""
+    from desktop_computer_requests import cancel_computer_task, get_active_task
+
+    if not settings.conveyor_computer_use_enabled:
+        return "Computer Use 未启用。"
+    task = get_active_task(settings)
+    if not task:
+        return "没有正在运行的 Computer Use 任务。"
+    res = cancel_computer_task(settings, task["task_id"], reason="operator_stop")
+    if res.get("ok"):
+        return f"🛑 已取消任务 {task['task_id']}。"
+    return f"取消失败: {res.get('error')}"
 
 
 def register_builtin_tools() -> None:
@@ -581,10 +721,38 @@ def register_builtin_tools() -> None:
         ),
         ToolSpec(
             name="computer.status",
-            summary="Computer Use (desktop agent) 状态 — control not implemented",
+            summary="Computer Use (desktop agent) 状态 — 含 Direct 模式",
             danger=DangerLevel.READ,
             executor=exec_computer_status,
-            keywords=("computer use", "桌面", "desktop status", "截屏 status"),
+            keywords=("computer use", "桌面", "desktop status", "截屏 status", "direct mode"),
+        ),
+        ToolSpec(
+            name="computer.observe",
+            summary="触发一次桌面观察 (screenshot/state 元数据)",
+            danger=DangerLevel.READ,
+            executor=exec_computer_observe,
+            keywords=("computer observe", "桌面观察", "看一眼电脑", "observe desktop"),
+        ),
+        ToolSpec(
+            name="computer.action",
+            summary="执行单个桌面动作 (click/type/hotkey/scroll/wait)",
+            danger=DangerLevel.WRITE_SAFE,
+            executor=exec_computer_action,
+            keywords=("computer action", "桌面动作", "点一下", "敲一下"),
+        ),
+        ToolSpec(
+            name="computer.task",
+            summary="运行 Codex 动作循环完成桌面目标 (需授权)",
+            danger=DangerLevel.WRITE,
+            executor=exec_computer_task,
+            keywords=("computer task", "操作电脑", "帮我点", "打开", "在电脑上"),
+        ),
+        ToolSpec(
+            name="computer.stop",
+            summary="立即取消正在运行的 Computer Use 任务",
+            danger=DangerLevel.WRITE_SAFE,
+            executor=exec_computer_stop,
+            keywords=("computer stop", "停止操作", "取消电脑任务", "stop computer"),
         ),
     ]
     for spec in specs:

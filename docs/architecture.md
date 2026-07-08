@@ -1109,6 +1109,67 @@ P2.1 已完成：两个 channel adapter 各自落在 `channel/telegram.py` 和
 - 暂不纳入 P5.1：剪贴板、相机/麦克风、支付流程、密码
   管理器窗口。
 
+### P5.6 直连 Computer Use 模式（cua 后端，已落地）
+
+P5.6 在 P5.1 的 heartbeat / 协议基座之上，实现了「免干预直连 Computer Use」：
+`Telegram/飞书 自然语言 → Codex → Conveyor computer-use 工具 → Mac
+desktop_agent → 本地 cua-driver → 真实桌面操作`。后端用 `trycua/cua`，
+**只运行在 Mac 桌面 agent 端**，VPS 从不与 Cua 协议对话。
+
+- **配置开关（默认全关）**：`conveyor_computer_use_enabled` /
+  `conveyor_computer_direct_enabled` / `conveyor_computer_always_direct`
+  / `conveyor_computer_max_steps`(20) / `conveyor_computer_max_seconds`(600)
+  / `conveyor_cua_driver_cmd`("cua-driver mcp") /
+  `conveyor_computer_allowed_actions` /
+  `conveyor_computer_blocked_keywords` /
+  `conveyor_computer_backend`("http" 真实 Mac / "fake" 进程内测试)。
+- **能力门控**：`nodes/types.py` 新增 `CAP_COMPUTER_USE_DIRECT` 与
+  `DESKTOP_DIRECT_CAPABILITIES`；`nodes/registry.py` 的
+  `computer_use_active(settings)` 作为总开关谓词。仍**不**把
+  `is_stub_environment()` 翻成 `False`（保持项目级 stub 总闸不变）。
+- **请求存储**：`desktop_computer_requests.py`，文件位于
+  `CODEX_MEMORY_ROOT/state/desktop_computer_requests.json`，沿用
+  observe/upload 的「跨进程文件锁 + `.tmp`+`os.replace` 原子写」。
+  支持任务 / 步骤的 claim-complete-fail-cancel、TTL 过期、
+  `arm_direct_mode` / `is_direct_mode_active`（enabled 且
+  always_direct 或 arm 未过期）、`contains_blocked_keyword` /
+  `is_action_allowed` / `normalize_action` / `redact_computer_action`。
+- **控制面**：`desktop_agent_server.py` 新增
+  `/desktop/computer/task/step/claim|complete|fail` 与
+  `/desktop/computer/task/pending`、`/desktop/computer/status`
+  （Bearer + `hmac.compare_digest`，`127.0.0.1`）。
+- **Mac agent**：`desktop_cua.py` 的 `CuaDriver`（`LocalCuaTransport`
+  使用配置命令定位本地 `cua-driver` binary，并通过
+  `cua-driver call <tool> <json>` 执行；`FakeCuaTransport` 仅测试，不保留
+  明文文本）。`/computer_status` 还会读取 `permissions status --json`
+  的 metadata-only 权限状态；`desktop_agent.py --poll-computer` 轮询
+  control plane，claim 待执行步骤 → `build_driver` 执行 → 回写结果。
+- **VPS 侧循环**：`desktop_computer_planner.py`（`CodexPlanner` 驱动
+  `codex exec --json` 严格单步 JSON 动作；`ScriptedPlanner` 用于 smoke）
+  + `desktop_computer_loop.py`（`HttpComputerBackend` 仅轮询存储等
+  完成；`FakeComputerBackend` 进程内跑 `FakeCuaTransport`；
+  `run_computer_loop` 强制动作白名单、拦截词、max_steps/max_seconds、
+  `/computer_stop` 取消、脱敏轨迹）。
+- **工具注册**：`handlers/tools/executors.py` 新增
+  `computer.status`(READ) / `computer.observe`(READ) /
+  `computer.action`(WRITE_SAFE) / `computer.task`(WRITE) /
+  `computer.stop`(WRITE_SAFE)。`handlers/commands.py` 新增
+  `/computer_status` `/computer_arm [分钟]` `/computer_task <目标>`
+  `/computer_stop` `/computer_log [task_id]` `/computer_screenshot`
+  `/computer_observe` `/computer_action <json>`。
+- **NL 路由**：`handlers/intent.py` 的 `_COMPUTER_TASK_PATTERNS`
+  （操作电脑/帮我点/打开 <app>/在电脑上/用电脑/control my mac 等）
+  路由到 `computer.task`；`computer.status` 保留给状态类查询。
+- **安全边界**：即便在 direct 模式也始终生效——动作允许清单、拦截词
+  守卫、不注入密钥、输入文本/快捷键脱敏、driver 返回白名单、
+  `MAX_STEPS`/`MAX_SECONDS` 上限、`/computer_stop` 紧急停止。Cua
+  永不跨网络。详见 `docs/desktop_security.md §7`。
+- **Smoke**：`scripts/desktop_computer_smoke.py`（14 项：默认全关、
+  driver 缺失优雅降级、Cua CLI wrapper 映射、当前 `get_desktop_state`
+  fallback、arm TTL 开启、过期拦截、always-direct 绕过、动作白名单、
+  拦截词停任务、max_steps 停任务、stop 取消、fake 后端运行+脱敏、
+  claim 脱敏边界、stop 命令取消），加入 `make smoke`。
+
 ---
 
 ## 9. 变更记录
@@ -1116,6 +1177,7 @@ P2.1 已完成：两个 channel adapter 各自落在 `channel/telegram.py` 和
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | **3.0** | **2026-07-01** | **P5.0 执行节点（VPS + desktop stub）。新增 `nodes/` 包、`nodes.status` + `computer.status` 确定性工具、`/nodes` / `/node_status` / `/computer_status` 命令、飞书 `node_status_card` / `computer_status_card`、把过去会穿透到 Codex 的桌面 / Computer Use 自然语言拦截到 stub，以及 `docs/desktop_agent_protocol.md` / `docs/desktop_security.md` 两份设计稿。**本任务没有真实桌面控制能力**，desktop 节点无论怎么配置都是 offline。详见上文 P5.0 节。 |
+| **3.1** | **2026-07-08** | **P5.6 直连 Computer Use 模式（cua 后端，默认关闭）。** NL → `computer.task` → Codex 单步 JSON 动作 → Mac `desktop_agent` 经本地 `cua-driver` 执行真实桌面操作；VPS 仅轮询文件存储，Cua 永不跨网络。新增配置开关、能力门控（`CAP_COMPUTER_USE_DIRECT`）、请求存储、控制面端点、`desktop_cua.py`、工具与命令（`/computer_arm` `/computer_task` `/computer_stop` 等）、NL 路由，以及硬性安全边界（动作白名单、拦截词、脱敏、上限、紧急停止）。详见上文 P5.6 节与 `docs/desktop_security.md §7`。 |
 | 2.0 | 2026-06-11 | 加 agent 工具层、Telegram live smoke、backlog；中英同步 |
 | 2.1 | 2026-06-11 | 加 `CONVEYOR_PROGRESS_MODE`（verbose/compact/quiet）；compact 修 Feishu progress 链；同步 6.7 节、harness、backlog |
 | 2.2 | 2026-06-11 | 加自动 VPS 部署（GitHub Actions + deploy_vps.sh） |

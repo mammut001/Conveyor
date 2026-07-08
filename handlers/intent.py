@@ -428,6 +428,47 @@ _COMPUTER_USE_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+
+# P5.6: action directives that should RUN a Computer Use task (hands-free
+# control via the local cua-driver), NOT just report status. These are
+# checked BEFORE ``_COMPUTER_USE_PATTERNS`` so an explicit action verb wins
+# over a status query. The verb set is deliberately narrower than
+# ``_CJK_VERBS`` (no "看一下"/"看看") to avoid routing a "look at my mac"
+# status question into a mutating task.
+_CJK_TASK_VERBS = (
+    r"(?:\u6253\u5f00|\u8fd0\u884c|\u542f\u52a8|\u70b9|\u64cd\u4f5c|"
+    r"\u622a\u56fe|\u9f20\u6807|\u952e\u76d8|\u6309|\u6572)"
+)
+_TASK_APP = (
+    r"(?:chrome|safari|\u6d4f\u89c8\u5668|xcode|terminal|\u7ec8\u7aef|"
+    r"finder|\u8ba1\u7b97\u5668|app|application|\u5e94\u7528|\u8bbe\u7f6e)"
+)
+_COMPUTER_TASK_PATTERNS = (
+    # 操作电脑 / 操作我的 Mac / 操作本机
+    re.compile(rf"{_CJK_TASK_VERBS}.*?{_NOUN_GROUP}", re.IGNORECASE),
+    # 帮我点 / 帮我打开 / 帮我运行 / 帮我截图  (action verb after 帮我)
+    re.compile(rf"\u5e2e\u6211\s*(?:{_CJK_TASK_VERBS})", re.IGNORECASE),
+    # 在(我的)电脑/mac(上) 打开/运行/点...
+    re.compile(
+        rf"\u5728\s*{_NOUN_GROUP}\s*(?:\u4e0a)?\s*(?:{_CJK_TASK_VERBS})",
+        re.IGNORECASE,
+    ),
+    # 用(我的)电脑/mac 打开/运行...
+    re.compile(
+        rf"\u7528\s*{_NOUN_GROUP}\s*(?:{_CJK_TASK_VERBS})",
+        re.IGNORECASE,
+    ),
+    # 打开/运行/启动 <app>  (e.g. 打开 Chrome, 打开浏览器)
+    re.compile(
+        rf"(?:{_CJK_TASK_VERBS})\s*(?:我(?:\u7684)?\s*)?{_TASK_APP}",
+        re.IGNORECASE,
+    ),
+    # English: "control my mac", "operate my desktop", "use my mac"
+    re.compile(
+        r"(?:control|operate|use)\s+my\s+(mac|macbook|desktop|laptop)",
+        re.IGNORECASE,
+    ),
+)
 _WEB_SEARCH_PATTERNS = (
     re.compile(r"(搜索|搜|search|查|找).*(网上|web|网页|internet|谷歌|google)", re.IGNORECASE),
     re.compile(r"(网上|web|internet).*(搜索|搜|search|查|找)", re.IGNORECASE),
@@ -468,6 +509,9 @@ def route_intent(text: str) -> RouteResult:
     for pat in _OBSERVE_REQUEST_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("desktop.observe.request",))
+    for pat in _COMPUTER_TASK_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("computer.task",), arg=body)
     for pat in _COMPUTER_USE_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("computer.status",))

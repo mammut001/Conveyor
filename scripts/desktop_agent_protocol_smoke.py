@@ -242,10 +242,11 @@ def main() -> int:
         else:
             print("[pass] nodes_status_online_text")
 
-        # 10. computer.status does not claim screenshot/control works
+        # 10. computer.status reports P5.6 state honestly (does not claim
+        #     screenshot/control works when direct mode is off).
         print("Testing computer.status output...")
         text_comp = asyncio.run(exec_computer_status(desktop_agent_server.settings, ""))
-        if "desktop agent online, control not enabled" not in text_comp or "not implemented" not in text_comp.lower():
+        if "Computer Use" not in text_comp or ("未启用" not in text_comp and "Cua driver" not in text_comp):
             _fail("computer_status_online_text", f"text={text_comp}")
         else:
             print("[pass] computer_status_online_text")
@@ -267,10 +268,13 @@ def main() -> int:
         else:
             print("[pass] route_macbook_online")
 
-        # 13. NL phrase 帮我在 Mac 上打开 Xcode routes to computer.status
+        # 13. NL phrase 帮我在 Mac 上打开 Xcode routes to a local computer
+        #     tool (status or P5.6 task), never to Codex.
         print("Testing 帮我在 Mac 上打开 Xcode routing...")
         res_nl2 = route_intent("帮我在 Mac 上打开 Xcode")
-        if res_nl2.kind != "deterministic" or "computer.status" not in res_nl2.tools:
+        if res_nl2.kind != "deterministic" or not (
+            {"computer.status", "computer.task"} & set(res_nl2.tools)
+        ):
             _fail("route_open_xcode_mac", f"result={res_nl2}")
         else:
             print("[pass] route_open_xcode_mac")

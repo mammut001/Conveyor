@@ -210,7 +210,7 @@ def _test_exec_nodes_status_text() -> None:
 
 
 def _test_exec_computer_status_stub() -> None:
-    """The /computer_status tool explicitly says not implemented."""
+    """The /computer_status tool reports P5.6 state honestly."""
     import asyncio
 
     from config import Settings
@@ -223,17 +223,20 @@ def _test_exec_computer_status_stub() -> None:
         codex_task_root=Path("/tmp/t"),
         codex_model=None,
         codex_timeout_seconds=3600,
-        telegram_progress_seconds=3,
         codex_retry_429_delays_seconds=(),
+        telegram_progress_seconds=3,
         codex_memory_root=Path("/tmp/m"),
         user_timezone="UTC",
     )
     text = asyncio.run(exec_computer_status(settings, ""))
-    if "未实现" not in text and "未启用" not in text and "not implemented" not in text.lower():
-        _fail("exec_computer_status_stub", f"text={text[:200]!r}")
+    if "Computer Use" not in text:
+        _fail("exec_computer_status_stub", f"missing header: {text[:200]!r}")
         return
-    if "未触发" not in text and "没有触发" not in text and "no desktop action" not in text.lower():
-        _fail("exec_computer_status_stub", "did not say 'no action was performed'")
+    if "启用" not in text:
+        _fail("exec_computer_status_stub", f"missing enabled flag: {text[:200]!r}")
+        return
+    if "Direct 模式" not in text:
+        _fail("exec_computer_status_stub", f"missing direct-mode line: {text[:200]!r}")
         return
     print("[pass] exec_computer_status_stub")
 
@@ -256,32 +259,93 @@ def _test_intent_nodes_status_routes() -> None:
     print("[pass] intent_nodes_status_routes")
 
 
-def _test_intent_computer_use_routes_to_stub() -> None:
-    """Desktop anchored phrases → computer.status, NOT Codex."""
+def _test_intent_computer_use_routes_deterministic() -> None:
+    """Desktop-anchored phrases must NOT fall through to Codex (llm).
+
+    They now route to computer.status (status query) or computer.task
+    (P5.6 action directive) — never to Codex, which cannot see the
+    screen.
+    """
     from handlers.intent import route_intent
 
     cases = [
-        "帮我在 Mac 上打开 Xcode",
         "操作我的电脑",
         "用我的 Mac 打开浏览器",
+        "帮我在 Mac 上打开 Xcode",
         "看一下我 MacBook 上的 Xcode",
         "computer use my Mac",
+        "打开 Chrome",
     ]
     for phrase in cases:
         result = route_intent(phrase)
         if result.kind != "deterministic":
             _fail(
-                "intent_computer_use_routes_to_stub",
+                "intent_computer_use_routes_deterministic",
                 f"{phrase!r} kind={result.kind} (must not fall to Codex)",
             )
             return
-        if "computer.status" not in result.tools:
+        if result.tools and "computer.status" not in result.tools and "computer.task" not in result.tools:
             _fail(
-                "intent_computer_use_routes_to_stub",
+                "intent_computer_use_routes_deterministic",
                 f"{phrase!r} tools={result.tools}",
             )
             return
-    print("[pass] intent_computer_use_routes_to_stub")
+    print("[pass] intent_computer_use_routes_deterministic")
+
+
+def _test_intent_computer_status_queries_route_to_status() -> None:
+    """Pure status / observe queries still go to computer.status (P5.6)."""
+    from handlers.intent import route_intent
+
+    cases = [
+        "看一下我 MacBook 上的 Xcode",
+        "computer use status",
+    ]
+    for phrase in cases:
+        result = route_intent(phrase)
+        if result.kind != "deterministic":
+            _fail(
+                "intent_computer_status_queries_route_to_status",
+                f"{phrase!r} kind={result.kind}",
+            )
+            return
+        if result.tools != ("computer.status",):
+            _fail(
+                "intent_computer_status_queries_route_to_status",
+                f"{phrase!r} tools={result.tools}",
+            )
+            return
+    print("[pass] intent_computer_status_queries_route_to_status")
+
+
+def _test_intent_computer_action_directives_route_to_task() -> None:
+    """Action directives route to computer.task (P5.6 hands-free run)."""
+    from handlers.intent import route_intent
+
+    cases = [
+        "操作我的电脑",
+        "用我的 Mac 打开浏览器",
+        "帮我在 Mac 上打开 Xcode",
+        "打开 Chrome",
+        "在电脑上打开浏览器",
+        "帮我点登录按钮",
+        "control my mac",
+    ]
+    for phrase in cases:
+        result = route_intent(phrase)
+        if result.kind != "deterministic":
+            _fail(
+                "intent_computer_action_directives_route_to_task",
+                f"{phrase!r} kind={result.kind}",
+            )
+            return
+        if result.tools != ("computer.task",):
+            _fail(
+                "intent_computer_action_directives_route_to_task",
+                f"{phrase!r} tools={result.tools}",
+            )
+            return
+    print("[pass] intent_computer_action_directives_route_to_task")
 
 
 def _test_intent_screenshot_observe_routes() -> None:
@@ -466,7 +530,9 @@ def main() -> int:
     _test_exec_nodes_status_text()
     _test_exec_computer_status_stub()
     _test_intent_nodes_status_routes()
-    _test_intent_computer_use_routes_to_stub()
+    _test_intent_computer_use_routes_deterministic()
+    _test_intent_computer_status_queries_route_to_status()
+    _test_intent_computer_action_directives_route_to_task()
     _test_intent_screenshot_observe_routes()
     _test_intent_ambiguous_open_xcode_not_hijacked()
     _test_node_status_card_shape()
@@ -475,7 +541,7 @@ def main() -> int:
     _test_settings_carries_node_fields()
     _test_sensitive_fields_includes_agent_token()
 
-    total = 17
+    total = 19
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")

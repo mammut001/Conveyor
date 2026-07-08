@@ -109,6 +109,7 @@ CAP_BROWSER_CONTROL = "browser.control"
 CAP_MOUSE_CLICK = "mouse.click"
 CAP_KEYBOARD_TYPE = "keyboard.type"
 CAP_COMPUTER_USE_STEP = "computer_use.step"
+CAP_COMPUTER_USE_DIRECT = "computer_use.direct"
 
 DESKTOP_STUB_CAPABILITIES: tuple[NodeCapability, ...] = (
     CAP_SCREENSHOT,
@@ -125,6 +126,20 @@ DESKTOP_FULL_CAPABILITIES: tuple[NodeCapability, ...] = (
     CAP_MOUSE_CLICK,
     CAP_KEYBOARD_TYPE,
     CAP_COMPUTER_USE_STEP,
+)
+
+# P5.6: when CONVEYOR_COMPUTER_USE_ENABLED=true the desktop node
+# advertises real (non-stub) computer-use capabilities, including
+# the hands-free direct-driver token. Still gated by the config
+# kill switch — never enabled implicitly.
+DESKTOP_DIRECT_CAPABILITIES: tuple[NodeCapability, ...] = (
+    CAP_SCREENSHOT,
+    CAP_DESKTOP_OBSERVE,
+    CAP_BROWSER_CONTROL,
+    CAP_MOUSE_CLICK,
+    CAP_KEYBOARD_TYPE,
+    CAP_COMPUTER_USE_STEP,
+    CAP_COMPUTER_USE_DIRECT,
 )
 
 
@@ -209,6 +224,8 @@ __all__ = [
     "CAP_MOUSE_CLICK",
     "CAP_KEYBOARD_TYPE",
     "CAP_COMPUTER_USE_STEP",
+    "CAP_COMPUTER_USE_DIRECT",
+    "DESKTOP_DIRECT_CAPABILITIES",
     "format_node_line",
     "format_node_block",
 ]

@@ -16,6 +16,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Exception handling: mark running queue row as failed if job fails to start.
   - Updated `/queue_clear` command to directly cancel all queued jobs and aligned the help text.
 
+- **Direct Computer Use Mode (P5.6, cua backend, OFF by default)**:
+  - Hands-free loop: `Telegram/Feishu NL → Codex → Conveyor computer-use tools → Mac desktop_agent → local cua-driver → real desktop actions`. Cua (`trycua/cua`) runs **only on the Mac agent**; the VPS never speaks the Cua protocol.
+  - Config flags (all default safe/off): `CONVEYOR_COMPUTER_USE_ENABLED`, `CONVEYOR_COMPUTER_DIRECT_ENABLED`, `CONVEYOR_COMPUTER_ALWAYS_DIRECT`, `CONVEYOR_COMPUTER_MAX_STEPS` (20), `CONVEYOR_COMPUTER_MAX_SECONDS` (600), `CONVEYOR_CUA_DRIVER_CMD` (`cua-driver mcp`), `CONVEYOR_COMPUTER_ALLOWED_ACTIONS`, `CONVEYOR_COMPUTER_BLOCKED_KEYWORDS`, `CONVEYOR_COMPUTER_BACKEND` (`http`/`fake`).
+  - Commands: `/computer_status`, `/computer_arm [minutes]` (TTL arm), `/computer_task <goal>`, `/computer_stop` (kill switch), `/computer_log [task_id]`, `/computer_screenshot`, `/computer_observe`, `/computer_action <json>`.
+  - `nodes/types.py`: new `CAP_COMPUTER_USE_DIRECT` + `DESKTOP_DIRECT_CAPABILITIES`; `nodes/registry.py` `computer_use_active()` kill-switch predicate (project-level `is_stub_environment()` master switch untouched).
+  - `desktop_computer_requests.py`: file-backed task/step store at `CODEX_MEMORY_ROOT/state/desktop_computer_requests.json` (cross-process lock + atomic write) with arm TTL, direct-mode gating, blocked-keyword guard, action allow-list, redaction.
+  - `desktop_cua.py`: `CuaDriver` with `LocalCuaTransport` (locates the configured local `cua-driver` binary, executes via `cua-driver call <tool> <json>`, redacts logs, stores Cua screenshots locally as metadata-only ids) and `FakeCuaTransport` (test-only, never retains plaintext).
+  - `desktop_agent_server.py`: new `/desktop/computer/task/step/claim|complete|fail`, `/desktop/computer/task/pending`, `/desktop/computer/status` endpoints.
+  - `desktop_agent.py`: new `--poll-computer` loop executing claimed steps locally via `build_driver`.
+  - `handlers/tools/executors.py`: `computer.status` (READ), `computer.observe` (READ), `computer.action` (WRITE_SAFE), `computer.task` (WRITE), `computer.stop` (WRITE_SAFE).
+  - `handlers/intent.py`: `_COMPUTER_TASK_PATTERNS` (操作电脑 / 帮我点 / 打开 <app> / 在电脑上 / control my mac …) now route to `computer.task`; status phrases stay on `computer.status`.
+  - Hard safety envelope enforced even in direct mode: action allow-list, blocked-keyword guard, no secret injection, typed-text/hotkey redaction in all logs, driver result allow-list, `MAX_STEPS`/`MAX_SECONDS` caps, `/computer_stop` kill switch. Cua never crosses the network.
+  - Smoke: `scripts/desktop_computer_smoke.py` (14 cases) added to `make smoke`, including Cua CLI wrapper mapping, current `get_desktop_state` fallback, arm/expiry, blocked keyword, max steps, stop, and redaction boundaries. `scripts/cua_driver_real_smoke.py` adds a read-only Mac-side verifier for an installed/authorized driver. See `docs/desktop_security.md §7`.
+
 
 ## [0.1.1] - 2026-07-06 (Security Hardening)
 

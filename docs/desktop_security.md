@@ -51,11 +51,16 @@ audited change that re-validates this document.
    task.** The same `matches_context` check used by
    `handlers.tools.confirm` is reused so a different chat
    cannot resume a task started in another.
-9. **Computer Use is never automatic.** A natural-language
-   "open Xcode on my Mac" message must never execute a step
-   without the operator pressing a confirm button (or sending
-   the confirmation text). Codex must not "decide" to call
-   the agent.
+9. **Computer Use is never automatic by default.** A
+   natural-language "open Xcode on my Mac" message must never
+   execute a step without the operator pressing a confirm button
+   (or sending the confirmation text). Codex must not "decide"
+   to call the agent. The one exception is the explicit
+   opt-in **direct mode** (§7): only after `/computer_arm` (TTL)
+   or `CONVEYOR_COMPUTER_ALWAYS_DIRECT=true` does the loop run
+   hands-free — and even then every step is still gated by the
+   §7.2 safety envelope (action allow-list, blocked-keyword
+   guard, redaction, caps, kill switch).
 
 ---
 
@@ -162,8 +167,86 @@ In P5.1 and P5.1.1, the desktop agent registration and heartbeat endpoint has be
 * **File-backed Persistence Isolation**: Status info is shared across processes using `CODEX_MEMORY_ROOT/state/desktop_nodes.json`. This JSON state file is guaranteed to contain NO tokens, secrets, or request headers, and only stores general connection metadata (node ID, version, host summary). No screenshots, mouse, keyboard, or action data are written or stored.
 * **P5.2 observe**: Read-only screenshot capture is local-only through `capture-screen-helper`. Metadata JSON is stored under `CODEX_MEMORY_ROOT/desktop/screenshots/`; image bytes are not sent to the VPS.
 * **P5.3.1 request store hardening**: The observe request store is hardened with a cross-process file lock. This prevents lost updates when Telegram, Feishu, and `desktop_agent_server.py` read/write `CODEX_MEMORY_ROOT/state/desktop_observe_requests.json` concurrently.
-* **Safety Non-goals**: No mouse/keyboard control, browser automation, remote screenshot trigger, or Gemini Computer Use API calls are active. Computer Use control is still not implemented.
+* **Safety Non-goals**: No mouse/keyboard control, browser automation, remote screenshot trigger, or Gemini Computer Use API calls are active by default. Computer Use control is implemented in P5.6 behind the gated **direct mode** (see §7); it is **OFF by default** and never exposes the Cua driver to the network.
 
+---
 
+## 7. P5.6 Direct Computer Use Mode (cua backend)
+
+P5.6 adds a hands-free direct computer-use mode: `Telegram/Feishu NL → Codex → Conveyor computer-use tools → Mac desktop_agent → local cua-driver → real desktop actions`. The backend is `trycua/cua`, run **only on the Mac desktop agent side**. The VPS never speaks the Cua protocol; it only writes step requests to a file store that the Mac agent polls.
+
+### 7.1 Off-by-default, opt-in
+
+- Every flag defaults to `false`/`disabled`:
+  `CONVEYOR_COMPUTER_USE_ENABLED=false`,
+  `CONVEYOR_COMPUTER_DIRECT_ENABLED=false`,
+  `CONVEYOR_COMPUTER_ALWAYS_DIRECT=false`.
+- Direct (hands-free, no per-step confirmation) mode is reached only one of two ways:
+  1. **Arm TTL** — `/computer_arm [minutes]` arms direct mode for a limited time
+     (`is_direct_mode_active` = enabled AND (`CONVEYOR_COMPUTER_ALWAYS_DIRECT` OR a
+     non-expired arm)). After expiry the task is blocked.
+  2. **Always-direct** — `CONVEYOR_COMPUTER_ALWAYS_DIRECT=true` bypasses arming,
+     but still requires `CONVEYOR_COMPUTER_USE_ENABLED=true` and
+     `CONVEYOR_COMPUTER_DIRECT_ENABLED=true`.
+- `/computer_task <goal>` fails fast if direct mode is not active.
+- Node capability gating: `computer_use_active(settings)` must be true; otherwise the
+  `computer.use.direct` capability is not advertised.
+
+### 7.2 Hard safety envelope (applies even in direct mode)
+
+The relaxation of per-step confirmation is **not** a relaxation of safety. Regardless
+of armed/always-direct, every step is still gated by:
+
+1. **Action allow-list** — only `observe`, `click`, `type`, `hotkey`, `scroll`,
+   `wait`, `done`, `stop` are accepted (`is_action_allowed` +
+   `normalize_action`). Anything else is rejected before execution.
+2. **Blocked-keyword guard** — if the goal or any step's context contains
+   `password`, `passcode`, `bank`, `payment`, `crypto`, `keychain`,
+   `system settings`, `delete account` (configurable via
+   `CONVEYOR_COMPUTER_BLOCKED_KEYWORDS`), the task **stops and reports**; no desktop
+   action is taken.
+3. **No secret injection** — the loop never injects values from env/memory into
+   typed text. Typed text is limited to the operator-provided goal / explicit action
+   payload.
+4. **Redaction** — typed text and hotkey payloads are never stored raw.
+   `redact_computer_action` strips `text`/`keys` to length + redaction marker in the
+   trajectory and audit copy.
+5. **Result allow-list** — only allow-listed fields from the driver
+   (e.g. `png_bytes`, `ocr`, `window_title`, `text`) are accepted; forbidden fields
+   (`password`, `token`, …) are dropped by the driver's `_allow_list`.
+6. **Blast-radius caps** — `CONVEYOR_COMPUTER_MAX_STEPS` (default `20`) and
+   `CONVEYOR_COMPUTER_MAX_SECONDS` (default `600`) bound any single task; the loop
+   stops at either limit.
+7. **Kill switch** — `/computer_stop` cancels the active task immediately
+   (`cancel_computer_task`). Setting `CONVEYOR_COMPUTER_USE_ENABLED=false` (the
+   default) or `CONVEYOR_COMPUTER_DIRECT_ENABLED=false` disables it entirely;
+   changing config requires a restart to re-read.
+
+### 7.3 Cua stays local
+
+- `CONVEYOR_CUA_DRIVER_CMD` (default `cua-driver mcp`) shells out **only on the Mac
+  agent**. The configured command is used to locate the local `cua-driver` binary;
+  execution goes through the driver's local CLI wrapper (`cua-driver call <tool>
+  <json>`) rather than exposing the MCP stdio server on a socket or network port.
+  `probe_cua_driver` returns metadata only (`available`/`path`/`version`/permission
+  status/`error`) and never runs a real desktop action during the probe.
+- On macOS, real observe/click/type requires Cua's TCC permissions. Operators should
+  run `cua-driver permissions grant` on the Mac agent and verify with
+  `cua-driver permissions status --json`; `/computer_status` surfaces that
+  metadata-only permission state. `scripts/cua_driver_real_smoke.py` is a
+  read-only local verifier for the installed/authorized Mac agent path.
+- The VPS `HttpComputerBackend` only polls the shared file store
+  (`CODEX_MEMORY_ROOT/state/desktop_computer_requests.json`) for step completion; it
+  never opens a Cua/automation connection. No Cua traffic crosses the network.
+- The Mac agent executes steps in `desktop_agent.py --poll-computer`, calling
+  `build_driver` → `CuaDriver.execute`, then reports the (allow-listed, redacted)
+  result back to the control plane.
+
+### 7.4 Audit
+
+Each executed step appends a redacted trajectory entry
+(`timestamp`, `screenshot_id`/`hash`, `action_type`, redacted args, `result`) to the
+task record in the file store. Typed text and hotkeys are redacted in every stored
+copy. The trajectory is visible via `/computer_log [task_id]`.
 
 

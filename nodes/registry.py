@@ -21,6 +21,7 @@ from typing import Iterable, Mapping
 from config import Settings
 
 from nodes.types import (
+    DESKTOP_DIRECT_CAPABILITIES,
     DESKTOP_STUB_CAPABILITIES,
     NodeInfo,
     NodeStatus,
@@ -241,6 +242,28 @@ def is_stub_environment(settings: Settings | None = None) -> bool:
     return True
 
 
+def computer_use_active(settings: Settings | None = None) -> bool:
+    """True when Direct Computer Use is configured AND enabled.
+
+    Distinct from ``is_stub_environment``: the stub flag is a
+    coarse "is any real desktop agent wired in" gate, while this
+    predicate reflects the P5.6 opt-in kill switch
+    (``CONVEYOR_COMPUTER_USE_ENABLED``). Both must be honoured.
+    """
+    if settings is None:
+        return os.environ.get("CONVEYOR_COMPUTER_USE_ENABLED", "").strip().lower() in (
+            "true", "1", "yes", "on",
+        )
+    return bool(getattr(settings, "conveyor_computer_use_enabled", False))
+
+
+def desktop_computer_capabilities(settings: Settings | None = None) -> tuple[str, ...]:
+    """Capability set the desktop node should advertise given config."""
+    if computer_use_active(settings):
+        return DESKTOP_DIRECT_CAPABILITIES
+    return DESKTOP_STUB_CAPABILITIES
+
+
 __all__ = [
     "DESKTOP_ENABLE_ENV",
     "DESKTOP_ID_ENV",
@@ -256,6 +279,8 @@ __all__ = [
     "find_nodes_with_capability",
     "online_node_ids",
     "is_stub_environment",
+    "computer_use_active",
+    "desktop_computer_capabilities",
 ]
 
 

@@ -15,6 +15,7 @@ import urllib.request
 
 from config import Settings, load_settings
 from desktop_screenshot import capture_screenshot_once
+from desktop_cua import build_driver
 
 logging.basicConfig(
     level=logging.INFO,
@@ -510,7 +511,107 @@ def poll_upload_once(settings: Settings) -> None:
         logger.error("Upload complete rejected: %s", complete_res.get("error"))
 
 
-def heartbeat_loop(settings: Settings, *, poll_observe: bool = False) -> None:
+def poll_computer_once(settings: Settings) -> None:
+    """Poll for one pending computer step, execute it locally via Cua, report.
+
+    Mirrors ``poll_observe_once`` but drives an action through the local
+    Cua driver. All Cua execution stays on this Mac; only an allow-listed
+    result is sent back to the control plane.
+    """
+    token = (settings.conveyor_desktop_agent_token or "").strip()
+    if not token:
+        return
+
+    control_plane_url = _control_plane_url()
+    node_id = settings.conveyor_desktop_node_id or "macbook-payton"
+    pending_url = (
+        f"{control_plane_url}/desktop/computer/task/pending?"
+        f"{urllib.parse.urlencode({'node_id': node_id})}"
+    )
+
+    try:
+        payload = get_json(pending_url, token)
+    except Exception as exc:
+        logger.info("computer poll failed: %s", exc)
+        return
+
+    steps = payload.get("steps") if isinstance(payload, dict) else None
+    if not isinstance(steps, list) or not steps:
+        return
+
+    pending = steps[0]
+    if not isinstance(pending, dict):
+        return
+    step_id = pending.get("step_id")
+    if not isinstance(step_id, str) or not step_id:
+        return
+
+    try:
+        claim_res = post_json(
+            f"{control_plane_url}/desktop/computer/task/step/claim",
+            token,
+            {"step_id": step_id, "node_id": node_id},
+        )
+    except Exception as exc:
+        logger.info("computer claim failed step_id=%s: %s", step_id, exc)
+        return
+
+    if not claim_res.get("ok"):
+        logger.info("computer claim rejected step_id=%s error=%s", step_id, claim_res.get("error"))
+        return
+
+    claimed = claim_res.get("step") if isinstance(claim_res, dict) else None
+    if not isinstance(claimed, dict):
+        return
+    action = claimed.get("action")
+    if not isinstance(action, dict):
+        logger.info("computer claim returned no action step_id=%s", step_id)
+        return
+
+    logger.info("Computer step claimed: %s action=%s", step_id, action.get("action"))
+
+    driver = build_driver(settings, node_id=node_id)
+    result = driver.execute(action)
+    result_ok = bool(result.get("result_ok"))
+
+    if result_ok:
+        try:
+            complete_res = post_json(
+                f"{control_plane_url}/desktop/computer/task/step/complete",
+                token,
+                {"step_id": step_id, "node_id": node_id, "result": result},
+            )
+        except Exception as exc:
+            logger.info("computer complete failed step_id=%s: %s", step_id, exc)
+            return
+        if complete_res.get("ok"):
+            logger.info("Computer step completed: %s action=%s", step_id, action.get("action"))
+        else:
+            logger.info(
+                "computer complete rejected step_id=%s error=%s",
+                step_id, complete_res.get("error"),
+            )
+        return
+
+    error_code = result.get("error") or "computer_action_failed"
+    error_message = result.get("error_message") or "Cua action failed."
+    logger.info("Computer step failed: %s", error_code)
+    try:
+        post_json(
+            f"{control_plane_url}/desktop/computer/task/step/fail",
+            token,
+            {
+                "step_id": step_id,
+                "node_id": node_id,
+                "error": error_code,
+                "message": error_message,
+            },
+        )
+    except Exception as exc:
+        logger.info("computer fail report failed step_id=%s: %s", step_id, exc)
+
+
+def heartbeat_loop(settings: Settings, *, poll_observe: bool = False, poll_computer: bool = False) -> None:
     token = (settings.conveyor_desktop_agent_token or "").strip()
     if not token:
         print("Error: CONVEYOR_DESKTOP_AGENT_TOKEN environment variable is required.", file=sys.stderr)
@@ -523,7 +624,7 @@ def heartbeat_loop(settings: Settings, *, poll_observe: bool = False) -> None:
         heartbeat_interval = 30.0
 
     poll_interval = float(settings.conveyor_desktop_observe_poll_interval_seconds)
-    sleep_seconds = min(heartbeat_interval, poll_interval) if poll_observe else heartbeat_interval
+    sleep_seconds = min(heartbeat_interval, poll_interval) if (poll_observe or poll_computer) else heartbeat_interval
 
     print("Registering agent with control plane...")
     try:
@@ -533,6 +634,8 @@ def heartbeat_loop(settings: Settings, *, poll_observe: bool = False) -> None:
             print(f"Desktop agent registered: {node_id}")
             if poll_observe:
                 print("Observe polling enabled (metadata only; no upload).")
+            if poll_computer:
+                print("Computer Use polling enabled (local Cua driver).")
         else:
             print(f"Registration failed: {res.get('error')}", file=sys.stderr)
             sys.exit(1)
@@ -555,9 +658,12 @@ def heartbeat_loop(settings: Settings, *, poll_observe: bool = False) -> None:
                 print(f"Heartbeat failed: {exc}", file=sys.stderr)
             last_heartbeat = now
 
-        if poll_observe and now - last_poll >= poll_interval:
-            poll_observe_once(settings)
-            poll_upload_once(settings)
+        if (poll_observe or poll_computer) and now - last_poll >= poll_interval:
+            if poll_observe:
+                poll_observe_once(settings)
+                poll_upload_once(settings)
+            if poll_computer:
+                poll_computer_once(settings)
             last_poll = now
 
         time.sleep(sleep_seconds)
@@ -585,6 +691,11 @@ def main() -> None:
         action="store_true",
         help="Run heartbeat loop and poll for remote observe requests (metadata only).",
     )
+    parser.add_argument(
+        "--poll-computer",
+        action="store_true",
+        help="Run heartbeat loop and poll for Direct Computer Use steps (local Cua driver).",
+    )
     args = parser.parse_args()
 
     settings = load_settings()
@@ -594,7 +705,11 @@ def main() -> None:
         print(json.dumps(result, indent=2, sort_keys=True))
         sys.exit(0 if result.get("ok") else 1)
 
-    heartbeat_loop(settings, poll_observe=args.poll_observe)
+    heartbeat_loop(
+        settings,
+        poll_observe=args.poll_observe,
+        poll_computer=args.poll_computer,
+    )
 
 
 if __name__ == "__main__":

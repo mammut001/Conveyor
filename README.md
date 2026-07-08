@@ -154,21 +154,104 @@ Conveyor is becoming a private control plane for your VPS and,
 eventually, your local desktop. The control plane always runs on
 the VPS. The desktop node is a **stub** in this phase: it shows
 up in `/nodes` only when you opt in, and it is always
-`offline` until heartbeats arrive. **P5.2** adds read-only local
-screenshot observe via `capture-screen-helper`; mouse, keyboard,
-browser control, and Computer Use are **not** implemented.
+  `offline` until heartbeats arrive. **P5.2** adds read-only local
+  screenshot observe via `capture-screen-helper`; mouse, keyboard,
+  browser control, and Computer Use are **not** implemented by
+  default — **P5.6** adds a gated *direct computer-use mode* (cua
+  backend, Mac-local only) that is **OFF by default**.
 
 - `/nodes` · `/node_status` — list known execution nodes, their
   capabilities, and dynamic online/offline status.
-- `/computer_status` — show Computer Use status (online when desktop agent is running).
+- `/computer_status` — show Computer Use status (enabled flag, direct-mode
+  source, Cua driver probe, active task).
 - Natural language: `我的节点`, `机器状态`, `主机状态`,
   `MacBook 在线吗`, `desktop node`, `nodes status`,
   `computer use status`. Desktop-target phrases like
-  `帮我在 Mac 上打开 Xcode` route to a deterministic stub reply
-  instead of falling through to Codex. Screenshot observe phrases
-  like `take a screenshot on my desktop` route to
-  `desktop.observe.request` (P5.3 remote observe — metadata only).
-  Status phrases like `截图状态` route to `desktop.observe.status`.
+  `帮我在 Mac 上打开 Xcode`, `操作电脑…`, `帮我点…`, `打开 Chrome`,
+  `在电脑上…` route to `computer.task` (the direct Cua loop) **only
+  when direct mode is armed**; otherwise they return the stub reply.
+  Screenshot observe phrases like `take a screenshot on my desktop`
+  route to `desktop.observe.request` (P5.3 remote observe — metadata
+  only). Status phrases like `截图状态` route to `desktop.observe.status`.
+
+### P5.6 Direct Computer Use Mode (cua backend)
+
+A hands-free direct computer-use mode: `Telegram/Feishu NL → Codex →
+Conveyor computer-use tools → Mac desktop_agent → local cua-driver →
+real desktop actions`. The backend is `trycua/cua`, run **only on the
+Mac desktop agent** — the VPS never speaks the Cua protocol.
+
+Install Cua on the Mac agent side only. The official driver exposes
+`cua-driver mcp` as an MCP stdio server, but Conveyor's local wrapper
+executes the same binary through `cua-driver call <tool> <json>` so no
+Cua server is exposed on the network. On macOS, grant the driver before
+expecting real observe/click/type to work:
+
+```bash
+cua-driver permissions grant
+cua-driver permissions status --json
+```
+
+`/computer_status` reports the driver path/version and this metadata-only
+permission status. If permissions are not granted, Cua may start but
+screen capture or input actions will fail.
+
+After granting permissions, run the read-only local verifier on the Mac:
+
+```bash
+python3 scripts/cua_driver_real_smoke.py --cmd "cua-driver mcp"
+```
+
+**All flags default to `false`/disabled.** The mode is opt-in:
+
+- **Arm (TTL)**: `/computer_arm [minutes]` enables direct mode for a
+  limited time. After expiry, tasks are blocked.
+- **Always-direct**: `CONVEYOR_COMPUTER_ALWAYS_DIRECT=true` bypasses
+  arming (still requires `CONVEYOR_COMPUTER_USE_ENABLED=true` and
+  `CONVEYOR_COMPUTER_DIRECT_ENABLED=true`).
+- **Kill switch**: `/computer_stop` cancels the active task
+  immediately.
+
+**Commands**
+
+- `/computer_status` — enabled flag, direct-mode source, Cua probe,
+  active task.
+- `/computer_arm [minutes]` — arm direct mode for a TTL (e.g.
+  `/computer_arm 30`).
+- `/computer_task <goal>` — run the Codex→Cua loop hands-free (e.g.
+  `/computer_task 打开 Chrome 并访问 conveyor.dev`). Fails fast if
+  direct mode is not active.
+- `/computer_stop` — cancel the active task immediately.
+- `/computer_log [task_id]` — show the redacted trajectory of a task.
+- `/computer_screenshot` — capture one desktop observation
+  (metadata/screenshot id) in direct mode.
+- `/computer_observe` — trigger one desktop observation.
+- `/computer_action <json>` — execute a single allow-listed action,
+  e.g. `{"action":"click","x":100,"y":100}`. The Cua backend also
+  accepts optional `pid`/`window_id`/`element_index`/`element_token`/
+  `delivery_mode` for more reliable app-local clicks when the planner
+  has window state.
+
+**Key env flags** (all default safe)
+
+| Env | Default | Meaning |
+|---|---|---|
+| `CONVEYOR_COMPUTER_USE_ENABLED` | `false` | Master enable (whole feature). |
+| `CONVEYOR_COMPUTER_DIRECT_ENABLED` | `false` | Enable direct (hands-free) mode. |
+| `CONVEYOR_COMPUTER_ALWAYS_DIRECT` | `false` | Bypass arming (TTL) when true. |
+| `CONVEYOR_COMPUTER_MAX_STEPS` | `20` | Max steps per task. |
+| `CONVEYOR_COMPUTER_MAX_SECONDS` | `600` | Max wall-clock seconds per task. |
+| `CONVEYOR_CUA_DRIVER_CMD` | `cua-driver mcp` | Mac-local cua driver command. Conveyor uses the first token as the local `cua-driver` binary for `call`/status operations. |
+| `CONVEYOR_COMPUTER_ALLOWED_ACTIONS` | `observe,click,type,hotkey,scroll,wait` | Action allow-list. |
+| `CONVEYOR_COMPUTER_BLOCKED_KEYWORDS` | `password,passcode,bank,payment,crypto,keychain,system settings,delete account` | Stop-on-match guard. |
+| `CONVEYOR_COMPUTER_BACKEND` | `http` | `http` (real Mac agent) or `fake` (in-process, for tests). |
+
+**Safety envelope (enforced even in direct mode)**: action allow-list,
+blocked-keyword guard, no secret injection, typed-text/hotkey
+redaction in all stored logs, result allow-list from the driver,
+`MAX_STEPS`/`MAX_SECONDS` caps, and the `/computer_stop` kill switch.
+Cua never crosses the network. See `docs/desktop_security.md §7`.
+
 
 ### P5.1 Desktop Agent Heartbeat
 
@@ -247,7 +330,7 @@ sudo systemctl restart conveyor-telegram-bot conveyor-feishu-bot
 
 **Deployment (Mac):** build `capture-screen-helper`, set absolute `CONVEYOR_DESKTOP_SCREENSHOT_HELPER`, run `python desktop_agent.py --observe-once`. Screen Recording permission is a manual macOS step.
 
-> **Computer Use control is still not implemented.** See `docs/desktop_screenshot_observe.md`, `docs/desktop_agent_protocol.md`, and `docs/desktop_security.md`.
+> **Computer Use control is gated and OFF by default (P5.6).** The direct mode is opt-in via `/computer_arm` or `CONVEYOR_COMPUTER_ALWAYS_DIRECT=true`, with a hard safety envelope (action allow-list, blocked-keyword guard, redaction, caps, kill switch). Cua runs only on the Mac agent. See `docs/desktop_security.md §7`.
 
 
 ### P5.4 Manual Screenshot Thumbnail Upload
@@ -547,6 +630,7 @@ documented in [`docs/architecture.en.md`](docs/architecture.en.md).
 | Maintenance | `/maintain [keep]`, `/clean [keep]`, `/restart telegram\|feishu\|maintain` |
 | Session | `/context`, `/forget` |
 | **Execution nodes (P5.0 phase 0)** | `/nodes`, `/node_status`, `/computer_status` |
+| **Computer Use direct mode (P5.6)** | `/computer_status`, `/computer_arm [min]`, `/computer_task <goal>`, `/computer_stop`, `/computer_log [task_id]`, `/computer_screenshot`, `/computer_observe`, `/computer_action <json>` (OFF by default) |
 | Help | `/help` |
 
 For danger levels (READ / WRITE_SAFE / WRITE / DESTRUCTIVE) and tool internals

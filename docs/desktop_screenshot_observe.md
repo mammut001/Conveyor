@@ -1,7 +1,8 @@
 # Desktop Screenshot Observe — P5.2 / P5.2.1 / P5.2.2 / P5.3
 
 > **Status**: Implemented (local-first, read-only; P5.3 adds remote observe requests with metadata-only results).
-> **Not implemented**: Computer Use control, upload, thumbnail preview, OCR, LLM visual analysis, mouse/keyboard/browser control.
+> **Not implemented here**: upload, thumbnail preview, OCR, LLM visual analysis, mouse/keyboard/browser control.
+> **Computer Use control** is implemented separately in **P5.6** behind a gated direct mode (cua backend, Mac-local only, OFF by default) — see `docs/desktop_security.md §7`.
 
 P5.2 adds **read-only screenshot observe** on the operator's MacBook. Screenshots stay on disk by default. The VPS control plane receives metadata only when future remote wiring lands; in P5.2 it does not receive image bytes.
 

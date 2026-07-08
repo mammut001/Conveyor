@@ -62,3 +62,4 @@ htmlcov/
 menubar-agent/.build/
 menubar-agent/build/
 /$HOME
+/.workbuddy
