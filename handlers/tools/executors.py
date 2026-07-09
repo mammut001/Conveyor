@@ -422,11 +422,15 @@ async def exec_computer_status(settings: Settings, _arg: str) -> str:
     import time
 
     enabled = settings.conveyor_computer_use_enabled
-    source = direct_mode_source(settings) if enabled else None
+    direct_enabled = settings.conveyor_computer_direct_enabled
+    source = direct_mode_source(settings) if (enabled and direct_enabled) else None
     lines = ["🖥 Computer Use (P5.6 Direct)", ""]
     lines.append(f"启用: {'是' if enabled else '否 (CONVEYOR_COMPUTER_USE_ENABLED=false)'}")
-    
-    # Direct mode state
+    lines.append(
+        f"Direct 开关: {'是' if direct_enabled else '否 (CONVEYOR_COMPUTER_DIRECT_ENABLED=false)'}"
+    )
+
+    # Direct mode state (requires USE + DIRECT; arm or always_direct)
     direct_active = is_direct_mode_active(settings)
     lines.append(f"Direct 模式: {'启用' if direct_active else '未启用'}")
     if source:

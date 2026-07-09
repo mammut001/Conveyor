@@ -185,8 +185,11 @@ python3 scripts/cua_driver_real_smoke.py --cmd "cua-driver mcp"
 **所有开关默认 `false`/关闭**，该模式需显式开启：
 
 - **授权（TTL）**：`/computer_arm [分钟]` 在有限时间内开启 direct 模式；过期后任务被拦截。
-- **Always-direct**：`CONVEYOR_COMPUTER_ALWAYS_DIRECT=true` 可跳过授权（仍需
-  `CONVEYOR_COMPUTER_USE_ENABLED=true` 与 `CONVEYOR_COMPUTER_DIRECT_ENABLED=true`）。
+- **Direct 门闩**：`CONVEYOR_COMPUTER_DIRECT_ENABLED=true` 才允许
+  `/computer_arm`、`/computer_task`、`/computer_action` 以及
+  `is_direct_mode_active`。仅 `USE_ENABLED` 只开放 status / 观察就绪。
+- **Always-direct**：`CONVEYOR_COMPUTER_ALWAYS_DIRECT=true` 仅在
+  `USE_ENABLED` 与 `DIRECT_ENABLED` 均为 true 时跳过 arm。
 - **紧急停止**：`/computer_stop` 立即取消当前运行中的任务。
 
 **命令**

@@ -181,14 +181,22 @@ P5.6 adds a hands-free direct computer-use mode: `Telegram/Feishu NL → Codex �
   `CONVEYOR_COMPUTER_USE_ENABLED=false`,
   `CONVEYOR_COMPUTER_DIRECT_ENABLED=false`,
   `CONVEYOR_COMPUTER_ALWAYS_DIRECT=false`.
-- Direct (hands-free, no per-step confirmation) mode is reached only one of two ways:
+- Layered gates:
+  - `CONVEYOR_COMPUTER_USE_ENABLED=true` unlocks status and read-only observe readiness.
+  - `CONVEYOR_COMPUTER_DIRECT_ENABLED=true` is **also required** for `/computer_arm`,
+    `/computer_task`, `/computer_action`, and for `is_direct_mode_active` to return true.
+- Direct (hands-free, no per-step confirmation) mode is reached only one of two ways
+  (both require USE + DIRECT enabled):
   1. **Arm TTL** — `/computer_arm [minutes]` arms direct mode for a limited time
-     (`is_direct_mode_active` = enabled AND (`CONVEYOR_COMPUTER_ALWAYS_DIRECT` OR a
-     non-expired arm)). After expiry the task is blocked.
+     (`is_direct_mode_active` = USE AND DIRECT AND (`CONVEYOR_COMPUTER_ALWAYS_DIRECT`
+     OR a non-expired arm)). After expiry the task is blocked.
   2. **Always-direct** — `CONVEYOR_COMPUTER_ALWAYS_DIRECT=true` bypasses arming,
-     but still requires `CONVEYOR_COMPUTER_USE_ENABLED=true` and
-     `CONVEYOR_COMPUTER_DIRECT_ENABLED=true`.
-- `/computer_task <goal>` fails fast if direct mode is not active.
+     but only when both `CONVEYOR_COMPUTER_USE_ENABLED=true` and
+     `CONVEYOR_COMPUTER_DIRECT_ENABLED=true`. ALWAYS_DIRECT alone never enables
+     direct mode if DIRECT is off.
+- `/computer_task <goal>` / `/computer_action` fail fast if direct mode is not active.
+- Slash aliases: `/computer_observe` (same as `/computer_screenshot` / `computer.observe`),
+  `/computer_action <json>` → `computer.action`.
 - Node capability gating: `computer_use_active(settings)` must be true; otherwise the
   `computer.use.direct` capability is not advertised.
 
@@ -253,8 +261,9 @@ copy. The trajectory is visible via `/computer_log [task_id]`.
 
 P5.6.1 hardens the computer-use implementation for safer and more debuggable hands-free operation:
 1. **AX-First Click Preference**: Click actions containing AX metadata (`pid`/`window_id`/`element_index`) will prioritize AX-based clicks first. XY-coordinate clicking is used only as a fallback, and the click method used (`ax_click` vs `xy_click`) is recorded.
-2. **App Allowlist/Blocklist Validation**: Prevents actions when the active focused application matches a blocked app (defaults to `Keychain Access,System Settings,Terminal`) or, if `CONVEYOR_COMPUTER_ALLOWED_APPS` is specified, when the active app is not in the allowlist. Active app querying uses macOS `osascript`.
-3. **Structured JSONL Trajectories**: Logs all steps to `codex_memory_root/computer/trajectories/<task_id>.jsonl` with timestamp, task ID, step index, screenshot ID/hash, action type, redacted args, result status, error, and step duration (duration_ms).
+2. **App Allowlist/Blocklist Validation**: Prevents actions when the target/frontmost application matches a blocked app (defaults to `Keychain Access,System Settings,Terminal`) or, if `CONVEYOR_COMPUTER_ALLOWED_APPS` is specified, when a **mutating** action's target app is not in the allowlist. AX actions with `pid` resolve the **target** process name (not merely frontmost). Read-only `observe`/`wait` apply **blocklist only** so a Calculator-only allowlist does not reject the planner's first observe while Codex is frontmost.
+3. **Observe → AX hints for the planner**: Successful `observe` best-effort attaches `pid` / `window_id` / `ax_app` / short `element_hints` (button labels only, truncated) so CodexPlanner can emit AX clicks instead of bare x/y. Hints prefer allowed-apps windows when the allowlist is set.
+3. **Structured JSONL Trajectories**: Logs all steps to `codex_memory_root/computer/trajectories/<task_id>.jsonl` with timestamp, task ID, step index, screenshot ID/hash, action type, redacted args, result status, error, and step duration (duration_ms). Directory tree `computer/` and `computer/trajectories/` are chmod `0700` when possible; each JSONL file is chmod `0600`.
 4. **Concise Failure Cards**: Generates precise, low-clutter failure summaries when tasks fail, stop, or hit step caps, outlining the task ID, stop reason, last action, last screenshot ID/hash, steps completed, and log suggestion.
 5. **Telegram Stop Fast Path**: Clean stop keywords (`停下`, `别动`, `停止操作`, `stop computer`, `cancel computer task`) are routed directly to `computer.stop` at dispatch time, bypassing normal Codex routing to maximize speed.
 

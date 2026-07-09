@@ -441,7 +441,8 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "computer.status": ("/computer_status",),
     "computer.task": ("/computer_task",),
     "computer.stop": ("/computer_stop",),
-    "computer.observe": ("/computer_screenshot",),
+    "computer.observe": ("/computer_screenshot", "/computer_observe"),
+    "computer.action": ("/computer_action",),
     "desktop.screenshot.status": ("/desktop_screenshot_status", "/screenshot_status"),
     "desktop.observe.request": ("/observe_request", "/screenshot_request", "/request_screenshot", "/observe_preview", "/screenshot_preview"),
     "desktop.observe.status": ("/observe_status",),
@@ -540,6 +541,7 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "computer.task": "操作电脑完成任务",
     "computer.stop": "停止电脑任务",
     "computer.observe": "电脑截图观察",
+    "computer.action": "执行单个桌面动作",
     "desktop.screenshot.status": "桌面截图 observe 状态",
     "screenshot_status": "桌面截图状态",
     "desktop.observe.request": "创建远程截图 observe 请求 (P5.4.3 支持 --preview 自动缩略图)",
@@ -1346,15 +1348,28 @@ async def _computer_screenshot(msg, port, _runner, settings, _arg):
     await port.reply(msg, text)
 
 
+async def _computer_observe(msg, port, _runner, settings, _arg):
+    """Alias of /computer_screenshot — one-off desktop observation."""
+    await _computer_screenshot(msg, port, _runner, settings, _arg)
+
+
+async def _computer_action(msg, port, _runner, settings, _arg):
+    """Execute a single allow-listed desktop action from a JSON payload."""
+    from handlers.tools.runner import run_tool
+    text = await run_tool(settings, "computer.action", _arg or "")
+    await port.reply(msg, text)
+
+
 async def _computer_arm(msg, port, _runner, settings, _arg):
     """Arm Direct (hands-free) mode for a TTL.
 
-    No effect if CONVEYOR_COMPUTER_ALWAYS_DIRECT=true (already always-on).
+    Requires USE + DIRECT enabled. No effect if ALWAYS_DIRECT is already on
+    (and both flags are set).
     """
     from desktop_computer_requests import (
         arm_direct_mode,
         arm_remaining_seconds,
-        direct_mode_source,
+        is_direct_mode_active,
     )
 
     if not settings.conveyor_computer_use_enabled:
@@ -1364,7 +1379,14 @@ async def _computer_arm(msg, port, _runner, settings, _arg):
             "先在 .env 或环境开启后再 arm。",
         )
         return
-    if settings.conveyor_computer_always_direct:
+    if not settings.conveyor_computer_direct_enabled:
+        await port.reply(
+            msg,
+            "⚠️ Direct 模式开关未启用 (CONVEYOR_COMPUTER_DIRECT_ENABLED=false)。\n"
+            "status/观察就绪只需 USE；arm/task/action 还需要 DIRECT_ENABLED=true。",
+        )
+        return
+    if settings.conveyor_computer_always_direct and is_direct_mode_active(settings):
         await port.reply(
             msg,
             "✅ Always-Direct 已启用 (CONVEYOR_COMPUTER_ALWAYS_DIRECT=true)，无需 arm。\n"
@@ -1752,11 +1774,12 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "\n"
     text += "执行节点 (P5.0 + P5.6 Computer Use):\n"
     text += "/nodes /node_status — VPS + 可选 desktop 状态\n"
-    text += "/computer_status — Computer Use 状态 (功能开关 / Direct 模式 / 允许动作)\n"
-    text += "/computer_arm [分钟] — 启用 Direct (免确认) 模式，TTL 默认 30 分钟\n"
+    text += "/computer_status — Computer Use 状态 (USE / DIRECT 开关 / Direct 模式 / 允许动作)\n"
+    text += "/computer_arm [分钟] — 启用 Direct (免确认) 模式，TTL 默认 30 分钟 (需 DIRECT_ENABLED)\n"
     text += "/computer_task <目标> — 运行免确认 Computer Use 任务 (需 Direct 模式)\n"
     text += "/computer_stop — 立即停止当前电脑任务 (kill switch)\n"
-    text += "/computer_screenshot — 一次性 observe/截图当前桌面\n"
+    text += "/computer_screenshot /computer_observe — 一次性 observe/截图当前桌面\n"
+    text += "/computer_action <json> — 执行单个允许清单内动作 (如 {\"action\":\"click\",\"x\":100,\"y\":100})\n"
     text += "/computer_log [task_id] — 查看任务轨迹或最近任务列表\n"
     text += "/desktop_screenshot_status /screenshot_status — 截图元数据/状态（不截屏）\n"
     text += "/observe_request /screenshot_request — 创建远程 observe 请求（支持 --preview 自动缩略图）\n"
@@ -1904,6 +1927,18 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
             "One-off desktop observe/screenshot via computer-use backend",
             _computer_screenshot,
             takes_optional_arg=True,
+        ),
+        CommandSpec(
+            "computer_observe",
+            "One-off desktop observation (alias of /computer_screenshot)",
+            _computer_observe,
+            takes_optional_arg=True,
+        ),
+        CommandSpec(
+            "computer_action",
+            "Execute a single allow-listed desktop action from JSON",
+            _computer_action,
+            takes_arg=True,
         ),
         CommandSpec(
             "computer_log",

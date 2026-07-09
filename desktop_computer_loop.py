@@ -206,11 +206,20 @@ async def run_computer_loop(
                 observation = result
             steps_used += 1
 
-            # Check app allowlist / blocklist based on active_app returned in result
+            # Post-step app gate: blocklist always; allowlist only for
+            # mutating actions. Bare observe often reports frontmost=Codex
+            # while the goal app is Calculator — must not stop the task.
             active_app = (result or {}).get("active_app")
             if active_app:
-                from desktop_computer_requests import check_app_allowlist_blocklist
-                is_ok, reason = check_app_allowlist_blocklist(settings, active_app)
+                from desktop_computer_requests import (
+                    action_enforces_app_allowlist,
+                    check_app_allowlist_blocklist,
+                )
+                is_ok, reason = check_app_allowlist_blocklist(
+                    settings,
+                    active_app,
+                    enforce_allowlist=action_enforces_app_allowlist(action),
+                )
                 if not is_ok:
                     set_task_status(settings, task_id, "stopped", blocked_reason=reason)
                     break

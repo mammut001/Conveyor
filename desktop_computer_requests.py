@@ -58,6 +58,14 @@ RESULT_ALLOWED_FIELDS = frozenset({
     "error",
     "node_id",
     "created_at",
+    # LocalCuaTransport metadata (short strings only; no window titles).
+    "active_app",
+    "click_method",
+    # AX hints from observe so planner can emit AX clicks (not bare x/y).
+    "pid",
+    "window_id",
+    "ax_app",
+    "element_hints",
 })
 
 RESULT_FORBIDDEN_FIELDS = frozenset({
@@ -150,21 +158,49 @@ def validate_ax_fields(action: dict) -> tuple[bool, str | None]:
     return True, None
 
 
-def check_app_allowlist_blocklist(settings: Settings, app_name: str) -> tuple[bool, str | None]:
+# Read-only / control actions: allowlist does not apply (blocklist still does).
+# Planner first step is almost always bare ``observe`` while Codex/Terminal is
+# frontmost; requiring allowlist match there blocks the whole task before any
+# Calculator AX click can run.
+_ALLOWLIST_EXEMPT_ACTIONS = frozenset({"observe", "wait", "done", "stop"})
+
+
+def action_enforces_app_allowlist(action: object) -> bool:
+    """True when this action type must match CONVEYOR_COMPUTER_ALLOWED_APPS."""
+    if not isinstance(action, dict):
+        return True
+    act = str(action.get("action") or "").strip().lower()
+    return act not in _ALLOWLIST_EXEMPT_ACTIONS
+
+
+def check_app_allowlist_blocklist(
+    settings: Settings,
+    app_name: str,
+    *,
+    enforce_allowlist: bool = True,
+) -> tuple[bool, str | None]:
+    """Validate app against blocklist always; allowlist only when requested.
+
+    ``enforce_allowlist=False`` is used for read-only observe/wait so a
+    Calculator-only allowlist does not reject the planner's initial
+    desktop observe while Codex is frontmost. Mutating actions
+    (click/type/hotkey/scroll) always pass ``enforce_allowlist=True``.
+    """
     if not app_name:
         return True, None
     app_lower = app_name.strip().lower()
-    
-    # 1. Blocked apps check
+
+    # 1. Blocked apps check (always)
     blocked_apps = getattr(settings, "conveyor_computer_blocked_apps", ())
     for b in blocked_apps:
         if b.strip().lower() == app_lower:
             return False, f"blocked_app:{app_name}"
-            
-    # 2. Allowed apps check
+
+    # 2. Allowed apps check (mutating actions only)
+    if not enforce_allowlist:
+        return True, None
     allowed_apps = getattr(settings, "conveyor_computer_allowed_apps", ())
     if allowed_apps:
-        # Check if app_name is in allowed_apps
         matched = False
         for a in allowed_apps:
             if a.strip().lower() == app_lower:
@@ -172,7 +208,7 @@ def check_app_allowlist_blocklist(settings: Settings, app_name: str) -> tuple[bo
                 break
         if not matched:
             return False, f"app_not_in_allowlist:{app_name}"
-            
+
     return True, None
 
 
@@ -245,7 +281,9 @@ def normalize_action(action: object) -> dict:
     for key in (
         "x", "y", "dx", "dy", "seconds", "text", "keys",
         "pid", "window_id", "element_index", "element_token",
-        "delivery_mode", "scope", "button", "_mock_active_app",
+        "delivery_mode", "scope", "button",
+        "_mock_active_app", "_mock_target_app",
+        "_mock_element_hints", "_mock_pid", "_mock_window_id", "_mock_ax_app",
     ):
         if key in action:
             norm[key] = action[key]
@@ -300,12 +338,23 @@ def save_computer_store(settings: Settings, store: dict[str, dict]) -> None:
 # ---- direct-mode arming -----------------------------------------------------
 
 def arm_direct_mode(settings: Settings, ttl_minutes: int | None = None) -> dict:
-    """Arm direct (hands-free) mode for a TTL. Returns {ok, ...}."""
+    """Arm direct (hands-free) mode for a TTL. Returns {ok, ...}.
+
+    Requires both CONVEYOR_COMPUTER_USE_ENABLED and
+    CONVEYOR_COMPUTER_DIRECT_ENABLED. USE alone only unlocks status /
+    read-only readiness, not arming or action execution.
+    """
     if not settings.conveyor_computer_use_enabled:
         return {
             "ok": False,
             "error": "computer_use_disabled",
             "message": "CONVEYOR_COMPUTER_USE_ENABLED 未开启。",
+        }
+    if not settings.conveyor_computer_direct_enabled:
+        return {
+            "ok": False,
+            "error": "computer_direct_disabled",
+            "message": "CONVEYOR_COMPUTER_DIRECT_ENABLED 未开启。",
         }
     if ttl_minutes is None or ttl_minutes <= 0:
         ttl_minutes = DEFAULT_ARM_TTL_MINUTES
@@ -340,11 +389,15 @@ def disarm_direct_mode(settings: Settings) -> dict:
 def is_direct_mode_active(settings: Settings, now: datetime | None = None) -> bool:
     """True when hands-free mode is permitted.
 
-    Two paths: (1) ``CONVEYOR_COMPUTER_ALWAYS_DIRECT=true`` (no arm
-    needed), or (2) a non-expired arm record. Computer Use must also
-    be enabled.
+    Requires both USE and DIRECT enabled. Then either:
+    (1) ``CONVEYOR_COMPUTER_ALWAYS_DIRECT=true`` (no arm needed), or
+    (2) a non-expired arm record.
+
+    ALWAYS_DIRECT alone never bypasses a missing DIRECT_ENABLED flag.
     """
     if not settings.conveyor_computer_use_enabled:
+        return False
+    if not settings.conveyor_computer_direct_enabled:
         return False
     if settings.conveyor_computer_always_direct:
         return True
@@ -354,6 +407,8 @@ def is_direct_mode_active(settings: Settings, now: datetime | None = None) -> bo
 def direct_mode_source(settings: Settings, now: datetime | None = None) -> str | None:
     """Return 'always' | 'armed' | None describing why direct mode is on."""
     if not settings.conveyor_computer_use_enabled:
+        return None
+    if not settings.conveyor_computer_direct_enabled:
         return None
     if settings.conveyor_computer_always_direct:
         return "always"
@@ -522,14 +577,20 @@ def append_trajectory(settings: Settings, task_id: str, entry: dict) -> dict:
             record["updated_at"] = _iso_z(_utc_now())
             _save_unlocked(settings, store)
             
-            # Write JSONL log to disk
+            # Write JSONL log to disk (private dirs 0700, file 0600).
             try:
                 import json
                 from pathlib import Path
-                traj_dir = Path(settings.codex_memory_root) / "computer" / "trajectories"
+                computer_dir = Path(settings.codex_memory_root) / "computer"
+                traj_dir = computer_dir / "trajectories"
                 traj_dir.mkdir(parents=True, exist_ok=True)
+                for d in (computer_dir, traj_dir):
+                    try:
+                        os.chmod(d, 0o700)
+                    except OSError:
+                        pass
                 traj_file = traj_dir / f"{task_id}.jsonl"
-                
+
                 line_obj = {
                     "timestamp": ts,
                     "task_id": task_id,
@@ -542,9 +603,13 @@ def append_trajectory(settings: Settings, task_id: str, entry: dict) -> dict:
                     "error": entry.get("error"),
                     "duration_ms": entry.get("duration_ms", 0),
                 }
-                
+
                 with open(traj_file, "a", encoding="utf-8") as f:
                     f.write(json.dumps(line_obj, ensure_ascii=False) + "\n")
+                try:
+                    os.chmod(traj_file, 0o600)
+                except OSError:
+                    pass
             except Exception:
                 pass
     return {"ok": True}
@@ -679,8 +744,70 @@ def fail_computer_step(
     return {"ok": True, "step": dict(step), "task_id": task_id}
 
 
+# Short string fields from the driver — truncate so state never grows.
+_RESULT_SHORT_STRING_LIMITS = {
+    "active_app": 128,
+    "click_method": 64,
+    "error": 256,
+    "action_type": 64,
+    "effect": 128,
+    "node_id": 128,
+    "screenshot_id": 256,
+    "sha256": 128,
+    "obs_text_preview": 200,
+    "path": 512,
+    "created_at": 64,
+    "ax_app": 128,
+}
+
+_ELEMENT_HINT_MAX = 40
+_ELEMENT_HINT_LABEL_MAX = 32
+_ELEMENT_HINT_ROLE_MAX = 48
+_ELEMENT_HINT_TOKEN_MAX = 64
+
+
+def _clean_element_hints(value: object) -> list[dict[str, Any]] | None:
+    """Sanitize AX element hints: short labels/roles only, bounded list."""
+    if not isinstance(value, list):
+        return None
+    cleaned: list[dict[str, Any]] = []
+    for item in value[:_ELEMENT_HINT_MAX]:
+        if not isinstance(item, dict):
+            continue
+        hint: dict[str, Any] = {}
+        idx = item.get("element_index")
+        if idx is not None:
+            try:
+                hint["element_index"] = int(idx)
+            except (TypeError, ValueError):
+                continue
+        role = item.get("role")
+        if isinstance(role, str) and role.strip():
+            hint["role"] = _truncate_text(role.strip(), _ELEMENT_HINT_ROLE_MAX)
+        label = item.get("label")
+        if isinstance(label, str) and label.strip():
+            # Drop long free text (could leak UI secrets); keep short labels.
+            lab = label.strip()
+            if len(lab) > _ELEMENT_HINT_LABEL_MAX:
+                continue
+            hint["label"] = lab
+        token = item.get("element_token")
+        if isinstance(token, str) and token.strip():
+            hint["element_token"] = _truncate_text(token.strip(), _ELEMENT_HINT_TOKEN_MAX)
+        if "element_index" in hint:
+            cleaned.append(hint)
+    return cleaned
+
+
 def validate_computer_result(result: object) -> dict | None:
-    """Allow-list validation for step results (defence in depth)."""
+    """Allow-list validation for step results (defence in depth).
+
+    Accepts only RESULT_ALLOWED_FIELDS. Short string metadata such as
+    ``active_app`` and ``click_method`` (returned by LocalCuaTransport)
+    is coerced and truncated so the store never holds long free text.
+    AX observe hints (pid/window_id/element_hints) are accepted so the
+    planner can emit AX clicks after the first observe.
+    """
     if not isinstance(result, dict):
         return None
     for key in result:
@@ -691,7 +818,25 @@ def validate_computer_result(result: object) -> dict | None:
     cleaned: dict[str, Any] = {}
     for field in RESULT_ALLOWED_FIELDS:
         value = result.get(field)
-        if value is not None:
+        if value is None:
+            continue
+        if field in ("pid", "window_id"):
+            try:
+                cleaned[field] = int(value)
+            except (TypeError, ValueError):
+                continue
+            continue
+        if field == "element_hints":
+            hints = _clean_element_hints(value)
+            if hints:
+                cleaned[field] = hints
+            continue
+        limit = _RESULT_SHORT_STRING_LIMITS.get(field)
+        if limit is not None:
+            if not isinstance(value, str):
+                value = str(value)
+            cleaned[field] = _truncate_text(value, limit)
+        else:
             cleaned[field] = value
     return cleaned
 

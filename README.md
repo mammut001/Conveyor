@@ -206,9 +206,13 @@ python3 scripts/cua_driver_real_smoke.py --cmd "cua-driver mcp"
 
 - **Arm (TTL)**: `/computer_arm [minutes]` enables direct mode for a
   limited time. After expiry, tasks are blocked.
+- **Direct gate**: `CONVEYOR_COMPUTER_DIRECT_ENABLED=true` is required
+  for `/computer_arm`, `/computer_task`, `/computer_action`, and for
+  `is_direct_mode_active`. `USE_ENABLED` alone only unlocks status /
+  observe readiness.
 - **Always-direct**: `CONVEYOR_COMPUTER_ALWAYS_DIRECT=true` bypasses
-  arming (still requires `CONVEYOR_COMPUTER_USE_ENABLED=true` and
-  `CONVEYOR_COMPUTER_DIRECT_ENABLED=true`).
+  arming only when both `CONVEYOR_COMPUTER_USE_ENABLED=true` and
+  `CONVEYOR_COMPUTER_DIRECT_ENABLED=true`.
 - **Kill switch**: `/computer_stop` cancels the active task
   immediately.
 

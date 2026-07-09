@@ -38,21 +38,82 @@ import uuid
 
 from config import Settings
 from desktop_computer_requests import (
+    action_enforces_app_allowlist,
+    check_app_allowlist_blocklist,
     redact_computer_action,
     validate_ax_fields,
-    check_app_allowlist_blocklist,
 )
 
 def get_active_app_macos() -> str:
+    """Return the frontmost application name (best-effort)."""
     try:
-        import subprocess
-        cmd = ["osascript", "-e", 'tell application "System Events" to get name of first application process whose frontmost is true']
+        cmd = [
+            "osascript",
+            "-e",
+            'tell application "System Events" to get name of first application process whose frontmost is true',
+        ]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
         if proc.returncode == 0:
-            return proc.stdout.strip()
+            name = (proc.stdout or "").strip()
+            if name:
+                return name
     except Exception:
         pass
     return "Unknown"
+
+
+def get_app_name_for_pid(pid: int) -> str | None:
+    """Resolve macOS process name for a unix pid (best-effort).
+
+    Used for AX-targeted actions so allowlist/blocklist checks the *target*
+    app (e.g. Calculator) instead of whatever is currently frontmost
+    (often Codex / Terminal while the agent is driving).
+    """
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid_int <= 0:
+        return None
+    try:
+        cmd = [
+            "osascript",
+            "-e",
+            f'tell application "System Events" to get name of first process whose unix id is {pid_int}',
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if proc.returncode == 0:
+            name = (proc.stdout or "").strip()
+            if name:
+                return name
+    except Exception:
+        pass
+    return None
+
+
+def resolve_app_for_action(action: dict) -> str:
+    """App name used for allowlist/blocklist for this action.
+
+    Prefer the AX target pid's process name when present; otherwise the
+    frontmost app. This prevents hands-free AX clicks on an allowed app
+    from being rejected because Codex/Terminal is frontmost.
+    """
+    if not isinstance(action, dict):
+        return get_active_app_macos()
+    pid = action.get("pid")
+    if pid is not None:
+        try:
+            pid_int = int(pid)
+        except (TypeError, ValueError):
+            pid_int = 0
+        if pid_int > 0:
+            name = get_app_name_for_pid(pid_int)
+            if name:
+                return name
+            # Pid was specified but unresolvable — do not fall back to a
+            # different frontmost app (that reintroduces the false block).
+            return "Unknown"
+    return get_active_app_macos()
 
 logger = logging.getLogger("desktop_cua")
 
@@ -167,8 +228,34 @@ class LocalCuaTransport(CuaTransport):
                 "action_type": action.get("action"),
                 "node_id": node_id,
             }
-        active_app = get_active_app_macos()
-        is_ok, reason = check_app_allowlist_blocklist(self.settings, active_app)
+        # Target app (pid) for AX actions; frontmost otherwise.
+        # Observe/wait: blocklist only — allowlist would kill planner's first
+        # observe while Codex is frontmost under Calculator-only allowlist.
+        active_app = resolve_app_for_action(action)
+        act_name = action.get("action") if isinstance(action, dict) else None
+        # With a non-empty app allowlist, bare x/y clicks cannot prove they
+        # target an allowed app (frontmost is often Codex). Require AX.
+        allowed_apps = getattr(self.settings, "conveyor_computer_allowed_apps", ()) or ()
+        if (
+            act_name == "click"
+            and allowed_apps
+            and not any(
+                action.get(k) is not None
+                for k in ("pid", "window_id", "element_index", "element_token")
+            )
+        ):
+            return {
+                "result_ok": False,
+                "error": "ax_required_when_app_allowlist_set",
+                "action_type": "click",
+                "node_id": node_id,
+                "active_app": active_app,
+            }
+        is_ok, reason = check_app_allowlist_blocklist(
+            self.settings,
+            active_app,
+            enforce_allowlist=action_enforces_app_allowlist(action),
+        )
         if not is_ok:
             return {
                 "result_ok": False,
@@ -245,10 +332,157 @@ class LocalCuaTransport(CuaTransport):
                         "node_id": node_id,
                     }
                 meta = _save_cua_screenshot(self.settings, png, node_id=node_id)
-                return _observe_result_from_meta(meta, node_id)
+                res = _observe_result_from_meta(meta, node_id)
+                return self._attach_ax_hints(res, action)
 
         meta = self._observe_desktop_state(node_id)
-        return _observe_result_from_meta(meta, node_id)
+        res = _observe_result_from_meta(meta, node_id)
+        return self._attach_ax_hints(res, action)
+
+    def _attach_ax_hints(self, res: dict, action: dict) -> dict:
+        """Merge best-effort AX window/element hints into an observe result.
+
+        Without this, CodexPlanner only sees a screenshot id and falls back
+        to bare x/y clicks, which then fail under app allowlists when Codex
+        (not Calculator) is frontmost.
+        """
+        if not res.get("result_ok"):
+            return res
+        try:
+            hints = self._collect_ax_hints(action)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("ax hint collection failed: %s", exc)
+            return res
+        if hints:
+            res.update(hints)
+        return res
+
+    def _collect_ax_hints(self, action: dict | None = None) -> dict[str, Any]:
+        """Pick a target app window and return pid/window_id/element_hints.
+
+        Priority:
+        1. action.pid / action.window_id if provided
+        2. CONVEYOR_COMPUTER_ALLOWED_APPS (single or matching)
+        3. frontmost app
+        """
+        action = action if isinstance(action, dict) else {}
+        preferred_pid = None
+        preferred_wid = None
+        if action.get("pid") is not None:
+            try:
+                preferred_pid = int(action["pid"])
+            except (TypeError, ValueError):
+                preferred_pid = None
+        if action.get("window_id") is not None:
+            try:
+                preferred_wid = int(action["window_id"])
+            except (TypeError, ValueError):
+                preferred_wid = None
+
+        allowed = tuple(
+            a.strip()
+            for a in (getattr(self.settings, "conveyor_computer_allowed_apps", ()) or ())
+            if str(a).strip()
+        )
+        target_names = [a.lower() for a in allowed]
+        front = get_active_app_macos()
+
+        windows: list[dict] = []
+        # Prefer unfiltered list; fall back to per-pid if needed.
+        listed = self._call_tool("list_windows", {}, timeout=20)
+        if listed.get("ok") and isinstance(listed.get("data"), dict):
+            raw = listed["data"].get("windows") or []
+            if isinstance(raw, list):
+                windows = [w for w in raw if isinstance(w, dict)]
+        if not windows and preferred_pid:
+            listed = self._call_tool("list_windows", {"pid": preferred_pid}, timeout=20)
+            if listed.get("ok") and isinstance(listed.get("data"), dict):
+                raw = listed["data"].get("windows") or []
+                if isinstance(raw, list):
+                    windows = [w for w in raw if isinstance(w, dict)]
+
+        def _area(w: dict) -> float:
+            b = w.get("bounds") or {}
+            try:
+                return float(b.get("width") or 0) * float(b.get("height") or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _match_app(w: dict, names: list[str]) -> bool:
+            app = str(w.get("app_name") or "").strip().lower()
+            return bool(app) and app in names
+
+        candidates = list(windows)
+        if preferred_pid:
+            candidates = [
+                w for w in candidates
+                if int(w.get("pid") or 0) == preferred_pid
+            ] or candidates
+        if target_names:
+            filtered = [w for w in candidates if _match_app(w, target_names)]
+            if filtered:
+                candidates = filtered
+        elif front and front != "Unknown":
+            filtered = [w for w in candidates if _match_app(w, [front.lower()])]
+            if filtered:
+                candidates = filtered
+
+        # Prefer large on-screen windows (skip menu-bar strips).
+        candidates = sorted(
+            candidates,
+            key=lambda w: (
+                1 if w.get("is_on_screen") else 0,
+                1 if _area(w) >= 5000 else 0,
+                _area(w),
+            ),
+            reverse=True,
+        )
+        if preferred_wid is not None:
+            prefer = [w for w in candidates if int(w.get("window_id") or -1) == preferred_wid]
+            if prefer:
+                candidates = prefer + [w for w in candidates if w not in prefer]
+
+        chosen = None
+        for w in candidates:
+            if _area(w) < 5000 and preferred_wid is None:
+                continue
+            try:
+                pid = int(w.get("pid"))
+                wid = int(w.get("window_id"))
+            except (TypeError, ValueError):
+                continue
+            state = self._call_tool(
+                "get_window_state", {"pid": pid, "window_id": wid}, timeout=30,
+            )
+            if not state.get("ok"):
+                continue
+            data = state.get("data") or {}
+            elems = data.get("elements") if isinstance(data, dict) else None
+            if not isinstance(elems, list) or not elems:
+                continue
+            hints = _extract_element_hints(elems)
+            if not hints and preferred_wid is None:
+                # Still accept window even without short-labeled buttons.
+                hints = _extract_element_hints(elems, loose=True)
+            chosen = {
+                "pid": pid,
+                "window_id": wid,
+                "ax_app": str(w.get("app_name") or "")[:128] or None,
+                "element_hints": hints,
+            }
+            if hints:
+                break
+        if not chosen:
+            return {}
+        out: dict[str, Any] = {
+            "pid": chosen["pid"],
+            "window_id": chosen["window_id"],
+        }
+        if chosen.get("ax_app"):
+            out["ax_app"] = chosen["ax_app"]
+        if chosen.get("element_hints"):
+            out["element_hints"] = chosen["element_hints"]
+        return out
 
     def _observe_desktop_state(self, node_id: str) -> dict:
         prepared = _prepare_cua_screenshot_path(self.settings)
@@ -299,7 +533,15 @@ class LocalCuaTransport(CuaTransport):
             for k in ("pid", "window_id", "element_index"):
                 if ax_args.get(k) is not None:
                     ax_args[k] = int(ax_args[k])
-                    
+
+            # Populate Cua element cache before index-based click.
+            if ax_args.get("pid") is not None and ax_args.get("window_id") is not None:
+                self._call_tool(
+                    "get_window_state",
+                    {"pid": ax_args["pid"], "window_id": ax_args["window_id"]},
+                    timeout=30,
+                )
+
             if "pid" not in ax_args and "window_id" not in ax_args and "scope" not in ax_args:
                 ax_args["scope"] = "desktop"
             if ax_args.get("scope") == "desktop":
@@ -444,6 +686,49 @@ def _observe_result_from_meta(meta: dict, node_id: str) -> dict:
     }
 
 
+def _extract_element_hints(elems: list, *, loose: bool = False) -> list[dict[str, Any]]:
+    """Build short, allow-list-safe AX element hints for the planner.
+
+    Prefers buttons / short labels (digits, single words). Long free text
+    is dropped so results never carry raw window content.
+    """
+    hints: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for e in elems:
+        if not isinstance(e, dict):
+            continue
+        try:
+            idx = int(e.get("element_index"))
+        except (TypeError, ValueError):
+            continue
+        if idx in seen:
+            continue
+        role = str(e.get("role") or "")
+        label = e.get("label")
+        label_s = label.strip() if isinstance(label, str) else ""
+        role_l = role.lower()
+        is_button = "button" in role_l
+        if not loose:
+            if not is_button:
+                continue
+            if not label_s or len(label_s) > 32:
+                continue
+        else:
+            if not label_s or len(label_s) > 32:
+                continue
+        seen.add(idx)
+        hint: dict[str, Any] = {"element_index": idx, "role": role[:48] if role else "AXUnknown"}
+        if label_s:
+            hint["label"] = label_s[:32]
+        token = e.get("element_token")
+        if isinstance(token, str) and token.strip():
+            hint["element_token"] = token.strip()[:64]
+        hints.append(hint)
+        if len(hints) >= 40:
+            break
+    return hints
+
+
 class FakeCuaTransport(CuaTransport):
     """Deterministic, network-free backend for smokes and local tests.
 
@@ -466,10 +751,36 @@ class FakeCuaTransport(CuaTransport):
         redacted = redact_computer_action(action)
         self.log.append({"action": act, "redacted": redacted})
         
-        active_app = action.get("_mock_active_app") or getattr(self, "mock_active_app", "Finder")
+        # Mirror LocalCuaTransport: pid-targeted actions use the target
+        # app mock when provided, so frontmost-like mock_active_app does
+        # not falsely block AX clicks on an allowed app.
+        if action.get("pid") is not None and action.get("_mock_target_app"):
+            active_app = str(action.get("_mock_target_app") or "Unknown")
+        else:
+            active_app = action.get("_mock_active_app") or getattr(self, "mock_active_app", "Finder")
         settings = getattr(self, "settings", None)
         if settings:
-            is_ok, reason = check_app_allowlist_blocklist(settings, active_app)
+            allowed_apps = getattr(settings, "conveyor_computer_allowed_apps", ()) or ()
+            if (
+                act == "click"
+                and allowed_apps
+                and not any(
+                    action.get(k) is not None
+                    for k in ("pid", "window_id", "element_index", "element_token")
+                )
+            ):
+                return {
+                    "result_ok": False,
+                    "error": "ax_required_when_app_allowlist_set",
+                    "action_type": "click",
+                    "node_id": node_id,
+                    "active_app": active_app,
+                }
+            is_ok, reason = check_app_allowlist_blocklist(
+                settings,
+                active_app,
+                enforce_allowlist=action_enforces_app_allowlist(action),
+            )
             if not is_ok:
                 return {
                     "result_ok": False,
@@ -494,6 +805,26 @@ class FakeCuaTransport(CuaTransport):
                 "obs_text_len": 0,
                 "node_id": node_id,
             }
+            # Inject AX hints for smokes / planner (mirrors LocalCuaTransport).
+            mock_hints = action.get("_mock_element_hints")
+            if isinstance(mock_hints, list) and mock_hints:
+                res["element_hints"] = mock_hints
+            if action.get("_mock_pid") is not None:
+                res["pid"] = int(action["_mock_pid"])
+            if action.get("_mock_window_id") is not None:
+                res["window_id"] = int(action["_mock_window_id"])
+            if action.get("_mock_ax_app"):
+                res["ax_app"] = str(action["_mock_ax_app"])[:128]
+            elif getattr(self.settings, "conveyor_computer_allowed_apps", None):
+                apps = getattr(self.settings, "conveyor_computer_allowed_apps", ()) or ()
+                if len(apps) == 1:
+                    res.setdefault("ax_app", apps[0])
+                    res.setdefault("pid", 59084)
+                    res.setdefault("window_id", 7235)
+                    res.setdefault("element_hints", [
+                        {"element_index": 13, "role": "AXButton", "label": "1"},
+                        {"element_index": 14, "role": "AXButton", "label": "2"},
+                    ])
         elif act == "click":
             # Validation
             ok, err = validate_ax_fields(action)
@@ -597,6 +928,7 @@ class CuaDriver:
             "obs_text_preview", "action_type", "action_redacted", "result_ok",
             "effect", "path", "verified", "error", "node_id", "created_at",
             "keys_len", "text_len", "click_method", "active_app",
+            "pid", "window_id", "ax_app", "element_hints",
         }
         return {k: v for k, v in result.items() if k in allowed}
 

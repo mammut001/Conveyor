@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Direct Computer Use Fix Pack (P5.6.2)**:
+  - Accept Cua success metadata `active_app` / `click_method` in step results (was `invalid_result`).
+  - Enforce `CONVEYOR_COMPUTER_DIRECT_ENABLED` for arm/task/action and `is_direct_mode_active`; `ALWAYS_DIRECT` cannot bypass a disabled DIRECT flag.
+  - Register `/computer_observe` and `/computer_action` slash commands to match docs.
+  - CodexPlanner AX-first prompt; observe attaches `pid` / `window_id` / short `element_hints` for the planner.
+  - App allowlist: resolve target app from AX `pid` (not only frontmost); observe/wait skip allowlist (blocklist still applies).
+  - With a non-empty app allowlist, reject bare x/y clicks (`ax_required_when_app_allowlist_set`).
+  - Trajectory dirs `0700` / JSONL `0600` best-effort; `/computer_status` shows USE + DIRECT flags.
+  - Smokes expanded in `scripts/desktop_computer_smoke.py` (32 cases).
+
 ### Added
 - **Direct Computer Use Hardening (P5.6.1)**:
   - **AX-First Click Preference**: Prioritizes AX/element clicks over coordinate-based clicks if both options are present. Falls back to coordinates if needed, and logs the click method used (`ax_click` vs `xy_click`).

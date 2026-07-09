@@ -55,10 +55,40 @@ class Planner(ABC):
 def _obs_summary(observation: dict) -> str:
     if not isinstance(observation, dict):
         return "no observation"
+    parts: list[str] = []
     sid = observation.get("screenshot_id") or observation.get("sha256")
     if sid:
-        return f"screenshot {sid} ({observation.get('width')}x{observation.get('height')})"
-    return "no screenshot yet"
+        parts.append(
+            f"screenshot {sid} ({observation.get('width')}x{observation.get('height')})"
+        )
+    active = observation.get("active_app")
+    if isinstance(active, str) and active.strip():
+        parts.append(f"active_app={active.strip()[:64]}")
+    ax_app = observation.get("ax_app")
+    if isinstance(ax_app, str) and ax_app.strip():
+        parts.append(f"ax_app={ax_app.strip()[:64]}")
+    # Surface AX / element / action hints so the planner can prefer them.
+    for key in (
+        "pid", "window_id", "element_index", "element_token",
+        "elements", "element_hints", "action_hints", "ax_hints",
+        "click_method",
+    ):
+        val = observation.get(key)
+        if val is None or val == "" or val == []:
+            continue
+        if isinstance(val, (list, dict)):
+            try:
+                snippet = json.dumps(val, ensure_ascii=False)
+            except Exception:
+                snippet = str(val)
+            # element_hints can be longer — keep more for digit matching.
+            limit = 900 if key == "element_hints" else 240
+            if len(snippet) > limit:
+                snippet = snippet[: limit - 1] + "…"
+            parts.append(f"{key}={snippet}")
+        else:
+            parts.append(f"{key}={val}")
+    return "; ".join(parts) if parts else "no screenshot yet"
 
 
 def _trajectory_summary(trajectory: list[dict]) -> str:
@@ -116,14 +146,36 @@ class CodexPlanner(Planner):
         max_steps: int,
     ) -> str:
         allowed = ", ".join(_ALLOWED)
+        has_ax = any(
+            observation.get(k) is not None
+            for k in ("pid", "window_id", "element_hints", "elements")
+        ) if isinstance(observation, dict) else False
+        ax_rule = (
+            "硬性规则：当前观察已提供 AX 信息（pid/window_id/element_hints）。"
+            "下一次 click 必须使用 "
+            '{"action":"click","pid":…,"window_id":…,"element_index":…}；'
+            "禁止只输出 x/y 坐标 click。\n"
+            "从 element_hints 里按 label 匹配目标（例如数字 1 → label 为 \"1\" 的 AXButton）。\n"
+            if has_ax
+            else
+            "若尚无 AX 信息：先 observe；拿到 element_hints 后再 AX click。"
+            "仅当多次观察仍无 pid/element_hints 时，才允许 x/y click。\n"
+        )
         return (
             "你是桌面自动化规划器。目标：\n"
             f"{goal}\n\n"
             "只输出一个 JSON 对象（不要任何解释、不要 markdown 代码块），"
             "描述下一步要执行的单个桌面动作。可选 action：\n"
             f"{allowed}\n\n"
+            "点击策略（AX-first）：\n"
+            "- 当观察结果提供 pid/window_id/element_index（或 element_token）时，"
+            "优先输出 AX click，不要只用 x/y。\n"
+            "- 仅当观察中没有 AX 字段时，才使用坐标 click。\n"
+            "- 若观察里有 elements / element_hints / action_hints，先据此选择目标。\n"
+            f"{ax_rule}\n"
             "动作示例：\n"
             '{"action":"observe"}\n'
+            '{"action":"click","pid":123,"window_id":0,"element_index":5}\n'
             '{"action":"click","x":123,"y":456}\n'
             '{"action":"type","text":"要输入的文字"}\n'
             '{"action":"hotkey","keys":["cmd","l"]}\n'
