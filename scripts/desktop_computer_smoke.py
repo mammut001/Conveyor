@@ -835,6 +835,101 @@ def _test_ax_target_app_allowlist_not_frontmost() -> None:
     print("[pass] ax_target_app_allowlist_not_frontmost")
 
 
+def _test_simple_digit_goal_deterministic_path() -> None:
+    """Single-digit goals: observe → Clear → digit once → done (no thrash)."""
+    import asyncio
+
+    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from desktop_computer_planner import (
+        ScriptedPlanner,
+        extract_single_digit_click_goal,
+        maybe_simple_digit_action,
+    )
+    from desktop_computer_requests import get_computer_task
+
+    goal = "在当前 Calculator 窗口里点击数字 1，然后完成"
+    if extract_single_digit_click_goal(goal) != "1":
+        _fail("simple_digit_goal", f"extract failed for {goal!r}")
+        return
+
+    # Planner that would thrash if used — simple path must bypass it.
+    thrash = ScriptedPlanner([
+        {"action": "click", "x": 1, "y": 1},
+        {"action": "click", "x": 2, "y": 2},
+        {"action": "click", "x": 3, "y": 3},
+        {"action": "done", "summary": "thrash"},
+    ])
+    settings = _mk_settings(
+        conveyor_computer_allowed_apps=("Calculator",),
+        conveyor_computer_blocked_apps=(),
+        conveyor_computer_max_steps=10,
+    )
+    backend = FakeComputerBackend(settings)
+    result = asyncio.run(run_computer_loop(
+        settings, goal,
+        planner=thrash, backend=backend,
+        max_steps=10, max_seconds=60, direct_mode=True,
+    ))
+    if result.get("status") != "done":
+        _fail("simple_digit_goal", f"status={result}")
+        return
+    task = get_computer_task(settings, result["task_id"]) or {}
+    traj = task.get("trajectory") or []
+    click_labels = [
+        e.get("clicked_label")
+        for e in traj
+        if e.get("action_type") == "click" and e.get("result_ok")
+    ]
+    # Fake observe injects Clear-less default hints with "1" — may skip Clear.
+    digit_clicks = [lab for lab in click_labels if lab == "1"]
+    if len(digit_clicks) != 1:
+        _fail("simple_digit_goal", f"expected exactly one '1' click, got {click_labels} traj={traj}")
+        return
+    # No thrash xy clicks.
+    if any(
+        (e.get("action_redacted") or {}).get("x") is not None
+        for e in traj
+        if e.get("action_type") == "click"
+    ):
+        _fail("simple_digit_goal", f"xy thrash leaked: {traj}")
+        return
+
+    # Unit: done after digit clicked.
+    obs = {
+        "pid": 1, "window_id": 0,
+        "element_hints": [
+            {"element_index": 2, "role": "AXButton", "label": "Clear"},
+            {"element_index": 13, "role": "AXButton", "label": "1"},
+        ],
+    }
+    a0 = maybe_simple_digit_action(goal=goal, observation={"initial": True}, trajectory=[])
+    if not a0 or a0.get("action") != "observe":
+        _fail("simple_digit_goal", f"expected observe first: {a0}")
+        return
+    a1 = maybe_simple_digit_action(goal=goal, observation=obs, trajectory=[])
+    if not a1 or a1.get("action") != "click" or a1.get("_target_label") != "Clear":
+        _fail("simple_digit_goal", f"expected Clear first: {a1}")
+        return
+    a2 = maybe_simple_digit_action(
+        goal=goal, observation=obs,
+        trajectory=[{"action_type": "click", "result_ok": True, "clicked_label": "Clear"}],
+    )
+    if not a2 or a2.get("_target_label") != "1":
+        _fail("simple_digit_goal", f"expected digit 1: {a2}")
+        return
+    a3 = maybe_simple_digit_action(
+        goal=goal, observation=obs,
+        trajectory=[
+            {"action_type": "click", "result_ok": True, "clicked_label": "Clear"},
+            {"action_type": "click", "result_ok": True, "clicked_label": "1"},
+        ],
+    )
+    if not a3 or a3.get("action") != "done":
+        _fail("simple_digit_goal", f"expected done: {a3}")
+        return
+    print("[pass] simple_digit_goal_deterministic_path")
+
+
 def _test_xy_click_blocked_when_app_allowlist_set() -> None:
     """Bare x/y click must fail under app allowlist (no target app proof)."""
     from desktop_cua import build_driver
@@ -1348,6 +1443,7 @@ def main() -> int:
     _test_ax_click_preference_and_fallback()
     _test_app_allowlist_and_blocklist()
     _test_ax_target_app_allowlist_not_frontmost()
+    _test_simple_digit_goal_deterministic_path()
     _test_xy_click_blocked_when_app_allowlist_set()
     _test_observe_injects_ax_hints_for_planner()
     _test_observe_skips_allowlist_under_restricted_apps()
@@ -1363,7 +1459,7 @@ def main() -> int:
     _test_planner_ax_first_prompt()
     _test_trajectory_permissions_and_redaction()
 
-    total = 32
+    total = 33
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")

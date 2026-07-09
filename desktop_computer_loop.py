@@ -23,6 +23,7 @@ import time
 from typing import Any, Awaitable, Callable
 
 from config import Settings
+from desktop_computer_planner import maybe_simple_digit_action, resolve_clicked_label
 from desktop_computer_requests import (
     append_trajectory,
     cancel_computer_task,
@@ -145,18 +146,30 @@ async def run_computer_loop(
                 # Cancelled by /computer_stop.
                 break
 
-            # Ask the planner for the next action.
-            try:
-                action = await planner.next_action(
-                    goal=goal,
-                    observation=observation,
-                    trajectory=trajectory,
-                    steps_used=steps_used,
-                    max_steps=max_steps,
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                set_task_status(settings, task_id, "error", blocked_reason=f"planner_error:{type(exc).__name__}")
-                break
+            # Simple single-digit goals bypass Codex to avoid multi-click thrash
+            # (e.g. display ending as 113 instead of 1).
+            action = maybe_simple_digit_action(
+                goal=goal,
+                observation=observation,
+                trajectory=trajectory,
+            )
+            if action is None:
+                try:
+                    action = await planner.next_action(
+                        goal=goal,
+                        observation=observation,
+                        trajectory=trajectory,
+                        steps_used=steps_used,
+                        max_steps=max_steps,
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    set_task_status(
+                        settings,
+                        task_id,
+                        "error",
+                        blocked_reason=f"planner_error:{type(exc).__name__}",
+                    )
+                    break
             action = normalize_action(action)
             act = action.get("action")
 
@@ -190,7 +203,8 @@ async def run_computer_loop(
                 break
             duration_ms = int((time.monotonic() - step_start) * 1000)
 
-            # Record a redacted trajectory entry.
+            # Record a redacted trajectory entry (include short clicked_label for completion).
+            clicked_label = resolve_clicked_label(action, observation)
             entry = {
                 "action_type": act,
                 "action_redacted": redact_computer_action(action),
@@ -200,10 +214,18 @@ async def run_computer_loop(
                 "error": (result or {}).get("error"),
                 "duration_ms": duration_ms,
             }
+            if clicked_label:
+                entry["clicked_label"] = clicked_label
             append_trajectory(settings, task_id, entry)
             trajectory.append(entry)
             if isinstance(result, dict):
-                observation = result
+                # Preserve AX hints across non-observe steps so simple-digit
+                # completion still sees labels after a click result.
+                merged = dict(result)
+                for k in ("pid", "window_id", "element_hints", "ax_app"):
+                    if merged.get(k) is None and observation.get(k) is not None:
+                        merged[k] = observation.get(k)
+                observation = merged
             steps_used += 1
 
             # Post-step app gate: blocklist always; allowlist only for

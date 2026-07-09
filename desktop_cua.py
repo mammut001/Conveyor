@@ -752,10 +752,21 @@ class FakeCuaTransport(CuaTransport):
         self.log.append({"action": act, "redacted": redacted})
         
         # Mirror LocalCuaTransport: pid-targeted actions use the target
-        # app mock when provided, so frontmost-like mock_active_app does
-        # not falsely block AX clicks on an allowed app.
+        # app (mock or single allowlist entry), not frontmost mock_active_app.
         if action.get("pid") is not None and action.get("_mock_target_app"):
             active_app = str(action.get("_mock_target_app") or "Unknown")
+        elif action.get("pid") is not None:
+            apps = tuple(
+                a for a in (getattr(self.settings, "conveyor_computer_allowed_apps", ()) or ())
+                if str(a).strip()
+            )
+            if len(apps) == 1:
+                active_app = apps[0]
+            else:
+                active_app = (
+                    action.get("_mock_active_app")
+                    or getattr(self, "mock_active_app", "Finder")
+                )
         else:
             active_app = action.get("_mock_active_app") or getattr(self, "mock_active_app", "Finder")
         settings = getattr(self, "settings", None)

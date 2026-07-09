@@ -235,6 +235,14 @@ def redact_computer_action(action: dict) -> dict:
         if isinstance(keys, list):
             redacted["keys_len"] = len(keys)
             redacted["keys_redacted"] = "***"
+    # Keep short UI labels for trajectory completion checks; drop long free text.
+    for lab_key in ("_target_label", "label"):
+        if lab_key in redacted:
+            lab = redacted.get(lab_key)
+            if isinstance(lab, str) and lab.strip() and len(lab.strip()) <= 32:
+                redacted[lab_key] = lab.strip()
+            else:
+                redacted.pop(lab_key, None)
     return redacted
 
 
@@ -282,6 +290,7 @@ def normalize_action(action: object) -> dict:
         "x", "y", "dx", "dy", "seconds", "text", "keys",
         "pid", "window_id", "element_index", "element_token",
         "delivery_mode", "scope", "button",
+        "_target_label", "label",
         "_mock_active_app", "_mock_target_app",
         "_mock_element_hints", "_mock_pid", "_mock_window_id", "_mock_ax_app",
     ):

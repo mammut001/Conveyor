@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - App allowlist: resolve target app from AX `pid` (not only frontmost); observe/wait skip allowlist (blocklist still applies).
   - With a non-empty app allowlist, reject bare x/y clicks (`ax_required_when_app_allowlist_set`).
   - Trajectory dirs `0700` / JSONL `0600` best-effort; `/computer_status` shows USE + DIRECT flags.
-  - Smokes expanded in `scripts/desktop_computer_smoke.py` (32 cases).
+  - Smokes expanded in `scripts/desktop_computer_smoke.py` (33 cases).
+  - Single-digit click goals (e.g. 点击数字 1) use a deterministic path:
+    observe → optional Clear → one digit AX click → done (avoids Codex multi-click thrash).
 
 ### Added
 - **Direct Computer Use Hardening (P5.6.1)**:
