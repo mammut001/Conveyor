@@ -404,7 +404,8 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                     })
                     return
 
-            node_info = record_heartbeat(settings, node_id, agent_state, last_action)
+            poll_computer = body.get("poll_computer")
+            node_info = record_heartbeat(settings, node_id, agent_state, last_action, poll_computer=poll_computer)
 
             if node_info is None:
                 self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": f"Node {node_id} not registered"})

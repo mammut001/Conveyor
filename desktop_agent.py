@@ -86,7 +86,7 @@ def register_agent(settings: Settings) -> dict:
     return post_json(register_url, token, reg_data)
 
 
-def send_heartbeat_once(settings: Settings) -> dict:
+def send_heartbeat_once(settings: Settings, *, poll_computer: bool = False) -> dict:
     token = (settings.conveyor_desktop_agent_token or "").strip()
     control_plane_url = _control_plane_url()
     node_id = settings.conveyor_desktop_node_id or "macbook-payton"
@@ -95,6 +95,7 @@ def send_heartbeat_once(settings: Settings) -> dict:
         "node_id": node_id,
         "agent_state": "idle",
         "last_action": "heartbeat",
+        "poll_computer": poll_computer,
     }
     return post_json(heartbeat_url, token, hb_data)
 
@@ -649,7 +650,7 @@ def heartbeat_loop(settings: Settings, *, poll_observe: bool = False, poll_compu
         now = time.time()
         if now - last_heartbeat >= heartbeat_interval:
             try:
-                res = send_heartbeat_once(settings)
+                res = send_heartbeat_once(settings, poll_computer=poll_computer)
                 if res.get("ok"):
                     print("Heartbeat ok: online")
                 else:

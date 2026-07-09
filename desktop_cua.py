@@ -37,7 +37,22 @@ from typing import Any
 import uuid
 
 from config import Settings
-from desktop_computer_requests import redact_computer_action
+from desktop_computer_requests import (
+    redact_computer_action,
+    validate_ax_fields,
+    check_app_allowlist_blocklist,
+)
+
+def get_active_app_macos() -> str:
+    try:
+        import subprocess
+        cmd = ["osascript", "-e", 'tell application "System Events" to get name of first application process whose frontmost is true']
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if proc.returncode == 0:
+            return proc.stdout.strip()
+    except Exception:
+        pass
+    return "Unknown"
 
 logger = logging.getLogger("desktop_cua")
 
@@ -152,27 +167,40 @@ class LocalCuaTransport(CuaTransport):
                 "action_type": action.get("action"),
                 "node_id": node_id,
             }
+        active_app = get_active_app_macos()
+        is_ok, reason = check_app_allowlist_blocklist(self.settings, active_app)
+        if not is_ok:
+            return {
+                "result_ok": False,
+                "error": reason,
+                "action_type": action.get("action"),
+                "node_id": node_id,
+                "active_app": active_app,
+            }
         # Log only the redacted action — never the raw payload.
         logger.info("cua execute (redacted): %s", json.dumps(redact_computer_action(action)))
         act = action.get("action")
         if act == "wait":
-            return self._wait(action, node_id)
-        if act == "observe":
-            return self._observe(action, node_id)
-        if act == "click":
-            return self._click(action, node_id)
-        if act == "type":
-            return self._type_text(action, node_id)
-        if act == "hotkey":
-            return self._hotkey(action, node_id)
-        if act == "scroll":
-            return self._scroll(action, node_id)
-        return {
-            "result_ok": False,
-            "error": "unknown_action",
-            "action_type": act,
-            "node_id": node_id,
-        }
+            res = self._wait(action, node_id)
+        elif act == "observe":
+            res = self._observe(action, node_id)
+        elif act == "click":
+            res = self._click(action, node_id)
+        elif act == "type":
+            res = self._type_text(action, node_id)
+        elif act == "hotkey":
+            res = self._hotkey(action, node_id)
+        elif act == "scroll":
+            res = self._scroll(action, node_id)
+        else:
+            res = {
+                "result_ok": False,
+                "error": "unknown_action",
+                "action_type": act,
+                "node_id": node_id,
+            }
+        res["active_app"] = active_app
+        return res
 
     def _call_tool(self, tool: str, args: dict | None = None, *, timeout: int | None = None) -> dict:
         cmd = [self.binary, "call", tool]
@@ -242,35 +270,94 @@ class LocalCuaTransport(CuaTransport):
         )
 
     def _click(self, action: dict, node_id: str) -> dict:
-        args: dict[str, Any] = {}
-        _copy_optional(
-            action,
-            args,
-            (
-                "pid", "window_id", "element_index", "element_token",
-                "delivery_mode", "scope", "button",
-            ),
-        )
-        if "x" in action or "y" in action:
-            ok, x, y = _xy(action)
-            if not ok:
-                return {"result_ok": False, "error": "bad_coords", "action_type": "click", "node_id": node_id}
-            args["x"] = x
-            args["y"] = y
-        if not any(k in args for k in ("x", "y", "element_index", "element_token")):
+        # Validate AX fields first
+        ok, err = validate_ax_fields(action)
+        if not ok:
+            return {"result_ok": False, "error": f"validation_error:{err}", "action_type": "click", "node_id": node_id}
+            
+        has_ax = any(action.get(k) is not None for k in ("pid", "window_id", "element_index"))
+        has_xy = "x" in action and "y" in action
+        
+        if not has_ax and not has_xy and "element_token" not in action:
             return {"result_ok": False, "error": "click_target_required", "action_type": "click", "node_id": node_id}
-        if "pid" not in args and "window_id" not in args and "scope" not in args:
-            args["scope"] = "desktop"
-        if args.get("scope") == "desktop":
-            # Desktop-scope pixel click is gated by the driver's capture_scope.
-            self._call_tool("set_config", {"capture_scope": "desktop"}, timeout=15)
-        called = self._call_tool("click", args)
-        result = _result_from_call(called, "click", node_id)
-        data = called.get("data") if isinstance(called, dict) else None
-        if isinstance(data, dict):
-            for key in ("effect", "path", "verified"):
-                if key in data:
-                    result[key] = data[key]
+            
+        result = None
+        used_method = None
+        
+        if has_ax:
+            # AX/action-based click
+            ax_args: dict[str, Any] = {}
+            _copy_optional(
+                action,
+                ax_args,
+                (
+                    "pid", "window_id", "element_index", "element_token",
+                    "delivery_mode", "scope", "button",
+                ),
+            )
+            # Ensure integer types
+            for k in ("pid", "window_id", "element_index"):
+                if ax_args.get(k) is not None:
+                    ax_args[k] = int(ax_args[k])
+                    
+            if "pid" not in ax_args and "window_id" not in ax_args and "scope" not in ax_args:
+                ax_args["scope"] = "desktop"
+            if ax_args.get("scope") == "desktop":
+                self._call_tool("set_config", {"capture_scope": "desktop"}, timeout=15)
+                
+            called = self._call_tool("click", ax_args)
+            res = _result_from_call(called, "click", node_id)
+            if res.get("result_ok"):
+                result = res
+                used_method = "ax_click"
+                logger.info("ax_click succeeded: %s", json.dumps(redact_computer_action(action)))
+            else:
+                logger.info("ax_click failed, error=%s", res.get("error"))
+                if has_xy:
+                    logger.info("ax_click failed; falling back to xy_click")
+                else:
+                    result = res
+                    used_method = "ax_click"
+                    
+        if result is None and has_xy:
+            # Use x/y click as fallback
+            xy_args: dict[str, Any] = {}
+            _copy_optional(
+                action,
+                xy_args,
+                (
+                    "pid", "window_id", "element_index", "element_token",
+                    "delivery_mode", "scope", "button",
+                ),
+            )
+            # Ensure integer types if present
+            for k in ("pid", "window_id", "element_index"):
+                if xy_args.get(k) is not None:
+                    xy_args[k] = int(xy_args[k])
+                    
+            ok_coord, x, y = _xy(action)
+            if not ok_coord:
+                return {"result_ok": False, "error": "bad_coords", "action_type": "click", "node_id": node_id}
+            xy_args["x"] = x
+            xy_args["y"] = y
+            
+            if "pid" not in xy_args and "window_id" not in xy_args and "scope" not in xy_args:
+                xy_args["scope"] = "desktop"
+            if xy_args.get("scope") == "desktop":
+                self._call_tool("set_config", {"capture_scope": "desktop"}, timeout=15)
+                
+            called = self._call_tool("click", xy_args)
+            result = _result_from_call(called, "click", node_id)
+            used_method = "xy_click"
+            logger.info("xy_click executed, result_ok=%s", result.get("result_ok"))
+            
+        if result is None:
+            # Fallback when neither executed or both failed
+            result = {"result_ok": False, "error": "click_failed", "action_type": "click", "node_id": node_id}
+            used_method = "ax_click" if has_ax else "xy_click"
+            
+        result["click_method"] = used_method
+        logger.info("Click method used: %s", used_method)
         return result
 
     def _type_text(self, action: dict, node_id: str) -> dict:
@@ -366,23 +453,38 @@ class FakeCuaTransport(CuaTransport):
     this transport ignores any raw payload entirely).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings
         self.screen = (1920, 1080)
         self.last_pointer: tuple[int, int] = (0, 0)
         self.log: list[dict] = []
         self.fake_screenshot_seq = 0
+        self.mock_active_app = "Finder"
 
     def execute(self, action: dict, node_id: str) -> dict:
         act = action.get("action")
         redacted = redact_computer_action(action)
-        # Record only redacted metadata — never raw text/keys.
         self.log.append({"action": act, "redacted": redacted})
+        
+        active_app = action.get("_mock_active_app") or getattr(self, "mock_active_app", "Finder")
+        settings = getattr(self, "settings", None)
+        if settings:
+            is_ok, reason = check_app_allowlist_blocklist(settings, active_app)
+            if not is_ok:
+                return {
+                    "result_ok": False,
+                    "error": reason,
+                    "action_type": act,
+                    "node_id": node_id,
+                    "active_app": active_app,
+                }
+                
         if act == "observe":
             self.fake_screenshot_seq += 1
             sid = f"fake_obs_{self.fake_screenshot_seq}"
             import hashlib
             sha = hashlib.sha256(sid.encode("utf-8")).hexdigest()
-            return {
+            res = {
                 "result_ok": True,
                 "action_type": "observe",
                 "screenshot_id": sid,
@@ -392,28 +494,50 @@ class FakeCuaTransport(CuaTransport):
                 "obs_text_len": 0,
                 "node_id": node_id,
             }
-        if act == "click":
-            try:
-                x = int(action.get("x", 0))
-                y = int(action.get("y", 0))
-            except (TypeError, ValueError):
-                return {"result_ok": False, "error": "bad_coords", "action_type": "click", "node_id": node_id}
-            self.last_pointer = (x, y)
-            return {"result_ok": True, "action_type": "click", "node_id": node_id}
-        if act == "type":
-            # Raw text intentionally dropped; only length is reflected.
+        elif act == "click":
+            # Validation
+            ok, err = validate_ax_fields(action)
+            if not ok:
+                return {"result_ok": False, "error": f"validation_error:{err}", "action_type": "click", "node_id": node_id, "active_app": active_app}
+                
+            has_ax = any(action.get(k) is not None for k in ("pid", "window_id", "element_index"))
+            has_xy = "x" in action and "y" in action
+            
+            if not has_ax and not has_xy and "element_token" not in action:
+                return {"result_ok": False, "error": "click_target_required", "action_type": "click", "node_id": node_id, "active_app": active_app}
+                
+            used_method = "ax_click" if has_ax else "xy_click"
+            if not has_ax and has_xy:
+                try:
+                    int(action.get("x", 0))
+                    int(action.get("y", 0))
+                except (TypeError, ValueError):
+                    return {"result_ok": False, "error": "bad_coords", "action_type": "click", "node_id": node_id, "active_app": active_app}
+            
+            self.last_pointer = (int(action.get("x", 0)), int(action.get("y", 0))) if has_xy else (0, 0)
+            res = {
+                "result_ok": True, 
+                "action_type": "click", 
+                "node_id": node_id,
+                "click_method": used_method,
+            }
+        elif act == "type":
             text_len = len(action.get("text", "") or "")
-            return {"result_ok": True, "action_type": "type", "obs_text_len": text_len, "node_id": node_id}
-        if act == "hotkey":
+            res = {"result_ok": True, "action_type": "type", "obs_text_len": text_len, "node_id": node_id}
+        elif act == "hotkey":
             keys_len = len(action.get("keys", []) or [])
-            return {"result_ok": True, "action_type": "hotkey", "keys_len": keys_len, "node_id": node_id}
-        if act == "scroll":
-            return {"result_ok": True, "action_type": "scroll", "node_id": node_id}
-        if act == "wait":
+            res = {"result_ok": True, "action_type": "hotkey", "keys_len": keys_len, "node_id": node_id}
+        elif act == "scroll":
+            res = {"result_ok": True, "action_type": "scroll", "node_id": node_id}
+        elif act == "wait":
             seconds = max(0, min(5, float(action.get("seconds", 0) or 0)))
             time.sleep(seconds)
-            return {"result_ok": True, "action_type": "wait", "node_id": node_id}
-        return {"result_ok": False, "error": "unknown_action", "action_type": act, "node_id": node_id}
+            res = {"result_ok": True, "action_type": "wait", "node_id": node_id}
+        else:
+            res = {"result_ok": False, "error": "unknown_action", "action_type": act, "node_id": node_id}
+            
+        res["active_app"] = active_app
+        return res
 
 
 # ---- driver facade ----------------------------------------------------------
@@ -434,6 +558,8 @@ class CuaDriver:
                 self.settings.conveyor_cua_driver_cmd or "cua-driver mcp",
                 settings=self.settings,
             )
+        else:
+            self.transport.settings = self.settings
 
     def status(self) -> dict:
         """Metadata-only status: driver availability + screen shape."""
@@ -470,7 +596,7 @@ class CuaDriver:
             "screenshot_id", "sha256", "width", "height", "obs_text_len",
             "obs_text_preview", "action_type", "action_redacted", "result_ok",
             "effect", "path", "verified", "error", "node_id", "created_at",
-            "keys_len", "text_len",
+            "keys_len", "text_len", "click_method", "active_app",
         }
         return {k: v for k, v in result.items() if k in allowed}
 
@@ -479,7 +605,7 @@ def build_driver(settings: Settings, *, fake: bool = False, node_id: str = "") -
     """Construct a CuaDriver, optionally with the fake transport."""
     driver = CuaDriver(settings=settings, node_id=node_id)
     if fake:
-        driver.transport = FakeCuaTransport()
+        driver.transport = FakeCuaTransport(settings=settings)
     return driver
 
 

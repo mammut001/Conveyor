@@ -354,14 +354,54 @@ async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
     return _safe_truncate("\n".join(lines))
 
 
-def _format_loop_result(result: dict) -> str:
+def _format_loop_result(settings: Settings, result: dict) -> str:
     if not result.get("ok"):
         return f"❌ {result.get('error')}: {result.get('message')}"
-    lines = [f"🖥 Computer Use 任务 {result.get('task_id')}", ""]
-    lines.append(f"状态: {result.get('status')}")
+    status = result.get("status")
+    summary = result.get("summary")
+    task_id = result.get("task_id")
+    
+    is_failure = (status != "done") or (summary == "max_steps reached")
+    if is_failure:
+        from desktop_computer_requests import get_computer_task
+        task = get_computer_task(settings, task_id) or {}
+        trajectory = task.get("trajectory", []) or []
+        
+        reason = result.get("blocked_reason") or summary or status
+        
+        last_action_str = "None"
+        if trajectory:
+            last = trajectory[-1]
+            action_type = last.get("action_type")
+            redacted = last.get("action_redacted") or {}
+            args = {k: v for k, v in redacted.items() if k != "action"}
+            args_str = json.dumps(args, ensure_ascii=False) if args else ""
+            last_action_str = f"{action_type} {args_str}".strip()
+            
+        last_screenshot_id = "None"
+        last_screenshot_hash = "None"
+        for step in reversed(trajectory):
+            if step.get("screenshot_id"):
+                last_screenshot_id = step.get("screenshot_id")
+                last_screenshot_hash = step.get("screenshot_hash") or "None"
+                break
+                
+        lines = [
+            f"❌ Task failed/stopped",
+            f"Task ID: {task_id}",
+            f"Stop Reason: {reason}",
+            f"Last Action: {last_action_str}",
+            f"Last Screenshot: {last_screenshot_id} (hash: {last_screenshot_hash})",
+            f"Steps Completed: {result.get('steps_used', 0)}",
+            f"Suggestion: Run `/computer_log {task_id}` to view details.",
+        ]
+        return _safe_truncate("\n".join(lines))
+        
+    lines = [f"🖥 Computer Use 任务 {task_id}", ""]
+    lines.append(f"状态: {status}")
     lines.append(f"步数: {result.get('steps_used')}")
-    if result.get("summary"):
-        lines.append(f"摘要: {result.get('summary')}")
+    if summary:
+        lines.append(f"摘要: {summary}")
     if result.get("blocked_reason"):
         lines.append(f"停止原因: {result.get('blocked_reason')}")
     return _safe_truncate("\n".join(lines))
@@ -374,46 +414,98 @@ async def exec_computer_status(settings: Settings, _arg: str) -> str:
         direct_mode_source,
         get_active_task,
         is_direct_mode_active,
+        _parse_iso,
+        _utc_now,
     )
     from desktop_cua import probe_cua_driver
+    from nodes.state import get_desktop_runtime, is_desktop_online
+    import time
 
     enabled = settings.conveyor_computer_use_enabled
     source = direct_mode_source(settings) if enabled else None
     lines = ["🖥 Computer Use (P5.6 Direct)", ""]
     lines.append(f"启用: {'是' if enabled else '否 (CONVEYOR_COMPUTER_USE_ENABLED=false)'}")
+    
+    # Direct mode state
+    direct_active = is_direct_mode_active(settings)
+    lines.append(f"Direct 模式: {'启用' if direct_active else '未启用'}")
     if source:
-        lines.append(f"Direct 模式: 启用 ({source})")
+        lines.append(f"Direct 模式来源: {source}")
         if source == "armed":
-            lines.append(f"剩余: {arm_remaining_seconds(settings)}s")
-    else:
-        lines.append("Direct 模式: 未启用 (需 /computer_arm 或 CONVEYOR_COMPUTER_ALWAYS_DIRECT=true)")
+            lines.append(f"剩余 TTL: {arm_remaining_seconds(settings)}s")
     lines.append(f"Always-Direct: {'是' if settings.conveyor_computer_always_direct else '否'}")
     lines.append(
         f"Max steps: {settings.conveyor_computer_max_steps}, "
         f"Max seconds: {settings.conveyor_computer_max_seconds}"
     )
+    
+    # Cua driver probe
+    lines.append(f"Cua driver command: {settings.conveyor_cua_driver_cmd}")
     if enabled:
         probe = probe_cua_driver(settings.conveyor_cua_driver_cmd, settings=settings)
         if probe.get("available"):
             lines.append(f"Cua driver: 可用 ({probe.get('path')})")
+            if probe.get("version"):
+                lines.append(f"Cua driver version: {probe.get('version')}")
             perms = probe.get("permissions")
             if isinstance(perms, dict):
                 status = perms.get("status") or "unknown"
+                accessibility = perms.get("accessibility")
+                screen_rec = perms.get("screen_recording")
                 daemon = perms.get("daemon_running")
                 daemon_text = "yes" if daemon is True else "no" if daemon is False else "unknown"
                 lines.append(f"Cua permissions: {status} (daemon: {daemon_text})")
+                lines.append(f"Accessibility: {accessibility}, Screen Recording: {screen_rec}")
                 reason = perms.get("reason")
                 if status != "granted" and isinstance(reason, str) and reason.strip():
                     lines.append(f"Cua permissions note: {reason[:320]}")
         else:
             lines.append(f"Cua driver: 未找到 ({probe.get('error')}) — 仅 Mac 端需要")
+
+    # App allowlist / blocklist
+    allowed_apps = getattr(settings, "conveyor_computer_allowed_apps", ())
+    blocked_apps = getattr(settings, "conveyor_computer_blocked_apps", ())
+    lines.append(f"Allowed apps: {', '.join(allowed_apps) if allowed_apps else '无限制'}")
+    lines.append(f"Blocked apps: {', '.join(blocked_apps) if blocked_apps else '无'}")
+
+    # Node heartbeat state
+    node_id = settings.conveyor_desktop_node_id or "macbook-payton"
+    node_state = get_desktop_runtime(settings, node_id)
+    online = is_desktop_online(settings, node_id)
+    if node_state:
+        poll_comp = node_state.get("poll_computer", False)
+        last_seen = node_state.get("last_seen_at")
+        elapsed = int(time.time() - last_seen) if last_seen else -1
+        lines.append(f"Desktop agent poll-computer: {'enabled' if poll_comp else 'disabled'}")
+        if elapsed >= 0:
+            lines.append(f"Desktop last heartbeat: {elapsed}s ago (online: {online})")
+        else:
+            lines.append("Desktop last heartbeat: Never")
+    else:
+        lines.append("Desktop agent heartbeat: No heartbeat received yet")
+
+    # Active task status
     active = get_active_task(settings)
     lines.append("")
     if active:
-        lines.append(f"运行中任务: {active.get('task_id')} (step {active.get('step_seq')})")
+        task_id = active.get("task_id")
+        created_at_dt = _parse_iso(active.get("created_at"))
+        elapsed_sec = int((_utc_now() - created_at_dt).total_seconds()) if created_at_dt else 0
+        
+        trajectory = active.get("trajectory", []) or []
+        last_action_str = "None"
+        if trajectory:
+            last = trajectory[-1]
+            last_action_str = last.get("action_type")
+            
+        lines.append(f"运行中任务: {task_id}")
         lines.append(f"目标: {active.get('goal')}")
+        lines.append(f"已执行步数: {active.get('step_seq', 0)}")
+        lines.append(f"已运行时间: {elapsed_sec}s")
+        lines.append(f"最后动作: {last_action_str}")
     else:
         lines.append("运行中任务: 无")
+        
     return _safe_truncate("\n".join(lines))
 
 
@@ -439,7 +531,7 @@ async def exec_computer_observe(settings: Settings, arg: str) -> str:
         max_steps=2, max_seconds=30, direct_mode=True,
     )
     if not result.get("ok"):
-        return _format_loop_result(result)
+        return _format_loop_result(settings, result)
     # Surface the last observation metadata from the trajectory.
     from desktop_computer_requests import get_computer_task
     task = get_computer_task(settings, result["task_id"]) or {}
@@ -453,7 +545,7 @@ async def exec_computer_observe(settings: Settings, arg: str) -> str:
             f"screenshot_id: {last.get('screenshot_id')}\n"
             f"动作步数: {result.get('steps_used')}"
         )
-    return _format_loop_result(result)
+    return _format_loop_result(settings, result)
 
 
 async def exec_computer_action(settings: Settings, arg: str) -> str:
@@ -493,7 +585,7 @@ async def exec_computer_action(settings: Settings, arg: str) -> str:
         max_steps=1, max_seconds=30, operator_id="", chat_id="", channel="",
     )
     if not created.get("ok"):
-        return _format_loop_result(created)
+        return _format_loop_result(settings, created)
     task_id = created["task_id"]
     step = create_computer_step(settings, task_id, action)
     step_id = step["step_id"]
@@ -542,7 +634,7 @@ async def exec_computer_task(settings: Settings, arg: str) -> str:
         max_seconds=settings.conveyor_computer_max_seconds,
         direct_mode=True,
     )
-    return _format_loop_result(result)
+    return _format_loop_result(settings, result)
 
 
 async def exec_computer_stop(settings: Settings, _arg: str) -> str:

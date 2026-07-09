@@ -1393,26 +1393,37 @@ async def _computer_log(msg, port, _runner, settings, _arg):
         get_computer_task,
         list_recent_computer_tasks,
     )
+    from pathlib import Path
 
     task_id = (_arg or "").strip()
+    if not task_id:
+        tasks = list_recent_computer_tasks(settings, limit=1)
+        if tasks:
+            task_id = tasks[0]["task_id"]
+
     if task_id:
         task = get_computer_task(settings, task_id)
         if not task:
             await port.reply(msg, f"未找到任务 {task_id}")
             return
+        traj_path = Path(settings.codex_memory_root) / "computer" / "trajectories" / f"{task_id}.jsonl"
         lines = [
-            f"任务 {task_id}",
+            f"任务: {task_id}",
             f"状态: {task.get('status')}",
             f"目标: {task.get('goal')}",
+            f"轨迹文件: {traj_path}",
             "",
-            "轨迹:",
+            "最近步骤摘要 (最多 10 步):",
         ]
-        for step in task.get("trajectory", []) or []:
+        trajectory = task.get("trajectory", []) or []
+        last_n = trajectory[-10:]
+        for step in last_n:
             ts = step.get("ts", "")
             atype = step.get("action_type", "?")
             redacted = step.get("action_redacted", {})
-            result = step.get("result", "")
-            lines.append(f"  [{ts}] {atype} {redacted} -> {result}")
+            result = "ok" if step.get("result_ok") else "fail"
+            err = f" (error: {step.get('error')})" if step.get("error") else ""
+            lines.append(f"  [{ts}] {atype} {redacted} -> {result}{err}")
         await port.reply(msg, "\n".join(lines))
         return
 

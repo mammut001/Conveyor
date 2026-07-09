@@ -1170,12 +1170,23 @@ desktop_agent → 本地 cua-driver → 真实桌面操作`。后端用 `trycua/
   拦截词停任务、max_steps 停任务、stop 取消、fake 后端运行+脱敏、
   claim 脱敏边界、stop 命令取消），加入 `make smoke`。
 
+### P5.6.1 直连 Computer Use 安全加固与优化（已落地）
+
+P5.6.1 对直连 Computer Use 的安全性和可调试性进行了加固：
+- **AX 优先点击**：支持在 click 动作中优先使用 AX/控件点击，xy 坐标点击作为 fallback 降级。轨迹中记录 click_method (`ax_click` / `xy_click`)。
+- **应用白名单/黑名单**：新增配置 `conveyor_computer_allowed_apps` 与 `conveyor_computer_blocked_apps`（默认限制 Keychain Access, System Settings, Terminal），Mac agent 执行前通过 AppleScript 轮询 frontmost 进程并校验，不符合则终止任务。
+- **JSONL 结构化轨迹**：在 `codex_memory_root/computer/trajectories/<task_id>.jsonl` 下写出包含 timestamp, task_id, step, screenshot_id/hash, action_type, redacted_args, result_status, error, duration_ms 的 JSONL 日志， typed 文本全程脱敏。
+- **精简版失败报告**：任务失败/超限时回传包含 task_id, stop reason, last action, last screenshot id/hash, steps completed, /computer_log 引导的精简报告。
+- **Telegram 停止快捷路径**：在 dispatch 层拦截 `停下`、`别动`、`停止操作`、`stop computer`、`cancel computer task` 等自然语言并直达 `computer.stop` 工具，免去 Codex reasoning 的延迟。
+- **Smoke 覆盖**：在 `scripts/desktop_computer_smoke.py` 中新增 6 个用例覆盖上述功能，使得总用例数达到 20 个。
+
 ---
 
 ## 9. 变更记录
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| **3.2** | **2026-07-08** | **P5.6.1 直连 Computer Use 安全加固与优化。** 支持 AX 优先点击并记录 click_method；增加 active_app 探测与 allowed/blocked_apps 限定；将轨迹持久化为 JSONL 并统计步耗时 (duration_ms)；精简报错输出；Telegram 增加 `"停下"`/`"别动"` 等 NL 快速停止路径；新增 6 个 smoke 覆盖。详见 `docs/desktop_security.md §7.5`。 |
 | **3.0** | **2026-07-01** | **P5.0 执行节点（VPS + desktop stub）。新增 `nodes/` 包、`nodes.status` + `computer.status` 确定性工具、`/nodes` / `/node_status` / `/computer_status` 命令、飞书 `node_status_card` / `computer_status_card`、把过去会穿透到 Codex 的桌面 / Computer Use 自然语言拦截到 stub，以及 `docs/desktop_agent_protocol.md` / `docs/desktop_security.md` 两份设计稿。**本任务没有真实桌面控制能力**，desktop 节点无论怎么配置都是 offline。详见上文 P5.0 节。 |
 | **3.1** | **2026-07-08** | **P5.6 直连 Computer Use 模式（cua 后端，默认关闭）。** NL → `computer.task` → Codex 单步 JSON 动作 → Mac `desktop_agent` 经本地 `cua-driver` 执行真实桌面操作；VPS 仅轮询文件存储，Cua 永不跨网络。新增配置开关、能力门控（`CAP_COMPUTER_USE_DIRECT`）、请求存储、控制面端点、`desktop_cua.py`、工具与命令（`/computer_arm` `/computer_task` `/computer_stop` 等）、NL 路由，以及硬性安全边界（动作白名单、拦截词、脱敏、上限、紧急停止）。详见上文 P5.6 节与 `docs/desktop_security.md §7`。 |
 | 2.0 | 2026-06-11 | 加 agent 工具层、Telegram live smoke、backlog；中英同步 |

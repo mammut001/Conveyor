@@ -182,11 +182,13 @@ async def run_computer_loop(
                 set_task_status(settings, task_id, "error", blocked_reason=step.get("error", "step_create_failed"))
                 break
             step_id = step["step_id"]
+            step_start = time.monotonic()
             try:
                 result = await backend.execute_step(settings, task_id, step_id, action)
             except ComputerBackendError as exc:
                 set_task_status(settings, task_id, "error", blocked_reason=str(exc))
                 break
+            duration_ms = int((time.monotonic() - step_start) * 1000)
 
             # Record a redacted trajectory entry.
             entry = {
@@ -194,13 +196,24 @@ async def run_computer_loop(
                 "action_redacted": redact_computer_action(action),
                 "result_ok": bool(result.get("result_ok", True)) if isinstance(result, dict) else True,
                 "screenshot_id": (result or {}).get("screenshot_id"),
+                "screenshot_hash": (result or {}).get("sha256"),
                 "error": (result or {}).get("error"),
+                "duration_ms": duration_ms,
             }
             append_trajectory(settings, task_id, entry)
             trajectory.append(entry)
             if isinstance(result, dict):
                 observation = result
             steps_used += 1
+
+            # Check app allowlist / blocklist based on active_app returned in result
+            active_app = (result or {}).get("active_app")
+            if active_app:
+                from desktop_computer_requests import check_app_allowlist_blocklist
+                is_ok, reason = check_app_allowlist_blocklist(settings, active_app)
+                if not is_ok:
+                    set_task_status(settings, task_id, "stopped", blocked_reason=reason)
+                    break
 
             # Hard caps.
             if steps_used >= max_steps:

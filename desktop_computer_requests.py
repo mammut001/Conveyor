@@ -133,6 +133,49 @@ def _new_step_id(now: datetime | None = None) -> str:
     return f"cstp_{ts}_{uuid.uuid4().hex[:8]}"
 
 
+# ---- AX Validation & App Allowlist/Blocklist --------------------------------
+
+def validate_ax_fields(action: dict) -> tuple[bool, str | None]:
+    for key in ("pid", "window_id", "element_index"):
+        v = action.get(key)
+        if v is not None:
+            try:
+                val = int(v)
+                if key == "pid" and val <= 0:
+                    return False, f"pid must be positive integer, got {v}"
+                if key in ("window_id", "element_index") and val < 0:
+                    return False, f"{key} must be non-negative integer, got {v}"
+            except (ValueError, TypeError):
+                return False, f"{key} must be an integer, got {v}"
+    return True, None
+
+
+def check_app_allowlist_blocklist(settings: Settings, app_name: str) -> tuple[bool, str | None]:
+    if not app_name:
+        return True, None
+    app_lower = app_name.strip().lower()
+    
+    # 1. Blocked apps check
+    blocked_apps = getattr(settings, "conveyor_computer_blocked_apps", ())
+    for b in blocked_apps:
+        if b.strip().lower() == app_lower:
+            return False, f"blocked_app:{app_name}"
+            
+    # 2. Allowed apps check
+    allowed_apps = getattr(settings, "conveyor_computer_allowed_apps", ())
+    if allowed_apps:
+        # Check if app_name is in allowed_apps
+        matched = False
+        for a in allowed_apps:
+            if a.strip().lower() == app_lower:
+                matched = True
+                break
+        if not matched:
+            return False, f"app_not_in_allowlist:{app_name}"
+            
+    return True, None
+
+
 # ---- redaction --------------------------------------------------------------
 
 def redact_computer_action(action: dict) -> dict:
@@ -202,7 +245,7 @@ def normalize_action(action: object) -> dict:
     for key in (
         "x", "y", "dx", "dy", "seconds", "text", "keys",
         "pid", "window_id", "element_index", "element_token",
-        "delivery_mode", "scope", "button",
+        "delivery_mode", "scope", "button", "_mock_active_app",
     ):
         if key in action:
             norm[key] = action[key]
@@ -470,10 +513,40 @@ def append_trajectory(settings: Settings, task_id: str, entry: dict) -> dict:
             if not isinstance(record, dict):
                 return {"ok": False, "error": "task_not_found"}
             entry = dict(entry)
-            entry.setdefault("ts", _iso_z(_utc_now()))
-            record.setdefault("trajectory", []).append(entry)
+            ts = entry.setdefault("ts", _iso_z(_utc_now()))
+            
+            # Calculate step index before appending
+            step_idx = len(record.setdefault("trajectory", []))
+            
+            record["trajectory"].append(entry)
             record["updated_at"] = _iso_z(_utc_now())
             _save_unlocked(settings, store)
+            
+            # Write JSONL log to disk
+            try:
+                import json
+                from pathlib import Path
+                traj_dir = Path(settings.codex_memory_root) / "computer" / "trajectories"
+                traj_dir.mkdir(parents=True, exist_ok=True)
+                traj_file = traj_dir / f"{task_id}.jsonl"
+                
+                line_obj = {
+                    "timestamp": ts,
+                    "task_id": task_id,
+                    "step": step_idx,
+                    "screenshot_id": entry.get("screenshot_id"),
+                    "screenshot_hash": entry.get("screenshot_hash"),
+                    "action_type": entry.get("action_type"),
+                    "redacted_args": entry.get("action_redacted"),
+                    "result_status": "ok" if entry.get("result_ok") else "fail",
+                    "error": entry.get("error"),
+                    "duration_ms": entry.get("duration_ms", 0),
+                }
+                
+                with open(traj_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(line_obj, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
     return {"ok": True}
 
 

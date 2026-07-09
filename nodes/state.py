@@ -196,7 +196,11 @@ def record_heartbeat(
             node_state["last_action"] = last_action_str
         else:
             node_state["last_action"] = "heartbeat"
-
+            
+        poll_computer = kwargs.get("poll_computer")
+        if poll_computer is not None:
+            node_state["poll_computer"] = bool(poll_computer)
+ 
         save_desktop_state(settings, state)
 
         display_name = _safe_str(node_state.get("display_name"), 100)

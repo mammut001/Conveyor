@@ -1376,12 +1376,23 @@ speaks the Cua protocol.
   max_steps stops task, stop cancels, fake backend run + redaction,
   claim redaction boundary, stop command cancels), added to `make smoke`.
 
+### P5.6.1 Direct Computer Use Security Hardening & Optimizations (implemented)
+
+P5.6.1 hardens the computer-use implementation for safer and more debuggable hands-free operation:
+- **AX-First Click Preference**: Click actions containing AX metadata (`pid`/`window_id`/`element_index`) will prioritize AX-based clicks first. XY-coordinate clicking is used only as a fallback, and the click method used (`ax_click` vs `xy_click`) is recorded in the trajectory.
+- **App Allowlist/Blocklist Validation**: Prevents actions when the active focused application matches a blocked app (defaults to `Keychain Access,System Settings,Terminal`) or, if `CONVEYOR_COMPUTER_ALLOWED_APPS` is specified, when the active app is not in the allowlist. Active app querying uses macOS `osascript`.
+- **Structured JSONL Trajectories**: Logs all steps to `codex_memory_root/computer/trajectories/<task_id>.jsonl` with timestamp, task ID, step index, screenshot ID/hash, action type, redacted args, result status, error, and step duration (duration_ms), with typed text completely redacted.
+- **Concise Failure Cards**: Generates precise, low-clutter failure summaries when tasks fail, stop, or hit step caps, outlining the task ID, stop reason, last action, last screenshot ID/hash, steps completed, and log suggestion.
+- **Telegram Stop Fast Path**: Clean stop keywords (`停下`, `别动`, `停止操作`, `stop computer`, `cancel computer task`) are routed directly to `computer.stop` at dispatch time, bypassing normal Codex routing to maximize speed.
+- **Smoke Coverage**: Added 6 new test cases to `scripts/desktop_computer_smoke.py`, bringing the total to 20 tests.
+
 ---
 
 ## 10. Change log
 
 | Version | Date | Notes |
 |---|---|---|
+| **3.2** | **2026-07-08** | **P5.6.1 Direct Computer Use Security Hardening & Optimizations.** Supports AX-first click preference and logs `click_method`; detects `active_app` with allowlist/blocklist app checks; writes structured JSONL trajectory logs and step execution duration (`duration_ms`); outputs concise failure reports; intercepts natural language stop commands on Telegram; adds 6 smoke test cases. See `docs/desktop_security.md §7.5`. |
 | **3.0** | **2026-07-01** | **P5.0 execution nodes (VPS + desktop stub). Adds `nodes/` package, `nodes.status` + `computer.status` deterministic tools, `/nodes` / `/node_status` / `/computer_status` commands, Feishu `node_status_card` / `computer_status_card`, natural-language routing for desktop / Computer Use phrases that previously fell through to Codex, and the `docs/desktop_agent_protocol.md` / `docs/desktop_security.md` design stubs. No real desktop control is implemented in this task; the desktop node is offline regardless of configuration. See section § P5.0 above.** |
 | **3.1** | **2026-07-08** | **P5.6 Direct Computer Use Mode (cua backend, off by default).** NL → `computer.task` → Codex one-action-at-a-time JSON → Mac `desktop_agent` executes real desktop actions via the local `cua-driver`; the VPS only polls a file store, Cua never crosses the network. Adds config flags, capability gating (`CAP_COMPUTER_USE_DIRECT`), request store, control-plane endpoints, `desktop_cua.py`, tools and commands (`/computer_arm` `/computer_task` `/computer_stop` …), NL routing, and a hard safety envelope (action allow-list, blocked-keyword guard, redaction, caps, kill switch). See § P5.6 and `docs/desktop_security.md §7`. |
 | 2.1 | 2026-06-11 | Added `CONVEYOR_PROGRESS_MODE` (verbose/compact/quiet); compact mode fixes the Feishu progress chain; section 6.7 + harness + backlog updated. |

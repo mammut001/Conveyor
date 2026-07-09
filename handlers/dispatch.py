@@ -60,6 +60,14 @@ async def dispatch(
         await port.reply(msg, f"未知命令 /{cmd_name}。发送 /help 查看。")
         return
 
+    # Telegram stop fast path
+    text_clean = msg.text.strip().lower()
+    if text_clean in ("停下", "别动", "停止操作", "stop computer", "cancel computer task"):
+        from handlers.tools.runner import run_tool
+        text = await run_tool(settings, "computer.stop", "")
+        await port.reply(msg, text)
+        return
+
     if detect_memory_intent(msg.text):
         await handle_memo(msg, port, runner)
         return

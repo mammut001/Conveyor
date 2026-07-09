@@ -176,6 +176,10 @@ class Settings:
     # "fake" executes actions against an in-process fake Cua driver so
     # the loop can be smoke-tested with no network and no real Cua.
     conveyor_computer_backend: str = "http"
+    conveyor_computer_allowed_apps: tuple[str, ...] = ()
+    conveyor_computer_blocked_apps: tuple[str, ...] = (
+        "Keychain Access", "System Settings", "Terminal"
+    )
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -473,6 +477,19 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_computer_backend": os.getenv(
             "CONVEYOR_COMPUTER_BACKEND", "http"
         ).strip().lower(),
+        "conveyor_computer_allowed_apps": tuple(
+            a.strip()
+            for a in os.getenv("CONVEYOR_COMPUTER_ALLOWED_APPS", "").split(",")
+            if a.strip()
+        ),
+        "conveyor_computer_blocked_apps": tuple(
+            a.strip()
+            for a in os.getenv(
+                "CONVEYOR_COMPUTER_BLOCKED_APPS",
+                "Keychain Access,System Settings,Terminal"
+            ).split(",")
+            if a.strip()
+        ),
     }
 
 

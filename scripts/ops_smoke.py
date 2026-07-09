@@ -58,6 +58,7 @@ HANDLERS_OPS_PY = Path(__file__).resolve().parents[1] / "handlers" / "ops.py"
 @dataclass
 class FakeOutbound:
     replies: list[str] = field(default_factory=list)
+    supports_inline_buttons: bool = False
 
     async def reply(self, msg, text):
         self.replies.append(text)

@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Direct Computer Use Hardening (P5.6.1)**:
+  - **AX-First Click Preference**: Prioritizes AX/element clicks over coordinate-based clicks if both options are present. Falls back to coordinates if needed, and logs the click method used (`ax_click` vs `xy_click`).
+  - **App Allowlist/Blocklist Validation**: Restricts task execution based on the active application. Added `conveyor_computer_allowed_apps` and `conveyor_computer_blocked_apps` settings (default blocks Keychain Access, System Settings, Terminal). Active app name is polled on macOS via AppleScript.
+  - **Structured JSONL Trajectories**: Appends step records including timestamp, task_id, step index, screenshot_id/hash, action type, redacted args, result status, error, and duration_ms to `codex_memory_root/computer/trajectories/<task_id>.jsonl` with full redaction of typed text.
+  - **Concise Failure Cards**: Formats concise failure summaries containing task ID, stop reason, last action, last screenshot ID/hash, steps completed, and log recommendations when a task fails or hits limits.
+  - **Telegram Stop Fast Path**: Routes natural language stop commands (`停下`, `别动`, `停止操作`, `stop computer`, `cancel computer task`) directly to the `computer.stop` tool at dispatch time to bypass Codex routing delays.
+  - **Heartbeat & Status Upgrades**: Heartbeats now track the `poll_computer` option. `/computer_status` displays Cua command, availability, version, permissions, allowed/blocked apps, agent heartbeats, and active task details.
+  - **Smoke Tests**: Added 6 tests to `scripts/desktop_computer_smoke.py`, verifying all status fields, JSONL logs, failure reports, AX click preferences, app restrictions, and the stop fast path.
+
 - **Persistent Job Queue (P4.4)**:
   - Persistent SQLite DB store under `codex_memory_root/state/job_queue.sqlite3` with columns for ID, operator, channel, mode, prompt, state, timings, errors, and metadata.
   - Queue `queued`/`running` states and `paused` status persist across bot restarts and VPS reboots.

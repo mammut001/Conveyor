@@ -85,6 +85,9 @@ def _mk_settings(**over) -> "Settings":
             "password", "passcode", "bank", "payment", "crypto",
             "keychain", "system settings", "delete account",
         ),
+        conveyor_computer_blocked_apps=(
+            "Keychain Access", "System Settings",
+        ),
     )
     kwargs.update(over)
     return Settings(**kwargs)
@@ -597,6 +600,208 @@ def _test_stop_command_cancels_active() -> None:
     print("[pass] stop_command_cancels_active")
 
 
+# ---- Hardening P5.6.1 Smokes ----------------------------------------------
+
+def _test_cua_status_fields() -> None:
+    from handlers.tools.executors import exec_computer_status
+    from nodes.state import record_heartbeat, register_desktop_node
+    import asyncio
+    
+    settings = _mk_settings()
+    node_id = settings.conveyor_desktop_node_id or "macbook-payton"
+    register_desktop_node(settings, node_id, display_name="Test MacBook", agent_version="1.0", host_info={"hostname": "localhost"})
+    record_heartbeat(settings, node_id, "idle", "heartbeat", poll_computer=True)
+    
+    status_text = asyncio.run(exec_computer_status(settings, ""))
+    if "Allowed apps:" not in status_text:
+        _fail("cua_status_fields", "missing Allowed apps")
+        return
+    if "Blocked apps:" not in status_text:
+        _fail("cua_status_fields", "missing Blocked apps")
+        return
+    if "poll-computer: enabled" not in status_text:
+        _fail("cua_status_fields", f"missing poll-computer status: {status_text}")
+        return
+    if "Always-Direct:" not in status_text:
+        _fail("cua_status_fields", "missing Always-Direct status")
+        return
+    print("[pass] cua_status_fields")
+
+
+def _test_trajectory_jsonl_writing_and_redaction() -> None:
+    import asyncio
+    import json
+    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from desktop_computer_planner import ScriptedPlanner
+    
+    settings = _mk_settings()
+    planner = ScriptedPlanner([
+        {"action": "observe"},
+        {"action": "type", "text": "secret1234"},
+        {"action": "done", "summary": "finished"},
+    ])
+    backend = FakeComputerBackend(settings)
+    result = asyncio.run(run_computer_loop(
+        settings, "do a type test",
+        planner=planner, backend=backend,
+        max_steps=10, max_seconds=60, direct_mode=True,
+    ))
+    
+    task_id = result["task_id"]
+    jsonl_path = Path(settings.codex_memory_root) / "computer" / "trajectories" / f"{task_id}.jsonl"
+    if not jsonl_path.exists():
+        _fail("trajectory_jsonl_writing", f"JSONL file not found at {jsonl_path}")
+        return
+        
+    lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+    if len(lines) < 2:
+        _fail("trajectory_jsonl_writing", f"JSONL too short: {len(lines)} lines")
+        return
+        
+    for line in lines:
+        data = json.loads(line)
+        if data.get("action_type") == "type":
+            redacted_args = data.get("redacted_args") or {}
+            if "text" in redacted_args:
+                _fail("trajectory_jsonl_redaction", f"leaked raw text: {line}")
+                return
+            if redacted_args.get("text_redacted") != "***":
+                _fail("trajectory_jsonl_redaction", f"missing text_redacted marker: {line}")
+                return
+    print("[pass] trajectory_jsonl_writing_and_redaction")
+
+
+def _test_failure_report_concise() -> None:
+    import asyncio
+    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from desktop_computer_planner import ScriptedPlanner
+    from handlers.tools.executors import _format_loop_result
+    
+    settings = _mk_settings()
+    planner = ScriptedPlanner([
+        {"action": "observe"},
+        {"action": "observe"},
+    ])
+    backend = FakeComputerBackend(settings)
+    result = asyncio.run(run_computer_loop(
+        settings, "fail test",
+        planner=planner, backend=backend,
+        max_steps=1, max_seconds=60, direct_mode=True,
+    ))
+    
+    report = _format_loop_result(settings, result)
+    if "❌ Task failed/stopped" not in report:
+        _fail("failure_report_concise", f"missing fail header: {report}")
+        return
+    if f"Task ID: {result['task_id']}" not in report:
+        _fail("failure_report_concise", "missing Task ID")
+        return
+    if "Last Action: observe" not in report:
+        _fail("failure_report_concise", f"missing/incorrect Last Action: {report}")
+        return
+    if "Last Screenshot: fake_obs_" not in report:
+        _fail("failure_report_concise", f"missing Last Screenshot: {report}")
+        return
+    print("[pass] failure_report_concise")
+
+
+def _test_ax_click_preference_and_fallback() -> None:
+    import asyncio
+    from desktop_cua import build_driver
+    
+    settings = _mk_settings()
+    driver = build_driver(settings, fake=True)
+    
+    action = {"action": "click", "pid": 123, "window_id": 456, "element_index": 7, "x": 10, "y": 20}
+    res = driver.execute(action)
+    if res.get("click_method") != "ax_click":
+        _fail("ax_click_preference", f"expected click_method=ax_click, got {res.get('click_method')}")
+        return
+        
+    action_xy = {"action": "click", "x": 10, "y": 20}
+    res_xy = driver.execute(action_xy)
+    if res_xy.get("click_method") != "xy_click":
+        _fail("ax_click_preference", f"expected click_method=xy_click, got {res_xy.get('click_method')}")
+        return
+        
+    print("[pass] ax_click_preference_and_fallback")
+
+
+def _test_app_allowlist_and_blocklist() -> None:
+    import asyncio
+    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from desktop_computer_planner import ScriptedPlanner
+    
+    settings = _mk_settings(
+        conveyor_computer_blocked_apps=("Keychain Access", "System Settings", "Terminal")
+    )
+    planner = ScriptedPlanner([
+        {"action": "observe", "_mock_active_app": "System Settings"},
+        {"action": "done", "summary": "completed"},
+    ])
+    backend = FakeComputerBackend(settings)
+    result = asyncio.run(run_computer_loop(
+        settings, "blocked app test",
+        planner=planner, backend=backend,
+        max_steps=10, max_seconds=60, direct_mode=True,
+    ))
+    if result.get("status") != "stopped" or "blocked_app:System Settings" not in (result.get("blocked_reason") or ""):
+        _fail("app_blocklist", f"expected stopped due to blocked_app:System Settings, got {result}")
+        return
+        
+    settings_allow = _mk_settings(
+        conveyor_computer_allowed_apps=("Finder", "Safari")
+    )
+    planner_allow = ScriptedPlanner([
+        {"action": "observe", "_mock_active_app": "Chrome"},
+        {"action": "done", "summary": "completed"},
+    ])
+    backend_allow = FakeComputerBackend(settings_allow)
+    result_allow = asyncio.run(run_computer_loop(
+        settings_allow, "allowed app test",
+        planner=planner_allow, backend=backend_allow,
+        max_steps=10, max_seconds=60, direct_mode=True,
+    ))
+    if result_allow.get("status") != "stopped" or "app_not_in_allowlist:Chrome" not in (result_allow.get("blocked_reason") or ""):
+        _fail("app_allowlist", f"expected stopped due to app_not_in_allowlist:Chrome, got {result_allow}")
+        return
+        
+    print("[pass] app_allowlist_and_blocklist")
+
+
+def _test_stop_fast_path() -> None:
+    from handlers.dispatch import dispatch
+    from channel import InboundMessage
+    from channel.types import OutboundPort
+    from runner import CodexRunner
+    import asyncio
+    
+    class FakeOutbound(OutboundPort):
+        def __init__(self):
+            self.replies = []
+        async def reply(self, msg, text):
+            self.replies.append(text)
+            
+    settings = _mk_settings()
+    runner = CodexRunner(settings)
+    port = FakeOutbound()
+    
+    msg = InboundMessage(
+        message_id="msg-1",
+        chat_id="chat-1",
+        operator_id="1",
+        text="停下",
+        channel="telegram",
+    )
+    asyncio.run(dispatch(msg, port, settings, runner))
+    
+    if not port.replies or "没有正在运行的" not in port.replies[0]:
+        _fail("stop_fast_path", f"expected '没有正在运行的' in reply, got {port.replies}")
+        return
+        
+    print("[pass] stop_fast_path")
+
+
 # ---- Run -----------------------------------------------------------------
 
 
@@ -615,8 +820,16 @@ def main() -> int:
     _test_fake_backend_run_and_redaction()
     _test_claim_action_redaction_boundary()
     _test_stop_command_cancels_active()
+    
+    # P5.6.1 Hardening Smokes
+    _test_cua_status_fields()
+    _test_trajectory_jsonl_writing_and_redaction()
+    _test_failure_report_concise()
+    _test_ax_click_preference_and_fallback()
+    _test_app_allowlist_and_blocklist()
+    _test_stop_fast_path()
 
-    total = 14
+    total = 20
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")
