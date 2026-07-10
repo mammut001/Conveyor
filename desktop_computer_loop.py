@@ -134,8 +134,21 @@ async def run_computer_loop(
         task_id = created["task_id"]
     else:
         existing = get_computer_task(settings, task_id)
-        if not isinstance(existing, dict) or existing.get("status") != "running":
+        if not isinstance(existing, dict):
             return {"ok": False, "error": "task_not_running", "task_id": task_id}
+        if existing.get("status") != "running":
+            # A background executor can start after /computer_stop has
+            # already finalized the pre-created task. Preserve that terminal
+            # state so operator_stop is not reported as task_not_running.
+            return {
+                "ok": True,
+                "task_id": task_id,
+                "status": existing.get("status"),
+                "summary": existing.get("summary"),
+                "blocked_reason": existing.get("blocked_reason"),
+                "steps_used": existing.get("step_seq", 0),
+                "trajectory_len": len(existing.get("trajectory", []) or []),
+            }
     start = time.monotonic()
     steps_used = 0
     observation: dict[str, Any] = {"initial": True}

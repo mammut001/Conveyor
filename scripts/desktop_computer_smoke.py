@@ -665,6 +665,39 @@ def _test_stop_race_preserves_operator_stop() -> None:
     print("[pass] stop_race_preserves_operator_stop")
 
 
+def _test_precreated_stopped_task_does_not_report_not_running() -> None:
+    import asyncio
+
+    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from desktop_computer_planner import ScriptedPlanner
+    from desktop_computer_requests import (
+        cancel_computer_task,
+        create_computer_task,
+        get_computer_task,
+    )
+
+    settings = _mk_settings()
+    created = create_computer_task(
+        settings, "already stopped", direct_mode=True, max_steps=3, max_seconds=30,
+    )
+    task_id = created["task_id"]
+    cancel_computer_task(settings, task_id, reason="operator_stop")
+    result = asyncio.run(run_computer_loop(
+        settings, "already stopped",
+        planner=ScriptedPlanner([{"action": "observe"}]),
+        backend=FakeComputerBackend(settings), max_steps=3, max_seconds=30,
+        direct_mode=True, task_id=task_id,
+    ))
+    task = get_computer_task(settings, task_id) or {}
+    if result.get("status") != "stopped" or result.get("blocked_reason") != "operator_stop":
+        _fail("precreated_stopped_task_converges", f"result={result}")
+        return
+    if task.get("status") != "stopped" or task.get("blocked_reason") != "operator_stop":
+        _fail("precreated_stopped_task_converges", f"task={task}")
+        return
+    print("[pass] precreated_stopped_task_converges")
+
+
 def _test_computer_task_ack_starts_background() -> None:
     import asyncio
 
@@ -1643,6 +1676,7 @@ def main() -> int:
     _test_stop_command_cancels_active()
     _test_stale_task_expiry_clears_active()
     _test_stop_race_preserves_operator_stop()
+    _test_precreated_stopped_task_does_not_report_not_running()
     _test_computer_task_ack_starts_background()
     _test_background_preflight_failure_converges_task()
 
@@ -1670,7 +1704,7 @@ def main() -> int:
     _test_planner_ax_first_prompt()
     _test_trajectory_permissions_and_redaction()
 
-    total = 37
+    total = 38
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")
