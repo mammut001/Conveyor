@@ -156,8 +156,14 @@ if [[ -n "$DESKTOP_SERVER_PID" ]]; then
     fi
     sleep 1
   done
+  if kill -0 "$DESKTOP_SERVER_PID" 2>/dev/null; then
+    log "desktop_agent_server.py did not exit after TERM; forcing shutdown"
+    kill -9 "$DESKTOP_SERVER_PID" 2>/dev/null || true
+    sleep 1
+  fi
+  DESKTOP_SERVER_LOG="/tmp/conveyor_desktop_agent_server-${USER:-ubuntu}.log"
   nohup .venv/bin/python desktop_agent_server.py \
-    >/tmp/conveyor_desktop_agent_server.log 2>&1 </dev/null &
+    >"$DESKTOP_SERVER_LOG" 2>&1 </dev/null &
   DESKTOP_SERVER_PID="$!"
   sleep 2
   if kill -0 "$DESKTOP_SERVER_PID" 2>/dev/null; then
