@@ -649,9 +649,15 @@ async def exec_computer_task(settings: Settings, arg: str, *, task_id: str | Non
     """Run the Codex action loop to complete a desktop goal (hands-free)."""
     from desktop_computer_planner import CodexPlanner
     from desktop_computer_loop import build_backend, run_computer_loop
+    from desktop_computer_requests import set_task_status
 
     goal, error = _computer_task_preflight(settings, arg)
     if error:
+        # The chat handler may have created a running task before this
+        # background execution starts. Never leave that record active when
+        # a late config/TTL preflight rejects it.
+        if task_id:
+            set_task_status(settings, task_id, "stopped", blocked_reason="preflight_failed")
         return error
     if task_id is None:
         prepared = prepare_computer_task(settings, goal or "")
