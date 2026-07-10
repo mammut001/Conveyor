@@ -608,6 +608,39 @@ def _test_stop_command_cancels_active() -> None:
     print("[pass] stop_command_cancels_active")
 
 
+def _test_stale_task_expiry_clears_active() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from desktop_computer_requests import (
+        create_computer_step,
+        create_computer_task,
+        expire_old_computer,
+        get_active_task,
+        get_computer_task,
+    )
+
+    settings = _mk_settings()
+    created = create_computer_task(
+        settings, "stale task", direct_mode=True, max_steps=2, max_seconds=1,
+    )
+    task_id = created["task_id"]
+    step = create_computer_step(settings, task_id, {"action": "observe"})
+    future = datetime.now(timezone.utc) + timedelta(seconds=10)
+    changed = expire_old_computer(settings, now=future)
+    task = get_computer_task(settings, task_id) or {}
+    stored_step = next(iter((task.get("steps") or {}).values()), {})
+    if changed < 2 or task.get("status") != "stopped":
+        _fail("stale_task_expiry", f"changed={changed} task={task}")
+        return
+    if task.get("blocked_reason") != "max_seconds reached":
+        _fail("stale_task_expiry", f"reason={task.get('blocked_reason')}")
+        return
+    if stored_step.get("status") != "expired" or get_active_task(settings) is not None:
+        _fail("stale_task_expiry", f"step={stored_step} active={get_active_task(settings)}")
+        return
+    print("[pass] stale_task_expiry_clears_active")
+
+
 # ---- Hardening P5.6.1 Smokes ----------------------------------------------
 
 def _test_cua_status_fields() -> None:
@@ -1499,6 +1532,7 @@ def main() -> int:
     _test_fake_backend_run_and_redaction()
     _test_claim_action_redaction_boundary()
     _test_stop_command_cancels_active()
+    _test_stale_task_expiry_clears_active()
 
     # P5.6.1 Hardening Smokes
     _test_cua_status_fields()
@@ -1524,7 +1558,7 @@ def main() -> int:
     _test_planner_ax_first_prompt()
     _test_trajectory_permissions_and_redaction()
 
-    total = 33
+    total = 34
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")

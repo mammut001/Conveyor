@@ -895,8 +895,9 @@ def list_pending_computer_steps(settings: Settings, *, limit: int = 1) -> list[d
 
 
 def expire_old_computer(settings: Settings, now: datetime | None = None) -> int:
-    """Expire stale arms and steps. Returns number of changed records."""
+    """Expire stale arms, tasks, and steps. Returns number of changes."""
     changed = 0
+    current = _utc_now(now)
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
             store = _load_unlocked(settings)
@@ -904,22 +905,32 @@ def expire_old_computer(settings: Settings, now: datetime | None = None) -> int:
             arm = store.get("arm") or {}
             if isinstance(arm, dict) and arm.get("active"):
                 expires_at = _parse_iso(arm.get("expires_at"))
-                if expires_at is not None and _utc_now(now) > expires_at:
+                if expires_at is not None and current > expires_at:
                     store["arm"] = {}
                     changed += 1
-            # steps
+            # A dead executor cannot run the loop's in-process max-seconds
+            # guard, so expire the parent task as well as its steps.
             for record in store.get("tasks", {}).values():
                 if not isinstance(record, dict):
                     continue
+                task_expired = False
+                if record.get("status") == "running":
+                    task_expires_at = _parse_iso(record.get("expires_at"))
+                    if task_expires_at is not None and current > task_expires_at:
+                        record["status"] = "stopped"
+                        record["blocked_reason"] = "max_seconds reached"
+                        record["updated_at"] = _iso_z(current)
+                        changed += 1
+                        task_expired = True
                 for step in record.get("steps", {}).values():
                     if not isinstance(step, dict):
                         continue
                     if step.get("status") in ("completed", "failed", "cancelled", "expired"):
                         continue
                     expires_at = _parse_iso(step.get("expires_at"))
-                    if expires_at is not None and _utc_now(now) > expires_at:
+                    if task_expired or (expires_at is not None and current > expires_at):
                         step["status"] = "expired"
-                        step["updated_at"] = _iso_z(_utc_now(now))
+                        step["updated_at"] = _iso_z(current)
                         changed += 1
             if changed:
                 _save_unlocked(settings, store)
