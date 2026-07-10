@@ -138,6 +138,34 @@ for svc in "${SERVICES[@]}"; do
     fi
 done
 
+# desktop_agent_server.py is manually supervised on this VPS rather than
+# managed by systemd. Restart it when present so control-plane handlers load
+# the same source revision as the bot services.
+DESKTOP_SERVER_STATUS="not_running"
+DESKTOP_SERVER_PID="$(pgrep -f '[.]venv/bin/python desktop_agent_server.py' | head -1 || true)"
+if [[ -n "$DESKTOP_SERVER_PID" ]]; then
+    log "Restarting desktop_agent_server.py (pid ${DESKTOP_SERVER_PID})..."
+    kill "$DESKTOP_SERVER_PID" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      if ! kill -0 "$DESKTOP_SERVER_PID" 2>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
+    nohup .venv/bin/python desktop_agent_server.py \
+      >/tmp/conveyor_desktop_agent_server.log 2>&1 </dev/null &
+    DESKTOP_SERVER_PID="$!"
+    sleep 2
+    if kill -0 "$DESKTOP_SERVER_PID" 2>/dev/null; then
+      DESKTOP_SERVER_STATUS="active"
+      log "  desktop_agent_server.py: active (pid ${DESKTOP_SERVER_PID})"
+    else
+      DESKTOP_SERVER_STATUS="restart-failed"
+      ALL_ACTIVE=false
+      log "WARNING: desktop_agent_server.py failed to start"
+    fi
+fi
+
 # ---- rollback guard (if backed up and services unhealthy) -----------------
 if [[ "$ALL_ACTIVE" == "false" && -n "${BACKUP_PATH:-}" && -d "${BACKUP_PATH:-}" ]]; then
   log "Some services are not active. Attempting rollback ..."
@@ -174,7 +202,8 @@ cat > "${STATUS_FILE}" <<STATUS_JSON
   "smoke": "passed",
   "services": {
     "telegram": "${TG_STATE}",
-    "feishu": "${FS_STATE}"
+    "feishu": "${FS_STATE}",
+    "desktop_agent_server": "${DESKTOP_SERVER_STATUS}"
   },
   "rollback_attempted": $([ "$ALL_ACTIVE" == "false" ] && echo "true" || echo "false"),
   "previous_commit": "${OLD_COMMIT}"
@@ -187,6 +216,7 @@ log "Service status:"
 for svc in "${SERVICES[@]}"; do
     log "  ${svc}: ${SVC_STATUS[$svc]:-unknown}"
 done
+log "  desktop_agent_server.py: ${DESKTOP_SERVER_STATUS}"
 
 log "Deploy complete: ${OLD_COMMIT} → ${NEW_COMMIT}"
 
@@ -196,6 +226,7 @@ if [[ "$ALL_ACTIVE" == "false" ]]; then
   for svc in "${SERVICES[@]}"; do
     [[ "${SVC_STATUS[$svc]:-}" == "active" ]] || FINAL_OK=false
   done
+  [[ "$DESKTOP_SERVER_STATUS" != "restart-failed" ]] || FINAL_OK=false
   if [[ "$FINAL_OK" == "false" ]]; then
     die "Some services are not active after rollback. Manual intervention needed."
   fi
