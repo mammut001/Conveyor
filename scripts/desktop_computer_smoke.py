@@ -415,6 +415,24 @@ def _test_blocked_keyword_stops_task() -> None:
     print("[pass] blocked_keyword_stops_task")
 
 
+def _test_hard_blocked_keywords_cannot_be_removed() -> None:
+    from desktop_computer_requests import contains_blocked_keyword
+
+    settings = _mk_settings(conveyor_computer_blocked_keywords=("password",))
+    for phrase, expected in (
+        ("open the bank app", "bank"),
+        ("change system settings", "system settings"),
+        ("delete account", "delete account"),
+    ):
+        if contains_blocked_keyword(settings, phrase) != expected:
+            _fail(
+                "hard_blocked_keywords",
+                f"{phrase!r} did not remain blocked: {contains_blocked_keyword(settings, phrase)!r}",
+            )
+            return
+    print("[pass] hard_blocked_keywords")
+
+
 def _test_max_steps_stops_task() -> None:
     import asyncio
 
@@ -1691,6 +1709,7 @@ def main() -> int:
     _test_always_direct_bypass()
     _test_action_schema_allowlist()
     _test_blocked_keyword_stops_task()
+    _test_hard_blocked_keywords_cannot_be_removed()
     _test_max_steps_stops_task()
     _test_stop_check_cancels()
     _test_fake_backend_run_and_redaction()
@@ -1727,7 +1746,7 @@ def main() -> int:
     _test_planner_ax_first_prompt()
     _test_trajectory_permissions_and_redaction()
 
-    total = 39
+    total = 40
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")
