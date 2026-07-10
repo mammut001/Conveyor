@@ -501,6 +501,10 @@ def create_computer_task(
 
 
 def get_computer_task(settings: Settings, task_id: str) -> dict | None:
+    # A task may outlive the executor process. Reconcile its deadline before
+    # returning it so loop polling and /computer_log never expose stale
+    # ``running`` state indefinitely.
+    expire_old_computer(settings)
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
             store = _load_unlocked(settings)
@@ -510,6 +514,7 @@ def get_computer_task(settings: Settings, task_id: str) -> dict | None:
 
 def get_active_task(settings: Settings) -> dict | None:
     """Return the single running task, if any (single-operator model)."""
+    expire_old_computer(settings)
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
             store = _load_unlocked(settings)
@@ -625,6 +630,7 @@ def append_trajectory(settings: Settings, task_id: str, entry: dict) -> dict:
 
 
 def list_recent_computer_tasks(settings: Settings, *, limit: int = 5) -> list[dict]:
+    expire_old_computer(settings)
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
             store = _load_unlocked(settings)
