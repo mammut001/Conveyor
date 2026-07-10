@@ -207,6 +207,12 @@ async def run_computer_loop(
             try:
                 result = await backend.execute_step(settings, task_id, step_id, action)
             except ComputerBackendError as exc:
+                # /computer_stop can cancel the task while the Mac is
+                # completing the current step. Preserve operator_stop rather
+                # than overwriting the deliberate stopped state with error.
+                current_task = get_computer_task(settings, task_id)
+                if isinstance(current_task, dict) and current_task.get("status") == "stopped":
+                    break
                 set_task_status(settings, task_id, "error", blocked_reason=str(exc))
                 break
             duration_ms = int((time.monotonic() - step_start) * 1000)
