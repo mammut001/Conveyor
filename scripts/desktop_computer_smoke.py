@@ -761,8 +761,10 @@ def _test_computer_task_ack_starts_background() -> None:
         message_id="m", text="/computer_task safe task",
     )
     original = executors.exec_computer_task
+    exec_calls = []
 
     async def fake_exec(_settings, _goal, *, task_id=None):
+        exec_calls.append(task_id)
         set_task_status(_settings, task_id, "done", summary="fake complete")
         return "fake complete"
 
@@ -779,6 +781,14 @@ def _test_computer_task_ack_starts_background() -> None:
                 return
             if get_active_task(settings) is not None:
                 _fail("computer_task_ack_background", "task still active")
+                return
+            await command_handlers._computer_task(msg, port, None, settings, "safe task")
+            await asyncio.sleep(0)
+            if len(exec_calls) != 1 or "忽略重复消息" not in port.replies[-1]:
+                _fail(
+                    "computer_task_ack_background",
+                    f"duplicate spawned again: calls={exec_calls}, replies={port.replies}",
+                )
                 return
             print("[pass] computer_task_ack_starts_background")
         finally:
@@ -823,6 +833,92 @@ def _test_background_preflight_failure_converges_task() -> None:
     print("[pass] background_preflight_failure_converges")
 
 
+def _test_task_idempotency_and_single_active() -> None:
+    from desktop_computer_requests import create_computer_task, get_computer_task
+
+    settings = _mk_settings()
+    first = create_computer_task(
+        settings, "safe task", direct_mode=True, max_steps=5, max_seconds=60,
+        idempotency_key="telegram:chat:message-1", single_active=True,
+    )
+    duplicate = create_computer_task(
+        settings, "safe task", direct_mode=True, max_steps=5, max_seconds=60,
+        idempotency_key="telegram:chat:message-1", single_active=True,
+    )
+    competing = create_computer_task(
+        settings, "different task", direct_mode=True, max_steps=5, max_seconds=60,
+        idempotency_key="telegram:chat:message-2", single_active=True,
+    )
+    if duplicate.get("task_id") != first.get("task_id") or not duplicate.get("deduplicated"):
+        _fail("task_idempotency", f"first={first}, duplicate={duplicate}")
+        return
+    if competing.get("error") != "computer_task_active":
+        _fail("task_idempotency", f"competing={competing}")
+        return
+    stored = get_computer_task(settings, str(first.get("task_id"))) or {}
+    digest = str(stored.get("idempotency_key_sha256") or "")
+    if len(digest) != 64 or "message-1" in digest:
+        _fail("task_idempotency", f"unsafe digest={digest}")
+        return
+    print("[pass] task_idempotency_and_single_active")
+
+
+def _test_retry_creates_fresh_linked_attempt() -> None:
+    from desktop_computer_requests import (
+        append_trajectory,
+        create_computer_task,
+        retry_computer_task,
+        set_task_status,
+    )
+
+    settings = _mk_settings()
+    first = create_computer_task(
+        settings, "safe retry task", direct_mode=True, max_steps=5, max_seconds=60,
+    )
+    first_id = str(first.get("task_id") or "")
+    append_trajectory(settings, first_id, {"action_type": "observe", "result_ok": False})
+    set_task_status(settings, first_id, "error", blocked_reason="planner_timeout")
+    retry = retry_computer_task(
+        settings, first_id, idempotency_key="telegram:chat:retry-1",
+    )
+    task = retry.get("task") or {}
+    if not retry.get("ok") or task.get("retry_of") != first_id:
+        _fail("retry_fresh_attempt", f"retry={retry}")
+        return
+    if task.get("attempt") != 2 or task.get("root_task_id") != first_id:
+        _fail("retry_fresh_attempt", f"lineage={task}")
+        return
+    if task.get("trajectory") or task.get("steps"):
+        _fail("retry_fresh_attempt", f"old actions replayed: {task}")
+        return
+    duplicate = retry_computer_task(
+        settings, first_id, idempotency_key="telegram:chat:retry-1",
+    )
+    if duplicate.get("task_id") != retry.get("task_id") or not duplicate.get("deduplicated"):
+        _fail("retry_fresh_attempt", f"duplicate={duplicate}")
+        return
+    print("[pass] retry_creates_fresh_linked_attempt")
+
+
+def _test_retry_commands_registered() -> None:
+    from handlers.commands import COMMAND_TABLE
+    from handlers.intent import route_intent
+    from handlers.tools.registry import TOOL_REGISTRY
+
+    if not {"computer_retry", "computer_resume"}.issubset(COMMAND_TABLE):
+        _fail("retry_commands_registered", "command missing")
+        return
+    if "computer.retry" not in TOOL_REGISTRY:
+        _fail("retry_commands_registered", "tool missing")
+        return
+    for phrase in ("重试电脑任务", "resume computer task"):
+        route = route_intent(phrase)
+        if route.tools != ("computer.retry",):
+            _fail("retry_commands_registered", f"route {phrase!r} -> {route}")
+            return
+    print("[pass] retry_commands_registered")
+
+
 # ---- Hardening P5.6.1 Smokes ----------------------------------------------
 
 def _test_cua_status_fields() -> None:
@@ -847,6 +943,14 @@ def _test_cua_status_fields() -> None:
         return
     if "Always-Direct:" not in status_text:
         _fail("cua_status_fields", "missing Always-Direct status")
+        return
+    calc_status = asyncio.run(exec_computer_status(settings, "Calculator"))
+    blocked_status = asyncio.run(exec_computer_status(settings, "System Settings"))
+    if "AX reliable" not in calc_status:
+        _fail("cua_status_fields", f"missing Calculator capability: {calc_status}")
+        return
+    if "App capability: refused" not in blocked_status:
+        _fail("cua_status_fields", f"missing blocked capability: {blocked_status}")
         return
     print("[pass] cua_status_fields")
 
@@ -1048,6 +1152,36 @@ def _test_ax_target_app_allowlist_not_frontmost() -> None:
         )
         return
     print("[pass] ax_target_app_allowlist_not_frontmost")
+
+
+def _test_target_app_activation_metadata() -> None:
+    """Explicit target_app resolves a running app and activates it locally."""
+    from desktop_cua import LocalCuaTransport
+
+    settings = _mk_settings()
+    transport = LocalCuaTransport("cua-driver mcp", settings=settings)
+    calls = []
+
+    def fake_call(tool, args=None, *, timeout=None):
+        calls.append((tool, args or {}))
+        if tool == "list_apps":
+            return {"ok": True, "data": {"apps": [
+                {"name": "Calculator", "running": True, "pid": 4242},
+            ]}}
+        if tool == "bring_to_front":
+            return {"ok": True, "data": {}}
+        return {"ok": True, "data": {}}
+
+    transport._call_tool = fake_call
+    action = {"action": "observe", "target_app": "Calculator"}
+    err = transport._prepare_target_app(action)
+    if err or action.get("pid") != 4242:
+        _fail("target_app_activation_metadata", f"err={err}, action={action}")
+        return
+    if [name for name, _ in calls[:2]] != ["list_apps", "bring_to_front"]:
+        _fail("target_app_activation_metadata", f"calls={calls}")
+        return
+    print("[pass] target_app_activation_metadata")
 
 
 def _test_simple_digit_goal_deterministic_path() -> None:
@@ -1629,6 +1763,74 @@ def _test_planner_ax_first_prompt() -> None:
     print("[pass] planner_ax_first_prompt")
 
 
+def _test_planner_cancellation_reaps_process() -> None:
+    """Cancelling CodexPlanner also terminates and reaps its child process."""
+    from desktop_computer_planner import CodexPlanner
+
+    class FakeStdin:
+        def write(self, data):
+            return len(data)
+
+        async def drain(self):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeProc:
+        def __init__(self):
+            self.returncode = None
+            self.stdin = FakeStdin()
+            self.terminated = False
+            self.killed = False
+            self.done = asyncio.Event()
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+            self.done.set()
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+            self.done.set()
+
+        async def wait(self):
+            await self.done.wait()
+            return self.returncode
+
+    async def run():
+        import desktop_computer_planner as planner_mod
+
+        proc = FakeProc()
+
+        async def fake_spawn(*args, **kwargs):
+            return proc
+
+        original = planner_mod.asyncio.create_subprocess_exec
+        planner_mod.asyncio.create_subprocess_exec = fake_spawn
+        try:
+            task = asyncio.create_task(CodexPlanner(_mk_settings())._run_codex("test"))
+            await asyncio.sleep(0)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            return proc
+        finally:
+            planner_mod.asyncio.create_subprocess_exec = original
+
+    proc = asyncio.run(run())
+    if not proc.terminated and not proc.killed:
+        _fail("planner_cancellation_reaps_process", "child was not terminated")
+        return
+    if proc.returncode is None:
+        _fail("planner_cancellation_reaps_process", "child was not reaped")
+        return
+    print("[pass] planner_cancellation_reaps_process")
+
+
 def _test_trajectory_permissions_and_redaction() -> None:
     import asyncio
     import json
@@ -1721,6 +1923,9 @@ def main() -> int:
     _test_precreated_stopped_task_does_not_report_not_running()
     _test_computer_task_ack_starts_background()
     _test_background_preflight_failure_converges_task()
+    _test_task_idempotency_and_single_active()
+    _test_retry_creates_fresh_linked_attempt()
+    _test_retry_commands_registered()
 
     # P5.6.1 Hardening Smokes
     _test_cua_status_fields()
@@ -1729,6 +1934,7 @@ def main() -> int:
     _test_ax_click_preference_and_fallback()
     _test_app_allowlist_and_blocklist()
     _test_ax_target_app_allowlist_not_frontmost()
+    _test_target_app_activation_metadata()
     _test_simple_digit_goal_deterministic_path()
     _test_xy_click_blocked_when_app_allowlist_set()
     _test_observe_injects_ax_hints_for_planner()
@@ -1744,9 +1950,10 @@ def main() -> int:
     _test_always_direct_requires_direct_enabled()
     _test_command_table_computer_observe_action()
     _test_planner_ax_first_prompt()
+    _test_planner_cancellation_reaps_process()
     _test_trajectory_permissions_and_redaction()
 
-    total = 40
+    total = 45
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")

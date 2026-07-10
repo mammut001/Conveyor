@@ -23,7 +23,7 @@ import time
 from typing import Any, Awaitable, Callable
 
 from config import Settings
-from desktop_computer_planner import maybe_simple_digit_action, resolve_clicked_label
+from desktop_computer_planner import infer_target_app, maybe_simple_digit_action, resolve_clicked_label
 from desktop_computer_requests import (
     append_trajectory,
     cancel_computer_task,
@@ -182,13 +182,24 @@ async def run_computer_loop(
                 )
                 if action is None:
                     try:
-                        action = await planner.next_action(
-                            goal=goal,
-                            observation=observation,
-                            trajectory=trajectory,
-                            steps_used=steps_used,
-                            max_steps=max_steps,
+                        remaining = max_seconds - (time.monotonic() - start)
+                        if remaining <= 0:
+                            set_task_status(settings, task_id, "stopped", blocked_reason="max_seconds reached")
+                            break
+                        planner_timeout = min(float(settings.codex_timeout_seconds), remaining)
+                        action = await asyncio.wait_for(
+                            planner.next_action(
+                                goal=goal,
+                                observation=observation,
+                                trajectory=trajectory,
+                                steps_used=steps_used,
+                                max_steps=max_steps,
+                            ),
+                            timeout=max(0.1, planner_timeout),
                         )
+                    except asyncio.TimeoutError:
+                        set_task_status(settings, task_id, "stopped", blocked_reason="planner_timeout")
+                        break
                     except Exception as exc:  # pragma: no cover - defensive
                         set_task_status(
                             settings,
@@ -197,6 +208,9 @@ async def run_computer_loop(
                             blocked_reason=f"planner_error:{type(exc).__name__}",
                         )
                         break
+                target_app = infer_target_app(goal)
+                if target_app and action.get("action") == "observe" and not action.get("target_app"):
+                    action["target_app"] = target_app
             action = normalize_action(action)
             act = action.get("action")
 

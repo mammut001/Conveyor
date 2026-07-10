@@ -407,6 +407,27 @@ def _format_loop_result(settings: Settings, result: dict) -> str:
     return _safe_truncate("\n".join(lines))
 
 
+def _computer_app_capability(settings: Settings, app: str) -> str:
+    from desktop_computer_requests import check_app_allowlist_blocklist
+
+    name = (app or "").strip()
+    if not name:
+        return ""
+    allowed, reason = check_app_allowlist_blocklist(
+        settings, name, enforce_allowlist=True,
+    )
+    if not allowed:
+        return f"App capability: refused ({reason})"
+    lower = name.lower()
+    if lower in {"calculator", "finder", "notes", "textedit", "calendar", "mail", "preview"}:
+        return "App capability: AX reliable (recommended for dogfood)"
+    if lower in {"safari", "chrome", "google chrome", "firefox", "microsoft edge", "edge"}:
+        return "App capability: usually usable; complex pages/WebViews may need coordinate fallback"
+    if any(token in lower for token in ("remote", "rdp", "game", "canvas", "simulator")):
+        return "App capability: best effort; screenshot/coordinate fallback likely"
+    return "App capability: variable; run observe first and prefer AX element hints"
+
+
 async def exec_computer_status(settings: Settings, _arg: str) -> str:
     """P5.6 Computer Use status: enabled flag, direct-mode source, Cua probe."""
     from desktop_computer_requests import (
@@ -471,6 +492,12 @@ async def exec_computer_status(settings: Settings, _arg: str) -> str:
     blocked_apps = getattr(settings, "conveyor_computer_blocked_apps", ())
     lines.append(f"Allowed apps: {', '.join(allowed_apps) if allowed_apps else '无限制'}")
     lines.append(f"Blocked apps: {', '.join(blocked_apps) if blocked_apps else '无'}")
+    requested_app = (_arg or "").strip()
+    if requested_app:
+        lines.append(f"Target app: {requested_app[:128]}")
+        lines.append(_computer_app_capability(settings, requested_app))
+    else:
+        lines.append("Capability: native AX reliable; browsers usually usable; canvas/remote desktop best effort")
 
     # Node heartbeat state
     node_id = settings.conveyor_desktop_node_id or "macbook-payton"
@@ -504,6 +531,9 @@ async def exec_computer_status(settings: Settings, _arg: str) -> str:
             
         lines.append(f"运行中任务: {task_id}")
         lines.append(f"目标: {active.get('goal')}")
+        lines.append(f"Attempt: {active.get('attempt', 1)}")
+        if active.get("retry_of"):
+            lines.append(f"重试来源: {active.get('retry_of')}")
         lines.append(f"已执行步数: {active.get('step_seq', 0)}")
         lines.append(f"已运行时间: {elapsed_sec}s")
         lines.append(f"最后动作: {last_action_str}")
@@ -628,7 +658,15 @@ def _computer_task_preflight(settings: Settings, arg: str) -> tuple[str | None, 
     return goal, None
 
 
-def prepare_computer_task(settings: Settings, arg: str) -> dict:
+def prepare_computer_task(
+    settings: Settings,
+    arg: str,
+    *,
+    operator_id: str = "",
+    chat_id: str = "",
+    channel: str = "",
+    idempotency_key: str = "",
+) -> dict:
     """Create a running task record before sending the chat acknowledgement."""
     from desktop_computer_requests import create_computer_task
 
@@ -641,8 +679,56 @@ def prepare_computer_task(settings: Settings, arg: str) -> dict:
         direct_mode=True,
         max_steps=settings.conveyor_computer_max_steps,
         max_seconds=settings.conveyor_computer_max_seconds,
+        operator_id=operator_id,
+        chat_id=chat_id,
+        channel=channel,
+        idempotency_key=idempotency_key,
+        single_active=True,
     )
     return created
+
+
+def prepare_computer_retry(
+    settings: Settings,
+    task_id: str = "",
+    *,
+    operator_id: str = "",
+    chat_id: str = "",
+    channel: str = "",
+    idempotency_key: str = "",
+) -> dict:
+    """Prepare a fresh linked attempt; never replay prior actions."""
+    from desktop_computer_requests import (
+        get_computer_task,
+        list_recent_computer_tasks,
+        retry_computer_task,
+    )
+
+    task_id = (task_id or "").strip()
+    if not task_id:
+        for task in list_recent_computer_tasks(settings, limit=20):
+            if task.get("status") in {"stopped", "blocked", "error"}:
+                task_id = str(task.get("task_id") or "")
+                break
+    if not task_id:
+        return {"ok": False, "message": "没有可重试的 Computer Use 任务。"}
+    previous = get_computer_task(settings, task_id)
+    if not previous:
+        return {"ok": False, "message": f"未找到任务 {task_id}。"}
+    goal, error = _computer_task_preflight(settings, str(previous.get("goal") or ""))
+    if error:
+        return {"ok": False, "message": error}
+    result = retry_computer_task(
+        settings,
+        task_id,
+        idempotency_key=idempotency_key,
+        operator_id=operator_id,
+        chat_id=chat_id,
+        channel=channel,
+    )
+    if result.get("ok"):
+        result["goal"] = goal
+    return result
 
 
 async def exec_computer_task(settings: Settings, arg: str, *, task_id: str | None = None) -> str:
@@ -674,6 +760,20 @@ async def exec_computer_task(settings: Settings, arg: str, *, task_id: str | Non
         task_id=task_id,
     )
     return _format_loop_result(settings, result)
+
+
+async def exec_computer_retry(settings: Settings, arg: str) -> str:
+    """Retry a terminal task as a fresh linked attempt."""
+    prepared = prepare_computer_retry(settings, arg)
+    if not prepared.get("ok"):
+        return str(prepared.get("message") or prepared.get("error") or "重试失败")
+    if prepared.get("deduplicated"):
+        return f"任务 {prepared.get('task_id')} 已接收，无需重复启动。"
+    return await exec_computer_task(
+        settings,
+        str(prepared.get("goal") or ""),
+        task_id=str(prepared.get("task_id") or ""),
+    )
 
 
 async def exec_computer_stop(settings: Settings, _arg: str) -> str:
@@ -778,11 +878,11 @@ def register_builtin_tools() -> None:
             executor=exec_queue_status,
             keywords=("队列", "queue", "任务队列"),
         ),
-        # P5.0: Execution-node layer. The desktop node is a stub
-        # in this task — see ``docs/desktop_security.md``.
+        # Execution-node layer. The Mac agent is optional and reports
+        # offline until its heartbeat reaches the VPS control plane.
         ToolSpec(
             name="nodes.status",
-            summary="Execution nodes (VPS + desktop stub) 状态",
+            summary="Execution nodes (VPS + optional Mac agent) 状态",
             danger=DangerLevel.READ,
             executor=exec_nodes_status,
             keywords=("节点", "nodes", "host status", "vps + desktop"),
@@ -884,6 +984,13 @@ def register_builtin_tools() -> None:
             danger=DangerLevel.WRITE_SAFE,
             executor=exec_computer_stop,
             keywords=("computer stop", "停止操作", "取消电脑任务", "stop computer"),
+        ),
+        ToolSpec(
+            name="computer.retry",
+            summary="将失败或停止的 Computer Use 任务作为新 attempt 重试",
+            danger=DangerLevel.WRITE,
+            executor=exec_computer_retry,
+            keywords=("computer retry", "重试电脑任务", "恢复电脑任务", "resume computer"),
         ),
     ]
     for spec in specs:

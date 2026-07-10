@@ -443,6 +443,7 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "nodes.status": ("/nodes", "/node_status"),
     "computer.status": ("/computer_status",),
     "computer.task": ("/computer_task",),
+    "computer.retry": ("/computer_retry", "/computer_resume"),
     "computer.stop": ("/computer_stop",),
     "computer.observe": ("/computer_screenshot", "/computer_observe"),
     "computer.action": ("/computer_action",),
@@ -542,6 +543,7 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "nodes.status": "节点状态",
     "computer.status": "Computer Use 状态",
     "computer.task": "操作电脑完成任务",
+    "computer.retry": "重试或恢复电脑任务",
     "computer.stop": "停止电脑任务",
     "computer.observe": "电脑截图观察",
     "computer.action": "执行单个桌面动作",
@@ -1282,10 +1284,10 @@ async def _tool_disk(msg, port, _runner, settings, arg):
     await port.reply(msg, await run_tool(settings, "disk", arg))
 
 
-# ---- P5.0: Execution nodes (VPS + desktop stub) -------------------------
+# ---- Execution nodes / Computer Use --------------------------------------
 
 async def _nodes(msg, port, _runner, settings, _arg):
-    """List known execution nodes (VPS + optional desktop stub)."""
+    """List known execution nodes (VPS + optional Mac desktop agent)."""
     from handlers.tools.runner import run_tool
     text = await run_tool(settings, "nodes.status", "")
     if msg.channel == "feishu" and hasattr(port, "send_card"):
@@ -1303,12 +1305,7 @@ async def _node_status(msg, port, _runner, settings, _arg):
 
 
 async def _computer_status(msg, port, _runner, settings, _arg):
-    """Stub status for Computer Use (desktop agent) requests.
-
-    Real desktop control is not implemented in this task — see
-    ``docs/desktop_security.md``. The slash command exists so the
-    operator can probe the layer without triggering a Codex job.
-    """
+    """Metadata-only status for the local Mac Computer Use agent."""
     from handlers.tools.runner import run_tool
     text = await run_tool(settings, "computer.status", _arg or "")
     if msg.channel == "feishu" and hasattr(port, "send_card"):
@@ -1325,19 +1322,57 @@ async def _computer_task(msg, port, _runner, settings, _arg):
 
     Requires Direct mode (armed via /computer_arm or CONVEYOR_COMPUTER_ALWAYS_DIRECT=true).
     """
-    from handlers.tools.executors import exec_computer_task, prepare_computer_task
+    from handlers.tools.executors import prepare_computer_task
 
     goal = (_arg or "").strip()
-    prepared = prepare_computer_task(settings, goal)
+    idempotency_key = (
+        f"{msg.channel}:{msg.chat_id}:{msg.message_id}"
+        if msg.message_id else ""
+    )
+    prepared = prepare_computer_task(
+        settings,
+        goal,
+        operator_id=msg.operator_id,
+        chat_id=msg.chat_id,
+        channel=msg.channel,
+        idempotency_key=idempotency_key,
+    )
     if not prepared.get("ok"):
         await port.reply(msg, str(prepared.get("message") or prepared.get("error") or "任务创建失败"))
         return
     task_id = str(prepared.get("task_id") or "")
+    if prepared.get("deduplicated"):
+        await port.reply(msg, f"任务 {task_id} 已接收，忽略重复消息。")
+        return
+
+    await _launch_computer_task(msg, port, settings, goal, task_id)
+
+
+async def _launch_computer_task(msg, port, settings, goal: str, task_id: str, *, retry_of: str = ""):
+    """Start one prepared task in the background and acknowledge it."""
+    from handlers.tools.executors import exec_computer_task
+    from desktop_computer_requests import set_task_status
 
     async def finish() -> None:
         try:
             text = await exec_computer_task(settings, goal, task_id=task_id)
+        except asyncio.CancelledError:
+            set_task_status(
+                settings,
+                task_id,
+                "stopped",
+                blocked_reason="executor_cancelled",
+                only_if_running=True,
+            )
+            raise
         except Exception as exc:  # pragma: no cover - defensive channel guard
+            set_task_status(
+                settings,
+                task_id,
+                "error",
+                blocked_reason=f"executor_error:{type(exc).__name__}",
+                only_if_running=True,
+            )
             text = f"❌ Computer Use 任务 {task_id} 执行失败: {type(exc).__name__}"
         await port.reply(msg, text)
 
@@ -1346,8 +1381,44 @@ async def _computer_task(msg, port, _runner, settings, _arg):
     background.add_done_callback(_COMPUTER_TASKS.discard)
     await port.reply(
         msg,
-        f"🖥 Computer Use 任务 {task_id} 已开始执行。\n"
+        f"🖥 Computer Use 任务 {task_id} 已开始执行。"
+        + (f"\n重试来源: {retry_of}" if retry_of else "")
+        + "\n"
         "可发送 /computer_status 查看状态，或 /computer_stop 立即停止。",
+    )
+
+
+async def _computer_retry(msg, port, _runner, settings, _arg):
+    """Retry/resume a terminal task from a fresh observation."""
+    from handlers.tools.executors import prepare_computer_retry
+
+    idempotency_key = (
+        f"{msg.channel}:{msg.chat_id}:{msg.message_id}"
+        if msg.message_id else ""
+    )
+    prepared = prepare_computer_retry(
+        settings,
+        (_arg or "").strip(),
+        operator_id=msg.operator_id,
+        chat_id=msg.chat_id,
+        channel=msg.channel,
+        idempotency_key=idempotency_key,
+    )
+    if not prepared.get("ok"):
+        await port.reply(msg, str(prepared.get("message") or prepared.get("error") or "重试失败"))
+        return
+    task_id = str(prepared.get("task_id") or "")
+    if prepared.get("deduplicated"):
+        await port.reply(msg, f"重试任务 {task_id} 已接收，忽略重复消息。")
+        return
+    task = prepared.get("task") or {}
+    await _launch_computer_task(
+        msg,
+        port,
+        settings,
+        str(prepared.get("goal") or task.get("goal") or ""),
+        task_id,
+        retry_of=str(task.get("retry_of") or ""),
     )
 
 
@@ -1450,6 +1521,8 @@ async def _computer_log(msg, port, _runner, settings, _arg):
             f"任务: {task_id}",
             f"状态: {task.get('status')}",
             f"目标: {task.get('goal')}",
+            f"Attempt: {task.get('attempt', 1)}",
+            f"重试来源: {task.get('retry_of') or '无'}",
             f"轨迹文件: {traj_path}",
             "",
             "最近步骤摘要 (最多 10 步):",
@@ -1791,9 +1864,10 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "\n"
     text += "执行节点 (P5.0 + P5.6 Computer Use):\n"
     text += "/nodes /node_status — VPS + 可选 desktop 状态\n"
-    text += "/computer_status — Computer Use 状态 (USE / DIRECT 开关 / Direct 模式 / 允许动作)\n"
+    text += "/computer_status [App] — Computer Use 状态与目标 App 能力等级\n"
     text += "/computer_arm [分钟] — 启用 Direct (免确认) 模式，TTL 默认 30 分钟 (需 DIRECT_ENABLED)\n"
     text += "/computer_task <目标> — 运行免确认 Computer Use 任务 (需 Direct 模式)\n"
+    text += "/computer_retry [task_id] /computer_resume [task_id] — 从新 observe 重试失败或停止的任务\n"
     text += "/computer_stop — 立即停止当前电脑任务 (kill switch)\n"
     text += "/computer_screenshot /computer_observe — 一次性 observe/截图当前桌面\n"
     text += "/computer_action <json> — 执行单个允许清单内动作 (如 {\"action\":\"click\",\"x\":100,\"y\":100})\n"
@@ -1919,9 +1993,14 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("service_status", "Conveyor 服务状态", _tool_service_status),
         CommandSpec("git_status", "Workspace git status", _tool_git_status),
         # P5.0: Execution nodes
-        CommandSpec("nodes", "Execution nodes (VPS + desktop stub)", _nodes),
+        CommandSpec("nodes", "Execution nodes (VPS + optional Mac agent)", _nodes),
         CommandSpec("node_status", "Execution nodes (alias of /nodes)", _node_status),
-        CommandSpec("computer_status", "Computer Use (desktop agent) stub status", _computer_status),
+        CommandSpec(
+            "computer_status",
+            "Computer Use metadata status and optional App capability",
+            _computer_status,
+            takes_optional_arg=True,
+        ),
         CommandSpec(
             "computer_arm",
             "Arm Direct (hands-free) Computer Use mode for a TTL [minutes]",
@@ -1938,6 +2017,18 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
             "computer_stop",
             "Cancel the active Computer Use task immediately (kill switch)",
             _computer_stop,
+        ),
+        CommandSpec(
+            "computer_retry",
+            "Retry a stopped/failed Computer Use task from a fresh observation",
+            _computer_retry,
+            takes_optional_arg=True,
+        ),
+        CommandSpec(
+            "computer_resume",
+            "Alias of /computer_retry",
+            _computer_retry,
+            takes_optional_arg=True,
         ),
         CommandSpec(
             "computer_screenshot",

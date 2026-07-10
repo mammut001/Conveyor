@@ -18,7 +18,8 @@
 #     service user. Recommended ownership: `ubuntu:deploy` mode 640, so the
 #     ubuntu service user owns it and the deploy group can read it.
 #   - .venv exists; this script syncs dependencies from requirements.txt
-#   - systemd services: conveyor-telegram-bot, conveyor-feishu-bot
+#   - systemd services: conveyor-telegram-bot, conveyor-feishu-bot,
+#     conveyor-desktop-agent
 #   - deploy user has passwordless sudo for systemctl restart/status/is-active
 #
 # Safety:
@@ -114,6 +115,7 @@ log "Smoke tests passed."
 SERVICES=(
     conveyor-telegram-bot.service
     conveyor-feishu-bot.service
+    conveyor-desktop-agent.service
 )
 # Optionally restart maintain timer if it exists
 if systemctl list-unit-files conveyor-maintain.timer &>/dev/null; then
@@ -162,6 +164,7 @@ fi
 # ---- write .deploy-status.json --------------------------------------------
 TG_STATE="${SVC_STATUS[conveyor-telegram-bot.service]:-unknown}"
 FS_STATE="${SVC_STATUS[conveyor-feishu-bot.service]:-unknown}"
+DESKTOP_STATE="${SVC_STATUS[conveyor-desktop-agent.service]:-unknown}"
 
 cat > "${STATUS_FILE}" <<STATUS_JSON
 {
@@ -174,7 +177,8 @@ cat > "${STATUS_FILE}" <<STATUS_JSON
   "smoke": "passed",
   "services": {
     "telegram": "${TG_STATE}",
-    "feishu": "${FS_STATE}"
+    "feishu": "${FS_STATE}",
+    "desktop_agent_server": "${DESKTOP_STATE}"
   },
   "rollback_attempted": $([ "$ALL_ACTIVE" == "false" ] && echo "true" || echo "false"),
   "previous_commit": "${OLD_COMMIT}"

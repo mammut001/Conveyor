@@ -46,6 +46,20 @@ _ALLOWED = ("observe", "click", "type", "hotkey", "scroll", "wait", "done", "sto
 _CLEAR_LABELS = ("all clear", "clear", "ac", "c")
 
 
+def infer_target_app(goal: str) -> str | None:
+    """Infer only an explicitly named common desktop app from a goal."""
+    text = (goal or "").lower()
+    apps = (
+        "calculator", "safari", "chrome", "google chrome", "firefox",
+        "finder", "notes", "textedit", "calendar", "mail", "slack",
+        "chatgpt", "preview", "music", "spotify",
+    )
+    for app in sorted(apps, key=len, reverse=True):
+        if app in text:
+            return app.title() if app != "textedit" else "TextEdit"
+    return None
+
+
 def extract_single_digit_click_goal(goal: str) -> str | None:
     """If goal asks to click exactly one digit 0-9, return that digit, else None."""
     g = (goal or "").strip()
@@ -395,6 +409,8 @@ class CodexPlanner(Planner):
             "优先输出 AX click，不要只用 x/y。\n"
             "- 仅当观察中没有 AX 字段时，才使用坐标 click。\n"
             "- 若观察里有 elements / element_hints / action_hints，先据此选择目标。\n"
+            "- 如果目标明确提到某个 App，observe 时加入 target_app（使用 App 的正式名称）；"
+            "不要凭空猜测未提到的 App。\n"
             f"{ax_rule}"
             f"{digit_rule}\n"
             "动作示例：\n"
@@ -443,6 +459,7 @@ class CodexPlanner(Planner):
             "r+", suffix=".txt", delete=False, encoding="utf-8",
         ) as out_file:
             out_path = out_file.name
+        proc = None
         try:
             command = [
                 settings.codex_bin,
@@ -473,6 +490,22 @@ class CodexPlanner(Planner):
             except Exception:
                 return ""
         finally:
+            # A task stop or planner timeout cancels this coroutine. The
+            # cancellation must also reap the Codex child, otherwise a
+            # detached model process can continue consuming time/API quota.
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.terminate()
+                    await asyncio.wait_for(proc.wait(), timeout=3)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=3)
+                    except Exception:
+                        logger.warning("unable to reap cancelled Codex planner process")
             try:
                 os.unlink(out_path)
             except Exception:
