@@ -228,6 +228,17 @@ class LocalCuaTransport(CuaTransport):
                 "action_type": action.get("action"),
                 "node_id": node_id,
             }
+        # A task may name its target app. Resolve and activate it locally so
+        # observation and AX hints come from the intended window, even when
+        # the agent itself is currently frontmost.
+        target_error = self._prepare_target_app(action)
+        if target_error:
+            return {
+                "result_ok": False,
+                "error": target_error,
+                "action_type": action.get("action"),
+                "node_id": node_id,
+            }
         # Target app (pid) for AX actions; frontmost otherwise.
         # Observe/wait: blocklist only — allowlist would kill planner's first
         # observe while Codex is frontmost under Calculator-only allowlist.
@@ -288,6 +299,49 @@ class LocalCuaTransport(CuaTransport):
             }
         res["active_app"] = active_app
         return res
+
+    def _prepare_target_app(self, action: dict) -> str | None:
+        """Resolve ``target_app`` to a running pid and foreground it.
+
+        This is deliberately local and metadata-only. It does not launch an
+        app or inspect window titles; an absent app is reported clearly so
+        the planner/operator can open it and retry.
+        """
+        if not isinstance(action, dict) or not action.get("target_app"):
+            return None
+        if action.get("pid") is not None:
+            return None
+        wanted = str(action.get("target_app") or "").strip().lower()
+        if not wanted or len(wanted) > 128:
+            return "invalid_target_app"
+        listed = self._call_tool("list_apps", {}, timeout=20)
+        if not listed.get("ok"):
+            return "target_app_list_failed"
+        data = listed.get("data") or {}
+        apps = data.get("apps") if isinstance(data, dict) else None
+        if not isinstance(apps, list):
+            return "target_app_list_invalid"
+        matches = []
+        for app in apps:
+            if not isinstance(app, dict):
+                continue
+            name = str(app.get("name") or app.get("app_name") or "").strip()
+            if name.lower() == wanted:
+                matches.append(app)
+        if not matches:
+            return "target_app_not_found"
+        app = next((item for item in matches if item.get("running")), matches[0])
+        if not app.get("running") or not app.get("pid"):
+            return "target_app_not_running"
+        try:
+            pid = int(app["pid"])
+        except (TypeError, ValueError):
+            return "target_app_pid_invalid"
+        activated = self._call_tool("bring_to_front", {"pid": pid}, timeout=20)
+        if not activated.get("ok"):
+            return "target_app_activate_failed"
+        action["pid"] = pid
+        return None
 
     def _call_tool(self, tool: str, args: dict | None = None, *, timeout: int | None = None) -> dict:
         cmd = [self.binary, "call", tool]

@@ -148,28 +148,25 @@ agent tool layer (`Agent tool layer` — see `docs/architecture.en.md`).
   language: `看看负载`, `为什么服务器慢`, `搜一下 GitHub issue`, etc. Try
   `/nl_help` for the full list.
 
-### Execution nodes (VPS + desktop stub)
+### Execution nodes (VPS + Mac desktop agent)
 
-Conveyor is becoming a private control plane for your VPS and,
-eventually, your local desktop. The control plane always runs on
-the VPS. The desktop node is a **stub** in this phase: it shows
-up in `/nodes` only when you opt in, and it is always
-  `offline` until heartbeats arrive. **P5.2** adds read-only local
-  screenshot observe via `capture-screen-helper`; mouse, keyboard,
-  browser control, and Computer Use are **not** implemented by
-  default — **P5.6** adds a gated *direct computer-use mode* (cua
-  backend, Mac-local only) that is **OFF by default**.
+Conveyor is a private control plane for your VPS and optional local Mac.
+The control plane runs on the VPS; the Mac agent sends heartbeats and
+executes Cua actions locally. Computer Use is **OFF by default** and
+requires both feature flags plus an arm TTL (unless explicitly configured
+always-direct).
 
 - `/nodes` · `/node_status` — list known execution nodes, their
   capabilities, and dynamic online/offline status.
-- `/computer_status` — show Computer Use status (enabled flag, direct-mode
-  source, Cua driver probe, active task).
+- `/computer_status [App]` — show Computer Use status and, when an App is
+  supplied, its current capability class (AX reliable / usually usable /
+  best effort / refused).
 - Natural language: `我的节点`, `机器状态`, `主机状态`,
   `MacBook 在线吗`, `desktop node`, `nodes status`,
   `computer use status`. Desktop-target phrases like
   `帮我在 Mac 上打开 Xcode`, `操作电脑…`, `帮我点…`, `打开 Chrome`,
   `在电脑上…` route to `computer.task` (the direct Cua loop) **only
-  when direct mode is armed**; otherwise they return the stub reply.
+  when direct mode is armed**; otherwise they return a clear gate reply.
   Screenshot observe phrases like `take a screenshot on my desktop`
   route to `desktop.observe.request` (P5.3 remote observe — metadata
   only). Status phrases like `截图状态` route to `desktop.observe.status`.
@@ -227,6 +224,9 @@ python3 scripts/cua_driver_real_smoke.py --cmd "cua-driver mcp"
   with a task id; the completion report arrives asynchronously. Fails fast if
   direct mode is not active.
 - `/computer_stop` — cancel the active task immediately.
+- `/computer_retry [task_id]` / `/computer_resume [task_id]` — create a
+  linked fresh attempt after a stopped, blocked, or failed task. It observes
+  again and never replays old actions; duplicate chat delivery is deduplicated.
 - `/computer_log [task_id]` — show the redacted trajectory of a task.
 - `/computer_screenshot` — capture one desktop observation
   (metadata/screenshot id) in direct mode.

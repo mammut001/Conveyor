@@ -13,7 +13,8 @@
 #   1. Clone repo at /opt/conveyor
 #   2. Create .env on VPS (never committed)
 #   3. Create .venv (deploy syncs dependencies from requirements.txt)
-#   4. Install systemd services: conveyor-telegram-bot, conveyor-feishu-bot
+#   4. Install systemd services: conveyor-telegram-bot, conveyor-feishu-bot,
+#      conveyor-desktop-agent
 #   5. Grant deploy user passwordless sudo for:
 #        systemctl restart conveyor-telegram-bot
 #        systemctl restart conveyor-feishu-bot

@@ -17,6 +17,7 @@ Safety invariants (see docs/desktop_security.md):
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import threading
 import uuid
@@ -139,6 +140,13 @@ def _new_task_id(now: datetime | None = None) -> str:
 def _new_step_id(now: datetime | None = None) -> str:
     ts = _utc_now(now).strftime("%Y%m%dT%H%M%SZ")
     return f"cstp_{ts}_{uuid.uuid4().hex[:8]}"
+
+
+def _idempotency_digest(value: str) -> str | None:
+    value = (value or "").strip()
+    if not value:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 # ---- AX Validation & App Allowlist/Blocklist --------------------------------
@@ -304,6 +312,7 @@ def normalize_action(action: object) -> dict:
         "pid", "window_id", "element_index", "element_token",
         "delivery_mode", "scope", "button",
         "_target_label", "label",
+        "target_app",
         "_mock_active_app", "_mock_target_app",
         "_mock_element_hints", "_mock_pid", "_mock_window_id", "_mock_ax_app",
     ):
@@ -474,6 +483,9 @@ def create_computer_task(
     operator_id: str = "",
     chat_id: str = "",
     channel: str = "",
+    idempotency_key: str = "",
+    retry_of: str | None = None,
+    single_active: bool = False,
 ) -> dict:
     if not settings.conveyor_computer_use_enabled:
         return {
@@ -486,6 +498,7 @@ def create_computer_task(
         return {"ok": False, "error": "empty_goal", "message": "目标不能为空。"}
     now = _utc_now()
     task_id = _new_task_id(now)
+    idem_digest = _idempotency_digest(idempotency_key)
     record = {
         "task_id": task_id,
         "goal": goal,
@@ -504,13 +517,85 @@ def create_computer_task(
         "trajectory": [],
         "summary": None,
         "blocked_reason": None,
+        "idempotency_key_sha256": idem_digest,
+        "retry_of": retry_of,
+        "root_task_id": task_id,
+        "attempt": 1,
     }
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
             store = _load_unlocked(settings)
-            store.setdefault("tasks", {})[task_id] = record
+            tasks = store.setdefault("tasks", {})
+            if idem_digest:
+                for existing_id, existing in tasks.items():
+                    if (
+                        isinstance(existing, dict)
+                        and existing.get("idempotency_key_sha256") == idem_digest
+                    ):
+                        return {
+                            "ok": True,
+                            "task_id": existing_id,
+                            "task": dict(existing),
+                            "deduplicated": True,
+                        }
+            if single_active:
+                for existing_id, existing in tasks.items():
+                    if isinstance(existing, dict) and existing.get("status") == "running":
+                        return {
+                            "ok": False,
+                            "error": "computer_task_active",
+                            "active_task_id": existing_id,
+                            "message": f"已有 Computer Use 任务 {existing_id} 正在运行。",
+                        }
+            if retry_of:
+                parent = tasks.get(retry_of)
+                if not isinstance(parent, dict):
+                    return {"ok": False, "error": "retry_task_not_found"}
+                record["root_task_id"] = parent.get("root_task_id") or retry_of
+                try:
+                    record["attempt"] = int(parent.get("attempt") or 1) + 1
+                except (TypeError, ValueError):
+                    record["attempt"] = 2
+            tasks[task_id] = record
             _save_unlocked(settings, store)
     return {"ok": True, "task_id": task_id, "task": dict(record)}
+
+
+def retry_computer_task(
+    settings: Settings,
+    task_id: str,
+    *,
+    idempotency_key: str = "",
+    operator_id: str = "",
+    chat_id: str = "",
+    channel: str = "",
+) -> dict:
+    """Create a linked fresh attempt for a terminal task.
+
+    Previous actions are never replayed. The new loop starts from a fresh
+    observation, which is the only safe resume primitive for mutable UI state.
+    """
+    previous = get_computer_task(settings, task_id)
+    if not isinstance(previous, dict):
+        return {"ok": False, "error": "task_not_found", "message": f"未找到任务 {task_id}。"}
+    status = str(previous.get("status") or "")
+    if status == "running":
+        return {"ok": False, "error": "task_still_running", "message": "任务仍在运行，请先停止。"}
+    if status == "done":
+        return {"ok": False, "error": "task_already_done", "message": "任务已完成，无需重试。"}
+    return create_computer_task(
+        settings,
+        str(previous.get("goal") or ""),
+        direct_mode=True,
+        max_steps=int(previous.get("max_steps") or settings.conveyor_computer_max_steps),
+        max_seconds=int(previous.get("max_seconds") or settings.conveyor_computer_max_seconds),
+        operator_id=operator_id or str(previous.get("operator_id") or ""),
+        chat_id=chat_id or str(previous.get("chat_id") or ""),
+        channel=channel or str(previous.get("channel") or ""),
+        idempotency_key=idempotency_key,
+        retry_of=task_id,
+        single_active=True,
+    )
 
 
 def get_computer_task(settings: Settings, task_id: str) -> dict | None:
@@ -544,6 +629,7 @@ def set_task_status(
     *,
     summary: str | None = None,
     blocked_reason: str | None = None,
+    only_if_running: bool = False,
 ) -> dict:
     if status not in TASK_ALLOWED_STATUSES:
         return {"ok": False, "error": "invalid_status"}
@@ -553,6 +639,13 @@ def set_task_status(
             record = store.get("tasks", {}).get(task_id)
             if not isinstance(record, dict):
                 return {"ok": False, "error": "task_not_found"}
+            if only_if_running and record.get("status") != "running":
+                return {
+                    "ok": False,
+                    "error": "task_not_running",
+                    "status": record.get("status"),
+                    "task": dict(record),
+                }
             record["status"] = status
             record["updated_at"] = _iso_z(_utc_now())
             if summary is not None:

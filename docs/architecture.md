@@ -4,6 +4,12 @@
 > **日期**: 2026-06-11
 > **适用版本**: 通道解耦 P0+P1、agent 工具层、实时 Telegram 烟测、Telegram live smoke
 
+> **当前桌面状态**: P5.0 的 desktop stub 描述是历史记录。当前实现是 P5.6/P5.6.2
+> 的 Mac-local Cua direct loop：`desktop_agent_server.py` 由
+> `conveyor-desktop-agent.service` 托管，动作通过 `desktop_computer_loop.py`
+> 和本地 `cua-driver` 执行。详见 `docs/desktop_security.md` 与
+> `docs/desktop_capabilities.md`。
+
 ---
 
 ## 1. 一句话定位

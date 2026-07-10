@@ -1,0 +1,26 @@
+[Unit]
+Description=Conveyor: desktop control-plane HTTP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+Environment=CONVEYOR_DIR=/opt/conveyor
+EnvironmentFile=-/etc/default/conveyor
+WorkingDirectory=/opt/conveyor
+EnvironmentFile=/opt/conveyor/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/conveyor/.venv/bin/python /opt/conveyor/desktop_agent_server.py
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/conveyor /srv /home/ubuntu/.codex /home/ubuntu/.local/share/conveyor
+
+[Install]
+WantedBy=multi-user.target

@@ -199,7 +199,9 @@ Example startup command on VPS:
 ```bash
 export CONVEYOR_DESKTOP_NODE_ENABLED=true
 export CONVEYOR_DESKTOP_AGENT_TOKEN=...
-.venv/bin/python desktop_agent_server.py
+sudo systemctl enable --now conveyor-desktop-agent.service
+
+For development-only foreground debugging, `.venv/bin/python desktop_agent_server.py` is still valid.
 ```
 
 Example startup command on MacBook:
@@ -282,5 +284,4 @@ P5.4.1 adds a hardening pass with strict validation checks:
 * **Atomic Delivery Marking**:
   - Outbound image delivery is decoupled from long-lived database locks to prevent blocking concurrent network I/O.
   - Upon successful delivery, the status is marked atomically using lock-guarded helper functions (`mark_upload_delivered`, `mark_upload_delivery_failed`).
-
 

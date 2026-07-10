@@ -136,26 +136,24 @@ Conveyor:
 - **自然语言路由** —— 上面大多数都能用人话说：`看看负载`、
   `为什么服务器慢`、`搜一下 GitHub issue`…… 完整列表跑一下 `/nl_help`。
 
-### 执行节点（VPS + desktop stub）
+### 执行节点（VPS + Mac desktop agent）
 
-Conveyor 正在变成 VPS + 以后本地桌面的私有控制面。控制面永远跑
-在 VPS 上。desktop 节点在这一阶段还是 **stub**：只在 `.env` 里
-显式开启时才会出现在 `/nodes` 里，心跳到达前为 `offline`。**P5.2**
-增加了通过 `capture-screen-helper` 的本地只读截屏 observe；鼠标、
-键盘、浏览器控制、Computer Use 默认**仍未实现**——**P5.6** 增加了
-受控的「直连 Computer Use 模式」（cua 后端，仅运行在 Mac 本地），
-**默认关闭**。
+Conveyor 是 VPS 加可选本地 Mac 的私有控制面。控制面跑在 VPS 上，
+Mac agent 发送心跳并只在本地执行 Cua 动作。Computer Use 仍然**默认关闭**，
+需要同时打开两个 feature flag 并通过 arm TTL（除非显式配置 always-direct）。
 
 - `/nodes` · `/node_status` —— 列出已知执行节点、能力以及动态的 online/offline 状态。
-- `/computer_status` —— 显示 Computer Use 状态（启用开关、direct 模式来源、Cua 探测、运行中任务）。
+- `/computer_status [App]` —— 显示 Computer Use 状态；传入 App 时同时返回
+  AX 可靠 / 通常可用 / best effort / 拒绝四类能力判断。
 - 自然语言：`我的节点`、`机器状态`、`主机状态`、
   `MacBook 在线吗`、`desktop node`、`nodes status`、
   `computer use status`。带桌面控制目标的人话（`帮我在 Mac 上打开
   Xcode`、`操作电脑…`、`帮我点…`、`打开 Chrome`、`在电脑上…`）只有在
-  direct 模式已授权时才会走 `computer.task`（直连 Cua 循环），否则走确定性 stub。
+  direct 模式已授权时才会走 `computer.task`（直连 Cua 循环），否则返回明确的开关提示。
   截屏请求类短语（`take a screenshot
   on my desktop`）走 `desktop.observe.request`（P5.3 远程 observe，仅元数据）。
   状态类短语（`截图状态`）走 `desktop.observe.status`。
+  App 能力范围见 [`docs/desktop_capabilities.md`](docs/desktop_capabilities.md)。
 
 ### P5.6 直连 Computer Use 模式（cua 后端）
 
@@ -200,6 +198,8 @@ python3 scripts/cua_driver_real_smoke.py --cmd "cua-driver mcp"
   `/computer_task 打开 Chrome 并访问 conveyor.dev`）。会立即回 task id，完成后
   异步回报结果；direct 模式未开启时直接失败。
 - `/computer_stop` —— 立即取消当前任务。
+- `/computer_retry [task_id]` / `/computer_resume [task_id]` —— 为停止、阻断或失败任务
+  创建关联的新 attempt；重新 observe，绝不重放旧动作，并去重重复聊天投递。
 - `/computer_log [task_id]` —— 查看任务的脱敏轨迹。
 - `/computer_screenshot` —— 在 direct 模式下截一次桌面观察（元数据/截图 id）。
 - `/computer_observe` —— 触发一次桌面观察。

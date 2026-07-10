@@ -259,10 +259,11 @@ def _test_deploy_status_writes_services_json() -> CheckResult:
         has_services = '"services"' in content
         has_telegram = '"telegram"' in content
         has_feishu = '"feishu"' in content
-        ok = has_services and has_telegram and has_feishu
+        has_desktop = '"desktop_agent_server"' in content
+        ok = has_services and has_telegram and has_feishu and has_desktop
         return CheckResult(
             name, ok,
-            f"has_services={has_services}, has_telegram={has_telegram}, has_feishu={has_feishu}",
+            f"has_services={has_services}, has_telegram={has_telegram}, has_feishu={has_feishu}, has_desktop={has_desktop}",
         )
     except Exception as exc:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")

@@ -67,6 +67,7 @@ set -euo pipefail
 cd '$REMOTE_DIR'
 sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
 sudo cp systemd/conveyor-feishu-bot.service /etc/systemd/system/
+sudo cp systemd/conveyor-desktop-agent.service /etc/systemd/system/
 sudo cp systemd/conveyor-maintain.service /etc/systemd/system/
 sudo cp systemd/conveyor-maintain.timer /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -85,7 +86,7 @@ echo "==> Running healthcheck"
 ssh "$REMOTE" "cd '$REMOTE_DIR' && bash scripts/healthcheck.sh"
 
 echo "==> Enabling and starting services"
-ssh "$REMOTE" "sudo systemctl enable --now conveyor-telegram-bot conveyor-feishu-bot conveyor-maintain.timer && \
+ssh "$REMOTE" "sudo systemctl enable --now conveyor-telegram-bot conveyor-feishu-bot conveyor-desktop-agent conveyor-maintain.timer && \
   sleep 2 && sudo systemctl is-active conveyor-telegram-bot.service"
 
 echo

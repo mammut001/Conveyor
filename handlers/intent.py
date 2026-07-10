@@ -356,8 +356,7 @@ _OBSERVE_REQUEST_PATTERNS = (
 )
 
 
-# Computer Use / desktop action intent. The first match wins and
-# routes to the ``computer.status`` stub. We intentionally do NOT
+# Computer Use / desktop action intent. The first match wins. We do NOT
 # match vague "open x" or "click y" — those are coding requests
 # unless the user clearly anchors the target to their machine.
 #
@@ -469,6 +468,10 @@ _COMPUTER_TASK_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+_COMPUTER_RETRY_PATTERNS = (
+    re.compile(r"(?:重试|恢复|继续)\s*(?:上次|这个|该)?\s*(?:电脑|computer\s*use).*?(?:任务)?$", re.IGNORECASE),
+    re.compile(r"(?:retry|resume)\s+(?:the\s+)?(?:computer|desktop)(?:\s+use)?(?:\s+task)?", re.IGNORECASE),
+)
 _WEB_SEARCH_PATTERNS = (
     re.compile(r"(搜索|搜|search|查|找).*(网上|web|网页|internet|谷歌|google)", re.IGNORECASE),
     re.compile(r"(网上|web|internet).*(搜索|搜|search|查|找)", re.IGNORECASE),
@@ -490,11 +493,10 @@ def route_intent(text: str) -> RouteResult:
     if not body:
         return RouteResult(kind="llm")
 
-    # P5.0: execution-node patterns run BEFORE the generic
+    # Execution-node patterns run BEFORE the generic
     # ``detect_ops_intent`` (``机器状态``/``主机状态`` would
     # otherwise match the load snapshot pattern). The desktop
-    # layer is stub-only, so a phrase that names a target
-    # machine (Mac / MacBook / 本机 / desktop / computer) is
+    # A phrase that names a target machine (Mac / MacBook / 本机 / desktop) is
     # almost always a nodes.status or computer.status query,
     # not a load query.
     for pat in _NODES_STATUS_PATTERNS:
@@ -509,6 +511,14 @@ def route_intent(text: str) -> RouteResult:
     for pat in _OBSERVE_REQUEST_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("desktop.observe.request",))
+    for pat in _COMPUTER_RETRY_PATTERNS:
+        if pat.search(body):
+            match = re.search(r"\bctsk_[0-9TZ]+_[a-f0-9]{8}\b", body, re.IGNORECASE)
+            return RouteResult(
+                kind="deterministic",
+                tools=("computer.retry",),
+                arg=match.group(0) if match else "",
+            )
     for pat in _COMPUTER_TASK_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("computer.task",), arg=body)

@@ -4,6 +4,12 @@
 > **Date**: 2026-07-01
 > **Applies to**: Channel-decoupling P0+P1, agent tool layer, Telegram live smoke, Feishu interactive cards, **P5.0 phase-0 execution nodes**
 
+> **Current desktop status**: The P5.0 desktop-stub text below is historical.
+> The current implementation is the P5.6/P5.6.2 Mac-local Cua direct loop:
+> `desktop_agent_server.py` is managed by `conveyor-desktop-agent.service`,
+> while `desktop_computer_loop.py` drives the local `cua-driver`. See
+> `docs/desktop_security.md` and `docs/desktop_capabilities.md` for current behavior.
+
 ---
 
 ## 1. One-line positioning

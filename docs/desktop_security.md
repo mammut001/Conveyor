@@ -274,3 +274,11 @@ P5.6.1 hardens the computer-use implementation for safer and more debuggable han
 3. **Structured JSONL Trajectories**: Logs all steps to `codex_memory_root/computer/trajectories/<task_id>.jsonl` with timestamp, task ID, step index, screenshot ID/hash, action type, redacted args, result status, error, and step duration (duration_ms). Directory tree `computer/` and `computer/trajectories/` are chmod `0700` when possible; each JSONL file is chmod `0600`.
 4. **Concise Failure Cards**: Generates precise, low-clutter failure summaries when tasks fail, stop, or hit step caps, outlining the task ID, stop reason, last action, last screenshot ID/hash, steps completed, and log suggestion.
 5. **Telegram Stop Fast Path**: Clean stop keywords (`停下`, `别动`, `停止操作`, `stop computer`, `cancel computer task`) are routed directly to `computer.stop` at dispatch time, bypassing normal Codex routing to maximize speed.
+
+6. **Explicit target app**: When a goal explicitly names a supported running app, the local Mac agent may send `target_app` on `observe`. It resolves the app PID with `list_apps`, calls local `bring_to_front`, and then collects AX hints for that PID. It does not launch an absent app or inspect window titles; an absent app returns `target_app_not_running` or `target_app_not_found`.
+
+7. **Control-plane lifecycle**: VPS deployments manage `conveyor-desktop-agent.service` alongside Telegram and Feishu. The service is restart-on-failure and is included in deploy health status, preventing a manually started `desktop_agent_server.py` from silently running stale code after deploy.
+
+8. **Legacy state migration**: New state never persists AX `element_token`. Existing installations can run `python3 scripts/redact_computer_state.py` for a dry-run, then `--apply` after the normal state backup to remove that legacy field from the request store and JSONL trajectories.
+
+9. **Retry without replay**: `/computer_retry` and `/computer_resume` create a new linked attempt from a terminal task and begin with a fresh observation. Old actions are audit evidence only and are never replayed. The chat message identity is stored only as a SHA-256 digest, so duplicate Telegram/Feishu delivery cannot launch the same task twice.

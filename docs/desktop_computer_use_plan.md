@@ -1,9 +1,11 @@
 # P5.2 Computer Use — Implementation Plan
 
-> **Status**: Design + implementation plan. Grounded in the code actually
-> present in the repo (P5.0–P5.4 desktop stack) and the contracts in
-> `docs/desktop_agent_protocol.md` and `docs/desktop_security.md`.
-> **No code has been written yet.** This is the blueprint that turns the
+> **Status**: Historical P5.2 design document. The implementation described
+> here has been superseded by the shipped P5.6/P5.6.2 direct Computer Use
+> stack. For current behavior, read `docs/desktop_security.md`,
+> `desktop_computer_requests.py`, `desktop_computer_loop.py`, and
+> `desktop_cua.py`.
+> The original blueprint turned the
 > `computer_use.stub` capability into the full
 > (`browser.control`, `mouse.click`, `keyboard.type`, `computer_use.step`)
 > surface described in `architecture.en.md` § P5.1.
