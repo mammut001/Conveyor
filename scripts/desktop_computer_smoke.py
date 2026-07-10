@@ -1176,6 +1176,57 @@ def _test_result_allows_active_app_click_method() -> None:
     print("[pass] result_allows_active_app_click_method")
 
 
+def _test_trajectory_records_click_metadata() -> None:
+    """Loop logs safe Cua click metadata for /computer_log consumers."""
+    import asyncio
+
+    from desktop_computer_loop import run_computer_loop
+    from desktop_computer_planner import ScriptedPlanner
+    from desktop_computer_requests import complete_computer_step, get_computer_task
+
+    class MetadataBackend:
+        def __init__(self, settings):
+            self.settings = settings
+
+        async def execute_step(self, settings, task_id, step_id, action):
+            result = {
+                "result_ok": True,
+                "active_app": "Calculator",
+                "click_method": "ax_click",
+                "pid": 123,
+                "window_id": 456,
+                "ax_app": "Calculator",
+            }
+            complete_computer_step(settings, step_id, "mac-test", result)
+            return result
+
+    settings = _mk_settings()
+    planner = ScriptedPlanner([
+        {"action": "observe"},
+        {"action": "click", "x": 10, "y": 20},
+        {"action": "done", "summary": "clicked"},
+    ])
+    result = asyncio.run(run_computer_loop(
+        settings, "click a safe button", planner=planner,
+        backend=MetadataBackend(settings), max_steps=5, max_seconds=30,
+        direct_mode=True,
+    ))
+    task = get_computer_task(settings, result["task_id"]) or {}
+    clicks = [x for x in task.get("trajectory", []) if x.get("action_type") == "click"]
+    if result.get("status") != "done" or not clicks:
+        _fail("trajectory_records_click_metadata", f"result={result} trajectory={task.get('trajectory')}")
+        return
+    action_types = [x.get("action_type") for x in task.get("trajectory", [])]
+    if action_types[:3] != ["observe", "click", "observe"]:
+        _fail("trajectory_records_click_metadata", f"missing post-click observe: {action_types}")
+        return
+    click = clicks[-1]
+    if click.get("active_app") != "Calculator" or click.get("click_method") != "ax_click":
+        _fail("trajectory_records_click_metadata", f"click={click}")
+        return
+    print("[pass] trajectory_records_click_metadata")
+
+
 def _test_result_rejects_unknown_fields() -> None:
     from desktop_computer_requests import (
         claim_computer_step,
@@ -1451,6 +1502,7 @@ def main() -> int:
 
     # P5.6.2 Fix Pack Smokes
     _test_result_allows_active_app_click_method()
+    _test_trajectory_records_click_metadata()
     _test_result_rejects_unknown_fields()
     _test_direct_enabled_false_blocks_arm_task_action()
     _test_direct_enabled_true_plus_arm()

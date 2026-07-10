@@ -264,7 +264,7 @@ python3 scripts/cua_driver_real_smoke.py --cmd "cua-driver mcp"
 ### P5.3 远程 Observe 请求（仅元数据）
 
 * **聊天创建请求**：`/observe_request`、`/screenshot_request`，或 `截图看看我电脑现在是什么`
-* **Mac 轮询**：`python desktop_agent.py --poll-observe`（注册 + 心跳 + observe 轮询）
+* **Mac 轮询**：`python desktop_agent.py --poll-observe --poll-computer`（注册 + 心跳 + observe / Computer Use 轮询）
 * **状态查询**：`/observe_status`、`/screenshot_status`，或 `截图状态`
 * **取消**：`/observe_cancel <request_id>`（仅 pending/claimed）
 * VPS 在 `CODEX_MEMORY_ROOT/state/desktop_observe_requests.json` 存储请求
@@ -280,7 +280,7 @@ python3 scripts/cua_driver_real_smoke.py --cmd "cua-driver mcp"
 export CONVEYOR_CONTROL_PLANE_URL=https://your-control-plane.example.com
 export CONVEYOR_DESKTOP_AGENT_TOKEN=...
 export CONVEYOR_DESKTOP_SCREENSHOT_HELPER=/usr/local/bin/capture-screen-helper
-python desktop_agent.py --poll-observe
+python desktop_agent.py --poll-observe --poll-computer
 ```
 
 **VPS 部署：**

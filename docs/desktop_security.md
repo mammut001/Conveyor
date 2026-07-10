@@ -256,6 +256,11 @@ Each executed step appends a redacted trajectory entry
 (`timestamp`, `screenshot_id`/`hash`, `action_type`, redacted args, `result`) to the
 task record in the file store. Typed text and hotkeys are redacted in every stored
 copy. The trajectory is visible via `/computer_log [task_id]`.
+After every executed action other than `done`/`stop`, the loop performs a
+follow-up `observe` before asking the planner for its next action. This keeps
+planner state tied to the post-action desktop and distinguishes click success
+from verified UI state. Only short allow-listed metadata such as `active_app`
+and `click_method` is retained; raw screenshots and UI text are not.
 
 ### 7.5 P5.6.1 Hardening Upgrades
 
@@ -266,5 +271,4 @@ P5.6.1 hardens the computer-use implementation for safer and more debuggable han
 3. **Structured JSONL Trajectories**: Logs all steps to `codex_memory_root/computer/trajectories/<task_id>.jsonl` with timestamp, task ID, step index, screenshot ID/hash, action type, redacted args, result status, error, and step duration (duration_ms). Directory tree `computer/` and `computer/trajectories/` are chmod `0700` when possible; each JSONL file is chmod `0600`.
 4. **Concise Failure Cards**: Generates precise, low-clutter failure summaries when tasks fail, stop, or hit step caps, outlining the task ID, stop reason, last action, last screenshot ID/hash, steps completed, and log suggestion.
 5. **Telegram Stop Fast Path**: Clean stop keywords (`停下`, `别动`, `停止操作`, `stop computer`, `cancel computer task`) are routed directly to `computer.stop` at dispatch time, bypassing normal Codex routing to maximize speed.
-
 

@@ -1149,7 +1149,8 @@ desktop_agent → 本地 cua-driver → 真实桌面操作`。后端用 `trycua/
   + `desktop_computer_loop.py`（`HttpComputerBackend` 仅轮询存储等
   完成；`FakeComputerBackend` 进程内跑 `FakeCuaTransport`；
   `run_computer_loop` 强制动作白名单、拦截词、max_steps/max_seconds、
-  `/computer_stop` 取消、脱敏轨迹）。
+  `/computer_stop` 取消、脱敏轨迹）。每个已执行动作后会自动追加一次
+  `observe`，再交给 planner 决策，避免把 click 成功误当成界面状态已验证。
 - **工具注册**：`handlers/tools/executors.py` 新增
   `computer.status`(READ) / `computer.observe`(READ) /
   `computer.action`(WRITE_SAFE) / `computer.task`(WRITE) /

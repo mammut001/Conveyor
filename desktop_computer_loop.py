@@ -134,6 +134,7 @@ async def run_computer_loop(
     steps_used = 0
     observation: dict[str, Any] = {"initial": True}
     trajectory: list[dict] = []
+    followup_observe = False
 
     try:
         while steps_used < max_steps:
@@ -146,30 +147,37 @@ async def run_computer_loop(
                 # Cancelled by /computer_stop.
                 break
 
-            # Simple single-digit goals bypass Codex to avoid multi-click thrash
-            # (e.g. display ending as 113 instead of 1).
-            action = maybe_simple_digit_action(
-                goal=goal,
-                observation=observation,
-                trajectory=trajectory,
-            )
-            if action is None:
-                try:
-                    action = await planner.next_action(
-                        goal=goal,
-                        observation=observation,
-                        trajectory=trajectory,
-                        steps_used=steps_used,
-                        max_steps=max_steps,
-                    )
-                except Exception as exc:  # pragma: no cover - defensive
-                    set_task_status(
-                        settings,
-                        task_id,
-                        "error",
-                        blocked_reason=f"planner_error:{type(exc).__name__}",
-                    )
-                    break
+            if followup_observe:
+                # Refresh the desktop after every mutating/wait action before
+                # asking the planner for its next decision. This prevents a
+                # successful click from being mistaken for a verified UI state.
+                action = {"action": "observe"}
+                followup_observe = False
+            else:
+                # Simple single-digit goals bypass Codex to avoid multi-click
+                # thrash (e.g. display ending as 113 instead of 1).
+                action = maybe_simple_digit_action(
+                    goal=goal,
+                    observation=observation,
+                    trajectory=trajectory,
+                )
+                if action is None:
+                    try:
+                        action = await planner.next_action(
+                            goal=goal,
+                            observation=observation,
+                            trajectory=trajectory,
+                            steps_used=steps_used,
+                            max_steps=max_steps,
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive
+                        set_task_status(
+                            settings,
+                            task_id,
+                            "error",
+                            blocked_reason=f"planner_error:{type(exc).__name__}",
+                        )
+                        break
             action = normalize_action(action)
             act = action.get("action")
 
@@ -214,6 +222,13 @@ async def run_computer_loop(
                 "error": (result or {}).get("error"),
                 "duration_ms": duration_ms,
             }
+            # Preserve only the already allow-listed, short driver metadata
+            # that makes a desktop click auditable without storing UI text.
+            if isinstance(result, dict):
+                for field in ("active_app", "click_method", "pid", "window_id", "ax_app"):
+                    value = result.get(field)
+                    if value is not None:
+                        entry[field] = value
             if clicked_label:
                 entry["clicked_label"] = clicked_label
             append_trajectory(settings, task_id, entry)
@@ -227,6 +242,8 @@ async def run_computer_loop(
                         merged[k] = observation.get(k)
                 observation = merged
             steps_used += 1
+            if act != "observe":
+                followup_observe = True
 
             # Post-step app gate: blocklist always; allowlist only for
             # mutating actions. Bare observe often reports frontmost=Codex

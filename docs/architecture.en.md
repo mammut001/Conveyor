@@ -1351,7 +1351,9 @@ speaks the Cua protocol.
   `FakeComputerBackend` runs `FakeCuaTransport` in-process;
   `run_computer_loop` enforces the action allow-list, blocked-keyword
   guard, max_steps/max_seconds, `/computer_stop` cancellation, and a
-  redacted trajectory).
+  redacted trajectory). After each executed action it performs a follow-up
+  `observe` before the next planner decision, so click success is not treated
+  as UI-state verification.
 - **Tool registry**: `handlers/tools/executors.py` adds
   `computer.status` (READ) / `computer.observe` (READ) /
   `computer.action` (WRITE_SAFE) / `computer.task` (WRITE) /
