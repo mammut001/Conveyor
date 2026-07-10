@@ -714,6 +714,42 @@ def _test_computer_task_ack_starts_background() -> None:
     asyncio.run(run())
 
 
+def _test_background_preflight_failure_converges_task() -> None:
+    import asyncio
+    from dataclasses import replace
+
+    from desktop_computer_requests import (
+        arm_direct_mode,
+        get_active_task,
+        get_computer_task,
+    )
+    from handlers.tools.executors import exec_computer_task, prepare_computer_task
+
+    settings = _mk_settings()
+    arm_direct_mode(settings, 10)
+    prepared = prepare_computer_task(settings, "safe task")
+    task_id = prepared.get("task_id")
+    if not task_id:
+        _fail("background_preflight_failure_converges", f"task not created: {prepared}")
+        return
+
+    # Simulate the TTL/config gate changing between immediate acknowledgement
+    # and the scheduled executor starting.
+    blocked_settings = replace(settings, conveyor_computer_direct_enabled=False)
+    result = asyncio.run(exec_computer_task(blocked_settings, "safe task", task_id=task_id))
+    task = get_computer_task(blocked_settings, task_id) or {}
+    if "Direct 模式未启用" not in result:
+        _fail("background_preflight_failure_converges", f"unexpected result: {result}")
+        return
+    if task.get("status") != "stopped" or task.get("blocked_reason") != "preflight_failed":
+        _fail("background_preflight_failure_converges", f"task={task}")
+        return
+    if get_active_task(blocked_settings) is not None:
+        _fail("background_preflight_failure_converges", "task still active")
+        return
+    print("[pass] background_preflight_failure_converges")
+
+
 # ---- Hardening P5.6.1 Smokes ----------------------------------------------
 
 def _test_cua_status_fields() -> None:
@@ -1608,6 +1644,7 @@ def main() -> int:
     _test_stale_task_expiry_clears_active()
     _test_stop_race_preserves_operator_stop()
     _test_computer_task_ack_starts_background()
+    _test_background_preflight_failure_converges_task()
 
     # P5.6.1 Hardening Smokes
     _test_cua_status_fields()
@@ -1633,7 +1670,7 @@ def main() -> int:
     _test_planner_ax_first_prompt()
     _test_trajectory_permissions_and_redaction()
 
-    total = 36
+    total = 37
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")
