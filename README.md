@@ -222,8 +222,9 @@ python3 scripts/cua_driver_real_smoke.py --cmd "cua-driver mcp"
   active task.
 - `/computer_arm [minutes]` — arm direct mode for a TTL (e.g.
   `/computer_arm 30`).
-- `/computer_task <goal>` — run the Codex→Cua loop hands-free (e.g.
-  `/computer_task 打开 Chrome 并访问 conveyor.dev`). Fails fast if
+- `/computer_task <goal>` — start the Codex→Cua loop hands-free (e.g.
+  `/computer_task 打开 Chrome 并访问 conveyor.dev`). It acknowledges immediately
+  with a task id; the completion report arrives asynchronously. Fails fast if
   direct mode is not active.
 - `/computer_stop` — cancel the active task immediately.
 - `/computer_log [task_id]` — show the redacted trajectory of a task.

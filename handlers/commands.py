@@ -10,6 +10,7 @@ entry from their set_my_commands / help text.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass
@@ -46,6 +47,8 @@ from handlers.tools.restart_aliases import RESTART_USAGE, resolve_restart_alias
 DATE_ARG_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 CommandHandler = Callable[[InboundMessage, OutboundPort, CodexRunner, Settings, str], Awaitable[None]]
+
+_COMPUTER_TASKS: set[asyncio.Task] = set()
 
 
 @dataclass(frozen=True)
@@ -1322,16 +1325,30 @@ async def _computer_task(msg, port, _runner, settings, _arg):
 
     Requires Direct mode (armed via /computer_arm or CONVEYOR_COMPUTER_ALWAYS_DIRECT=true).
     """
-    from handlers.tools.runner import run_tool
+    from handlers.tools.executors import exec_computer_task, prepare_computer_task
+
     goal = (_arg or "").strip()
-    if not goal:
-        await port.reply(
-            msg,
-            "用法: /computer_task <目标>\n例如: /computer_task 打开 Chrome 并访问 conveyor.dev",
-        )
+    prepared = prepare_computer_task(settings, goal)
+    if not prepared.get("ok"):
+        await port.reply(msg, str(prepared.get("message") or prepared.get("error") or "任务创建失败"))
         return
-    text = await run_tool(settings, "computer.task", goal)
-    await port.reply(msg, text)
+    task_id = str(prepared.get("task_id") or "")
+
+    async def finish() -> None:
+        try:
+            text = await exec_computer_task(settings, goal, task_id=task_id)
+        except Exception as exc:  # pragma: no cover - defensive channel guard
+            text = f"❌ Computer Use 任务 {task_id} 执行失败: {type(exc).__name__}"
+        await port.reply(msg, text)
+
+    background = asyncio.create_task(finish())
+    _COMPUTER_TASKS.add(background)
+    background.add_done_callback(_COMPUTER_TASKS.discard)
+    await port.reply(
+        msg,
+        f"🖥 Computer Use 任务 {task_id} 已开始执行。\n"
+        "可发送 /computer_status 查看状态，或 /computer_stop 立即停止。",
+    )
 
 
 async def _computer_stop(msg, port, _runner, settings, _arg):
