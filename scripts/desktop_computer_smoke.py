@@ -567,6 +567,28 @@ def _test_claim_action_redaction_boundary() -> None:
     print("[pass] claim_action_redaction_boundary")
 
 
+def _test_ax_tokens_do_not_persist_in_redacted_data() -> None:
+    import json
+    from desktop_computer_requests import redact_computer_action, _clean_element_hints
+
+    action = {
+        "action": "click", "pid": 2011, "window_id": 15064,
+        "element_index": 13, "element_token": "s0001:13",
+    }
+    redacted = redact_computer_action(action)
+    if "element_token" in redacted or "token" in json.dumps(redacted).lower():
+        _fail("ax_tokens_not_persisted", f"token leaked in redacted action: {redacted}")
+        return
+    hints = _clean_element_hints([{
+        "element_index": 13, "label": "1", "role": "AXButton",
+        "element_token": "s0001:13",
+    }])
+    if hints and "element_token" in hints[0]:
+        _fail("ax_tokens_not_persisted", f"token leaked in cleaned hints: {hints}")
+        return
+    print("[pass] ax_tokens_not_persisted")
+
+
 def _is_fake(backend) -> bool:
     from desktop_cua import FakeCuaTransport
 
@@ -1673,6 +1695,7 @@ def main() -> int:
     _test_stop_check_cancels()
     _test_fake_backend_run_and_redaction()
     _test_claim_action_redaction_boundary()
+    _test_ax_tokens_do_not_persist_in_redacted_data()
     _test_stop_command_cancels_active()
     _test_stale_task_expiry_clears_active()
     _test_stop_race_preserves_operator_stop()
@@ -1704,7 +1727,7 @@ def main() -> int:
     _test_planner_ax_first_prompt()
     _test_trajectory_permissions_and_redaction()
 
-    total = 38
+    total = 39
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")

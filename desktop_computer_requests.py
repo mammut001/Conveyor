@@ -235,6 +235,9 @@ def redact_computer_action(action: dict) -> dict:
         if isinstance(keys, list):
             redacted["keys_len"] = len(keys)
             redacted["keys_redacted"] = "***"
+    # AX element tokens are executable routing handles, not audit data. Keep
+    # them only in the short-lived action delivered to the local agent.
+    redacted.pop("element_token", None)
     # Keep short UI labels for trajectory completion checks; drop long free text.
     for lab_key in ("_target_label", "label"):
         if lab_key in redacted:
@@ -806,9 +809,6 @@ def _clean_element_hints(value: object) -> list[dict[str, Any]] | None:
             if len(lab) > _ELEMENT_HINT_LABEL_MAX:
                 continue
             hint["label"] = lab
-        token = item.get("element_token")
-        if isinstance(token, str) and token.strip():
-            hint["element_token"] = _truncate_text(token.strip(), _ELEMENT_HINT_TOKEN_MAX)
         if "element_index" in hint:
             cleaned.append(hint)
     return cleaned
