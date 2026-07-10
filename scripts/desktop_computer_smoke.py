@@ -641,6 +641,35 @@ def _test_stale_task_expiry_clears_active() -> None:
     print("[pass] stale_task_expiry_clears_active")
 
 
+def _test_stop_race_preserves_operator_stop() -> None:
+    import asyncio
+
+    from desktop_computer_loop import ComputerBackendError, run_computer_loop
+    from desktop_computer_planner import ScriptedPlanner
+    from desktop_computer_requests import cancel_computer_task, get_computer_task
+
+    class CancellingBackend:
+        def __init__(self):
+            self.task_id = None
+
+        async def execute_step(self, settings, task_id, step_id, action):
+            self.task_id = task_id
+            cancel_computer_task(settings, task_id, reason="operator_stop")
+            raise ComputerBackendError("task_not_running")
+
+    settings = _mk_settings()
+    backend = CancellingBackend()
+    result = asyncio.run(run_computer_loop(
+        settings, "stop race", planner=ScriptedPlanner([{"action": "observe"}]),
+        backend=backend, max_steps=3, max_seconds=30, direct_mode=True,
+    ))
+    task = get_computer_task(settings, result["task_id"]) or {}
+    if task.get("status") != "stopped" or task.get("blocked_reason") != "operator_stop":
+        _fail("stop_race_preserves_operator_stop", f"result={result} task={task}")
+        return
+    print("[pass] stop_race_preserves_operator_stop")
+
+
 # ---- Hardening P5.6.1 Smokes ----------------------------------------------
 
 def _test_cua_status_fields() -> None:
@@ -1533,6 +1562,7 @@ def main() -> int:
     _test_claim_action_redaction_boundary()
     _test_stop_command_cancels_active()
     _test_stale_task_expiry_clears_active()
+    _test_stop_race_preserves_operator_stop()
 
     # P5.6.1 Hardening Smokes
     _test_cua_status_fields()
@@ -1558,7 +1588,7 @@ def main() -> int:
     _test_planner_ax_first_prompt()
     _test_trajectory_permissions_and_redaction()
 
-    total = 34
+    total = 35
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")
