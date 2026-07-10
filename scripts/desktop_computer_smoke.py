@@ -914,13 +914,26 @@ def _test_simple_digit_goal_deterministic_path() -> None:
         goal=goal, observation=obs,
         trajectory=[{"action_type": "click", "result_ok": True, "clicked_label": "Clear"}],
     )
-    if not a2 or a2.get("_target_label") != "1":
-        _fail("simple_digit_goal", f"expected digit 1: {a2}")
+    if not a2 or a2.get("_target_label") != "Clear":
+        _fail("simple_digit_goal", f"expected another clear step: {a2}")
+        return
+    obs_all_clear = dict(obs)
+    obs_all_clear["element_hints"] = [
+        {"element_index": 2, "role": "AXButton", "label": "All Clear"},
+        {"element_index": 13, "role": "AXButton", "label": "1"},
+    ]
+    a2b = maybe_simple_digit_action(
+        goal=goal, observation=obs_all_clear,
+        trajectory=[{"action_type": "click", "result_ok": True, "clicked_label": "Clear"}],
+    )
+    if not a2b or a2b.get("_target_label") != "All Clear":
+        _fail("simple_digit_goal", f"expected All Clear after Clear: {a2b}")
         return
     a3 = maybe_simple_digit_action(
-        goal=goal, observation=obs,
+        goal=goal, observation=obs_all_clear,
         trajectory=[
             {"action_type": "click", "result_ok": True, "clicked_label": "Clear"},
+            {"action_type": "click", "result_ok": True, "clicked_label": "All Clear"},
             {"action_type": "click", "result_ok": True, "clicked_label": "1"},
         ],
     )

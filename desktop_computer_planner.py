@@ -162,7 +162,9 @@ def maybe_simple_digit_action(
 ) -> dict | None:
     """Deterministic plan for single-digit click goals (no Codex thrash).
 
-    Sequence: observe (if needed) → optional Clear → click digit once → done.
+    Sequence: observe (if needed) → Clear/All Clear as needed → click digit
+    once → done. Calculator may expose ``Clear`` first and only reveal
+    ``All Clear`` after the first click while an expression is active.
     Returns None when the goal is not a simple single-digit click.
     """
     digit = extract_single_digit_click_goal(goal)
@@ -186,10 +188,12 @@ def maybe_simple_digit_action(
     if not isinstance(hints, list) or not hints or pid is None or window_id is None:
         return {"action": "observe"}
 
-    cleared = any(lab.lower() in _CLEAR_LABELS for lab in labels_done)
-    if not cleared:
+    # A Calculator expression can expose "Clear" first; that clears only the
+    # active operand and then exposes "All Clear". Treat only a successful
+    # All Clear/AC click as fully cleared, using the fresh post-action hints.
+    fully_cleared = any(lab in ("all clear", "ac") for lab in labels_done)
+    if not fully_cleared:
         clear_hint = _find_hint(obs, labels=("All Clear", "Clear", "AC"))
-        # Prefer "All Clear" / "Clear" over single-letter "C" to avoid mis-clicks.
         if clear_hint is not None:
             click = _ax_click_from_hint(obs, clear_hint)
             if click is not None:
