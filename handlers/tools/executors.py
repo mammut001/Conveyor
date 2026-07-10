@@ -609,27 +609,55 @@ async def exec_computer_action(settings: Settings, arg: str) -> str:
         return f"动作执行失败: {type(exc).__name__}"
 
 
-async def exec_computer_task(settings: Settings, arg: str) -> str:
-    """Run the Codex action loop to complete a desktop goal (hands-free)."""
-    from desktop_computer_requests import (
-        contains_blocked_keyword,
-        is_direct_mode_active,
-    )
-    from desktop_computer_planner import CodexPlanner
-    from desktop_computer_loop import build_backend, run_computer_loop
+def _computer_task_preflight(settings: Settings, arg: str) -> tuple[str | None, str | None]:
+    """Validate a task before it is placed in the persistent task store."""
+    from desktop_computer_requests import contains_blocked_keyword, is_direct_mode_active
 
     if not settings.conveyor_computer_use_enabled:
-        return "⚠️ Computer Use 未启用 (CONVEYOR_COMPUTER_USE_ENABLED=false)。"
+        return None, "⚠️ Computer Use 未启用 (CONVEYOR_COMPUTER_USE_ENABLED=false)。"
     goal = (arg or "").strip()
     if not goal:
-        return "用法: /computer_task <目标>\n例如: /computer_task 打开 Chrome 并访问 conveyor.dev"
+        return None, "用法: /computer_task <目标>\n例如: /computer_task 打开 Chrome 并访问 conveyor.dev"
     if contains_blocked_keyword(settings, goal):
-        return "⛔ 目标含受限关键词，已拒绝执行任何桌面动作。"
+        return None, "⛔ 目标含受限关键词，已拒绝执行任何桌面动作。"
     if not is_direct_mode_active(settings):
-        return (
+        return None, (
             "⚠️ Direct 模式未启用，无法自动执行。\n"
             "先 /computer_arm [分钟] 启用(或设置 CONVEYOR_COMPUTER_ALWAYS_DIRECT=true)。"
         )
+    return goal, None
+
+
+def prepare_computer_task(settings: Settings, arg: str) -> dict:
+    """Create a running task record before sending the chat acknowledgement."""
+    from desktop_computer_requests import create_computer_task
+
+    goal, error = _computer_task_preflight(settings, arg)
+    if error:
+        return {"ok": False, "message": error}
+    created = create_computer_task(
+        settings,
+        goal or "",
+        direct_mode=True,
+        max_steps=settings.conveyor_computer_max_steps,
+        max_seconds=settings.conveyor_computer_max_seconds,
+    )
+    return created
+
+
+async def exec_computer_task(settings: Settings, arg: str, *, task_id: str | None = None) -> str:
+    """Run the Codex action loop to complete a desktop goal (hands-free)."""
+    from desktop_computer_planner import CodexPlanner
+    from desktop_computer_loop import build_backend, run_computer_loop
+
+    goal, error = _computer_task_preflight(settings, arg)
+    if error:
+        return error
+    if task_id is None:
+        prepared = prepare_computer_task(settings, goal or "")
+        if not prepared.get("ok"):
+            return str(prepared.get("message") or prepared.get("error") or "任务创建失败")
+        task_id = prepared.get("task_id")
     planner = CodexPlanner(settings)
     backend = build_backend(settings)
     result = await run_computer_loop(
@@ -637,6 +665,7 @@ async def exec_computer_task(settings: Settings, arg: str) -> str:
         max_steps=settings.conveyor_computer_max_steps,
         max_seconds=settings.conveyor_computer_max_seconds,
         direct_mode=True,
+        task_id=task_id,
     )
     return _format_loop_result(settings, result)
 

@@ -110,6 +110,7 @@ async def run_computer_loop(
     max_seconds: int,
     direct_mode: bool,
     stop_check: Callable[[], bool] | None = None,
+    task_id: str | None = None,
 ) -> dict:
     """Run the action loop. Returns a summary dict.
 
@@ -117,19 +118,24 @@ async def run_computer_loop(
     direct mode must already be satisfied. This function focuses on the
     loop + safety enforcement.
     """
-    created = create_computer_task(
-        settings,
-        goal,
-        direct_mode=direct_mode,
-        max_steps=max_steps,
-        max_seconds=max_seconds,
-        operator_id=operator_id,
-        chat_id=chat_id,
-        channel=channel,
-    )
-    if not created.get("ok"):
-        return {"ok": False, "error": created.get("error"), "message": created.get("message")}
-    task_id = created["task_id"]
+    if task_id is None:
+        created = create_computer_task(
+            settings,
+            goal,
+            direct_mode=direct_mode,
+            max_steps=max_steps,
+            max_seconds=max_seconds,
+            operator_id=operator_id,
+            chat_id=chat_id,
+            channel=channel,
+        )
+        if not created.get("ok"):
+            return {"ok": False, "error": created.get("error"), "message": created.get("message")}
+        task_id = created["task_id"]
+    else:
+        existing = get_computer_task(settings, task_id)
+        if not isinstance(existing, dict) or existing.get("status") != "running":
+            return {"ok": False, "error": "task_not_running", "task_id": task_id}
     start = time.monotonic()
     steps_used = 0
     observation: dict[str, Any] = {"initial": True}

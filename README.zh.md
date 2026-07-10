@@ -196,8 +196,9 @@ python3 scripts/cua_driver_real_smoke.py --cmd "cua-driver mcp"
 
 - `/computer_status` —— 启用开关、direct 模式来源、Cua 探测、运行中任务。
 - `/computer_arm [分钟]` —— 授权 direct 模式一段时间（如 `/computer_arm 30`）。
-- `/computer_task <目标>` —— 免干预运行 Codex→Cua 循环（如
-  `/computer_task 打开 Chrome 并访问 conveyor.dev`）。direct 模式未开启时直接失败。
+- `/computer_task <目标>` —— 启动免干预 Codex→Cua 循环（如
+  `/computer_task 打开 Chrome 并访问 conveyor.dev`）。会立即回 task id，完成后
+  异步回报结果；direct 模式未开启时直接失败。
 - `/computer_stop` —— 立即取消当前任务。
 - `/computer_log [task_id]` —— 查看任务的脱敏轨迹。
 - `/computer_screenshot` —— 在 direct 模式下截一次桌面观察（元数据/截图 id）。

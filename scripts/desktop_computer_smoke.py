@@ -665,6 +665,55 @@ def _test_stop_race_preserves_operator_stop() -> None:
     print("[pass] stop_race_preserves_operator_stop")
 
 
+def _test_computer_task_ack_starts_background() -> None:
+    import asyncio
+
+    from channel import InboundMessage
+    from desktop_computer_requests import arm_direct_mode, get_active_task, set_task_status
+    import handlers.commands as command_handlers
+    import handlers.tools.executors as executors
+
+    class Port:
+        def __init__(self):
+            self.replies = []
+
+        async def reply(self, _msg, text):
+            self.replies.append(text)
+
+    settings = _mk_settings()
+    arm_direct_mode(settings, 10)
+    port = Port()
+    msg = InboundMessage(
+        channel="telegram", operator_id="1", chat_id="chat",
+        message_id="m", text="/computer_task safe task",
+    )
+    original = executors.exec_computer_task
+
+    async def fake_exec(_settings, _goal, *, task_id=None):
+        set_task_status(_settings, task_id, "done", summary="fake complete")
+        return "fake complete"
+
+    async def run():
+        executors.exec_computer_task = fake_exec
+        try:
+            await command_handlers._computer_task(msg, port, None, settings, "safe task")
+            if not port.replies or "已开始执行" not in port.replies[0]:
+                _fail("computer_task_ack_background", f"immediate={port.replies}")
+                return
+            await asyncio.sleep(0.05)
+            if len(port.replies) < 2 or port.replies[-1] != "fake complete":
+                _fail("computer_task_ack_background", f"completion={port.replies}")
+                return
+            if get_active_task(settings) is not None:
+                _fail("computer_task_ack_background", "task still active")
+                return
+            print("[pass] computer_task_ack_starts_background")
+        finally:
+            executors.exec_computer_task = original
+
+    asyncio.run(run())
+
+
 # ---- Hardening P5.6.1 Smokes ----------------------------------------------
 
 def _test_cua_status_fields() -> None:
@@ -1558,6 +1607,7 @@ def main() -> int:
     _test_stop_command_cancels_active()
     _test_stale_task_expiry_clears_active()
     _test_stop_race_preserves_operator_stop()
+    _test_computer_task_ack_starts_background()
 
     # P5.6.1 Hardening Smokes
     _test_cua_status_fields()
@@ -1583,7 +1633,7 @@ def main() -> int:
     _test_planner_ax_first_prompt()
     _test_trajectory_permissions_and_redaction()
 
-    total = 35
+    total = 36
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")
