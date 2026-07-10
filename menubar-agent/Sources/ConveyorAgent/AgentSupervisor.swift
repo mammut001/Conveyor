@@ -5,7 +5,7 @@ import Foundation
 /// On macOS 26, launchd-spawned CLI binaries (bash/python) can't be granted
 /// Full Disk Access to reach `~/Documents`, but a proper `.app` bundle can.
 /// So the menu bar app owns the agent: it spawns
-///   `<conveyorDir>/.venv/bin/python desktop_agent.py --poll-observe`
+///   `<conveyorDir>/.venv/bin/python desktop_agent.py --poll-observe --poll-computer`
 /// with the env vars from `<conveyorDir>/.desktop-agent.env`, appends the
 /// child's stdout/stderr to `~/Library/Logs/conveyor-desktop-agent.log`, and
 /// restarts it (with throttle) if it exits unexpectedly.
@@ -66,7 +66,7 @@ final class AgentSupervisor: ObservableObject {
         launchNow()
     }
 
-    /// Kill any `desktop_agent.py --poll-observe` python processes that aren't
+    /// Kill any desktop-agent poller python processes that aren't
     /// our own child. Called on start() to dedupe after an app crash/relaunch.
     private func killOrphanAgents() {
         let task = Process()
@@ -132,7 +132,10 @@ final class AgentSupervisor: ObservableObject {
         // -u: unbuffered stdout/stderr so log lines flush immediately
         // (otherwise Python buffers when stdout is a file, not a tty, and
         // the log looks empty even though the agent is working fine).
-        p.arguments = ["-u", "desktop_agent.py", "--poll-observe"]
+        // Keep read-only observe and direct computer-use polling in the same
+        // supervised child so the production entry point cannot silently lose
+        // the direct poller.
+        p.arguments = ["-u", "desktop_agent.py", "--poll-observe", "--poll-computer"]
         p.currentDirectoryURL = URL(fileURLWithPath: dir)
         p.environment = env
         // Pipe child output to the shared log file.

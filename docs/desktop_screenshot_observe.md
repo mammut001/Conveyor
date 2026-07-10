@@ -19,7 +19,7 @@ P5.2 adds **read-only screenshot observe** on the operator's MacBook. Screenshot
 **Supported:**
 
 - Chat creates a pending observe request (`/observe_request`, NL phrases like `截图看看我电脑现在是什么`)
-- Mac desktop agent polls the VPS (`python desktop_agent.py --poll-observe`)
+- Mac desktop agent polls the VPS (`python desktop_agent.py --poll-observe --poll-computer`)
 - Mac captures one local screenshot via `capture-screen-helper`
 - Mac returns **metadata only** to the VPS (no image bytes, no base64)
 - Chat shows metadata/status (`/observe_status`, `/screenshot_status`)
@@ -47,7 +47,7 @@ On Mac:
 export CONVEYOR_CONTROL_PLANE_URL=https://your-control-plane.example.com
 export CONVEYOR_DESKTOP_AGENT_TOKEN=...
 export CONVEYOR_DESKTOP_SCREENSHOT_HELPER=/usr/local/bin/capture-screen-helper
-python desktop_agent.py --poll-observe
+python desktop_agent.py --poll-observe --poll-computer
 ```
 
 In Feishu:
@@ -143,7 +143,7 @@ python desktop_agent.py --observe-once
 Remote observe polling:
 
 ```bash
-python desktop_agent.py --poll-observe
+python desktop_agent.py --poll-observe --poll-computer
 ```
 
 No base64, OCR text, window titles, secrets, or prompt content are stored.

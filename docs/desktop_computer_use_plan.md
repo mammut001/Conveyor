@@ -31,7 +31,7 @@ without you pressing Confirm — that is a hard rule, not a default.
 | Node registry | `nodes/registry.py` | stub | `build_stub_desktop_node()` returns OFFLINE; `is_stub_environment()` returns `True` (L232) — **the master switch**. |
 | Control plane | `desktop_agent_server.py` | partial | Bearer-auth HTTP on `127.0.0.1:8766` (`ThreadingHTTPServer`). Has register/heartbeat/observe/upload/status. **No task/step endpoints.** |
 | Local agent | `desktop_agent.py` | partial | `urllib`-based polling (`_control_plane_url()`, `_post_json` helper). `--poll-observe` + upload polling loops. **No task polling, no action executors.** |
-| Menubar app | `menubar-agent/Sources/.../AgentSupervisor.swift` | partial | Spawns `desktop_agent.py --poll-observe` as child (TCC-attributed). **Must also start the task-poll loop.** Needs **Accessibility** TCC for input synthesis. |
+| Menubar app | `menubar-agent/Sources/.../AgentSupervisor.swift` | implemented | Spawns `desktop_agent.py --poll-observe --poll-computer` as a TCC-attributed child. Needs **Accessibility** TCC for input synthesis. |
 | Request store | `desktop_observe_requests.py` / `desktop_upload_requests.py` | DONE | **The template pattern** for tasks: cross-process file lock, `ALLOWED/RESULT_FORBIDDEN` fields, claim/complete/fail/cancel, TTL expiry. |
 | Tool layer | `handlers/tools/registry.py`, `executors.py` | stub | `computer.status` registered but stubbed. `register_builtin_tools()` is the registration point. |
 | Intent | `handlers/intent.py` | stub | `_COMPUTER_USE_PATTERNS` already routes to `computer.status`. Needs a real route target. |

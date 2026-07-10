@@ -295,7 +295,7 @@ In P5.1, the desktop agent registration and heartbeat protocol is active:
 ### P5.3 Remote Observe Request (metadata only)
 
 * **Chat request**: `/observe_request`, `/screenshot_request`, or NL like `截图看看我电脑现在是什么`
-* **Mac polling**: `python desktop_agent.py --poll-observe` (register + heartbeat + observe poll loop)
+* **Mac polling**: `python desktop_agent.py --poll-observe --poll-computer` (register + heartbeat + observe / Computer Use poll loop)
 * **Status**: `/observe_status`, `/screenshot_status`, or NL like `截图状态`
 * **Cancel**: `/observe_cancel <request_id>` for pending/claimed requests
 * VPS stores pending requests at `CODEX_MEMORY_ROOT/state/desktop_observe_requests.json`
@@ -319,7 +319,7 @@ python desktop_agent_server.py
 export CONVEYOR_CONTROL_PLANE_URL=https://your-control-plane.example.com
 export CONVEYOR_DESKTOP_AGENT_TOKEN=...
 export CONVEYOR_DESKTOP_SCREENSHOT_HELPER=/usr/local/bin/capture-screen-helper
-python desktop_agent.py --poll-observe
+python desktop_agent.py --poll-observe --poll-computer
 ```
 
 **Deployment (VPS bot update):**
