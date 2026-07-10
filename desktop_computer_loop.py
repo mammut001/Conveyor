@@ -213,6 +213,9 @@ async def run_computer_loop(
                 current_task = get_computer_task(settings, task_id)
                 if isinstance(current_task, dict) and current_task.get("status") == "stopped":
                     break
+                if str(exc) in {"task_not_running", "step_cancelled"}:
+                    set_task_status(settings, task_id, "stopped", blocked_reason="operator_stop")
+                    break
                 set_task_status(settings, task_id, "error", blocked_reason=str(exc))
                 break
             duration_ms = int((time.monotonic() - step_start) * 1000)
