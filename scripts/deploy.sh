@@ -146,7 +146,7 @@ done
 # process rather than a systemd unit. Restart it when present so the control
 # plane loads the same source revision as the bot services.
 DESKTOP_SERVER_STATUS="not_running"
-DESKTOP_SERVER_PID="$(pgrep -f '[.]venv/bin/python desktop_agent_server.py' | head -1 || true)"
+DESKTOP_SERVER_PID="$(ps -eo pid=,args= | awk '$0 ~ /[.]venv\/bin\/python desktop_agent_server[.]py/ {print $1; exit}')"
 if [[ -n "$DESKTOP_SERVER_PID" ]]; then
   log "Restarting desktop_agent_server.py (pid ${DESKTOP_SERVER_PID}) ..."
   kill "$DESKTOP_SERVER_PID" 2>/dev/null || true
