@@ -220,11 +220,15 @@ python3 scripts/cua_driver_real_smoke.py --cmd "cua-driver mcp"
 | `CONVEYOR_CUA_DRIVER_CMD` | `cua-driver mcp` | Mac 本地 cua driver 命令。Conveyor 使用第一个 token 定位本地 `cua-driver` binary，并通过 `call`/status 子命令执行。 |
 | `CONVEYOR_COMPUTER_ALLOWED_ACTIONS` | `observe,click,type,hotkey,scroll,wait` | 动作允许清单。 |
 | `CONVEYOR_COMPUTER_BLOCKED_KEYWORDS` | `password,passcode,bank,payment,crypto,keychain,system settings,delete account` | 命中即停的拦截词。 |
+| `CONVEYOR_COMPUTER_ALLOWED_APPS` | 空（不限制普通应用） | 可选应用白名单；为空时普通 GUI 应用均可尝试。 |
+| `CONVEYOR_COMPUTER_BLOCKED_APPS` | `Keychain Access,System Settings,Terminal` | 始终拒绝的高风险应用。 |
 | `CONVEYOR_COMPUTER_BACKEND` | `http` | `http`（真实 Mac agent）或 `fake`（进程内，用于测试）。 |
 
 **安全边界（即便在 direct 模式下也始终生效）**：动作允许清单、拦截词守卫、
 不注入密钥、输入文本/快捷键在所有日志中脱敏、driver 返回结果白名单、
 `MAX_STEPS`/`MAX_SECONDS` 上限，以及 `/computer_stop` 紧急停止。Cua 永不跨网络。
+自定义 `CONVEYOR_COMPUTER_BLOCKED_KEYWORDS` 不能移除内置的 password、bank、payment、crypto、
+keychain、system settings 和 delete account 硬拦截。
 详见 `docs/desktop_security.md §7`。
 
 ### P5.1 Desktop Agent Heartbeat 心跳机制

@@ -213,9 +213,9 @@ of armed/always-direct, every step is still gated by:
    `normalize_action`). Anything else is rejected before execution.
 2. **Blocked-keyword guard** — if the goal or any step's context contains
    `password`, `passcode`, `bank`, `payment`, `crypto`, `keychain`,
-   `system settings`, `delete account` (configurable via
-   `CONVEYOR_COMPUTER_BLOCKED_KEYWORDS`), the task **stops and reports**; no desktop
-   action is taken.
+   `system settings`, `delete account`, the task **stops and reports**; no desktop
+   action is taken. Operators may add words with `CONVEYOR_COMPUTER_BLOCKED_KEYWORDS`,
+   but cannot remove these built-in hard blocks.
 3. **No secret injection** — the loop never injects values from env/memory into
    typed text. Typed text is limited to the operator-provided goal / explicit action
    payload.

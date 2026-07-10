@@ -164,6 +164,14 @@ def validate_ax_fields(action: dict) -> tuple[bool, str | None]:
 # Calculator AX click can run.
 _ALLOWLIST_EXEMPT_ACTIONS = frozenset({"observe", "wait", "done", "stop"})
 
+# These contexts remain blocked even if an operator customizes the optional
+# keyword list. Broad ordinary-app support must not turn into unrestricted
+# financial, credential, system-administration, or destructive automation.
+_HARD_BLOCKED_KEYWORDS = (
+    "password", "passcode", "bank", "payment", "crypto",
+    "keychain", "system settings", "delete account",
+)
+
 
 def action_enforces_app_allowlist(action: object) -> bool:
     """True when this action type must match CONVEYOR_COMPUTER_ALLOWED_APPS."""
@@ -252,8 +260,10 @@ def redact_computer_action(action: dict) -> dict:
 def _blocked_keywords(settings: Settings) -> tuple[str, ...]:
     kws = getattr(settings, "conveyor_computer_blocked_keywords", None)
     if isinstance(kws, (tuple, list)):
-        return tuple(str(k).strip().lower() for k in kws if str(k).strip())
-    return ()
+        configured = (str(k).strip().lower() for k in kws if str(k).strip())
+    else:
+        configured = ()
+    return tuple(dict.fromkeys((*_HARD_BLOCKED_KEYWORDS, *configured)))
 
 
 def contains_blocked_keyword(settings: Settings, text: str) -> str | None:

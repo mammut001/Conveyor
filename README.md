@@ -249,6 +249,8 @@ python3 scripts/cua_driver_real_smoke.py --cmd "cua-driver mcp"
 | `CONVEYOR_CUA_DRIVER_CMD` | `cua-driver mcp` | Mac-local cua driver command. Conveyor uses the first token as the local `cua-driver` binary for `call`/status operations. |
 | `CONVEYOR_COMPUTER_ALLOWED_ACTIONS` | `observe,click,type,hotkey,scroll,wait` | Action allow-list. |
 | `CONVEYOR_COMPUTER_BLOCKED_KEYWORDS` | `password,passcode,bank,payment,crypto,keychain,system settings,delete account` | Stop-on-match guard. |
+| `CONVEYOR_COMPUTER_ALLOWED_APPS` | empty (no ordinary-app restriction) | Optional app allowlist; empty permits ordinary GUI apps. |
+| `CONVEYOR_COMPUTER_BLOCKED_APPS` | `Keychain Access,System Settings,Terminal` | Always-blocked high-risk apps. |
 | `CONVEYOR_COMPUTER_BACKEND` | `http` | `http` (real Mac agent) or `fake` (in-process, for tests). |
 
 **Safety envelope (enforced even in direct mode)**: action allow-list,
@@ -256,6 +258,9 @@ blocked-keyword guard, no secret injection, typed-text/hotkey
 redaction in all stored logs, result allow-list from the driver,
 `MAX_STEPS`/`MAX_SECONDS` caps, and the `/computer_stop` kill switch.
 Cua never crosses the network. See `docs/desktop_security.md §7`.
+Custom `CONVEYOR_COMPUTER_BLOCKED_KEYWORDS` values can add terms but cannot remove the
+built-in hard blocks for passwords, banking, payments, crypto, Keychain, System Settings,
+or account deletion.
 
 
 ### P5.1 Desktop Agent Heartbeat
