@@ -1236,6 +1236,10 @@ picked up opportunistically.
 
 ### P5.0 Execution nodes — phase 0 foundation (done)
 
+> This section is a historical P5.0 record. Its "desktop offline / computer.status
+> stub" wording does not describe the current runtime; see the current-status
+> note at the top and the P5.6 section for the shipped implementation.
+
 - `nodes/types.py` — `NodeType` (`vps` / `desktop`), `NodeStatus`
   (`online` / `offline` / `unknown`), `TrustLevel`
   (`server` / `local_desktop`), `NodeInfo` dataclass, well-known

@@ -46,6 +46,63 @@ _ALLOWED = ("observe", "click", "type", "hotkey", "scroll", "wait", "done", "sto
 _CLEAR_LABELS = ("all clear", "clear", "ac", "c")
 
 
+def is_observe_only_goal(goal: str) -> bool:
+    """True only for goals that explicitly require read-only observation."""
+    text = (goal or "").strip().lower()
+    if not text:
+        return False
+    asks_observe = any(token in text for token in ("observe", "观察", "看一下", "查看"))
+    forbids_mutation = any(
+        token in text
+        for token in (
+            "不要点击", "严禁点击", "禁止点击", "不要输入", "严禁输入",
+            "只观察", "仅观察", "observe only", "only observe",
+            "do not click", "don't click", "without clicking",
+            "do not type", "without typing",
+        )
+    )
+    if not (asks_observe and forbids_mutation):
+        return False
+    # Remove explicit prohibition clauses, then reject any remaining positive
+    # action clause (for example: "不要输入，然后点击 1").
+    remaining = re.sub(
+        r"(?:不要|严禁|禁止|不)(?:(?:点击|输入|滚动|按下|快捷键|、|，|或|和|\s))+",
+        "",
+        text,
+    )
+    remaining = re.sub(
+        r"(?:do\s+not|don't|without)\s+"
+        r"(?:click(?:ing)?|typ(?:e|ing)|scroll(?:ing)?|press(?:ing)?|hotkey)"
+        r"(?:\s*(?:,|or|and)\s*"
+        r"(?:click(?:ing)?|typ(?:e|ing)|scroll(?:ing)?|press(?:ing)?|hotkey))*",
+        "",
+        remaining,
+    )
+    return re.search(
+        r"(?:点击|输入|滚动|按下)|\b(?:click|type|scroll|hotkey|press)\b",
+        remaining,
+    ) is None
+
+
+def maybe_observe_only_action(
+    *,
+    goal: str,
+    trajectory: list[dict],
+) -> dict | None:
+    """Deterministic observe -> done policy for explicit read-only goals."""
+    if not is_observe_only_goal(goal):
+        return None
+    observed = any(
+        isinstance(entry, dict)
+        and entry.get("action_type") == "observe"
+        and entry.get("result_ok", True)
+        for entry in (trajectory or [])
+    )
+    if observed:
+        return {"action": "done", "summary": "read-only observation completed"}
+    return {"action": "observe"}
+
+
 def infer_target_app(goal: str) -> str | None:
     """Infer only an explicitly named common desktop app from a goal."""
     text = (goal or "").lower()

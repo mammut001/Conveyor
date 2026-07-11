@@ -779,12 +779,13 @@ smoke 测试，重启服务 —— 一步到位。smoke 失败则不重启。
    ```bash
    sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
    sudo cp systemd/conveyor-feishu-bot.service   /etc/systemd/system/
+   sudo cp systemd/conveyor-desktop-agent.service /etc/systemd/system/
    sudo cp systemd/conveyor-maintain.service     /etc/systemd/system/
    sudo cp systemd/conveyor-maintain.timer       /etc/systemd/system/
    sudo cp systemd/conveyor-scheduler.service    /etc/systemd/system/
    sudo cp systemd/conveyor-scheduler.timer      /etc/systemd/system/
    sudo systemctl daemon-reload
-   sudo systemctl enable --now conveyor-telegram-bot conveyor-feishu-bot
+   sudo systemctl enable --now conveyor-telegram-bot conveyor-feishu-bot conveyor-desktop-agent
    sudo systemctl enable --now conveyor-maintain.timer conveyor-scheduler.timer
    ```
 
@@ -794,10 +795,13 @@ smoke 测试，重启服务 —— 一步到位。smoke 失败则不重启。
    # /etc/sudoers.d/conveyor-deploy
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart conveyor-telegram-bot
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart conveyor-feishu-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart conveyor-desktop-agent
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-telegram-bot
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-feishu-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-desktop-agent
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active conveyor-telegram-bot
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active conveyor-feishu-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active conveyor-desktop-agent
    ```
 
 ### 手动测试部署

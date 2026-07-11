@@ -1,27 +1,22 @@
 # P5.2 Computer Use — Implementation Plan
 
 > **Status**: Historical P5.2 design document. The implementation described
-> here has been superseded by the shipped P5.6/P5.6.2 direct Computer Use
-> stack. For current behavior, read `docs/desktop_security.md`,
-> `desktop_computer_requests.py`, `desktop_computer_loop.py`, and
-> `desktop_cua.py`.
-> The original blueprint turned the
-> `computer_use.stub` capability into the full
-> (`browser.control`, `mouse.click`, `keyboard.type`, `computer_use.step`)
-> surface described in `architecture.en.md` § P5.1.
+> below is retained for design history only and is not the current contract.
+> The shipped P5.6/P5.6.2 direct Computer Use stack is implemented through
+> `desktop_computer_requests.py`, `desktop_computer_loop.py`, `desktop_cua.py`,
+> and the local Mac agent. For current behavior and safety limits, read
+> `docs/desktop_security.md` and `docs/desktop_capabilities.md`.
 
 ---
 
 ## 0. TL;DR for the operator
 
-Computer Use is today a **deliberate stub**. The natural-language router
-already catches "帮我在 Mac 上打开 Xcode" / "take a screenshot on my desktop"
-and routes them to `computer.status`, which returns honest "not implemented"
-text (see `handlers/tools/executors.py::exec_computer_status`,
-`handlers/intent.py::_COMPUTER_USE_PATTERNS`). Adding real control means
-wiring a **per-step-confirmed action loop** on top of the existing
-request-store + heartbeat + confirm patterns. Nothing executes on the Mac
-without you pressing Confirm — that is a hard rule, not a default.
+The original P5.2 design treated Computer Use as a deliberate stub. That is
+historical context only: P5.6/P5.6.2 now provides an opt-in direct loop with
+local Cua execution, an action allow-list, blocked-context guards, step/time
+caps, redacted trajectories, and an operator kill switch. The sections below
+describe the earlier confirmation-based design and should not be used as the
+current runtime specification.
 
 ---
 

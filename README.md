@@ -861,12 +861,13 @@ failure prevents the restart.
    ```bash
    sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
    sudo cp systemd/conveyor-feishu-bot.service   /etc/systemd/system/
+   sudo cp systemd/conveyor-desktop-agent.service /etc/systemd/system/
    sudo cp systemd/conveyor-maintain.service     /etc/systemd/system/
    sudo cp systemd/conveyor-maintain.timer       /etc/systemd/system/
    sudo cp systemd/conveyor-scheduler.service    /etc/systemd/system/
    sudo cp systemd/conveyor-scheduler.timer      /etc/systemd/system/
    sudo systemctl daemon-reload
-   sudo systemctl enable --now conveyor-telegram-bot conveyor-feishu-bot
+   sudo systemctl enable --now conveyor-telegram-bot conveyor-feishu-bot conveyor-desktop-agent
    sudo systemctl enable --now conveyor-maintain.timer conveyor-scheduler.timer
    ```
 
@@ -876,10 +877,13 @@ failure prevents the restart.
    # /etc/sudoers.d/conveyor-deploy
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart conveyor-telegram-bot
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart conveyor-feishu-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart conveyor-desktop-agent
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-telegram-bot
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-feishu-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl status  conveyor-desktop-agent
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active conveyor-telegram-bot
    deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active conveyor-feishu-bot
+   deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active conveyor-desktop-agent
    ```
 
 ### Manual deploy test
@@ -914,7 +918,7 @@ python scripts/security_audit.py --env /opt/conveyor/.env --service conveyor-tel
    - backs up key files before reset
    - syncs `.venv` from `requirements.txt`
    - runs `make smoke`
-   - if smoke passes: restarts `conveyor-telegram-bot` + `conveyor-feishu-bot`
+   - if smoke passes: restarts Telegram, Feishu, and `conveyor-desktop-agent`
    - if smoke fails: exits nonzero, services are NOT restarted
    - writes `.deploy-status.json` with deploy metadata
    - if restart health check fails: attempts rollback from backup
@@ -926,8 +930,8 @@ rsyncs source files then runs the same remote smoke + restart flow.
 ### `/deploy_status` command
 
 Send `/deploy_status` to the bot to see last deploy time, source, git SHA,
-smoke result and service states, current runtime git SHA, branch, progress
-mode, and live `systemctl is-active` for both services.
+    smoke result and service states, current runtime git SHA, branch, progress
+    mode, and live `systemctl is-active` for all managed services.
 
 ### Limitations
 

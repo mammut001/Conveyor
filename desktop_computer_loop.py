@@ -23,7 +23,12 @@ import time
 from typing import Any, Awaitable, Callable
 
 from config import Settings
-from desktop_computer_planner import infer_target_app, maybe_simple_digit_action, resolve_clicked_label
+from desktop_computer_planner import (
+    infer_target_app,
+    maybe_observe_only_action,
+    maybe_simple_digit_action,
+    resolve_clicked_label,
+)
 from desktop_computer_requests import (
     append_trajectory,
     cancel_computer_task,
@@ -173,13 +178,17 @@ async def run_computer_loop(
                 action = {"action": "observe"}
                 followup_observe = False
             else:
-                # Simple single-digit goals bypass Codex to avoid multi-click
-                # thrash (e.g. display ending as 113 instead of 1).
-                action = maybe_simple_digit_action(
-                    goal=goal,
-                    observation=observation,
-                    trajectory=trajectory,
-                )
+                # Explicit read-only goals use a deterministic observe->done
+                # policy so the planner cannot add an unnecessary click.
+                action = maybe_observe_only_action(goal=goal, trajectory=trajectory)
+                if action is None:
+                    # Simple single-digit goals bypass Codex to avoid multi-click
+                    # thrash (e.g. display ending as 113 instead of 1).
+                    action = maybe_simple_digit_action(
+                        goal=goal,
+                        observation=observation,
+                        trajectory=trajectory,
+                    )
                 if action is None:
                     try:
                         remaining = max_seconds - (time.monotonic() - start)

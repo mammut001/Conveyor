@@ -18,10 +18,13 @@
 #   5. Grant deploy user passwordless sudo for:
 #        systemctl restart conveyor-telegram-bot
 #        systemctl restart conveyor-feishu-bot
+#        systemctl restart conveyor-desktop-agent
 #        systemctl status  conveyor-telegram-bot
 #        systemctl status  conveyor-feishu-bot
+#        systemctl status  conveyor-desktop-agent
 #        systemctl is-active conveyor-telegram-bot
 #        systemctl is-active conveyor-feishu-bot
+#        systemctl is-active conveyor-desktop-agent
 #
 # Security:
 #   - No secrets are hardcoded; all come from GitHub Actions secrets.

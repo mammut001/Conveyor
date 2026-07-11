@@ -1292,6 +1292,54 @@ def _test_simple_digit_goal_deterministic_path() -> None:
     print("[pass] simple_digit_goal_deterministic_path")
 
 
+def _test_observe_only_goal_never_mutates() -> None:
+    """Explicit read-only goals must execute observe -> done without Codex."""
+    import asyncio
+
+    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from desktop_computer_planner import is_observe_only_goal
+    from desktop_computer_requests import get_computer_task
+
+    class MutatingPlanner:
+        def __init__(self):
+            self.calls = 0
+
+        async def next_action(self, **_kwargs):
+            self.calls += 1
+            return {"action": "click", "x": 10, "y": 10}
+
+    goal = "在 Calculator 窗口只观察一次，严禁点击或输入，然后完成"
+    if not is_observe_only_goal(goal):
+        _fail("observe_only_goal", "explicit read-only goal not detected")
+        return
+    if is_observe_only_goal("观察 Calculator 然后点击数字 1"):
+        _fail("observe_only_goal", "interactive goal misclassified")
+        return
+    if is_observe_only_goal("观察 Calculator，不要输入，然后点击数字 1"):
+        _fail("observe_only_goal", "mixed read/write goal misclassified")
+        return
+    settings = _mk_settings()
+    planner = MutatingPlanner()
+    result = asyncio.run(run_computer_loop(
+        settings,
+        goal,
+        planner=planner,
+        backend=FakeComputerBackend(settings),
+        max_steps=4,
+        max_seconds=60,
+        direct_mode=True,
+    ))
+    task = get_computer_task(settings, result.get("task_id")) or {}
+    action_types = [entry.get("action_type") for entry in (task.get("trajectory") or [])]
+    if result.get("status") != "done" or action_types != ["observe"]:
+        _fail("observe_only_goal", f"result={result}, actions={action_types}")
+        return
+    if planner.calls != 0:
+        _fail("observe_only_goal", f"planner was called {planner.calls} times")
+        return
+    print("[pass] observe_only_goal_never_mutates")
+
+
 def _test_xy_click_blocked_when_app_allowlist_set() -> None:
     """Bare x/y click must fail under app allowlist (no target app proof)."""
     from desktop_cua import build_driver
@@ -1936,6 +1984,7 @@ def main() -> int:
     _test_ax_target_app_allowlist_not_frontmost()
     _test_target_app_activation_metadata()
     _test_simple_digit_goal_deterministic_path()
+    _test_observe_only_goal_never_mutates()
     _test_xy_click_blocked_when_app_allowlist_set()
     _test_observe_injects_ax_hints_for_planner()
     _test_observe_skips_allowlist_under_restricted_apps()
@@ -1953,7 +2002,7 @@ def main() -> int:
     _test_planner_cancellation_reaps_process()
     _test_trajectory_permissions_and_redaction()
 
-    total = 45
+    total = 46
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")
