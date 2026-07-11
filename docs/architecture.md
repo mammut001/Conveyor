@@ -1052,6 +1052,10 @@ P2.1 已完成：两个 channel adapter 各自落在 `channel/telegram.py` 和
 
 ### P5.0 执行节点 — phase 0 基础（已完成）
 
+> 本节是 P5.0 的历史记录。其“desktop offline / computer.status stub”
+> 描述不代表当前运行时；P5.6/P5.6.2 的真实状态见文档顶部与第
+> P5.6 节。
+
 - `nodes/types.py` — `NodeType`（`vps` / `desktop`）、
   `NodeStatus`（`online` / `offline` / `unknown`）、
   `TrustLevel`（`server` / `local_desktop`）、`NodeInfo` 数据类、
