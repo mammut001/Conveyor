@@ -282,3 +282,5 @@ P5.6.1 hardens the computer-use implementation for safer and more debuggable han
 8. **Legacy state migration**: New state never persists AX `element_token`. Existing installations can run `python3 scripts/redact_computer_state.py` for a dry-run, then `--apply` after the normal state backup to remove that legacy field from the request store and JSONL trajectories.
 
 9. **Retry without replay**: `/computer_retry` and `/computer_resume` create a new linked attempt from a terminal task and begin with a fresh observation. Old actions are audit evidence only and are never replayed. The chat message identity is stored only as a SHA-256 digest, so duplicate Telegram/Feishu delivery cannot launch the same task twice.
+
+10. **Read-only goal guard**: Goals that explicitly request observation while forbidding click/type are reduced to `observe -> done`. Codex cannot append a mutating action after the observation; ordinary interactive goals are unaffected.
