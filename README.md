@@ -10,6 +10,9 @@ Self-hosted · Single-operator · Read-first · Explicit apply / discard control
 
 </div>
 
+> [!IMPORTANT]
+> **v0.1.1 security-hardening upgrade:** after updating an existing VPS, reinstall/reload the narrowed systemd units and run `make smoke` before restarting services. See the deployment docs / previous long-form README in Git history for the exact upgrade sequence.
+
 ---
 
 ## The idea
@@ -101,10 +104,12 @@ Conveyor intentionally assumes a **single trusted operator**, but still treats a
 For coding jobs:
 
 - detached git worktrees
+- exact sender allowlists
 - explicit diff inspection
 - apply / discard separation
+- dangerous-action confirmation
 - cancellation and queue controls
-- auditable tool execution
+- audit logging for mutating tools
 
 For direct computer use:
 
@@ -143,16 +148,38 @@ Optional computer-use flow:
 
 ## Quick start
 
-Conveyor is designed to run on your own VPS. Exact deployment settings depend on which channels and integrations you enable.
+**Prerequisites:** an Ubuntu VPS with SSH access, Codex CLI installed, and a Telegram account.
 
-Start with the architecture and deployment documentation in the repository, configure only the integrations you need, and keep computer-use flags disabled until the Mac node and permission model are verified.
+```bash
+git clone https://github.com/mammut001/Conveyor.git
+cd Conveyor
+sudo bash scripts/install.sh
+```
 
-Useful documentation:
+Then configure the minimum environment values in `/opt/conveyor/.env`:
+
+```dotenv
+TELEGRAM_BOT_TOKEN=123456789:from_botfather
+TELEGRAM_ALLOWED_USER_ID=your_user_id
+CODEX_WORKSPACE_ROOT=/path/to/your/repo
+```
+
+Keep `.env` private (`chmod 600`), restart the Telegram service, and test with `/start` followed by a small `/run` task. Configure Feishu, Google/Gmail, GitHub, desktop nodes, or computer use only if you need them.
+
+Before deploying changes, run:
+
+```bash
+make smoke
+```
+
+## Documentation
 
 - [Architecture](docs/architecture.en.md)
 - [Desktop security](docs/desktop_security.md)
 - [Chinese README](README.zh.md)
 - [Previous long-form README reference](README.full.md)
+- [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- [Apply safety policy](docs/apply_safety.md)
 
 ## Design principles
 
@@ -186,7 +213,7 @@ If you need a public multi-user agent platform, this project is intentionally no
 
 ## License
 
-See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
 
 ---
 
