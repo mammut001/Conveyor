@@ -14,6 +14,7 @@ import asyncio
 
 from config import Settings
 
+
 class CodexRunner:
     _LIFECYCLE_EVENT_TYPES = frozenset({
         "thread.started",
@@ -34,6 +35,8 @@ class CodexRunner:
         self._lock_obj: asyncio.Lock | None = None
         self.current_job: "Job | None" = None
         self.last_job: "Job | None" = None
+        from runtime_control import register_runtime_runner
+        self.runtime_owner_id = register_runtime_runner(self)
 
     @property
     def _lock(self) -> asyncio.Lock:
@@ -43,22 +46,15 @@ class CodexRunner:
 
 
 from runner.day_brief import _day_brief_state_path, _day_brief_recent_jobs, _day_brief_text
-
 from runner.memo import _ensure_section, _extract_section, _insert_line_in_section, append_memo, read_memory, read_journal, reclassify_unfiled, classify_memo
-
 from runner.metadata import _read_final_message, _write_job_metadata, job_records, _last_job_id, _last_worktree_path, _latest_file, _state_from_attempt_file
-
 from runner.operators.jobs import (
     status_text, diff_text, diff_job, jobs_text, last_text,
     discard_last_job, discard_job, apply_last_job, apply_job,
 )
-
 from runner.operators.maintain import clean_old_jobs, clean_old_worktrees
-
 from runner.operators.run import validate, start, cancel, _run_job, _run_codex_attempt, _wait_until_cancelled, _is_rate_limited, _should_send_event_progress, _is_user_visible_event, _is_prose_event, _tool_call_name, _agent_message_text, _completed_message, _failed_message, _codex_command, _child_env, _new_job_id, _elapsed
-
 from runner.prefetch import _tool_registry_text, _operator_profile_text, _prefetch_memory, today_memory_text, list_journal, _now_local_str
-
 from runner.streaming import (
     _is_prose_event_text,
     _is_reasoning_event,
@@ -70,12 +66,8 @@ from runner.streaming import (
     _capture_usage,
     _event_summary,
 )
-
 from runner.worktree import _job_worktree_path, _create_worktree, _user_today, _today_worktree_path, _memory_path, _memory_context_text, _ensure_today_worktree, _remove_worktree, _copy_untracked_files, _copy_validated_untracked_files, _git, cleanup_job_worktree
 
-# Attach the free functions as methods via the
-# descriptor protocol. setattr on the class
-# turns each imported function into a real method.
 for _name, _func in [
     ("_day_brief_state_path", _day_brief_state_path),
     ("_day_brief_recent_jobs", _day_brief_recent_jobs),
@@ -154,9 +146,6 @@ for _name, _func in [
 ]:
     setattr(CodexRunner, _name, _func)
 
-# Module-level aliases for the class-level constants
-# so other runner/ modules can do
-# `from runner.core import MEMORY_FILENAME` etc.
 _LIFECYCLE_EVENT_TYPES = CodexRunner._LIFECYCLE_EVENT_TYPES
 MEMO_CATEGORIES = CodexRunner.MEMO_CATEGORIES
 MEMORY_FILENAME = CodexRunner.MEMORY_FILENAME
