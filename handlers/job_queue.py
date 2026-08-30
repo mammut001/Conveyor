@@ -642,12 +642,12 @@ class JobQueue:
             logger.debug("Queue paused, not starting next job")
             return
 
-        next_job = await self.dequeue(require_idle=True)
-        if next_job is None:
+        if self._start_callback is None:
+            logger.debug("No start callback set; leaving queued jobs unclaimed")
             return
 
-        if self._start_callback is None:
-            logger.warning("No start callback set, cannot start queued job %s", next_job.id)
+        next_job = await self.dequeue(require_idle=True)
+        if next_job is None:
             return
 
         logger.info("Starting queued job %s", next_job.id)
@@ -725,12 +725,12 @@ class JobQueue:
             logger.debug("Queue paused, not starting next job")
             return
 
-        next_job = await self.dequeue(require_idle=True)
-        if next_job is None:
+        if self._start_callback is None:
+            logger.debug("No start callback set; leaving queued jobs unclaimed")
             return
 
-        if self._start_callback is None:
-            logger.warning("No start callback set, cannot start queued job %s", next_job.id)
+        next_job = await self.dequeue(require_idle=True)
+        if next_job is None:
             return
 
         logger.info("Starting queued job %s", next_job.id)
