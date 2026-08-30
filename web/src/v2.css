@@ -1,0 +1,83 @@
+.stream-divider {
+  margin: 18px 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  opacity: .58;
+}
+
+.transcript-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.transcript-message {
+  border: 1px solid var(--line, rgba(128, 128, 128, .2));
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: rgba(127, 127, 127, .045);
+}
+
+.transcript-message.role-user {
+  margin-left: min(12%, 72px);
+}
+
+.transcript-message.role-assistant {
+  margin-right: min(8%, 48px);
+}
+
+.transcript-message header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.transcript-message time,
+.runtime-owner-card small {
+  opacity: .58;
+}
+
+.transcript-message pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.55;
+}
+
+.runtime-owner-card {
+  display: grid;
+  gap: 5px;
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line, rgba(128, 128, 128, .2));
+  border-radius: 10px;
+  background: rgba(127, 127, 127, .04);
+}
+
+.runtime-owner-card > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.runtime-owner-card span {
+  max-width: 62%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+@media (max-width: 760px) {
+  .transcript-message.role-user,
+  .transcript-message.role-assistant {
+    margin-left: 0;
+    margin-right: 0;
+  }
+}
