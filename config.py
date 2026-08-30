@@ -78,6 +78,13 @@ class Settings:
     conveyor_max_worktrees_bytes: int = 500 * 1024 * 1024
     conveyor_max_pending_jobs: int = 20
     conveyor_max_jobs_per_hour: int = 60
+    # Lightweight browser console. It binds to loopback by default and all
+    # control/data endpoints require a high-entropy bearer token.
+    conveyor_web_enabled: bool = False
+    conveyor_web_host: str = "127.0.0.1"
+    conveyor_web_port: int = 8787
+    conveyor_web_token: str | None = None  # SENSITIVE
+    conveyor_event_retention_per_job: int = 2000
     # Gmail App Password backend (P3.3). All optional; gmail.status reports
     # missing config gracefully. OAuth is a future phase.
     gmail_backend: str | None = None  # "imap_smtp" or None
@@ -360,6 +367,11 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_max_worktrees_bytes": _int_env("CONVEYOR_MAX_WORKTREES_BYTES", 500 * 1024 * 1024),
         "conveyor_max_pending_jobs": _int_env("CONVEYOR_MAX_PENDING_JOBS", 20),
         "conveyor_max_jobs_per_hour": _int_env("CONVEYOR_MAX_JOBS_PER_HOUR", 60),
+        "conveyor_web_enabled": os.getenv("CONVEYOR_WEB_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on"),
+        "conveyor_web_host": os.getenv("CONVEYOR_WEB_HOST", "127.0.0.1").strip() or "127.0.0.1",
+        "conveyor_web_port": _int_env("CONVEYOR_WEB_PORT", 8787),
+        "conveyor_web_token": os.getenv("CONVEYOR_WEB_TOKEN") or None,
+        "conveyor_event_retention_per_job": _int_env("CONVEYOR_EVENT_RETENTION_PER_JOB", 2000),
         # Gmail App Password backend (P3.3)
         "gmail_backend": os.getenv("GMAIL_BACKEND") or None,
         "gmail_address": os.getenv("GMAIL_ADDRESS") or None,

@@ -63,3 +63,4 @@ menubar-agent/.build/
 menubar-agent/build/
 /$HOME
 /.workbuddy
+web/node_modules/

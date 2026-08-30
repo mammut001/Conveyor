@@ -13,6 +13,13 @@ Self-hosted · Single-operator · Read-first · Explicit apply / discard control
 > [!IMPORTANT]
 > **v0.1.1 security-hardening upgrade:** after updating an existing VPS, reinstall/reload the narrowed systemd units and run `make smoke` before restarting services. See the deployment docs / previous long-form README in Git history for the exact upgrade sequence.
 
+> [!NOTE]
+> The optional bearer-authenticated [Web Console](docs/web_console.md) adds
+> ordered event replay, queue/job views, scoped Apply/Discard approvals, node
+> status, screenshots, and the computer emergency stop. It binds to loopback by
+> default and serves prebuilt assets, so no Node.js process or browser runs on
+> the VPS.
+
 ---
 
 ## The idea
@@ -103,6 +110,8 @@ Conveyor intentionally assumes a **single trusted operator**, but still treats a
 
 For coding jobs:
 
+- Codex runs with `danger-full-access`; isolation and review come from detached
+  worktrees and Conveyor's policy gates, not an OS sandbox
 - detached git worktrees
 - exact sender allowlists
 - explicit diff inspection

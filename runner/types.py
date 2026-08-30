@@ -83,6 +83,9 @@ class Job:
     usage: dict[str, int] = field(default_factory=dict)
     cancel_requested: bool = False
     process: asyncio.subprocess.Process | None = field(default=None, repr=False)
+    # Stable queue/control-plane id. The runner keeps its existing timestamp
+    # id for logs/worktrees; clients correlate through this optional adapter.
+    external_id: str | None = None
 
 
 @dataclass(frozen=True)

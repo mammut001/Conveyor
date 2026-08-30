@@ -115,15 +115,32 @@ async def handle_codex_job(
     mode: JobMode = JobMode.RUN,
     prompt: str | None = None,
 ) -> None:
+    await submit_codex_job(msg, port, runner, mode=mode, prompt=prompt, wait=True)
+
+
+async def submit_codex_job(
+    msg: InboundMessage,
+    port: OutboundPort,
+    runner: CodexRunner,
+    mode: JobMode = JobMode.RUN,
+    prompt: str | None = None,
+    *,
+    wait: bool = False,
+) -> tuple[bool, str, "QueuedJob | None"]:
+    """Submit a job through the shared persistent queue.
+
+    Browser requests return immediately after enqueue (``wait=False``), while
+    existing chat adapters retain their wait-for-final-response behavior.
+    """
     body = (prompt if prompt is not None else msg.text).strip()
     if not body:
         await port.reply(msg, "Usage: /run <prompt>")
-        return
+        return False, "empty prompt", None
 
     operator_id = msg.operator_id or "unknown"
     if check_rate_limit(operator_id, runner.settings.conveyor_max_jobs_per_hour):
         await port.reply(msg, "提交失败：已达到每小时最大任务数限制")
-        return
+        return False, "rate limit", None
 
     # P3.8: Check if a job is already running and queue if needed
     from handlers.job_queue import get_job_queue
@@ -132,7 +149,7 @@ async def handle_codex_job(
     # Check queue limit before attempting to enqueue
     if queue.queue_length >= runner.settings.conveyor_max_pending_jobs:
         await port.reply(msg, f"无法排队：队列已满（最多 {runner.settings.conveyor_max_pending_jobs} 个任务）")
-        return
+        return False, "queue full", None
 
     record_job_submission(operator_id)
     success, queue_msg, queued_job = await queue.enqueue(
@@ -145,17 +162,31 @@ async def handle_codex_job(
     )
     if not success:
         await port.reply(msg, f"无法排队：{queue_msg}")
-        return
+        return False, queue_msg, None
 
-    if runner.current_job and runner.current_job.state == JobState.RUNNING:
+    # SQLite is authoritative because Telegram, Feishu and Web can be
+    # separate processes sharing one queue.
+    if queue.has_running_job:
         # Job is running, so this one remains queued
         await port.reply(msg, queue_msg)
-        return
+        return True, queue_msg, queued_job
 
     # No job running, execute immediately
-    dequeued_job = await queue.dequeue()
+    dequeued_job = await queue.dequeue(require_idle=True)
     if dequeued_job:
-        await _execute_codex_job(msg, port, runner, mode, body)
+        execute_msg = dequeued_job._msg or msg
+        execute_port = dequeued_job._port or port
+        execute_mode = JobMode.FIX if dequeued_job.mode == "fix" else JobMode.RUN
+        execution = _execute_codex_job(
+            execute_msg, execute_port, runner, execute_mode,
+            dequeued_job.prompt, queue_job_id=dequeued_job.id,
+        )
+        if wait:
+            await execution
+        else:
+            import asyncio
+            asyncio.create_task(execution)
+    return True, queue_msg, queued_job
 
 
 async def _execute_codex_job(
@@ -164,6 +195,8 @@ async def _execute_codex_job(
     runner: CodexRunner,
     mode: JobMode,
     body: str,
+    *,
+    queue_job_id: str | None = None,
 ) -> None:
     """Execute a Codex job directly (not through queue)."""
     # Session context injection: prepend recent turns so the LLM has
@@ -175,6 +208,16 @@ async def _execute_codex_job(
     user_text_for_session = body  # remember for session recording
 
     progress_mode = _normalize_mode(getattr(runner.settings, "conveyor_progress_mode", "compact"))
+
+    if queue_job_id:
+        try:
+            from agent_events import emit_event
+            emit_event(
+                runner.settings, "assistant.started", queue_job_id, {},
+                session_id=msg.chat_id,
+            )
+        except Exception:
+            logger.exception("Could not persist assistant.started")
 
     placeholder_id = await port.reply(msg, PLACEHOLDER_TEXT)
     last_progress: str = PLACEHOLDER_TEXT
@@ -189,6 +232,15 @@ async def _execute_codex_job(
     async def progress(message_text: str) -> None:
         nonlocal last_progress, edit_broken, compact_fallback_sent
         outgoing = truncate(message_text)
+        if queue_job_id:
+            try:
+                from agent_events import emit_event
+                emit_event(
+                    runner.settings, "assistant.delta", queue_job_id,
+                    {"text": outgoing}, session_id=msg.chat_id,
+                )
+            except Exception:
+                logger.exception("Could not persist assistant progress")
         if outgoing == last_progress:
             return
         if progress_mode == "quiet":
@@ -276,6 +328,11 @@ async def _execute_codex_job(
         await port.reply(msg, f"现在不能开始：{truncate(redacted_exc, 1200)}")
         return
 
+    if queue_job_id:
+        job.external_id = queue_job_id
+        from handlers.job_queue import get_job_queue
+        get_job_queue().bind_runtime_job(queue_job_id, job)
+
     # On Feishu, send a structured "job started" card right after
     # the runner accepts the job. The placeholder ("⏳ 收到，处理中…")
     # already went out as an editable card via port.reply, so the
@@ -357,10 +414,28 @@ async def _execute_codex_job(
     # Record turn for session continuity.
     append_turn(runner.settings, msg, user_text_for_session, final_answer)
 
+    if queue_job_id:
+        try:
+            from agent_events import emit_event
+            emit_event(
+                runner.settings,
+                "assistant.completed" if not job.error else "assistant.failed",
+                queue_job_id,
+                {"text": final_answer, "runtime_job_id": job.id},
+                session_id=msg.chat_id,
+            )
+        except Exception:
+            logger.exception("Could not persist assistant terminal event")
+
     # P3.8: Notify queue that job completed, so next queued job can start
     from handlers.job_queue import get_job_queue
     queue = get_job_queue()
-    await queue.on_job_completed(job.id)
+    await queue.on_job_completed(
+        job.id,
+        queue_job_id=queue_job_id,
+        final_state=getattr(job.state, "value", str(job.state)),
+        error=job.error or None,
+    )
 
 
 async def _sleep(seconds: float) -> None:
@@ -450,7 +525,9 @@ async def _start_queued_job_callback(queued_job: QueuedJob) -> None:
         
     mode = JobMode.FIX if queued_job.mode == "fix" else JobMode.RUN
     
-    asyncio.create_task(_execute_codex_job(msg, port, runner, mode, queued_job.prompt))
+    asyncio.create_task(_execute_codex_job(
+        msg, port, runner, mode, queued_job.prompt, queue_job_id=queued_job.id,
+    ))
 
 from handlers.job_queue import get_job_queue
 get_job_queue().set_start_callback(_start_queued_job_callback)

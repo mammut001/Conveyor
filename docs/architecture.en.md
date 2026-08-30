@@ -30,16 +30,16 @@ on the same channel."
 ## 2. Runtime architecture
 
 ```text
-Telegram                            Feishu
+Telegram                            Feishu                 Web browser
    │                                  │
    │ Update                           │ WebSocket
    ▼                                  ▼
  bot.py                          feishu_bot.py
  _TelegramOutbound               FeishuOutbound
    │                                  │
-   └──────────┬───────────────────────┘
+   └──────────┬───────────────────────┴──── REST + SSE ───────┐
               ▼
-       InboundMessage            ← channel-agnostic
+       InboundMessage / persistent queue / agent events      │
               │
               ▼
        handlers.dispatch
@@ -93,7 +93,7 @@ Telegram                            Feishu
 
 @dataclass(frozen=True)
 class InboundMessage:
-    channel: Literal["telegram", "feishu"]
+    channel: Literal["telegram", "feishu", "web"]
     operator_id: str          # Telegram user id / Feishu open_id (str)
     chat_id: str              # session id (Telegram int → str)
     message_id: str | None    # for reply/thread

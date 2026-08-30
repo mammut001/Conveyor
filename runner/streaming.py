@@ -175,6 +175,17 @@ async def _read_jsonl_stdout(
                 event_obj = json.loads(text)
             except json.JSONDecodeError:
                 event_obj = None
+            if isinstance(event_obj, dict) and getattr(job, "external_id", None):
+                try:
+                    from agent_events import emit_codex_event
+                    emit_codex_event(
+                        self.settings,
+                        str(job.external_id),
+                        event_obj,
+                    )
+                except Exception:
+                    # Event replay must never be able to break Codex execution.
+                    pass
             if isinstance(event_obj, dict) and str(event_obj.get("type") or "").lower() == "error":
                 err_msg = str(event_obj.get("message") or "")
                 err_lower = err_msg.lower()

@@ -35,6 +35,7 @@ EXCLUDES=(
   --exclude=state
   --exclude=MEMORY.md
   --exclude='MEMORY.md.archived-*'
+  --exclude=node_modules
 )
 
 echo "==> Checking SSH to $REMOTE"
@@ -68,6 +69,7 @@ cd '$REMOTE_DIR'
 sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
 sudo cp systemd/conveyor-feishu-bot.service /etc/systemd/system/
 sudo cp systemd/conveyor-desktop-agent.service /etc/systemd/system/
+sudo cp systemd/conveyor-web.service /etc/systemd/system/
 sudo cp systemd/conveyor-maintain.service /etc/systemd/system/
 sudo cp systemd/conveyor-maintain.timer /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -88,6 +90,11 @@ ssh "$REMOTE" "cd '$REMOTE_DIR' && bash scripts/healthcheck.sh"
 echo "==> Enabling and starting services"
 ssh "$REMOTE" "sudo systemctl enable --now conveyor-telegram-bot conveyor-feishu-bot conveyor-desktop-agent conveyor-maintain.timer && \
   sleep 2 && sudo systemctl is-active conveyor-telegram-bot.service"
+
+if ssh "$REMOTE" "grep -Eq '^CONVEYOR_WEB_ENABLED=(true|1|yes|on)$' '$REMOTE_DIR/.env'"; then
+  echo "==> Enabling Web Console"
+  ssh "$REMOTE" "sudo systemctl enable --now conveyor-web.service && sudo systemctl is-active conveyor-web.service"
+fi
 
 echo
 echo "Install complete. Open Telegram and send /start to your bot."

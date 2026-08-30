@@ -137,6 +137,7 @@ install_systemd_units() {
         "conveyor-telegram-bot.service"
         "conveyor-feishu-bot.service"
         "conveyor-desktop-agent.service"
+        "conveyor-web.service"
         "conveyor-maintain.service"
         "conveyor-maintain.timer"
         "conveyor-scheduler.service"
@@ -168,6 +169,9 @@ enable_services() {
     log_info "Enabling and starting services..."
     systemctl enable conveyor-telegram-bot.service
     systemctl enable conveyor-desktop-agent.service
+    if grep -Eqi '^CONVEYOR_WEB_ENABLED=(true|1|yes|on)$' "$CONVEYOR_DIR/.env"; then
+        systemctl enable conveyor-web.service
+    fi
     systemctl enable conveyor-maintain.timer
     systemctl enable conveyor-scheduler.timer
     log_ok "Services enabled"
@@ -177,6 +181,9 @@ start_services() {
     log_info "Starting services..."
     systemctl restart conveyor-telegram-bot.service
     systemctl restart conveyor-desktop-agent.service
+    if systemctl is-enabled conveyor-web.service &>/dev/null; then
+        systemctl restart conveyor-web.service
+    fi
     systemctl restart conveyor-maintain.timer
     systemctl restart conveyor-scheduler.timer
     log_ok "Services started"
@@ -187,6 +194,7 @@ stop_services() {
     systemctl stop conveyor-telegram-bot.service 2>/dev/null || true
     systemctl stop conveyor-feishu-bot.service 2>/dev/null || true
     systemctl stop conveyor-desktop-agent.service 2>/dev/null || true
+    systemctl stop conveyor-web.service 2>/dev/null || true
     systemctl stop conveyor-maintain.timer 2>/dev/null || true
     systemctl stop conveyor-maintain.service 2>/dev/null || true
     systemctl stop conveyor-scheduler.timer 2>/dev/null || true
@@ -200,6 +208,7 @@ remove_systemd_units() {
         "conveyor-telegram-bot.service"
         "conveyor-feishu-bot.service"
         "conveyor-desktop-agent.service"
+        "conveyor-web.service"
         "conveyor-maintain.service"
         "conveyor-maintain.timer"
         "conveyor-scheduler.service"

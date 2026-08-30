@@ -1,5 +1,11 @@
 # Conveyor
 
+> Web Console：Conveyor 现在包含一个可选的 Bearer Token 认证浏览器控制台，
+> 支持有序事件重放、队列/任务、Diff 审阅、按任务绑定的 Apply/Discard 审批、
+> 节点状态、截图和电脑紧急停止。默认仅监听 `127.0.0.1`，VPS 只运行 Python
+> 并提供预构建静态资源，不需要 Node.js 常驻或浏览器。详见
+> [docs/web_console.md](docs/web_console.md)。
+
 **在自己的 VPS 上，通过 Telegram / 飞书远程运行 Codex。**
 
 Conveyor 把一个私有的 Telegram / 飞书会话变成一台

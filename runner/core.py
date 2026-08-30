@@ -48,7 +48,10 @@ from runner.memo import _ensure_section, _extract_section, _insert_line_in_secti
 
 from runner.metadata import _read_final_message, _write_job_metadata, job_records, _last_job_id, _last_worktree_path, _latest_file, _state_from_attempt_file
 
-from runner.operators.jobs import status_text, diff_text, jobs_text, last_text, discard_last_job, apply_last_job
+from runner.operators.jobs import (
+    status_text, diff_text, diff_job, jobs_text, last_text,
+    discard_last_job, discard_job, apply_last_job, apply_job,
+)
 
 from runner.operators.maintain import clean_old_jobs, clean_old_worktrees
 
@@ -94,10 +97,13 @@ for _name, _func in [
     ("_state_from_attempt_file", _state_from_attempt_file),
     ("status_text", status_text),
     ("diff_text", diff_text),
+    ("diff_job", diff_job),
     ("jobs_text", jobs_text),
     ("last_text", last_text),
     ("discard_last_job", discard_last_job),
+    ("discard_job", discard_job),
     ("apply_last_job", apply_last_job),
+    ("apply_job", apply_job),
     ("clean_old_jobs", clean_old_jobs),
     ("clean_old_worktrees", clean_old_worktrees),
     ("validate", validate),
