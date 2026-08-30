@@ -14,6 +14,7 @@ from typing import Any
 from agent_events import emit_event, get_event_store
 from handlers.job_queue import JobQueue
 from redaction import redact_text, truncate
+from runtime_control import COMMAND_CANCEL, get_runtime_control
 
 
 class WebControl:
@@ -290,7 +291,17 @@ class WebControl:
         if current and getattr(current, "external_id", None) == job_id:
             result = await self.runner.cancel()
             return True, result
-        return False, "Running job belongs to another Conveyor process and cannot be signalled here."
+        if job.get("state") != "running":
+            return False, f"Job is {job.get('state') or 'not running'}."
+        control = get_runtime_control(self.settings)
+        owner_id = str((job.get("metadata") or {}).get("execution_owner_id") or "").strip()
+        if not owner_id:
+            owner_id = control.owner_for_job(job_id) or ""
+        if not owner_id:
+            return False, "Running job has no live execution owner yet; retry after the runner starts streaming."
+        command = control.submit(job_id, owner_id, COMMAND_CANCEL)
+        emit_event(self.settings, "task.cancel_requested", job_id, {"command_id": command.id})
+        return True, f"Cancellation requested for {job_id}."
 
     async def emergency_stop(self) -> str:
         from handlers.tools.executors import exec_computer_stop
