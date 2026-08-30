@@ -218,8 +218,6 @@ class EventStore:
     def latest_for_jobs(self, job_ids: Iterable[str]) -> dict[str, AgentEvent]:
         ids = list(dict.fromkeys(str(job_id) for job_id in job_ids if job_id))
         result: dict[str, AgentEvent] = {}
-        # Stay below SQLite's conservative host-parameter limit while avoiding
-        # one query (and up to the full retention window) per dashboard row.
         for start in range(0, len(ids), 400):
             chunk = ids[start:start + 400]
             placeholders = ",".join("?" for _ in chunk)
@@ -284,11 +282,13 @@ def emit_event(settings: Any, kind: str, job_id: str, payload: dict[str, Any] | 
 
 
 def emit_codex_event(settings: Any, job_id: str, raw: dict[str, Any]) -> AgentEvent | None:
-    """Translate a Codex JSONL envelope into the stable public vocabulary.
+    """Translate a Codex JSONL envelope into the stable public vocabulary."""
+    try:
+        from runtime_control import bind_live_job
+        bind_live_job(settings, job_id)
+    except Exception:
+        pass
 
-    Only small display-safe fields cross the boundary; raw environment data,
-    full command payloads and reasoning are intentionally not persisted here.
-    """
     event_type = str(raw.get("type") or raw.get("event") or "").lower()
     item = raw.get("item") if isinstance(raw.get("item"), dict) else {}
     item_type = str(item.get("type") or "").lower()
@@ -297,9 +297,7 @@ def emit_codex_event(settings: Any, job_id: str, raw: dict[str, Any]) -> AgentEv
 
     toolish = any(tag in item_type for tag in ("function_call", "tool_call", "command_execution"))
     tool_call_id = str(item.get("id") or item.get("call_id") or "") or None
-    payload: dict[str, Any] = {
-        "source_type": event_type,
-    }
+    payload: dict[str, Any] = {"source_type": event_type}
     if toolish:
         name = item.get("name") or item.get("tool") or item.get("function")
         if not name and "command_execution" in item_type:
