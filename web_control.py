@@ -15,6 +15,7 @@ from agent_events import emit_event, get_event_store
 from handlers.job_queue import JobQueue
 from redaction import redact_text, truncate
 from runtime_control import COMMAND_CANCEL, get_runtime_control
+from transcript_store import get_transcript_store
 
 
 class WebControl:
@@ -76,7 +77,21 @@ class WebControl:
         return item
 
     def list_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
+        transcript_sessions = get_transcript_store(self.settings).list_sessions(limit)
         jobs = self.queue.list_jobs(500)
+        if transcript_sessions:
+            latest_by_session: dict[str, dict[str, Any]] = {}
+            for job in jobs:
+                session_id = str(job.get("chat_id") or "")
+                if session_id and session_id not in latest_by_session:
+                    latest_by_session[session_id] = job
+            for session in transcript_sessions:
+                session["last_activity"] = session.get("updated_at") or session.get("created_at")
+                session["latest_job"] = latest_by_session.get(str(session.get("id") or ""))
+            return transcript_sessions
+
+        # Backward-compatible projection for installations that have not yet
+        # written a structured transcript.
         grouped: dict[str, dict[str, Any]] = {}
         for job in jobs:
             session_id = str(job.get("chat_id") or "")
@@ -88,6 +103,7 @@ class WebControl:
                 "created_at": job.get("created_at"),
                 "last_activity": job.get("updated_at") or job.get("created_at"),
                 "job_count": 0,
+                "message_count": 0,
                 "latest_job": None,
                 "title": job.get("prompt_preview") or "Session",
             })
@@ -98,6 +114,12 @@ class WebControl:
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         jobs = self.list_jobs(200, session_id=session_id)
+        transcript = get_transcript_store(self.settings).get_session(session_id)
+        if transcript is not None:
+            transcript["last_activity"] = transcript.get("updated_at") or transcript.get("created_at")
+            transcript["jobs"] = jobs
+            transcript["job_count"] = len(jobs)
+            return transcript
         if not jobs:
             return None
         return {
@@ -106,6 +128,8 @@ class WebControl:
             "created_at": jobs[-1].get("created_at"),
             "last_activity": jobs[0].get("updated_at") or jobs[0].get("created_at"),
             "jobs": jobs,
+            "messages": [],
+            "job_count": len(jobs),
         }
 
     def events(self, job_id: str, after: int = 0, limit: int = 500) -> list[dict[str, Any]]:
