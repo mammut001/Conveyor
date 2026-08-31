@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
-import { runtimeOwnerFromJob, type TranscriptMessage } from './runtime'
+import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
 import './v2.css'
 
 type EventItem = {
@@ -9,7 +9,7 @@ type EventItem = {
   kind: string; job_id: string; payload: Record<string, unknown>; tool_call_id?: string
 }
 type Job = {
-  id: string; state: string; mode: string; channel: string; chat_id: string
+  id: string; state: string; mode: string; channel: string; chat_id: string; operator_id?: string
   created_at: string; updated_at?: string; started_at?: string; finished_at?: string
   prompt_preview: string; metadata?: Record<string, string>; latest_event?: EventItem
   changed_files?: { status: string; path: string }[]
@@ -17,7 +17,7 @@ type Job = {
 }
 type Session = {
   id: string; channel?: string; title?: string; created_at: string; updated_at?: string; last_activity: string
-  job_count: number; message_count?: number; latest_job?: Job
+  operator_id?: string; source_chat_id?: string; job_count: number; message_count?: number; latest_job?: Job
 }
 type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[] }
 type Approval = { id: string; job_id: string; action: string; status: string; created_at?: string }
@@ -59,6 +59,7 @@ export default function App() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [selectedSessionId, setSelectedSessionId] = useState('')
   const [selectedJobId, setSelectedJobId] = useState('')
+  const [creatingSession, setCreatingSession] = useState(false)
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([])
   const [events, setEvents] = useState<EventItem[]>([])
   const [approvals, setApprovals] = useState<Approval[]>([])
@@ -93,13 +94,13 @@ export default function App() {
       ])
       setSessions(sessionData.sessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setError('')
-      if (!selectedJobId && jobData.jobs.length) setSelectedJobId(jobData.jobs[0].id)
-      if (!selectedSessionId) {
+      if (!creatingSession && !selectedJobId && jobData.jobs.length) setSelectedJobId(jobData.jobs[0].id)
+      if (!creatingSession && !selectedSessionId) {
         const initialSession = sessionData.sessions[0]?.id || jobData.jobs[0]?.chat_id || ''
         if (initialSession) setSelectedSessionId(initialSession)
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not connect') }
-  }, [api, selectedJobId, selectedSessionId, token])
+  }, [api, creatingSession, selectedJobId, selectedSessionId, token])
 
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
@@ -156,10 +157,21 @@ export default function App() {
 
   const selectedJob = useMemo(() => jobs.find(job => job.id === selectedJobId), [jobs, selectedJobId])
   useEffect(() => {
-    if (selectedJob?.chat_id && selectedJob.chat_id !== selectedSessionId) setSelectedSessionId(selectedJob.chat_id)
-  }, [selectedJob, selectedSessionId])
+    if (!selectedJob || creatingSession) return
+    const matching = sessions.find(session => session.channel === selectedJob.channel
+      && session.operator_id === selectedJob.operator_id
+      && session.source_chat_id === selectedJob.chat_id)
+    const target = matching?.id || selectedJob.chat_id
+    if (target && target !== selectedSessionId) setSelectedSessionId(target)
+  }, [creatingSession, selectedJob, selectedSessionId, sessions])
   const pendingForJob = approvals.filter(item => item.job_id === selectedJobId)
   const runtimeOwner = runtimeOwnerFromJob(selectedJob)
+  const terminalHasTranscript = Boolean(selectedJob && terminalJobState(selectedJob.state)
+    && transcript.some(message => message.role === 'assistant'
+      && (!message.job_id || message.job_id === selectedJob.id)))
+  const visibleEvents = terminalHasTranscript
+    ? events.filter(item => !item.kind.startsWith('assistant.'))
+    : events
 
   async function submit(event: FormEvent) {
     event.preventDefault(); if (!prompt.trim() || busy) return
@@ -169,6 +181,7 @@ export default function App() {
         method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSessionId || undefined }),
       })
       setPrompt(''); await refresh()
+      setCreatingSession(false)
       if (result.session_id) setSelectedSessionId(result.session_id)
       if (result.job_id) setSelectedJobId(result.job_id)
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Submit failed') }
@@ -202,9 +215,9 @@ export default function App() {
     {error && <div className="error-banner global">{error}<button onClick={() => setError('')}>×</button></div>}
     <section className="workspace">
       <aside className="sessions-panel panel">
-        <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { setSelectedSessionId(''); setSelectedJobId(''); setTranscript([]); setPrompt('') }} aria-label="New session">＋</button></div>
+        <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { setCreatingSession(true); setSelectedSessionId(''); setSelectedJobId(''); setTranscript([]); setPrompt('') }} aria-label="New session">＋</button></div>
         <div className="session-list">
-          {sessions.map(session => <button key={session.id} className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`} onClick={() => { setSelectedSessionId(session.id); if (session.latest_job) setSelectedJobId(session.latest_job.id) }}>
+          {sessions.map(session => <button key={session.id} className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`} onClick={() => { setCreatingSession(false); setSelectedSessionId(session.id); if (session.latest_job) setSelectedJobId(session.latest_job.id) }}>
             <span className={`status-rail ${session.latest_job?.state || ''}`} /><span><strong>{session.title || 'Untitled session'}</strong><small>{session.message_count ?? 0} messages · {session.job_count} job{session.job_count === 1 ? '' : 's'} · {formatTime(session.last_activity)}</small></span>
           </button>)}
           {!sessions.length && <Empty text="No sessions yet" />}
@@ -221,7 +234,7 @@ export default function App() {
           {transcript.length > 0 && <><div className="stream-divider">Conversation history</div><TranscriptPanel messages={transcript} /></>}
           {selectedJob && <div className="stream-divider">Job {selectedJob.id} execution</div>}
           {selectedJob && !transcript.length && <article className="event-card user-event"><div className="event-meta"><span>YOU</span><time>{formatTime(selectedJob.created_at)}</time></div><p>{selectedJob.prompt_preview}</p></article>}
-          {events.map(item => <EventCard key={item.event_id} item={item} />)}
+          {visibleEvents.map(item => <EventCard key={item.event_id} item={item} />)}
           {!selectedJob && !selectedSessionId && <div className="welcome-state"><div className="brand-mark">C</div><h2>What should Conveyor do?</h2><p>Start a task below. It will enter the same persistent queue used by Telegram and Feishu.</p></div>}
           {selectedJob && !events.length && <Empty text="Waiting for the first event…" />}
         </div>

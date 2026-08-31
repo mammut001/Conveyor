@@ -9,6 +9,7 @@ import json
 import logging
 import mimetypes
 import os
+import sys
 import threading
 import time
 import uuid
@@ -25,6 +26,7 @@ from handlers.jobs import submit_codex_job
 from redaction import SecretRedactingFilter, redact_text
 from runner import CodexRunner, JobMode
 from web_control import WebControl
+from transcript_store import session_identity
 
 logger = logging.getLogger("conveyor.web")
 MAX_BODY_BYTES = 65_536
@@ -61,6 +63,13 @@ class WebConsoleServer(ThreadingHTTPServer):
         self.control = control
         self.loop = loop
         self.token = token
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        error = sys.exc_info()[1]
+        if isinstance(error, (BrokenPipeError, ConnectionResetError)):
+            logger.debug("Web client disconnected: %s", client_address[0])
+            return
+        super().handle_error(request, client_address)
 
 
 class WebConsoleHandler(BaseHTTPRequestHandler):
@@ -195,13 +204,21 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if not prompt or len(prompt) > 8_000:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "prompt must be 1-8000 characters"})
                     return
-                session_id = str(body.get("session_id") or f"web-{uuid.uuid4().hex[:12]}")
-                if len(session_id) > 128 or not all(ch.isalnum() or ch in "-_" for ch in session_id):
-                    self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid session_id"})
-                    return
+                requested_session_id = str(body.get("session_id") or "")
+                resolved = self.server.control.resolve_session_identity(requested_session_id) if requested_session_id else None
+                if resolved:
+                    channel, operator_id, source_chat_id = resolved
+                    durable_session_id = requested_session_id
+                else:
+                    source_chat_id = requested_session_id or f"web-{uuid.uuid4().hex[:12]}"
+                    if len(source_chat_id) > 128 or not all(ch.isalnum() or ch in "-_" for ch in source_chat_id):
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid session_id"})
+                        return
+                    channel, operator_id = "web", "web-console"
+                    durable_session_id = session_identity(channel, source_chat_id, operator_id)
                 mode = JobMode.FIX if body.get("mode") == "fix" else JobMode.RUN
                 msg = InboundMessage(
-                    channel="web", operator_id="web-console", chat_id=session_id,
+                    channel=channel, operator_id=operator_id, chat_id=source_chat_id,
                     message_id=uuid.uuid4().hex, text=prompt, chat_type="p2p",
                 )
                 ok, message, job = self._await(submit_codex_job(
@@ -210,7 +227,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 ))
                 self._json(HTTPStatus.ACCEPTED if ok else HTTPStatus.CONFLICT, {
                     "ok": ok, "message": message, "job_id": job.id if job else None,
-                    "session_id": session_id,
+                    "session_id": durable_session_id,
                 })
             elif len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "cancel":
                 ok, message = self._await(self.server.control.cancel_job(parts[2]))

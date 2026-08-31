@@ -80,14 +80,23 @@ class WebControl:
         transcript_sessions = get_transcript_store(self.settings).list_sessions(limit)
         jobs = self.queue.list_jobs(500)
         if transcript_sessions:
-            latest_by_session: dict[str, dict[str, Any]] = {}
+            latest_by_session: dict[tuple[str, str, str], dict[str, Any]] = {}
             for job in jobs:
-                session_id = str(job.get("chat_id") or "")
-                if session_id and session_id not in latest_by_session:
-                    latest_by_session[session_id] = job
+                key = (
+                    str(job.get("channel") or ""),
+                    str(job.get("operator_id") or ""),
+                    str(job.get("chat_id") or ""),
+                )
+                if all(key) and key not in latest_by_session:
+                    latest_by_session[key] = job
             for session in transcript_sessions:
                 session["last_activity"] = session.get("updated_at") or session.get("created_at")
-                session["latest_job"] = latest_by_session.get(str(session.get("id") or ""))
+                key = (
+                    str(session.get("channel") or ""),
+                    str(session.get("operator_id") or ""),
+                    str(session.get("source_chat_id") or ""),
+                )
+                session["latest_job"] = latest_by_session.get(key)
             return transcript_sessions
 
         # Backward-compatible projection for installations that have not yet
@@ -113,13 +122,19 @@ class WebControl:
         return list(grouped.values())[:limit]
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
-        jobs = self.list_jobs(200, session_id=session_id)
         transcript = get_transcript_store(self.settings).get_session(session_id)
         if transcript is not None:
+            source_chat_id = str(transcript.get("source_chat_id") or "")
+            jobs = self.list_jobs(200, session_id=source_chat_id)
+            jobs = [job for job in jobs if (
+                job.get("channel") == transcript.get("channel")
+                and job.get("operator_id") == transcript.get("operator_id")
+            )]
             transcript["last_activity"] = transcript.get("updated_at") or transcript.get("created_at")
             transcript["jobs"] = jobs
             transcript["job_count"] = len(jobs)
             return transcript
+        jobs = self.list_jobs(200, session_id=session_id)
         if not jobs:
             return None
         return {
@@ -131,6 +146,17 @@ class WebControl:
             "messages": [],
             "job_count": len(jobs),
         }
+
+    def resolve_session_identity(self, session_id: str) -> tuple[str, str, str] | None:
+        transcript = get_transcript_store(self.settings).get_session(session_id)
+        if transcript is None:
+            return None
+        channel = str(transcript.get("channel") or "")
+        operator_id = str(transcript.get("operator_id") or "")
+        source_chat_id = str(transcript.get("source_chat_id") or "")
+        if channel not in ("telegram", "feishu", "web") or not operator_id or not source_chat_id:
+            return None
+        return channel, operator_id, source_chat_id
 
     def events(self, job_id: str, after: int = 0, limit: int = 500) -> list[dict[str, Any]]:
         return [item.to_dict() for item in get_event_store(self.settings).list(job_id, after, limit)]
