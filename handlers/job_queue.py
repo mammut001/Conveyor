@@ -153,15 +153,9 @@ class JobQueue:
             except Exception:
                 root = Path(os.getenv("CODEX_MEMORY_ROOT", "~/.codex")).expanduser().resolve()
         
-        # If the root is in /tmp, isolate it by current user name to prevent multi-user permission conflicts on shared VPS /tmp folder
-        if str(root).startswith("/tmp/"):
-            try:
-                import getpass
-                username = getpass.getuser()
-                root = root.parent / f"{root.name}-{username}"
-            except Exception:
-                pass
-                
+        # The configured memory root is the cross-process control-plane
+        # boundary. Never rewrite it per user: agent events, transcripts and
+        # the queue must share the same SQLite database.
         return root / "state" / "job_queue.sqlite3"
 
     def _get_conn(self) -> sqlite3.Connection:
