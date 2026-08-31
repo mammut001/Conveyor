@@ -52,6 +52,10 @@ def status_text(self) -> str:
 async def diff_text(self) -> str:
     worktree_path = self._last_worktree_path()
     job_id = self._last_job_id()
+    return truncate(await diff_job(self, job_id, worktree_path), 3900)
+
+
+async def diff_job(self, job_id: str | None, worktree_path: Path | None) -> str:
     if not worktree_path or not worktree_path.exists():
         return "No job worktree available yet."
     status = await self._git(["status", "--short"], cwd=worktree_path, check=False)
@@ -59,12 +63,13 @@ async def diff_text(self) -> str:
     diff = await self._git(["diff", "--", "."], cwd=worktree_path, check=False)
     if not status.strip() and not stat.strip() and not diff.strip():
         return f"Job {job_id}: no git diff."
-    return truncate(
+    # Web clients need the real unified diff. Bound it defensively, while the
+    # legacy chat wrapper above keeps its historical 3900-character limit.
+    return (
         f"Job {job_id} status:\n{status.strip() or '(clean)'}\n\n"
         f"Diff stat:\n{stat.strip() or '(no tracked changes)'}\n\n"
-        f"Diff preview:\n{diff.strip() or '(no tracked diff; check untracked files above)'}",
-        3900,
-    )
+        f"Unified diff:\n{diff.strip() or '(no tracked diff; check untracked files above)'}"
+    )[:1_000_000]
 
 
 def jobs_text(self, limit: int = 8) -> str:
@@ -91,6 +96,10 @@ def last_text(self) -> str:
 async def discard_last_job(self) -> str:
     worktree_path = self._last_worktree_path()
     job_id = self._last_job_id()
+    return await discard_job(self, job_id, worktree_path)
+
+
+async def discard_job(self, job_id: str | None, worktree_path: Path | None) -> str:
     if not worktree_path or not worktree_path.exists():
         return "No job worktree to discard."
     await self._remove_worktree(worktree_path)
@@ -98,11 +107,15 @@ async def discard_last_job(self) -> str:
 
 
 async def apply_last_job(self) -> str:
+    worktree_path = self._last_worktree_path()
+    job_id = self._last_job_id()
+    return await apply_job(self, job_id, worktree_path)
+
+
+async def apply_job(self, job_id: str | None, worktree_path: Path | None) -> str:
     from runner.file_lock import file_lock
     from runner.apply_policy import validate_apply_paths, collect_tracked_changed_files, collect_untracked_files
 
-    worktree_path = self._last_worktree_path()
-    job_id = self._last_job_id()
     if not worktree_path or not worktree_path.exists():
         return "No job worktree to apply."
 

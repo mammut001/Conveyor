@@ -39,6 +39,7 @@ EXCLUDES=(
   --exclude=.deploy-status.json
   --exclude=.deploy.lock
   --exclude=.deploy-backups
+  --exclude=node_modules
 )
 
 log() { echo "[deploy] $*"; }
@@ -47,10 +48,10 @@ die() { log "ERROR: $*" >&2; exit 1; }
 # ---- rsync ----------------------------------------------------------------
 log "Syncing to ${REMOTE}:${REMOTE_DIR} ..."
 for sub in \
-  scripts runner bot.py feishu_bot.py config.py runner.py redaction.py \
+  scripts runner bot.py feishu_bot.py web_console.py web_control.py agent_events.py config.py runner.py redaction.py \
   desktop_agent.py desktop_agent_server.py desktop_cua.py \
   desktop_computer_loop.py desktop_computer_planner.py desktop_computer_requests.py \
-  desktop_screenshot.py requirements.txt systemd channel handlers nodes Makefile; do
+  desktop_screenshot.py requirements.txt systemd channel handlers nodes web tests Makefile; do
   if [[ -e "$LOCAL_DIR/$sub" ]]; then
     rsync -az "${EXCLUDES[@]}" \
       "$LOCAL_DIR/$sub" "$REMOTE:$REMOTE_DIR/"
@@ -116,6 +117,9 @@ log "Smoke passed."
 
 # ---- restart services ------------------------------------------------------
 SERVICES=(conveyor-telegram-bot conveyor-feishu-bot)
+if systemctl is-enabled --quiet conveyor-web.service 2>/dev/null; then
+  SERVICES+=(conveyor-web.service)
+fi
 # Optionally restart maintain timer if it exists
 if systemctl list-unit-files conveyor-maintain.timer &>/dev/null; then
   SERVICES+=(conveyor-maintain.timer)

@@ -14,6 +14,7 @@ SENSITIVE_SETTING_FIELDS = frozenset({
     "github_token",
     "web_search_api_key",
     "conveyor_desktop_agent_token",
+    "conveyor_web_token",
 })
 
 # Substrings to search for in dictionary keys to mark them sensitive

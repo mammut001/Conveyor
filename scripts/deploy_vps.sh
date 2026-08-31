@@ -117,6 +117,9 @@ SERVICES=(
     conveyor-feishu-bot.service
     conveyor-desktop-agent.service
 )
+if systemctl is-enabled --quiet conveyor-web.service 2>/dev/null; then
+    SERVICES+=(conveyor-web.service)
+fi
 # Optionally restart maintain timer if it exists
 if systemctl list-unit-files conveyor-maintain.timer &>/dev/null; then
     SERVICES+=(conveyor-maintain.timer)

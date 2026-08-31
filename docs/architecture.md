@@ -23,16 +23,16 @@
 ## 2. 运行时架构
 
 ```text
-Telegram                            Feishu
+Telegram                            Feishu                 Web browser
    │                                  │
    │ Update                           │ WebSocket
    ▼                                  ▼
  bot.py                          feishu_bot.py
  _TelegramOutbound               FeishuOutbound
    │                                  │
-   └──────────┬───────────────────────┘
+   └──────────┬───────────────────────┴──── REST + SSE ───────┐
               ▼
-       InboundMessage            ← channel-agnostic
+       InboundMessage / persistent queue / agent events      │
               │
               ▼
        handlers.dispatch
@@ -86,7 +86,7 @@ Telegram                            Feishu
 
 @dataclass(frozen=True)
 class InboundMessage:
-    channel: Literal["telegram", "feishu"]
+    channel: Literal["telegram", "feishu", "web"]
     operator_id: str          # Telegram user id / Feishu open_id（统一为 str）
     chat_id: str              # 会话 ID（Telegram int → str）
     message_id: str | None    # 用于 reply/thread

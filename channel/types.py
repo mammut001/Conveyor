@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-ChannelName = Literal["telegram", "feishu"]
+ChannelName = Literal["telegram", "feishu", "web"]
 ChatType = Literal["p2p", "group", "unknown"]
 
 

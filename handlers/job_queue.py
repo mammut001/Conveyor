@@ -107,17 +107,40 @@ class JobQueue:
         finally:
             conn.close()
 
+    @property
+    def has_running_job(self) -> bool:
+        conn = self._get_conn()
+        try:
+            return bool(conn.execute(
+                "SELECT 1 FROM queued_jobs WHERE state = 'running' LIMIT 1"
+            ).fetchone())
+        finally:
+            conn.close()
+
+    def _emit(self, kind: str, job_id: str, payload: dict[str, Any] | None = None,
+              *, session_id: str | None = None) -> None:
+        if self._settings is None:
+            return
+        try:
+            from agent_events import emit_event
+            emit_event(
+                self._settings, kind, job_id, payload or {},
+                session_id=session_id,
+            )
+        except Exception:
+            logger.exception("Could not persist agent event %s for %s", kind, job_id)
+
     def set_start_callback(self, callback: Callable[[QueuedJob], Awaitable[None]]) -> None:
         """Set the callback to start a queued job."""
         self._start_callback = callback
 
-    def configure(self, settings: "Settings", runner: "CodexRunner") -> None:
+    def configure(self, settings: "Settings", runner: "CodexRunner", *, recover: bool = True) -> None:
         """Configure settings and runner, and load/recover database."""
         self._settings = settings
         self._runner = runner
         if hasattr(settings, "conveyor_max_pending_jobs"):
             self._max_length = settings.conveyor_max_pending_jobs
-        self.recover_and_load()
+        self.recover_and_load(mark_interrupted=recover)
 
     def _db_path(self) -> Path:
         if self._settings and hasattr(self._settings, "codex_memory_root"):
@@ -187,17 +210,18 @@ class JobQueue:
                 )
             """)
 
-    def recover_and_load(self) -> None:
+    def recover_and_load(self, *, mark_interrupted: bool = True) -> None:
         """Recover interrupted running jobs and reload paused state and counter."""
         conn = self._get_conn()
         now_str = datetime.now(timezone.utc).isoformat()
         try:
             with conn:
                 # 1. Update running jobs to interrupted on startup
-                conn.execute(
-                    "UPDATE queued_jobs SET state = 'interrupted', finished_at = ?, position = 0 WHERE state = 'running'",
-                    (now_str,)
-                )
+                if mark_interrupted:
+                    conn.execute(
+                        "UPDATE queued_jobs SET state = 'interrupted', finished_at = ?, position = 0 WHERE state = 'running'",
+                        (now_str,)
+                    )
                 
                 # 2. Load paused state
                 cur = conn.execute("SELECT value FROM queue_metadata WHERE key = 'paused'")
@@ -315,6 +339,14 @@ class JobQueue:
                 "Job %s queued at position %d (channel=%s, operator=%s)",
                 job_id, queued_job.position, msg.channel, msg.operator_id,
             )
+            self._emit("task.created", job_id, {
+                "mode": mode,
+                "channel": msg.channel,
+                "text": original_text or msg.text,
+            }, session_id=msg.chat_id)
+            self._emit("task.queued", job_id, {
+                "position": queued_job.position,
+            }, session_id=msg.chat_id)
             return True, (
                 f"⏳ 任务已排队\n"
                 f"队列位置: {queued_job.position}/{count + 1}\n"
@@ -322,17 +354,26 @@ class JobQueue:
                 f"提示: {queued_job.prompt_preview}"
             ), queued_job
 
-    async def dequeue(self) -> QueuedJob | None:
+    async def dequeue(self, *, require_idle: bool = False) -> QueuedJob | None:
         """Remove and return the next job from the queue."""
         async with self._lock:
             if self._paused:
                 return None
             conn = self._get_conn()
             try:
-                with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    if require_idle:
+                        running = conn.execute(
+                            "SELECT 1 FROM queued_jobs WHERE state = 'running' LIMIT 1"
+                        ).fetchone()
+                        if running:
+                            conn.rollback()
+                            return None
                     cur = conn.execute("SELECT * FROM queued_jobs WHERE state = 'queued' ORDER BY position ASC, created_at ASC LIMIT 1")
                     row = cur.fetchone()
                     if not row:
+                        conn.rollback()
                         return None
                     
                     job_id = row["id"]
@@ -345,6 +386,10 @@ class JobQueue:
                     
                     cur = conn.execute("SELECT * FROM queued_jobs WHERE id = ?", (job_id,))
                     updated_row = cur.fetchone()
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
             finally:
                 conn.close()
                 
@@ -356,6 +401,7 @@ class JobQueue:
                 runner=refs.get("runner") or self._runner
             )
             logger.info("Job %s dequeued (remaining queued count: %d)", job.id, self._get_queued_count())
+            self._emit("task.started", job.id, {"mode": job.mode}, session_id=job.chat_id)
             return job
 
     def _get_queued_count(self, conn: sqlite3.Connection | None = None) -> int:
@@ -392,7 +438,63 @@ class JobQueue:
                 
             self._memory_references.pop(job_id, None)
             logger.info("Job %s cancelled from queue", job_id)
+            self._emit("task.cancelled", job_id, {})
             return True, f"已取消队列任务 {job_id}"
+
+    def bind_runtime_job(self, queue_job_id: str, runtime_job: Any) -> None:
+        """Persist the runner id/worktree correlation used by APIs and replay."""
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT metadata_json FROM queued_jobs WHERE id = ?", (queue_job_id,)
+            ).fetchone()
+            if row is None:
+                return
+            try:
+                metadata = json.loads(row[0] or "{}")
+            except Exception:
+                metadata = {}
+            metadata["runtime_job_id"] = str(getattr(runtime_job, "id", ""))
+            worktree = getattr(runtime_job, "worktree_path", None)
+            if worktree:
+                metadata["worktree_path"] = str(worktree)
+            with conn:
+                conn.execute(
+                    "UPDATE queued_jobs SET metadata_json = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(metadata), datetime.now(timezone.utc).isoformat(), queue_job_id),
+                )
+        finally:
+            conn.close()
+
+    def list_jobs(self, limit: int = 100, *, session_id: str | None = None) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        try:
+            sql = "SELECT * FROM queued_jobs"
+            params: list[Any] = []
+            if session_id is not None:
+                sql += " WHERE chat_id = ?"
+                params.append(session_id)
+            sql += " ORDER BY created_at DESC LIMIT ?"
+            params.append(min(max(1, int(limit)), 500))
+            rows = conn.execute(sql, params).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                item = {key: row[key] for key in row.keys() if key != "prompt"}
+                try:
+                    metadata = json.loads(row["metadata_json"] or "{}")
+                except Exception:
+                    metadata = {}
+                item["metadata"] = metadata
+                item.pop("metadata_json", None)
+                item["prompt_preview"] = truncate(redact_text(row["prompt"] or ""), 500)
+                result.append(item)
+            return result
+        finally:
+            conn.close()
+
+    def job_snapshot(self, job_id: str) -> dict[str, Any] | None:
+        items = self.list_jobs(500)
+        return next((item for item in items if item["id"] == job_id), None)
 
     async def clear(self) -> int:
         """Clear all queued jobs. Returns count of cleared jobs."""
@@ -516,13 +618,14 @@ class JobQueue:
         now_str = datetime.now(timezone.utc).isoformat()
         redacted_err = redact_text(error_message)
         
+        running_id: str | None = None
         try:
             async with self._lock:
                 with conn:
                     cur = conn.execute("SELECT id FROM queued_jobs WHERE state = 'running' LIMIT 1")
                     row = cur.fetchone()
                     if row:
-                        running_id = row[0]
+                        running_id = str(row[0])
                         conn.execute(
                             "UPDATE queued_jobs SET state = ?, finished_at = ?, error = ? WHERE id = ?",
                             (QueueJobState.FAILED.value, now_str, redacted_err, running_id)
@@ -531,18 +634,20 @@ class JobQueue:
                         logger.info("Marked running job %s as failed (start-failed)", running_id)
         finally:
             conn.close()
+        if running_id:
+            self._emit("task.failed", running_id, {"error": redacted_err})
 
         # Trigger next job
         if self._paused:
             logger.debug("Queue paused, not starting next job")
             return
 
-        next_job = await self.dequeue()
-        if next_job is None:
+        if self._start_callback is None:
+            logger.debug("No start callback set; leaving queued jobs unclaimed")
             return
 
-        if self._start_callback is None:
-            logger.warning("No start callback set, cannot start queued job %s", next_job.id)
+        next_job = await self.dequeue(require_idle=True)
+        if next_job is None:
             return
 
         logger.info("Starting queued job %s", next_job.id)
@@ -560,13 +665,22 @@ class JobQueue:
             finally:
                 conn.close()
 
-    async def on_job_completed(self, job_id: str | None = None) -> None:
+    async def on_job_completed(
+        self,
+        job_id: str | None = None,
+        *,
+        queue_job_id: str | None = None,
+        final_state: str | None = None,
+        error: str | None = None,
+    ) -> None:
         """Called when a Codex job completes. Starts the next queued job if any."""
         conn = self._get_conn()
         now_str = datetime.now(timezone.utc).isoformat()
         
-        error_msg = None
-        state = QueueJobState.COMPLETED
+        error_msg = error
+        state = QueueJobState.FAILED if final_state == "failed" else (
+            QueueJobState.CANCELLED if final_state == "cancelled" else QueueJobState.COMPLETED
+        )
         if self._runner and self._runner.current_job:
             current_job = self._runner.current_job
             if job_id is None or str(getattr(current_job, "id", "")) == job_id:
@@ -576,12 +690,19 @@ class JobQueue:
                 elif current_job.state == JobState.FAILED:
                     state = QueueJobState.FAILED
         
+        running_id: str | None = None
         try:
             with conn:
-                cur = conn.execute("SELECT id FROM queued_jobs WHERE state = 'running' LIMIT 1")
+                if queue_job_id:
+                    cur = conn.execute(
+                        "SELECT id FROM queued_jobs WHERE id = ? AND state = 'running'",
+                        (queue_job_id,),
+                    )
+                else:
+                    cur = conn.execute("SELECT id FROM queued_jobs WHERE state = 'running' LIMIT 1")
                 row = cur.fetchone()
                 if row:
-                    running_id = row[0]
+                    running_id = str(row[0])
                     conn.execute(
                         "UPDATE queued_jobs SET state = ?, finished_at = ?, error = ? WHERE id = ?",
                         (state.value, now_str, error_msg, running_id)
@@ -589,17 +710,27 @@ class JobQueue:
                     self._memory_references.pop(running_id, None)
         finally:
             conn.close()
+        if running_id:
+            terminal_kind = {
+                QueueJobState.FAILED: "task.failed",
+                QueueJobState.CANCELLED: "task.cancelled",
+            }.get(state, "task.completed")
+            self._emit(
+                terminal_kind,
+                running_id,
+                {"error": redact_text(error_msg or "")} if error_msg else {},
+            )
 
         if self._paused:
             logger.debug("Queue paused, not starting next job")
             return
 
-        next_job = await self.dequeue()
-        if next_job is None:
+        if self._start_callback is None:
+            logger.debug("No start callback set; leaving queued jobs unclaimed")
             return
 
-        if self._start_callback is None:
-            logger.warning("No start callback set, cannot start queued job %s", next_job.id)
+        next_job = await self.dequeue(require_idle=True)
+        if next_job is None:
             return
 
         logger.info("Starting queued job %s", next_job.id)
