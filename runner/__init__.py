@@ -1,17 +1,12 @@
-"""runner/ — codex subprocess spawn, worktree, streaming,
-memory, CLI. Originally a 2005-line runner.py monolith;
-this package splits the responsibilities so a new
-chat-feel round or operator can land in the right place.
+"""runner/ — agent execution, worktrees, streaming, memory and CLI.
 
-Public surface:
-  CodexRunner, Job, JobMode, JobState, JobRecord,
-  ProgressCallback.
+Public surface keeps the existing CodexRunner API and additionally exposes the
+provider-neutral AgentBackend boundary.
 """
 from config import Settings, load_settings
 from runner.types import Job, JobMode, JobState, JobRecord, ProgressCallback
 from runner.core import CodexRunner
-# Re-export streaming-side module constants so legacy call sites
-# that do `runner.THINKING_THRESHOLD_SECONDS` keep working.
+from runner.backend import AgentBackend, CodexBackend, backend_name
 from runner.streaming import (
     THINKING_INDICATOR,
     THINKING_THRESHOLD_SECONDS,
@@ -23,6 +18,9 @@ from runner._paths import RUNNER_HOME
 
 __all__ = [
     "CodexRunner",
+    "AgentBackend",
+    "CodexBackend",
+    "backend_name",
     "Job",
     "JobMode",
     "JobState",
