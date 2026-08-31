@@ -76,19 +76,23 @@ class ProviderHealthTests(unittest.IsolatedAsyncioTestCase):
                 attempt_job.error = "upstream high demand"
                 attempt_job.last_event = "429"
 
+            async def on_progress(message: str):
+                progress.append(message)
+
             runner = SimpleNamespace(settings=settings)
             with patch.dict("os.environ", {"CONVEYOR_ENV_FILE": str(root / ".env")}, clear=False), \
                  patch("runner.provider_guard._base_run_codex_attempt", fake_attempt):
-                await guarded_run_codex_attempt(runner, job, progress.append)
+                await guarded_run_codex_attempt(runner, job, on_progress)
                 self.assertEqual(calls, 1)
                 self.assertIn("temporarily unavailable", job.error)
                 self.assertEqual(job.last_event, "provider unavailable (rate_limited)")
 
                 second = SimpleNamespace(return_code=None, error="", last_event="starting")
-                await guarded_run_codex_attempt(runner, second, progress.append)
+                await guarded_run_codex_attempt(runner, second, on_progress)
                 self.assertEqual(calls, 1)
                 self.assertEqual(second.return_code, 75)
                 self.assertEqual(second.last_event, "provider circuit open")
+                self.assertGreaterEqual(len(progress), 2)
 
 
 if __name__ == "__main__":
