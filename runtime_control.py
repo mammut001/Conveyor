@@ -63,6 +63,7 @@ class RuntimeControl:
     def __init__(self, db_path: Path) -> None:
         self.db_path = Path(db_path)
         self._init_db()
+        self.prune()
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -163,7 +164,8 @@ class RuntimeControl:
         )
         conn = self._connect()
         try:
-            with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
                 existing = conn.execute(
                     """SELECT * FROM runtime_commands
                        WHERE job_id = ? AND owner_id = ? AND kind = ?
@@ -172,6 +174,7 @@ class RuntimeControl:
                     (job_id, owner_id, kind),
                 ).fetchone()
                 if existing is not None:
+                    conn.commit()
                     return self._from_row(existing)
                 conn.execute(
                     """INSERT INTO runtime_commands
@@ -179,6 +182,10 @@ class RuntimeControl:
                        VALUES (?, ?, ?, ?, 'pending', ?)""",
                     (command.id, command.job_id, command.owner_id, command.kind, command.created_at),
                 )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
             return command
         finally:
             conn.close()
@@ -251,11 +258,11 @@ class RuntimeControl:
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT id, completed_at, created_at FROM runtime_commands WHERE status IN ('completed', 'failed')"
+                "SELECT id, claimed_at, completed_at, created_at FROM runtime_commands"
             ).fetchall()
             stale: list[str] = []
             for row in rows:
-                raw = row["completed_at"] or row["created_at"]
+                raw = row["completed_at"] or row["claimed_at"] or row["created_at"]
                 try:
                     ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
                 except Exception:
