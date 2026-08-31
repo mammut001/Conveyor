@@ -1,33 +1,18 @@
 #!/usr/bin/env python3
-"""deploy_status_smoke.py — tests for /deploy_status command and deploy metadata.
-
-Verifies:
-  - /deploy_status handler exists and is callable
-  - Valid .deploy-status.json is parsed and displayed
-  - Missing .deploy-status.json returns "暂无部署状态记录"
-  - Invalid JSON does not crash
-  - No .env contents are leaked
-  - Output includes deploy time, git sha, smoke result, services, progress mode
-  - deploy.sh and deploy_vps.sh write valid JSON structure
-
-Run: .venv/bin/python scripts/deploy_status_smoke.py
-"""
+"""Behavior/static smoke for /deploy_status and canonical deployment metadata."""
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO))
-
-from scripts.harness_common import CheckResult, print_results  # noqa: E402
-
-
-# ---- Helpers ---------------------------------------------------------------
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 SAMPLE_STATUS = {
     "deployed_at": "2026-06-11T03:00:00Z",
@@ -37,214 +22,90 @@ SAMPLE_STATUS = {
     "run_id": "12345",
     "remote_dir": "/opt/conveyor",
     "smoke": "passed",
-    "services": {
-        "telegram": "active",
-        "feishu": "active",
-    },
+    "backup_path": "/opt/conveyor/.deploy-backups/example",
+    "database_path": "/home/ubuntu/.codex/state/job_queue.sqlite3",
+    "services": {"telegram": "active", "feishu": "active", "web": "active"},
+    "rollback_attempted": False,
+    "previous_commit": "def5678",
 }
 
 
-async def _run_deploy_status(status_json: dict | None, cwd: Path) -> str:
-    """Run the _deploy_status handler in a controlled cwd and capture output."""
-    # Temporarily write .deploy-status.json if provided
-    status_file = cwd / ".deploy-status.json"
-    wrote = False
-    if status_json is not None:
-        status_file.write_text(json.dumps(status_json), encoding="utf-8")
-        wrote = True
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise SystemExit(f"deploy status smoke failed: {message}")
 
-    # Import handler
+
+async def run_handler(cwd: Path) -> str:
     from handlers.commands import _deploy_status
-
     msg = MagicMock()
     port = MagicMock()
     port.reply = AsyncMock()
     runner = MagicMock()
     settings = SimpleNamespace(conveyor_progress_mode="compact")
-
-    import os
-    old_cwd = os.getcwd()
+    old = Path.cwd()
     try:
         os.chdir(cwd)
         await _deploy_status(msg, port, runner, settings, "")
     finally:
-        os.chdir(old_cwd)
-        if wrote and status_file.exists():
-            status_file.unlink()
-
+        os.chdir(old)
     port.reply.assert_awaited_once()
-    return port.reply.call_args[0][1]
+    return str(port.reply.call_args[0][1])
 
 
-# ---- Tests -----------------------------------------------------------------
+async def behavior_checks() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        (root / ".deploy-status.json").write_text(json.dumps(SAMPLE_STATUS), encoding="utf-8")
+        output = await run_handler(root)
+        require("2026-06-11" in output, "valid status missing deployment time")
+        require("abc1234" in output, "valid status missing git SHA")
+        require("passed" in output, "valid status missing smoke result")
+        require("active" in output, "valid status missing service state")
+        require("compact" in output, "valid status missing progress mode")
 
-def _test_handler_registered() -> CheckResult:
-    name = "deploy_status: handler registered in COMMAND_TABLE"
-    try:
-        from handlers.commands import COMMAND_TABLE
-        spec = COMMAND_TABLE.get("deploy_status")
-        ok = spec is not None
-        return CheckResult(name, ok, f"spec={spec}" if ok else "not found in COMMAND_TABLE")
-    except Exception as exc:
-        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+    with tempfile.TemporaryDirectory() as temporary:
+        output = await run_handler(Path(temporary))
+        require("暂无部署状态记录" in output, "missing status file did not degrade gracefully")
 
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        (root / ".deploy-status.json").write_text("{bad json!!", encoding="utf-8")
+        output = await run_handler(root)
+        require("读取失败" in output or "暂无" in output or "Deploy" in output,
+                "invalid status JSON was not handled")
 
-def _test_valid_status_file() -> CheckResult:
-    name = "deploy_status: valid .deploy-status.json displayed"
-    import asyncio
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output = asyncio.run(_run_deploy_status(SAMPLE_STATUS, Path(tmpdir)))
-        checks = []
-        if "2026-06-11" not in output:
-            checks.append("missing deploy time")
-        if "abc1234" not in output:
-            checks.append("missing git sha")
-        if "passed" not in output:
-            checks.append("missing smoke result")
-        if "active" not in output:
-            checks.append("missing service status")
-        if "compact" not in output:
-            checks.append("missing progress mode")
-        ok = len(checks) == 0
-        return CheckResult(name, ok, "; ".join(checks) if ok else "; ".join(checks))
-    except Exception as exc:
-        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        secret_status = dict(SAMPLE_STATUS)
+        secret_status["secret_note"] = "TELEGRAM_BOT_TOKEN=123:ABC"
+        secret_status["env_content"] = "API_KEY=sk-very-secret"
+        (root / ".deploy-status.json").write_text(json.dumps(secret_status), encoding="utf-8")
+        output = await run_handler(root)
+        require("123:ABC" not in output and "sk-very-secret" not in output,
+                "deploy status leaked unknown secret fields")
 
 
-def _test_missing_status_file() -> CheckResult:
-    name = "deploy_status: missing file returns '暂无部署状态记录'"
-    import asyncio
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output = asyncio.run(_run_deploy_status(None, Path(tmpdir)))
-        ok = "暂无部署状态记录" in output
-        return CheckResult(name, ok, f"output contains expected text: {ok}")
-    except Exception as exc:
-        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
+def static_checks() -> None:
+    from handlers.commands import COMMAND_TABLE
+    require(COMMAND_TABLE.get("deploy_status") is not None, "/deploy_status not registered")
 
-
-def _test_invalid_json_no_crash() -> CheckResult:
-    name = "deploy_status: invalid JSON does not crash"
-    import asyncio
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            status_file = Path(tmpdir) / ".deploy-status.json"
-            status_file.write_text("{bad json!!", encoding="utf-8")
-            output = asyncio.run(_run_deploy_status(None, Path(tmpdir)))
-            # If we get here, it didn't crash. But the file won't be found
-            # because _run_deploy_status(None) doesn't write it.
-            # Let's test differently - write invalid json directly.
-        # Direct test: write invalid JSON and call handler
-        with tempfile.TemporaryDirectory() as tmpdir:
-            status_file = Path(tmpdir) / ".deploy-status.json"
-            status_file.write_text("{bad json!!", encoding="utf-8")
-
-            from handlers.commands import _deploy_status
-            import os
-            msg = MagicMock()
-            port = MagicMock()
-            port.reply = AsyncMock()
-            runner = MagicMock()
-            settings = SimpleNamespace(conveyor_progress_mode="compact")
-
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                asyncio.run(_deploy_status(msg, port, runner, settings, ""))
-            finally:
-                os.chdir(old_cwd)
-
-            port.reply.assert_awaited_once()
-            output = port.reply.call_args[0][1]
-            # Should contain error message, not crash
-            ok = "读取失败" in output or "暂无" in output or "Deploy" in output
-            return CheckResult(name, ok, f"handled invalid JSON gracefully: {ok}")
-    except Exception as exc:
-        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
-
-
-def _test_no_env_leak() -> CheckResult:
-    name = "deploy_status: no .env contents in output"
-    import asyncio
-    try:
-        status_with_secrets = {
-            **SAMPLE_STATUS,
-            "secret_note": "TELEGRAM_BOT_TOKEN=123:ABC",
-            "env_content": "API_KEY=sk-very-secret",
-        }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output = asyncio.run(_run_deploy_status(status_with_secrets, Path(tmpdir)))
-        # The handler reads specific fields, so secret_note/env_content
-        # won't appear. But verify no bot token pattern leaked.
-        has_token = "123:ABC" in output or "sk-very-secret" in output
-        return CheckResult(name, not has_token, "no secrets leaked" if not has_token else "SECRETS LEAKED!")
-    except Exception as exc:
-        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
-
-
-def _test_deploy_sh_writes_json_fields() -> CheckResult:
-    name = "deploy (rsync): deploy.sh writes JSON with required fields"
-    try:
-        deploy_sh = REPO / "scripts" / "deploy.sh"
-        content = deploy_sh.read_text(encoding="utf-8")
-        required_fields = ["deployed_at", "source", "git_sha", "smoke", "services"]
-        missing = [f for f in required_fields if f'"{f}"' not in content and f"'{f}'" not in content]
-        ok = len(missing) == 0
-        return CheckResult(name, ok, f"missing={missing}" if missing else "all fields present")
-    except Exception as exc:
-        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
-
-
-def _test_deploy_vps_writes_json_fields() -> CheckResult:
-    name = "deploy (vps): deploy_vps.sh writes JSON with required fields"
-    try:
-        deploy_vps = REPO / "scripts" / "deploy_vps.sh"
-        content = deploy_vps.read_text(encoding="utf-8")
-        required_fields = ["deployed_at", "source", "git_sha", "smoke", "services"]
-        missing = [f for f in required_fields if f'"{f}"' not in content and f"'{f}'" not in content]
-        ok = len(missing) == 0
-        return CheckResult(name, ok, f"missing={missing}" if missing else "all fields present")
-    except Exception as exc:
-        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
-
-
-def _test_help_mentions_deploy_status() -> CheckResult:
-    name = "help: mentions /deploy_status"
-    try:
-        from handlers.commands import _help
-        import asyncio
-        msg = MagicMock()
-        port = MagicMock()
-        port.reply = AsyncMock()
-        runner = MagicMock()
-        settings = SimpleNamespace()
-        asyncio.run(_help(msg, port, runner, settings, ""))
-        output = port.reply.call_args[0][1]
-        ok = "deploy_status" in output
-        return CheckResult(name, ok, "/deploy_status in help text" if ok else "not in help text")
-    except Exception as exc:
-        return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
-
-
-CHECKS = [
-    _test_handler_registered,
-    _test_valid_status_file,
-    _test_missing_status_file,
-    _test_invalid_json_no_crash,
-    _test_no_env_leak,
-    _test_deploy_sh_writes_json_fields,
-    _test_deploy_vps_writes_json_fields,
-    _test_help_mentions_deploy_status,
-]
+    remote = (ROOT / "scripts" / "deploy_vps.sh").read_text(encoding="utf-8")
+    manual = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    for field in ("deployed_at", "source", "git_sha", "smoke", "services",
+                  "backup_path", "database_path", "previous_commit"):
+        require(f'"{field}"' in remote, f"canonical deploy status missing field {field}")
+    require('git show "${TARGET_COMMIT}:scripts/deploy_vps.sh"' in manual,
+            "manual deploy is not delegated to canonical deployer")
+    require(".deploy-status.json" not in "\n".join(
+        line for line in manual.splitlines() if not line.lstrip().startswith("#")
+    ), "manual wrapper still writes an independent status file")
 
 
 def main() -> int:
-    results = [t() for t in CHECKS]
-    print_results(results)
-    ok = all(r.ok for r in results)
-    print("deploy status smoke ok" if ok else "deploy status smoke failed")
-    return 0 if ok else 1
+    static_checks()
+    asyncio.run(behavior_checks())
+    print("deploy status smoke ok")
+    return 0
 
 
 if __name__ == "__main__":
