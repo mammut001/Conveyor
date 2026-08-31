@@ -34,6 +34,20 @@ jobs:
       - name: Install dependencies
         run: .venv/bin/python -m pip install -r requirements.txt
 
+      - name: Create smoke fixture
+        shell: bash
+        run: |
+          cat > .env.test <<EOF
+          TELEGRAM_BOT_TOKEN=ci-placeholder-token
+          TELEGRAM_ALLOWED_USER_ID=1
+          CODEX_WORKSPACE_ROOT=${GITHUB_WORKSPACE}
+          CODEX_TASK_ROOT=${RUNNER_TEMP}/conveyor-task
+          CODEX_MEMORY_ROOT=${RUNNER_TEMP}/conveyor-memory
+          USER_TIMEZONE=UTC
+          CONVEYOR_DESKTOP_AGENT_TOKEN=ci-desktop-placeholder-token
+          EOF
+          chmod 600 .env.test
+
       - name: Compile Python
         run: .venv/bin/python -m compileall -q .
 
