@@ -37,6 +37,11 @@ type ComputerStatus = {
   armed: boolean; arm_remaining_seconds: number; active_task?: Record<string, unknown> | null
   screenshots: { artifact_id: string; created_at?: string; width?: number; height?: number }[]
 }
+type ProviderConfig = {
+  provider_id: string; provider_name: string; model: string; reasoning_effort: string
+  base_url: string; wire_api: 'responses' | 'chat'; env_key: string
+  api_key_configured: boolean; api_key_hint: string; config_path: string
+}
 
 const statusOrder = ['running', 'queued', 'interrupted', 'failed', 'cancelled', 'completed']
 
@@ -78,7 +83,10 @@ export default function App() {
   const [mode, setMode] = useState<'run' | 'fix'>('run')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
   const lastSequence = useRef(0)
+  const streamRef = useRef<HTMLDivElement>(null)
 
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(path, {
@@ -117,21 +125,24 @@ export default function App() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not connect') }
   }, [api, creatingSession, selectedJobId, selectedSessionId, token])
 
+  const refreshTranscript = useCallback(async () => {
+    if (!authenticated || !selectedSessionId) { setTranscript([]); return }
+    try {
+      const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`)
+      setTranscript(session.messages || [])
+    } catch { setTranscript([]) }
+  }, [api, authenticated, selectedSessionId])
+
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
     if (!authenticated) return
-    const timer = window.setInterval(() => void refresh(), 15_000)
+    const timer = window.setInterval(() => { void refresh(); void refreshTranscript() }, 3_000)
     return () => window.clearInterval(timer)
-  }, [authenticated, refresh])
+  }, [authenticated, refresh, refreshTranscript])
 
   useEffect(() => {
-    if (!authenticated || !selectedSessionId) { setTranscript([]); return }
-    let stopped = false
-    void api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`)
-      .then(session => { if (!stopped) setTranscript(session.messages || []) })
-      .catch(() => { if (!stopped) setTranscript([]) })
-    return () => { stopped = true }
-  }, [api, authenticated, selectedSessionId])
+    void refreshTranscript()
+  }, [refreshTranscript])
 
   useEffect(() => {
     if (!authenticated || !selectedJobId) return
@@ -161,6 +172,10 @@ export default function App() {
             const event = JSON.parse(line.slice(6)) as EventItem
             lastSequence.current = Math.max(lastSequence.current, event.sequence)
             setEvents(previous => previous.some(item => item.event_id === event.event_id) ? previous : [...previous, event].slice(-1000))
+            if (event.kind.startsWith('assistant.') || event.kind.startsWith('task.')) {
+              void refresh()
+              void refreshTranscript()
+            }
           }
         }
       } catch { /* reconnect below unless the selection changed */ }
@@ -168,7 +183,7 @@ export default function App() {
     }
     void connect()
     return () => { stopped = true; controller?.abort(); if (retry) window.clearTimeout(retry) }
-  }, [api, authenticated, selectedJobId, token])
+  }, [api, authenticated, refresh, refreshTranscript, selectedJobId, token])
 
   const selectedJob = useMemo(() => jobs.find(job => job.id === selectedJobId), [jobs, selectedJobId])
   const selectedSession = useMemo(() => sessions.find(session => session.id === selectedSessionId), [sessions, selectedSessionId])
@@ -188,6 +203,17 @@ export default function App() {
   const visibleEvents = terminalHasTranscript
     ? events.filter(item => !item.kind.startsWith('assistant.'))
     : events
+
+  useEffect(() => {
+    const node = streamRef.current
+    if (node) node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
+  }, [events.length, transcript.length, selectedJobId])
+
+  async function openSettings() {
+    setSettingsOpen(true); setError('')
+    try { setProviderConfig(await api<ProviderConfig>('/api/config/provider')) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not load settings') }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault(); if (!prompt.trim() || busy) return
@@ -226,7 +252,7 @@ export default function App() {
   return <main className="app-shell">
     <header className="topbar">
       <div className="brand"><span className="brand-mark small">C</span><div><strong>Conveyor</strong><small>CONTROL CONSOLE</small></div></div>
-      <div className="top-status"><span className="live-dot" /> Online <span className="separator" /> Queue {system?.queue.depth ?? 0}</div>
+      <div className="top-actions"><button className="settings-button" onClick={() => void openSettings()}>⚙ Settings</button><div className="top-status"><span className="live-dot" /> Online <span className="separator" /> Queue {system?.queue.depth ?? 0}</div></div>
     </header>
     {error && <div className="error-banner global">{error}<button onClick={() => setError('')}>×</button></div>}
     <section className="workspace">
@@ -246,7 +272,7 @@ export default function App() {
           <div><p className="eyebrow">CONVERSATION + LIVE EXECUTION</p><h2>{creatingSession ? 'New session' : sessionLabel(selectedSession)}</h2></div>
           {selectedJob && <StatusBadge state={selectedJob.state} />}
         </div>
-        <div className="event-stream">
+        <div className="event-stream" ref={streamRef}>
           {selectedJob?.state === 'failed' && <div className="job-notice failed"><strong>Task failed</strong><span>{selectedJob.error || 'See the execution timeline below for details.'}</span></div>}
           {selectedJob?.state === 'cancelled' && <div className="job-notice"><strong>Task cancelled</strong><span>This task is terminal; start a new message to try again.</span></div>}
           {transcript.length > 0 && <><div className="stream-divider">Conversation history</div><TranscriptPanel messages={transcript} /></>}
@@ -293,7 +319,44 @@ export default function App() {
         </ContextSection>
       </aside>
     </section>
+    {settingsOpen && <ProviderSettings config={providerConfig} busy={busy} onClose={() => setSettingsOpen(false)} onSave={async payload => {
+      setBusy(true); setError('')
+      try {
+        const result = await api<{ config: ProviderConfig }>('/api/config/provider', { method: 'POST', body: JSON.stringify(payload) })
+        setProviderConfig(result.config)
+      } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not save settings'); throw reason }
+      finally { setBusy(false) }
+    }} />}
   </main>
+}
+
+function ProviderSettings({ config, busy, onClose, onSave }: {
+  config: ProviderConfig | null; busy: boolean; onClose: () => void
+  onSave: (payload: Record<string, string>) => Promise<void>
+}) {
+  const [draft, setDraft] = useState({ provider_id: '', provider_name: '', model: '', reasoning_effort: 'minimal', base_url: '', wire_api: 'responses', env_key: 'OPENAI_API_KEY', api_key: '' })
+  const [saved, setSaved] = useState(false)
+  useEffect(() => { if (config) setDraft({ ...config, api_key: '' }) }, [config])
+  function field(name: keyof typeof draft, value: string) { setSaved(false); setDraft(previous => ({ ...previous, [name]: value })) }
+  return <div className="settings-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+    <section className="settings-sheet" role="dialog" aria-modal="true" aria-label="Provider settings">
+      <header><div><p className="eyebrow">MODEL PROVIDER</p><h2>Configuration</h2><p>OpenAI-compatible provider settings used by new Conveyor tasks.</p></div><button className="close-button" onClick={onClose} aria-label="Close settings">×</button></header>
+      {!config ? <div className="settings-loading">Loading configuration…</div> : <form onSubmit={event => { event.preventDefault(); void onSave(draft).then(() => { setSaved(true); setDraft(previous => ({ ...previous, api_key: '' })) }).catch(() => {}) }}>
+        <div className="form-grid">
+          <label>Provider ID<input value={draft.provider_id} onChange={event => field('provider_id', event.target.value)} placeholder="deepseek" required /></label>
+          <label>Display name<input value={draft.provider_name} onChange={event => field('provider_name', event.target.value)} placeholder="DeepSeek" required /></label>
+          <label className="wide">Base URL<input value={draft.base_url} onChange={event => field('base_url', event.target.value)} placeholder="https://api.deepseek.com/v1" required /></label>
+          <label>Model<input value={draft.model} onChange={event => field('model', event.target.value)} placeholder="deepseek-chat" required /></label>
+          <label>API protocol<select value={draft.wire_api} onChange={event => field('wire_api', event.target.value)}><option value="responses">Responses</option><option value="chat">Chat Completions</option></select></label>
+          <label>Reasoning<select value={draft.reasoning_effort} onChange={event => field('reasoning_effort', event.target.value)}>{['none','minimal','low','medium','high','xhigh'].map(value => <option key={value}>{value}</option>)}</select></label>
+          <label>Key variable<input value={draft.env_key} onChange={event => field('env_key', event.target.value.toUpperCase())} placeholder="OPENAI_API_KEY" required /></label>
+          <label className="wide">API key<input type="password" autoComplete="off" value={draft.api_key} onChange={event => field('api_key', event.target.value)} placeholder={config.api_key_configured ? `Configured ${config.api_key_hint} · leave blank to keep` : 'Paste a new API key'} /></label>
+        </div>
+        <div className="config-note"><strong>Saved securely on the VPS</strong><span>The browser never receives the full key. Changes apply to the next task and update <code>config.toml</code> plus the service <code>.env</code>.</span></div>
+        <footer><span className={saved ? 'save-status visible' : 'save-status'}>✓ Saved. New tasks will use this provider.</span><button type="button" onClick={onClose}>Cancel</button><button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save configuration'}</button></footer>
+      </form>}
+    </section>
+  </div>
 }
 
 function StatusBadge({ state }: { state: string }) { return <span className={`status-badge ${state}`}><i />{stateLabel(state)}</span> }

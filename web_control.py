@@ -16,6 +16,7 @@ from handlers.job_queue import JobQueue
 from redaction import redact_text, truncate
 from runtime_control import COMMAND_CANCEL, get_runtime_control
 from transcript_store import get_transcript_store
+from provider_config import get_provider_config, save_provider_config
 
 
 class WebControl:
@@ -63,6 +64,14 @@ class WebControl:
             item["latest_event"] = event.to_dict() if event else None
             item["changed_files"] = self._changed_files(item)
         return jobs
+
+    def provider_config(self) -> dict[str, Any]:
+        """Return the active provider configuration without secret material."""
+        return get_provider_config(self.settings)
+
+    def update_provider_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Atomically persist the provider and its optional replacement key."""
+        return save_provider_config(self.settings, payload)
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         item = self.queue.job_snapshot(job_id)
