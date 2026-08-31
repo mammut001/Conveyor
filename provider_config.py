@@ -227,6 +227,11 @@ def save_provider_config(settings: Any, payload: dict[str, Any]) -> dict[str, An
     if values["api_key"]:
         _update_env(env_path(), values["env_key"], values["api_key"])
         os.environ[values["env_key"]] = values["api_key"]
+    try:
+        from provider_health import get_provider_health
+        get_provider_health(settings).reset(values["provider_id"])
+    except Exception:
+        pass
     return get_provider_config(settings)
 
 
