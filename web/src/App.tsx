@@ -2,7 +2,6 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
-import './v2.css'
 
 type EventItem = {
   schema_version: number; event_id: string; sequence: number; timestamp: string
