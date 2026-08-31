@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from runner.backend import AgentBackend, CodexBackend, backend_name
-from runner.types import JobMode
+from runner.streaming import _read_stderr
+from runner.types import Job, JobMode
 
 
 class FakeRunner:
@@ -44,6 +47,31 @@ class AgentBackendTests(unittest.TestCase):
         self.assertIn("validate", runner.calls)
         self.assertIn("start:run:hello", runner.calls)
         self.assertIn("cancel", runner.calls)
+
+    def test_successful_provider_warning_on_stderr_is_not_a_job_error(self) -> None:
+        class Reader:
+            def __init__(self) -> None:
+                self.lines = [b"websocket unavailable; using HTTP fallback\n", b""]
+
+            async def readline(self) -> bytes:
+                return self.lines.pop(0)
+
+        class Process:
+            stderr = Reader()
+
+            async def wait(self) -> int:
+                return 0
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = Job("job-1", JobMode.RUN, "read", "unused")
+            # Exercise the race where stderr reaches EOF just before the main
+            # waiter stores the successful return code on the job.
+            job.return_code = None
+            job.final_message_path = Path(temp) / "final.txt"
+            job.final_message_path.write_text("done", encoding="utf-8")
+            process = Process()
+            asyncio.run(_read_stderr(None, job, process))
+            self.assertEqual(job.error, "")
 
 
 if __name__ == "__main__":
