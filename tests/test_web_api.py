@@ -29,6 +29,9 @@ class FakeControl:
     def get_session(self, session_id):
         return {"id": session_id, "jobs": []} if session_id == "web-a" else None
 
+    def resolve_session_identity(self, session_id):
+        return ("web", "web-console", "web-a") if session_id == "web-a" else None
+
     def list_jobs(self, _limit=100):
         return [{"id": "q1", "state": "running", "chat_id": "web-a"}]
 

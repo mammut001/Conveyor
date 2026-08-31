@@ -1,20 +1,25 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
+import { TranscriptPanel } from './components/TranscriptPanel'
+import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
+import './v2.css'
 
 type EventItem = {
   schema_version: number; event_id: string; sequence: number; timestamp: string
   kind: string; job_id: string; payload: Record<string, unknown>; tool_call_id?: string
 }
 type Job = {
-  id: string; state: string; mode: string; channel: string; chat_id: string
+  id: string; state: string; mode: string; channel: string; chat_id: string; operator_id?: string
   created_at: string; updated_at?: string; started_at?: string; finished_at?: string
   prompt_preview: string; metadata?: Record<string, string>; latest_event?: EventItem
   changed_files?: { status: string; path: string }[]
   runtime?: Record<string, unknown>
 }
 type Session = {
-  id: string; channel: string; title: string; created_at: string; last_activity: string
-  job_count: number; latest_job?: Job
+  id: string; channel?: string; title?: string; created_at: string; updated_at?: string; last_activity: string
+  operator_id?: string; source_chat_id?: string; job_count: number; message_count?: number; latest_job?: Job
 }
+type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[] }
 type Approval = { id: string; job_id: string; action: string; status: string; created_at?: string }
 type NodeInfo = {
   id: string; name: string; type: string; status: string; last_seen_at?: string
@@ -52,7 +57,10 @@ export default function App() {
   const [authenticated, setAuthenticated] = useState(false)
   const [sessions, setSessions] = useState<Session[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
+  const [selectedSessionId, setSelectedSessionId] = useState('')
   const [selectedJobId, setSelectedJobId] = useState('')
+  const [creatingSession, setCreatingSession] = useState(false)
+  const [transcript, setTranscript] = useState<TranscriptMessage[]>([])
   const [events, setEvents] = useState<EventItem[]>([])
   const [approvals, setApprovals] = useState<Approval[]>([])
   const [nodes, setNodes] = useState<NodeInfo[]>([])
@@ -86,9 +94,13 @@ export default function App() {
       ])
       setSessions(sessionData.sessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setError('')
-      if (!selectedJobId && jobData.jobs.length) setSelectedJobId(jobData.jobs[0].id)
+      if (!creatingSession && !selectedJobId && jobData.jobs.length) setSelectedJobId(jobData.jobs[0].id)
+      if (!creatingSession && !selectedSessionId) {
+        const initialSession = sessionData.sessions[0]?.id || jobData.jobs[0]?.chat_id || ''
+        if (initialSession) setSelectedSessionId(initialSession)
+      }
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not connect') }
-  }, [api, selectedJobId, token])
+  }, [api, creatingSession, selectedJobId, selectedSessionId, token])
 
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
@@ -96,6 +108,15 @@ export default function App() {
     const timer = window.setInterval(() => void refresh(), 15_000)
     return () => window.clearInterval(timer)
   }, [authenticated, refresh])
+
+  useEffect(() => {
+    if (!authenticated || !selectedSessionId) { setTranscript([]); return }
+    let stopped = false
+    void api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`)
+      .then(session => { if (!stopped) setTranscript(session.messages || []) })
+      .catch(() => { if (!stopped) setTranscript([]) })
+    return () => { stopped = true }
+  }, [api, authenticated, selectedSessionId])
 
   useEffect(() => {
     if (!authenticated || !selectedJobId) return
@@ -135,17 +156,34 @@ export default function App() {
   }, [api, authenticated, selectedJobId, token])
 
   const selectedJob = useMemo(() => jobs.find(job => job.id === selectedJobId), [jobs, selectedJobId])
-  const selectedSession = selectedJob?.chat_id
+  useEffect(() => {
+    if (!selectedJob || creatingSession) return
+    const matching = sessions.find(session => session.channel === selectedJob.channel
+      && session.operator_id === selectedJob.operator_id
+      && session.source_chat_id === selectedJob.chat_id)
+    const target = matching?.id || selectedJob.chat_id
+    if (target && target !== selectedSessionId) setSelectedSessionId(target)
+  }, [creatingSession, selectedJob, selectedSessionId, sessions])
   const pendingForJob = approvals.filter(item => item.job_id === selectedJobId)
+  const runtimeOwner = runtimeOwnerFromJob(selectedJob)
+  const terminalHasTranscript = Boolean(selectedJob && terminalJobState(selectedJob.state)
+    && transcript.some(message => message.role === 'assistant'
+      && (!message.job_id || message.job_id === selectedJob.id)))
+  const visibleEvents = terminalHasTranscript
+    ? events.filter(item => !item.kind.startsWith('assistant.'))
+    : events
 
   async function submit(event: FormEvent) {
     event.preventDefault(); if (!prompt.trim() || busy) return
     setBusy(true); setError('')
     try {
-      const result = await api<{ job_id: string }>('/api/tasks', {
-        method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSession }),
+      const result = await api<{ job_id: string; session_id?: string }>('/api/tasks', {
+        method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSessionId || undefined }),
       })
-      setPrompt(''); await refresh(); if (result.job_id) setSelectedJobId(result.job_id)
+      setPrompt(''); await refresh()
+      setCreatingSession(false)
+      if (result.session_id) setSelectedSessionId(result.session_id)
+      if (result.job_id) setSelectedJobId(result.job_id)
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Submit failed') }
     finally { setBusy(false) }
   }
@@ -177,10 +215,10 @@ export default function App() {
     {error && <div className="error-banner global">{error}<button onClick={() => setError('')}>×</button></div>}
     <section className="workspace">
       <aside className="sessions-panel panel">
-        <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { setSelectedJobId(''); setPrompt('') }} aria-label="New session">＋</button></div>
+        <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { setCreatingSession(true); setSelectedSessionId(''); setSelectedJobId(''); setTranscript([]); setPrompt('') }} aria-label="New session">＋</button></div>
         <div className="session-list">
-          {sessions.map(session => <button key={session.id} className={`session-item ${session.id === selectedSession ? 'active' : ''}`} onClick={() => session.latest_job && setSelectedJobId(session.latest_job.id)}>
-            <span className={`status-rail ${session.latest_job?.state || ''}`} /><span><strong>{session.title || 'Untitled session'}</strong><small>{session.job_count} job{session.job_count === 1 ? '' : 's'} · {formatTime(session.last_activity)}</small></span>
+          {sessions.map(session => <button key={session.id} className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`} onClick={() => { setCreatingSession(false); setSelectedSessionId(session.id); if (session.latest_job) setSelectedJobId(session.latest_job.id) }}>
+            <span className={`status-rail ${session.latest_job?.state || ''}`} /><span><strong>{session.title || 'Untitled session'}</strong><small>{session.message_count ?? 0} messages · {session.job_count} job{session.job_count === 1 ? '' : 's'} · {formatTime(session.last_activity)}</small></span>
           </button>)}
           {!sessions.length && <Empty text="No sessions yet" />}
         </div>
@@ -189,13 +227,15 @@ export default function App() {
 
       <section className="stream-panel panel">
         <div className="stream-header">
-          <div><p className="eyebrow">LIVE JOB STREAM</p><h2>{selectedJob ? selectedJob.prompt_preview : 'New task'}</h2></div>
+          <div><p className="eyebrow">CONVERSATION + LIVE EXECUTION</p><h2>{selectedJob ? selectedJob.prompt_preview : (selectedSessionId ? 'Session' : 'New task')}</h2></div>
           {selectedJob && <StatusBadge state={selectedJob.state} />}
         </div>
         <div className="event-stream">
-          {selectedJob && <article className="event-card user-event"><div className="event-meta"><span>YOU</span><time>{formatTime(selectedJob.created_at)}</time></div><p>{selectedJob.prompt_preview}</p></article>}
-          {events.map(item => <EventCard key={item.event_id} item={item} />)}
-          {!selectedJob && <div className="welcome-state"><div className="brand-mark">C</div><h2>What should Conveyor do?</h2><p>Start a task below. It will enter the same persistent queue used by Telegram and Feishu.</p></div>}
+          {transcript.length > 0 && <><div className="stream-divider">Conversation history</div><TranscriptPanel messages={transcript} /></>}
+          {selectedJob && <div className="stream-divider">Job {selectedJob.id} execution</div>}
+          {selectedJob && !transcript.length && <article className="event-card user-event"><div className="event-meta"><span>YOU</span><time>{formatTime(selectedJob.created_at)}</time></div><p>{selectedJob.prompt_preview}</p></article>}
+          {visibleEvents.map(item => <EventCard key={item.event_id} item={item} />)}
+          {!selectedJob && !selectedSessionId && <div className="welcome-state"><div className="brand-mark">C</div><h2>What should Conveyor do?</h2><p>Start a task below. It will enter the same persistent queue used by Telegram and Feishu.</p></div>}
           {selectedJob && !events.length && <Empty text="Waiting for the first event…" />}
         </div>
         <form className="composer" onSubmit={submit}>
@@ -211,6 +251,7 @@ export default function App() {
             <KeyValue label="ID" value={selectedJob.id} mono /><KeyValue label="State" value={selectedJob.state} />
             <KeyValue label="Provider" value="Codex" /><KeyValue label="Mode" value={selectedJob.mode} />
             <KeyValue label="Started" value={formatTime(selectedJob.started_at)} />
+            <RuntimeOwnerCard owner={runtimeOwner} state={selectedJob.state} />
             <div className="action-row"><button disabled={busy || !['queued','running'].includes(selectedJob.state)} onClick={() => action(`/api/jobs/${selectedJob.id}/cancel`)}>Cancel</button></div>
           </> : <Empty text="Select a job" />}
         </ContextSection>
