@@ -1,6 +1,7 @@
 """Safe, minimal editing of the active Codex provider configuration."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -70,6 +71,12 @@ def _read_env_value(path: Path, key: str) -> str | None:
     return None
 
 
+def _config_revision(values: dict[str, str]) -> str:
+    """Stable non-secret fingerprint used to scope provider health state."""
+    payload = json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def get_provider_config(settings: Any) -> dict[str, Any]:
     path = config_path(settings)
     text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
@@ -78,7 +85,7 @@ def get_provider_config(settings: Any) -> dict[str, Any]:
     provider = providers.get(provider_id, {})
     env_key = provider.get("env_key") or "OPENAI_API_KEY"
     secret = os.getenv(env_key) or _read_env_value(env_path(), env_key)
-    return {
+    effective = {
         "provider_id": provider_id,
         "provider_name": provider.get("name", provider_id),
         "model": top.get("model", ""),
@@ -86,6 +93,10 @@ def get_provider_config(settings: Any) -> dict[str, Any]:
         "base_url": provider.get("base_url", ""),
         "wire_api": provider.get("wire_api", "responses"),
         "env_key": env_key,
+    }
+    return {
+        **effective,
+        "config_revision": _config_revision(effective),
         "api_key_configured": bool(secret),
         "api_key_hint": f"••••{secret[-4:]}" if secret and len(secret) >= 4 else ("••••" if secret else ""),
         "config_path": str(path),
