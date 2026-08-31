@@ -12,6 +12,7 @@ type Job = {
   id: string; state: string; mode: string; channel: string; chat_id: string; operator_id?: string
   created_at: string; updated_at?: string; started_at?: string; finished_at?: string
   prompt_preview: string; metadata?: Record<string, string>; latest_event?: EventItem
+  error?: string
   changed_files?: { status: string; path: string }[]
   runtime?: Record<string, unknown>
 }
@@ -49,6 +50,12 @@ function bytes(value: number | null) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB']; let n = value; let i = 0
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++ }
   return `${n.toFixed(i > 1 ? 1 : 0)} ${units[i]}`
+}
+function stateLabel(state?: string) {
+  return (state || 'unknown').replace('_', ' ')
+}
+function sessionLabel(session: Session | undefined) {
+  return session?.title || session?.latest_job?.prompt_preview || 'New session'
 }
 
 export default function App() {
@@ -94,10 +101,18 @@ export default function App() {
       ])
       setSessions(sessionData.sessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setError('')
-      if (!creatingSession && !selectedJobId && jobData.jobs.length) setSelectedJobId(jobData.jobs[0].id)
       if (!creatingSession && !selectedSessionId) {
-        const initialSession = sessionData.sessions[0]?.id || jobData.jobs[0]?.chat_id || ''
-        if (initialSession) setSelectedSessionId(initialSession)
+        const initialSession = sessionData.sessions[0]
+        if (initialSession) {
+          setSelectedSessionId(initialSession.id)
+          setSelectedJobId(initialSession.latest_job?.id || '')
+        } else if (jobData.jobs[0]) {
+          setSelectedSessionId(jobData.jobs[0].chat_id)
+          setSelectedJobId(jobData.jobs[0].id)
+        }
+      } else if (!creatingSession && !selectedJobId && selectedSessionId) {
+        const session = sessionData.sessions.find(item => item.id === selectedSessionId)
+        if (session?.latest_job) setSelectedJobId(session.latest_job.id)
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not connect') }
   }, [api, creatingSession, selectedJobId, selectedSessionId, token])
@@ -156,6 +171,7 @@ export default function App() {
   }, [api, authenticated, selectedJobId, token])
 
   const selectedJob = useMemo(() => jobs.find(job => job.id === selectedJobId), [jobs, selectedJobId])
+  const selectedSession = useMemo(() => sessions.find(session => session.id === selectedSessionId), [sessions, selectedSessionId])
   useEffect(() => {
     if (!selectedJob || creatingSession) return
     const matching = sessions.find(session => session.channel === selectedJob.channel
@@ -217,20 +233,22 @@ export default function App() {
       <aside className="sessions-panel panel">
         <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { setCreatingSession(true); setSelectedSessionId(''); setSelectedJobId(''); setTranscript([]); setPrompt('') }} aria-label="New session">＋</button></div>
         <div className="session-list">
-          {sessions.map(session => <button key={session.id} className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`} onClick={() => { setCreatingSession(false); setSelectedSessionId(session.id); if (session.latest_job) setSelectedJobId(session.latest_job.id) }}>
+          {sessions.map(session => <button key={session.id} className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`} onClick={() => { setCreatingSession(false); setSelectedSessionId(session.id); setSelectedJobId(session.latest_job?.id || '') }}>
             <span className={`status-rail ${session.latest_job?.state || ''}`} /><span><strong>{session.title || 'Untitled session'}</strong><small>{session.message_count ?? 0} messages · {session.job_count} job{session.job_count === 1 ? '' : 's'} · {formatTime(session.last_activity)}</small></span>
           </button>)}
           {!sessions.length && <Empty text="No sessions yet" />}
         </div>
-        <div className="queue-summary"><p className="eyebrow">QUEUE</p>{statusOrder.map(state => system?.queue.states[state] ? <div key={state}><span>{state}</span><strong>{system.queue.states[state]}</strong></div> : null)}</div>
+        <div className="queue-summary"><p className="eyebrow">ACTIVE QUEUE</p>{(['running', 'queued'] as const).map(state => <div key={state}><span>{state}</span><strong>{system?.queue.states[state] || 0}</strong></div>)}<p className="history-note">History · {(['interrupted', 'failed', 'cancelled', 'completed'] as const).reduce((total, state) => total + (system?.queue.states[state] || 0), 0)} terminal tasks</p></div>
       </aside>
 
       <section className="stream-panel panel">
         <div className="stream-header">
-          <div><p className="eyebrow">CONVERSATION + LIVE EXECUTION</p><h2>{selectedJob ? selectedJob.prompt_preview : (selectedSessionId ? 'Session' : 'New task')}</h2></div>
+          <div><p className="eyebrow">CONVERSATION + LIVE EXECUTION</p><h2>{creatingSession ? 'New session' : sessionLabel(selectedSession)}</h2></div>
           {selectedJob && <StatusBadge state={selectedJob.state} />}
         </div>
         <div className="event-stream">
+          {selectedJob?.state === 'failed' && <div className="job-notice failed"><strong>Task failed</strong><span>{selectedJob.error || 'See the execution timeline below for details.'}</span></div>}
+          {selectedJob?.state === 'cancelled' && <div className="job-notice"><strong>Task cancelled</strong><span>This task is terminal; start a new message to try again.</span></div>}
           {transcript.length > 0 && <><div className="stream-divider">Conversation history</div><TranscriptPanel messages={transcript} /></>}
           {selectedJob && <div className="stream-divider">Job {selectedJob.id} execution</div>}
           {selectedJob && !transcript.length && <article className="event-card user-event"><div className="event-meta"><span>YOU</span><time>{formatTime(selectedJob.created_at)}</time></div><p>{selectedJob.prompt_preview}</p></article>}
@@ -278,7 +296,7 @@ export default function App() {
   </main>
 }
 
-function StatusBadge({ state }: { state: string }) { return <span className={`status-badge ${state}`}><i />{state.replace('_', ' ')}</span> }
+function StatusBadge({ state }: { state: string }) { return <span className={`status-badge ${state}`}><i />{stateLabel(state)}</span> }
 function Empty({ text }: { text: string }) { return <div className="empty">{text}</div> }
 function KeyValue({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) { return <div className="key-value"><span>{label}</span><strong className={mono ? 'mono' : ''}>{value}</strong></div> }
 function ContextSection({ title, children }: { title: string; children: React.ReactNode }) { return <section className="context-section"><p className="eyebrow">{title.toUpperCase()}</p>{children}</section> }
@@ -295,7 +313,7 @@ function AuthenticatedImage({ artifact, token }: { artifact: ComputerStatus['scr
   return url ? <figure className="screenshot"><img src={url} alt="Latest Mac node screenshot" /><figcaption>Latest screenshot · {formatTime(artifact.created_at)}</figcaption></figure> : null
 }
 function EventCard({ item }: { item: EventItem }) {
-  const isTool = item.kind.startsWith('tool.'); const text = String(item.payload.text || item.payload.output || item.payload.result || '')
+  const isTool = item.kind.startsWith('tool.'); const text = String(item.payload.text || item.payload.output || item.payload.result || item.payload.error || '')
   if (isTool) return <details className={`event-card tool-event ${item.kind.endsWith('failed') ? 'failed' : ''}`} open={item.kind.endsWith('failed')}>
     <summary><span className="tool-icon">⌘</span><span><strong>{String(item.payload.name || 'Tool')}</strong><small>{item.kind.replace('tool.', '')}</small></span><time>{formatTime(item.timestamp)}</time><b>⌄</b></summary>
     {text && <pre>{text.slice(0, 12000)}</pre>}
