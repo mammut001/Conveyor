@@ -7,4 +7,9 @@ Conveyor keeps two intentionally separate session representations:
 
 The transcript is not hidden reasoning. It stores only user-visible conversation text and optional display metadata.
 
+Session IDs are namespaced by channel, operator and source chat ID, so identical
+Telegram and Feishu chat identifiers cannot collide. `/forget` retains its
+historical meaning: it clears only the bounded JSONL prompt-context cache, not
+the durable UI transcript.
+
 This separation prevents UI/history requirements from silently changing what is injected back into model prompts.

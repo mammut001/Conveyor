@@ -81,13 +81,14 @@ def _mirror_transcript(
     kind: str,
 ) -> None:
     try:
-        from transcript_store import get_transcript_store
+        from transcript_store import get_transcript_store, session_identity
         get_transcript_store(settings).append_turn(
-            msg.chat_id,
+            session_identity(msg.channel, msg.chat_id, msg.operator_id),
             user_text,
             assistant_text,
             channel=msg.channel,
             operator_id=msg.operator_id,
+            source_chat_id=msg.chat_id,
             kind=kind,
         )
     except Exception:

@@ -15,13 +15,42 @@ from pathlib import Path
 from typing import Any
 
 from redaction import redact_text, truncate
+from security.secrets import is_sensitive_key
 
 _MAX_CONTENT = 16_000
 _ALLOWED_ROLES = {"user", "assistant", "system", "tool"}
+_MAX_METADATA_TEXT = 2_000
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def session_identity(channel: str, chat_id: str, operator_id: str) -> str:
+    """Return a stable identity without allowing cross-channel collisions."""
+    if not channel or not chat_id or not operator_id:
+        raise ValueError("channel, chat_id and operator_id are required")
+    return f"{channel}:{operator_id}:{chat_id}"
+
+
+def _safe_metadata(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 3:
+        return "[TRUNCATED]"
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in list(value.items())[:32]:
+            name = str(key)[:128]
+            lowered = name.lower()
+            if is_sensitive_key(name) or "reasoning" in lowered or "thinking" in lowered:
+                result[name] = "[REDACTED]"
+            else:
+                result[name] = _safe_metadata(item, depth=depth + 1)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [_safe_metadata(item, depth=depth + 1) for item in list(value)[:32]]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return truncate(redact_text(str(value)), _MAX_METADATA_TEXT)
 
 
 @dataclass(frozen=True)
@@ -58,6 +87,7 @@ class TranscriptStore:
                         id TEXT PRIMARY KEY,
                         channel TEXT,
                         operator_id TEXT,
+                        source_chat_id TEXT,
                         title TEXT NOT NULL,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
@@ -92,6 +122,7 @@ class TranscriptStore:
         *,
         channel: str | None = None,
         operator_id: str | None = None,
+        source_chat_id: str | None = None,
         title: str | None = None,
     ) -> dict[str, Any]:
         if not session_id:
@@ -103,13 +134,14 @@ class TranscriptStore:
             with conn:
                 conn.execute(
                     """INSERT INTO sessions
-                       (id, channel, operator_id, title, created_at, updated_at, archived)
-                       VALUES (?, ?, ?, ?, ?, ?, 0)
+                       (id, channel, operator_id, source_chat_id, title, created_at, updated_at, archived)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 0)
                        ON CONFLICT(id) DO UPDATE SET
                          channel = COALESCE(excluded.channel, sessions.channel),
                          operator_id = COALESCE(excluded.operator_id, sessions.operator_id),
+                         source_chat_id = COALESCE(excluded.source_chat_id, sessions.source_chat_id),
                          updated_at = excluded.updated_at""",
-                    (session_id, channel, operator_id, safe_title, now, now),
+                    (session_id, channel, operator_id, source_chat_id, safe_title, now, now),
                 )
             row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
             return dict(row)
@@ -127,6 +159,7 @@ class TranscriptStore:
         metadata: dict[str, Any] | None = None,
         channel: str | None = None,
         operator_id: str | None = None,
+        source_chat_id: str | None = None,
     ) -> TranscriptMessage:
         if role not in _ALLOWED_ROLES:
             raise ValueError(f"unsupported transcript role: {role}")
@@ -135,6 +168,7 @@ class TranscriptStore:
             session_id,
             channel=channel,
             operator_id=operator_id,
+            source_chat_id=source_chat_id,
             title=safe_content[:80] if role == "user" and safe_content else None,
         )
         message = TranscriptMessage(
@@ -145,7 +179,7 @@ class TranscriptStore:
             created_at=_utc_now(),
             job_id=job_id,
             kind=kind,
-            metadata=metadata or {},
+            metadata=_safe_metadata(metadata or {}),
         )
         conn = self._connect()
         try:
@@ -180,7 +214,10 @@ class TranscriptStore:
             rows = conn.execute(
                 f"""SELECT s.*,
                            (SELECT COUNT(*) FROM session_messages m WHERE m.session_id = s.id) AS message_count,
-                           (SELECT COUNT(*) FROM queued_jobs q WHERE q.chat_id = s.id) AS job_count
+                           (SELECT COUNT(*) FROM queued_jobs q
+                            WHERE q.chat_id = COALESCE(s.source_chat_id, s.id)
+                              AND (s.channel IS NULL OR q.channel = s.channel)
+                              AND (s.operator_id IS NULL OR q.operator_id = s.operator_id)) AS job_count
                     FROM sessions s {where}
                     ORDER BY updated_at DESC LIMIT ?""",
                 (min(max(1, int(limit)), 200),),
@@ -227,6 +264,7 @@ class TranscriptStore:
         job_id: str | None = None,
         channel: str | None = None,
         operator_id: str | None = None,
+        source_chat_id: str | None = None,
         kind: str = "codex",
     ) -> tuple[TranscriptMessage, TranscriptMessage]:
         user = self.append(
@@ -237,6 +275,7 @@ class TranscriptStore:
             kind=kind,
             channel=channel,
             operator_id=operator_id,
+            source_chat_id=source_chat_id,
         )
         assistant = self.append(
             session_id,
@@ -246,6 +285,7 @@ class TranscriptStore:
             kind=kind,
             channel=channel,
             operator_id=operator_id,
+            source_chat_id=source_chat_id,
         )
         return user, assistant
 
