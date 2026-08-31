@@ -332,10 +332,24 @@ async def _read_stderr(self, job: Job, process: asyncio.subprocess.Process) -> N
         if not line:
             break
         chunks.append(line.decode("utf-8", errors="replace"))
-    if chunks and not job.error:
+    effective_return_code = job.return_code
+    if effective_return_code is None:
+        wait = getattr(process, "wait", None)
+        if callable(wait):
+            effective_return_code = await wait()
+        else:
+            effective_return_code = getattr(process, "returncode", None)
+    final_ready = bool(
+        job.final_message_path
+        and job.final_message_path.is_file()
+        and job.final_message_path.stat().st_size > 0
+    )
+    if chunks and not job.error and (effective_return_code != 0 or not final_ready):
         job.error = truncate(redact_text("".join(chunks)), 3000)
-    if job.return_code is not None and job.return_code < 0:
+    if effective_return_code is not None and effective_return_code < 0 and job.cancel_requested:
         job.error = "cancelled"
+    elif effective_return_code is not None and effective_return_code < 0 and not job.error:
+        job.error = "Provider process terminated unexpectedly."
 
 
 def _capture_usage(self, job: Job, raw_line: str) -> None:
