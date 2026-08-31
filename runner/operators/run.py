@@ -445,7 +445,12 @@ def _codex_command(self, job: Job) -> list[str]:
 
 def _child_env(self) -> dict[str, str]:
     from security.secrets import child_env_from
+    from provider_config import refresh_provider_env
     env = child_env_from(os.environ)
+    # Provider settings are editable from the Web Console. Refresh only the
+    # narrowly allowlisted provider credentials for every new Codex process,
+    # so a key change applies without restarting the chat workers.
+    env.update(refresh_provider_env())
     env["CODEX_TELEGRAM_JOB"] = "1"
     env["CODEX_RUNNER_HOME"] = str(RUNNER_HOME)
     return env

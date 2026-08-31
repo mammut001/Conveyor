@@ -23,6 +23,12 @@ class FakeControl:
     def system_status(self):
         return {"uptime_seconds": 1, "queue": {"depth": 0}}
 
+    def provider_config(self):
+        return {"provider_id": "minimax", "model": "MiniMax-M3", "api_key_configured": True, "api_key_hint": "••••1234"}
+
+    def update_provider_config(self, payload):
+        return {**payload, "api_key": None, "api_key_configured": True, "api_key_hint": "••••5678"}
+
     def list_sessions(self):
         return [{"id": "web-a", "title": "Session"}]
 
@@ -126,6 +132,16 @@ class WebApiTests(unittest.TestCase):
         status, replay = self.request("GET", "/api/jobs/q1/events?after=1")
         self.assertEqual(status, 200); self.assertEqual(replay["events"], [])
         self.assertEqual(self.request("GET", "/api/jobs/q1/diff")[0], 200)
+
+    def test_provider_config_is_authenticated_and_never_echoes_key(self):
+        status, config = self.request("GET", "/api/config/provider")
+        self.assertEqual(status, 200); self.assertTrue(config["api_key_configured"])
+        self.assertEqual(self.request("GET", "/api/config/provider", authorized=False)[0], 401)
+        status, result = self.request("POST", "/api/config/provider", {
+            "provider_id": "deepseek", "model": "deepseek-chat", "api_key": "sk-secret-value",
+        })
+        self.assertEqual(status, 200)
+        self.assertNotIn("sk-secret-value", json.dumps(result))
 
     def test_realtime_connect_event_and_reconnect_cursor(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)

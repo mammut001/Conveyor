@@ -87,7 +87,15 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Cache-Control", "no-store" if content_type.startswith("application/json") else "public, max-age=300")
+        if content_type.startswith("application/json"):
+            cache_control = "no-store"
+        elif content_type.startswith("text/html"):
+            # The HTML points at hashed assets. Revalidate it on every reload
+            # so a production rollout cannot leave the operator on an old UI.
+            cache_control = "no-cache"
+        else:
+            cache_control = "public, max-age=31536000, immutable"
+        self.send_header("Cache-Control", cache_control)
         self.send_header("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'")
         if length is not None:
             self.send_header("Content-Length", str(length))
@@ -150,6 +158,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/system/status":
                 self._json(HTTPStatus.OK, self.server.control.system_status())
+            elif path == "/api/config/provider":
+                self._json(HTTPStatus.OK, self.server.control.provider_config())
             elif path == "/api/sessions":
                 self._json(HTTPStatus.OK, {"sessions": self.server.control.list_sessions()})
             elif len(parts) == 3 and parts[:2] == ["api", "sessions"]:
@@ -229,6 +239,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     "ok": ok, "message": message, "job_id": job.id if job else None,
                     "session_id": durable_session_id,
                 })
+            elif parsed.path == "/api/config/provider":
+                result = self.server.control.update_provider_config(body)
+                self._json(HTTPStatus.OK, {"ok": True, "config": result})
             elif len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "cancel":
                 ok, message = self._await(self.server.control.cancel_job(parts[2]))
                 self._json(HTTPStatus.OK if ok else HTTPStatus.CONFLICT, {"ok": ok, "message": message})
