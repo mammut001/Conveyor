@@ -32,10 +32,16 @@ class AgentBackendTests(unittest.TestCase):
         runner = FakeRunner(); backend = CodexBackend(runner)
         async def scenario():
             async def progress(_text: str): pass
+            await backend.validate()
             self.assertEqual(await backend.start(JobMode.RUN, "hello", progress), "job")
             self.assertEqual(await backend.cancel(), "cancelled")
             self.assertEqual(await backend.diff_job("q1"), "diff:q1")
+            self.assertEqual(await backend.apply_job("q1"), "apply:q1")
+            self.assertEqual(await backend.discard_job("q1"), "discard:q1")
         asyncio.run(scenario())
+        self.assertIs(backend.settings, runner.settings)
+        self.assertIs(backend.current_job, runner.current_job)
+        self.assertIn("validate", runner.calls)
         self.assertIn("start:run:hello", runner.calls)
         self.assertIn("cancel", runner.calls)
 
