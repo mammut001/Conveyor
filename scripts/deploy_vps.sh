@@ -39,9 +39,11 @@ clean_live_checkout() {
     --quiet
 }
 
+# ---- lock -----------------------------------------------------------------
 exec 200>"${LOCK_FILE}"
 flock -n 200 || die "Another deploy is already running (lock: ${LOCK_FILE})"
 
+# ---- preflight ------------------------------------------------------------
 cd "${DEPLOY_PATH}"
 [[ -f .env ]] || die ".env not found at ${DEPLOY_PATH}/.env"
 [[ -x .venv/bin/python ]] || die ".venv/bin/python not found"
@@ -54,6 +56,7 @@ OLD_COMMIT_FULL="$(git rev-parse HEAD)"
 OLD_COMMIT="$(git rev-parse --short HEAD)"
 log "Current commit: ${OLD_COMMIT}"
 
+log "Fetching origin/main..."
 git fetch origin main --quiet
 ORIGIN_MAIN="$(git rev-parse origin/main)"
 if [[ -n "${REQUESTED_SHA}" ]]; then
@@ -67,6 +70,7 @@ fi
 TARGET_COMMIT="$(git rev-parse --short "${TARGET_COMMIT_FULL}")"
 log "Target commit:  ${TARGET_COMMIT}"
 
+# ---- locate shared control-plane database and require idle queue -----------
 DB_PATH="$(.venv/bin/python - <<'PY'
 from pathlib import Path
 from dotenv import dotenv_values
@@ -99,6 +103,7 @@ PY
   || die "Queue is not idle (queued=${QUEUED_COUNT}, running=${RUNNING_COUNT}); retry after jobs finish"
 log "Queue idle: queued=0 running=0"
 
+# ---- backup current release metadata, secrets file, and SQLite ------------
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_PATH="${BACKUP_DIR}/${TIMESTAMP}"
 mkdir -p "${BACKUP_PATH}"
@@ -125,8 +130,11 @@ finally:
 PY
 fi
 log "Backup complete: ${BACKUP_PATH}"
+
+# Keep only the five newest release backups after a successful new backup.
 ls -1dt "${BACKUP_DIR}"/*/ 2>/dev/null | tail -n +6 | xargs rm -rf 2>/dev/null || true
 
+# ---- candidate validation before touching live source ---------------------
 CANDIDATE="$(mktemp -d /tmp/conveyor-deploy-candidate.XXXXXX)"
 rmdir "${CANDIDATE}"
 git worktree add --detach "${CANDIDATE}" "${TARGET_COMMIT_FULL}" --quiet
@@ -134,6 +142,10 @@ log "Validating detached candidate ${TARGET_COMMIT}..."
 python3 -m venv "${CANDIDATE}/.venv"
 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 \
   "${CANDIDATE}/.venv/bin/python" -m pip install -q -r "${CANDIDATE}/requirements.txt"
+
+# `make smoke` is deliberately env-free with respect to production secrets,
+# but a subset of integration smokes still requires valid placeholder paths.
+# Build the same non-secret fixture used by CI inside the candidate worktree.
 cat > "${CANDIDATE}/.env.test" <<EOF
 TELEGRAM_BOT_TOKEN=deploy-placeholder-token
 TELEGRAM_ALLOWED_USER_ID=1
@@ -144,6 +156,7 @@ USER_TIMEZONE=UTC
 CONVEYOR_DESKTOP_AGENT_TOKEN=deploy-desktop-placeholder-token
 EOF
 chmod 600 "${CANDIDATE}/.env.test"
+
 (
   cd "${CANDIDATE}"
   .venv/bin/python -m compileall -q .
@@ -155,6 +168,8 @@ log "Candidate validation passed."
 clean_candidate
 CANDIDATE=""
 
+# Capture only services that are currently active; deployment must not enable
+# or revive unrelated/pre-existing disabled services.
 ALL_CANDIDATE_SERVICES=(
   conveyor-telegram-bot.service
   conveyor-feishu-bot.service
@@ -170,6 +185,7 @@ for svc in "${ALL_CANDIDATE_SERVICES[@]}"; do
 done
 
 declare -A SVC_STATUS
+
 rollback_release() {
   local reason="$1"
   ROLLBACK_ATTEMPTED=true
@@ -196,6 +212,7 @@ rollback_release() {
   return 1
 }
 
+# ---- live cutover ---------------------------------------------------------
 if [[ "${OLD_COMMIT_FULL}" != "${TARGET_COMMIT_FULL}" ]]; then
   log "Cutting over live checkout to ${TARGET_COMMIT}..."
   git reset --hard "${TARGET_COMMIT_FULL}" --quiet || rollback_release "git reset"
@@ -204,13 +221,17 @@ else
   log "Live checkout already has target revision; validating/restarting it."
 fi
 
+log "Syncing production Python dependencies..."
 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 .venv/bin/python -m pip install -q -r requirements.txt \
   || rollback_release "dependency sync"
+
+log "Running production smoke tests..."
 if ! make smoke; then
   rollback_release "production smoke"
 fi
 log "Production smoke passed."
 
+# ---- restart previously-active services and health-check ------------------
 ALL_ACTIVE=true
 for svc in "${SERVICES[@]}"; do
   log "Restarting ${svc}..."
@@ -222,10 +243,12 @@ for svc in "${SERVICES[@]}"; do
   SVC_STATUS["${svc}"]="${STATE}"
   if [[ "${STATE}" != "active" ]]; then
     ALL_ACTIVE=false
+    log "WARNING: ${svc} is ${STATE} after restart"
   else
     log "  ${svc}: ${STATE}"
   fi
 done
+
 if [[ "${ALL_ACTIVE}" != "true" ]]; then
   rollback_release "service health check" || die "Deployment rolled back after service health failure"
 fi
@@ -234,10 +257,12 @@ NEW_COMMIT_FULL="$(git rev-parse HEAD)"
 NEW_COMMIT="$(git rev-parse --short HEAD)"
 [[ "${NEW_COMMIT_FULL}" == "${TARGET_COMMIT_FULL}" ]] || rollback_release "post-cutover SHA mismatch"
 
+# ---- write deployment status ---------------------------------------------
 TG_STATE="${SVC_STATUS[conveyor-telegram-bot.service]:-inactive-before-deploy}"
 FS_STATE="${SVC_STATUS[conveyor-feishu-bot.service]:-inactive-before-deploy}"
 DESKTOP_STATE="${SVC_STATUS[conveyor-desktop-agent.service]:-inactive-before-deploy}"
 WEB_STATE="${SVC_STATUS[conveyor-web.service]:-inactive-before-deploy}"
+
 cat > "${STATUS_FILE}" <<STATUS_JSON
 {
   "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -260,6 +285,8 @@ cat > "${STATUS_FILE}" <<STATUS_JSON
 }
 STATUS_JSON
 log "Wrote ${STATUS_FILE}"
+
+log "Service status:"
 for svc in "${SERVICES[@]}"; do
   log "  ${svc}: ${SVC_STATUS[$svc]:-unknown}"
 done
