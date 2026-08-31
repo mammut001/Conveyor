@@ -1,248 +1,37 @@
 #!/usr/bin/env bash
-# Deploy local source to the VPS. NEVER use `rsync --delete` against the project
-# root on the VPS — .env lives there and contains live bot/LLM secrets, and
-# local copies intentionally omit it. Always rsync a per-subdir list with
-# explicit --exclude for any future secret files.
+# Manual production deploy entrypoint.
 #
-# Hardened flow:
-#   1. rsync source files to VPS
-#   2. SSH to VPS: acquire deploy lock, run smoke, restart services
-#   3. Write .deploy-status.json on VPS
-#   4. If restart health check fails, attempt minimal rollback
+# This intentionally does NOT rsync the developer working tree into production.
+# Manual deploys use the same canonical, transactional origin/main path as CI:
+# fetch origin/main locally, stream that revision's deploy_vps.sh over SSH, and
+# ask the remote script to deploy the exact main commit.
 set -euo pipefail
 
-# Override on the command line: CONVEYOR_REMOTE=user@host bash scripts/deploy.sh
-# Also honors CODEX_TELEGRAM_REMOTE / CODEX_TELEGRAM_REMOTE_DIR from the
-# developer shell so `alias deploy-runner` in ~/.zshrc works without edits.
 REMOTE="${CONVEYOR_REMOTE:-${CODEX_TELEGRAM_REMOTE:-<ssh-user>@<vps-host>}}"
 REMOTE_DIR="${CONVEYOR_REMOTE_DIR:-${CODEX_TELEGRAM_REMOTE_DIR:-/opt/conveyor}}"
 LOCAL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-
-# GitHub Actions metadata (passed as env vars by the workflow).
-GITHUB_SHA="${GITHUB_SHA:-}"
-GITHUB_REF_NAME="${GITHUB_REF_NAME:-}"
-GITHUB_RUN_ID="${GITHUB_RUN_ID:-}"
 DEPLOY_SOURCE="${DEPLOY_SOURCE:-manual}"
-
-EXCLUDES=(
-  --exclude=.env
-  --exclude=.env.*
-  --exclude=__pycache__
-  --exclude=*.pyc
-  --exclude=.venv
-  --exclude=logs
-  --exclude=worktrees
-  --exclude=snapshots
-  --exclude=state
-  --exclude=MEMORY.md
-  --exclude='MEMORY.md.archived-*'
-  --exclude=.deploy-status.json
-  --exclude=.deploy.lock
-  --exclude=.deploy-backups
-  --exclude=node_modules
-)
 
 log() { echo "[deploy] $*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
 
-# ---- rsync ----------------------------------------------------------------
-log "Syncing to ${REMOTE}:${REMOTE_DIR} ..."
-for sub in \
-  scripts runner bot.py feishu_bot.py web_console.py web_control.py provider_config.py agent_events.py config.py runner.py redaction.py \
-  desktop_agent.py desktop_agent_server.py desktop_cua.py \
-  desktop_computer_loop.py desktop_computer_planner.py desktop_computer_requests.py \
-  desktop_screenshot.py requirements.txt systemd channel handlers nodes web tests Makefile; do
-  if [[ -e "$LOCAL_DIR/$sub" ]]; then
-    rsync -az "${EXCLUDES[@]}" \
-      "$LOCAL_DIR/$sub" "$REMOTE:$REMOTE_DIR/"
-  fi
-done
-log "rsync complete."
+[[ "${REMOTE}" != "<ssh-user>@<vps-host>" ]] || die "Set CONVEYOR_REMOTE (or CODEX_TELEGRAM_REMOTE) first"
 
-# ---- remote smoke + restart + status file ----------------------------------
-# The entire post-rsync phase runs as a single SSH heredoc on the VPS.
-# This keeps the lock, smoke, restart, and status-file write atomic.
-GIT_SHA_SHORT="${GITHUB_SHA:+$(echo "$GITHUB_SHA" | head -c 7)}"
-if [[ -z "$GIT_SHA_SHORT" ]]; then
-  GIT_SHA_SHORT="$(cd "$LOCAL_DIR" && git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
-fi
+cd "${LOCAL_DIR}"
+log "Fetching canonical origin/main..."
+git fetch origin main --quiet
+TARGET_COMMIT="$(git rev-parse origin/main)"
+git cat-file -e "${TARGET_COMMIT}:scripts/deploy_vps.sh" 2>/dev/null \
+  || die "origin/main does not contain scripts/deploy_vps.sh"
 
-log "Running remote smoke + restart on VPS ..."
-ssh "$REMOTE" bash -s -- \
-    "$REMOTE_DIR" "$DEPLOY_SOURCE" "$GIT_SHA_SHORT" "$GITHUB_REF_NAME" "$GITHUB_RUN_ID" <<'REMOTE_EOF'
-set -euo pipefail
+# Stream the deployer from the exact target revision. This prevents a manual
+# rollout from executing either an unmerged local deploy script or the stale
+# deploy script currently installed on the VPS.
+printf -v REMOTE_COMMAND \
+  'GITHUB_SHA=%q GITHUB_REF_NAME=%q GITHUB_RUN_ID=%q DEPLOY_SOURCE=%q CONVEYOR_DEPLOY_PATH=%q bash -s' \
+  "${TARGET_COMMIT}" "main" "manual" "${DEPLOY_SOURCE}" "${REMOTE_DIR}"
 
-REMOTE_DIR="$1"
-DEPLOY_SOURCE="$2"
-GIT_SHA="$3"
-GIT_REF="$4"
-RUN_ID="$5"
-LOCK_FILE="${REMOTE_DIR}/.deploy.lock"
-STATUS_FILE="${REMOTE_DIR}/.deploy-status.json"
-BACKUP_DIR="${REMOTE_DIR}/.deploy-backups"
-
-log() { echo "[vps-deploy] $*"; }
-die() { log "ERROR: $*" >&2; exit 1; }
-
-# ---- lock ------------------------------------------------------------------
-exec 200>"${LOCK_FILE}"
-flock -n 200 || die "Another deploy is already running (lock: ${LOCK_FILE})"
-
-cd "${REMOTE_DIR}"
-
-# ---- preflight -------------------------------------------------------------
-[[ -f .env ]] || die ".env not found at ${REMOTE_DIR}/.env"
-[[ -d .venv ]] || die ".venv not found at ${REMOTE_DIR}/.venv"
-[[ -f Makefile ]] || die "Makefile not found at ${REMOTE_DIR}/Makefile"
-
-# ---- backup key files (minimal rollback support) ---------------------------
-TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-BACKUP_PATH="${BACKUP_DIR}/${TIMESTAMP}"
-mkdir -p "${BACKUP_PATH}"
-for f in Makefile config.py runner.py bot.py feishu_bot.py; do
-  [[ -f "$f" ]] && cp "$f" "${BACKUP_PATH}/" 2>/dev/null || true
-done
-# Keep only last 5 backups
-if [[ -d "${BACKUP_DIR}" ]]; then
-  ls -1dt "${BACKUP_DIR}"/*/ 2>/dev/null | tail -n +6 | xargs rm -rf 2>/dev/null || true
-fi
-log "Backup at ${BACKUP_PATH}"
-
-# ---- smoke -----------------------------------------------------------------
-log "Running make smoke ..."
-if ! make smoke; then
-  die "Smoke tests FAILED. Services will NOT be restarted."
-fi
-log "Smoke passed."
-
-# ---- restart services ------------------------------------------------------
-SERVICES=(conveyor-telegram-bot conveyor-feishu-bot)
-if systemctl is-enabled --quiet conveyor-web.service 2>/dev/null; then
-  SERVICES+=(conveyor-web.service)
-fi
-# Optionally restart maintain timer if it exists
-if systemctl list-unit-files conveyor-maintain.timer &>/dev/null; then
-  SERVICES+=(conveyor-maintain.timer)
-fi
-
-declare -A SVC_STATUS
-ALL_ACTIVE=true
-for svc in "${SERVICES[@]}"; do
-  log "Restarting ${svc} ..."
-  if sudo systemctl restart "${svc}"; then
-    sleep 2
-    STATE="$(systemctl is-active "${svc}" 2>/dev/null || echo 'inactive')"
-    SVC_STATUS["$svc"]="$STATE"
-    if [[ "$STATE" != "active" ]]; then
-      ALL_ACTIVE=false
-      log "WARNING: ${svc} is ${STATE} after restart"
-    else
-      log "  ${svc}: ${STATE}"
-    fi
-  else
-    SVC_STATUS["$svc"]="restart-failed"
-    ALL_ACTIVE=false
-    log "WARNING: failed to restart ${svc}"
-  fi
-done
-
-# desktop_agent_server.py is currently installed as a manually supervised
-# process rather than a systemd unit. Restart it when present so the control
-# plane loads the same source revision as the bot services.
-DESKTOP_SERVER_STATUS="not_running"
-DESKTOP_SERVER_PID="$(ps -eo pid=,args= | awk '$0 ~ /[.]venv\/bin\/python desktop_agent_server[.]py/ {print $1; exit}')"
-if [[ -n "$DESKTOP_SERVER_PID" ]]; then
-  log "Restarting desktop_agent_server.py (pid ${DESKTOP_SERVER_PID}) ..."
-  kill "$DESKTOP_SERVER_PID" 2>/dev/null || true
-  for _ in 1 2 3 4 5; do
-    if ! kill -0 "$DESKTOP_SERVER_PID" 2>/dev/null; then
-      break
-    fi
-    sleep 1
-  done
-  if kill -0 "$DESKTOP_SERVER_PID" 2>/dev/null; then
-    log "desktop_agent_server.py did not exit after TERM; forcing shutdown"
-    kill -9 "$DESKTOP_SERVER_PID" 2>/dev/null || true
-    sleep 1
-  fi
-  DESKTOP_SERVER_LOG="/tmp/conveyor_desktop_agent_server-${USER:-ubuntu}.log"
-  nohup .venv/bin/python desktop_agent_server.py \
-    >"$DESKTOP_SERVER_LOG" 2>&1 </dev/null &
-  DESKTOP_SERVER_PID="$!"
-  sleep 2
-  if kill -0 "$DESKTOP_SERVER_PID" 2>/dev/null; then
-    DESKTOP_SERVER_STATUS="active"
-    log "  desktop_agent_server.py: active (pid ${DESKTOP_SERVER_PID})"
-  else
-    DESKTOP_SERVER_STATUS="restart-failed"
-    ALL_ACTIVE=false
-    log "WARNING: desktop_agent_server.py failed to start"
-  fi
-fi
-
-# ---- rollback guard --------------------------------------------------------
-if [[ "$ALL_ACTIVE" == "false" ]]; then
-  log "Some services are not active. Attempting rollback ..."
-  for f in Makefile config.py runner.py bot.py feishu_bot.py; do
-    if [[ -f "${BACKUP_PATH}/$f" ]]; then
-      cp "${BACKUP_PATH}/$f" "${REMOTE_DIR}/$f" 2>/dev/null || true
-    fi
-  done
-  for svc in "${SERVICES[@]}"; do
-    STATE="${SVC_STATUS[$svc]:-unknown}"
-    if [[ "$STATE" != "active" ]]; then
-      log "Re-restarting ${svc} after rollback ..."
-      sudo systemctl restart "${svc}" 2>/dev/null || true
-      sleep 2
-      NEW_STATE="$(systemctl is-active "${svc}" 2>/dev/null || echo 'inactive')"
-      SVC_STATUS["$svc"]="$NEW_STATE"
-      log "  ${svc}: ${NEW_STATE}"
-    fi
-  done
-fi
-
-# ---- write .deploy-status.json ---------------------------------------------
-TG_STATE="${SVC_STATUS[conveyor-telegram-bot]:-unknown}"
-FS_STATE="${SVC_STATUS[conveyor-feishu-bot]:-unknown}"
-
-cat > "${STATUS_FILE}" <<STATUS_JSON
-{
-  "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "source": "${DEPLOY_SOURCE}",
-  "git_sha": "${GIT_SHA}",
-  "git_ref": "${GIT_REF}",
-  "run_id": "${RUN_ID}",
-  "remote_dir": "${REMOTE_DIR}",
-  "smoke": "passed",
-  "services": {
-    "telegram": "${TG_STATE}",
-    "feishu": "${FS_STATE}",
-    "desktop_agent_server": "${DESKTOP_SERVER_STATUS}"
-  },
-  "rollback_attempted": $([ "$ALL_ACTIVE" == "false" ] && echo "true" || echo "false"),
-  "backup_path": "${BACKUP_PATH}"
-}
-STATUS_JSON
-log "Wrote ${STATUS_FILE}"
-
-# ---- final summary ---------------------------------------------------------
-log "Deploy complete."
-for svc in "${SERVICES[@]}"; do
-  log "  ${svc}: ${SVC_STATUS[$svc]:-unknown}"
-done
-log "  desktop_agent_server.py: ${DESKTOP_SERVER_STATUS}"
-
-# Exit nonzero if any service is still not active
-if [[ "$ALL_ACTIVE" == "false" ]]; then
-  FINAL_OK=true
-  for svc in "${SERVICES[@]}"; do
-    [[ "${SVC_STATUS[$svc]:-}" == "active" ]] || FINAL_OK=false
-  done
-  [[ "$DESKTOP_SERVER_STATUS" != "restart-failed" ]] || FINAL_OK=false
-  if [[ "$FINAL_OK" == "false" ]]; then
-    die "Some services are not active after rollback. Manual intervention needed."
-  fi
-fi
-REMOTE_EOF
-
-log "Remote deploy finished successfully."
+log "Deploying origin/main ${TARGET_COMMIT:0:12} to ${REMOTE}:${REMOTE_DIR}..."
+git show "${TARGET_COMMIT}:scripts/deploy_vps.sh" \
+  | ssh "${REMOTE}" "${REMOTE_COMMAND}"
+log "Transactional production deploy finished."
