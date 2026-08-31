@@ -1,6 +1,7 @@
 """Persistent provider health and fail-fast circuit-breaker state."""
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -58,6 +59,17 @@ class ProviderHealthStore:
                     );
                     """
                 )
+        finally:
+            conn.close()
+
+    def reset(self, provider_id: str) -> None:
+        """Forget stale health after an explicit operator config/key change."""
+        if not provider_id:
+            return
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("DELETE FROM provider_health WHERE provider_id = ?", (provider_id,))
         finally:
             conn.close()
 
@@ -125,8 +137,10 @@ class ProviderHealthStore:
 
     def record_failure(self, provider_id: str, config_revision: str, error_text: str) -> dict[str, Any]:
         kind = classify_provider_error(error_text)
-        threshold = max(1, int(getattr(self.settings, "conveyor_provider_circuit_threshold", 1)))
-        cooldown = max(1, int(getattr(self.settings, "conveyor_provider_circuit_seconds", 180)))
+        threshold_default = int(getattr(self.settings, "conveyor_provider_circuit_threshold", 1))
+        cooldown_default = int(getattr(self.settings, "conveyor_provider_circuit_seconds", 180))
+        threshold = max(1, int(os.getenv("CONVEYOR_PROVIDER_CIRCUIT_THRESHOLD", str(threshold_default))))
+        cooldown = max(1, int(os.getenv("CONVEYOR_PROVIDER_CIRCUIT_SECONDS", str(cooldown_default))))
         current = self.snapshot(provider_id, config_revision)
         failures = current["consecutive_failures"] + 1
         circuit_kind = kind in {"rate_limited", "auth_failed", "unreachable"}
