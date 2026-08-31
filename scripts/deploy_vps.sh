@@ -142,6 +142,21 @@ log "Validating detached candidate ${TARGET_COMMIT}..."
 python3 -m venv "${CANDIDATE}/.venv"
 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 \
   "${CANDIDATE}/.venv/bin/python" -m pip install -q -r "${CANDIDATE}/requirements.txt"
+
+# `make smoke` is deliberately env-free with respect to production secrets,
+# but a subset of integration smokes still requires valid placeholder paths.
+# Build the same non-secret fixture used by CI inside the candidate worktree.
+cat > "${CANDIDATE}/.env.test" <<EOF
+TELEGRAM_BOT_TOKEN=deploy-placeholder-token
+TELEGRAM_ALLOWED_USER_ID=1
+CODEX_WORKSPACE_ROOT=${CANDIDATE}
+CODEX_TASK_ROOT=${CANDIDATE}/.smoke-task
+CODEX_MEMORY_ROOT=${CANDIDATE}/.smoke-memory
+USER_TIMEZONE=UTC
+CONVEYOR_DESKTOP_AGENT_TOKEN=deploy-desktop-placeholder-token
+EOF
+chmod 600 "${CANDIDATE}/.env.test"
+
 (
   cd "${CANDIDATE}"
   .venv/bin/python -m compileall -q .
@@ -181,6 +196,7 @@ rollback_release() {
     PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 .venv/bin/python -m pip install -q -r requirements.txt || true
   fi
   local rollback_ok=true
+  local state
   for svc in "${SERVICES[@]}"; do
     sudo -n systemctl restart "${svc}" >/dev/null 2>&1 || rollback_ok=false
     sleep 2
