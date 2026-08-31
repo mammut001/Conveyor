@@ -180,6 +180,8 @@ async def _run_job(self, job: Job, on_progress: ProgressCallback) -> None:
             await on_progress(f"Cancelled job {job.id}.")
             return
 
+        assert job.metadata_path is not None
+        logs_dir = job.metadata_path.parent
         delays = self.settings.codex_retry_429_delays_seconds
         for attempt_index in range(job.max_attempts):
             job.attempt = attempt_index + 1

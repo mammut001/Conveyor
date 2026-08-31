@@ -83,47 +83,53 @@ def test_rate_limiting() -> CheckResult:
 
 
 def test_queue_limit() -> CheckResult:
-    # Set limit to 1 pending job in queue
-    settings = Settings(
-        telegram_bot_token="test-token",
-        telegram_allowed_user_id=1,
-        codex_workspace_root=Path("/tmp"),
-        codex_bin="codex",
-        codex_task_root=Path("/tmp"),
-        codex_model=None,
-        codex_timeout_seconds=3,
-        telegram_progress_seconds=3,
-        codex_retry_429_delays_seconds=(),
-        codex_memory_root=Path("/tmp"),
-        user_timezone="UTC",
-        conveyor_max_pending_jobs=1,
-        conveyor_max_jobs_per_hour=100, # prevent rate limiting interference
-    )
-    runner = CodexRunner(settings)
-    reset_job_queue()
-    JOB_SUBMISSION_TIMESTAMPS.clear()
-    
-    # Mock a currently running job so new ones must queue
-    class FakeJob:
-        id = "job-running"
-        state = JobState.RUNNING
-    runner.current_job = FakeJob()
-    
-    port = FakeOutbound()
-    
-    async def _run():
-        # 1st queued (succeeds)
-        await handle_codex_job(_msg("op-1", "job 1"), port, runner)
-        
-        # 2nd queued (fails queue full)
-        before_len = len(port.replies)
-        await handle_codex_job(_msg("op-1", "job 2"), port, runner)
-        if len(port.replies) == before_len + 1 and "队列已满" in port.replies[-1]:
-            return True, "successfully blocked queue overflow"
-        return False, f"replies: {port.replies}"
+    # Use a fresh SQLite queue and create the running row through the same
+    # API as production. runner.current_job alone is deliberately not
+    # authoritative across processes.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        settings = Settings(
+            telegram_bot_token="test-token",
+            telegram_allowed_user_id=1,
+            codex_workspace_root=root,
+            codex_bin="codex",
+            codex_task_root=root / "tasks",
+            codex_model=None,
+            codex_timeout_seconds=3,
+            telegram_progress_seconds=3,
+            codex_retry_429_delays_seconds=(),
+            codex_memory_root=root / "memory",
+            user_timezone="UTC",
+            conveyor_max_pending_jobs=1,
+            conveyor_max_jobs_per_hour=100, # prevent rate limiting interference
+        )
+        runner = CodexRunner(settings)
+        reset_job_queue()
+        queue = get_job_queue()
+        queue.configure(settings, runner, recover=False)
+        JOB_SUBMISSION_TIMESTAMPS.clear()
+        port = FakeOutbound()
 
-    ok, detail = asyncio.run(_run())
-    return CheckResult("quota: queue capacity limit enforced", ok, detail)
+        async def _run():
+            success, _, _ = await queue.enqueue(
+                "run", "active job", _msg("op-1", "active job"), port, runner
+            )
+            if not success or await queue.dequeue(require_idle=True) is None:
+                return False, "could not create running queue fixture"
+
+            # 1st pending job succeeds; 2nd is rejected at capacity.
+            await handle_codex_job(_msg("op-1", "job 1"), port, runner)
+            before_len = len(port.replies)
+            await handle_codex_job(_msg("op-1", "job 2"), port, runner)
+            if len(port.replies) == before_len + 1 and "队列已满" in port.replies[-1]:
+                return True, "successfully blocked queue overflow"
+            return False, f"replies: {port.replies}"
+
+        try:
+            ok, detail = asyncio.run(_run())
+        finally:
+            reset_job_queue()
+        return CheckResult("quota: queue capacity limit enforced", ok, detail)
 
 
 def test_worktree_size_limit() -> CheckResult:

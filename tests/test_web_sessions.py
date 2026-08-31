@@ -24,6 +24,10 @@ class WebSessionTests(unittest.TestCase):
             runner = SimpleNamespace(current_job=None)
             queue = JobQueue()
             queue.configure(settings, runner, recover=False)
+            self.assertEqual(
+                queue._db_path(),
+                root / "state" / "job_queue.sqlite3",
+            )
             now = datetime.now(timezone.utc).isoformat()
             connection = queue._get_conn()
             try:
