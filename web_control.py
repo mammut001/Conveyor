@@ -15,7 +15,7 @@ from agent_events import emit_event, get_event_store
 from handlers.job_queue import JobQueue
 from redaction import redact_text, truncate
 from runtime_control import COMMAND_CANCEL, get_runtime_control
-from transcript_store import get_transcript_store
+from transcript_store import get_transcript_store, session_identity
 from provider_config import get_provider_config, save_provider_config
 
 
@@ -106,7 +106,43 @@ class WebControl:
                     str(session.get("source_chat_id") or ""),
                 )
                 session["latest_job"] = latest_by_session.get(key)
-            return transcript_sessions
+            # A queued Web task may not have a transcript yet because the
+            # execution owner has not started it. Keep that task visible in
+            # the sidebar instead of dropping it whenever another transcript
+            # already exists.
+            known_keys = {
+                (
+                    str(session.get("channel") or ""),
+                    str(session.get("operator_id") or ""),
+                    str(session.get("source_chat_id") or ""),
+                )
+                for session in transcript_sessions
+            }
+            for job in jobs:
+                key = (
+                    str(job.get("channel") or ""),
+                    str(job.get("operator_id") or ""),
+                    str(job.get("chat_id") or ""),
+                )
+                if not all(key) or key in known_keys:
+                    continue
+                session_id = session_identity(key[0], key[2], key[1])
+                transcript_sessions.append({
+                    "id": session_id,
+                    "channel": key[0],
+                    "operator_id": key[1],
+                    "source_chat_id": key[2],
+                    "title": job.get("prompt_preview") or "New session",
+                    "created_at": job.get("created_at"),
+                    "updated_at": job.get("updated_at") or job.get("created_at"),
+                    "last_activity": job.get("updated_at") or job.get("created_at"),
+                    "job_count": 1,
+                    "message_count": 0,
+                    "latest_job": job,
+                })
+                known_keys.add(key)
+            transcript_sessions.sort(key=lambda item: str(item.get("last_activity") or ""), reverse=True)
+            return transcript_sessions[:limit]
 
         # Backward-compatible projection for installations that have not yet
         # written a structured transcript.
@@ -143,7 +179,19 @@ class WebControl:
             transcript["jobs"] = jobs
             transcript["job_count"] = len(jobs)
             return transcript
-        jobs = self.list_jobs(200, session_id=session_id)
+        # Queued Web jobs can be projected into a durable namespaced session
+        # before their first transcript turn is written. Resolve those jobs
+        # by their channel/operator/source-chat identity as well as by the
+        # legacy raw chat-id lookup.
+        jobs = []
+        for job in self.list_jobs(200):
+            channel = str(job.get("channel") or "")
+            chat_id = str(job.get("chat_id") or "")
+            operator_id = str(job.get("operator_id") or "")
+            if channel and chat_id and operator_id and session_identity(channel, chat_id, operator_id) == session_id:
+                jobs.append(job)
+        if not jobs:
+            jobs = self.list_jobs(200, session_id=session_id)
         if not jobs:
             return None
         return {
