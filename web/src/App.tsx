@@ -1,65 +1,55 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
+import { ContextDrawer, type DrawerKind } from './components/ContextDrawer'
+import { ProviderSettings } from './components/ProviderSettings'
 import { TranscriptPanel } from './components/TranscriptPanel'
+import { WorkspaceSidebar } from './components/WorkspaceSidebar'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
-
-type EventItem = {
-  schema_version: number; event_id: string; sequence: number; timestamp: string
-  kind: string; job_id: string; payload: Record<string, unknown>; tool_call_id?: string
-}
-type Job = {
-  id: string; state: string; mode: string; channel: string; chat_id: string; operator_id?: string
-  created_at: string; updated_at?: string; started_at?: string; finished_at?: string
-  prompt_preview: string; metadata?: Record<string, string>; latest_event?: EventItem
-  error?: string
-  changed_files?: { status: string; path: string }[]
-  runtime?: Record<string, unknown>
-}
-type Session = {
-  id: string; channel?: string; title?: string; created_at: string; updated_at?: string; last_activity: string
-  operator_id?: string; source_chat_id?: string; job_count: number; message_count?: number; latest_job?: Job
-}
-type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[] }
-type Approval = { id: string; job_id: string; action: string; status: string; created_at?: string }
-type NodeInfo = {
-  id: string; name: string; type: string; status: string; last_seen_at?: string
-  capabilities: string[]; metadata?: Record<string, unknown>
-}
-type SystemStatus = {
-  uptime_seconds: number; load_average: number[]; cpu_count: number
-  memory: { total: number | null; available: number | null }
-  disk: { total: number; used: number; free: number }
-  queue: { depth: number; paused: boolean; states: Record<string, number> }
-  channels: Record<string, { configured: boolean }>; nodes: NodeInfo[]
-}
-type ComputerStatus = {
-  armed: boolean; arm_remaining_seconds: number; active_task?: Record<string, unknown> | null
-  screenshots: { artifact_id: string; created_at?: string; width?: number; height?: number }[]
-}
-type ProviderConfig = {
-  provider_id: string; provider_name: string; model: string; reasoning_effort: string
-  base_url: string; wire_api: 'responses' | 'chat'; env_key: string
-  api_key_configured: boolean; api_key_hint: string; config_path: string
-}
-
-const statusOrder = ['running', 'queued', 'interrupted', 'failed', 'cancelled', 'completed']
+import type { Approval, ComputerStatus, EventItem, Job, NodeInfo, ProviderConfig, Session, SessionDetail, SystemStatus } from './types'
 
 function formatTime(value?: string) {
   if (!value) return '—'
   const date = new Date(value)
   return Number.isNaN(date.valueOf()) ? value : date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
-function bytes(value: number | null) {
-  if (value == null) return '—'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']; let n = value; let i = 0
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++ }
-  return `${n.toFixed(i > 1 ? 1 : 0)} ${units[i]}`
-}
+
 function stateLabel(state?: string) {
-  return (state || 'unknown').replace('_', ' ')
+  return (state || 'unknown').replaceAll('_', ' ')
 }
+
 function sessionLabel(session: Session | undefined) {
-  return session?.title || session?.latest_job?.prompt_preview || 'New session'
+  return session?.title || session?.latest_job?.prompt_preview || 'New chat'
+}
+
+function eventText(item: EventItem) {
+  return String(item.payload.text || item.payload.output || item.payload.result || item.payload.error || '')
+}
+
+function StatusBadge({ state }: { state: string }) {
+  return <span className={`v3-status-badge ${state}`}><i />{stateLabel(state)}</span>
+}
+
+function Empty({ title, text }: { title: string; text: string }) {
+  return <div className="v3-empty"><div className="v3-empty-mark">C</div><h2>{title}</h2><p>{text}</p></div>
+}
+
+function ActivityEvent({ item }: { item: EventItem }) {
+  const text = eventText(item)
+  const isTool = item.kind.startsWith('tool.')
+  const failed = item.kind.endsWith('failed') || item.kind.includes('error')
+  return <div className={`v3-activity-row ${failed ? 'failed' : ''}`}>
+    <span className={`v3-activity-icon ${isTool ? 'tool' : ''}`}>{isTool ? '⌘' : '·'}</span>
+    <span className="v3-activity-copy"><strong>{isTool ? String(item.payload.name || 'Tool') : stateLabel(item.kind)}</strong>{text && <small>{text.slice(0, 180)}</small>}</span>
+    <time>{formatTime(item.timestamp)}</time>
+  </div>
+}
+
+function ApprovalCard({ approval, busy, onAction }: { approval: Approval; busy: boolean; onAction: (path: string, body?: object) => Promise<void> }) {
+  const apply = approval.action === 'apply'
+  return <article className="v3-approval-card">
+    <div className="v3-approval-icon">!</div>
+    <div className="v3-approval-copy"><span className="v3-kicker">APPROVAL REQUIRED</span><h3>{apply ? 'Apply these changes?' : 'Discard this worktree?'}</h3><p>This decision is scoped to the current task and expires automatically.</p></div>
+    <div className="v3-approval-actions"><button disabled={busy} onClick={() => void onAction(`/api/approvals/${approval.id}/reject`)}>Reject</button><button className="v3-primary" disabled={busy} onClick={() => void onAction(`/api/approvals/${approval.id}/approve`)}>Approve</button></div>
+  </article>
 }
 
 export default function App() {
@@ -84,8 +74,11 @@ export default function App() {
   const [error, setError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [drawer, setDrawer] = useState<DrawerKind | null>(null)
   const lastSequence = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
+  const composerRef = useRef<HTMLTextAreaElement>(null)
 
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(path, {
@@ -102,12 +95,21 @@ export default function App() {
     if (!token) return
     try {
       const [sessionData, jobData, approvalData, nodeData, systemData, computerData] = await Promise.all([
-        api<{ sessions: Session[] }>('/api/sessions'), api<{ jobs: Job[] }>('/api/jobs'),
-        api<{ approvals: Approval[] }>('/api/approvals'), api<{ nodes: NodeInfo[] }>('/api/nodes'),
-        api<SystemStatus>('/api/system/status'), api<ComputerStatus>('/api/computer/status'),
+        api<{ sessions: Session[] }>('/api/sessions'),
+        api<{ jobs: Job[] }>('/api/jobs'),
+        api<{ approvals: Approval[] }>('/api/approvals'),
+        api<{ nodes: NodeInfo[] }>('/api/nodes'),
+        api<SystemStatus>('/api/system/status'),
+        api<ComputerStatus>('/api/computer/status'),
       ])
-      setSessions(sessionData.sessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
-      setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setError('')
+      setSessions(sessionData.sessions)
+      setJobs(jobData.jobs)
+      setApprovals(approvalData.approvals)
+      setNodes(nodeData.nodes)
+      setSystem(systemData)
+      setComputer(computerData)
+      setAuthenticated(true)
+      setError('')
       if (!creatingSession && !selectedSessionId) {
         const initialSession = sessionData.sessions[0]
         if (initialSession) {
@@ -121,7 +123,9 @@ export default function App() {
         const session = sessionData.sessions.find(item => item.id === selectedSessionId)
         if (session?.latest_job) setSelectedJobId(session.latest_job.id)
       }
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not connect') }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not connect')
+    }
   }, [api, creatingSession, selectedJobId, selectedSessionId, token])
 
   const refreshTranscript = useCallback(async () => {
@@ -129,7 +133,9 @@ export default function App() {
     try {
       const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`)
       setTranscript(session.messages || [])
-    } catch { setTranscript([]) }
+    } catch {
+      setTranscript([])
+    }
   }, [api, authenticated, selectedSessionId])
 
   useEffect(() => { void refresh() }, [refresh])
@@ -138,19 +144,27 @@ export default function App() {
     const timer = window.setInterval(() => { void refresh(); void refreshTranscript() }, 3_000)
     return () => window.clearInterval(timer)
   }, [authenticated, refresh, refreshTranscript])
+  useEffect(() => { void refreshTranscript() }, [refreshTranscript])
 
   useEffect(() => {
-    void refreshTranscript()
-  }, [refreshTranscript])
+    if (!authenticated || providerConfig) return
+    void api<ProviderConfig>('/api/config/provider').then(setProviderConfig).catch(() => {})
+  }, [api, authenticated, providerConfig])
 
   useEffect(() => {
     if (!authenticated || !selectedJobId) return
-    let stopped = false; let controller: AbortController | null = null; let retry: number | undefined
-    lastSequence.current = 0; setEvents([]); setDiff('')
+    let stopped = false
+    let controller: AbortController | null = null
+    let retry: number | undefined
+    lastSequence.current = 0
+    setEvents([])
+    setDiff('')
+
     void api<{ events: EventItem[] }>(`/api/jobs/${selectedJobId}/events`).then(({ events: initial }) => {
       if (stopped) return
       const unique = [...new Map(initial.map(item => [item.event_id, item])).values()]
-      setEvents(unique.slice(-1000)); lastSequence.current = unique.at(-1)?.sequence || 0
+      setEvents(unique.slice(-1000))
+      lastSequence.current = unique.at(-1)?.sequence || 0
     }).catch(reason => setError(String(reason)))
     void api<{ diff: string }>(`/api/jobs/${selectedJobId}/diff`).then(data => !stopped && setDiff(data.diff)).catch(() => {})
 
@@ -161,13 +175,18 @@ export default function App() {
           headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
         })
         if (!response.ok || !response.body) throw new Error('Realtime unavailable')
-        const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
         while (!stopped) {
-          const { value, done } = await reader.read(); if (done) break
+          const { value, done } = await reader.read()
+          if (done) break
           buffer += decoder.decode(value, { stream: true })
-          const frames = buffer.split('\n\n'); buffer = frames.pop() || ''
+          const frames = buffer.split('\n\n')
+          buffer = frames.pop() || ''
           for (const frame of frames) {
-            const line = frame.split('\n').find(part => part.startsWith('data: ')); if (!line) continue
+            const line = frame.split('\n').find(part => part.startsWith('data: '))
+            if (!line) continue
             const event = JSON.parse(line.slice(6)) as EventItem
             lastSequence.current = Math.max(lastSequence.current, event.sequence)
             setEvents(previous => previous.some(item => item.event_id === event.event_id) ? previous : [...previous, event].slice(-1000))
@@ -177,7 +196,7 @@ export default function App() {
             }
           }
         }
-      } catch { /* reconnect below unless the selection changed */ }
+      } catch { /* reconnect unless selection changed */ }
       if (!stopped) retry = window.setTimeout(() => void connect(), 1500)
     }
     void connect()
@@ -186,6 +205,17 @@ export default function App() {
 
   const selectedJob = useMemo(() => jobs.find(job => job.id === selectedJobId), [jobs, selectedJobId])
   const selectedSession = useMemo(() => sessions.find(session => session.id === selectedSessionId), [sessions, selectedSessionId])
+  const pendingForJob = approvals.filter(item => item.job_id === selectedJobId && item.status === 'pending')
+  const runtimeOwner = runtimeOwnerFromJob(selectedJob)
+  const terminalHasTranscript = Boolean(selectedJob && terminalJobState(selectedJob.state)
+    && transcript.some(message => message.role === 'assistant' && (!message.job_id || message.job_id === selectedJob.id)))
+  const activityEvents = events.filter(item => !item.kind.startsWith('assistant.') && !item.kind.startsWith('approval.'))
+  const completedAssistant = [...events].reverse().find(item => item.kind === 'assistant.completed')
+  const liveAssistantText = terminalHasTranscript ? '' : completedAssistant
+    ? eventText(completedAssistant)
+    : events.filter(item => item.kind === 'assistant.delta').map(eventText).join('')
+  const latestTool = [...activityEvents].reverse().find(item => item.kind.startsWith('tool.'))
+
   useEffect(() => {
     if (!selectedJob || creatingSession) return
     const matching = sessions.find(session => session.channel === selectedJob.channel
@@ -194,49 +224,81 @@ export default function App() {
     const target = matching?.id || selectedJob.chat_id
     if (target && target !== selectedSessionId) setSelectedSessionId(target)
   }, [creatingSession, selectedJob, selectedSessionId, sessions])
-  const pendingForJob = approvals.filter(item => item.job_id === selectedJobId)
-  const runtimeOwner = runtimeOwnerFromJob(selectedJob)
-  const terminalHasTranscript = Boolean(selectedJob && terminalJobState(selectedJob.state)
-    && transcript.some(message => message.role === 'assistant'
-      && (!message.job_id || message.job_id === selectedJob.id)))
-  const visibleEvents = terminalHasTranscript
-    ? events.filter(item => !item.kind.startsWith('assistant.'))
-    : events
 
   useEffect(() => {
     const node = streamRef.current
     if (node) node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
-  }, [events.length, transcript.length, selectedJobId])
+  }, [events.length, pendingForJob.length, transcript.length, selectedJobId])
 
   async function openSettings() {
-    setSettingsOpen(true); setError('')
+    setSettingsOpen(true)
+    setError('')
     try { setProviderConfig(await api<ProviderConfig>('/api/config/provider')) }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not load settings') }
   }
 
   async function submit(event: FormEvent) {
-    event.preventDefault(); if (!prompt.trim() || busy) return
-    setBusy(true); setError('')
+    event.preventDefault()
+    if (!prompt.trim() || busy) return
+    setBusy(true)
+    setError('')
     try {
       const result = await api<{ job_id: string; session_id?: string }>('/api/tasks', {
         method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSessionId || undefined }),
       })
-      setPrompt(''); await refresh()
+      setPrompt('')
+      await refresh()
       setCreatingSession(false)
       if (result.session_id) setSelectedSessionId(result.session_id)
       if (result.job_id) setSelectedJobId(result.job_id)
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Submit failed') }
-    finally { setBusy(false) }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Submit failed')
+    } finally {
+      setBusy(false)
+      composerRef.current?.focus()
+    }
   }
+
   async function action(path: string, body: object = {}) {
-    setBusy(true); setError('')
-    try { await api(path, { method: 'POST', body: JSON.stringify(body) }); await refresh() }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Action failed') }
-    finally { setBusy(false) }
+    setBusy(true)
+    setError('')
+    try {
+      await api(path, { method: 'POST', body: JSON.stringify(body) })
+      await refresh()
+      await refreshTranscript()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Action failed')
+    } finally {
+      setBusy(false)
+    }
   }
+
+  function newSession() {
+    setCreatingSession(true)
+    setSelectedSessionId('')
+    setSelectedJobId('')
+    setTranscript([])
+    setEvents([])
+    setDiff('')
+    setPrompt('')
+    setDrawer(null)
+    window.setTimeout(() => composerRef.current?.focus(), 0)
+  }
+
+  function selectSession(session: Session) {
+    setCreatingSession(false)
+    setSelectedSessionId(session.id)
+    setSelectedJobId(session.latest_job?.id || '')
+    setDrawer(null)
+  }
+
   function unlock(event: FormEvent) {
-    event.preventDefault(); const value = tokenDraft.trim(); if (!value) return
-    sessionStorage.setItem('conveyor-token', value); setToken(value); setTokenDraft('')
+    event.preventDefault()
+    const value = tokenDraft.trim()
+    if (!value) return
+    sessionStorage.setItem('conveyor-token', value)
+    setToken(value)
+    setTokenDraft('')
   }
 
   if (!authenticated) return <main className="unlock-shell">
@@ -248,138 +310,90 @@ export default function App() {
     </form>
   </main>
 
-  return <main className="app-shell">
-    <header className="topbar">
-      <div className="brand"><span className="brand-mark small">C</span><div><strong>Conveyor</strong><small>CONTROL CONSOLE</small></div></div>
-      <div className="top-actions"><button className="settings-button" onClick={() => void openSettings()}>⚙ Settings</button><div className="top-status"><span className="live-dot" /> Online <span className="separator" /> Queue {system?.queue.depth ?? 0}</div></div>
-    </header>
-    {error && <div className="error-banner global">{error}<button onClick={() => setError('')}>×</button></div>}
-    <section className="workspace">
-      <aside className="sessions-panel panel">
-        <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { setCreatingSession(true); setSelectedSessionId(''); setSelectedJobId(''); setTranscript([]); setPrompt('') }} aria-label="New session">＋</button></div>
-        <div className="session-list">
-          {sessions.map(session => <button key={session.id} className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`} onClick={() => { setCreatingSession(false); setSelectedSessionId(session.id); setSelectedJobId(session.latest_job?.id || '') }}>
-            <span className={`status-rail ${session.latest_job?.state || ''}`} /><span><strong>{session.title || 'Untitled session'}</strong><small>{session.message_count ?? 0} messages · {session.job_count} job{session.job_count === 1 ? '' : 's'} · {formatTime(session.last_activity)}</small></span>
-          </button>)}
-          {!sessions.length && <Empty text="No sessions yet" />}
-        </div>
-        <div className="queue-summary"><p className="eyebrow">ACTIVE QUEUE</p>{(['running', 'queued'] as const).map(state => <div key={state}><span>{state}</span><strong>{system?.queue.states[state] || 0}</strong></div>)}<p className="history-note">History · {(['interrupted', 'failed', 'cancelled', 'completed'] as const).reduce((total, state) => total + (system?.queue.states[state] || 0), 0)} terminal tasks</p></div>
-      </aside>
+  const changeCount = selectedJob?.changed_files?.length || 0
+  const providerLabel = providerConfig ? `${providerConfig.provider_name} · ${providerConfig.model}` : 'Provider'
 
-      <section className="stream-panel panel">
-        <div className="stream-header">
-          <div><p className="eyebrow">CONVERSATION + LIVE EXECUTION</p><h2>{creatingSession ? 'New session' : sessionLabel(selectedSession)}</h2></div>
+  return <main className={`v3-app ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+    <WorkspaceSidebar
+      sessions={sessions}
+      selectedSessionId={selectedSessionId}
+      system={system}
+      collapsed={sidebarCollapsed}
+      onToggleCollapsed={() => setSidebarCollapsed(value => !value)}
+      onNewSession={newSession}
+      onSelectSession={selectSession}
+    />
+
+    <section className="v3-main">
+      <header className="v3-global-header">
+        <div className="v3-mobile-brand"><button className="v3-icon-button" onClick={() => setSidebarCollapsed(value => !value)}>☰</button><strong>Conveyor</strong></div>
+        <div className="v3-global-actions">
+          <button className="v3-provider-pill" onClick={() => void openSettings()}><span className={`v3-provider-dot ${providerConfig?.health?.status || 'healthy'}`} />{providerLabel}</button>
+          <button className="v3-icon-button wide" onClick={() => setDrawer('computer')}>Computer</button>
+          <button className="v3-icon-button wide" onClick={() => setDrawer('system')}>System</button>
+          <button className="v3-icon-button" onClick={() => void openSettings()} aria-label="Settings">⚙</button>
+        </div>
+      </header>
+      {error && <div className="v3-error-banner"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
+
+      <header className="v3-conversation-header">
+        <div className="v3-conversation-identity"><span className="v3-agent-avatar">C</span><div><h1>{creatingSession ? 'New chat' : sessionLabel(selectedSession)}</h1><p>{selectedJob ? `${selectedJob.channel} · ${selectedJob.mode === 'fix' ? 'Fix' : 'Ask'}` : 'Ready for a new task'}</p></div></div>
+        <div className="v3-conversation-actions">
           {selectedJob && <StatusBadge state={selectedJob.state} />}
+          {selectedJob && <button onClick={() => setDrawer('changes')} className={changeCount ? 'has-changes' : ''}>Changes{changeCount ? ` ${changeCount}` : ''}</button>}
+          {selectedJob && <button onClick={() => setDrawer('details')}>Details</button>}
         </div>
-        <div className="event-stream" ref={streamRef}>
-          {selectedJob?.state === 'failed' && <div className="job-notice failed"><strong>Task failed</strong><span>{selectedJob.error || 'See the execution timeline below for details.'}</span></div>}
-          {selectedJob?.state === 'cancelled' && <div className="job-notice"><strong>Task cancelled</strong><span>This task is terminal; start a new message to try again.</span></div>}
-          {transcript.length > 0 && <><div className="stream-divider">Conversation history</div><TranscriptPanel messages={transcript} /></>}
-          {selectedJob && <div className="stream-divider">Job {selectedJob.id} execution</div>}
-          {selectedJob && !transcript.length && <article className="event-card user-event"><div className="event-meta"><span>YOU</span><time>{formatTime(selectedJob.created_at)}</time></div><p>{selectedJob.prompt_preview}</p></article>}
-          {visibleEvents.map(item => <EventCard key={item.event_id} item={item} />)}
-          {!selectedJob && !selectedSessionId && <div className="welcome-state"><div className="brand-mark">C</div><h2>What should Conveyor do?</h2><p>Start a task below. It will enter the same persistent queue used by Telegram and Feishu.</p></div>}
-          {selectedJob && !events.length && <Empty text="Waiting for the first event…" />}
-        </div>
-        <form className="composer" onSubmit={submit}>
-          <div className="mode-switch"><button type="button" className={mode === 'run' ? 'active' : ''} onClick={() => setMode('run')}>Ask</button><button type="button" className={mode === 'fix' ? 'active' : ''} onClick={() => setMode('fix')}>Fix</button></div>
-          <textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="Ask Conveyor…" rows={2} maxLength={8000} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
-          <button className="send-button" disabled={!prompt.trim() || busy}>{busy ? '…' : 'Send'} <span>↗</span></button>
-        </form>
-      </section>
+      </header>
 
-      <aside className="context-panel panel">
-        <ContextSection title="Job">
-          {selectedJob ? <>
-            <KeyValue label="ID" value={selectedJob.id} mono /><KeyValue label="State" value={selectedJob.state} />
-            <KeyValue label="Provider" value="Codex" /><KeyValue label="Mode" value={selectedJob.mode} />
-            <KeyValue label="Started" value={formatTime(selectedJob.started_at)} />
-            <RuntimeOwnerCard owner={runtimeOwner} state={selectedJob.state} />
-            <div className="action-row"><button disabled={busy || !['queued','running'].includes(selectedJob.state)} onClick={() => action(`/api/jobs/${selectedJob.id}/cancel`)}>Cancel</button></div>
-          </> : <Empty text="Select a job" />}
-        </ContextSection>
-        {pendingForJob.map(approval => <section className="approval-card" key={approval.id}><p className="eyebrow">APPROVAL REQUIRED</p><h3>{approval.action === 'apply' ? 'Apply changes' : 'Discard worktree'}?</h3><p>This decision is scoped to job <code>{approval.job_id}</code> and expires automatically.</p><div className="action-row"><button className="danger" onClick={() => action(`/api/approvals/${approval.id}/reject`)}>Reject</button><button className="primary" onClick={() => action(`/api/approvals/${approval.id}/approve`)}>Approve</button></div></section>)}
-        <ContextSection title="Changes">
-          <div className="file-list">{selectedJob?.changed_files?.map(file => <div key={file.path}><span className="file-status">{file.status || 'M'}</span><code>{file.path}</code></div>)}{selectedJob && !selectedJob.changed_files?.length && <Empty text="No changed files" />}</div>
-          {selectedJob && <><details className="diff-view"><summary>Unified diff</summary><pre>{diff || 'No diff available.'}</pre></details><div className="action-row"><button className="danger" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/discard`)}>Discard…</button><button className="primary" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/apply`)}>Apply…</button></div></>}
-        </ContextSection>
-        <ContextSection title="Computer">
-          <KeyValue label="CUA" value={computer?.armed ? `Armed · ${computer.arm_remaining_seconds}s` : 'Disarmed'} />
-          {computer?.active_task && <KeyValue label="Task" value={String(computer.active_task.status || computer.active_task.task_id || 'active')} />}
-          {computer?.screenshots[0] && <AuthenticatedImage artifact={computer.screenshots[0]} token={token} />}
-          {nodes.map(node => <div className="node-card" key={node.id}><div><span className={`node-dot ${node.status}`} /><strong>{node.name}</strong></div><small>{node.type} · {node.status}<br />Last seen {formatTime(node.last_seen_at)}</small></div>)}
-          {!nodes.length && <Empty text="No execution nodes" />}
-          <button className="emergency" onClick={() => action('/api/computer/stop')}>■ Emergency stop</button>
-        </ContextSection>
-        <ContextSection title="System">
-          <KeyValue label="Load" value={system?.load_average.slice(0, 2).map(n => n.toFixed(2)).join(' / ') || '—'} />
-          <KeyValue label="Memory free" value={bytes(system?.memory.available ?? null)} /><KeyValue label="Disk free" value={bytes(system?.disk.free ?? null)} />
-          <KeyValue label="Telegram" value={system?.channels.telegram.configured ? 'Configured' : 'Off'} /><KeyValue label="Feishu" value={system?.channels.feishu.configured ? 'Configured' : 'Off'} />
-        </ContextSection>
-      </aside>
+      <div className="v3-thread" ref={streamRef}>
+        <div className="v3-thread-inner">
+          {selectedJob?.state === 'failed' && <div className="v3-task-notice failed"><span>!</span><div><strong>Task failed</strong><p>{selectedJob.error || 'Open task details for the failure information.'}</p></div><button onClick={() => setDrawer('details')}>Details</button></div>}
+          {selectedJob?.state === 'cancelled' && <div className="v3-task-notice"><span>×</span><div><strong>Task cancelled</strong><p>The task is terminal. You can continue the conversation with a new message.</p></div></div>}
+
+          {transcript.length > 0 && <TranscriptPanel messages={transcript} />}
+          {selectedJob && !transcript.length && <article className="v3-message user"><header><span>You</span><time>{formatTime(selectedJob.created_at)}</time></header><div>{selectedJob.prompt_preview}</div></article>}
+          {liveAssistantText && <article className="v3-message assistant live"><header><span><i className="v3-live-dot" />Conveyor</span><time>working</time></header><div>{liveAssistantText}</div></article>}
+
+          {pendingForJob.map(approval => <ApprovalCard key={approval.id} approval={approval} busy={busy} onAction={action} />)}
+
+          {selectedJob && activityEvents.length > 0 && <details className="v3-activity-card" open={['running', 'failed', 'interrupted'].includes(selectedJob.state)}>
+            <summary><span className={`v3-activity-state ${selectedJob.state}`}><i /></span><span className="v3-activity-summary"><strong>{selectedJob.state === 'running' ? (latestTool ? `Working · ${String(latestTool.payload.name || 'tool')}` : 'Working') : 'Execution activity'}</strong><small>{activityEvents.length} event{activityEvents.length === 1 ? '' : 's'} · click to {['running','failed','interrupted'].includes(selectedJob.state) ? 'collapse' : 'expand'}</small></span><span>⌄</span></summary>
+            <div className="v3-activity-list">{activityEvents.slice(-80).map(item => <ActivityEvent key={item.event_id} item={item} />)}</div>
+          </details>}
+
+          {selectedJob && changeCount > 0 && <article className="v3-changes-card"><div><span className="v3-kicker">WORKTREE CHANGES</span><h3>{changeCount} file{changeCount === 1 ? '' : 's'} changed</h3><p>Review the diff before deciding whether these changes should land.</p></div><div><button onClick={() => setDrawer('changes')}>View changes</button><button className="v3-danger" disabled={busy} onClick={() => void action(`/api/jobs/${selectedJob.id}/discard`)}>Discard…</button><button className="v3-primary" disabled={busy} onClick={() => void action(`/api/jobs/${selectedJob.id}/apply`)}>Apply…</button></div></article>}
+
+          {!selectedJob && !selectedSessionId && <Empty title="What should Conveyor do?" text="Ask a question or start a Fix task. The conversation will stay clean while execution details remain available on demand." />}
+          {selectedJob && !events.length && !transcript.length && <div className="v3-loading-row"><span className="v3-spinner" /> Waiting for the first event…</div>}
+        </div>
+      </div>
+
+      <form className="v3-composer-wrap" onSubmit={submit}>
+        <div className="v3-composer">
+          <textarea ref={composerRef} value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={mode === 'fix' ? 'Describe what should change…' : 'Ask Conveyor…'} rows={1} maxLength={8000} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
+          <div className="v3-composer-footer">
+            <div className="v3-mode-switch"><button type="button" className={mode === 'run' ? 'active' : ''} onClick={() => setMode('run')}>Ask</button><button type="button" className={mode === 'fix' ? 'active' : ''} onClick={() => setMode('fix')}>Fix</button></div>
+            <span className="v3-composer-hint">Shift ↵ for newline</span>
+            <button className="v3-send" disabled={!prompt.trim() || busy} aria-label="Send">{busy ? '…' : '↑'}</button>
+          </div>
+        </div>
+      </form>
     </section>
+
+    <ContextDrawer kind={drawer} job={selectedJob} diff={diff} runtimeOwner={runtimeOwner} computer={computer} nodes={nodes} system={system} token={token} busy={busy} onClose={() => setDrawer(null)} onAction={action} />
+
     {settingsOpen && <ProviderSettings config={providerConfig} busy={busy} onClose={() => setSettingsOpen(false)} onSave={async payload => {
-      setBusy(true); setError('')
+      setBusy(true)
+      setError('')
       try {
         const result = await api<{ config: ProviderConfig }>('/api/config/provider', { method: 'POST', body: JSON.stringify(payload) })
         setProviderConfig(result.config)
-      } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not save settings'); throw reason }
-      finally { setBusy(false) }
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : 'Could not save settings')
+        throw reason
+      } finally {
+        setBusy(false)
+      }
     }} />}
   </main>
-}
-
-function ProviderSettings({ config, busy, onClose, onSave }: {
-  config: ProviderConfig | null; busy: boolean; onClose: () => void
-  onSave: (payload: Record<string, string>) => Promise<void>
-}) {
-  const [draft, setDraft] = useState({ provider_id: '', provider_name: '', model: '', reasoning_effort: 'minimal', base_url: '', wire_api: 'responses', env_key: 'OPENAI_API_KEY', api_key: '' })
-  const [saved, setSaved] = useState(false)
-  useEffect(() => { if (config) setDraft({ ...config, api_key: '' }) }, [config])
-  function field(name: keyof typeof draft, value: string) { setSaved(false); setDraft(previous => ({ ...previous, [name]: value })) }
-  return <div className="settings-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
-    <section className="settings-sheet" role="dialog" aria-modal="true" aria-label="Provider settings">
-      <header><div><p className="eyebrow">MODEL PROVIDER</p><h2>Configuration</h2><p>OpenAI-compatible provider settings used by new Conveyor tasks.</p></div><button className="close-button" onClick={onClose} aria-label="Close settings">×</button></header>
-      {!config ? <div className="settings-loading">Loading configuration…</div> : <form onSubmit={event => { event.preventDefault(); void onSave(draft).then(() => { setSaved(true); setDraft(previous => ({ ...previous, api_key: '' })) }).catch(() => {}) }}>
-        <div className="form-grid">
-          <label>Provider ID<input value={draft.provider_id} onChange={event => field('provider_id', event.target.value)} placeholder="deepseek" required /></label>
-          <label>Display name<input value={draft.provider_name} onChange={event => field('provider_name', event.target.value)} placeholder="DeepSeek" required /></label>
-          <label className="wide">Base URL<input value={draft.base_url} onChange={event => field('base_url', event.target.value)} placeholder="https://api.deepseek.com/v1" required /></label>
-          <label>Model<input value={draft.model} onChange={event => field('model', event.target.value)} placeholder="deepseek-chat" required /></label>
-          <label>API protocol<select value={draft.wire_api} onChange={event => field('wire_api', event.target.value)}><option value="responses">Responses</option><option value="chat">Chat Completions</option></select></label>
-          <label>Reasoning<select value={draft.reasoning_effort} onChange={event => field('reasoning_effort', event.target.value)}>{['none','minimal','low','medium','high','xhigh'].map(value => <option key={value}>{value}</option>)}</select></label>
-          <label>Key variable<input value={draft.env_key} onChange={event => field('env_key', event.target.value.toUpperCase())} placeholder="OPENAI_API_KEY" required /></label>
-          <label className="wide">API key<input type="password" autoComplete="off" value={draft.api_key} onChange={event => field('api_key', event.target.value)} placeholder={config.api_key_configured ? `Configured ${config.api_key_hint} · leave blank to keep` : 'Paste a new API key'} /></label>
-        </div>
-        <div className="config-note"><strong>Saved securely on the VPS</strong><span>The browser never receives the full key. Changes apply to the next task and update <code>config.toml</code> plus the service <code>.env</code>.</span></div>
-        <footer><span className={saved ? 'save-status visible' : 'save-status'}>✓ Saved. New tasks will use this provider.</span><button type="button" onClick={onClose}>Cancel</button><button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save configuration'}</button></footer>
-      </form>}
-    </section>
-  </div>
-}
-
-function StatusBadge({ state }: { state: string }) { return <span className={`status-badge ${state}`}><i />{stateLabel(state)}</span> }
-function Empty({ text }: { text: string }) { return <div className="empty">{text}</div> }
-function KeyValue({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) { return <div className="key-value"><span>{label}</span><strong className={mono ? 'mono' : ''}>{value}</strong></div> }
-function ContextSection({ title, children }: { title: string; children: React.ReactNode }) { return <section className="context-section"><p className="eyebrow">{title.toUpperCase()}</p>{children}</section> }
-function AuthenticatedImage({ artifact, token }: { artifact: ComputerStatus['screenshots'][number]; token: string }) {
-  const [url, setUrl] = useState('')
-  useEffect(() => {
-    let active = true; let localUrl = ''
-    void fetch(`/api/artifacts/${encodeURIComponent(artifact.artifact_id)}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(response => response.ok ? response.blob() : Promise.reject())
-      .then(blob => { if (active) { localUrl = URL.createObjectURL(blob); setUrl(localUrl) } })
-      .catch(() => {})
-    return () => { active = false; if (localUrl) URL.revokeObjectURL(localUrl) }
-  }, [artifact.artifact_id, token])
-  return url ? <figure className="screenshot"><img src={url} alt="Latest Mac node screenshot" /><figcaption>Latest screenshot · {formatTime(artifact.created_at)}</figcaption></figure> : null
-}
-function EventCard({ item }: { item: EventItem }) {
-  const isTool = item.kind.startsWith('tool.'); const text = String(item.payload.text || item.payload.output || item.payload.result || item.payload.error || '')
-  if (isTool) return <details className={`event-card tool-event ${item.kind.endsWith('failed') ? 'failed' : ''}`} open={item.kind.endsWith('failed')}>
-    <summary><span className="tool-icon">⌘</span><span><strong>{String(item.payload.name || 'Tool')}</strong><small>{item.kind.replace('tool.', '')}</small></span><time>{formatTime(item.timestamp)}</time><b>⌄</b></summary>
-    {text && <pre>{text.slice(0, 12000)}</pre>}
-  </details>
-  if (item.kind.startsWith('approval.')) return <article className="event-card approval-event"><div className="event-meta"><span>APPROVAL</span><time>{formatTime(item.timestamp)}</time></div><p>{item.kind.replace('.', ' ')} · {String(item.payload.action || '')}</p></article>
-  return <article className={`event-card ${item.kind.startsWith('assistant.') ? 'assistant-event' : 'system-event'}`}><div className="event-meta"><span>{item.kind.startsWith('assistant.') ? 'CONVEYOR' : item.kind.toUpperCase()}</span><time>{formatTime(item.timestamp)}</time></div><p>{text || item.kind.replace('.', ' ')}</p></article>
 }
