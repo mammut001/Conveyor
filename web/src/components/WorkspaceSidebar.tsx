@@ -64,8 +64,8 @@ export function WorkspaceSidebar({
   const recent = filtered.filter(session => !active.includes(session))
 
   if (collapsed) return <aside className="v3-sidebar collapsed" aria-label="Conveyor sessions">
-    <button className="v3-rail-button brand" onClick={onToggleCollapsed} title="Expand sidebar">C</button>
-    <button className="v3-rail-button" onClick={onNewSession} title="New chat">＋</button>
+    <button className="v3-rail-button brand" onClick={onToggleCollapsed} title="Expand sidebar" aria-label="Expand sidebar">C</button>
+    <button className="v3-rail-button" onClick={onNewSession} title="New chat" aria-label="New chat">＋</button>
     <div className="v3-rail-sessions">
       {sessions.slice(0, 8).map(session => <button
         key={session.id}
@@ -105,7 +105,7 @@ export function WorkspaceSidebar({
     <div className="v3-sidebar-scroll">
       {renderGroup('Active', active)}
       {renderGroup('Recent', recent)}
-      {!filtered.length && <div className="v3-sidebar-empty">No sessions match “{query}”.</div>}
+      {!filtered.length && <div className="v3-sidebar-empty">{query ? `No sessions match “${query}”.` : 'No conversations yet.'}</div>}
     </div>
     <div className="v3-sidebar-footer">
       <div><span className="v3-live-dot" />{system?.queue.paused ? 'Queue paused' : 'Online'}</div>

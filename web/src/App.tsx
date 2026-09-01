@@ -16,8 +16,8 @@ function stateLabel(state?: string) {
   return (state || 'unknown').replaceAll('_', ' ')
 }
 
-function sessionLabel(session: Session | undefined) {
-  return session?.title || session?.latest_job?.prompt_preview || 'New chat'
+function sessionLabel(session: Session | undefined, fallbackJob?: Job) {
+  return session?.title || session?.latest_job?.prompt_preview || fallbackJob?.prompt_preview || 'New chat'
 }
 
 function eventText(item: EventItem) {
@@ -74,7 +74,7 @@ export default function App() {
   const [error, setError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth <= 900)
   const [drawer, setDrawer] = useState<DrawerKind | null>(null)
   const lastSequence = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
@@ -230,6 +230,25 @@ export default function App() {
     if (node) node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
   }, [events.length, pendingForJob.length, transcript.length, selectedJobId])
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (settingsOpen) { setSettingsOpen(false); return }
+      if (drawer) { setDrawer(null); return }
+      if (!sidebarCollapsed && window.innerWidth <= 900) setSidebarCollapsed(true)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [drawer, settingsOpen, sidebarCollapsed])
+
+  useEffect(() => {
+    const collapseOnNarrow = () => {
+      if (window.innerWidth <= 900) setSidebarCollapsed(true)
+    }
+    window.addEventListener('resize', collapseOnNarrow)
+    return () => window.removeEventListener('resize', collapseOnNarrow)
+  }, [])
+
   async function openSettings() {
     setSettingsOpen(true)
     setError('')
@@ -275,6 +294,7 @@ export default function App() {
 
   function newSession() {
     setCreatingSession(true)
+    if (window.innerWidth <= 900) setSidebarCollapsed(true)
     setSelectedSessionId('')
     setSelectedJobId('')
     setTranscript([])
@@ -287,6 +307,7 @@ export default function App() {
 
   function selectSession(session: Session) {
     setCreatingSession(false)
+    if (window.innerWidth <= 900) setSidebarCollapsed(true)
     setSelectedSessionId(session.id)
     setSelectedJobId(session.latest_job?.id || '')
     setDrawer(null)
@@ -326,7 +347,7 @@ export default function App() {
 
     <section className="v3-main">
       <header className="v3-global-header">
-        <div className="v3-mobile-brand"><button className="v3-icon-button" onClick={() => setSidebarCollapsed(value => !value)}>☰</button><strong>Conveyor</strong></div>
+        <div className="v3-mobile-brand"><button className="v3-icon-button" onClick={() => setSidebarCollapsed(value => !value)} aria-label={sidebarCollapsed ? 'Open sidebar' : 'Close sidebar'}>☰</button><strong>Conveyor</strong></div>
         <div className="v3-global-actions">
           <button className="v3-provider-pill" onClick={() => void openSettings()}><span className={`v3-provider-dot ${providerConfig?.health?.status || 'healthy'}`} />{providerLabel}</button>
           <button className="v3-icon-button wide" onClick={() => setDrawer('computer')}>Computer</button>
@@ -337,7 +358,7 @@ export default function App() {
       {error && <div className="v3-error-banner"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
 
       <header className="v3-conversation-header">
-        <div className="v3-conversation-identity"><span className="v3-agent-avatar">C</span><div><h1>{creatingSession ? 'New chat' : sessionLabel(selectedSession)}</h1><p>{selectedJob ? `${selectedJob.channel} · ${selectedJob.mode === 'fix' ? 'Fix' : 'Ask'}` : 'Ready for a new task'}</p></div></div>
+        <div className="v3-conversation-identity"><span className="v3-agent-avatar">C</span><div><h1>{creatingSession ? 'New chat' : sessionLabel(selectedSession, selectedJob)}</h1><p>{selectedJob ? `${selectedJob.channel} · ${selectedJob.mode === 'fix' ? 'Fix' : 'Ask'}` : 'Ready for a new task'}</p></div></div>
         <div className="v3-conversation-actions">
           {selectedJob && <StatusBadge state={selectedJob.state} />}
           {selectedJob && <button onClick={() => setDrawer('changes')} className={changeCount ? 'has-changes' : ''}>Changes{changeCount ? ` ${changeCount}` : ''}</button>}

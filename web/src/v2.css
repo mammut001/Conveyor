@@ -261,6 +261,7 @@ button { color: inherit; }
 
 @media (max-width: 900px) {
   .v3-app,.v3-app.sidebar-collapsed { grid-template-columns: 60px minmax(0, 1fr); }
+  .v3-main { grid-column: 2; }
   .v3-sidebar:not(.collapsed) { position: fixed; inset: 0 auto 0 0; z-index: 35; width: 286px; box-shadow: 18px 0 50px rgba(16,24,40,.12); }
   .v3-mobile-brand { display: flex; }
   .v3-global-header { justify-content: space-between; }
