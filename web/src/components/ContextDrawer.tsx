@@ -66,6 +66,10 @@ export function ContextDrawer({
 }) {
   if (!kind) return null
   const title = kind === 'changes' ? 'Changes' : kind === 'details' ? 'Task details' : kind === 'computer' ? 'Computer' : 'System'
+  const submitChangesAction = (path: string) => {
+    onClose()
+    void onAction(path)
+  }
   return <div className="v3-drawer-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <aside className="v3-drawer" role="dialog" aria-modal="true" aria-label={title}>
       <header className="v3-drawer-header"><div><span className="v3-kicker">CONTEXT</span><h2>{title}</h2></div><button className="v3-close" onClick={onClose} aria-label="Close">×</button></header>
@@ -75,7 +79,7 @@ export function ContextDrawer({
             <div className="v3-file-list">{job?.changed_files?.map(file => <div key={file.path}><span>{file.status || 'M'}</span><code>{file.path}</code></div>)}{!job?.changed_files?.length && <p className="v3-muted">No changed files.</p>}</div>
           </DrawerSection>
           <DrawerSection title="Unified diff"><pre className="v3-diff">{diff || 'No diff available.'}</pre></DrawerSection>
-          {job && <div className="v3-drawer-actions"><button className="v3-danger" disabled={busy} onClick={() => void onAction(`/api/jobs/${job.id}/discard`)}>Discard…</button><button className="v3-primary" disabled={busy} onClick={() => void onAction(`/api/jobs/${job.id}/apply`)}>Apply…</button></div>}
+          {job && <div className="v3-drawer-actions"><button className="v3-danger" disabled={busy} onClick={() => submitChangesAction(`/api/jobs/${job.id}/discard`)}>Discard…</button><button className="v3-primary" disabled={busy} onClick={() => submitChangesAction(`/api/jobs/${job.id}/apply`)}>Apply…</button></div>}
         </>}
         {kind === 'details' && <>
           <DrawerSection title="Task">
