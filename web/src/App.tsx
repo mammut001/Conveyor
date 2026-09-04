@@ -64,6 +64,24 @@ function mergeEvents(existing: EventItem[], incoming: EventItem[]) {
 const ACTIVITY_OPEN_STATES = new Set(['running'])
 const AUTO_SCROLL_THRESHOLD = 80
 
+type PendingSubmission = {
+  id: number
+  text: string
+  sessionId: string
+  jobId?: string
+  submittedAt: number
+}
+
+function transcriptContainsSubmission(messages: TranscriptMessage[], submission: PendingSubmission) {
+  return messages.some(message => {
+    if (message.role !== 'user' || message.content.trim() !== submission.text.trim()) return false
+    if (submission.jobId && message.job_id === submission.jobId) return true
+    if (submission.sessionId && message.session_id !== submission.sessionId) return false
+    const createdAt = Date.parse(message.created_at)
+    return !Number.isNaN(createdAt) && createdAt >= submission.submittedAt - 5_000
+  })
+}
+
 function StatusBadge({ state }: { state: string }) {
   return <span className={`v3-status-badge ${state}`}><i />{stateLabel(state)}</span>
 }
@@ -85,8 +103,18 @@ function ActivityEvent({ item }: { item: EventItem }) {
 
 function ActivityCard({ state, events, latestTool }: { state: string; events: EventItem[]; latestTool?: EventItem }) {
   const [open, setOpen] = useState(() => ACTIVITY_OPEN_STATES.has(state))
+  const previousState = useRef(state)
+  const userChoseVisibility = useRef(false)
+
+  useEffect(() => {
+    const wasActive = ACTIVITY_OPEN_STATES.has(previousState.current)
+    const isTerminal = terminalJobState(state)
+    if (wasActive && isTerminal && !userChoseVisibility.current) setOpen(false)
+    previousState.current = state
+  }, [state])
+
   return <details className="v3-activity-card" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary><span className={`v3-activity-state ${state}`}><i /></span><span className="v3-activity-summary"><strong>{state === 'running' ? (latestTool ? `Working · ${String(latestTool.payload.name || 'tool')}` : 'Working') : 'Execution activity'}</strong><small>{events.length} event{events.length === 1 ? '' : 's'} · click to {open ? 'collapse' : 'expand'}</small></span><span>⌄</span></summary>
+    <summary onClick={() => { userChoseVisibility.current = true }}><span className={`v3-activity-state ${state}`}><i /></span><span className="v3-activity-summary"><strong>{state === 'running' ? (latestTool ? `Working · ${String(latestTool.payload.name || 'tool')}` : 'Working') : 'Execution activity'}</strong><small>{events.length} event{events.length === 1 ? '' : 's'} · click to {open ? 'collapse' : 'expand'}</small></span><span>⌄</span></summary>
     <div className="v3-activity-list">{events.slice(-80).map(item => <ActivityEvent key={item.event_id} item={item} />)}</div>
   </details>
 }
@@ -127,11 +155,13 @@ export default function App() {
   const lastSequence = useRef(0)
   const workspaceRequest = useRef(0)
   const transcriptRequest = useRef(0)
+  const submissionSequence = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const stickToBottom = useRef(true)
   const scrollFrame = useRef<number | null>(null)
   const [isAtBottom, setIsAtBottom] = useState(true)
+  const [pendingSubmission, setPendingSubmission] = useState<PendingSubmission | null>(null)
 
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(path, {
@@ -327,6 +357,19 @@ export default function App() {
     ? eventText(completedAssistant)
     : events.filter(item => item.kind === 'assistant.delta').map(eventText).join('')
   const latestTool = [...activityEvents].reverse().find(item => item.kind.startsWith('tool.'))
+  const pendingSubmissionMatchesJob = Boolean(pendingSubmission?.jobId && selectedJob?.id === pendingSubmission.jobId)
+  const pendingSubmissionInTranscript = Boolean(pendingSubmission && transcriptContainsSubmission(transcript, pendingSubmission))
+  const pendingSubmissionInCurrentView = Boolean(pendingSubmission && (
+    pendingSubmission.jobId
+      ? selectedJobId === pendingSubmission.jobId
+      : pendingSubmission.sessionId
+        ? selectedSessionId === pendingSubmission.sessionId
+        : !selectedSessionId && !selectedJobId
+  ))
+  const pendingSubmissionProjected = Boolean(pendingSubmission && (
+    pendingSubmissionInTranscript || (pendingSubmissionMatchesJob && transcript.length === 0)
+  ))
+  const showOptimisticSubmission = Boolean(pendingSubmissionInCurrentView && !pendingSubmissionProjected)
 
   const handleThreadScroll = useCallback(() => {
     const node = streamRef.current
@@ -357,6 +400,11 @@ export default function App() {
     const target = matching?.id || selectedJob.chat_id
     if (target && target !== selectedSessionId) setSelectedSessionId(target)
   }, [creatingSession, selectedJob, selectedSessionId, sessions])
+
+  useEffect(() => {
+    if (!pendingSubmission || !pendingSubmissionProjected) return
+    setPendingSubmission(current => current?.id === pendingSubmission.id ? null : current)
+  }, [pendingSubmission, pendingSubmissionProjected])
 
   useEffect(() => {
     stickToBottom.current = true
@@ -414,18 +462,30 @@ export default function App() {
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (!prompt.trim() || busy) return
+    const submittedText = prompt.trim()
+    const submittedSessionId = selectedSessionId
+    const submissionId = ++submissionSequence.current
     setBusy(true)
     setError('')
+    setPrompt('')
+    setPendingSubmission({ id: submissionId, text: submittedText, sessionId: submittedSessionId, submittedAt: Date.now() })
     try {
       const result = await api<{ job_id: string; session_id?: string }>('/api/tasks', {
-        method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSessionId || undefined }),
+        method: 'POST', body: JSON.stringify({ prompt: submittedText, mode, session_id: submittedSessionId || undefined }),
       })
-      setPrompt('')
       setCreatingSession(false)
       if (result.session_id) setSelectedSessionId(result.session_id)
       if (result.job_id) setSelectedJobId(result.job_id)
-      await refresh()
+      setPendingSubmission(previous => previous?.id === submissionId ? {
+        ...previous,
+        sessionId: result.session_id || previous.sessionId,
+        jobId: result.job_id || previous.jobId,
+      } : previous)
+      await refreshWorkspace()
+      void refreshDiagnostics()
     } catch (reason) {
+      setPendingSubmission(previous => previous?.id === submissionId ? null : previous)
+      setPrompt(current => current === '' ? submittedText : current)
       setError(reason instanceof Error ? reason.message : 'Submit failed')
     } finally {
       setBusy(false)
@@ -530,6 +590,7 @@ export default function App() {
 
           {transcript.length > 0 && <TranscriptPanel messages={transcript} />}
           {selectedJob && !transcript.length && <article className="v3-message user"><header><span>You</span><time>{formatTime(selectedJob.created_at)}</time></header><div>{selectedJob.prompt_preview}</div></article>}
+          {showOptimisticSubmission && <article className="v3-message user"><header><span>You</span><time>sending</time></header><div>{pendingSubmission?.text}</div></article>}
           {liveAssistantText && <article className="v3-message assistant live"><header><span><i className="v3-live-dot" />Conveyor</span><time>working</time></header><div>{liveAssistantText}</div></article>}
 
           {pendingForJob.map(approval => <ApprovalCard key={approval.id} approval={approval} busy={busy} onAction={action} />)}
@@ -538,7 +599,7 @@ export default function App() {
 
           {selectedJob && changeCount > 0 && <article className="v3-changes-card"><div><span className="v3-kicker">WORKTREE CHANGES</span><h3>{changeCount} file{changeCount === 1 ? '' : 's'} changed</h3><p>Review the diff before deciding whether these changes should land.</p></div><div><button onClick={() => setDrawer('changes')}>View changes</button><button className="v3-danger" disabled={busy} onClick={() => void action(`/api/jobs/${selectedJob.id}/discard`)}>Discard…</button><button className="v3-primary" disabled={busy} onClick={() => void action(`/api/jobs/${selectedJob.id}/apply`)}>Apply…</button></div></article>}
 
-          {!selectedJob && !selectedSessionId && <Empty title="What should Conveyor do?" text="Ask a question or start a Fix task. The conversation will stay clean while execution details remain available on demand." />}
+          {!selectedJob && !selectedSessionId && !showOptimisticSubmission && <Empty title="What should Conveyor do?" text="Ask a question or start a Fix task. The conversation will stay clean while execution details remain available on demand." />}
           {selectedJob && !events.length && !transcript.length && <div className="v3-loading-row"><span className="v3-spinner" /> Waiting for the first event…</div>}
         </div>
       </div>

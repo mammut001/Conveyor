@@ -271,11 +271,12 @@ button { color: inherit; }
 .form-grid input:focus,.form-grid select:focus { border-color: #9bb0d1; box-shadow: 0 0 0 3px rgba(37,99,235,.06); }
 .config-note { display: grid; gap: 4px; margin-top: 18px; padding: 12px 13px; border: 1px solid #dbeafe; border-radius: 9px; background: #f8fbff; color: #475467; font-size: 11px; line-height: 1.5; }
 .config-note strong { color: #1d4ed8; }
-.settings-sheet footer { display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin-top: 20px; }
+.settings-sheet footer { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin: 20px -27px -25px; border-top: 1px solid var(--v3-line); background: rgba(255,255,255,.96); padding: 12px 27px calc(13px + env(safe-area-inset-bottom, 0px)); backdrop-filter: blur(8px); }
 .settings-sheet footer button { border: 1px solid var(--v3-line-strong); border-radius: 8px; background: #fff; padding: 8px 12px; cursor: pointer; }
 .settings-sheet footer .primary { border-color: var(--v3-blue); background: var(--v3-blue); color: #fff; }
 .save-status { margin-right: auto; color: #15803d; font-size: 11px; opacity: 0; }
 .save-status.visible { opacity: 1; }
+.settings-sheet button:focus-visible,.settings-sheet input:focus-visible,.settings-sheet select:focus-visible { outline: 2px solid rgba(37,99,235,.4); outline-offset: 2px; }
 .settings-loading { padding: 50px 28px; color: var(--v3-muted); text-align: center; }
 
 @media (max-width: 900px) {
@@ -312,6 +313,8 @@ button { color: inherit; }
   .v3-drawer { width: 100%; }
   .settings-backdrop { padding: 0; place-items: stretch; }
   .settings-sheet { width: 100%; max-height: 100vh; border: 0; border-radius: 0; }
+  .settings-sheet footer { flex-wrap: wrap; }
+  .settings-sheet footer .save-status { flex: 1 0 100%; margin-right: 0; }
   .form-grid { grid-template-columns: 1fr; }
   .form-grid .wide { grid-column: auto; }
 }
