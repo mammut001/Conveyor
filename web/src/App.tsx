@@ -248,11 +248,6 @@ export default function App() {
     setEvents([])
     setDiff('')
 
-    void api<{ events: EventItem[] }>(`/api/jobs/${selectedJobId}/events`).then(({ events: initial }) => {
-      if (stopped) return
-      lastSequence.current = Math.max(lastSequence.current, ...initial.map(item => item.sequence), 0)
-      setEvents(previous => mergeEvents(previous, initial))
-    }).catch(reason => setError(String(reason)))
     void api<{ diff: string }>(`/api/jobs/${selectedJobId}/diff`).then(data => !stopped && setDiff(data.diff)).catch(() => {})
 
     const connect = async () => {
@@ -286,7 +281,20 @@ export default function App() {
       } catch { /* reconnect unless selection changed */ }
       if (!stopped) retry = window.setTimeout(() => void connect(), 1500)
     }
-    void connect()
+
+    const loadHistoryThenConnect = async () => {
+      try {
+        const { events: initial } = await api<{ events: EventItem[] }>(`/api/jobs/${selectedJobId}/events`)
+        if (stopped) return
+        lastSequence.current = Math.max(lastSequence.current, ...initial.map(item => item.sequence), 0)
+        setEvents(previous => mergeEvents(previous, initial))
+      } catch (reason) {
+        if (stopped) return
+        setError(String(reason))
+      }
+      if (!stopped) void connect()
+    }
+    void loadHistoryThenConnect()
     return () => { stopped = true; controller?.abort(); if (retry) window.clearTimeout(retry) }
   }, [api, authenticated, refreshTranscript, refreshWorkspace, selectedJobId, token])
 
