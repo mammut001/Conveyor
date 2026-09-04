@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { Session, SystemStatus } from '../types'
+import type { Job, Session, SystemStatus } from '../types'
 
 function formatTime(value?: string) {
   if (!value) return '—'
@@ -36,8 +36,18 @@ function statusLabel(session: Session) {
   return ''
 }
 
+const ATTENTION_COLLAPSE_THRESHOLD = 6
+
+function sessionGroup(session: Session) {
+  const state = session.latest_job?.state
+  if (state === 'running' || state === 'queued') return 'active' as const
+  if (state === 'failed' || state === 'interrupted') return 'attention' as const
+  return 'recent' as const
+}
+
 export function WorkspaceSidebar({
   sessions,
+  jobs,
   selectedSessionId,
   system,
   collapsed,
@@ -46,6 +56,7 @@ export function WorkspaceSidebar({
   onSelectSession,
 }: {
   sessions: Session[]
+  jobs: Job[]
   selectedSessionId: string
   system: SystemStatus | null
   collapsed: boolean
@@ -53,6 +64,8 @@ export function WorkspaceSidebar({
   onNewSession: () => void
   onSelectSession: (session: Session) => void
 }) {
+  const runningCount = jobs.filter(job => job.state === 'running').length
+  const queuedCount = jobs.filter(job => job.state === 'queued').length
   const [query, setQuery] = useState('')
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -60,14 +73,32 @@ export function WorkspaceSidebar({
     return sessions.filter(session => [session.title, session.latest_job?.prompt_preview, session.channel]
       .some(value => value?.toLowerCase().includes(needle)))
   }, [query, sessions])
-  const active = filtered.filter(session => ['running', 'queued', 'failed', 'interrupted'].includes(session.latest_job?.state || ''))
-  const recent = filtered.filter(session => !active.includes(session))
+  const grouped = useMemo(() => {
+    const groups = {
+      active: [] as Session[],
+      attention: [] as Session[],
+      recent: [] as Session[],
+    }
+    filtered.forEach(session => groups[sessionGroup(session)].push(session))
+    return groups
+  }, [filtered])
+  const [needsAttentionExpanded, setNeedsAttentionExpanded] = useState(false)
+  const selectedNeedsAttention = grouped.attention.some(session => session.id === selectedSessionId)
+  const needsAttentionCollapsed = grouped.attention.length > ATTENTION_COLLAPSE_THRESHOLD
+    && !needsAttentionExpanded
+    && !selectedNeedsAttention
+  const railSessions = useMemo(() => {
+    const visible = sessions.slice(0, 8)
+    const selected = sessions.find(session => session.id === selectedSessionId)
+    if (!selected || visible.some(session => session.id === selected.id)) return visible
+    return [selected, ...visible.slice(0, 7)]
+  }, [selectedSessionId, sessions])
 
   if (collapsed) return <aside className="v3-sidebar collapsed" aria-label="Conveyor sessions">
     <button className="v3-rail-button brand" onClick={onToggleCollapsed} title="Expand sidebar" aria-label="Expand sidebar">C</button>
     <button className="v3-rail-button" onClick={onNewSession} title="New chat" aria-label="New chat">＋</button>
     <div className="v3-rail-sessions">
-      {sessions.slice(0, 8).map(session => <button
+      {railSessions.map(session => <button
         key={session.id}
         className={`v3-rail-dot ${session.latest_job?.state || ''} ${session.id === selectedSessionId ? 'active' : ''}`}
         aria-label={sessionTitle(session)}
@@ -77,13 +108,34 @@ export function WorkspaceSidebar({
     </div>
   </aside>
 
-  const renderGroup = (label: string, items: Session[]) => items.length ? <section className="v3-session-group">
-    <div className="v3-section-label"><span>{label}</span><span>{items.length}</span></div>
-    <div className="v3-session-list">
+  const renderGroup = (
+    label: string,
+    items: Session[],
+    options?: { collapsible?: boolean; collapsed?: boolean; listId?: string; onToggle?: () => void },
+  ) => items.length ? <section className={`v3-session-group ${options?.collapsible ? 'is-collapsible' : ''}`}>
+    {options?.collapsible ? <button
+      className="v3-section-toggle"
+      type="button"
+      aria-expanded={!options.collapsed}
+      aria-controls={options.listId}
+      aria-label={`${options.collapsed ? 'Expand' : 'Collapse'} ${label} (${items.length})`}
+      onClick={options.onToggle}
+    >
+      <span className="v3-section-label"><span>{label}</span><span>{items.length}</span></span>
+      <span className="v3-section-toggle-icon" aria-hidden="true">{options.collapsed ? '+' : '−'}</span>
+    </button> : <div className="v3-section-label"><span>{label}</span><span>{items.length}</span></div>}
+    <div id={options?.listId} className="v3-session-list" hidden={options?.collapsed}>
       {items.map(session => {
         const state = session.latest_job?.state || 'idle'
         const activity = statusLabel(session)
-        return <button key={session.id} className={`v3-session-row ${session.id === selectedSessionId ? 'active' : ''}`} onClick={() => onSelectSession(session)}>
+        const selected = session.id === selectedSessionId
+        return <button
+          key={session.id}
+          className={`v3-session-row ${selected ? 'active' : ''}`}
+          aria-current={selected ? 'true' : undefined}
+          title={sessionTitle(session)}
+          onClick={() => onSelectSession(session)}
+        >
           <span className={`v3-session-status ${state}`} />
           <span className="v3-session-copy">
             <span className="v3-session-title">{sessionTitle(session)}</span>
@@ -103,13 +155,19 @@ export function WorkspaceSidebar({
     <button className="v3-new-chat" onClick={onNewSession}><span>＋</span> New chat</button>
     <label className="v3-search"><span>⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search sessions" aria-label="Search sessions" /></label>
     <div className="v3-sidebar-scroll">
-      {renderGroup('Active', active)}
-      {renderGroup('Recent', recent)}
+      {renderGroup('Active', grouped.active)}
+      {renderGroup('Needs attention', grouped.attention, {
+        collapsible: true,
+        collapsed: needsAttentionCollapsed,
+        listId: 'v3-needs-attention-list',
+        onToggle: () => setNeedsAttentionExpanded(expanded => !expanded),
+      })}
+      {renderGroup('Recent', grouped.recent)}
       {!filtered.length && <div className="v3-sidebar-empty">{query ? `No sessions match “${query}”.` : 'No conversations yet.'}</div>}
     </div>
     <div className="v3-sidebar-footer">
       <div><span className="v3-live-dot" />{system?.queue.paused ? 'Queue paused' : 'Online'}</div>
-      <div>{system?.queue.states.running || 0} working · {system?.queue.states.queued || 0} queued</div>
+      <div>{runningCount} working · {queuedCount} queued</div>
     </div>
   </aside>
 }

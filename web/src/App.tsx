@@ -24,6 +24,46 @@ function eventText(item: EventItem) {
   return String(item.payload.text || item.payload.output || item.payload.result || item.payload.error || '')
 }
 
+function resizeComposer(textarea: HTMLTextAreaElement | null) {
+  if (!textarea) return
+  const maxHeight = 180
+  textarea.style.height = 'auto'
+  textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`
+  textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden'
+}
+
+function normalizeFailure(text: string) {
+  return text.trim().replace(/^\[error\]\s*/i, '')
+}
+
+function sameData(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function mergeEvents(existing: EventItem[], incoming: EventItem[]) {
+  const byId = new Map(existing.map(item => [item.event_id, item]))
+  let changed = false
+  for (const item of incoming) {
+    if (byId.has(item.event_id)) continue
+    byId.set(item.event_id, item)
+    changed = true
+  }
+  if (!changed) return existing
+
+  return [...byId.values()]
+    .sort((left, right) => {
+      const sequenceDelta = left.sequence - right.sequence
+      if (sequenceDelta) return sequenceDelta
+      const timestampDelta = Date.parse(left.timestamp) - Date.parse(right.timestamp)
+      if (!Number.isNaN(timestampDelta) && timestampDelta) return timestampDelta
+      return left.event_id.localeCompare(right.event_id)
+    })
+    .slice(-1000)
+}
+
+const ACTIVITY_OPEN_STATES = new Set(['running', 'failed', 'interrupted'])
+const AUTO_SCROLL_THRESHOLD = 80
+
 function StatusBadge({ state }: { state: string }) {
   return <span className={`v3-status-badge ${state}`}><i />{stateLabel(state)}</span>
 }
@@ -41,6 +81,14 @@ function ActivityEvent({ item }: { item: EventItem }) {
     <span className="v3-activity-copy"><strong>{isTool ? String(item.payload.name || 'Tool') : stateLabel(item.kind)}</strong>{text && <small>{text.slice(0, 180)}</small>}</span>
     <time>{formatTime(item.timestamp)}</time>
   </div>
+}
+
+function ActivityCard({ state, events, latestTool }: { state: string; events: EventItem[]; latestTool?: EventItem }) {
+  const [open, setOpen] = useState(() => ACTIVITY_OPEN_STATES.has(state))
+  return <details className="v3-activity-card" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary><span className={`v3-activity-state ${state}`}><i /></span><span className="v3-activity-summary"><strong>{state === 'running' ? (latestTool ? `Working · ${String(latestTool.payload.name || 'tool')}` : 'Working') : 'Execution activity'}</strong><small>{events.length} event{events.length === 1 ? '' : 's'} · click to {open ? 'collapse' : 'expand'}</small></span><span>⌄</span></summary>
+    <div className="v3-activity-list">{events.slice(-80).map(item => <ActivityEvent key={item.event_id} item={item} />)}</div>
+  </details>
 }
 
 function ApprovalCard({ approval, busy, onAction }: { approval: Approval; busy: boolean; onAction: (path: string, body?: object) => Promise<void> }) {
@@ -79,6 +127,8 @@ export default function App() {
   const lastSequence = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  const stickToBottom = useRef(true)
+  const scrollFrame = useRef<number | null>(null)
 
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(path, {
@@ -91,59 +141,88 @@ export default function App() {
     return body as T
   }, [token])
 
-  const refresh = useCallback(async () => {
+  const refreshWorkspace = useCallback(async () => {
     if (!token) return
     try {
-      const [sessionData, jobData, approvalData, nodeData, systemData, computerData] = await Promise.all([
+      const [sessionData, jobData, approvalData] = await Promise.all([
         api<{ sessions: Session[] }>('/api/sessions'),
         api<{ jobs: Job[] }>('/api/jobs'),
         api<{ approvals: Approval[] }>('/api/approvals'),
+      ])
+      setSessions(previous => sameData(previous, sessionData.sessions) ? previous : sessionData.sessions)
+      setJobs(previous => sameData(previous, jobData.jobs) ? previous : jobData.jobs)
+      setApprovals(previous => sameData(previous, approvalData.approvals) ? previous : approvalData.approvals)
+      setAuthenticated(true)
+      setError('')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not connect')
+    }
+  }, [api, token])
+
+  const refreshDiagnostics = useCallback(async () => {
+    if (!token) return
+    try {
+      const [nodeData, systemData, computerData] = await Promise.all([
         api<{ nodes: NodeInfo[] }>('/api/nodes'),
         api<SystemStatus>('/api/system/status'),
         api<ComputerStatus>('/api/computer/status'),
       ])
-      setSessions(sessionData.sessions)
-      setJobs(jobData.jobs)
-      setApprovals(approvalData.approvals)
-      setNodes(nodeData.nodes)
-      setSystem(systemData)
-      setComputer(computerData)
-      setAuthenticated(true)
+      setNodes(previous => sameData(previous, nodeData.nodes) ? previous : nodeData.nodes)
+      setSystem(previous => sameData(previous, systemData) ? previous : systemData)
+      setComputer(previous => sameData(previous, computerData) ? previous : computerData)
       setError('')
-      if (!creatingSession && !selectedSessionId) {
-        const initialSession = sessionData.sessions[0]
-        if (initialSession) {
-          setSelectedSessionId(initialSession.id)
-          setSelectedJobId(initialSession.latest_job?.id || '')
-        } else if (jobData.jobs[0]) {
-          setSelectedSessionId(jobData.jobs[0].chat_id)
-          setSelectedJobId(jobData.jobs[0].id)
-        }
-      } else if (!creatingSession && !selectedJobId && selectedSessionId) {
-        const session = sessionData.sessions.find(item => item.id === selectedSessionId)
-        if (session?.latest_job) setSelectedJobId(session.latest_job.id)
-      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not connect')
     }
-  }, [api, creatingSession, selectedJobId, selectedSessionId, token])
+  }, [api, token])
+
+  const refresh = useCallback(async () => {
+    await Promise.all([refreshWorkspace(), refreshDiagnostics()])
+  }, [refreshDiagnostics, refreshWorkspace])
 
   const refreshTranscript = useCallback(async () => {
-    if (!authenticated || !selectedSessionId) { setTranscript([]); return }
+    if (!authenticated || !selectedSessionId) {
+      setTranscript(previous => previous.length ? [] : previous)
+      return
+    }
     try {
       const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`)
-      setTranscript(session.messages || [])
+      const messages = session.messages || []
+      setTranscript(previous => sameData(previous, messages) ? previous : messages)
     } catch {
-      setTranscript([])
+      setTranscript(previous => previous.length ? [] : previous)
     }
   }, [api, authenticated, selectedSessionId])
 
-  useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => {
+    if (!creatingSession && !selectedSessionId) {
+      const initialSession = sessions[0]
+      if (initialSession) {
+        setSelectedSessionId(initialSession.id)
+        setSelectedJobId(initialSession.latest_job?.id || '')
+      } else if (jobs[0]) {
+        setSelectedSessionId(jobs[0].chat_id)
+        setSelectedJobId(jobs[0].id)
+      }
+    } else if (!creatingSession && !selectedJobId && selectedSessionId) {
+      const session = sessions.find(item => item.id === selectedSessionId)
+      if (session?.latest_job) setSelectedJobId(session.latest_job.id)
+    }
+  }, [creatingSession, jobs, selectedJobId, selectedSessionId, sessions])
+
+  useEffect(() => {
+    void refreshWorkspace()
+    void refreshDiagnostics()
+  }, [refreshDiagnostics, refreshWorkspace])
   useEffect(() => {
     if (!authenticated) return
-    const timer = window.setInterval(() => { void refresh(); void refreshTranscript() }, 3_000)
-    return () => window.clearInterval(timer)
-  }, [authenticated, refresh, refreshTranscript])
+    const workspaceTimer = window.setInterval(() => { void refreshWorkspace(); void refreshTranscript() }, 3_000)
+    const diagnosticsTimer = window.setInterval(() => { void refreshDiagnostics() }, 15_000)
+    return () => {
+      window.clearInterval(workspaceTimer)
+      window.clearInterval(diagnosticsTimer)
+    }
+  }, [authenticated, refreshDiagnostics, refreshTranscript, refreshWorkspace])
   useEffect(() => { void refreshTranscript() }, [refreshTranscript])
 
   useEffect(() => {
@@ -162,9 +241,8 @@ export default function App() {
 
     void api<{ events: EventItem[] }>(`/api/jobs/${selectedJobId}/events`).then(({ events: initial }) => {
       if (stopped) return
-      const unique = [...new Map(initial.map(item => [item.event_id, item])).values()]
-      setEvents(unique.slice(-1000))
-      lastSequence.current = unique.at(-1)?.sequence || 0
+      lastSequence.current = Math.max(lastSequence.current, ...initial.map(item => item.sequence), 0)
+      setEvents(previous => mergeEvents(previous, initial))
     }).catch(reason => setError(String(reason)))
     void api<{ diff: string }>(`/api/jobs/${selectedJobId}/diff`).then(data => !stopped && setDiff(data.diff)).catch(() => {})
 
@@ -189,9 +267,9 @@ export default function App() {
             if (!line) continue
             const event = JSON.parse(line.slice(6)) as EventItem
             lastSequence.current = Math.max(lastSequence.current, event.sequence)
-            setEvents(previous => previous.some(item => item.event_id === event.event_id) ? previous : [...previous, event].slice(-1000))
+            setEvents(previous => mergeEvents(previous, [event]))
             if (event.kind.startsWith('assistant.') || event.kind.startsWith('task.')) {
-              void refresh()
+              void refreshWorkspace()
               void refreshTranscript()
             }
           }
@@ -201,7 +279,7 @@ export default function App() {
     }
     void connect()
     return () => { stopped = true; controller?.abort(); if (retry) window.clearTimeout(retry) }
-  }, [api, authenticated, refresh, refreshTranscript, selectedJobId, token])
+  }, [api, authenticated, refreshTranscript, refreshWorkspace, selectedJobId, token])
 
   const selectedJob = useMemo(() => jobs.find(job => job.id === selectedJobId), [jobs, selectedJobId])
   const selectedSession = useMemo(() => sessions.find(session => session.id === selectedSessionId), [sessions, selectedSessionId])
@@ -209,12 +287,36 @@ export default function App() {
   const runtimeOwner = runtimeOwnerFromJob(selectedJob)
   const terminalHasTranscript = Boolean(selectedJob && terminalJobState(selectedJob.state)
     && transcript.some(message => message.role === 'assistant' && (!message.job_id || message.job_id === selectedJob.id)))
-  const activityEvents = events.filter(item => !item.kind.startsWith('assistant.') && !item.kind.startsWith('approval.'))
+  const failureText = selectedJob?.state === 'failed' ? selectedJob.error?.trim() : undefined
+  const normalizedFailure = failureText ? normalizeFailure(failureText) : undefined
+  const transcriptHasFailure = Boolean(normalizedFailure && transcript.some(message => message.role !== 'user' && normalizeFailure(message.content) === normalizedFailure))
+  const liveAssistantEvents = events.filter(item => item.kind.startsWith('assistant.'))
+  const liveAssistantHasFailure = Boolean(!terminalHasTranscript && normalizedFailure && (
+    liveAssistantEvents.some(item => normalizeFailure(eventText(item)) === normalizedFailure)
+      || normalizeFailure(liveAssistantEvents.map(eventText).join('')) === normalizedFailure
+  ))
+  const rawActivityEvents = events.filter(item => !item.kind.startsWith('assistant.') && !item.kind.startsWith('approval.'))
+  const activityHasFailure = Boolean(normalizedFailure && rawActivityEvents.some(item => normalizeFailure(eventText(item)) === normalizedFailure))
+  let failureEventShown = false
+  const activityEvents = rawActivityEvents.filter(item => {
+    if (!normalizedFailure || normalizeFailure(eventText(item)) !== normalizedFailure) return true
+    if (transcriptHasFailure || liveAssistantHasFailure || failureEventShown) return false
+    failureEventShown = true
+    return true
+  })
+  const failureNoticeText = failureText && !transcriptHasFailure && !liveAssistantHasFailure && !activityHasFailure ? failureText : undefined
   const completedAssistant = [...events].reverse().find(item => item.kind === 'assistant.completed')
   const liveAssistantText = terminalHasTranscript ? '' : completedAssistant
     ? eventText(completedAssistant)
     : events.filter(item => item.kind === 'assistant.delta').map(eventText).join('')
   const latestTool = [...activityEvents].reverse().find(item => item.kind.startsWith('tool.'))
+
+  const handleThreadScroll = useCallback(() => {
+    const node = streamRef.current
+    if (!node) return
+    const distanceFromBottom = node.scrollHeight - node.clientHeight - node.scrollTop
+    stickToBottom.current = distanceFromBottom <= AUTO_SCROLL_THRESHOLD
+  }, [])
 
   useEffect(() => {
     if (!selectedJob || creatingSession) return
@@ -226,9 +328,30 @@ export default function App() {
   }, [creatingSession, selectedJob, selectedSessionId, sessions])
 
   useEffect(() => {
+    stickToBottom.current = true
+  }, [selectedJobId])
+
+  useEffect(() => {
     const node = streamRef.current
-    if (node) node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
-  }, [events.length, pendingForJob.length, transcript.length, selectedJobId])
+    if (!node || !stickToBottom.current || scrollFrame.current !== null) return
+    scrollFrame.current = window.requestAnimationFrame(() => {
+      scrollFrame.current = null
+      const current = streamRef.current
+      if (!current || !stickToBottom.current) return
+      const target = Math.max(0, current.scrollHeight - current.clientHeight)
+      if (target - current.scrollTop <= 4) return
+      current.scrollTo({ top: target, behavior: 'instant' })
+    })
+  }, [events, pendingForJob.length, selectedJobId, transcript])
+
+  useEffect(() => () => {
+    if (scrollFrame.current !== null) {
+      window.cancelAnimationFrame(scrollFrame.current)
+      scrollFrame.current = null
+    }
+  }, [])
+
+  useEffect(() => { resizeComposer(composerRef.current) }, [prompt])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -266,10 +389,10 @@ export default function App() {
         method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSessionId || undefined }),
       })
       setPrompt('')
-      await refresh()
       setCreatingSession(false)
       if (result.session_id) setSelectedSessionId(result.session_id)
       if (result.job_id) setSelectedJobId(result.job_id)
+      await refresh()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Submit failed')
     } finally {
@@ -337,6 +460,7 @@ export default function App() {
   return <main className={`v3-app ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
     <WorkspaceSidebar
       sessions={sessions}
+      jobs={jobs}
       selectedSessionId={selectedSessionId}
       system={system}
       collapsed={sidebarCollapsed}
@@ -366,9 +490,9 @@ export default function App() {
         </div>
       </header>
 
-      <div className="v3-thread" ref={streamRef}>
+      <div className="v3-thread" ref={streamRef} onScroll={handleThreadScroll}>
         <div className="v3-thread-inner">
-          {selectedJob?.state === 'failed' && <div className="v3-task-notice failed"><span>!</span><div><strong>Task failed</strong><p>{selectedJob.error || 'Open task details for the failure information.'}</p></div><button onClick={() => setDrawer('details')}>Details</button></div>}
+          {selectedJob?.state === 'failed' && <div className="v3-task-notice failed"><span>!</span><div><strong>Task failed</strong><p>{failureNoticeText || 'Open task details for the failure information.'}</p></div><button onClick={() => setDrawer('details')}>Details</button></div>}
           {selectedJob?.state === 'cancelled' && <div className="v3-task-notice"><span>×</span><div><strong>Task cancelled</strong><p>The task is terminal. You can continue the conversation with a new message.</p></div></div>}
 
           {transcript.length > 0 && <TranscriptPanel messages={transcript} />}
@@ -377,10 +501,7 @@ export default function App() {
 
           {pendingForJob.map(approval => <ApprovalCard key={approval.id} approval={approval} busy={busy} onAction={action} />)}
 
-          {selectedJob && activityEvents.length > 0 && <details className="v3-activity-card" open={['running', 'failed', 'interrupted'].includes(selectedJob.state)}>
-            <summary><span className={`v3-activity-state ${selectedJob.state}`}><i /></span><span className="v3-activity-summary"><strong>{selectedJob.state === 'running' ? (latestTool ? `Working · ${String(latestTool.payload.name || 'tool')}` : 'Working') : 'Execution activity'}</strong><small>{activityEvents.length} event{activityEvents.length === 1 ? '' : 's'} · click to {['running','failed','interrupted'].includes(selectedJob.state) ? 'collapse' : 'expand'}</small></span><span>⌄</span></summary>
-            <div className="v3-activity-list">{activityEvents.slice(-80).map(item => <ActivityEvent key={item.event_id} item={item} />)}</div>
-          </details>}
+          {selectedJob && activityEvents.length > 0 && <ActivityCard key={selectedJobId} state={selectedJob.state} events={activityEvents} latestTool={latestTool} />}
 
           {selectedJob && changeCount > 0 && <article className="v3-changes-card"><div><span className="v3-kicker">WORKTREE CHANGES</span><h3>{changeCount} file{changeCount === 1 ? '' : 's'} changed</h3><p>Review the diff before deciding whether these changes should land.</p></div><div><button onClick={() => setDrawer('changes')}>View changes</button><button className="v3-danger" disabled={busy} onClick={() => void action(`/api/jobs/${selectedJob.id}/discard`)}>Discard…</button><button className="v3-primary" disabled={busy} onClick={() => void action(`/api/jobs/${selectedJob.id}/apply`)}>Apply…</button></div></article>}
 
@@ -391,7 +512,7 @@ export default function App() {
 
       <form className="v3-composer-wrap" onSubmit={submit}>
         <div className="v3-composer">
-          <textarea ref={composerRef} value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={mode === 'fix' ? 'Describe what should change…' : 'Ask Conveyor…'} rows={1} maxLength={8000} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
+          <textarea ref={composerRef} value={prompt} onChange={event => { setPrompt(event.target.value); resizeComposer(event.currentTarget) }} placeholder={mode === 'fix' ? 'Describe what should change…' : 'Ask Conveyor…'} rows={1} maxLength={8000} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
           <div className="v3-composer-footer">
             <div className="v3-mode-switch"><button type="button" className={mode === 'run' ? 'active' : ''} onClick={() => setMode('run')}>Ask</button><button type="button" className={mode === 'fix' ? 'active' : ''} onClick={() => setMode('fix')}>Fix</button></div>
             <span className="v3-composer-hint">Shift ↵ for newline</span>
