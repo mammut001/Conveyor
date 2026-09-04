@@ -61,7 +61,7 @@ function mergeEvents(existing: EventItem[], incoming: EventItem[]) {
     .slice(-1000)
 }
 
-const ACTIVITY_OPEN_STATES = new Set(['running', 'failed', 'interrupted'])
+const ACTIVITY_OPEN_STATES = new Set(['running'])
 const AUTO_SCROLL_THRESHOLD = 80
 
 function StatusBadge({ state }: { state: string }) {
@@ -125,10 +125,13 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth <= 900)
   const [drawer, setDrawer] = useState<DrawerKind | null>(null)
   const lastSequence = useRef(0)
+  const workspaceRequest = useRef(0)
+  const transcriptRequest = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const stickToBottom = useRef(true)
   const scrollFrame = useRef<number | null>(null)
+  const [isAtBottom, setIsAtBottom] = useState(true)
 
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(path, {
@@ -143,18 +146,21 @@ export default function App() {
 
   const refreshWorkspace = useCallback(async () => {
     if (!token) return
+    const requestId = ++workspaceRequest.current
     try {
       const [sessionData, jobData, approvalData] = await Promise.all([
         api<{ sessions: Session[] }>('/api/sessions'),
         api<{ jobs: Job[] }>('/api/jobs'),
         api<{ approvals: Approval[] }>('/api/approvals'),
       ])
+      if (requestId !== workspaceRequest.current) return
       setSessions(previous => sameData(previous, sessionData.sessions) ? previous : sessionData.sessions)
       setJobs(previous => sameData(previous, jobData.jobs) ? previous : jobData.jobs)
       setApprovals(previous => sameData(previous, approvalData.approvals) ? previous : approvalData.approvals)
       setAuthenticated(true)
       setError('')
     } catch (reason) {
+      if (requestId !== workspaceRequest.current) return
       setError(reason instanceof Error ? reason.message : 'Could not connect')
     }
   }, [api, token])
@@ -181,15 +187,18 @@ export default function App() {
   }, [refreshDiagnostics, refreshWorkspace])
 
   const refreshTranscript = useCallback(async () => {
+    const requestId = ++transcriptRequest.current
     if (!authenticated || !selectedSessionId) {
       setTranscript(previous => previous.length ? [] : previous)
       return
     }
     try {
       const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`)
+      if (requestId !== transcriptRequest.current) return
       const messages = session.messages || []
       setTranscript(previous => sameData(previous, messages) ? previous : messages)
     } catch {
+      if (requestId !== transcriptRequest.current) return
       setTranscript(previous => previous.length ? [] : previous)
     }
   }, [api, authenticated, selectedSessionId])
@@ -268,7 +277,7 @@ export default function App() {
             const event = JSON.parse(line.slice(6)) as EventItem
             lastSequence.current = Math.max(lastSequence.current, event.sequence)
             setEvents(previous => mergeEvents(previous, [event]))
-            if (event.kind.startsWith('assistant.') || event.kind.startsWith('task.')) {
+            if (event.kind === 'assistant.completed' || event.kind.startsWith('task.')) {
               void refreshWorkspace()
               void refreshTranscript()
             }
@@ -315,7 +324,21 @@ export default function App() {
     const node = streamRef.current
     if (!node) return
     const distanceFromBottom = node.scrollHeight - node.clientHeight - node.scrollTop
-    stickToBottom.current = distanceFromBottom <= AUTO_SCROLL_THRESHOLD
+    const atBottom = distanceFromBottom <= AUTO_SCROLL_THRESHOLD
+    stickToBottom.current = atBottom
+    setIsAtBottom(previous => previous === atBottom ? previous : atBottom)
+  }, [])
+
+  const jumpToLatest = useCallback(() => {
+    const node = streamRef.current
+    stickToBottom.current = true
+    setIsAtBottom(true)
+    if (scrollFrame.current !== null) {
+      window.cancelAnimationFrame(scrollFrame.current)
+      scrollFrame.current = null
+    }
+    if (!node) return
+    node.scrollTo({ top: Math.max(0, node.scrollHeight - node.clientHeight), behavior: 'instant' })
   }, [])
 
   useEffect(() => {
@@ -329,6 +352,7 @@ export default function App() {
 
   useEffect(() => {
     stickToBottom.current = true
+    setIsAtBottom(true)
   }, [selectedJobId])
 
   useEffect(() => {
@@ -468,6 +492,7 @@ export default function App() {
       onNewSession={newSession}
       onSelectSession={selectSession}
     />
+    {!sidebarCollapsed && <button className="v3-sidebar-scrim" type="button" aria-label="Close sidebar" onClick={() => setSidebarCollapsed(true)} />}
 
     <section className="v3-main">
       <header className="v3-global-header">
@@ -511,6 +536,7 @@ export default function App() {
       </div>
 
       <form className="v3-composer-wrap" onSubmit={submit}>
+        {!isAtBottom && <button className="v3-jump-latest" type="button" onClick={jumpToLatest} aria-label="Jump to latest activity">↓ Jump to latest</button>}
         <div className="v3-composer">
           <textarea ref={composerRef} value={prompt} onChange={event => { setPrompt(event.target.value); resizeComposer(event.currentTarget) }} placeholder={mode === 'fix' ? 'Describe what should change…' : 'Ask Conveyor…'} rows={1} maxLength={8000} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
           <div className="v3-composer-footer">
