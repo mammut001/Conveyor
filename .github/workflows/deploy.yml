@@ -1,42 +1,23 @@
-# .github/workflows/deploy.yml — auto-deploy to VPS on push to main.
+# .github/workflows/deploy.yml — deploy validated main revisions to the VPS.
 #
-# Required GitHub secrets:
-#   VPS_HOST       — VPS hostname or IP
-#   VPS_USER       — SSH user (prefer a dedicated deploy user)
-#   VPS_SSH_KEY    — private key for the deploy user
+# Automatic deployment is triggered only after the `CI` workflow completes
+# successfully for `main`. A manual workflow_dispatch remains available for an
+# operator-controlled redeploy of the current main revision.
 #
-# Optional secrets:
-#   VPS_PORT       — SSH port (default 22)
-#   CONVEYOR_DEPLOY_PATH — repo root on VPS (default /opt/conveyor)
-#
-# VPS one-time setup:
-#   1. Clone repo at /opt/conveyor
-#   2. Create .env on VPS (never committed)
-#   3. Create .venv (deploy syncs dependencies from requirements.txt)
-#   4. Install systemd services: conveyor-telegram-bot, conveyor-feishu-bot,
-#      conveyor-desktop-agent
-#   5. Grant deploy user passwordless sudo for:
-#        systemctl restart conveyor-telegram-bot
-#        systemctl restart conveyor-feishu-bot
-#        systemctl restart conveyor-desktop-agent
-#        systemctl status  conveyor-telegram-bot
-#        systemctl status  conveyor-feishu-bot
-#        systemctl status  conveyor-desktop-agent
-#        systemctl is-active conveyor-telegram-bot
-#        systemctl is-active conveyor-feishu-bot
-#        systemctl is-active conveyor-desktop-agent
-#
-# Security:
-#   - No secrets are hardcoded; all come from GitHub Actions secrets.
-#   - The deploy script never prints .env.
-#   - known_hosts is populated from the VPS fingerprint to prevent MITM.
+# The deploy script is streamed from the exact revision that passed CI. This is
+# important when deploy_vps.sh itself changes: the first rollout of a hardened
+# deployer must not execute the stale copy currently installed on the VPS.
 
 name: Deploy to VPS
 
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: deploy-vps
@@ -44,18 +25,36 @@ concurrency:
 
 jobs:
   deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
-      - name: Check out repository
+      - name: Resolve validated revision
+        id: revision
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
+            echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            echo "ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out validated revision
         uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.revision.outputs.sha }}
 
       - name: Install SSH key
         uses: shimataro/ssh-key-action@v2
         with:
           key: ${{ secrets.VPS_SSH_KEY }}
-          known_hosts: unnecessary  # we scan below
+          known_hosts: unnecessary
           if_key_exists: replace
 
       - name: Add VPS to known_hosts
@@ -63,19 +62,22 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -p ${{ secrets.VPS_PORT || 22 }} -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Deploy via SSH (git-based)
+      - name: Deploy exact validated revision
         env:
           DEPLOY_PATH: ${{ secrets.CONVEYOR_DEPLOY_PATH || '/opt/conveyor' }}
-          GITHUB_SHA: ${{ github.sha }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
+          DEPLOY_SHA: ${{ steps.revision.outputs.sha }}
+          DEPLOY_REF: ${{ steps.revision.outputs.ref }}
+          RUN_ID: ${{ github.run_id }}
           DEPLOY_SOURCE: github-actions
+        shell: bash
         run: |
+          printf -v REMOTE_COMMAND \
+            'GITHUB_SHA=%q GITHUB_REF_NAME=%q GITHUB_RUN_ID=%q DEPLOY_SOURCE=%q CONVEYOR_DEPLOY_PATH=%q bash -s' \
+            "$DEPLOY_SHA" "$DEPLOY_REF" "$RUN_ID" "$DEPLOY_SOURCE" "$DEPLOY_PATH"
           ssh -p ${{ secrets.VPS_PORT || 22 }} \
               ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
-              "GITHUB_SHA=${GITHUB_SHA} GITHUB_REF_NAME=${GITHUB_REF_NAME} GITHUB_RUN_ID=${GITHUB_RUN_ID} DEPLOY_SOURCE=${DEPLOY_SOURCE} CONVEYOR_DEPLOY_PATH=${DEPLOY_PATH} bash ${DEPLOY_PATH}/scripts/deploy_vps.sh"
+              "$REMOTE_COMMAND" < scripts/deploy_vps.sh
 
       - name: Report failure
         if: failure()
-        run: |
-          echo "::error::VPS deploy failed. Check the SSH step output above."
+        run: echo "::error::VPS deploy failed. Check the SSH step output above."
