@@ -4,19 +4,9 @@
 # successfully for `main`. A manual workflow_dispatch remains available for an
 # operator-controlled redeploy of the current main revision.
 #
-# Required GitHub secrets:
-#   VPS_HOST       — VPS hostname or IP
-#   VPS_USER       — SSH user (prefer a dedicated deploy user)
-#   VPS_SSH_KEY    — private key for the deploy user
-#
-# Optional secrets:
-#   VPS_PORT       — SSH port (default 22)
-#   CONVEYOR_DEPLOY_PATH — repo root on VPS (default /opt/conveyor)
-#
-# Security:
-#   - No secrets are hardcoded; all come from GitHub Actions secrets.
-#   - The deploy script never prints .env.
-#   - known_hosts is populated from the VPS fingerprint to prevent MITM.
+# The deploy script is streamed from the exact revision that passed CI. This is
+# important when deploy_vps.sh itself changes: the first rollout of a hardened
+# deployer must not execute the stale copy currently installed on the VPS.
 
 name: Deploy to VPS
 
@@ -40,7 +30,7 @@ jobs:
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Resolve validated revision
@@ -72,17 +62,21 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -p ${{ secrets.VPS_PORT || 22 }} -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Deploy via SSH (git-based)
+      - name: Deploy exact validated revision
         env:
           DEPLOY_PATH: ${{ secrets.CONVEYOR_DEPLOY_PATH || '/opt/conveyor' }}
           DEPLOY_SHA: ${{ steps.revision.outputs.sha }}
           DEPLOY_REF: ${{ steps.revision.outputs.ref }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
           DEPLOY_SOURCE: github-actions
+        shell: bash
         run: |
+          printf -v REMOTE_COMMAND \
+            'GITHUB_SHA=%q GITHUB_REF_NAME=%q GITHUB_RUN_ID=%q DEPLOY_SOURCE=%q CONVEYOR_DEPLOY_PATH=%q bash -s' \
+            "$DEPLOY_SHA" "$DEPLOY_REF" "$RUN_ID" "$DEPLOY_SOURCE" "$DEPLOY_PATH"
           ssh -p ${{ secrets.VPS_PORT || 22 }} \
               ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
-              "GITHUB_SHA=${DEPLOY_SHA} GITHUB_REF_NAME=${DEPLOY_REF} GITHUB_RUN_ID=${GITHUB_RUN_ID} DEPLOY_SOURCE=${DEPLOY_SOURCE} CONVEYOR_DEPLOY_PATH=${DEPLOY_PATH} bash ${DEPLOY_PATH}/scripts/deploy_vps.sh"
+              "$REMOTE_COMMAND" < scripts/deploy_vps.sh
 
       - name: Report failure
         if: failure()
