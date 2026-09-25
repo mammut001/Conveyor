@@ -77,6 +77,9 @@ class FakeControl:
     def computer_status(self):
         return {"armed": False, "arm_remaining_seconds": 0, "active_task": None, "screenshots": []}
 
+    def request_host_screen(self):
+        return {"ok": True, "request": {"request_id": "obs_test", "status": "pending"}}
+
     def artifact_path(self, _artifact_id):
         return None
 
@@ -172,6 +175,10 @@ class WebApiTests(unittest.TestCase):
     def test_nodes_computer_and_emergency_stop(self):
         self.assertEqual(self.request("GET", "/api/nodes")[0], 200)
         self.assertEqual(self.request("GET", "/api/computer/status")[0], 200)
+        status, result = self.request("POST", "/api/computer/screenshot", {}, authorized=False)
+        self.assertEqual(status, 401)
+        status, result = self.request("POST", "/api/computer/screenshot", {})
+        self.assertEqual(status, 202); self.assertEqual(result["request"]["request_id"], "obs_test")
         self.assertEqual(self.request("POST", "/api/computer/stop", {})[0], 200)
 
 
