@@ -382,3 +382,112 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   .stream-header > div { min-width: 0; flex: 1; }
   .stream-header h2 { max-width: 100%; }
 }
+
+.host-screen-card {
+  display: grid;
+  gap: 9px;
+  margin: 8px 0 12px;
+  padding: 11px;
+  border: 1px solid #e4e7ec;
+  border-radius: 12px;
+  background: #fff;
+}
+.host-screen-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.host-screen-heading > div { display: grid; gap: 3px; min-width: 0; }
+.host-screen-heading strong { color: #30343b; font-size: 12px; font-weight: 650; }
+.host-screen-heading small { color: #858b95; font-size: 10px; }
+.screen-capture-button {
+  flex: none;
+  min-height: 30px;
+  padding: 6px 9px;
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  color: #394150;
+  background: #fff;
+  cursor: pointer;
+  font: 600 10px/1.2 ui-sans-serif, sans-serif;
+}
+.screen-capture-button:hover:not(:disabled) { border-color: #bdc7d7; background: #f7f9fc; }
+.screen-capture-button:disabled { cursor: not-allowed; opacity: .48; }
+.screen-empty {
+  min-height: 126px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  padding: 16px 10px;
+  border: 1px dashed #dfe3e9;
+  border-radius: 10px;
+  background: #fafbfc;
+  text-align: center;
+}
+.screen-empty > span { color: #8d96a3; font-size: 21px; }
+.screen-empty strong { color: #4a505b; font-size: 11px; }
+.screen-empty p,.screen-privacy-note,.screen-request-status { margin: 0; color: #818793; font-size: 10px; line-height: 1.45; }
+.screen-empty p { max-width: 220px; }
+.screen-privacy-note { padding: 0 1px; }
+.screen-request-status { color: #52647f; }
+.screen-request-status.failed { color: #ad3842; }
+.host-screen-preview { margin: 0; border-radius: 10px; background: #f6f7f9; }
+.screen-image-trigger {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: #17191d;
+  cursor: zoom-in;
+}
+.screen-image-trigger img { display: block; width: 100%; height: 142px; object-fit: contain; }
+.screen-image-trigger span {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 5px 7px;
+  border: 1px solid #ffffff3b;
+  border-radius: 7px;
+  color: #fff;
+  background: #101318c9;
+  font: 10px/1 ui-sans-serif, sans-serif;
+}
+.host-screen-preview figcaption { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px; }
+.host-screen-preview figcaption span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screen-viewer-backdrop {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(12px, 3vw, 34px);
+  background: rgba(12, 16, 24, .72);
+  backdrop-filter: blur(4px);
+}
+.screen-viewer {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(1440px, 100%);
+  height: min(92dvh, 1050px);
+  overflow: hidden;
+  border: 1px solid #303743;
+  border-radius: 17px;
+  color: #eff2f7;
+  background: #11151b;
+  box-shadow: 0 30px 100px rgba(0, 0, 0, .46);
+}
+.screen-viewer-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 18px 21px; border-bottom: 1px solid #29313d; }
+.screen-viewer-header .eyebrow { margin: 0 0 5px; color: #96a1b1; }
+.screen-viewer-header h2 { margin: 0; color: #f5f7fa; font-size: 16px; }
+.screen-viewer-header p:last-child { margin: 5px 0 0; color: #99a3b0; font-size: 11px; }
+.screen-viewer-header .close-button { border-color: #384252; color: #d9e0ea; background: #1a2029; }
+.screen-viewer-image-frame { display: grid; place-items: center; min-height: 0; padding: 18px; overflow: hidden; background: #080a0e; }
+.screen-viewer-image-frame img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+.screen-viewer-footer { display: flex; justify-content: space-between; gap: 18px; padding: 11px 21px; border-top: 1px solid #29313d; color: #909aa8; font-size: 10px; line-height: 1.4; }
+
+@media (max-width: 620px) {
+  .screen-viewer-backdrop { padding: 0; }
+  .screen-viewer { width: 100%; height: 100dvh; max-height: 100dvh; border: 0; border-radius: 0; }
+  .screen-viewer-header { padding: 15px; }
+  .screen-viewer-image-frame { padding: 8px; }
+  .screen-viewer-footer { display: grid; gap: 4px; padding: 10px 15px; }
+}

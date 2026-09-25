@@ -34,7 +34,11 @@ type SystemStatus = {
 }
 type ComputerStatus = {
   armed: boolean; arm_remaining_seconds: number; active_task?: Record<string, unknown> | null
-  screenshots: { artifact_id: string; created_at?: string; width?: number; height?: number }[]
+  screenshots: { artifact_id: string; created_at?: string; width?: number; height?: number; node_id?: string }[]
+  screen_preview_enabled?: boolean
+  screen_request?: {
+    request_id: string; status: string; created_at?: string; upload_status?: string | null; error?: string | null
+  } | null
 }
 type ProviderConfig = {
   provider_id: string; provider_name: string; model: string; reasoning_effort: string
@@ -61,6 +65,25 @@ function stateLabel(state?: string) {
 function sessionLabel(session: Session | undefined) {
   return session?.title || session?.latest_job?.prompt_preview || 'New session'
 }
+function hostScreenRequestLabel(request: ComputerStatus['screen_request']) {
+  if (!request) return ''
+  if (request.status === 'pending') return 'Waiting for the Mac agent…'
+  if (request.status === 'claimed') return 'Capturing a fresh screenshot on the Mac…'
+  if (request.status === 'completed' && ['pending', 'claimed'].includes(request.upload_status || '')) return 'Preparing the private thumbnail…'
+  if (request.status === 'completed' && request.upload_status === 'completed') return 'Latest preview is ready'
+  if (request.status === 'completed' && request.upload_status === 'failed') return 'Screenshot captured · thumbnail sharing failed'
+  if (request.status === 'completed') return 'Captured locally · preview upload unavailable'
+  if (request.status === 'failed') return 'Capture failed' + (request.error ? ' · ' + request.error.replaceAll('_', ' ') : '')
+  if (request.status === 'expired') return 'Screenshot request expired'
+  if (request.status === 'cancelled') return 'Screenshot request cancelled'
+  return 'Screenshot · ' + stateLabel(request.status)
+}
+function hostScreenRequestPending(request: ComputerStatus['screen_request']) {
+  return Boolean(request && (
+    ['pending', 'claimed'].includes(request.status)
+    || (request.status === 'completed' && ['pending', 'claimed'].includes(request.upload_status || ''))
+  ))
+}
 
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem('conveyor-token') || '')
@@ -83,6 +106,8 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [screenBusy, setScreenBusy] = useState(false)
+  const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
   const lastSequence = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
@@ -234,6 +259,19 @@ export default function App() {
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Action failed') }
     finally { setBusy(false) }
   }
+  async function captureHostScreen() {
+    if (screenBusy || !computer?.screen_preview_enabled) return
+    setScreenBusy(true); setScreenError('')
+    try {
+      const result = await api<{ request: NonNullable<ComputerStatus['screen_request']> }>('/api/computer/screenshot', {
+        method: 'POST', body: JSON.stringify({}),
+      })
+      setComputer(previous => previous ? { ...previous, screen_request: result.request } : previous)
+      await refresh()
+    } catch (reason) {
+      setScreenError(reason instanceof Error ? reason.message : 'Could not request a host screenshot')
+    } finally { setScreenBusy(false) }
+  }
   function unlock(event: FormEvent) {
     event.preventDefault(); const value = tokenDraft.trim(); if (!value) return
     sessionStorage.setItem('conveyor-token', value); setToken(value); setTokenDraft('')
@@ -306,7 +344,20 @@ export default function App() {
         <ContextSection title="Computer">
           <KeyValue label="CUA" value={computer?.armed ? `Armed · ${computer.arm_remaining_seconds}s` : 'Disarmed'} />
           {computer?.active_task && <KeyValue label="Task" value={String(computer.active_task.status || computer.active_task.task_id || 'active')} />}
-          {computer?.screenshots[0] && <AuthenticatedImage artifact={computer.screenshots[0]} token={token} />}
+          <div className="host-screen-card">
+            <div className="host-screen-heading">
+              <div><strong>Host screen</strong><small>Read-only · one-shot capture</small></div>
+              <button type="button" className="screen-capture-button" disabled={!computer?.screen_preview_enabled || screenBusy || hostScreenRequestPending(computer?.screen_request)} onClick={() => void captureHostScreen()}>
+                {screenBusy ? 'Requesting…' : hostScreenRequestPending(computer?.screen_request) ? 'Capturing…' : 'Capture'}
+              </button>
+            </div>
+            {computer?.screenshots[0]
+              ? <AuthenticatedImage artifact={computer.screenshots[0]} token={token} />
+              : <div className="screen-empty"><span aria-hidden="true">▣</span><strong>No shared screen preview</strong><p>When enabled, an explicit capture sends a size-limited thumbnail. The Mac keeps the original.</p></div>}
+            {!computer?.screen_preview_enabled && <p className="screen-privacy-note">Thumbnail sharing is off. Screens stay on the Mac.</p>}
+            {computer?.screen_request && <p className={`screen-request-status ${computer.screen_request.status === 'failed' ? 'failed' : ''}`} aria-live="polite">{hostScreenRequestLabel(computer.screen_request)}</p>}
+            {screenError && <p className="screen-request-status failed" role="alert">{screenError}</p>}
+          </div>
           {nodes.map(node => <div className="node-card" key={node.id}><div><span className={`node-dot ${node.status}`} /><strong>{node.name}</strong></div><small>{node.type} · {node.status}<br />Last seen {formatTime(node.last_seen_at)}</small></div>)}
           {!nodes.length && <Empty text="No execution nodes" />}
           <button className="emergency" onClick={() => action('/api/computer/stop')}>■ Emergency stop</button>
@@ -364,15 +415,57 @@ function KeyValue({ label, value, mono = false }: { label: string; value: string
 function ContextSection({ title, children }: { title: string; children: React.ReactNode }) { return <section className="context-section"><h3 className="eyebrow">{title.toUpperCase()}</h3>{children}</section> }
 function AuthenticatedImage({ artifact, token }: { artifact: ComputerStatus['screenshots'][number]; token: string }) {
   const [url, setUrl] = useState('')
+  const [expanded, setExpanded] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
+  const wasExpandedRef = useRef(false)
   useEffect(() => {
     let active = true; let localUrl = ''
+    setUrl('')
     void fetch(`/api/artifacts/${encodeURIComponent(artifact.artifact_id)}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(response => response.ok ? response.blob() : Promise.reject())
       .then(blob => { if (active) { localUrl = URL.createObjectURL(blob); setUrl(localUrl) } })
       .catch(() => {})
     return () => { active = false; if (localUrl) URL.revokeObjectURL(localUrl) }
   }, [artifact.artifact_id, token])
-  return url ? <figure className="screenshot"><img src={url} alt="Latest Mac node screenshot" /><figcaption>Latest screenshot · {formatTime(artifact.created_at)}</figcaption></figure> : null
+  useEffect(() => {
+    if (!expanded) {
+      if (wasExpandedRef.current) triggerRef.current?.focus()
+      wasExpandedRef.current = false
+      return
+    }
+    wasExpandedRef.current = true
+    closeRef.current?.focus()
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setExpanded(false) }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [expanded])
+  return url ? <>
+    <figure className="screenshot host-screen-preview">
+      <button ref={triggerRef} type="button" className="screen-image-trigger" onClick={() => setExpanded(true)} aria-label="Open latest host screen preview">
+        <img src={url} alt="Latest captured host computer screen" />
+        <span>Open screen</span>
+      </button>
+      <figcaption><span>{artifact.width && artifact.height ? `${artifact.width} × ${artifact.height} · ` : ''}{formatTime(artifact.created_at)}</span><span>{artifact.node_id || 'Mac node'}</span></figcaption>
+    </figure>
+    {expanded && <div className="screen-viewer-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setExpanded(false) }}>
+      <section className="screen-viewer" role="dialog" aria-modal="true" aria-labelledby="screen-viewer-title" onKeyDown={event => {
+        if (event.key !== 'Tab') return
+        const focusable = event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+        if (focusable.length === 0) { event.preventDefault(); return }
+        const first = focusable[0]; const last = focusable[focusable.length - 1]
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+      }}>
+        <header className="screen-viewer-header">
+          <div><p className="eyebrow">MAC NODE · READ-ONLY</p><h2 id="screen-viewer-title">Latest host screen</h2><p>{artifact.width && artifact.height ? `${artifact.width} × ${artifact.height} · ` : ''}Captured {formatTime(artifact.created_at)}</p></div>
+          <button ref={closeRef} type="button" className="close-button" onClick={() => setExpanded(false)} aria-label="Close screen preview">×</button>
+        </header>
+        <div className="screen-viewer-image-frame"><img src={url} alt="Expanded latest captured host computer screen" /></div>
+        <footer className="screen-viewer-footer"><span>{artifact.node_id || 'Mac node'} · preview thumbnail</span><span>The original screenshot remains on the Mac. No continuous stream or remote input is enabled.</span></footer>
+      </section>
+    </div>}
+  </> : null
 }
 function EventCard({ item }: { item: EventItem }) {
   const isTool = item.kind.startsWith('tool.'); const text = String(item.payload.text || item.payload.output || item.payload.result || item.payload.error || '')
