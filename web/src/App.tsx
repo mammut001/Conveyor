@@ -258,7 +258,7 @@ export default function App() {
       <aside className="sessions-panel panel">
         <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { setCreatingSession(true); setSelectedSessionId(''); setSelectedJobId(''); setTranscript([]); setPrompt('') }} aria-label="New session">＋</button></div>
         <div className="session-list">
-          {sessions.map(session => <button key={session.id} className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`} onClick={() => { setCreatingSession(false); setSelectedSessionId(session.id); setSelectedJobId(session.latest_job?.id || '') }}>
+          {sessions.map(session => <button key={session.id} className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`} title={sessionLabel(session)} aria-pressed={session.id === selectedSessionId} onClick={() => { setCreatingSession(false); setSelectedSessionId(session.id); setSelectedJobId(session.latest_job?.id || '') }}>
             <span className={`status-rail ${session.latest_job?.state || ''}`} /><span><strong>{session.title || 'Untitled session'}</strong><small>{session.message_count ?? 0} messages · {session.job_count} job{session.job_count === 1 ? '' : 's'} · {formatTime(session.last_activity)}</small></span>
           </button>)}
           {!sessions.length && <Empty text="No sessions yet" />}
@@ -361,7 +361,7 @@ function ProviderSettings({ config, busy, onClose, onSave }: {
 function StatusBadge({ state }: { state: string }) { return <span className={`status-badge ${state}`}><i />{stateLabel(state)}</span> }
 function Empty({ text }: { text: string }) { return <div className="empty">{text}</div> }
 function KeyValue({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) { return <div className="key-value"><span>{label}</span><strong className={mono ? 'mono' : ''}>{value}</strong></div> }
-function ContextSection({ title, children }: { title: string; children: React.ReactNode }) { return <section className="context-section"><p className="eyebrow">{title.toUpperCase()}</p>{children}</section> }
+function ContextSection({ title, children }: { title: string; children: React.ReactNode }) { return <section className="context-section"><h3 className="eyebrow">{title.toUpperCase()}</h3>{children}</section> }
 function AuthenticatedImage({ artifact, token }: { artifact: ComputerStatus['screenshots'][number]; token: string }) {
   const [url, setUrl] = useState('')
   useEffect(() => {

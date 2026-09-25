@@ -310,12 +310,75 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   .event-stream { padding: 18px 13px; }
   .transcript-message.role-user, .user-event { max-width: 92%; }
   .context-panel { display: block; }
-  .composer { grid-template-columns: 1fr auto; gap: 7px 8px; width: calc(100% - 20px); margin: 8px auto 12px; padding: 9px 10px; border-radius: 17px; }
-  .mode-switch { grid-column: 1 / -1; justify-self: start; }
-  .composer textarea { grid-column: 1; grid-row: 2; }
-  .send-button { grid-column: 2; grid-row: 2; }
+  .composer { grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; width: calc(100% - 20px); margin: 8px auto 12px; padding: 8px 9px; border-radius: 17px; }
+  .mode-switch { grid-column: auto; justify-self: start; }
+  .composer textarea { grid-column: auto; grid-row: auto; min-height: 40px; padding: 5px 3px; font-size: 13px; }
+  .send-button { grid-column: auto; grid-row: auto; min-height: 34px; padding: 7px 9px; }
   .composer::after { font-size: 9px; }
   .top-actions { gap: 7px; }
   .settings-button { padding: 7px 9px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
+
+/* Keep long session names and runtime owners readable in narrow panels. */
+.session-item > span:last-child { min-width: 0; }
+.session-item strong {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.4;
+}
+.runtime-owner-card > div { display: grid; justify-content: stretch; gap: 3px; }
+.runtime-owner-card > div > strong { color: #363940; font-size: 11px; line-height: 1.3; }
+.runtime-owner-card span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: left;
+  white-space: normal;
+}
+.action-row { flex-wrap: wrap; }
+
+@media (max-width: 820px) {
+  /* Give the conversation its own scroll area so the prompt never covers a message. */
+  .stream-panel {
+    height: calc(100dvh - 210px);
+    min-height: min(520px, calc(100dvh - 190px));
+    flex: none;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+  .event-stream { min-height: 0; padding-bottom: 24px; }
+  .composer {
+    position: relative;
+    bottom: auto;
+    margin-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  }
+}
+
+@media (max-width: 560px) {
+  .event-stream { padding-bottom: 24px; }
+  .composer { padding-bottom: calc(9px + env(safe-area-inset-bottom, 0px)); }
+}
+
+@media (max-width: 360px) {
+  .topbar { gap: 8px; }
+  .brand small { display: none; }
+  .top-actions { flex: none; gap: 6px; }
+  .settings-button {
+    display: grid;
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    place-items: center;
+    padding: 0;
+    font-size: 0;
+  }
+  .settings-button::before { content: "⚙"; font-size: 15px; }
+  .top-status { display: none; }
+  .stream-header > div { min-width: 0; flex: 1; }
+  .stream-header h2 { max-width: 100%; }
+}
