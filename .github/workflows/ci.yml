@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 15
     env:
       TELEGRAM_BOT_TOKEN: test-token
-      TELEGRAM_ALLOWED_USER_ID: "0"
+      TELEGRAM_ALLOWED_USER_ID: "12345"
       CODEX_WORKSPACE_ROOT: /tmp/conveyor-ci/workspace
       CODEX_TASK_ROOT: /tmp/conveyor-ci/tasks
       CODEX_MEMORY_ROOT: /tmp/conveyor-ci/memory
@@ -33,6 +33,9 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
+
+      - name: Create isolated test directories
+        run: mkdir -p "$CODEX_WORKSPACE_ROOT" "$CODEX_TASK_ROOT" "$CODEX_MEMORY_ROOT"
 
       - name: Create virtual environment
         run: python -m venv .venv
