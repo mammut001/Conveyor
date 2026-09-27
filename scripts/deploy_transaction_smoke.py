@@ -25,11 +25,16 @@ def main() -> int:
     require(text, "git merge-base --is-ancestor", "validated SHA ancestry check")
     require(text, "Candidate validation FAILED; live checkout was not changed", "pre-cutover failure behavior")
     require(text, "--exclude=.env", "secret preservation")
+    require(text, 'cat > "${CANDIDATE}/.env.test"', "self-contained candidate smoke fixture")
+    require(text, "TELEGRAM_BOT_TOKEN=deploy-placeholder-token", "non-secret candidate bot token")
+    require(text, "CODEX_MEMORY_ROOT=${CANDIDATE}/.smoke-memory", "isolated candidate memory root")
 
     candidate = text.index("Validating detached candidate")
+    fixture = text.index('cat > "${CANDIDATE}/.env.test"')
+    smoke = text.index("if ! make smoke")
     cutover = text.index("Cutting over live checkout")
-    if candidate >= cutover:
-        raise SystemExit("deploy transaction smoke failed: live cutover appears before candidate validation")
+    if not (candidate < fixture < smoke < cutover):
+        raise SystemExit("deploy transaction smoke failed: candidate fixture/smoke/cutover ordering is unsafe")
 
     if "for f in Makefile config.py runner.py bot.py feishu_bot.py" in text:
         raise SystemExit("deploy transaction smoke failed: legacy partial-file rollback still present")
