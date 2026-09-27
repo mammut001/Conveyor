@@ -55,6 +55,7 @@ behaving:
 | --- | --- |
 | No answers about the operator's systems | rule 1 routes them to Codex; the system prompt requires `[[ESCALATE]]` for anything needing tools |
 | Grounding | fact-checks and time-sensitive questions (最新 / 今天 / 价格 / news …) get a web evidence pack first when search is configured |
+| Model-requested search | when a search backend is configured and no evidence was pre-fetched, the model may answer `[[SEARCH: <query>]]` instead of guessing; Conveyor shows "🔎 搜索：…", runs one search and asks again with the results (one round max; the query is capped at 200 chars and only goes to the operator-configured search backend). A failed search marks the answer as unverified |
 | Unverified freshness | time-sensitive answers without evidence get "ℹ️ 未联网核实，信息可能过时" |
 | No invented links | every URL in an answer must appear in the evidence, the question or the quote — others are replaced with "(链接已移除)" and counted (code check) |
 | Self-graded support | the model ends with `[[CONFIDENCE: high/medium/low]]`; low adds "⚠️ 把握不大" and a /deep button |

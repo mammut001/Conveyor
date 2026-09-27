@@ -44,12 +44,17 @@ logger = logging.getLogger(__name__)
 ChatOutcome = Literal["answered", "escalate", "unavailable"]
 
 ESCALATE_TOKEN = "[[ESCALATE]]"
+SEARCH_TOKEN = "[[SEARCH:"
+MAX_SEARCH_QUERY_CHARS = 200
 HISTORY_TTL_SECONDS = 30 * 60
 EDIT_INTERVAL_SECONDS = 1.2
 DEEP_HINT = "发 /deep 让 Codex 深入查证。"
 
 _CONFIDENCE_RE = re.compile(r"\[\[\s*CONFIDENCE\s*:\s*(high|medium|low)\s*\]\]", re.IGNORECASE)
-_CONTROL_RE = re.compile(r"\[\[\s*(?:CONFIDENCE\s*:[^\]]*|ESCALATE)\s*\]\]", re.IGNORECASE)
+_CONTROL_RE = re.compile(
+    r"\[\[\s*(?:CONFIDENCE\s*:[^\]]*|ESCALATE|SEARCH\s*:[^\]]*)\s*\]\]", re.IGNORECASE,
+)
+_SEARCH_RE = re.compile(r"^\[\[\s*SEARCH\s*:\s*([^\]\n]+?)\s*\]\]", re.IGNORECASE)
 _URL_RE = re.compile(r"https?://[^\s<>\"'）)\]】]+")
 _URL_TRAIL = ".,;:!?。，；：！？"
 
@@ -241,7 +246,9 @@ def reset(
 # ---- prompt ----------------------------------------------------------------
 
 
-def system_prompt(settings: "Settings", *, has_evidence: bool) -> str:
+def system_prompt(
+    settings: "Settings", *, has_evidence: bool, can_search: bool = False,
+) -> str:
     from config import load_operator_profile
 
     try:
@@ -252,12 +259,22 @@ def system_prompt(settings: "Settings", *, has_evidence: bool) -> str:
     language = live.get("operator_language") or getattr(settings, "operator_language", None) or "zh-CN"
     style = live.get("operator_style") or getattr(settings, "operator_style", None) or "terse"
     today = datetime.now().astimezone().strftime("%Y-%m-%d %A %Z")
-    evidence_rule = (
-        "Web evidence is provided below; base factual claims on it and cite its URLs."
-        if has_evidence else
-        "No web evidence is provided; for anything that may have changed recently, say that "
-        "you could not verify it."
-    )
+    if has_evidence:
+        evidence_rule = "Web evidence is provided below; base factual claims on it and cite its URLs."
+    elif can_search:
+        evidence_rule = (
+            "Web search is available. If a good answer depends on facts you are not sure "
+            "of, or that may have changed (news, prices, versions, releases, schedules, who "
+            "holds a role, anything recent), reply with exactly "
+            f"{SEARCH_TOKEN} <short web search query>]] and nothing else; you will then get "
+            "search results and answer from them. Do not search for small talk, opinions, "
+            "writing help or well-established knowledge."
+        )
+    else:
+        evidence_rule = (
+            "No web evidence is provided; for anything that may have changed recently, say that "
+            "you could not verify it."
+        )
     return (
         f"You are Conveyor's chat layer for {name}, its single operator. Today is {today}.\n"
         f"Reply in the operator's language ({language}), style: {style}. Keep answers chat-sized.\n"
@@ -369,6 +386,24 @@ def check_answer(raw: str, allowed_urls: set[str]) -> Checked:
     return Checked(body, confidence, removed, False)
 
 
+def parse_search(raw: str) -> str | None:
+    """The query of a leading ``[[SEARCH: …]]`` request, else None."""
+    m = _SEARCH_RE.match((raw or "").strip())
+    if not m:
+        return None
+    query = " ".join(m.group(1).split())[:MAX_SEARCH_QUERY_CHARS]
+    return query or None
+
+
+def _held_back(head: str) -> bool:
+    """While streaming: could ``head`` still turn into a control-only reply
+    (escalation or search request)? Then show nothing yet."""
+    for token in (ESCALATE_TOKEN, SEARCH_TOKEN):
+        if token.startswith(head) or head.upper().startswith(token.upper()):
+            return True
+    return False
+
+
 def visible_partial(buf: str) -> str:
     """Streaming view: hide control tokens, including a half-written one."""
     text = _CONTROL_RE.sub("", buf)
@@ -442,33 +477,69 @@ async def ask_chat(
         )
     except OSError:
         return "unavailable", None
-    messages = [{"role": "system", "content": system_prompt(settings, has_evidence=bool(evidence))}]
-    messages += history(key, settings.chat_history_turns, settings=settings)
-    messages.append({"role": "user", "content": user_content})
+    can_search = not evidence and getattr(settings, "web_search_backend", "disabled") != "disabled"
+    past = history(key, settings.chat_history_turns, settings=settings)
+
+    def _messages(content, *, has_evidence: bool, may_search: bool) -> list[dict]:
+        return (
+            [{"role": "system", "content": system_prompt(
+                settings, has_evidence=has_evidence, can_search=may_search)}]
+            + past
+            + [{"role": "user", "content": content}]
+        )
 
     placeholder = await port.reply(msg, "💭 …")
-    buf = ""
-    shown = ""
-    last_edit = 0.0
-    try:
-        async for chunk in stream_chat(config, messages):
-            buf += chunk
-            head = buf.lstrip()
-            if head.startswith(ESCALATE_TOKEN[: len(head)]) and len(head) <= len(ESCALATE_TOKEN):
-                continue  # might be an escalation; show nothing yet
-            if head.startswith(ESCALATE_TOKEN):
-                continue
-            now = time.monotonic()
-            view = visible_partial(buf)
-            if placeholder and view and view != shown and now - last_edit >= EDIT_INTERVAL_SECONDS:
-                if await port.edit_progress(msg, placeholder, view + " ▍"):
-                    shown = view
-                last_edit = now
-    except ChatError as exc:
-        logger.warning("chat tier failed, falling back to agent: %s", exc)
-        if placeholder:
-            await port.edit_progress(msg, placeholder, "↪️ 对话模型暂不可用，转交 Codex…")
+
+    async def _stream(messages: list[dict]) -> str | None:
+        buf = ""
+        shown = ""
+        last_edit = 0.0
+        try:
+            async for chunk in stream_chat(config, messages):
+                buf += chunk
+                if _held_back(buf.lstrip()):
+                    continue  # might be an escalation / search request
+                now = time.monotonic()
+                view = visible_partial(buf)
+                if placeholder and view and view != shown and now - last_edit >= EDIT_INTERVAL_SECONDS:
+                    if await port.edit_progress(msg, placeholder, view + " ▍"):
+                        shown = view
+                    last_edit = now
+        except ChatError as exc:
+            logger.warning("chat tier failed, falling back to agent: %s", exc)
+            if placeholder:
+                await port.edit_progress(msg, placeholder, "↪️ 对话模型暂不可用，转交 Codex…")
+            return None
+        return buf
+
+    buf = await _stream(_messages(user_content, has_evidence=bool(evidence), may_search=can_search))
+    if buf is None:
         return "unavailable", None
+
+    # One model-requested web search, then a second round with the results.
+    searched = ""
+    search_failed = False
+    query = parse_search(buf) if can_search else None
+    if query:
+        searched = query
+        if placeholder:
+            await port.edit_progress(msg, placeholder, f"🔎 搜索：{query} …")
+        evidence = await web_evidence(settings, query)
+        search_failed = not evidence
+        try:
+            user_content = build_user_content(
+                settings, question, reply=reply, images=images, evidence=evidence,
+            )
+        except OSError:
+            return "unavailable", None
+        if search_failed and isinstance(user_content, str):
+            user_content += (
+                "\n\n(Web search returned nothing usable. Answer from what you know and "
+                "say clearly that it is unverified.)"
+            )
+        buf = await _stream(_messages(user_content, has_evidence=bool(evidence), may_search=False))
+        if buf is None:
+            return "unavailable", None
 
     allowed = evidence_urls(evidence) | extract_urls(question)
     if reply is not None:
@@ -484,12 +555,13 @@ async def ask_chat(
             await port.edit_progress(msg, placeholder, "↪️ 没得到有效回答，转交 Codex…")
         return "unavailable", None
 
-    unverified = is_time_sensitive(question) and not evidence
+    unverified = (is_time_sensitive(question) and not evidence) or search_failed
     # One line per answer so the hallucination guards can be tracked from
     # the logs (how often confidence is low / links get removed).
     logger.info(
-        "chat tier answered chat=%s confidence=%s removed_links=%d evidence=%s chars=%d",
-        key, checked.confidence, checked.removed_links, bool(evidence), len(checked.body),
+        "chat tier answered chat=%s confidence=%s removed_links=%d evidence=%s searched=%s chars=%d",
+        key, checked.confidence, checked.removed_links, bool(evidence), bool(searched),
+        len(checked.body),
     )
     final = finalize(checked, time_sensitive_unverified=unverified)
     delivered = bool(placeholder) and await port.edit_progress(msg, placeholder, final)

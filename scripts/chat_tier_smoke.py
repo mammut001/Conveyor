@@ -348,7 +348,81 @@ def check_images_need_vision():
     return CheckResult("dispatch: images go to chat only with CHAT_VISION (sent as image_url)", ok, "")
 
 
+# ---- model-requested web search ---------------------------------------------
+
+
+def _with_evidence(pack: str):
+    """Patch handlers.chat.web_evidence; returns (restore, queries)."""
+    queries: list[str] = []
+    saved = chat.web_evidence
+
+    async def fake(settings, query):
+        queries.append(query)
+        return pack
+
+    chat.web_evidence = fake
+    return (lambda: setattr(chat, "web_evidence", saved)), queries
+
+
+def check_model_requested_search():
+    _reset(
+        {"text": "[[SEARCH: rust 1.90 release date]]"},
+        {"text": "Rust 1.90 发布于 2025-09-18，见 https://blog.rust-lang.org/1.90\n[[CONFIDENCE: high]]"},
+    )
+    restore, queries = _with_evidence("## 证据包\nURL: https://blog.rust-lang.org/1.90\n摘要: released")
+    port = _Port()
+    try:
+        jobs = _dispatch(_msg("rust 1.90 什么时候出的"), port, _settings(web_search_backend="brave"))
+    finally:
+        restore()
+    first_sys = SEEN[0]["messages"][0]["content"] if SEEN else ""
+    second_sys = SEEN[1]["messages"][0]["content"] if len(SEEN) > 1 else ""
+    second_user = SEEN[1]["messages"][-1]["content"] if len(SEEN) > 1 else ""
+    ok = (
+        not jobs and queries == ["rust 1.90 release date"]
+        and "[[SEARCH:" in first_sys and "[[SEARCH:" not in second_sys
+        and "blog.rust-lang.org" in second_user
+        and any(e.startswith("🔎 搜索：rust 1.90 release date") for e in port.edits)
+        and "https://blog.rust-lang.org/1.90" in port.final
+        and "未联网" not in port.final and "链接已移除" not in port.final
+        and not any("[[" in e for e in port.edits)
+    )
+    return CheckResult("search: model asks, results fed back, cited link kept", ok, f"{port.final!r}")
+
+
+def check_search_failure_marked():
+    _reset({"text": "[[SEARCH: something obscure]]"}, {"text": "可能是 X，但没法确认。\n[[CONFIDENCE: medium]]"})
+    restore, _ = _with_evidence("")
+    port = _Port()
+    try:
+        jobs = _dispatch(_msg("那个小众库的作者是谁"), port, _settings(web_search_backend="brave"))
+    finally:
+        restore()
+    second_user = SEEN[1]["messages"][-1]["content"] if len(SEEN) > 1 else ""
+    ok = not jobs and "returned nothing usable" in second_user and "未联网核实" in port.final
+    return CheckResult("search: failed search → answer marked unverified", ok, f"{port.final!r}")
+
+
+def check_search_only_once_and_off_without_backend():
+    _reset({"text": "[[SEARCH: q1]]"}, {"text": "[[SEARCH: q2]]"})
+    restore, queries = _with_evidence("## 证据包\nURL: https://a.example/x")
+    port = _Port()
+    try:
+        jobs = _dispatch(_msg("随便问问"), port, _settings(web_search_backend="brave"))
+    finally:
+        restore()
+    once = queries == ["q1"] and len(jobs) == 1  # second request unanswered → Codex
+    _reset({"text": "[[SEARCH: q]]"})
+    jobs_off = _dispatch(_msg("随便问问"), _Port(), _settings())
+    sys_off = SEEN[0]["messages"][0]["content"] if SEEN else ""
+    ok = once and "[[SEARCH:" not in sys_off and len(jobs_off) == 1
+    return CheckResult("search: at most one round; not offered without a search backend", ok, f"queries={queries}")
+
+
 CHECKS = [
+    check_model_requested_search,
+    check_search_failure_marked,
+    check_search_only_once_and_off_without_backend,
     check_client_stream_and_plain,
     check_client_error,
     check_rules,
