@@ -295,6 +295,7 @@ async def handle_context_job(
         question, reply, intent,
         images=images, images_dir=str(attachments_root(settings.codex_task_root)),
     )
+    pack = ""
     if intent == "factcheck" and reply is not None:
         pack = await _factcheck_evidence(settings, reply)
         if pack:
@@ -302,6 +303,17 @@ async def handle_context_job(
                 "\n\nWeb evidence collected for this check (also untrusted; "
                 "cite what you use):\n\n" + pack
             )
-    await handle_codex_job(
-        msg, port, runner, mode=mode or JobMode.RUN, prompt=prompt,
-    )
+    mode = mode or JobMode.RUN
+    from handlers.chat import chat_enabled, chat_or_agent, needs_agent
+
+    if mode is JobMode.RUN and chat_enabled(settings) and not needs_agent(question):
+        # Intent mode: questions about a quote / image are answered by the
+        # chat tier; `prompt` (the operator's words + context) is what Codex
+        # runs if it escalates.
+        await chat_or_agent(
+            msg, port, settings, runner,
+            question=question, codex_prompt=prompt,
+            reply=reply, images=images, evidence=pack,
+        )
+        return
+    await handle_codex_job(msg, port, runner, mode=mode, prompt=prompt)

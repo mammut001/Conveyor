@@ -1750,8 +1750,14 @@ async def _forget(msg, port, _runner, settings, _arg):
 
 
 async def _help(msg, port, _runner, _settings, _arg):
+    from handlers.chat import chat_enabled
+
     text = "Codex Bot\n"
-    text += "直接发文字 → 跑 Codex（danger-full-access）\n"
+    if _settings is not None and chat_enabled(_settings):
+        text += "直接发文字 → 对话模型秒回；需要动手时转 Codex（danger-full-access）\n"
+        text += "/deep → 把上一个问题交给 Codex 用工具深入查\n"
+    else:
+        text += "直接发文字 → 跑 Codex（danger-full-access）\n"
     text += "记 xxx / /memo xxx → 写 MEMORY.md（不经 Codex）\n"
     text += "/status /last /diff /apply /discard /cancel\n"
     text += "/jobs [n] /memory [date] [cat] /journal [n]\n"

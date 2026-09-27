@@ -400,6 +400,28 @@ async def tool_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await cancel_pending(inbound, port, settings, token)
 
 
+async def deep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """"🔍 用 Codex 处理" button under a chat-tier answer → /deep."""
+    if not await _guard(update):
+        return
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    user = update.effective_user
+    chat = update.effective_chat
+    inbound = InboundMessage(
+        channel="telegram",
+        operator_id=str(getattr(user, "id", "") or ""),
+        chat_id=str(getattr(chat, "id", "") or ""),
+        message_id=str(getattr(query.message, "message_id", "") or "") if query.message else None,
+        text="/deep",
+        chat_type="p2p" if getattr(chat, "type", None) == "private" else "group",
+        raw=update,
+    )
+    await dispatch(inbound, make_outbound(update), settings, runner)
+
+
 async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Groups: act only when @mentioned or replied to (Grok-style), so
     # ordinary group conversation is neither answered nor rejected.
@@ -652,6 +674,7 @@ def main() -> None:
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
     application.add_handler(CallbackQueryHandler(tool_callback, pattern=r"^tool:"))
+    application.add_handler(CallbackQueryHandler(deep_callback, pattern=r"^deep$"))
     # Catch-all for COMMAND_TABLE entries without explicit CommandHandler above.
     application.add_handler(MessageHandler(filters.COMMAND, generic_command_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_cmd))

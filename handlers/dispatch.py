@@ -11,6 +11,14 @@ import logging
 from channel.auth import is_allowed
 from channel.types import InboundMessage, OutboundPort
 from config import Settings
+from handlers.chat import (
+    chat_enabled,
+    chat_or_agent,
+    handle_deep,
+    is_time_sensitive,
+    needs_agent,
+    web_evidence,
+)
 from handlers.commands import parse_command, run_command
 from handlers.context import (
     detect_context_intent,
@@ -54,6 +62,9 @@ async def dispatch(
                 await port.reply(msg, "用法：/memo <内容>")
                 return
             await handle_memo(msg, port, runner, text=f"记 {arg}")
+            return
+        if cmd_name == "deep":
+            await handle_deep(msg, port, runner)
             return
         if cmd_name in ("run", "fix"):
             if not arg:
@@ -120,10 +131,20 @@ async def dispatch(
         await handle_hybrid(msg, port, runner, settings, route)
         return
 
+    prompt = route.question or msg.text
+    # Intent mode: conversation goes to the chat tier; clear execution
+    # requests (and everything when the chat tier is off) go to Codex.
+    if chat_enabled(settings) and not needs_agent(msg.text):
+        evidence = await web_evidence(settings, msg.text) if is_time_sensitive(msg.text) else ""
+        await chat_or_agent(
+            msg, port, settings, runner,
+            question=msg.text, codex_prompt=prompt, evidence=evidence,
+        )
+        return
     await handle_codex_job(
         msg,
         port,
         runner,
         mode=JobMode.RUN,
-        prompt=(route.question or msg.text),
+        prompt=prompt,
     )

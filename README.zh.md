@@ -100,6 +100,17 @@ Conveyor:
 - `/memory [date] [category]` · `/journal [n]` — 读 MEMORY 和归档的
   journal。
 
+### 对话层（intent 模式，可选）
+
+- `CONVEYOR_CHAT_MODE=auto` 后：闲聊、问答、引用和看图由对话模型直接流式
+  回答（秒级、无工具）；改代码、跑命令、查服务器等才开 Codex 任务，模型
+  自己判断需要动手时也会转交。`/run` `/fix` 永远走 Codex。
+- 防幻觉：涉及你自己系统的问题强制走 Codex；时效性问题先联网取证；回答
+  里不在证据中的链接自动删除；模型自评把握低时标注并给出 `/deep`
+  按钮让 Codex 用工具深入查；未联网的时效性回答会标"可能过时"。
+- 被引用内容触发的转交需要你发 `/deep` 确认。详见
+  [docs/chat_tier.md](docs/chat_tier.md)。
+
 ### 引用回复 & @提问（Grok 式）
 
 - 回复/引用任意一条消息并 @机器人：`这是真的吗？` 会先联网搜证据再给出

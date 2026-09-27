@@ -74,6 +74,7 @@ Conveyor also supports a persistent single-concurrency queue, so jobs survive bo
 - **Remote Codex jobs** — start, inspect, cancel, discard, and apply worktree-based tasks.
 - **Persistent job queue** — SQLite-backed FIFO execution with pause/resume and restart recovery.
 - **Telegram + Feishu** — the same control model across both chat surfaces; Feishu can render interactive action cards.
+- **Chat tier (intent mode)** — optional: conversation and Q&A are answered in seconds by a direct chat-model call (streamed, no tools); only work that needs execution becomes a Codex job. Hallucination guards remove unverifiable links, flag low confidence and unverified fresh facts, and `/deep` re-runs any answer on Codex. See [docs/chat_tier.md](docs/chat_tier.md).
 - **Mention & reply context** — reply to any message with `@bot is this true?`, "explain", "summarize" or "translate" and Conveyor answers about that message; fact-checks pull web evidence first. Send or reply to a photo and it looks at the image too (a screenshot captioned `/fix …` works). In groups it only acts when mentioned or replied to. See [docs/reply_context.md](docs/reply_context.md).
 - **Developer ops** — load, process, disk, logs, services, git status, diagnostics, smoke checks, and maintenance commands.
 - **Personal tools** — notes, reminders, memory, daily briefs, project profiles, and planning helpers.
