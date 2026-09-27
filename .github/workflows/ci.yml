@@ -18,6 +18,12 @@ jobs:
     name: Backend
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      TELEGRAM_BOT_TOKEN: test-token
+      TELEGRAM_ALLOWED_USER_ID: "0"
+      CODEX_WORKSPACE_ROOT: /tmp/conveyor-ci/workspace
+      CODEX_TASK_ROOT: /tmp/conveyor-ci/tasks
+      CODEX_MEMORY_ROOT: /tmp/conveyor-ci/memory
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
