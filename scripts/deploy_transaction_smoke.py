@@ -25,16 +25,21 @@ def main() -> int:
     require(text, "git merge-base --is-ancestor", "validated SHA ancestry check")
     require(text, "Candidate validation FAILED; live checkout was not changed", "pre-cutover failure behavior")
     require(text, "--exclude=.env", "secret preservation")
-    require(text, 'cat > "${CANDIDATE}/.env.test"', "self-contained candidate smoke fixture")
-    require(text, "TELEGRAM_BOT_TOKEN=deploy-placeholder-token", "non-secret candidate bot token")
-    require(text, "CODEX_MEMORY_ROOT=${CANDIDATE}/.smoke-memory", "isolated candidate memory root")
+    require(text, "write_smoke_fixture()", "isolated smoke fixture helper")
+    require(text, "TELEGRAM_BOT_TOKEN=deploy-placeholder-token", "non-secret smoke token")
+    require(text, 'write_smoke_fixture "${CANDIDATE}"', "candidate smoke fixture")
+    require(text, 'write_smoke_fixture "${DEPLOY_PATH}"', "production smoke fixture")
+    require(text, 'clean_smoke_fixture "${DEPLOY_PATH}"', "production fixture cleanup")
 
     candidate = text.index("Validating detached candidate")
-    fixture = text.index('cat > "${CANDIDATE}/.env.test"')
-    smoke = text.index("if ! make smoke")
+    candidate_fixture = text.index('write_smoke_fixture "${CANDIDATE}"')
+    first_smoke = text.index("if ! make smoke")
     cutover = text.index("Cutting over live checkout")
-    if not (candidate < fixture < smoke < cutover):
-        raise SystemExit("deploy transaction smoke failed: candidate fixture/smoke/cutover ordering is unsafe")
+    production = text.index("Running production smoke tests")
+    production_fixture = text.index('write_smoke_fixture "${DEPLOY_PATH}"', production)
+    last_smoke = text.rindex("if ! make smoke")
+    if not (candidate < candidate_fixture < first_smoke < cutover < production < production_fixture < last_smoke):
+        raise SystemExit("deploy transaction smoke failed: candidate/production smoke ordering is unsafe")
 
     if "for f in Makefile config.py runner.py bot.py feishu_bot.py" in text:
         raise SystemExit("deploy transaction smoke failed: legacy partial-file rollback still present")

@@ -39,6 +39,26 @@ clean_live_checkout() {
     --quiet
 }
 
+write_smoke_fixture() {
+  local root="$1"
+  cat > "${root}/.env.test" <<EOF
+TELEGRAM_BOT_TOKEN=deploy-placeholder-token
+TELEGRAM_ALLOWED_USER_ID=1
+CODEX_WORKSPACE_ROOT=${root}
+CODEX_TASK_ROOT=${root}/.smoke-task
+CODEX_MEMORY_ROOT=${root}/.smoke-memory
+USER_TIMEZONE=UTC
+CONVEYOR_DESKTOP_AGENT_TOKEN=deploy-desktop-placeholder-token
+EOF
+  chmod 600 "${root}/.env.test"
+}
+
+clean_smoke_fixture() {
+  local root="$1"
+  rm -f "${root}/.env.test"
+  rm -rf "${root}/.smoke-task" "${root}/.smoke-memory"
+}
+
 # ---- lock -----------------------------------------------------------------
 exec 200>"${LOCK_FILE}"
 flock -n 200 || die "Another deploy is already running (lock: ${LOCK_FILE})"
@@ -143,20 +163,8 @@ python3 -m venv "${CANDIDATE}/.venv"
 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 \
   "${CANDIDATE}/.venv/bin/python" -m pip install -q -r "${CANDIDATE}/requirements.txt"
 
-# `make smoke` is deliberately env-free with respect to production secrets,
-# but a subset of integration smokes still requires valid placeholder paths.
-# Build the same non-secret fixture used by CI inside the candidate worktree.
-cat > "${CANDIDATE}/.env.test" <<EOF
-TELEGRAM_BOT_TOKEN=deploy-placeholder-token
-TELEGRAM_ALLOWED_USER_ID=1
-CODEX_WORKSPACE_ROOT=${CANDIDATE}
-CODEX_TASK_ROOT=${CANDIDATE}/.smoke-task
-CODEX_MEMORY_ROOT=${CANDIDATE}/.smoke-memory
-USER_TIMEZONE=UTC
-CONVEYOR_DESKTOP_AGENT_TOKEN=deploy-desktop-placeholder-token
-EOF
-chmod 600 "${CANDIDATE}/.env.test"
-
+# Candidate smoke uses isolated placeholders only; it never needs production secrets.
+write_smoke_fixture "${CANDIDATE}"
 (
   cd "${CANDIDATE}"
   .venv/bin/python -m compileall -q .
@@ -189,6 +197,7 @@ declare -A SVC_STATUS
 rollback_release() {
   local reason="$1"
   ROLLBACK_ATTEMPTED=true
+  clean_smoke_fixture "${DEPLOY_PATH}" || true
   log "Cutover failed: ${reason}. Rolling back whole source revision to ${OLD_COMMIT}..."
   git reset --hard "${OLD_COMMIT_FULL}" --quiet || true
   clean_live_checkout || true
@@ -225,10 +234,13 @@ log "Syncing production Python dependencies..."
 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 .venv/bin/python -m pip install -q -r requirements.txt \
   || rollback_release "dependency sync"
 
-log "Running production smoke tests..."
+log "Running production smoke tests with isolated non-secret fixture..."
+write_smoke_fixture "${DEPLOY_PATH}"
 if ! make smoke; then
+  clean_smoke_fixture "${DEPLOY_PATH}"
   rollback_release "production smoke"
 fi
+clean_smoke_fixture "${DEPLOY_PATH}"
 log "Production smoke passed."
 
 # ---- restart previously-active services and health-check ------------------
