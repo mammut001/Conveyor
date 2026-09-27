@@ -67,7 +67,7 @@ async def dispatch(
         if cmd_name == "deep":
             await handle_deep(msg, port, runner, settings=settings)
             return
-        if cmd_name in ("chat_clear", "forget"):
+        if cmd_name == "chat_clear":
             await handle_chat_clear(msg, port, settings)
             return
         if cmd_name in ("run", "fix"):
