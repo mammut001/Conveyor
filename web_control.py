@@ -167,6 +167,12 @@ class WebControl:
             return None
         return channel, operator_id, source_chat_id
 
+    def archive_session(self, session_id: str) -> bool:
+        return get_transcript_store(self.settings).archive_session(session_id)
+
+    def delete_session(self, session_id: str) -> bool:
+        return get_transcript_store(self.settings).delete_session(session_id)
+
     def events(self, job_id: str, after: int = 0, limit: int = 500) -> list[dict[str, Any]]:
         return [item.to_dict() for item in get_event_store(self.settings).list(job_id, after, limit)]
 

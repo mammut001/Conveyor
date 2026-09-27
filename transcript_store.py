@@ -241,6 +241,25 @@ class TranscriptStore:
         finally:
             conn.close()
 
+    def archive_session(self, session_id: str) -> bool:
+        conn = self._connect()
+        try:
+            with conn:
+                cursor = conn.execute("UPDATE sessions SET archived = 1 WHERE id = ?", (session_id,))
+                return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def delete_session(self, session_id: str) -> bool:
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("DELETE FROM session_messages WHERE session_id = ?", (session_id,))
+                cursor = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+                return cursor.rowcount > 0
+        finally:
+            conn.close()
+
     def messages(self, session_id: str, *, after: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
         conn = self._connect()
         try:

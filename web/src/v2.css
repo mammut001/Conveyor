@@ -7,47 +7,6 @@
   opacity: .58;
 }
 
-.transcript-panel {
-  display: grid;
-  gap: 12px;
-}
-
-.transcript-message {
-  border: 1px solid var(--line, rgba(128, 128, 128, .2));
-  border-radius: 14px;
-  padding: 14px 16px;
-  background: rgba(127, 127, 127, .045);
-}
-
-.transcript-message.role-user {
-  margin-left: min(12%, 72px);
-}
-
-.transcript-message.role-assistant {
-  margin-right: min(8%, 48px);
-}
-
-.transcript-message header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-  font-size: 12px;
-}
-
-.transcript-message time,
-.runtime-owner-card small {
-  opacity: .58;
-}
-
-.transcript-message pre {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: inherit;
-  line-height: 1.55;
-}
 
 .runtime-owner-card {
   display: grid;
@@ -198,20 +157,6 @@ body { color: var(--text); background: var(--bg); }
 .event-stream { padding: 25px max(22px, calc((100% - 780px) / 2)); background: #fff; overscroll-behavior: contain; }
 .stream-divider { display: flex; align-items: center; gap: 11px; margin: 24px 0 13px; color: #878b92; font: 10px/1.4 ui-sans-serif, sans-serif; letter-spacing: .07em; }
 .stream-divider::after { content: ""; height: 1px; flex: 1; background: #eceef0; }
-.transcript-panel { gap: 24px; }
-.transcript-message { border: 0; border-radius: 0; padding: 0; background: transparent; box-shadow: none; }
-.transcript-message.role-user { width: fit-content; max-width: min(84%, 650px); margin-left: auto; padding: 11px 16px; border-radius: 19px; background: #f1f1f2; }
-.transcript-message.role-user header, .user-event .event-meta { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.transcript-message.role-user pre, .user-event p { color: #34363b; font-size: 14px; line-height: 1.6; }
-.transcript-message.role-assistant { margin-right: 0; padding: 0 1px; }
-.transcript-message.role-assistant header { justify-content: flex-start; gap: 9px; margin-bottom: 9px; color: #33353a; font-size: 13px; }
-.transcript-message.role-assistant header strong { display: inline-flex; align-items: center; gap: 8px; font-weight: 650; }
-.transcript-message.role-assistant header strong::before { content: "C"; width: 22px; height: 22px; display: inline-grid; place-items: center; border-radius: 7px; color: #a95138; background: #fbede7; font: 700 11px ui-monospace, monospace; }
-.transcript-message.role-assistant time { display: none; }
-.transcript-message.role-assistant pre { color: #303238; font-size: 14px; line-height: 1.75; }
-.transcript-message.role-system, .transcript-message.role-tool { padding: 11px 13px; border: 1px solid #eceef0; border-radius: 12px; background: #fafbfc; }
-.transcript-message header { margin-bottom: 7px; color: #777b83; font-size: 11px; }
-.transcript-message pre { color: #34363b; }
 .event-card { margin-bottom: 12px; padding: 14px 16px; border: 1px solid #e9eaed; border-radius: 14px; color: #35373c; background: #fbfbfc; box-shadow: none; font-size: 13px; line-height: 1.65; }
 .event-card p { color: #35373c; }
 .user-event { width: fit-content; max-width: min(84%, 650px); margin-left: auto; border: 0; border-radius: 19px; padding: 11px 16px; color: #34363b; background: #f1f1f2; }
@@ -498,6 +443,42 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
    ========================================================================== */
 
 /* Modern bubble layout for TranscriptPanel */
+/* Session list with inline archive action */
+.session-item-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  position: relative;
+}
+
+.session-item-row .session-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-archive-btn {
+  opacity: 0;
+  border: 0;
+  background: transparent;
+  color: #9aa0aa;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.session-item-row:hover .session-archive-btn {
+  opacity: 0.65;
+}
+
+.session-archive-btn:hover {
+  opacity: 1 !important;
+  color: #ad3842;
+  background: rgba(173, 56, 66, 0.08);
+}
+
 .transcript-panel {
   display: flex;
   flex-direction: column;
@@ -553,9 +534,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 }
 
 .transcript-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
   background: #fbede7;
   color: #a95138;
   display: grid;
@@ -563,6 +544,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   font-size: 15px;
   flex-shrink: 0;
   margin-top: 1px;
+  user-select: none;
 }
 
 .transcript-body {
@@ -570,28 +552,65 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   min-width: 0;
 }
 
-.transcript-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.transcript-sender {
-  font-weight: 650;
-  font-size: 13px;
-  color: #26282d;
-}
-
-.transcript-header time {
-  font-size: 11px;
-  color: #8c9098;
-}
-
 .transcript-content {
   color: #2c2e33;
   font-size: 14px;
   line-height: 1.7;
+}
+
+.transcript-footer {
+  margin-top: 4px;
+  user-select: none;
+}
+
+.transcript-footer time {
+  font-size: 11px;
+  color: #9ea3ab;
+}
+
+/* Error callout in conversation */
+.transcript-error-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 10px 0;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #fdf5f5;
+  border: 1px solid #f8d7da;
+  color: #842029;
+}
+
+.transcript-error-card .error-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  user-select: none;
+}
+
+.transcript-error-card .error-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.transcript-error-card .error-title {
+  display: block;
+  font-size: 12px;
+  font-weight: 650;
+  color: #a71d2a;
+  margin-bottom: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.transcript-error-card .error-message {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #58151c;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 /* Formatted Text Flow */

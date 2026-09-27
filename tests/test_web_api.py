@@ -35,6 +35,12 @@ class FakeControl:
     def get_session(self, session_id):
         return {"id": session_id, "jobs": []} if session_id == "web-a" else None
 
+    def archive_session(self, session_id):
+        return session_id == "web-a"
+
+    def delete_session(self, session_id):
+        return session_id == "web-a"
+
     def resolve_session_identity(self, session_id):
         return ("web", "web-console", "web-a") if session_id == "web-a" else None
 
@@ -128,6 +134,8 @@ class WebApiTests(unittest.TestCase):
 
     def test_sessions_jobs_event_replay_and_diff(self):
         self.assertEqual(self.request("GET", "/api/sessions")[0], 200)
+        self.assertEqual(self.request("DELETE", "/api/sessions/web-a")[0], 200)
+        self.assertEqual(self.request("DELETE", "/api/sessions/unknown")[0], 404)
         status, jobs = self.request("GET", "/api/jobs")
         self.assertEqual(status, 200); self.assertEqual(jobs["jobs"][0]["id"], "q1")
         status, events = self.request("GET", "/api/jobs/q1/events?after=0")

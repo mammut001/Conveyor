@@ -72,6 +72,15 @@ class TranscriptStoreTests(unittest.TestCase):
         self.assertEqual(message.metadata["reasoning"], "[REDACTED]")
         self.assertLessEqual(len(message.metadata["label"]), 2000)
 
+    def test_archive_and_delete_session(self) -> None:
+        self.store.append("s1", "user", "hi")
+        self.assertEqual(len(self.store.list_sessions()), 1)
+        self.assertTrue(self.store.archive_session("s1"))
+        self.assertEqual(len(self.store.list_sessions()), 0)
+        self.assertEqual(len(self.store.list_sessions(include_archived=True)), 1)
+        self.assertTrue(self.store.delete_session("s1"))
+        self.assertEqual(len(self.store.list_sessions(include_archived=True)), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -92,7 +92,7 @@ export default function App() {
   const [authenticated, setAuthenticated] = useState(false)
   const [sessions, setSessions] = useState<Session[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
-  const [selectedSessionId, setSelectedSessionId] = useState('')
+  const [selectedSessionId, setSelectedSessionId] = useState(() => sessionStorage.getItem('conveyor-selected-session') || '')
   const [selectedJobId, setSelectedJobId] = useState('')
   const [creatingSession, setCreatingSession] = useState(false)
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([])
@@ -113,6 +113,15 @@ export default function App() {
   const lastSequence = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
 
+  const selectSession = useCallback((sessionId: string, jobId?: string) => {
+    setCreatingSession(false)
+    setSelectedSessionId(sessionId)
+    if (sessionId) sessionStorage.setItem('conveyor-selected-session', sessionId)
+    else sessionStorage.removeItem('conveyor-selected-session')
+    setSelectedJobId(jobId || '')
+    setTranscript([]) // Clear immediately to prevent flashing stale session
+  }, [])
+
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(path, {
       ...init,
@@ -124,6 +133,26 @@ export default function App() {
     return body as T
   }, [token])
 
+  const archiveSession = useCallback(async (sessionId: string) => {
+    try {
+      await api(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+      if (selectedSessionId === sessionId) {
+        sessionStorage.removeItem('conveyor-selected-session')
+        setSelectedSessionId('')
+        setSelectedJobId('')
+        setTranscript([])
+      }
+      void api<{ sessions: Session[] }>('/api/sessions').then(data => {
+        setSessions(data.sessions)
+        if (selectedSessionId === sessionId && data.sessions[0]) {
+          selectSession(data.sessions[0].id, data.sessions[0].latest_job?.id)
+        }
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not archive session')
+    }
+  }, [api, selectSession, selectedSessionId])
+
   const refresh = useCallback(async () => {
     if (!token) return
     try {
@@ -134,18 +163,25 @@ export default function App() {
       ])
       setSessions(sessionData.sessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setError('')
-      if (!creatingSession && !selectedSessionId) {
-        const initialSession = sessionData.sessions[0]
-        if (initialSession) {
-          setSelectedSessionId(initialSession.id)
-          setSelectedJobId(initialSession.latest_job?.id || '')
-        } else if (jobData.jobs[0]) {
-          setSelectedSessionId(jobData.jobs[0].chat_id)
-          setSelectedJobId(jobData.jobs[0].id)
+      if (!creatingSession) {
+        const savedSessionId = sessionStorage.getItem('conveyor-selected-session')
+        const currentTargetId = selectedSessionId || savedSessionId
+        const matched = sessionData.sessions.find(item => item.id === currentTargetId)
+        if (matched) {
+          if (selectedSessionId !== matched.id) {
+            setSelectedSessionId(matched.id)
+            setSelectedJobId(matched.latest_job?.id || '')
+          } else if (!selectedJobId && matched.latest_job) {
+            setSelectedJobId(matched.latest_job.id)
+          }
+        } else if (!selectedSessionId) {
+          const initial = sessionData.sessions[0]
+          if (initial) {
+            setSelectedSessionId(initial.id)
+            setSelectedJobId(initial.latest_job?.id || '')
+            sessionStorage.setItem('conveyor-selected-session', initial.id)
+          }
         }
-      } else if (!creatingSession && !selectedJobId && selectedSessionId) {
-        const session = sessionData.sessions.find(item => item.id === selectedSessionId)
-        if (session?.latest_job) setSelectedJobId(session.latest_job.id)
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not connect') }
   }, [api, creatingSession, selectedJobId, selectedSessionId, token])
@@ -304,11 +340,33 @@ export default function App() {
     {error && <div className="error-banner global">{error}<button onClick={() => setError('')}>×</button></div>}
     <section className="workspace">
       <aside className="sessions-panel panel">
-        <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { setCreatingSession(true); setSelectedSessionId(''); setSelectedJobId(''); setTranscript([]); setPrompt('') }} aria-label="New session">＋</button></div>
+        <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { selectSession('', ''); setCreatingSession(true); setPrompt('') }} aria-label="New session">＋</button></div>
         <div className="session-list">
-          {sessions.map(session => <button key={session.id} className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`} title={sessionLabel(session)} aria-pressed={session.id === selectedSessionId} onClick={() => { setCreatingSession(false); setSelectedSessionId(session.id); setSelectedJobId(session.latest_job?.id || '') }}>
-            <span className={`status-rail ${session.latest_job?.state || ''}`} /><span><strong>{session.title || 'Untitled session'}</strong><small>{session.message_count ?? 0} messages · {session.job_count} job{session.job_count === 1 ? '' : 's'} · {formatTime(session.last_activity)}</small></span>
-          </button>)}
+          {sessions.map(session => (
+            <div key={session.id} className="session-item-row">
+              <button
+                className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`}
+                title={sessionLabel(session)}
+                aria-pressed={session.id === selectedSessionId}
+                onClick={() => selectSession(session.id, session.latest_job?.id)}
+              >
+                <span className={`status-rail ${session.latest_job?.state || ''}`} />
+                <span>
+                  <strong>{session.title || 'Untitled session'}</strong>
+                  <small>{session.message_count ?? 0} messages · {session.job_count} job{session.job_count === 1 ? '' : 's'} · {formatTime(session.last_activity)}</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                className="session-archive-btn"
+                title="Archive session"
+                aria-label="Archive session"
+                onClick={(e) => { e.stopPropagation(); void archiveSession(session.id) }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
           {!sessions.length && <Empty text="No sessions yet" />}
         </div>
         <div className="queue-summary"><p className="eyebrow">ACTIVE QUEUE</p>{(['running', 'queued'] as const).map(state => <div key={state}><span>{state}</span><strong>{system?.queue.states[state] || 0}</strong></div>)}<p className="history-note">History · {(['interrupted', 'failed', 'cancelled', 'completed'] as const).reduce((total, state) => total + (system?.queue.states[state] || 0), 0)} terminal tasks</p></div>
@@ -320,8 +378,8 @@ export default function App() {
           {selectedJob && <StatusBadge state={selectedJob.state} />}
         </div>
         <div className="event-stream" ref={streamRef}>
-          {selectedJob?.state === 'failed' && <div className="job-notice failed"><strong>Task failed</strong><span>{selectedJob.error || 'See the execution details below.'}</span></div>}
-          {selectedJob?.state === 'cancelled' && <div className="job-notice"><strong>Task cancelled</strong><span>This task was cancelled; start a new message to continue.</span></div>}
+          {!transcript.length && selectedJob?.state === 'failed' && <div className="job-notice failed"><strong>Task failed</strong><span>{selectedJob.error || 'See the execution details below.'}</span></div>}
+          {!transcript.length && selectedJob?.state === 'cancelled' && <div className="job-notice"><strong>Task cancelled</strong><span>This task was cancelled; start a new message to continue.</span></div>}
 
           {/* Conversation history */}
           {transcript.length > 0 && <TranscriptPanel messages={transcript} />}
@@ -359,10 +417,9 @@ export default function App() {
                 <article className="transcript-message role-assistant live-streaming">
                   <div className="transcript-avatar" aria-hidden="true">🤖</div>
                   <div className="transcript-body">
-                    <header className="transcript-header">
-                      <span className="transcript-sender">Conveyor</span>
+                    <div className="transcript-header" style={{ marginBottom: 4 }}>
                       <span className="streaming-indicator">● 生成中</span>
-                    </header>
+                    </div>
                     <div className="transcript-content">
                       <FormattedText content={liveAssistantText} />
                       <span className="typing-cursor">▌</span>

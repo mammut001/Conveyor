@@ -242,6 +242,12 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/config/provider":
                 result = self.server.control.update_provider_config(body)
                 self._json(HTTPStatus.OK, {"ok": True, "config": result})
+            elif len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] in ("archive", "delete"):
+                if parts[3] == "delete":
+                    ok = self.server.control.delete_session(parts[2])
+                else:
+                    ok = self.server.control.archive_session(parts[2])
+                self._json(HTTPStatus.OK if ok else HTTPStatus.NOT_FOUND, {"ok": ok})
             elif len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "cancel":
                 ok, message = self._await(self.server.control.cancel_job(parts[2]))
                 self._json(HTTPStatus.OK if ok else HTTPStatus.CONFLICT, {"ok": ok, "message": message})
@@ -265,6 +271,21 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.BAD_REQUEST, {"error": redact_text(str(exc))})
         except Exception:
             logger.exception("POST request failed")
+            self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"})
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        if not parsed.path.startswith("/api/") or not self._require_auth():
+            return
+        parts = self._segments(parsed.path)
+        try:
+            if len(parts) == 3 and parts[:2] == ["api", "sessions"]:
+                ok = self.server.control.archive_session(parts[2])
+                self._json(HTTPStatus.OK if ok else HTTPStatus.NOT_FOUND, {"ok": ok})
+            else:
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        except Exception:
+            logger.exception("DELETE request failed")
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"})
 
     def _stream_events(self, query: dict[str, list[str]]) -> None:
