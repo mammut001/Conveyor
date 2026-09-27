@@ -124,16 +124,50 @@ def chat_key(msg: InboundMessage) -> str:
     return f"{msg.channel}:{msg.chat_id}"
 
 
-def history(key: str, limit: int, *, now: float | None = None) -> list[dict]:
+def history(
+    key: str,
+    limit: int,
+    *,
+    now: float | None = None,
+    settings: "Settings" | None = None,
+) -> list[dict]:
+    from handlers import chat_memory
+
     now = time.time() if now is None else now
     thread = _threads.get(key)
-    if thread is None or now - thread.last > HISTORY_TTL_SECONDS:
-        _threads.pop(key, None)
-        return []
-    return list(thread.turns)[-2 * max(0, limit):]
+    if thread is not None and now - thread.last <= HISTORY_TTL_SECONDS:
+        return list(thread.turns)[-2 * max(0, limit):]
+
+    # Not in memory or expired in memory; try persistent SQLite store
+    if settings is not None:
+        turns = chat_memory.get_history(
+            settings.codex_memory_root,
+            key,
+            limit,
+            ttl_seconds=HISTORY_TTL_SECONDS,
+            now=now,
+        )
+        if turns:
+            th = _threads.setdefault(key, _Thread())
+            th.turns = deque(turns, maxlen=2 * max(1, limit))
+            th.last = now
+            return turns
+
+    _threads.pop(key, None)
+    return []
 
 
-def remember(key: str, user: str, assistant: str, limit: int, *, now: float | None = None) -> None:
+def remember(
+    key: str,
+    user: str,
+    assistant: str,
+    limit: int,
+    *,
+    now: float | None = None,
+    settings: "Settings" | None = None,
+) -> None:
+    from handlers import chat_memory
+
     thread = _threads.setdefault(key, _Thread())
     thread.turns.append({"role": "user", "content": user})
     thread.turns.append({"role": "assistant", "content": assistant})
@@ -141,22 +175,67 @@ def remember(key: str, user: str, assistant: str, limit: int, *, now: float | No
         thread.turns.popleft()
     thread.last = time.time() if now is None else now
 
+    if settings is not None:
+        chat_memory.add_turn(
+            settings.codex_memory_root,
+            key,
+            user,
+            assistant,
+            limit,
+            now=thread.last,
+        )
 
-def set_last(key: str, request: LastRequest) -> None:
+
+def set_last(
+    key: str,
+    request: LastRequest,
+    *,
+    settings: "Settings" | None = None,
+) -> None:
+    from handlers import chat_memory
+
     _last[key] = request
+    if settings is not None:
+        chat_memory.save_last_request(
+            settings.codex_memory_root,
+            key,
+            chat_memory.StoredLastRequest(request.codex_prompt, request.confirm),
+        )
 
 
-def pop_last(key: str) -> LastRequest | None:
-    return _last.pop(key, None)
+def pop_last(
+    key: str,
+    *,
+    settings: "Settings" | None = None,
+) -> LastRequest | None:
+    from handlers import chat_memory
+
+    mem_last = _last.pop(key, None)
+    if settings is not None:
+        stored = chat_memory.pop_last_request(settings.codex_memory_root, key)
+        if mem_last is not None:
+            return mem_last
+        if stored is not None:
+            return LastRequest(codex_prompt=stored.codex_prompt, confirm=stored.confirm)
+    return mem_last
 
 
-def reset(key: str | None = None) -> None:
+def reset(
+    key: str | None = None,
+    *,
+    settings: "Settings" | None = None,
+) -> None:
+    from handlers import chat_memory
+
     if key is None:
         _threads.clear()
         _last.clear()
     else:
         _threads.pop(key, None)
         _last.pop(key, None)
+
+    memory_root = settings.codex_memory_root if settings is not None else None
+    chat_memory.clear_history(memory_root, key)
 
 
 # ---- prompt ----------------------------------------------------------------
@@ -364,7 +443,7 @@ async def ask_chat(
     except OSError:
         return "unavailable", None
     messages = [{"role": "system", "content": system_prompt(settings, has_evidence=bool(evidence))}]
-    messages += history(key, settings.chat_history_turns)
+    messages += history(key, settings.chat_history_turns, settings=settings)
     messages.append({"role": "user", "content": user_content})
 
     placeholder = await port.reply(msg, "💭 …")
@@ -421,7 +500,7 @@ async def ask_chat(
         user_turn += f"\n[about a quoted message: {reply.text.strip()[:200]}]"
     if images:
         user_turn += f"\n[{len(images)} image(s) attached]"
-    remember(key, user_turn, checked.body, settings.chat_history_turns)
+    remember(key, user_turn, checked.body, settings.chat_history_turns, settings=settings)
     return "answered", checked
 
 
@@ -454,14 +533,14 @@ async def chat_or_agent(
         msg, port, settings, question=question, reply=reply, images=images, evidence=evidence,
     )
     if outcome == "answered":
-        set_last(key, LastRequest(codex_prompt=codex_prompt, confirm=False))
+        set_last(key, LastRequest(codex_prompt=codex_prompt, confirm=False), settings=settings)
         if checked is not None and checked.confidence == "low":
             await _offer_deep(msg, port, "要让 Codex 用工具深入查一下吗？")
         return
     if outcome == "escalate" and untrusted:
         # The model read someone else's content; do not let that start an
         # agent job without the operator saying so.
-        set_last(key, LastRequest(codex_prompt=codex_prompt, confirm=True))
+        set_last(key, LastRequest(codex_prompt=codex_prompt, confirm=True), settings=settings)
         await _offer_deep(msg, port, "这件事需要在服务器上动手。确认交给 Codex 执行吗？发 /deep 确认。")
         return
     await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=codex_prompt)
@@ -471,13 +550,25 @@ async def handle_deep(
     msg: InboundMessage,
     port: OutboundPort,
     runner: "CodexRunner",
+    *,
+    settings: "Settings" | None = None,
 ) -> None:
     """``/deep``: re-run the last chat-tier request on the Codex agent."""
     from handlers.jobs import handle_codex_job
     from runner import JobMode
 
-    last = pop_last(chat_key(msg))
+    last = pop_last(chat_key(msg), settings=settings)
     if last is None:
         await port.reply(msg, "没有可以深入的上一个问题。直接发问题，或用 /run <任务>。")
         return
     await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=last.codex_prompt)
+
+
+async def handle_chat_clear(
+    msg: InboundMessage,
+    port: OutboundPort,
+    settings: "Settings",
+) -> None:
+    """``/chat_clear``: reset conversation history for this chat."""
+    reset(chat_key(msg), settings=settings)
+    await port.reply(msg, "🧹 对话历史已清空，新的对话将从零开始。")

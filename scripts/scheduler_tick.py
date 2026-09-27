@@ -70,6 +70,15 @@ def run_tick(*, dry_run: bool = False) -> tuple[int, int]:
         except Exception as exc:
             logger.error("Briefing check failed: %s", exc)
 
+    # Proactive Topic Watch: check and send if due
+    try:
+        from personal_tools.topic_watch import check_topic_watches_and_send
+        watches_sent = check_topic_watches_and_send(settings, dry_run=dry_run)
+        if watches_sent > 0:
+            logger.info("Sent %d topic watch notification(s)", watches_sent)
+    except Exception as exc:
+        logger.error("Topic watch check failed: %s", exc)
+
     if not due:
         logger.debug("No due deliverable reminders.")
         return 0, 0

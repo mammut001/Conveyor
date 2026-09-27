@@ -1740,13 +1740,53 @@ async def _context(msg, port, _runner, settings, _arg):
 
 
 async def _forget(msg, port, _runner, settings, _arg):
-    """Clear this chat/operator session."""
+    """Clear this chat/operator session and chat tier history."""
     from handlers.session import clear_session
+    from handlers.chat import chat_key, reset
     removed = clear_session(settings, msg)
-    if removed:
-        await port.reply(msg, "会话记录已清除。")
-    else:
-        await port.reply(msg, "没有需要清除的会话记录。")
+    reset(chat_key(msg), settings=settings)
+    await port.reply(msg, "会话记录与对话历史已清除。")
+
+
+async def _watch(msg, port, _runner, settings, arg):
+    """Subscribe to proactive updates for a topic."""
+    from personal_tools.topic_watch import watch_topic
+    arg = (arg or "").strip()
+    if not arg:
+        await port.reply(msg, "用法：/watch <话题> [小时数]（例如：/watch AI Agent 进展 4h）")
+        return
+    parts = arg.rsplit(None, 1)
+    topic = arg
+    hours = 6.0
+    if len(parts) == 2:
+        try:
+            h_str = parts[1].rstrip("hH小时")
+            hours = float(h_str)
+            topic = parts[0]
+        except ValueError:
+            pass
+    res = watch_topic(settings, msg.operator_id, msg.channel, msg.chat_id, topic, hours)
+    await port.reply(msg, res.text)
+
+
+async def _watches(msg, port, _runner, settings, _arg):
+    """List all active topic watches for this operator."""
+    from personal_tools.topic_watch import list_watches
+    res = list_watches(settings, msg.operator_id)
+    await port.reply(msg, res.text)
+
+
+async def _unwatch(msg, port, _runner, settings, arg):
+    """Cancel a topic subscription."""
+    from personal_tools.topic_watch import unwatch_topic
+    arg = (arg or "").strip().lstrip("#")
+    try:
+        watch_id = int(arg)
+    except ValueError:
+        await port.reply(msg, "用法：/unwatch <id>。发 /watches 查看当前关注列表。")
+        return
+    res = unwatch_topic(settings, msg.operator_id, watch_id)
+    await port.reply(msg, res.text)
 
 
 async def _help(msg, port, _runner, _settings, _arg):
@@ -2250,6 +2290,10 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         ),
         CommandSpec("context", "查看最近会话上下文", _context),
         CommandSpec("forget", "清除当前会话记录", _forget),
+        CommandSpec("chat_clear", "清空当前会话与对话历史", _forget),
+        CommandSpec("watch", "关注话题并定时推送更新", _watch, takes_arg=True),
+        CommandSpec("watches", "查看所有关注的话题", _watches),
+        CommandSpec("unwatch", "取消话题关注", _unwatch, takes_arg=True),
         CommandSpec("help", "帮助", _help),
         CommandSpec("nl_help", "自然语言示例", _nl_help),
     ]

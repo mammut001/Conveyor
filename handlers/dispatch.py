@@ -14,6 +14,7 @@ from config import Settings
 from handlers.chat import (
     chat_enabled,
     chat_or_agent,
+    handle_chat_clear,
     handle_deep,
     is_time_sensitive,
     needs_agent,
@@ -64,7 +65,10 @@ async def dispatch(
             await handle_memo(msg, port, runner, text=f"记 {arg}")
             return
         if cmd_name == "deep":
-            await handle_deep(msg, port, runner)
+            await handle_deep(msg, port, runner, settings=settings)
+            return
+        if cmd_name in ("chat_clear", "forget"):
+            await handle_chat_clear(msg, port, settings)
             return
         if cmd_name in ("run", "fix"):
             if not arg:

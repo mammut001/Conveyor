@@ -74,11 +74,27 @@ not start a job by itself: the bot asks, and the operator confirms with
 `/deep`. Injected text in a quoted message therefore cannot make the bot
 run an agent job.
 
-## Memory
+## Memory & Persistence
 
-Each chat keeps the last `CONVEYOR_CHAT_HISTORY_TURNS` exchanges in memory
-for follow-ups, forgotten after 30 idle minutes or a restart. The system
-prompt carries the operator profile (name / language / style) and today's
-date.
+Each chat retains the last `CONVEYOR_CHAT_HISTORY_TURNS` exchanges in an active
+conversation window. Turns, session state, and `/deep` escalation requests are
+persisted to SQLite (`chat_memory.db` in `settings.codex_memory_root`), so
+conversations survive service restarts and deployments.
 
-Smoke: `scripts/chat_tier_smoke.py` (fake OpenAI-compatible SSE server).
+* `/chat_clear` (or `/forget`): clears the active conversation history and session state.
+* Follow-ups within the active session window carry the recent turns.
+* Stale turns beyond session TTL are archived; `/deep` requests persist across restarts.
+
+## Proactive Topic Watches
+
+Operators can subscribe to topics or search queries for proactive push notifications:
+
+* `/watch <topic> [hours]` — subscribe to automatic web search monitoring (default: every 6h).
+* `/watches` — view all active topic subscriptions.
+* `/unwatch <id>` — cancel a subscription.
+
+`conveyor-scheduler.timer` checks due watches on each tick. A SHA-256 fingerprint diffs
+new search results against the previous run's digest; notifications are sent only when
+genuine updates appear, citing verified sources only.
+
+Smoke suites: `scripts/chat_tier_smoke.py`, `scripts/chat_memory_smoke.py`, `scripts/topic_watch_smoke.py`.
