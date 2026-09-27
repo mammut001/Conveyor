@@ -93,7 +93,16 @@ requires `Authorization: Bearer <token>`.
 - `POST /api/approvals/{id}/approve`, `/reject`
 - `GET /api/nodes`, `GET /api/nodes/{id}`
 - `GET /api/computer/status`, `POST /api/computer/stop`
+- `POST /api/computer/screenshot` for an explicit, one-shot host screenshot request
 - `GET /api/artifacts/{id}` for allow-listed screenshot thumbnails
+
+Host-screen capture is read-only and opt-in. `POST /api/computer/screenshot` is
+available only when `CONVEYOR_DESKTOP_UPLOAD_ENABLED=true`, the Mac desktop
+agent is online, and its screenshot helper is configured. It requests one
+capture; Conveyor transfers only the configured, size-limited thumbnail to the
+VPS for the authenticated Web Console. The original stays on the Mac. The
+browser does not start a continuous stream and gains no mouse or keyboard
+control from this feature. Thumbnail upload remains disabled by default.
 
 Apply and discard endpoints create a five-minute, job-scoped approval. They do
 not mutate the worktree until the matching authenticated approval endpoint is

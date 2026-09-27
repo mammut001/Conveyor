@@ -251,6 +251,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif len(parts) == 4 and parts[:2] == ["api", "approvals"] and parts[3] in ("approve", "reject"):
                 result = self._await(self.server.control.decide_approval(parts[2], parts[3] == "approve"), timeout=120)
                 self._json(HTTPStatus.OK if result else HTTPStatus.NOT_FOUND, result or {"error": "not found"})
+            elif parsed.path == "/api/computer/screenshot":
+                result = self.server.control.request_host_screen()
+                self._json(HTTPStatus.ACCEPTED if result.get("ok") else HTTPStatus.CONFLICT, result)
             elif parsed.path == "/api/computer/stop":
                 result = self._await(self.server.control.emergency_stop())
                 self._json(HTTPStatus.OK, {"ok": True, "result": result})

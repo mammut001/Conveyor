@@ -366,13 +366,119 @@ class WebControl:
         from handlers.tools.executors import exec_computer_stop
         return await exec_computer_stop(self.settings, "")
 
+    def request_host_screen(self) -> dict[str, Any]:
+        """Request one explicit, read-only host screenshot for the Web Console."""
+        if not getattr(self.settings, "conveyor_desktop_upload_enabled", False):
+            return {
+                "ok": False,
+                "error": "thumbnail_preview_disabled",
+                "message": "Host-screen thumbnail sharing is disabled; screenshots remain on the Mac.",
+            }
+
+        from channel.types import InboundMessage
+        from desktop_observe_requests import create_observe_request, list_recent_observe_requests
+        from desktop_upload_requests import list_recent_upload_requests
+
+        marker = "web-console-host-screen-preview"
+        uploads = list_recent_upload_requests(self.settings, limit=10)
+        for record in list_recent_observe_requests(self.settings, limit=10):
+            if record.get("created_by_channel") != "web" or record.get("user_request") != marker:
+                continue
+            upload = next(
+                (item for item in uploads if item.get("observe_request_id") == record.get("request_id")),
+                None,
+            )
+            pending_observe = record.get("status") in ("pending", "claimed")
+            pending_upload = isinstance(upload, dict) and upload.get("status") in ("pending", "claimed")
+            if pending_observe or pending_upload:
+                return {
+                    "ok": True,
+                    "request": {
+                        "request_id": record.get("request_id"),
+                        "status": record.get("status"),
+                        "created_at": record.get("created_at"),
+                    },
+                    "already_pending": True,
+                }
+
+        msg = InboundMessage(
+            channel="web",
+            operator_id="web-console",
+            chat_id="web-console",
+            message_id=f"web-screen-{uuid.uuid4().hex}",
+            text="Capture host screen for Web Console preview",
+            chat_type="p2p",
+        )
+        result = create_observe_request(
+            self.settings,
+            msg,
+            marker,
+            auto_upload_thumbnail=True,
+            auto_delivery=False,
+        )
+        if not result.get("ok"):
+            return result
+        record = result.get("request") or {}
+        return {
+            "ok": True,
+            "request": {
+                "request_id": record.get("request_id"),
+                "status": record.get("status"),
+                "created_at": record.get("created_at"),
+            },
+        }
+
     def computer_status(self) -> dict[str, Any]:
         from desktop_computer_requests import get_active_task, arm_remaining_seconds, is_direct_mode_active
-        from desktop_upload_requests import list_recent_upload_requests
+        from desktop_observe_requests import list_recent_observe_requests
+        from desktop_upload_requests import (
+            ensure_upload_request_for_observe,
+            list_recent_upload_requests,
+        )
+        upload_records = list_recent_upload_requests(self.settings, limit=10)
+        screen_request = None
+        marker = "web-console-host-screen-preview"
+        observe_records = list_recent_observe_requests(self.settings, limit=10)
+        host_screen_records = [
+            record for record in observe_records
+            if record.get("created_by_channel") == "web" and record.get("user_request") == marker
+        ]
+        for record in host_screen_records:
+            if (
+                getattr(self.settings, "conveyor_desktop_upload_enabled", False)
+                and record.get("status") == "completed"
+                and record.get("auto_upload_thumbnail")
+            ):
+                ensure_upload_request_for_observe(
+                    self.settings,
+                    record,
+                    created_by_channel="web",
+                    created_by_chat_id="web-console",
+                    created_by_operator_id="web-console",
+                )
+                upload_records = list_recent_upload_requests(self.settings, limit=10)
+            upload = next(
+                (item for item in upload_records if item.get("observe_request_id") == record.get("request_id")),
+                None,
+            )
+            screen_request = {
+                "request_id": record.get("request_id"),
+                "status": record.get("status"),
+                "created_at": record.get("created_at"),
+                "error": record.get("error") if record.get("status") == "failed" else None,
+                "upload_status": upload.get("status") if isinstance(upload, dict) else None,
+            }
+            break
+
+        host_request_ids = {record.get("request_id") for record in host_screen_records}
         screenshots: list[dict[str, Any]] = []
-        for record in list_recent_upload_requests(self.settings, limit=5):
+        for record in upload_records:
             result = record.get("result") if isinstance(record.get("result"), dict) else {}
-            if record.get("status") != "completed" or not result.get("thumbnail_path"):
+            if (
+                record.get("observe_request_id") not in host_request_ids
+                or record.get("status") != "completed"
+                or not result.get("thumbnail_path")
+            ):
                 continue
             screenshots.append({
                 "artifact_id": record.get("upload_id"),
@@ -380,12 +486,19 @@ class WebControl:
                 "width": result.get("width"), "height": result.get("height"),
                 "bytes": result.get("bytes"), "node_id": result.get("node_id"),
             })
+            if len(screenshots) == 5:
+                break
+
         active = get_active_task(self.settings)
         return {
             "armed": is_direct_mode_active(self.settings),
             "arm_remaining_seconds": arm_remaining_seconds(self.settings),
             "active_task": active if isinstance(active, dict) else None,
             "screenshots": screenshots,
+            "screen_preview_enabled": bool(
+                getattr(self.settings, "conveyor_desktop_upload_enabled", False)
+            ),
+            "screen_request": screen_request,
         }
 
     def artifact_path(self, artifact_id: str) -> Path | None:
