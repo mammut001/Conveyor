@@ -26,10 +26,10 @@ def check_env_permissions(env_path: Path) -> CheckResult:
     if not env_path.exists():
         return CheckResult("env permissions", False, f"{env_path} missing")
     mode = _mode(env_path)
-    ok = (mode & 0o077) == 0
+    ok = (mode & 0o027) == 0
     detail = f"{env_path} mode={mode:o}"
     if not ok:
-        detail += f" (suggest: chmod 0600 {env_path})"
+        detail += f" (suggest: chmod 0600 or 0640 {env_path})"
     return CheckResult("env permissions", ok, detail)
 
 

@@ -54,7 +54,7 @@ ALLOWED_CHILD_ENV_EXACT = {
 
 # Env prefix variables allowed to pass through
 ALLOWED_CHILD_ENV_PREFIXES = {
-    "CODEX_", "OPENAI_", "AZURE_OPENAI_", "MINIMAX_", "ANTHROPIC_"
+    "CODEX_", "OPENAI_", "AZURE_OPENAI_", "MINIMAX_", "ANTHROPIC_", "DEEPSEEK_"
 }
 
 def is_sensitive_key(key: str) -> bool:
