@@ -48,7 +48,7 @@ die() { log "ERROR: $*" >&2; exit 1; }
 # ---- rsync ----------------------------------------------------------------
 log "Syncing to ${REMOTE}:${REMOTE_DIR} ..."
 for sub in \
-  scripts runner bot.py feishu_bot.py web_console.py web_control.py agent_events.py config.py runner.py redaction.py \
+  scripts runner bot.py feishu_bot.py web_console.py web_control.py provider_config.py agent_events.py config.py runner.py redaction.py \
   desktop_agent.py desktop_agent_server.py desktop_cua.py \
   desktop_computer_loop.py desktop_computer_planner.py desktop_computer_requests.py \
   desktop_screenshot.py requirements.txt systemd channel handlers nodes web tests Makefile; do

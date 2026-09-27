@@ -81,3 +81,62 @@
     margin-right: 0;
   }
 }
+
+/* White operator console. Keep color reserved for state and primary actions. */
+body, .app-shell, .panel, .context-panel, .composer, .event-stream { background: #fff }
+.top-actions { display: flex; align-items: center; gap: 18px }
+.settings-button { border: 1px solid var(--line); border-radius: 8px; background: #fff; color: #344054; padding: 8px 11px; cursor: pointer; font-size: 12px }
+.settings-button:hover { background: #f8fafc; border-color: #cfd6e2 }
+.session-item:hover { background: #f8fafc }
+.session-item.active { background: #f1f5f9; box-shadow: inset 0 0 0 1px #e2e8f0 }
+.event-card, .transcript-message, .runtime-owner-card, .node-card { background: #fff }
+.user-event { background: #f8fafc }
+.assistant-event { background: #fff; border-left-color: #2563eb }
+.system-event { color: #526071; background: #fbfcfe }
+.tool-event pre, .diff-view pre { background: #f8fafc; color: #253044 }
+.tool-icon { border-color: #d8dee8 }
+.mode-switch { background: #f1f5f9 }
+.mode-switch button.active { background: #fff; color: #172033; box-shadow: 0 1px 3px rgba(16,24,40,.12) }
+.composer textarea { color: #172033 }
+.composer textarea::placeholder { color: #98a2b3 }
+.send-button, .primary, .action-row .primary { border-color: #2563eb; background: #2563eb; color: #fff }
+.action-row button, .emergency { background: #fff; border-color: #d7dde7 }
+.approval-card { background: #fffbeb }
+.screenshot { background: #f8fafc }
+.error-banner { background: #fff2f3; color: #b42332 }
+.unlock-shell { background: #fff }
+.unlock-card { background: #fff; box-shadow: 0 24px 70px rgba(16,24,40,.12) }
+.unlock-card label { color: #344054 }
+.unlock-card input { background: #fff; color: #172033 }
+.job-notice { background: #eff6ff; color: #344054; border-color: #bfdbfe }
+.job-notice.failed { background: #fff2f3; color: #b42332; border-color: #fecdd3 }
+.job-notice.failed strong { color: #912331 }
+
+.settings-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; background: rgba(15,23,42,.28); backdrop-filter: blur(3px) }
+.settings-sheet { width: min(720px, 100%); max-height: calc(100vh - 48px); overflow: auto; border: 1px solid #dfe4ec; border-radius: 16px; background: #fff; box-shadow: 0 24px 80px rgba(15,23,42,.2) }
+.settings-sheet>header { display: flex; justify-content: space-between; gap: 24px; padding: 25px 28px 20px; border-bottom: 1px solid var(--line) }
+.settings-sheet h2 { margin: 5px 0 6px; font-size: 22px }
+.settings-sheet header p:last-child { margin: 0; color: var(--muted); font-size: 13px }
+.close-button { align-self: start; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: #667085; cursor: pointer; font-size: 22px }
+.settings-sheet form { padding: 24px 28px 26px }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px }
+.form-grid label { display: grid; gap: 7px; color: #344054; font-size: 12px; font-weight: 600 }
+.form-grid .wide { grid-column: 1 / -1 }
+.form-grid input, .form-grid select { width: 100%; min-width: 0; border: 1px solid #d0d5dd; border-radius: 8px; background: #fff; color: #172033; padding: 10px 11px; outline: none }
+.form-grid input:focus, .form-grid select:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.1) }
+.config-note { display: grid; gap: 4px; margin-top: 20px; padding: 13px 14px; border: 1px solid #dbeafe; border-radius: 9px; background: #f8fbff; color: #475467; font-size: 12px; line-height: 1.5 }
+.config-note strong { color: #1d4ed8 }
+.settings-sheet footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 22px }
+.settings-sheet footer button { border: 1px solid #d0d5dd; border-radius: 8px; background: #fff; padding: 9px 13px; cursor: pointer }
+.settings-sheet footer .primary { border-color: #2563eb; background: #2563eb }
+.save-status { margin-right: auto; color: #15803d; font-size: 12px; opacity: 0 }.save-status.visible { opacity: 1 }
+.settings-loading { padding: 50px 28px; color: var(--muted); text-align: center }
+
+@media (max-width: 620px) {
+  .settings-backdrop { padding: 0; place-items: stretch }
+  .settings-sheet { width: 100%; max-height: 100vh; border-radius: 0; border: 0 }
+  .form-grid { grid-template-columns: 1fr }
+  .form-grid .wide { grid-column: auto }
+  .top-actions { gap: 8px }
+  .settings-button { padding: 7px 9px }
+}
