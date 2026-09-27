@@ -32,6 +32,20 @@ class ReplyContext:
 
 
 @dataclass(frozen=True)
+class Attachment:
+    """An image attached to (or replied to by) an inbound message.
+
+    Only a reference is captured at conversion time; the bytes are fetched
+    through ``OutboundPort.fetch_attachment`` after the allowlist check.
+    """
+    kind: Literal["image"]
+    ref: str  # Telegram file_id / Feishu image_key
+    origin: Literal["message", "reply"] = "message"
+    message_id: str | None = None  # Feishu: message owning the resource
+    size: int | None = None  # bytes, when the channel reports it
+
+
+@dataclass(frozen=True)
 class InboundMessage:
     """A single message arriving on any channel. Immutable."""
     channel: ChannelName
@@ -42,6 +56,7 @@ class InboundMessage:
     chat_type: ChatType = "unknown"
     mentioned_bot: bool = False
     reply_to: ReplyContext | None = None
+    attachments: tuple[Attachment, ...] = ()
     # Raw SDK payload, used by adapter-specific UI (e.g. inline buttons).
     # Handlers must not branch on this; it is purely for adapter handoff.
     raw: Any = None
@@ -56,6 +71,7 @@ class OutboundPort(Protocol):
     must check before calling the corresponding method.
     """
     supports_inline_buttons: bool
+    supports_attachments: bool = False
 
     async def reply(self, msg: InboundMessage, text: str) -> str | None:
         """Reply to a message; returns the new placeholder id (if any)."""
@@ -75,6 +91,13 @@ class OutboundPort(Protocol):
     ) -> str | None:
         """Optional. Reply with an inline button grid.
         Each button dict: {"text": ..., "callback_data": ...}."""
+        ...
+
+    async def fetch_attachment(
+        self, msg: InboundMessage, attachment: Attachment,
+    ) -> bytes | None:
+        """Optional (``supports_attachments``). Download an attachment's
+        bytes; None when unavailable or too large."""
         ...
 
     async def send_image(

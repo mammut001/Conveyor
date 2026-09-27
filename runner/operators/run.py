@@ -23,6 +23,7 @@ from uuid import uuid4
 
 # Project root for codex --add-dir and CODEX_RUNNER_HOME env.
 from runner._paths import RUNNER_HOME
+from runner.attachments import prompt_images
 from runner.file_lock import file_lock
 from runner.types import Job, JobMode, JobState, ProgressCallback
 from redaction import redact_text, safe_json, truncate
@@ -440,6 +441,11 @@ def _codex_command(self, job: Job) -> list[str]:
     ]
     if self.settings.codex_model:
         command[2:2] = ["--model", self.settings.codex_model]
+    images = prompt_images(self.settings.codex_task_root, job.prompt)
+    if images:
+        # One comma-joined value followed by a flag, so the variadic
+        # --image option cannot swallow the trailing "-" (stdin prompt).
+        command[2:2] = ["--image", ",".join(str(p) for p in images)]
     return command
 
 

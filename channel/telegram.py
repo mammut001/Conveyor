@@ -19,7 +19,7 @@ from typing import Any, Sequence
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
 from channel.mentions import mentions, strip_mention
-from channel.types import InboundMessage, ReplyContext
+from channel.types import Attachment, InboundMessage, ReplyContext
 from redaction import truncate
 
 logger = logging.getLogger("conveyor.channel.telegram")
@@ -100,6 +100,49 @@ def _reply_context(msg: Any, bot_id: int | None) -> ReplyContext | None:
     )
 
 
+# Telegram's bot API only serves files up to 20 MB; the store caps at 10 MB.
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+def _image_of(message: Any, origin: str) -> Attachment | None:
+    """The best image in ``message`` (largest photo size under the cap,
+    or an image document), as an Attachment reference."""
+    if message is None:
+        return None
+    photos = list(getattr(message, "photo", None) or ())
+    if photos:
+        fitting = [p for p in photos if (getattr(p, "file_size", 0) or 0) <= _MAX_IMAGE_BYTES]
+        best = (fitting or photos)[-1]
+        return Attachment(
+            kind="image", ref=str(best.file_id), origin=origin,
+            size=getattr(best, "file_size", None),
+        )
+    doc = getattr(message, "document", None)
+    mime = str(getattr(doc, "mime_type", "") or "") if doc is not None else ""
+    if doc is not None and mime.startswith("image/"):
+        return Attachment(
+            kind="image", ref=str(doc.file_id), origin=origin,
+            size=getattr(doc, "file_size", None),
+        )
+    return None
+
+
+def _attachments(msg: Any) -> tuple[Attachment, ...]:
+    """Images on the message itself, then on the message it replies to."""
+    if msg is None:
+        return ()
+    found: list[Attachment] = []
+    own = _image_of(msg, "message")
+    if own is not None:
+        found.append(own)
+    reply = getattr(msg, "reply_to_message", None)
+    if reply is not None and not _is_topic_root(msg, reply):
+        replied = _image_of(reply, "reply")
+        if replied is not None:
+            found.append(replied)
+    return tuple(found)
+
+
 def _replies_to_bot(msg: Any, bot_id: int | None) -> bool:
     reply = getattr(msg, "reply_to_message", None) if msg is not None else None
     if reply is None or bot_id is None or _is_topic_root(msg, reply):
@@ -110,7 +153,10 @@ def _replies_to_bot(msg: Any, bot_id: int | None) -> bool:
 def _mentions_bot(msg: Any, text: str, username: str, bot_id: int | None) -> bool:
     if username and mentions(text, username):
         return True
-    for entity in (getattr(msg, "entities", None) or ()):
+    entities = tuple(getattr(msg, "entities", None) or ()) + tuple(
+        getattr(msg, "caption_entities", None) or ()
+    )
+    for entity in entities:
         if getattr(entity, "type", None) == "text_mention":
             user = getattr(entity, "user", None)
             if bot_id is not None and getattr(user, "id", None) == bot_id:
@@ -136,7 +182,7 @@ def inbound_from_update(
     msg = update.effective_message
     text_value = text
     if text_value is None and msg is not None:
-        text_value = msg.text or ""
+        text_value = msg.text or getattr(msg, "caption", None) or ""
     text_value = text_value or ""
     username, bot_id = _bot_identity(update)
     reply_to = _reply_context(msg, bot_id)
@@ -154,6 +200,7 @@ def inbound_from_update(
                    else "group"),
         mentioned_bot=mentioned,
         reply_to=reply_to,
+        attachments=_attachments(msg),
         raw=update,
     )
 
@@ -170,6 +217,7 @@ class TelegramOutbound:
     here.
     """
     supports_inline_buttons: bool = True
+    supports_attachments: bool = True
 
     def __init__(self, update: Update) -> None:
         self._update = update
@@ -218,6 +266,20 @@ class TelegramOutbound:
         from channel.feishu_cards import flatten_card_to_text  # lazy
         text = flatten_card_to_text(card)
         return await send_text(self._update, text)
+
+    async def fetch_attachment(
+        self, msg: InboundMessage, attachment: Attachment,
+    ) -> bytes | None:
+        """Download a Telegram file by file_id (size-capped)."""
+        if attachment.size is not None and attachment.size > _MAX_IMAGE_BYTES:
+            return None
+        bot = self._update.get_bot()
+        tg_file = await bot.get_file(attachment.ref)
+        size = getattr(tg_file, "file_size", None)
+        if size is not None and size > _MAX_IMAGE_BYTES:
+            return None
+        data = await tg_file.download_as_bytearray()
+        return bytes(data) if len(data) <= _MAX_IMAGE_BYTES else None
 
     async def send_image(
         self,

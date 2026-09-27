@@ -425,8 +425,11 @@ async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
     message = update.effective_message
-    prompt = (message.text if message and message.text else "").strip()
-    if not prompt:
+    prompt = ((message.text or message.caption) if message else "") or ""
+    prompt = prompt.strip()
+    # A photo without a caption is still a request ("what is this?").
+    has_image = bool(message and (message.photo or message.document))
+    if not prompt and not has_image:
         return
     # Delegate to the shared channel-agnostic dispatcher (003 P0.2).
     await _dispatch_text(update, prompt)
@@ -652,6 +655,9 @@ def main() -> None:
     # Catch-all for COMMAND_TABLE entries without explicit CommandHandler above.
     application.add_handler(MessageHandler(filters.COMMAND, generic_command_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_cmd))
+    # Photos / image files (caption = the question; "/fix …" captions work
+    # too because dispatch parses the caption like text).
+    application.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, text_cmd))
     # Defense-in-depth: any unhandled exception in a handler is
     # logged by PTB with "No error handlers are registered,
     # logging exception." The user sees nothing. The recent

@@ -1,4 +1,4 @@
-# Mention & reply context ("@bot is this true?")
+# Mention, reply & image context ("@bot is this true?")
 
 Point Conveyor at a message instead of retyping it. In Telegram or Feishu,
 reply to (or quote) any message and mention the bot:
@@ -17,6 +17,34 @@ Replying to one of Conveyor's own answers continues the thread ("why?",
 "shorter please"); in Telegram groups that counts as addressing the bot, no
 @mention needed. Selecting part of a message with Telegram's quote feature
 sends only the selected text.
+
+## Images ("这张图是什么？")
+
+Send a photo (or an image file) — with or without a caption — or reply to
+one, and the agent looks at it:
+
+| You send | Conveyor does |
+| --- | --- |
+| a photo, no caption | Describes / explains it |
+| a photo with a question as caption | Answers it about the image |
+| `@bot 这是真的吗？` replying to a photo or a post with images | Fact-checks the image (and any text of that message) |
+| a screenshot captioned `/fix …` | Runs a fix job with the screenshot attached |
+
+In groups the caption must @mention the bot (or reply to it), like text.
+Up to 4 images per request; each at most 10 MB (JPEG, PNG, GIF, WebP).
+
+How: adapters record `Attachment` references (`InboundMessage.attachments`:
+the message's own images, then the replied-to message's). After the
+allowlist check `handlers/context.py` downloads them through
+`OutboundPort.fetch_attachment` into `<codex_task_root>/attachments/`
+(`runner/attachments.py`: magic-byte check, random names, `0600` files in a
+`0700` directory, 7-day retention). The prompt opens with
+`[image: <name>]` header lines; the runner turns those into
+`codex exec --image …` (Claude Code backend: `--add-dir` for the store so
+its Read tool can open them). Only header lines at the very top of the
+prompt count, only random store names are accepted and the file must live
+in the store, so quoted text can never attach an arbitrary file. Text
+inside images is treated as untrusted data, like quotes.
 
 ## Group chats
 
@@ -63,4 +91,4 @@ full host access. Conveyor therefore:
   input to intent routing, so a quoted message cannot pick a tool;
 - truncates quotes to 3000 characters and fact-check search queries to 200.
 
-Smoke: `scripts/reply_context_smoke.py` (part of `make smoke`).
+Smoke: `scripts/reply_context_smoke.py` and `scripts/image_context_smoke.py` (part of `make smoke`).

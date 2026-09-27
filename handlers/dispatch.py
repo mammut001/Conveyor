@@ -14,7 +14,7 @@ from config import Settings
 from handlers.commands import parse_command, run_command
 from handlers.context import (
     detect_context_intent,
-    handle_reply_context,
+    handle_context_job,
     memo_text_with_quote,
 )
 from handlers.intent import route_intent
@@ -32,9 +32,10 @@ async def dispatch(
     settings: Settings,
     runner: CodexRunner,
 ) -> None:
-    # A bare "@bot" reply to a message is a real request ("explain this"),
-    # so an empty text only ends here when there is nothing quoted either.
-    if not msg.text.strip() and msg.reply_to is None:
+    # A bare "@bot" reply to a message, or a photo without a caption, is a
+    # real request ("explain this"), so an empty text only ends here when
+    # there is nothing quoted or attached either.
+    if not msg.text.strip() and msg.reply_to is None and not msg.attachments:
         return
 
     if not is_allowed(msg, settings):
@@ -59,8 +60,8 @@ async def dispatch(
                 await port.reply(msg, f"用法：/{cmd_name} <prompt>")
                 return
             mode = JobMode.FIX if cmd_name == "fix" else JobMode.RUN
-            if msg.reply_to is not None:
-                await handle_reply_context(
+            if msg.reply_to is not None or msg.attachments:
+                await handle_context_job(
                     msg, port, settings, runner, question=arg, mode=mode,
                 )
                 return
@@ -78,6 +79,12 @@ async def dispatch(
         from handlers.tools.runner import run_tool
         text = await run_tool(settings, "computer.stop", "")
         await port.reply(msg, text)
+        return
+
+    # Images (sent, or on the replied-to message) always go to the agent:
+    # no deterministic tool can look at a picture.
+    if msg.attachments:
+        await handle_context_job(msg, port, settings, runner)
         return
 
     if detect_memory_intent(msg.text):
@@ -103,7 +110,7 @@ async def dispatch(
     if msg.reply_to is not None and (
         detect_context_intent(msg.text) != "ask" or route.kind == "llm"
     ):
-        await handle_reply_context(msg, port, settings, runner)
+        await handle_context_job(msg, port, settings, runner)
         return
 
     if route.kind == "deterministic":

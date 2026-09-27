@@ -24,7 +24,7 @@ from typing import Any
 from lark_oapi.channel import FeishuChannel
 
 from channel.auth import is_allowed
-from channel.feishu import FeishuOutbound, fetch_reply_context, inbound_from_event
+from channel.feishu import FeishuOutbound, fetch_reply, inbound_from_event
 from channel.feishu_cards import action_to_command, extract_card_action
 from channel.types import InboundMessage
 from config import load_feishu_settings
@@ -215,12 +215,16 @@ async def main() -> None:
             return
 
         # Replying to a message (e.g. "@bot 这是真的吗") makes the parent
-        # message the context. Fetched only after the allowlist check.
-        reply_to = await fetch_reply_context(
+        # message (its text and images) the context. Fetched only after the allowlist check.
+        reply_to, reply_images = await fetch_reply(
             channel, msg, bot_app_id=settings.lark_app_id,
         )
-        if reply_to is not None:
-            inbound = dataclasses.replace(inbound, reply_to=reply_to)
+        if reply_to is not None or reply_images:
+            inbound = dataclasses.replace(
+                inbound,
+                reply_to=reply_to,
+                attachments=inbound.attachments + reply_images,
+            )
 
         try:
             await dispatch(inbound, port, settings, runner)
