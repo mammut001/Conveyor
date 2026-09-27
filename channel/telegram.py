@@ -18,7 +18,8 @@ from typing import Any, Sequence
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
-from channel.types import InboundMessage
+from channel.mentions import mentions, strip_mention
+from channel.types import Attachment, InboundMessage, ReplyContext
 from redaction import truncate
 
 logger = logging.getLogger("conveyor.channel.telegram")
@@ -27,33 +28,179 @@ logger = logging.getLogger("conveyor.channel.telegram")
 # ---- Inbound conversion ----------------------------------------------------
 
 
+def _bot_identity(update: Update) -> tuple[str, int | None]:
+    """(username, id) of this bot, or ("", None) when unavailable
+    (fake updates in tests, or a bot that has not been initialized)."""
+    try:
+        bot = update.get_bot()
+        username = getattr(bot, "username", "")
+        bot_id = getattr(bot, "id", None)
+    except Exception:
+        return ("", None)
+    return (
+        username if isinstance(username, str) else "",
+        bot_id if isinstance(bot_id, int) else None,
+    )
+
+
+def _display_name(user: Any) -> str:
+    if user is None:
+        return ""
+    full = getattr(user, "full_name", None)
+    if full:
+        return str(full)
+    parts = [getattr(user, "first_name", None), getattr(user, "last_name", None)]
+    name = " ".join(p for p in parts if p)
+    return name or str(getattr(user, "username", "") or "")
+
+
+def _is_topic_root(msg: Any, reply: Any) -> bool:
+    """Forum topics make every message a reply to the topic's service
+    message; that is not a real reply and must not become context."""
+    if getattr(reply, "forum_topic_created", None) is not None:
+        return True
+    return bool(
+        getattr(msg, "is_topic_message", False)
+        and getattr(reply, "message_id", None) is not None
+        and getattr(reply, "message_id", None) == getattr(msg, "message_thread_id", None)
+    )
+
+
+def _reply_context(msg: Any, bot_id: int | None) -> ReplyContext | None:
+    """Replied-to / quoted message as ReplyContext.
+
+    A partial quote (the user selected part of the message) wins over the
+    whole replied-to text; a quote of a message in another chat
+    (``external_reply``) is used when there is no in-chat reply.
+    """
+    if msg is None:
+        return None
+    reply = getattr(msg, "reply_to_message", None)
+    if reply is not None and _is_topic_root(msg, reply):
+        reply = None
+    quote = getattr(msg, "quote", None)
+    quote_text = (getattr(quote, "text", None) or "").strip() if quote else ""
+    if reply is None:
+        if quote_text and getattr(msg, "external_reply", None) is not None:
+            return ReplyContext(text=quote_text, partial_quote=True)
+        return None
+    text = quote_text or (getattr(reply, "text", None) or getattr(reply, "caption", None) or "").strip()
+    if not text:
+        return None
+    user = getattr(reply, "from_user", None)
+    author = _display_name(user)
+    if not author:
+        author = str(getattr(getattr(reply, "sender_chat", None), "title", "") or "")
+    from_bot = bot_id is not None and getattr(user, "id", None) == bot_id
+    return ReplyContext(
+        text=text,
+        author=author,
+        from_bot=from_bot,
+        partial_quote=bool(quote_text),
+    )
+
+
+# Telegram's bot API only serves files up to 20 MB; the store caps at 10 MB.
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+def _image_of(message: Any, origin: str) -> Attachment | None:
+    """The best image in ``message`` (largest photo size under the cap,
+    or an image document), as an Attachment reference."""
+    if message is None:
+        return None
+    photos = list(getattr(message, "photo", None) or ())
+    if photos:
+        fitting = [p for p in photos if (getattr(p, "file_size", 0) or 0) <= _MAX_IMAGE_BYTES]
+        best = (fitting or photos)[-1]
+        return Attachment(
+            kind="image", ref=str(best.file_id), origin=origin,
+            size=getattr(best, "file_size", None),
+        )
+    doc = getattr(message, "document", None)
+    mime = str(getattr(doc, "mime_type", "") or "") if doc is not None else ""
+    if doc is not None and mime.startswith("image/"):
+        return Attachment(
+            kind="image", ref=str(doc.file_id), origin=origin,
+            size=getattr(doc, "file_size", None),
+        )
+    return None
+
+
+def _attachments(msg: Any) -> tuple[Attachment, ...]:
+    """Images on the message itself, then on the message it replies to."""
+    if msg is None:
+        return ()
+    found: list[Attachment] = []
+    own = _image_of(msg, "message")
+    if own is not None:
+        found.append(own)
+    reply = getattr(msg, "reply_to_message", None)
+    if reply is not None and not _is_topic_root(msg, reply):
+        replied = _image_of(reply, "reply")
+        if replied is not None:
+            found.append(replied)
+    return tuple(found)
+
+
+def _replies_to_bot(msg: Any, bot_id: int | None) -> bool:
+    reply = getattr(msg, "reply_to_message", None) if msg is not None else None
+    if reply is None or bot_id is None or _is_topic_root(msg, reply):
+        return False
+    return getattr(getattr(reply, "from_user", None), "id", None) == bot_id
+
+
+def _mentions_bot(msg: Any, text: str, username: str, bot_id: int | None) -> bool:
+    if username and mentions(text, username):
+        return True
+    entities = tuple(getattr(msg, "entities", None) or ()) + tuple(
+        getattr(msg, "caption_entities", None) or ()
+    )
+    for entity in entities:
+        if getattr(entity, "type", None) == "text_mention":
+            user = getattr(entity, "user", None)
+            if bot_id is not None and getattr(user, "id", None) == bot_id:
+                return True
+    return False
+
+
 def inbound_from_update(
     update: Update, text: str | None = None
 ) -> InboundMessage:
     """Convert a python-telegram-bot Update into the channel-agnostic
-    InboundMessage used by handlers.dispatch. Preserves the historical
-    bot.py behavior exactly:
+    InboundMessage used by handlers.dispatch.
       * `text` argument wins over the update's message text
       * missing message → `text=""` and `message_id=None`
       * chat type is "p2p" for private chats, otherwise "group"
-        (no explicit "unknown" — matches pre-P2.1 behavior)
-      * `mentioned_bot` is left at the dataclass default (False)
+      * `mentioned_bot` is True when the text @mentions this bot (or
+        text-mentions it) or the message replies to one of its messages;
+        the bot's own @username is stripped from `text`
+      * `reply_to` carries the replied-to / quoted message text
     """
     user = update.effective_user
     chat = update.effective_chat
     msg = update.effective_message
     text_value = text
     if text_value is None and msg is not None:
-        text_value = msg.text or ""
+        text_value = msg.text or getattr(msg, "caption", None) or ""
+    text_value = text_value or ""
+    username, bot_id = _bot_identity(update)
+    reply_to = _reply_context(msg, bot_id)
+    mentioned = _mentions_bot(msg, text_value, username, bot_id) or _replies_to_bot(msg, bot_id)
+    if username:
+        text_value = strip_mention(text_value, username)
     return InboundMessage(
         channel="telegram",
         operator_id=str(getattr(user, "id", "") or ""),
         chat_id=str(getattr(chat, "id", "") or ""),
         message_id=(str(getattr(msg, "message_id", "") or "")
                     if msg is not None else None),
-        text=(text_value or "").strip(),
+        text=text_value.strip(),
         chat_type=("p2p" if (chat and getattr(chat, "type", None) == "private")
                    else "group"),
+        mentioned_bot=mentioned,
+        reply_to=reply_to,
+        attachments=_attachments(msg),
         raw=update,
     )
 
@@ -70,6 +217,7 @@ class TelegramOutbound:
     here.
     """
     supports_inline_buttons: bool = True
+    supports_attachments: bool = True
 
     def __init__(self, update: Update) -> None:
         self._update = update
@@ -118,6 +266,20 @@ class TelegramOutbound:
         from channel.feishu_cards import flatten_card_to_text  # lazy
         text = flatten_card_to_text(card)
         return await send_text(self._update, text)
+
+    async def fetch_attachment(
+        self, msg: InboundMessage, attachment: Attachment,
+    ) -> bytes | None:
+        """Download a Telegram file by file_id (size-capped)."""
+        if attachment.size is not None and attachment.size > _MAX_IMAGE_BYTES:
+            return None
+        bot = self._update.get_bot()
+        tg_file = await bot.get_file(attachment.ref)
+        size = getattr(tg_file, "file_size", None)
+        if size is not None and size > _MAX_IMAGE_BYTES:
+            return None
+        data = await tg_file.download_as_bytearray()
+        return bytes(data) if len(data) <= _MAX_IMAGE_BYTES else None
 
     async def send_image(
         self,

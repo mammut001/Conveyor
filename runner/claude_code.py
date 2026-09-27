@@ -19,6 +19,7 @@ from typing import Any
 
 from agent_events import emit_event
 from redaction import redact_text, truncate
+from runner.attachments import attachments_root, prompt_images
 from runner.core import CodexRunner
 from runner.types import Job, JobMode, ProgressCallback
 
@@ -90,6 +91,10 @@ class ClaudeCodeBackend(CodexRunner):
         ]
         if self.claude_model:
             command.extend(["--model", self.claude_model])
+        if prompt_images(self.settings.codex_task_root, job.prompt):
+            # Attached images are read with the Read tool from the private
+            # attachments directory (outside the worktree).
+            command.extend(["--add-dir", str(attachments_root(self.settings.codex_task_root))])
         return command
 
     async def _run_codex_attempt(self, job: Job, on_progress: ProgressCallback) -> None:

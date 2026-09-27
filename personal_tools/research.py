@@ -230,6 +230,30 @@ def project_research_collect(
     return ToolResult(ok=True, text=f"[HYBRID_PROMPT]{prompt}")
 
 
+def factcheck_evidence(settings: Settings, claim: str) -> tuple[str, str]:
+    """Collect a web evidence pack for fact-checking ``claim``.
+
+    Returns ``(evidence_pack, error)``. Callers fall back to letting the
+    agent check on its own when ``error`` is set (search disabled, no
+    results, backend failure), so this never raises for those cases.
+    """
+    claim = claim.strip()
+    if not claim:
+        return "", "empty claim"
+    results, err = search_web(settings, claim, settings.research_max_sources * 2)
+    if err:
+        return "", err
+    if not results:
+        return "", "no search results"
+    deduped = _dedupe_domains(results, settings.research_max_sources)
+    evidence = _fetch_evidence(
+        settings, deduped,
+        settings.research_fetch_top_n,
+        settings.research_max_chars_per_source,
+    )
+    return _build_evidence_pack(evidence), ""
+
+
 # --- Adapters for personal_tools/registry.py ---
 
 async def research_adapter(settings: Settings, arg: str, **kw) -> ToolResult:

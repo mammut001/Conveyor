@@ -179,6 +179,7 @@ def _make_fake_update(
     update = mock.MagicMock()
     update.effective_chat = mock.MagicMock()
     update.effective_chat.id = chat_id
+    update.effective_chat.type = "private"
     update.effective_message = mock.MagicMock()
     update.effective_message.reply_text = mock.AsyncMock(
         return_value=SimpleNamespace(message_id=placeholder_id),
@@ -2893,6 +2894,7 @@ def _make_fake_handler_update(text=None, callback_data=None):
     update.effective_user.id = 999999
     update.effective_chat = MagicMock()
     update.effective_chat.id = 12345
+    update.effective_chat.type = "private"
     update.effective_message = MagicMock()
     update.effective_message.chat = MagicMock()
     update.effective_message.chat.id = 12345
