@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TELEGRAM_BOT_TOKEN: test-token
+      TELEGRAM_ALLOWED_USER_ID: "12345"
+      CODEX_WORKSPACE_ROOT: /tmp/conveyor-ci/workspace
+      CODEX_TASK_ROOT: /tmp/conveyor-ci/tasks
+      CODEX_MEMORY_ROOT: /tmp/conveyor-ci/memory
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Create isolated test directories
+        run: mkdir -p "$CODEX_WORKSPACE_ROOT" "$CODEX_TASK_ROOT" "$CODEX_MEMORY_ROOT"
+
+      - name: Create virtual environment
+        run: python -m venv .venv
+
+      - name: Install dependencies
+        run: .venv/bin/python -m pip install -r requirements.txt
+
+      - name: Compile Python
+        run: .venv/bin/python -m compileall -q .
+
+      - name: Run unit tests
+        run: .venv/bin/python -m unittest discover -s tests -v
+
+      - name: Run smoke suite
+        run: make smoke
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Dependency audit
+        run: npm audit --audit-level=high
