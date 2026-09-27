@@ -154,6 +154,25 @@ def init_db(settings: Settings) -> None:
                 project_id INTEGER NOT NULL,
                 FOREIGN KEY (project_id) REFERENCES project_profiles(id)
             );
+
+            -- Topic Watches (proactive search & push)
+            CREATE TABLE IF NOT EXISTS topic_watches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operator_id TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                interval_minutes INTEGER NOT NULL DEFAULT 360,
+                channel TEXT NOT NULL DEFAULT 'telegram',
+                chat_id TEXT NOT NULL DEFAULT '',
+                last_checked_at TEXT,
+                last_digest TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_topic_watches_operator
+                ON topic_watches(operator_id, status);
+            CREATE INDEX IF NOT EXISTS idx_topic_watches_due
+                ON topic_watches(status, last_checked_at);
             """
         )
         conn.commit()
@@ -224,6 +243,21 @@ class ProjectProfileRow:
     gmail_query: str
     default_branch: str
     enabled: bool
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class TopicWatchRow:
+    id: int
+    operator_id: str
+    topic: str
+    interval_minutes: int
+    channel: str
+    chat_id: str
+    last_checked_at: str | None
+    last_digest: str | None
+    status: str
     created_at: str
     updated_at: str
 
@@ -648,6 +682,95 @@ class PersonalToolsStore:
             ).fetchone()
         return _project_profile_from_row(row) if row else None
 
+    # --- Topic Watch methods (Proactive Push) ---
+
+    def create_topic_watch(
+        self,
+        operator_id: str,
+        topic: str,
+        channel: str,
+        chat_id: str,
+        interval_minutes: int = 360,
+    ) -> TopicWatchRow:
+        now = _utc_now()
+        with _connect(self._settings) as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO topic_watches (
+                    operator_id, topic, interval_minutes, channel, chat_id,
+                    last_checked_at, last_digest, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, NULL, NULL, 'active', ?, ?)
+                """,
+                (operator_id, topic, interval_minutes, channel, chat_id, now, now),
+            )
+            conn.commit()
+            watch_id = int(cur.lastrowid)
+        return TopicWatchRow(
+            id=watch_id,
+            operator_id=operator_id,
+            topic=topic,
+            interval_minutes=interval_minutes,
+            channel=channel,
+            chat_id=chat_id,
+            last_checked_at=None,
+            last_digest=None,
+            status="active",
+            created_at=now,
+            updated_at=now,
+        )
+
+    def delete_topic_watch(self, operator_id: str, watch_id: int) -> bool:
+        now = _utc_now()
+        with _connect(self._settings) as conn:
+            cur = conn.execute(
+                "UPDATE topic_watches SET status = 'deleted', updated_at = ? WHERE id = ? AND operator_id = ? AND status != 'deleted'",
+                (now, watch_id, operator_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def list_topic_watches(self, operator_id: str, *, status: str = "active") -> list[TopicWatchRow]:
+        with _connect(self._settings) as conn:
+            rows = conn.execute(
+                "SELECT * FROM topic_watches WHERE operator_id = ? AND status = ? ORDER BY id ASC",
+                (operator_id, status),
+            ).fetchall()
+        return [_topic_watch_from_row(r) for r in rows]
+
+    def list_due_topic_watches(self, *, now: datetime | None = None) -> list[TopicWatchRow]:
+        from datetime import timedelta
+        ref_dt = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        with _connect(self._settings) as conn:
+            rows = conn.execute("SELECT * FROM topic_watches WHERE status = 'active'").fetchall()
+        due: list[TopicWatchRow] = []
+        for r in rows:
+            w = _topic_watch_from_row(r)
+            if not w.last_checked_at:
+                due.append(w)
+                continue
+            try:
+                last_dt = datetime.fromisoformat(w.last_checked_at)
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                if last_dt + timedelta(minutes=w.interval_minutes) <= ref_dt:
+                    due.append(w)
+            except Exception:
+                due.append(w)
+        return due
+
+    def update_topic_watch_check(self, watch_id: int, last_checked_at: str, last_digest: str | None) -> None:
+        now = _utc_now()
+        with _connect(self._settings) as conn:
+            conn.execute(
+                """
+                UPDATE topic_watches
+                SET last_checked_at = ?, last_digest = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (last_checked_at, last_digest, now, watch_id),
+            )
+            conn.commit()
+
 
 def _note_from_row(row: sqlite3.Row) -> NoteRow:
     return NoteRow(
@@ -707,6 +830,22 @@ def _project_profile_from_row(row: sqlite3.Row) -> ProjectProfileRow:
         gmail_query=str(row["gmail_query"]),
         default_branch=str(row["default_branch"]),
         enabled=bool(row["enabled"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _topic_watch_from_row(row: sqlite3.Row) -> TopicWatchRow:
+    return TopicWatchRow(
+        id=int(row["id"]),
+        operator_id=str(row["operator_id"]),
+        topic=str(row["topic"]),
+        interval_minutes=int(row["interval_minutes"]),
+        channel=str(row["channel"]),
+        chat_id=str(row["chat_id"]),
+        last_checked_at=str(row["last_checked_at"]) if row["last_checked_at"] is not None else None,
+        last_digest=str(row["last_digest"]) if row["last_digest"] is not None else None,
+        status=str(row["status"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )

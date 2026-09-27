@@ -23,6 +23,7 @@ from uuid import uuid4
 
 # Project root for codex --add-dir and CODEX_RUNNER_HOME env.
 from runner._paths import RUNNER_HOME
+from runner.attachments import prompt_images
 from runner.file_lock import file_lock
 from runner.types import Job, JobMode, JobState, ProgressCallback
 from redaction import redact_text, safe_json, truncate
@@ -440,17 +441,17 @@ def _codex_command(self, job: Job) -> list[str]:
     ]
     if self.settings.codex_model:
         command[2:2] = ["--model", self.settings.codex_model]
+    images = prompt_images(self.settings.codex_task_root, job.prompt)
+    if images:
+        # One comma-joined value followed by a flag, so the variadic
+        # --image option cannot swallow the trailing "-" (stdin prompt).
+        command[2:2] = ["--image", ",".join(str(p) for p in images)]
     return command
 
 
 def _child_env(self) -> dict[str, str]:
     from security.secrets import child_env_from
-    from provider_config import refresh_provider_env
     env = child_env_from(os.environ)
-    # Provider settings are editable from the Web Console. Refresh only the
-    # narrowly allowlisted provider credentials for every new Codex process,
-    # so a key change applies without restarting the chat workers.
-    env.update(refresh_provider_env())
     env["CODEX_TELEGRAM_JOB"] = "1"
     env["CODEX_RUNNER_HOME"] = str(RUNNER_HOME)
     return env
