@@ -2,7 +2,7 @@
 
 Allows operators to subscribe to topics (/watch <topic> [interval_hours]).
 Periodic scheduler ticks check web search for fresh developments, compute
-content diff digests, and push updates to Telegram or Feishu when real
+content diff digests, and push updates to supported chat channels when real
 changes occur.
 """
 from __future__ import annotations
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_INTERVAL_HOURS = 6.0
 MIN_INTERVAL_HOURS = 0.5
 MAX_INTERVAL_HOURS = 168.0  # 7 days
+SUPPORTED_WATCH_CHANNELS = {"telegram"}
 
 
 def compute_digest(results: list[SearchResult]) -> str:
@@ -43,6 +44,11 @@ def watch_topic(
     topic = topic.strip()
     if not topic:
         return ToolResult(ok=False, text="⚠️ 请提供要关注的话题或关键词。用法：/watch <话题> [小时数]")
+    if channel not in SUPPORTED_WATCH_CHANNELS:
+        return ToolResult(
+            ok=False,
+            text="⚠️ 当前话题关注仅支持 Telegram 推送；Feishu 推送尚未实现，因此没有创建订阅。",
+        )
 
     interval_hours = max(MIN_INTERVAL_HOURS, min(MAX_INTERVAL_HOURS, float(interval_hours)))
     interval_minutes = int(interval_hours * 60)
@@ -105,12 +111,11 @@ def _deliver_topic_message(settings: Settings, channel: str, chat_id: str, text:
         except Exception as exc:
             logger.error("Failed to send Telegram topic watch notification: %s", exc)
             return False
-    elif channel == "feishu":
+    if channel == "feishu":
         logger.warning("Feishu delivery not yet implemented for topic watches")
         return False
-    else:
-        logger.warning("Unknown channel %s for topic watch", channel)
-        return False
+    logger.warning("Unknown channel %s for topic watch", channel)
+    return False
 
 
 def check_topic_watches_and_send(
