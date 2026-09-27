@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Mention & reply context (Grok-style)**: reply to or quote any message and mention the bot to fact-check (`这是真的吗` / `is this true?` — web evidence pack + ✅/❌/⚠️/❓ verdict with sources, degrading to agent-only checking without a search backend), explain (bare mention), summarize, translate or ask about it. `记一下` on a reply saves the quoted text; `/run` and `/fix` on a reply carry it as context; replying to the bot's own answer continues the thread. Quoted text is wrapped as untrusted data (tag-closing neutralized, 3000-char cap) and never drives intent routing. `channel/types.ReplyContext`, `channel/mentions.py`, `handlers/context.py`, `personal_tools.research.factcheck_evidence`; see `docs/reply_context.md`. Smoke: `scripts/reply_context_smoke.py` (26 cases).
+- **Group chat gating**: Telegram groups now act only when the bot is @mentioned (or text-mentioned) or replied to, with the bot's `@username` stripped; unauthorized group members are ignored silently instead of receiving "Unauthorized.". Telegram forum-topic pseudo-replies are not treated as reply context.
+
+### Fixed
+- **Feishu group mentions**: `mentioned_bot` is now derived from the event's mention list and the bot's `open_id` (the SDK leaves the flag unset for message events, so group @mentions were previously dropped), and the bot's `@name` is stripped so `@bot /status` parses as a command.
+
 ### Fixed
 - **Direct Computer Use Fix Pack (P5.6.2)**:
   - Accept Cua success metadata `active_app` / `click_method` in step results (was `invalid_result`).

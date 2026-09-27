@@ -12,6 +12,11 @@ from channel.auth import is_allowed
 from channel.types import InboundMessage, OutboundPort
 from config import Settings
 from handlers.commands import parse_command, run_command
+from handlers.context import (
+    detect_context_intent,
+    handle_reply_context,
+    memo_text_with_quote,
+)
 from handlers.intent import route_intent
 from handlers.jobs import handle_codex_job
 from handlers.memo import detect_memory_intent, handle_memo
@@ -27,7 +32,9 @@ async def dispatch(
     settings: Settings,
     runner: CodexRunner,
 ) -> None:
-    if not msg.text.strip():
+    # A bare "@bot" reply to a message is a real request ("explain this"),
+    # so an empty text only ends here when there is nothing quoted either.
+    if not msg.text.strip() and msg.reply_to is None:
         return
 
     if not is_allowed(msg, settings):
@@ -52,6 +59,11 @@ async def dispatch(
                 await port.reply(msg, f"用法：/{cmd_name} <prompt>")
                 return
             mode = JobMode.FIX if cmd_name == "fix" else JobMode.RUN
+            if msg.reply_to is not None:
+                await handle_reply_context(
+                    msg, port, settings, runner, question=arg, mode=mode,
+                )
+                return
             await handle_codex_job(msg, port, runner, mode=mode, prompt=arg)
             return
         handled = await run_command(cmd_name, msg, port, runner, settings, arg)
@@ -69,11 +81,31 @@ async def dispatch(
         return
 
     if detect_memory_intent(msg.text):
+        if msg.reply_to is not None:
+            # "记一下" replying to a message saves the quoted message.
+            await handle_memo(
+                msg, port, runner,
+                text=memo_text_with_quote(msg.text, msg.reply_to),
+            )
+            return
         await handle_memo(msg, port, runner)
         return
 
     # Agent tool layer: deterministic tools, hybrid (tools + Codex), or LLM.
+    # Routing only ever looks at the operator's own words.
     route = route_intent(msg.text)
+
+    # Reply / quote context ("@bot is this true?" on someone's message).
+    # A request about the quoted message (fact-check, explain, summarize,
+    # translate, or a free-form question) answers with it as context; a
+    # plain tool request that merely happens to be a reply ("服务器状态"
+    # replying to an old bot message) keeps its fast tool route.
+    if msg.reply_to is not None and (
+        detect_context_intent(msg.text) != "ask" or route.kind == "llm"
+    ):
+        await handle_reply_context(msg, port, settings, runner)
+        return
+
     if route.kind == "deterministic":
         await handle_route(msg, port, runner, settings, route)
         return

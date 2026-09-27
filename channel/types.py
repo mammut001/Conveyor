@@ -15,6 +15,23 @@ ChatType = Literal["p2p", "group", "unknown"]
 
 
 @dataclass(frozen=True)
+class ReplyContext:
+    """The message an inbound message replies to or quotes.
+
+    This is what makes "@bot is this true?" under someone else's message
+    work: the adapter captures the replied-to text so handlers can answer
+    about it. The text is third-party content and must be treated as
+    untrusted data by anything that forwards it to an agent.
+    """
+    text: str
+    author: str = ""
+    from_bot: bool = False
+    # True when the user selected only part of the replied-to message
+    # (Telegram quote) rather than replying to the whole message.
+    partial_quote: bool = False
+
+
+@dataclass(frozen=True)
 class InboundMessage:
     """A single message arriving on any channel. Immutable."""
     channel: ChannelName
@@ -24,6 +41,7 @@ class InboundMessage:
     text: str
     chat_type: ChatType = "unknown"
     mentioned_bot: bool = False
+    reply_to: ReplyContext | None = None
     # Raw SDK payload, used by adapter-specific UI (e.g. inline buttons).
     # Handlers must not branch on this; it is purely for adapter handoff.
     raw: Any = None

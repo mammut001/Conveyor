@@ -20,6 +20,7 @@ from channel.telegram import (
 )
 from config import load_settings
 from handlers import dispatch
+from handlers.context import is_addressed_to_bot
 from handlers.onboarding import (
     operator_profile_exists,
     operator_profile_path,
@@ -107,7 +108,9 @@ async def _guard(update: Update) -> bool:
         return True
     user = update.effective_user
     logger.warning("Rejected unauthorized Telegram user id=%s username=%s", getattr(user, "id", None), getattr(user, "username", None))
-    if update.effective_message:
+    # In groups, stay silent: other members mentioning the bot should not
+    # get a reply they can use to probe it or spam the chat.
+    if update.effective_message and inbound.chat_type == "p2p":
         await update.effective_message.reply_text("Unauthorized.")
     return False
 
@@ -398,6 +401,10 @@ async def tool_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Groups: act only when @mentioned or replied to (Grok-style), so
+    # ordinary group conversation is neither answered nor rejected.
+    if not is_addressed_to_bot(inbound_from_update(update)):
+        return
     if not await _guard(update):
         return
     # Onboarding-C: first-run nudge. If the user types ANY message

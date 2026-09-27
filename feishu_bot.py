@@ -17,17 +17,19 @@ Feishu card action callback handler.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from typing import Any
 
 from lark_oapi.channel import FeishuChannel
 
 from channel.auth import is_allowed
-from channel.feishu import FeishuOutbound, inbound_from_event
+from channel.feishu import FeishuOutbound, fetch_reply_context, inbound_from_event
 from channel.feishu_cards import action_to_command, extract_card_action
 from channel.types import InboundMessage
 from config import load_feishu_settings
 from handlers import dispatch
+from handlers.context import is_addressed_to_bot
 from handlers.tools.runner import cancel_pending, execute_confirmed
 from redaction import redact_text, SecretRedactingFilter
 from runner import CodexRunner
@@ -176,7 +178,8 @@ async def main() -> None:
     port = FeishuOutbound(channel)
 
     async def on_message(msg) -> None:
-        inbound = inbound_from_event(msg)
+        bot_open_id = getattr(channel.bot_identity, "open_id", None)
+        inbound = inbound_from_event(msg, bot_open_id=bot_open_id)
         logger.info(
             "message chat_type=%s sender=%s chat_id=%s text=%r",
             inbound.chat_type,
@@ -189,7 +192,7 @@ async def main() -> None:
             return
 
         # Group: only respond when @bot; DM: always respond.
-        if inbound.chat_type != "p2p" and not inbound.mentioned_bot:
+        if not is_addressed_to_bot(inbound):
             return
 
         # Bootstrap hint: when no allowlist is set, surface the sender's
@@ -206,8 +209,18 @@ async def main() -> None:
 
         if not is_allowed(inbound, settings):
             logger.warning("Rejected unauthorized Feishu open_id=%s", inbound.operator_id)
-            await port.send_new(inbound, "Unauthorized.")
+            # Stay silent in groups; only a DM gets the rejection.
+            if inbound.chat_type == "p2p":
+                await port.send_new(inbound, "Unauthorized.")
             return
+
+        # Replying to a message (e.g. "@bot 这是真的吗") makes the parent
+        # message the context. Fetched only after the allowlist check.
+        reply_to = await fetch_reply_context(
+            channel, msg, bot_app_id=settings.lark_app_id,
+        )
+        if reply_to is not None:
+            inbound = dataclasses.replace(inbound, reply_to=reply_to)
 
         try:
             await dispatch(inbound, port, settings, runner)

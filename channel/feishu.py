@@ -12,12 +12,14 @@ logging. MUST NOT import the Telegram SDK or `runner` / `handlers/*`.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Sequence
 
 from lark_oapi.channel import FeishuChannel
 
-from channel.types import InboundMessage
+from channel.mentions import strip_mention
+from channel.types import InboundMessage, ReplyContext
 from redaction import truncate
 
 logger = logging.getLogger("conveyor.channel.feishu")
@@ -237,11 +239,42 @@ class FeishuOutbound:
 # ---- Inbound conversion ----------------------------------------------------
 
 
-def inbound_from_event(msg: Any) -> InboundMessage:
+def _bot_mention_names(msg: Any, bot_open_id: str | None) -> list[str]:
+    """Display names under which ``msg`` @mentions this bot."""
+    if not bot_open_id:
+        return []
+    names: list[str] = []
+    for m in getattr(msg, "mentions", None) or ():
+        if getattr(m, "open_id", None) == bot_open_id and getattr(m, "name", None):
+            names.append(str(m.name))
+    return names
+
+
+def _mentions_bot(msg: Any, bot_open_id: str | None) -> bool:
+    if bool(getattr(msg, "mentioned_bot", False)):
+        return True
+    if not bot_open_id:
+        return False
+    return any(
+        getattr(m, "open_id", None) == bot_open_id
+        for m in getattr(msg, "mentions", None) or ()
+    )
+
+
+def inbound_from_event(
+    msg: Any,
+    *,
+    bot_open_id: str | None = None,
+    reply_to: ReplyContext | None = None,
+) -> InboundMessage:
     """Convert a FeishuChannel message event into the channel-agnostic
-    InboundMessage used by handlers.dispatch. Preserves the historical
-    _to_inbound behavior exactly: same attribute lookups, same chat_type
-    fallback to "unknown", same `mentioned_bot` flag.
+    InboundMessage used by handlers.dispatch. Same attribute lookups and
+    chat_type fallback to "unknown" as the historical _to_inbound.
+
+    With ``bot_open_id`` (the bot's own identity) ``mentioned_bot`` is
+    derived from the event's mention list — the SDK leaves its own
+    ``mentioned_bot`` flag unset for message events — and the bot's
+    ``@name`` is stripped from the text so "@bot /status" parses.
     """
     sender_id = getattr(msg, "sender_id", None) or ""
     chat_id = getattr(msg, "chat_id", None) or getattr(
@@ -250,6 +283,8 @@ def inbound_from_event(msg: Any) -> InboundMessage:
     message_id = getattr(msg, "message_id", None) or getattr(msg, "id", None)
     chat_type = getattr(msg, "chat_type", None) or "unknown"
     text = (getattr(msg, "content_text", None) or "").strip()
+    for name in _bot_mention_names(msg, bot_open_id):
+        text = strip_mention(text, name)
     return InboundMessage(
         channel="feishu",
         operator_id=str(sender_id),
@@ -259,9 +294,99 @@ def inbound_from_event(msg: Any) -> InboundMessage:
         chat_type=(
             chat_type if chat_type in ("p2p", "group", "unknown") else "unknown"
         ),
-        mentioned_bot=bool(getattr(msg, "mentioned_bot", False)),
+        mentioned_bot=_mentions_bot(msg, bot_open_id),
+        reply_to=reply_to,
         raw=msg,
     )
+
+
+def _post_text(content: dict) -> str:
+    """Flatten Feishu ``post`` content (optionally locale-wrapped)."""
+    if "content" not in content:
+        for value in content.values():
+            if isinstance(value, dict) and "content" in value:
+                content = value
+                break
+    lines: list[str] = []
+    title = content.get("title")
+    if title:
+        lines.append(str(title))
+    for para in content.get("content") or []:
+        parts: list[str] = []
+        for el in para if isinstance(para, list) else []:
+            if not isinstance(el, dict):
+                continue
+            tag = el.get("tag")
+            if tag in ("text", "a", "code_block", "md"):
+                parts.append(str(el.get("text") or ""))
+            elif tag == "at":
+                parts.append("@" + str(el.get("user_name") or el.get("user_id") or ""))
+        lines.append("".join(parts))
+    return "\n".join(line for line in lines if line).strip()
+
+
+def reply_context_from_payload(
+    payload: Any, *, bot_app_id: str | None = None,
+) -> ReplyContext | None:
+    """Build a ReplyContext from a GET /im/v1/messages/:id response dict.
+
+    Only text and post messages carry quotable text; other types (images,
+    files, cards) return None so the request is handled without context.
+    """
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data") or {}
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list) or not items or not isinstance(items[0], dict):
+        return None
+    item = items[0]
+    body = item.get("body") or {}
+    raw_content = body.get("content") if isinstance(body, dict) else None
+    try:
+        content = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+    except ValueError:
+        return None
+    if not isinstance(content, dict):
+        return None
+    msg_type = item.get("msg_type")
+    if msg_type == "text":
+        text = str(content.get("text") or "")
+    elif msg_type == "post":
+        text = _post_text(content)
+    else:
+        return None
+    for m in item.get("mentions") or []:
+        if isinstance(m, dict) and m.get("key"):
+            text = text.replace(str(m["key"]), "@" + str(m.get("name") or ""))
+    text = text.strip()
+    if not text:
+        return None
+    sender = item.get("sender") or {}
+    from_bot = bool(
+        bot_app_id
+        and sender.get("sender_type") == "app"
+        and sender.get("id") == bot_app_id
+    )
+    return ReplyContext(text=text, from_bot=from_bot)
+
+
+async def fetch_reply_context(
+    channel: Any, msg: Any, *, bot_app_id: str | None = None,
+) -> ReplyContext | None:
+    """Fetch the message ``msg`` replies to (best-effort, never raises)."""
+    reply = getattr(msg, "reply", None)
+    parent_id = getattr(reply, "message_id", None) if reply is not None else None
+    if not parent_id:
+        return None
+    inline_text = (getattr(reply, "text", None) or "").strip()
+    if inline_text:
+        return ReplyContext(text=inline_text)
+    try:
+        payload = await channel.driver.fetch_message(str(parent_id))
+    except Exception:
+        logger.debug("Feishu reply fetch failed for %s", parent_id, exc_info=True)
+        return None
+    return reply_context_from_payload(payload, bot_app_id=bot_app_id)
 
 
 # Keep the historic `_to_inbound` name as a private alias so the
