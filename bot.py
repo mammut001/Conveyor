@@ -20,6 +20,7 @@ from channel.telegram import (
 )
 from config import load_settings
 from handlers import dispatch
+from handlers.context import is_addressed_to_bot
 from handlers.onboarding import (
     operator_profile_exists,
     operator_profile_path,
@@ -107,7 +108,9 @@ async def _guard(update: Update) -> bool:
         return True
     user = update.effective_user
     logger.warning("Rejected unauthorized Telegram user id=%s username=%s", getattr(user, "id", None), getattr(user, "username", None))
-    if update.effective_message:
+    # In groups, stay silent: other members mentioning the bot should not
+    # get a reply they can use to probe it or spam the chat.
+    if update.effective_message and inbound.chat_type == "p2p":
         await update.effective_message.reply_text("Unauthorized.")
     return False
 
@@ -397,7 +400,33 @@ async def tool_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await cancel_pending(inbound, port, settings, token)
 
 
+async def deep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """"🔍 用 Codex 处理" button under a chat-tier answer → /deep."""
+    if not await _guard(update):
+        return
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    user = update.effective_user
+    chat = update.effective_chat
+    inbound = InboundMessage(
+        channel="telegram",
+        operator_id=str(getattr(user, "id", "") or ""),
+        chat_id=str(getattr(chat, "id", "") or ""),
+        message_id=str(getattr(query.message, "message_id", "") or "") if query.message else None,
+        text="/deep",
+        chat_type="p2p" if getattr(chat, "type", None) == "private" else "group",
+        raw=update,
+    )
+    await dispatch(inbound, make_outbound(update), settings, runner)
+
+
 async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Groups: act only when @mentioned or replied to (Grok-style), so
+    # ordinary group conversation is neither answered nor rejected.
+    if not is_addressed_to_bot(inbound_from_update(update)):
+        return
     if not await _guard(update):
         return
     # Onboarding-C: first-run nudge. If the user types ANY message
@@ -418,8 +447,11 @@ async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
     message = update.effective_message
-    prompt = (message.text if message and message.text else "").strip()
-    if not prompt:
+    prompt = ((message.text or message.caption) if message else "") or ""
+    prompt = prompt.strip()
+    # A photo without a caption is still a request ("what is this?").
+    has_image = bool(message and (message.photo or message.document))
+    if not prompt and not has_image:
         return
     # Delegate to the shared channel-agnostic dispatcher (003 P0.2).
     await _dispatch_text(update, prompt)
@@ -642,9 +674,13 @@ def main() -> None:
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
     application.add_handler(CallbackQueryHandler(tool_callback, pattern=r"^tool:"))
+    application.add_handler(CallbackQueryHandler(deep_callback, pattern=r"^deep$"))
     # Catch-all for COMMAND_TABLE entries without explicit CommandHandler above.
     application.add_handler(MessageHandler(filters.COMMAND, generic_command_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_cmd))
+    # Photos / image files (caption = the question; "/fix …" captions work
+    # too because dispatch parses the caption like text).
+    application.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, text_cmd))
     # Defense-in-depth: any unhandled exception in a handler is
     # logged by PTB with "No error handlers are registered,
     # logging exception." The user sees nothing. The recent

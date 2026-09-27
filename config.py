@@ -119,6 +119,18 @@ class Settings:
     research_max_sources: int = 5
     research_fetch_top_n: int = 5
     research_max_chars_per_source: int = 6000
+    # Chat tier (intent mode). "off" keeps every free-text request on the
+    # Codex agent; "auto" answers conversation / Q&A / quotes / images with
+    # a direct chat-model call and escalates to Codex only when execution
+    # is needed. OpenAI-compatible endpoint; falls back to MINIMAX_*.
+    chat_mode: str = "off"  # off|auto
+    chat_base_url: str | None = None
+    chat_api_key: str | None = None  # SENSITIVE
+    chat_model: str | None = None
+    chat_vision: bool = False  # the chat model accepts image inputs
+    chat_history_turns: int = 6
+    chat_timeout_seconds: int = 60
+    chat_max_tokens: int = 1500
     # File Search / Knowledge Base (P4.2). Natural-language-first file search.
     file_search_enabled: bool = True
     file_search_allowed_roots: str | None = None  # comma-separated extra roots
@@ -404,6 +416,15 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "research_max_sources": _int_env("RESEARCH_MAX_SOURCES", 5),
         "research_fetch_top_n": _int_env("RESEARCH_FETCH_TOP_N", 5),
         "research_max_chars_per_source": _int_env("RESEARCH_MAX_CHARS_PER_SOURCE", 6000),
+        # Chat tier (intent mode)
+        "chat_mode": (os.getenv("CONVEYOR_CHAT_MODE", "off").strip().lower() or "off"),
+        "chat_base_url": (os.getenv("CONVEYOR_CHAT_BASE_URL") or os.getenv("MINIMAX_BASE_URL") or None),
+        "chat_api_key": (os.getenv("CONVEYOR_CHAT_API_KEY") or os.getenv("MINIMAX_API_KEY") or None),
+        "chat_model": (os.getenv("CONVEYOR_CHAT_MODEL") or os.getenv("MINIMAX_CHAT_MODEL") or None),
+        "chat_vision": os.getenv("CONVEYOR_CHAT_VISION", "false").strip().lower() in ("true", "1", "yes", "on"),
+        "chat_history_turns": _int_env("CONVEYOR_CHAT_HISTORY_TURNS", 6),
+        "chat_timeout_seconds": _int_env("CONVEYOR_CHAT_TIMEOUT_SECONDS", 60),
+        "chat_max_tokens": _int_env("CONVEYOR_CHAT_MAX_TOKENS", 1500),
         # File Search / Knowledge Base (P4.2)
         "file_search_enabled": os.getenv("FILE_SEARCH_ENABLED", "true").strip().lower() in ("true", "1", "yes"),
         "file_search_allowed_roots": os.getenv("FILE_SEARCH_ALLOWED_ROOTS") or None,
