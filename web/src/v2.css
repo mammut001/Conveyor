@@ -491,3 +491,434 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   .screen-viewer-image-frame { padding: 8px; }
   .screen-viewer-footer { display: grid; gap: 4px; padding: 10px 15px; }
 }
+
+/* ==========================================================================
+   Chat-First UI Optimization: Modern Bubble Formatting, Tool Accordions,
+   and Clean Telemetry Separation
+   ========================================================================== */
+
+/* Modern bubble layout for TranscriptPanel */
+.transcript-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.transcript-message {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.transcript-message.role-user {
+  align-self: flex-end;
+  width: fit-content;
+  max-width: min(84%, 640px);
+  margin-left: auto;
+  margin-right: 0;
+  padding: 12px 18px;
+  border-radius: 20px 20px 4px 20px;
+  background: #f0f1f4;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.transcript-message.role-user .transcript-avatar,
+.transcript-message.role-user .transcript-header {
+  display: none;
+}
+
+.transcript-message.role-user .formatted-paragraph {
+  color: #202226;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.transcript-message.role-user .inline-code {
+  background: rgba(0, 0, 0, 0.07);
+  border: 0;
+  color: #222;
+}
+
+.transcript-message.role-assistant {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  max-width: min(96%, 780px);
+  margin-right: auto;
+  padding: 2px 0;
+}
+
+.transcript-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: #fbede7;
+  color: #a95138;
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.transcript-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.transcript-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.transcript-sender {
+  font-weight: 650;
+  font-size: 13px;
+  color: #26282d;
+}
+
+.transcript-header time {
+  font-size: 11px;
+  color: #8c9098;
+}
+
+.transcript-content {
+  color: #2c2e33;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* Formatted Text Flow */
+.formatted-text-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.formatted-paragraph {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.formatted-list {
+  margin: 4px 0 6px 18px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.formatted-list li {
+  line-height: 1.6;
+}
+
+.inline-code {
+  padding: 2px 6px;
+  margin: 0 2px;
+  border-radius: 6px;
+  background: #f0f2f5;
+  border: 1px solid #e2e5e9;
+  color: #b94228;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+
+.text-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Code block container with copy button */
+.code-block-container {
+  margin: 10px 0 14px;
+  border-radius: 11px;
+  overflow: hidden;
+  border: 1px solid #2f343d;
+  background: #181b20;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
+.code-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 14px;
+  background: #23272e;
+  border-bottom: 1px solid #2d323b;
+}
+
+.code-lang-tag {
+  color: #9299a6;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: lowercase;
+}
+
+.code-copy-btn {
+  border: 0;
+  padding: 3px 9px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #cdd3de;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.code-copy-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.code-block-pre {
+  margin: 0;
+  padding: 14px;
+  overflow-x: auto;
+  background: transparent;
+  color: #e4e7ed;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* Live In-Progress Job Indicator */
+.live-job-banner {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin: 14px 0;
+  padding: 10px 15px;
+  border-radius: 12px;
+  font-size: 13px;
+  width: fit-content;
+}
+
+.live-job-banner.queued {
+  background: #fff9e9;
+  border: 1px solid #efe0bb;
+  color: #89610e;
+}
+
+.live-job-banner.running {
+  background: #eff8f3;
+  border: 1px solid #cde9db;
+  color: #176b4a;
+}
+
+.live-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.live-pulse.queued {
+  background: var(--yellow);
+  box-shadow: 0 0 0 0 rgba(169, 116, 9, 0.5);
+  animation: pulse-ring 2s infinite;
+}
+
+.live-pulse.running {
+  background: var(--green);
+  box-shadow: 0 0 0 0 rgba(25, 132, 93, 0.5);
+  animation: pulse-ring 1.8s infinite;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(25, 132, 93, 0.6); }
+  70% { transform: scale(1); box-shadow: 0 0 0 7px rgba(25, 132, 93, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(25, 132, 93, 0); }
+}
+
+.streaming-indicator {
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 500;
+  animation: fade-glow 1.5s infinite ease-in-out;
+}
+
+@keyframes fade-glow {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.typing-cursor {
+  display: inline-block;
+  color: var(--accent);
+  margin-left: 2px;
+  font-weight: bold;
+  animation: blink 0.9s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* Completed Tools Collapsible Summary */
+.completed-tools-drawer {
+  margin: 12px 0 16px;
+  border: 1px solid #e7eaee;
+  border-radius: 12px;
+  background: #fafbfc;
+  overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+
+.completed-tools-drawer:hover {
+  border-color: #d8dde4;
+}
+
+.completed-tools-summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #4f545e;
+  list-style: none;
+  user-select: none;
+}
+
+.completed-tools-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-summary-icon {
+  font-size: 14px;
+  color: #df7a4e;
+}
+
+.tool-job-pill {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #edeef2;
+  color: #636873;
+  font-family: ui-monospace, monospace;
+  font-size: 10.5px;
+}
+
+.expand-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: #8c929e;
+}
+
+.completed-tools-body {
+  padding: 12px;
+  border-top: 1px solid #e9eaed;
+  background: #f7f8fa;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Welcome Screen Suggestions */
+.suggested-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 22px;
+}
+
+.prompt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 15px;
+  border: 1px solid #e1e3e8;
+  border-radius: 20px;
+  background: #fff;
+  color: #44474f;
+  font-size: 12.5px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: all 0.16s ease;
+}
+
+.prompt-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: #fdfaf9;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(203, 104, 73, 0.12);
+}
+
+/* Sidebar Telemetry Drawer */
+.telemetry-drawer {
+  margin-top: 14px;
+  border: 1px solid #e6e8ec;
+  border-radius: 11px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.telemetry-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  cursor: pointer;
+  color: #7b8089;
+  user-select: none;
+}
+
+.telemetry-list {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 6px 12px;
+  border-top: 1px solid #eef0f3;
+  background: #fafbfc;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.telemetry-item {
+  padding: 5px 0;
+  border-bottom: 1px solid #f0f2f5;
+  font-family: ui-monospace, monospace;
+  font-size: 10.5px;
+}
+
+.telemetry-item:last-child {
+  border-bottom: 0;
+}
+
+.telemetry-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
+.telemetry-pill {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #e8ebf0;
+  color: #4b515d;
+  font-size: 9.5px;
+}
+
+.telemetry-item time {
+  color: #9aa0aa;
+  font-size: 9.5px;
+}
+
+.telemetry-text {
+  color: #3b3f47;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+

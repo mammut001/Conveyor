@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FormattedText } from './components/FormattedText'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
@@ -221,12 +222,21 @@ export default function App() {
   }, [creatingSession, selectedJob, selectedSessionId, sessions])
   const pendingForJob = approvals.filter(item => item.job_id === selectedJobId)
   const runtimeOwner = runtimeOwnerFromJob(selectedJob)
-  const terminalHasTranscript = Boolean(selectedJob && terminalJobState(selectedJob.state)
-    && transcript.some(message => message.role === 'assistant'
-      && (!message.job_id || message.job_id === selectedJob.id)))
-  const visibleEvents = terminalHasTranscript
-    ? events.filter(item => !item.kind.startsWith('assistant.'))
-    : events
+  const toolEvents = useMemo(() => events.filter(item => item.kind.startsWith('tool.')), [events])
+  const liveAssistantText = useMemo(() => {
+    if (!selectedJob || terminalJobState(selectedJob.state)) return ''
+    return events
+      .filter(item => item.kind === 'assistant.delta')
+      .map(item => String(item.payload.text || ''))
+      .join('')
+  }, [events, selectedJob])
+  const promptAlreadyInTranscript = useMemo(() => {
+    if (!selectedJob) return true
+    return transcript.some(m =>
+      m.job_id === selectedJob.id ||
+      (m.role === 'user' && m.content.trim() === selectedJob.prompt_preview.trim())
+    )
+  }, [selectedJob, transcript])
 
   useEffect(() => {
     const node = streamRef.current
@@ -310,14 +320,96 @@ export default function App() {
           {selectedJob && <StatusBadge state={selectedJob.state} />}
         </div>
         <div className="event-stream" ref={streamRef}>
-          {selectedJob?.state === 'failed' && <div className="job-notice failed"><strong>Task failed</strong><span>{selectedJob.error || 'See the execution timeline below for details.'}</span></div>}
-          {selectedJob?.state === 'cancelled' && <div className="job-notice"><strong>Task cancelled</strong><span>This task is terminal; start a new message to try again.</span></div>}
-          {transcript.length > 0 && <><div className="stream-divider">Conversation history</div><TranscriptPanel messages={transcript} /></>}
-          {selectedJob && <div className="stream-divider">Job {selectedJob.id} execution</div>}
-          {selectedJob && !transcript.length && <article className="event-card user-event"><div className="event-meta"><span>YOU</span><time>{formatTime(selectedJob.created_at)}</time></div><p>{selectedJob.prompt_preview}</p></article>}
-          {visibleEvents.map(item => <EventCard key={item.event_id} item={item} />)}
-          {!selectedJob && !selectedSessionId && <div className="welcome-state"><div className="brand-mark">C</div><h2>What should Conveyor do?</h2><p>Start a task below. It will enter the same persistent queue used by Telegram and Feishu.</p></div>}
-          {selectedJob && !events.length && <Empty text="Waiting for the first event…" />}
+          {selectedJob?.state === 'failed' && <div className="job-notice failed"><strong>Task failed</strong><span>{selectedJob.error || 'See the execution details below.'}</span></div>}
+          {selectedJob?.state === 'cancelled' && <div className="job-notice"><strong>Task cancelled</strong><span>This task was cancelled; start a new message to continue.</span></div>}
+
+          {/* Conversation history */}
+          {transcript.length > 0 && <TranscriptPanel messages={transcript} />}
+
+          {/* In-progress user prompt if not yet reflected in transcript */}
+          {selectedJob && !terminalJobState(selectedJob.state) && !promptAlreadyInTranscript && (
+            <article className="transcript-message role-user pending-turn">
+              <div className="transcript-content">
+                <p className="formatted-paragraph">{selectedJob.prompt_preview}</p>
+              </div>
+            </article>
+          )}
+
+          {/* Live In-Progress execution & streaming state */}
+          {selectedJob && !terminalJobState(selectedJob.state) && (
+            <div className="live-job-turn">
+              <div className={`live-job-banner ${selectedJob.state}`}>
+                <span className={`live-pulse ${selectedJob.state}`} />
+                <span>
+                  {selectedJob.state === 'queued'
+                    ? `排队中 · 等待执行 (${selectedJob.id})…`
+                    : `Conveyor 正在执行 (${selectedJob.id})…`}
+                </span>
+              </div>
+
+              {toolEvents.length > 0 && (
+                <div className="live-tools-list">
+                  {toolEvents.map(tool => (
+                    <EventCard key={tool.event_id} item={tool} />
+                  ))}
+                </div>
+              )}
+
+              {liveAssistantText && (
+                <article className="transcript-message role-assistant live-streaming">
+                  <div className="transcript-avatar" aria-hidden="true">🤖</div>
+                  <div className="transcript-body">
+                    <header className="transcript-header">
+                      <span className="transcript-sender">Conveyor</span>
+                      <span className="streaming-indicator">● 生成中</span>
+                    </header>
+                    <div className="transcript-content">
+                      <FormattedText content={liveAssistantText} />
+                      <span className="typing-cursor">▌</span>
+                    </div>
+                  </div>
+                </article>
+              )}
+            </div>
+          )}
+
+          {/* Completed Tools Collapsible Summary (ONLY shown if tools were actually run) */}
+          {selectedJob && terminalJobState(selectedJob.state) && toolEvents.length > 0 && (
+            <details className="completed-tools-drawer">
+              <summary className="completed-tools-summary">
+                <span className="tool-summary-icon">⚡</span>
+                <span>
+                  <strong>{toolEvents.length} 个工具操作</strong> 已在任务 {selectedJob.id} 中执行
+                </span>
+                <span className="expand-hint">点击查看明细 ⌄</span>
+              </summary>
+              <div className="completed-tools-body">
+                {toolEvents.map(tool => (
+                  <EventCard key={tool.event_id} item={tool} />
+                ))}
+              </div>
+            </details>
+          )}
+
+          {/* Welcome state when empty */}
+          {!selectedJob && !selectedSessionId && !transcript.length && (
+            <div className="welcome-state">
+              <div className="brand-mark">C</div>
+              <h2>Conveyor Control Console</h2>
+              <p>你的个人常驻 Agent 控制台。在下方输入任务，或通过 Telegram、飞书随时交流。</p>
+              <div className="suggested-prompts">
+                <button type="button" className="prompt-chip" onClick={() => setPrompt('检查当前系统状态和任务队列')}>
+                  🔍 检查系统与任务队列
+                </button>
+                <button type="button" className="prompt-chip" onClick={() => setPrompt('查看最近的代码修改和 Git 提交记录')}>
+                  🛠️ 查看最近代码变更
+                </button>
+                <button type="button" className="prompt-chip" onClick={() => setPrompt('帮我梳理今天的工作进展和待办事项')}>
+                  📝 总结今日工作进展
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         <form className="composer" onSubmit={submit}>
           <div className="mode-switch"><button type="button" className={mode === 'run' ? 'active' : ''} onClick={() => setMode('run')}>Ask</button><button type="button" className={mode === 'fix' ? 'active' : ''} onClick={() => setMode('fix')}>Fix</button></div>
@@ -334,6 +426,28 @@ export default function App() {
             <KeyValue label="Started" value={formatTime(selectedJob.started_at)} />
             <RuntimeOwnerCard owner={runtimeOwner} state={selectedJob.state} />
             <div className="action-row"><button disabled={busy || !['queued','running'].includes(selectedJob.state)} onClick={() => action(`/api/jobs/${selectedJob.id}/cancel`)}>Cancel</button></div>
+            {events.length > 0 && (
+              <details className="telemetry-drawer">
+                <summary className="eyebrow telemetry-summary">
+                  <span>TELEMETRY ({events.length})</span>
+                  <b>⌄</b>
+                </summary>
+                <div className="telemetry-list">
+                  {events.map(ev => (
+                    <div key={ev.event_id} className="telemetry-item">
+                      <div className="telemetry-item-header">
+                        <span className={`telemetry-pill ${ev.kind.split('.')[0]}`}>{ev.kind}</span>
+                        <time>{formatTime(ev.timestamp)}</time>
+                      </div>
+                      {Boolean(ev.payload?.text) && <div className="telemetry-text">{String(ev.payload.text)}</div>}
+                      {Boolean(ev.payload?.name) && <div className="telemetry-text">Tool: {String(ev.payload.name)}</div>}
+                      {Boolean(ev.payload?.prompt) && <div className="telemetry-text">Prompt: {String(ev.payload.prompt).slice(0, 100)}</div>}
+                      {Boolean(ev.payload?.error) && <div className="telemetry-error">{String(ev.payload.error)}</div>}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
           </> : <Empty text="Select a job" />}
         </ContextSection>
         {pendingForJob.map(approval => <section className="approval-card" key={approval.id}><p className="eyebrow">APPROVAL REQUIRED</p><h3>{approval.action === 'apply' ? 'Apply changes' : 'Discard worktree'}?</h3><p>This decision is scoped to job <code>{approval.job_id}</code> and expires automatically.</p><div className="action-row"><button className="danger" onClick={() => action(`/api/approvals/${approval.id}/reject`)}>Reject</button><button className="primary" onClick={() => action(`/api/approvals/${approval.id}/approve`)}>Approve</button></div></section>)}
