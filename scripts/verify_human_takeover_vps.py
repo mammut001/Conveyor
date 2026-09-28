@@ -249,6 +249,8 @@ def main() -> int:
 
     # 3. Activate takeover lease
     takeover_start = store.start(reason="operator_requested", ttl_seconds=300)
+    cancel_pending_computer_steps(settings)
+    cancel_pending_observe_requests(settings)
     takeover_active = store.activate(takeover_start["id"])
     takeover_id = takeover_active["id"]
     i3_data["takeover_id"] = takeover_id
@@ -270,9 +272,14 @@ def main() -> int:
     # 4. Attempt controlled requests during active takeover
     attempts: list[dict] = []
 
-    # Attempt a: screenshot request
+    # Attempt a: screenshot / observe request
+    class FakeMsg:
+        channel = "web"
+        chat_id = "test-chat"
+        operator_id = "test-operator"
+
     t_a = ts()
-    obs_req_res = create_observe_request(settings, "test-node")
+    obs_req_res = create_observe_request(settings, FakeMsg(), "test-node-observe")
     attempts.append({
         "type": "screenshot/observe_request",
         "timestamp": t_a,
