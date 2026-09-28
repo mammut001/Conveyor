@@ -3,6 +3,7 @@ from __future__ import annotations
 import getpass
 import json
 import os
+import shutil
 import sys
 import time
 import urllib.error
@@ -10,9 +11,10 @@ import urllib.request
 from pathlib import Path
 
 
-ENV_PATH = Path("/opt/conveyor/.env")
+CONVEYOR_DIR = Path(os.environ.get("CONVEYOR_DIR", "/opt/conveyor")).expanduser().resolve()
+ENV_PATH = CONVEYOR_DIR / ".env"
 DEFAULT_WORKSPACE = "/srv/codex-telegram-test-repo"
-DEFAULT_CODEX_BIN = "/usr/bin/codex"
+DEFAULT_CODEX_BIN = shutil.which("codex") or "/usr/bin/codex"
 
 
 def prompt_secret(label: str, existing: str | None = None) -> str:
@@ -70,12 +72,16 @@ def discover_user_id(token: str) -> str:
             user = (message or {}).get("from") or {}
             user_id = user.get("id")
             if user_id:
-                name = user.get("username") or " ".join(filter(None, [user.get("first_name"), user.get("last_name")]))
+                name = user.get("username") or " ".join(
+                    filter(None, [user.get("first_name"), user.get("last_name")])
+                )
                 print(f"Found Telegram user: {name or '(no name)'} ({user_id})")
                 if seen:
                     bot_api(token, f"getUpdates?offset={max(seen) + 1}&timeout=1")
                 return str(user_id)
-    raise RuntimeError("Timed out waiting for /start. Open Telegram, message the bot, then run this script again.")
+    raise RuntimeError(
+        "Timed out waiting for /start. Open Telegram, message the bot, then run this script again."
+    )
 
 
 def validate_token(token: str) -> None:
@@ -86,20 +92,46 @@ def validate_token(token: str) -> None:
     print(f"Telegram bot verified: @{bot.get('username', '(unknown)')}")
 
 
+def _managed_lines(values: dict[str, str]) -> dict[str, str]:
+    return {
+        "TELEGRAM_BOT_TOKEN": values["TELEGRAM_BOT_TOKEN"],
+        "TELEGRAM_ALLOWED_USER_ID": values["TELEGRAM_ALLOWED_USER_ID"],
+        "CODEX_WORKSPACE_ROOT": values["CODEX_WORKSPACE_ROOT"],
+        "CODEX_BIN": values["CODEX_BIN"],
+        "OPENAI_API_KEY": values["OPENAI_API_KEY"],
+        "MINIMAX_API_KEY": values["MINIMAX_API_KEY"],
+        "CODEX_TASK_ROOT": values["CODEX_TASK_ROOT"],
+        "CODEX_TIMEOUT_SECONDS": values["CODEX_TIMEOUT_SECONDS"],
+        "TELEGRAM_PROGRESS_SECONDS": values["TELEGRAM_PROGRESS_SECONDS"],
+    }
+
+
 def write_env(values: dict[str, str]) -> None:
-    lines = [
-        f"TELEGRAM_BOT_TOKEN={values['TELEGRAM_BOT_TOKEN']}",
-        f"TELEGRAM_ALLOWED_USER_ID={values['TELEGRAM_ALLOWED_USER_ID']}",
-        f"CODEX_WORKSPACE_ROOT={values['CODEX_WORKSPACE_ROOT']}",
-        f"CODEX_BIN={values['CODEX_BIN']}",
-        f"OPENAI_API_KEY={values['OPENAI_API_KEY']}",
-        f"MINIMAX_API_KEY={values['MINIMAX_API_KEY']}",
-        f"CODEX_TASK_ROOT={values['CODEX_TASK_ROOT']}",
-        f"CODEX_TIMEOUT_SECONDS={values['CODEX_TIMEOUT_SECONDS']}",
-        f"TELEGRAM_PROGRESS_SECONDS={values['TELEGRAM_PROGRESS_SECONDS']}",
-        "",
-    ]
-    ENV_PATH.write_text("\n".join(lines), encoding="utf-8")
+    """Update managed keys while preserving unrelated Conveyor settings/comments."""
+    managed = _managed_lines(values)
+    output: list[str] = []
+    seen: set[str] = set()
+
+    if ENV_PATH.exists():
+        for raw_line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+            stripped = raw_line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key = stripped.split("=", 1)[0].strip()
+                if key in managed:
+                    output.append(f"{key}={managed[key]}")
+                    seen.add(key)
+                    continue
+            output.append(raw_line)
+
+    if output and output[-1].strip():
+        output.append("")
+    for key, value in managed.items():
+        if key not in seen:
+            output.append(f"{key}={value}")
+    output.append("")
+
+    ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ENV_PATH.write_text("\n".join(output), encoding="utf-8")
     os.chmod(ENV_PATH, 0o600)
 
 
@@ -108,7 +140,10 @@ def main() -> int:
     token = prompt_secret("Telegram bot token", existing.get("TELEGRAM_BOT_TOKEN"))
     validate_token(token)
 
-    allowed_user_id = prompt_text("Telegram allowed user id, or press Enter to discover", existing.get("TELEGRAM_ALLOWED_USER_ID"))
+    allowed_user_id = prompt_text(
+        "Telegram allowed user id, or press Enter to discover",
+        existing.get("TELEGRAM_ALLOWED_USER_ID"),
+    )
     if not allowed_user_id:
         allowed_user_id = discover_user_id(token)
 
@@ -122,7 +157,11 @@ def main() -> int:
         openai_api_key = prompt_secret("OpenAI API key for Codex", openai_api_key)
     else:
         raise RuntimeError("Provider must be openai or minimax.")
-    workspace = prompt_text("Codex workspace git repo", existing.get("CODEX_WORKSPACE_ROOT", DEFAULT_WORKSPACE))
+
+    workspace = prompt_text(
+        "Codex workspace git repo",
+        existing.get("CODEX_WORKSPACE_ROOT", DEFAULT_WORKSPACE),
+    )
     codex_bin = prompt_text("Codex binary", existing.get("CODEX_BIN", DEFAULT_CODEX_BIN))
 
     values = {
@@ -138,7 +177,7 @@ def main() -> int:
     }
     write_env(values)
     print(f"Wrote {ENV_PATH} with mode 600.")
-    print("Next: run scripts/healthcheck.sh, then sudo systemctl enable --now conveyor-telegram-bot.")
+    print("Next: run conveyor doctor, then sudo conveyor restart all.")
     return 0
 
 
