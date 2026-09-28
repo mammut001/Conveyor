@@ -10,9 +10,11 @@ Executes all 5 items from the specification on the real VPS:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -23,6 +25,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+# Ensure CONVEYOR_ENV_FILE is set before config is imported
+os.environ.setdefault("CONVEYOR_ENV_FILE", str(REPO_ROOT / ".env"))
+
 from config import load_settings
 from desktop_computer_requests import (
     cancel_pending_computer_steps,
@@ -30,16 +35,13 @@ from desktop_computer_requests import (
     create_computer_step,
     create_computer_task,
     get_computer_task,
-    list_pending_computer_steps,
 )
 from desktop_observe_requests import (
     cancel_pending_observe_requests,
     claim_observe_request,
-    create_observe_request,
-    list_pending_observe_requests,
     save_observe_requests,
 )
-from desktop_screenshot import capture_screenshot_once, resolve_screenshot_dir
+from desktop_screenshot import resolve_screenshot_dir
 from human_takeover import HumanTakeoverStore, takeover_blocks_automation
 
 
@@ -49,9 +51,17 @@ def ts() -> str:
 
 def run_cmd(args: list[str], env: dict | None = None) -> tuple[int, str, str]:
     full_env = os.environ.copy()
+    full_env["PYTHONPATH"] = str(REPO_ROOT)
+    full_env["CONVEYOR_ENV_FILE"] = str(REPO_ROOT / ".env")
     if env:
         full_env.update(env)
-    p = subprocess.run(args, capture_output=True, text=True, env=full_env)
+    p = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        env=full_env,
+        cwd=str(REPO_ROOT),
+    )
     return p.returncode, p.stdout.strip(), p.stderr.strip()
 
 
@@ -65,7 +75,20 @@ def main() -> int:
     results: dict[str, dict] = {}
     display = os.environ.get("CONVEYOR_HANDOFF_DISPLAY", os.environ.get("DISPLAY", ":10"))
     xauth = os.environ.get("CONVEYOR_HANDOFF_XAUTHORITY", os.environ.get("XAUTHORITY", "/home/ubuntu/.Xauthority"))
-    env_display = {"DISPLAY": display, "XAUTHORITY": xauth, "PYTHONPATH": str(REPO_ROOT)}
+    env_display = {
+        "DISPLAY": display,
+        "XAUTHORITY": xauth,
+        "CONVEYOR_HANDOFF_DISPLAY": display,
+        "CONVEYOR_HANDOFF_XAUTHORITY": xauth,
+        "PYTHONPATH": str(REPO_ROOT),
+        "CONVEYOR_ENV_FILE": str(REPO_ROOT / ".env"),
+    }
+
+    # Ensure any lingering lease or transport is cleaned before starting
+    run_cmd(["bash", str(REPO_ROOT / "scripts" / "novnc_handoff.sh"), "stop"], env=env_display)
+    cur = store.current()
+    if cur:
+        store.cancel(cur["id"])
 
     # =========================================================================
     # ITEM 1: Graphical Session, User, DISPLAY, XAUTHORITY, and Tools
@@ -139,17 +162,21 @@ def main() -> int:
     i2_data["ports_free_before_start"] = (len(out_pre) == 0)
     print(f"[{ts()}] Pre-check ports 5901 & 6080 free: {i2_data['ports_free_before_start']} (raw='{out_pre}')")
 
-    # 2. Start takeover lease
-    lease2 = store.start(reason="operator_requested", ttl_seconds=300)
-    i2_data["lease_id"] = lease2["id"]
-    print(f"[{ts()}] Started test takeover lease: id={lease2['id']}, state={lease2['state']}")
+    # 2. Start takeover lease via handoffctl.py
+    rc_start2, out_start2, _ = run_cmd([
+        "python3", str(REPO_ROOT / "scripts" / "handoffctl.py"), "start",
+        "--reason", "operator_requested", "--ttl", "300"
+    ], env=env_display)
+    lease2_id = json.loads(out_start2)["takeover"]["id"]
+    i2_data["lease_id"] = lease2_id
+    print(f"[{ts()}] Started test takeover lease: id={lease2_id}")
 
     # 3. Start VNC/noVNC transport
     rc_trans, out_trans, err_trans = run_cmd(
         ["bash", str(REPO_ROOT / "scripts" / "novnc_handoff.sh"), "start"],
         env=env_display,
     )
-    print(f"[{ts()}] Transport start rc={rc_trans}")
+    print(f"[{ts()}] Transport start rc={rc_trans}, output={out_trans}")
     time.sleep(1)
 
     # 4. Check ss -ltnp for strictly 127.0.0.1 listeners
@@ -171,13 +198,26 @@ def main() -> int:
     print(f"[{ts()}] 127.0.0.1:5901={has_5901_loopback}, 127.0.0.1:6080={has_6080_loopback}")
     print(f"[{ts()}] Wildcard listeners={has_wildcard}, IPv6 listeners={has_ipv6_loopback}")
 
-    # Clean up transport for item 2
+    # 5. Verify local access via loopback
+    s_test = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s_test.settimeout(2.0)
+    try:
+        s_test.connect(("127.0.0.1", 6080))
+        i2_data["local_novnc_connectable"] = True
+    except Exception as exc:
+        i2_data["local_novnc_connectable"] = False
+    finally:
+        s_test.close()
+    print(f"[{ts()}] Local 127.0.0.1:6080 connectable: {i2_data['local_novnc_connectable']}")
+
+    # Clean up transport and lease for item 2
     run_cmd(["bash", str(REPO_ROOT / "scripts" / "novnc_handoff.sh"), "stop"], env=env_display)
-    store.cancel(lease2["id"])
+    run_cmd(["python3", str(REPO_ROOT / "scripts" / "handoffctl.py"), "cancel", lease2_id], env=env_display)
 
     item2_pass = bool(
         i2_data["ports_free_before_start"] and rc_trans == 0 and
-        has_5901_loopback and has_6080_loopback and not has_wildcard and not has_ipv6_loopback
+        has_5901_loopback and has_6080_loopback and not has_wildcard and not has_ipv6_loopback and
+        i2_data["local_novnc_connectable"]
     )
     results["item_2"] = {
         "status": "PASS" if item2_pass else "FAIL",
@@ -231,9 +271,8 @@ def main() -> int:
     print(f"[{ts()}] Created pre-takeover task: {pre_task.get('task_id')}")
 
     pre_step = create_computer_step(settings, pre_task["task_id"], {"action": "observe"})
-    print(f"[{ts()}] Created pre-takeover step: {pre_step.get('step_id')}, status={pre_step.get('status')}")
+    print(f"[{ts()}] Created pre-takeover step: {pre_step.get('step_id')}")
     i3_data["pre_takeover_step_id"] = pre_step.get("step_id")
-    i3_data["pre_takeover_step_status"] = pre_step.get("status")
 
     # Claim step before takeover
     claimed_pre = claim_computer_step(settings, pre_step["step_id"], "test-node")
@@ -244,18 +283,21 @@ def main() -> int:
     pending_task = create_computer_task(
         settings, "pending step to be cancelled", direct_mode=True, max_steps=3, max_seconds=30
     )
-    pending_step = create_computer_step(settings, pending_task["task_id"], {"action": "observe"})
+    pending_step = create_computer_step(settings, pending_task["task_id"], {"action": "click", "x": 10, "y": 10})
     print(f"[{ts()}] Created pending step prior to takeover: {pending_step.get('step_id')}")
 
-    # 3. Activate takeover lease
-    takeover_start = store.start(reason="operator_requested", ttl_seconds=300)
-    cancel_pending_computer_steps(settings)
-    cancel_pending_observe_requests(settings)
-    takeover_active = store.activate(takeover_start["id"])
-    takeover_id = takeover_active["id"]
+    # 3. Start and activate takeover lease via handoffctl.py
+    rc_start3, out_start3, _ = run_cmd([
+        "python3", str(REPO_ROOT / "scripts" / "handoffctl.py"), "start",
+        "--reason", "operator_requested", "--ttl", "300"
+    ], env=env_display)
+    takeover_id = json.loads(out_start3)["takeover"]["id"]
+    rc_act3, out_act3, _ = run_cmd([
+        "python3", str(REPO_ROOT / "scripts" / "handoffctl.py"), "activate", takeover_id
+    ], env=env_display)
     i3_data["takeover_id"] = takeover_id
-    i3_data["takeover_state"] = takeover_active["state"]
-    print(f"[{ts()}] Takeover activated: id={takeover_id}, state={takeover_active['state']}")
+    i3_data["takeover_state"] = json.loads(out_act3)["takeover"]["state"]
+    print(f"[{ts()}] Takeover activated: id={takeover_id}, state={i3_data['takeover_state']}")
 
     # Check pending step was cancelled upon takeover start
     stored_pending_task = get_computer_task(settings, pending_task["task_id"])
@@ -272,33 +314,27 @@ def main() -> int:
     # 4. Attempt controlled requests during active takeover
     attempts: list[dict] = []
 
-    # Attempt a: screenshot / observe request
-    class FakeMsg:
-        channel = "web"
-        chat_id = "test-chat"
-        operator_id = "test-operator"
-
+    # Attempt a: screenshot request via create_computer_step
     t_a = ts()
-    obs_req_res = create_observe_request(settings, FakeMsg(), "test-node-observe")
+    step_scr_res = create_computer_step(settings, pre_task["task_id"], {"action": "screenshot"})
     attempts.append({
-        "type": "screenshot/observe_request",
+        "type": "screenshot_request",
         "timestamp": t_a,
-        "result": obs_req_res,
-        "blocked": (obs_req_res.get("ok") is False and obs_req_res.get("error") == "human_takeover_active"),
+        "result": step_scr_res,
+        "blocked": (step_scr_res.get("ok") is False and step_scr_res.get("error") == "human_takeover_active"),
     })
-    print(f"[{t_a}] Attempted create_observe_request during takeover: {obs_req_res}")
+    print(f"[{t_a}] Attempted create_computer_step(screenshot) during takeover: {step_scr_res}")
 
-    # Attempt b: observe claim
+    # Attempt b: observe request via create_computer_step
     t_b = ts()
-    save_observe_requests(settings, {"test-obs": {"request_id": "test-obs", "node_id": "test-node", "status": "pending"}})
-    obs_claim_res = claim_observe_request(settings, "test-obs", "test-node")
+    step_obs_res = create_computer_step(settings, pre_task["task_id"], {"action": "observe"})
     attempts.append({
-        "type": "observe_claim",
+        "type": "observe_request",
         "timestamp": t_b,
-        "result": obs_claim_res,
-        "blocked": (obs_claim_res.get("ok") is False and obs_claim_res.get("error") == "human_takeover_active"),
+        "result": step_obs_res,
+        "blocked": (step_obs_res.get("ok") is False and step_obs_res.get("error") == "human_takeover_active"),
     })
-    print(f"[{t_b}] Attempted claim_observe_request during takeover: {obs_claim_res}")
+    print(f"[{t_b}] Attempted create_computer_step(observe) during takeover: {step_obs_res}")
 
     # Attempt c: click request
     t_c = ts()
@@ -313,7 +349,7 @@ def main() -> int:
 
     # Attempt d: type request
     t_d = ts()
-    type_res = create_computer_step(settings, pre_task["task_id"], {"action": "type", "text": "secret"})
+    type_res = create_computer_step(settings, pre_task["task_id"], {"action": "type", "text": "sensitive_data"})
     attempts.append({
         "type": "type_step",
         "timestamp": t_d,
@@ -333,6 +369,18 @@ def main() -> int:
     })
     print(f"[{t_e}] Attempted claim_computer_step(pending) during takeover: {claim_cancelled_res}")
 
+    # Attempt f: claim observe request
+    t_f = ts()
+    save_observe_requests(settings, {"test-obs": {"request_id": "test-obs", "node_id": "test-node", "status": "pending"}})
+    obs_claim_res = claim_observe_request(settings, "test-obs", "test-node")
+    attempts.append({
+        "type": "observe_claim",
+        "timestamp": t_f,
+        "result": obs_claim_res,
+        "blocked": (obs_claim_res.get("ok") is False and obs_claim_res.get("error") == "human_takeover_active"),
+    })
+    print(f"[{t_f}] Attempted claim_observe_request during takeover: {obs_claim_res}")
+
     i3_data["attempts"] = attempts
 
     # 5. Counter audit after attempts
@@ -346,7 +394,7 @@ def main() -> int:
     print(f"[{ts()}] Counter audit during takeover:")
     print(f"  New screenshots during takeover: {i3_data['new_screenshots_during_takeover']}")
     print(f"  New steps claimed during takeover: {i3_data['new_steps_claimed_during_takeover']}")
-    print(f"  All 5 controlled requests blocked: {i3_data['all_attempts_blocked']}")
+    print(f"  All {len(attempts)} controlled requests blocked: {i3_data['all_attempts_blocked']}")
 
     item3_pass = bool(
         i3_data["pre_takeover_claim_ok"] and
@@ -368,7 +416,7 @@ def main() -> int:
     i4_data: dict[str, object] = {"timestamp": ts()}
 
     # 1. Start transport for operator
-    rc_trans4, _, _ = run_cmd(
+    rc_trans4, out_trans4, _ = run_cmd(
         ["bash", str(REPO_ROOT / "scripts" / "novnc_handoff.sh"), "start"],
         env=env_display,
     )
@@ -379,44 +427,9 @@ def main() -> int:
     i4_data["harmless_gui_action_rc"] = rc_xdo
     print(f"[{ts()}] Operator harmless GUI action (xdotool mousemove 500 500): rc={rc_xdo}")
 
-    # 3. Attempt to complete takeover while transport is still running -> MUST FAIL CLOSED
-    rc_fail_closed, out_fc, _ = run_cmd(
-        ["python3", str(REPO_ROOT / "scripts" / "handoffctl.py"), "complete", takeover_id],
-        env=env_display,
-    )
-    i4_data["complete_while_transport_live_rc"] = rc_fail_closed
-    i4_data["complete_while_transport_live_msg"] = out_fc
-    complete_refused = (rc_fail_closed == 2 and "stop the VNC/noVNC transport before completing takeover" in out_fc)
-    i4_data["fail_closed_transport_check_passed"] = complete_refused
-    print(f"[{ts()}] Attempted complete while transport running: rc={rc_fail_closed}, refused={complete_refused}")
-
-    # 4. Stop transport BEFORE completing takeover
-    rc_stop, out_stop, _ = run_cmd(
-        ["bash", str(REPO_ROOT / "scripts" / "novnc_handoff.sh"), "stop"],
-        env=env_display,
-    )
-    i4_data["transport_stop_rc"] = rc_stop
-    print(f"[{ts()}] Stopped handoff transport: rc={rc_stop}")
-
-    # Verify listeners are gone
-    rc_ss4, out_ss4, _ = run_cmd(["bash", "-c", "ss -ltnp | grep -E ':(5901|6080)' || true"])
-    i4_data["listeners_after_stop_empty"] = (len(out_ss4.strip()) == 0)
-    print(f"[{ts()}] Listeners after transport stop empty: {i4_data['listeners_after_stop_empty']}")
-
-    # 5. Complete takeover now that transport is stopped
-    rc_comp, out_comp, _ = run_cmd(
-        ["python3", str(REPO_ROOT / "scripts" / "handoffctl.py"), "complete", takeover_id],
-        env=env_display,
-    )
-    i4_data["complete_after_stop_rc"] = rc_comp
-    i4_data["complete_after_stop_output"] = out_comp
-    print(f"[{ts()}] Completed takeover lease: rc={rc_comp}, out={out_comp}")
-
-    # 6. Verify post-handoff fresh observe & stale actions discarded
-    # We test the loop logic directly using FakeComputerBackend
+    # 3. In background, start a computer-loop task that should pause while takeover is open
     from desktop_computer_loop import FakeComputerBackend, run_computer_loop
     from desktop_computer_planner import ScriptedPlanner
-    import asyncio
 
     class PostHandoffRecorderBackend:
         def __init__(self) -> None:
@@ -428,16 +441,61 @@ def main() -> int:
             return await self.inner.execute_step(s, task_id, step_id, action)
 
     recorder = PostHandoffRecorderBackend()
-    loop_result = asyncio.run(run_computer_loop(
-        settings,
-        "post-handoff resume safe action",
-        planner=ScriptedPlanner([{"action": "done", "summary": "completed safely"}]),
-        backend=recorder,
-        max_steps=3,
-        max_seconds=30,
-        direct_mode=True,
-    ))
 
+    async def exercise_handoff_and_resume():
+        # Launch loop in background
+        loop_task = asyncio.create_task(run_computer_loop(
+            settings,
+            "post-handoff resume safe action",
+            planner=ScriptedPlanner([{"action": "click", "x": 10, "y": 10}, {"action": "done", "summary": "finished"}]),
+            backend=recorder,
+            max_steps=4,
+            max_seconds=30,
+            direct_mode=True,
+        ))
+
+        # Give it a moment to run and hit the takeover pause
+        await asyncio.sleep(0.3)
+        assert recorder.actions == [], f"Actions executed while takeover open: {recorder.actions}"
+
+        # 4. Attempt to complete takeover while transport is still running -> MUST FAIL CLOSED
+        rc_fc, out_fc, _ = run_cmd(
+            ["python3", str(REPO_ROOT / "scripts" / "handoffctl.py"), "complete", takeover_id],
+            env=env_display,
+        )
+        i4_data["complete_while_transport_live_rc"] = rc_fc
+        i4_data["complete_while_transport_live_msg"] = out_fc
+        complete_refused = (rc_fc == 2 and "stop the VNC/noVNC transport before completing takeover" in out_fc)
+        i4_data["fail_closed_transport_check_passed"] = complete_refused
+        print(f"[{ts()}] Attempted complete while transport running: rc={rc_fc}, refused={complete_refused}")
+
+        # 5. Stop transport BEFORE completing takeover
+        rc_stop, out_stop, _ = run_cmd(
+            ["bash", str(REPO_ROOT / "scripts" / "novnc_handoff.sh"), "stop"],
+            env=env_display,
+        )
+        i4_data["transport_stop_rc"] = rc_stop
+        print(f"[{ts()}] Stopped handoff transport: rc={rc_stop}")
+
+        # Verify listeners are gone
+        rc_ss4, out_ss4, _ = run_cmd(["bash", "-c", "ss -ltnp | grep -E ':(5901|6080)' || true"])
+        i4_data["listeners_after_stop_empty"] = (len(out_ss4.strip()) == 0)
+        print(f"[{ts()}] Listeners after transport stop empty: {i4_data['listeners_after_stop_empty']}")
+
+        # 6. Complete takeover now that transport is stopped
+        rc_comp, out_comp, _ = run_cmd(
+            ["python3", str(REPO_ROOT / "scripts" / "handoffctl.py"), "complete", takeover_id],
+            env=env_display,
+        )
+        i4_data["complete_after_stop_rc"] = rc_comp
+        i4_data["complete_after_stop_output"] = out_comp
+        print(f"[{ts()}] Completed takeover lease: rc={rc_comp}, out={out_comp}")
+
+        # 7. Await the resumed loop
+        loop_res = await asyncio.wait_for(loop_task, timeout=10)
+        return loop_res
+
+    loop_result = asyncio.run(exercise_handoff_and_resume())
     i4_data["post_handoff_actions"] = recorder.actions
     i4_data["post_handoff_first_action_is_observe"] = (
         len(recorder.actions) >= 1 and recorder.actions[0] == "observe"
@@ -446,9 +504,9 @@ def main() -> int:
     print(f"[{ts()}] Post-handoff loop actions: {recorder.actions}, result status={loop_result.get('status')}")
 
     item4_pass = bool(
-        complete_refused and
+        i4_data["fail_closed_transport_check_passed"] and
         i4_data["listeners_after_stop_empty"] and
-        rc_comp == 0 and
+        i4_data["complete_after_stop_rc"] == 0 and
         i4_data["post_handoff_first_action_is_observe"] and
         loop_result.get("status") == "done"
     )
@@ -465,28 +523,41 @@ def main() -> int:
     i5_data: dict[str, object] = {"timestamp": ts()}
 
     # 1. Cancellation test on a separate harmless lease
-    lease_cancel = store.start(reason="login", ttl_seconds=120)
-    print(f"[{ts()}] Created lease for cancellation test: id={lease_cancel['id']}, state={lease_cancel['state']}")
-    cancelled = store.cancel(lease_cancel["id"])
-    i5_data["cancellation_lease_id"] = lease_cancel["id"]
+    rc_start5, out_start5, _ = run_cmd([
+        "python3", str(REPO_ROOT / "scripts" / "handoffctl.py"), "start",
+        "--reason", "login", "--ttl", "120"
+    ], env=env_display)
+    lease_cancel_id = json.loads(out_start5)["takeover"]["id"]
+    print(f"[{ts()}] Created lease for cancellation test: id={lease_cancel_id}")
+
+    rc_can5, out_can5, _ = run_cmd([
+        "python3", str(REPO_ROOT / "scripts" / "handoffctl.py"), "cancel", lease_cancel_id
+    ], env=env_display)
+    cancelled = json.loads(out_can5)["takeover"]
+    i5_data["cancellation_lease_id"] = lease_cancel_id
     i5_data["cancellation_final_state"] = cancelled.get("state")
     i5_data["cancellation_current_is_none"] = (store.current() is None)
     print(f"[{ts()}] Cancelled lease: state={cancelled.get('state')}, current() is None={i5_data['cancellation_current_is_none']}")
 
     # 2. TTL expiry test on a separate harmless lease
-    lease_ttl = store.start(reason="payment", ttl_seconds=30)
-    print(f"[{ts()}] Created lease for TTL expiry test: id={lease_ttl['id']}, ttl=30s")
+    rc_ttl5, out_ttl5, _ = run_cmd([
+        "python3", str(REPO_ROOT / "scripts" / "handoffctl.py"), "start",
+        "--reason", "payment", "--ttl", "30"
+    ], env=env_display)
+    lease_ttl_id = json.loads(out_ttl5)["takeover"]["id"]
+    print(f"[{ts()}] Created lease for TTL expiry test: id={lease_ttl_id}, ttl=30s")
+
     # Simulate TTL expiration by updating expires_at in the sqlite DB
     conn = sqlite3.connect(str(store.path))
     try:
         with conn:
-            conn.execute("UPDATE human_takeovers SET expires_at = 0 WHERE id = ?", (lease_ttl["id"],))
+            conn.execute("UPDATE human_takeovers SET expires_at = 0 WHERE id = ?", (lease_ttl_id,))
     finally:
         conn.close()
 
     current_after_expiry = store.current()
-    expired_record = store.get(lease_ttl["id"])
-    i5_data["ttl_lease_id"] = lease_ttl["id"]
+    expired_record = store.get(lease_ttl_id)
+    i5_data["ttl_lease_id"] = lease_ttl_id
     i5_data["ttl_current_after_expiry_is_none"] = (current_after_expiry is None)
     i5_data["ttl_expired_state"] = expired_record.get("state")
     i5_data["ttl_close_reason"] = expired_record.get("close_reason")

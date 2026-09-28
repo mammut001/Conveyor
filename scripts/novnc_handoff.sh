@@ -15,6 +15,7 @@ LISTEN_HOST="127.0.0.1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$REPO_ROOT"
+export CONVEYOR_ENV_FILE="${CONVEYOR_ENV_FILE:-$REPO_ROOT/.env}"
 HANDOFFCTL="$SCRIPT_DIR/handoffctl.py"
 RUNTIME_BASE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 if [[ ! -d "$RUNTIME_BASE" || ! -w "$RUNTIME_BASE" ]]; then
@@ -143,7 +144,7 @@ PY
   lease_json="$(takeover_snapshot)" || { stop_transport; die "Could not verify takeover state after startup"; }
   lease_id="$(printf '%s' "$lease_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("takeover") or {}; print(t.get("id", ""))')"
   [[ -n "$lease_id" ]] || { stop_transport; die "Takeover lease closed during startup"; }
-  nohup "$0" watch "$lease_id" >/dev/null 2>&1 </dev/null &
+  nohup /usr/bin/env bash "$SCRIPT_DIR/novnc_handoff.sh" watch "$lease_id" >/dev/null 2>&1 </dev/null &
   printf '%s\n' "$!" > "$WATCHER_PID"
   chmod 600 "$WATCHER_PID"
   if ! pid_alive "$WATCHER_PID"; then
@@ -219,7 +220,7 @@ watch_transport() {
     current_id="$(printf '%s' "$snapshot" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("takeover") or {}; print(t.get("id", ""))' 2>/dev/null || true)"
     state="$(printf '%s' "$snapshot" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("takeover") or {}; print(t.get("state", ""))' 2>/dev/null || true)"
     remaining="$(printf '%s' "$snapshot" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("takeover") or {}; print(t.get("remaining_seconds", 0))' 2>/dev/null || printf '0')"
-    if [[ "$current_id" != "$expected_id" || "$state" != "waiting_for_human" && "$state" != "human_active" || ! "$remaining" =~ ^[0-9]+$ || "$remaining" -le 10 ]]; then
+    if [[ "$current_id" != "$expected_id" || ( "$state" != "waiting_for_human" && "$state" != "human_active" ) || ! "$remaining" =~ ^[0-9]+$ || "$remaining" -le 10 ]]; then
       log "Takeover lease closed or nearing expiry; stopping the remote desktop."
       stop_transport
       return 0
