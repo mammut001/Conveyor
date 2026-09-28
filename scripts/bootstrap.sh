@@ -5,8 +5,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/mammut001/Conveyor/main/scripts/bootstrap.sh | sudo bash
 #
 # Optional:
-#   CONVEYOR_VERSION=v0.3.0 curl -fsSL .../bootstrap.sh | sudo -E bash
-#   CONVEYOR_MODE=update curl -fsSL .../bootstrap.sh | sudo -E bash
+#   curl -fsSL .../bootstrap.sh | sudo CONVEYOR_VERSION=v0.3.0 bash
+#   curl -fsSL .../bootstrap.sh | sudo CONVEYOR_MODE=update bash
 set -euo pipefail
 
 REPO_URL="${CONVEYOR_REPO_URL:-https://github.com/mammut001/Conveyor.git}"
@@ -43,7 +43,6 @@ log "Downloading Conveyor (${REF})..."
 git clone --filter=blob:none --quiet "$REPO_URL" "$TMP_DIR/conveyor"
 
 if ! git -C "$TMP_DIR/conveyor" checkout --quiet --detach "$REF" 2>/dev/null; then
-  # A branch name may only exist as origin/<name> in a fresh clone.
   if git -C "$TMP_DIR/conveyor" rev-parse --verify --quiet "origin/$REF" >/dev/null; then
     git -C "$TMP_DIR/conveyor" checkout --quiet --detach "origin/$REF"
   else
