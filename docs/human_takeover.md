@@ -136,11 +136,22 @@ Start the coordination lease:
 python scripts/handoffctl.py start --reason payment --task-id <computer-task-id> --ttl 300
 ```
 
+The start command pauses new computer-use and screenshot claims, discards
+queued work planned against the old screen, and waits for an already claimed
+action or screenshot to finish before it returns. Do not open the remote
+desktop until this command returns successfully.
+
 Start the graphical transport:
 
 ```bash
 bash scripts/novnc_handoff.sh start
 ```
+
+The helper refuses to start without an open takeover lease. It uses the
+current `DISPLAY` when set (otherwise `:0`) and `XAUTHORITY` when set; an
+explicit auth file can be supplied with `CONVEYOR_HANDOFF_XAUTHORITY`. The
+helper monitors the lease and closes the transport shortly before its TTL.
+Both listeners remain hard-coded to `127.0.0.1`.
 
 From the operator's own computer, create an SSH tunnel:
 
@@ -163,13 +174,20 @@ python scripts/handoffctl.py activate <takeover-id>
 After the human-only step is complete:
 
 ```bash
-python scripts/handoffctl.py complete <takeover-id>
 bash scripts/novnc_handoff.sh stop
+python scripts/handoffctl.py complete <takeover-id>
 ```
+
+Stop the VNC/noVNC transport before completing or cancelling the lease. The
+CLI refuses to release the lease while either listener process is still live,
+so the Agent cannot resume while the operator still owns the desktop.
 
 The noVNC helper creates an ephemeral VNC password in a mode-0700 runtime
 directory and deletes the password/auth files on stop. Conveyor's takeover
-database never stores that password.
+database never stores that password, and the helper no longer prints it during
+startup. If an operator needs the credential, retrieve it only in a private
+VPS terminal that is not being recorded; never place it in chat, shell command
+arguments, screenshots, clipboard, or a report.
 
 ## Web Workbench integration
 
@@ -197,9 +215,6 @@ server logs.
   process privilege to spawn or kill arbitrary commands.
 - Put the handoff route behind the same private network / TLS boundary as the
   Web Workbench.
-- Add post-handoff one-shot observe only after the takeover closes.
-- Add an integration test proving no computer action is created while a
-  takeover lease is open.
 - Verify x11vnc against the actual VPS display manager/XAUTHORITY setup.
 
 Do not expose the noVNC or VNC port publicly as a shortcut for those steps.

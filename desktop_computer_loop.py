@@ -36,6 +36,7 @@ from desktop_computer_planner import (
 from desktop_computer_requests import (
     append_trajectory,
     cancel_computer_task,
+    cancel_pending_computer_step,
     contains_blocked_keyword,
     create_computer_step,
     create_computer_task,
@@ -66,6 +67,7 @@ class HttpComputerBackend:
 
     async def execute_step(self, settings: Settings, task_id: str, step_id: str, action: dict) -> dict:
         deadline = time.monotonic() + settings.conveyor_computer_max_seconds
+        takeover_store = HumanTakeoverStore(settings)
         while time.monotonic() < deadline:
             task = get_computer_task(settings, task_id)
             if not isinstance(task, dict):
@@ -74,12 +76,25 @@ class HttpComputerBackend:
             if not isinstance(step, dict):
                 raise ComputerBackendError("step_missing")
             status = step.get("status")
+            if status == "pending" and takeover_store.current() is not None:
+                cancel_pending_computer_step(
+                    settings,
+                    task_id,
+                    step_id,
+                    reason="human_takeover_active",
+                )
+                raise ComputerBackendError("human_takeover_active")
             if status == "completed":
                 result = step.get("result") or {}
                 if not isinstance(result, dict):
                     result = {}
                 return result
             if status in ("failed", "expired", "cancelled"):
+                if status == "cancelled" and (
+                    step.get("error") == "human_takeover_active"
+                    or takeover_store.current() is not None
+                ):
+                    raise ComputerBackendError("human_takeover_active")
                 raise ComputerBackendError(f"step_{status}")
             await asyncio.sleep(self.poll_interval)
         raise ComputerBackendError("step_timeout")
@@ -192,6 +207,9 @@ async def run_computer_loop(
             if pause_started is not None:
                 start += time.monotonic() - pause_started
                 pause_started = None
+                # Discard any planner result and refresh the desktop after a
+                # handoff. The old plan was made against a pre-human screen.
+                followup_observe = True
 
             if followup_observe:
                 # Refresh the desktop after every mutating/wait action before
@@ -271,6 +289,11 @@ async def run_computer_loop(
             # Create + execute the step.
             step = create_computer_step(settings, task_id, action)
             if not step.get("ok"):
+                if step.get("error") == "human_takeover_active":
+                    if pause_started is None:
+                        pause_started = time.monotonic()
+                    followup_observe = True
+                    continue
                 set_task_status(settings, task_id, "error", blocked_reason=step.get("error", "step_create_failed"))
                 break
             step_id = step["step_id"]
@@ -284,6 +307,12 @@ async def run_computer_loop(
                 current_task = get_computer_task(settings, task_id)
                 if isinstance(current_task, dict) and current_task.get("status") == "stopped":
                     break
+                if str(exc) == "human_takeover_active":
+                    # The pending step was never claimed/executed. Re-enter
+                    # the lease wait and, after release, observe before using
+                    # the planner again.
+                    followup_observe = True
+                    continue
                 if str(exc) in {"task_not_running", "step_cancelled"}:
                     set_task_status(settings, task_id, "stopped", blocked_reason="operator_stop")
                     break
