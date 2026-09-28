@@ -81,8 +81,14 @@ def _active_refinement(self, worktree_path: Path | None):
         from refinement_store import RefinementStore
         store = RefinementStore(self.settings)
         return store, store.active_for_worktree(worktree_path)
-    except Exception:
-        return None, None
+    except Exception as exc:
+        # Shared refinement worktrees can be mutated by a later queued/running
+        # turn. If the control-plane DB cannot tell us whether this path is
+        # active, Apply/Discard must not silently fall back to legacy behavior
+        # and race that writer. Fail closed until refinement state is readable.
+        raise RuntimeError(
+            "Refinement state is unavailable; refusing to Apply/Discard this worktree."
+        ) from exc
 
 
 def _emit_refinement_closed(self, chain: dict | None, *, state: str, reason: str) -> None:
@@ -119,7 +125,10 @@ async def discard_job(self, job_id: str | None, worktree_path: Path | None) -> s
     if not worktree_path or not worktree_path.exists():
         return "No job worktree to discard."
 
-    store, active = _active_refinement(self, worktree_path)
+    try:
+        store, active = _active_refinement(self, worktree_path)
+    except RuntimeError as exc:
+        return str(exc)
     guard = store.begin_mutation(worktree_path) if active and store is not None else None
     if guard is not None and guard.running_conflict:
         return "A refinement job is still running in this worktree. Cancel or let it finish before Discard."
@@ -159,7 +168,10 @@ async def apply_job(self, job_id: str | None, worktree_path: Path | None) -> str
     if not worktree_path or not worktree_path.exists():
         return "No job worktree to apply."
 
-    store, active = _active_refinement(self, worktree_path)
+    try:
+        store, active = _active_refinement(self, worktree_path)
+    except RuntimeError as exc:
+        return str(exc)
     lock_path = self.settings.codex_task_root / "locks" / "apply.lock"
     with file_lock(lock_path):
         # Acquire after apply.lock so every Apply process uses the same lock
