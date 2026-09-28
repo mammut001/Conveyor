@@ -56,9 +56,6 @@ class QueuedJob:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     state: QueueJobState = QueueJobState.QUEUED
     position: int = 0
-    # Stable cross-channel identity and persisted expectation that this job
-    # must continue an existing/pending refinement chain rather than silently
-    # falling back to a fresh worktree.
     session_id: str = ""
     refinement_intent: bool = False
 
@@ -142,8 +139,6 @@ class JobQueue:
         self._runner = runner
         if hasattr(settings, "conveyor_max_pending_jobs"):
             self._max_length = settings.conveyor_max_pending_jobs
-        # Ensure the refinement table shares this exact DB before recovery.
-        RefinementStore(settings)
         self.recover_and_load(mark_interrupted=recover)
 
     def _db_path(self) -> Path:
@@ -177,7 +172,12 @@ class JobQueue:
         return conn
 
     def _init_db(self, conn: sqlite3.Connection) -> None:
-        """Additive/idempotent migration; old queue DBs remain readable."""
+        """Additive/idempotent migration; old queue DBs remain readable.
+
+        The refinement table is created on *this exact queue connection*.
+        This keeps the queue database authoritative even in tests or utility
+        callers whose runner settings are not the globally configured settings.
+        """
         with conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS queued_jobs (
@@ -202,6 +202,32 @@ class JobQueue:
                     key TEXT PRIMARY KEY,
                     value TEXT
                 )
+            """)
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS session_worktrees (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    operator_id TEXT NOT NULL,
+                    source_chat_id TEXT NOT NULL,
+                    worktree_path TEXT NOT NULL,
+                    owner_runtime_job_id TEXT NOT NULL,
+                    root_queue_job_id TEXT,
+                    latest_queue_job_id TEXT,
+                    latest_runtime_job_id TEXT NOT NULL,
+                    turn_count INTEGER NOT NULL DEFAULT 1,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    closed_at TEXT,
+                    close_reason TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_session_worktrees_session_state
+                    ON session_worktrees(session_id, state, updated_at DESC);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_session_worktrees_one_active
+                    ON session_worktrees(session_id) WHERE state = 'active';
+                CREATE INDEX IF NOT EXISTS idx_session_worktrees_path_state
+                    ON session_worktrees(worktree_path, state);
             """)
             columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(queued_jobs)")}
             if "session_id" not in columns:
@@ -296,9 +322,6 @@ class JobQueue:
     ) -> tuple[bool, str, QueuedJob | None]:
         """Add a queue job and persist whether it expects chain continuation."""
         session_id = stable_session_id(msg.channel, msg.chat_id, msg.operator_id)
-        settings = self._settings or getattr(runner, "settings", None)
-        if settings is not None:
-            RefinementStore(settings)
 
         async with self._lock:
             conn = self._get_conn()
@@ -352,8 +375,6 @@ class JobQueue:
             finally:
                 conn.close()
 
-            # Once a message reaches this function it is an execution job,
-            # including Web Ask messages conservatively escalated by dispatch.
             if hasattr(port, "is_codex"):
                 try:
                     port.is_codex = True
@@ -471,12 +492,7 @@ class JobQueue:
             return True, f"已取消队列任务 {job_id}"
 
     def bind_runtime_job(self, queue_job_id: str, runtime_job: Any) -> None:
-        """Bind queue/runtime identity and resolve refinement reuse at start time.
-
-        The first call happens immediately after ``runner.start`` and before the
-        scheduled runner task creates a worktree. A second call from the
-        worktree layer persists the actual path/chain after successful binding.
-        """
+        """Bind queue/runtime identity and resolve refinement reuse at start time."""
         conn = self._get_conn()
         try:
             row = conn.execute("SELECT * FROM queued_jobs WHERE id = ?", (queue_job_id,)).fetchone()
@@ -497,9 +513,17 @@ class JobQueue:
             runtime_job.refinement_source_chat_id = str(row["chat_id"] or "")
             runtime_job.refinement_queue_job_id = queue_job_id
 
-            settings = self._settings or getattr(self._runner, "settings", None)
+            refs = self._memory_references.get(queue_job_id, {})
+            settings = self._settings or getattr(refs.get("runner"), "settings", None) or getattr(self._runner, "settings", None)
             if settings is not None and session_id and not getattr(runtime_job, "refinement_bound", False):
-                active = RefinementStore(settings).active(session_id)
+                # The queue DB is authoritative. In normal production this path
+                # equals settings.codex_memory_root; direct tests/utilities may
+                # intentionally use a fake runner with different settings.
+                store = RefinementStore(settings)
+                if store.db_path.resolve() != self._db_path().resolve():
+                    store.db_path = self._db_path()
+                    store._init_db()
+                active = store.active(session_id)
                 if active is not None:
                     runtime_job.reuse_worktree_path = Path(active["worktree_path"])
                     runtime_job.refinement_chain_id = str(active["id"])
@@ -509,9 +533,6 @@ class JobQueue:
                     runtime_job.refinement_turn = int(active["turn_count"] or 0) + 1
                     runtime_job.reused_worktree = True
                 elif refinement_intent:
-                    # This was explicitly queued as a continuation. If Apply,
-                    # Discard, deletion, or failed creation removed the chain
-                    # while it waited, never silently convert it to a new task.
                     runtime_job.refinement_resolution_error = (
                         "Active refinement chain is no longer available; "
                         "the queued follow-up was not run in a new worktree."
@@ -548,8 +569,6 @@ class JobQueue:
             sql = "SELECT * FROM queued_jobs"
             params: list[Any] = []
             if session_id is not None:
-                # This API historically takes source chat id; keep that behavior
-                # for WebControl and existing clients.
                 sql += " WHERE chat_id = ?"
                 params.append(session_id)
             sql += " ORDER BY created_at DESC LIMIT ?"
