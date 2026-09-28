@@ -1,35 +1,22 @@
-"""runner/metadata.py — split out of runner.py.
-
-The original runner.py was 2005 lines and 5 big
-responsibilities. This file is one slice.
-
-runner/core.py attaches each function on this module
-to the CodexRunner class as a method at import time,
-so callers see the same public surface.
-"""
+"""runner/metadata.py — job metadata persistence and discovery."""
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-import re
-import shutil
-import subprocess
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
-
-# Module-level constants (also on CodexRunner class shell)
+from runner.types import Job, JobRecord
+from redaction import redact_text, truncate
+from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 
 MEMORY_FILENAME = "MEMORY.md"
-from config import Settings, load_settings
-from runner.types import Job, JobMode, JobRecord
-from redaction import redact_text, safe_json, truncate
-from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
+
+
 def _read_final_message(self, job: Job) -> str:
     if job.final_message_path and job.final_message_path.exists():
-        return truncate(job.final_message_path.read_text(encoding="utf-8", errors="replace"), 3000)
+        return truncate(
+            job.final_message_path.read_text(encoding="utf-8", errors="replace"), 3000
+        )
     return ""
 
 
@@ -59,9 +46,20 @@ def _write_job_metadata(self, job: Job) -> None:
         "last_event": redact_text(truncate(job.last_event, 1200)),
         "error": redact_text(truncate(job.error, 1200)) if job.error else "",
         "summary": redact_text(truncate(job.summary, 1200)) if job.summary else "",
+        # Refinement metadata is intentionally control/audit state, not a
+        # transcript message. Old job.json files simply omit these keys.
+        "refinement_session_id": getattr(job, "refinement_session_id", None),
+        "refinement_chain_id": getattr(job, "refinement_chain_id", None),
+        "refinement_owner_job_id": getattr(job, "refinement_owner_job_id", None),
+        "refinement_root_queue_job_id": getattr(job, "refinement_root_queue_job_id", None),
+        "refinement_parent_queue_job_id": getattr(job, "refinement_parent_queue_job_id", None),
+        "refinement_turn": getattr(job, "refinement_turn", None),
+        "reused_worktree": bool(getattr(job, "reused_worktree", False)),
     }
     tmp_path = job.metadata_path.with_suffix(".json.tmp")
-    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     tmp_path.replace(job.metadata_path)
 
 
@@ -75,14 +73,18 @@ def job_records(self, limit: int = 20) -> list[JobRecord]:
             continue
         job_id = log_dir.name
         final_file = self._latest_file(log_dir, "attempt-*-final.txt")
-        attempt_file = self._latest_file(log_dir, "attempt-*.jsonl") or (log_dir / "codex.jsonl" if (log_dir / "codex.jsonl").exists() else None)
+        attempt_file = self._latest_file(log_dir, "attempt-*.jsonl") or (
+            log_dir / "codex.jsonl" if (log_dir / "codex.jsonl").exists() else None
+        )
         metadata = load_job_metadata(log_dir)
         final_preview = ""
         summary = metadata_text(metadata, "summary") if metadata else ""
         if summary:
             final_preview = summary.strip().replace("\n", " ")
         elif final_file:
-            final_preview = final_file.read_text(encoding="utf-8", errors="replace").strip().replace("\n", " ")
+            final_preview = final_file.read_text(
+                encoding="utf-8", errors="replace"
+            ).strip().replace("\n", " ")
         state = "unknown"
         metadata_state = metadata_text(metadata, "state") if metadata else ""
         if metadata_state:
@@ -99,7 +101,6 @@ def job_records(self, limit: int = 20) -> list[JobRecord]:
                 if wt.exists():
                     worktree_path = wt
         if worktree_path is None:
-            # Fall back to legacy per-job path for jobs created before the daily worktree switch.
             legacy_path = self.settings.codex_task_root / "worktrees" / job_id
             if legacy_path.exists():
                 worktree_path = legacy_path
