@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULTS_FILE="/etc/default/conveyor"
+CONVEYOR_DIR="${CONVEYOR_DIR:-/opt/conveyor}"
+CONVEYOR_INSTALL_REF="${CONVEYOR_INSTALL_REF:-main}"
+
+if [[ -r "$DEFAULTS_FILE" ]]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      CONVEYOR_DIR) CONVEYOR_DIR="$value" ;;
+      CONVEYOR_INSTALL_REF) CONVEYOR_INSTALL_REF="$value" ;;
+    esac
+  done < <(grep -E '^(CONVEYOR_DIR|CONVEYOR_INSTALL_REF)=' "$DEFAULTS_FILE" || true)
+fi
+
+usage() {
+  cat <<'EOF'
+Usage: conveyor <command>
+
+Commands:
+  status              Show Conveyor service status
+  logs [service]      Follow logs (telegram, feishu, web, desktop)
+  restart [service]   Restart one service or all enabled services
+  doctor              Run Conveyor healthcheck
+  configure           Re-run interactive environment configuration
+  update              Reinstall/update from the configured Conveyor ref
+  uninstall           Remove Conveyor services (keeps files)
+  version             Show configured install ref
+EOF
+}
+
+service_name() {
+  case "${1:-telegram}" in
+    telegram) echo conveyor-telegram-bot.service ;;
+    feishu) echo conveyor-feishu-bot.service ;;
+    web) echo conveyor-web.service ;;
+    desktop) echo conveyor-desktop-agent.service ;;
+    maintain) echo conveyor-maintain.timer ;;
+    scheduler) echo conveyor-scheduler.timer ;;
+    *) return 1 ;;
+  esac
+}
+
+need_root() {
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    echo "This command requires root. Re-run with sudo." >&2
+    exit 1
+  fi
+}
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  status)
+    units=(conveyor-telegram-bot.service conveyor-feishu-bot.service conveyor-web.service conveyor-desktop-agent.service conveyor-maintain.timer conveyor-scheduler.timer)
+    for unit in "${units[@]}"; do
+      if systemctl list-unit-files "$unit" --no-legend 2>/dev/null | grep -q "^$unit"; then
+        printf '%-36s %s\n' "$unit" "$(systemctl is-active "$unit" 2>/dev/null || true)"
+      fi
+    done
+    ;;
+  logs)
+    unit="$(service_name "${1:-telegram}")" || { echo "Unknown service: ${1:-}" >&2; exit 2; }
+    exec journalctl -u "$unit" -f
+    ;;
+  restart)
+    need_root
+    if [[ "${1:-all}" == "all" ]]; then
+      for unit in conveyor-telegram-bot.service conveyor-feishu-bot.service conveyor-web.service conveyor-desktop-agent.service conveyor-maintain.timer conveyor-scheduler.timer; do
+        if systemctl is-enabled "$unit" >/dev/null 2>&1; then
+          systemctl restart "$unit"
+          echo "restarted $unit"
+        fi
+      done
+    else
+      unit="$(service_name "$1")" || { echo "Unknown service: $1" >&2; exit 2; }
+      systemctl restart "$unit"
+    fi
+    ;;
+  doctor)
+    [[ -x "$CONVEYOR_DIR/scripts/healthcheck.sh" ]] || { echo "Conveyor healthcheck not found under $CONVEYOR_DIR" >&2; exit 1; }
+    exec bash "$CONVEYOR_DIR/scripts/healthcheck.sh"
+    ;;
+  configure)
+    need_root
+    [[ -x "$CONVEYOR_DIR/.venv/bin/python" ]] || { echo "Conveyor virtualenv not found." >&2; exit 1; }
+    service_user="$(stat -c '%U' "$CONVEYOR_DIR")"
+    sudo -u "$service_user" env CONVEYOR_DIR="$CONVEYOR_DIR" \
+      "$CONVEYOR_DIR/.venv/bin/python" "$CONVEYOR_DIR/scripts/configure_env.py" </dev/tty
+    echo "Configuration updated. Run: sudo conveyor restart all"
+    ;;
+  update)
+    need_root
+    url="https://raw.githubusercontent.com/mammut001/Conveyor/${CONVEYOR_INSTALL_REF}/scripts/bootstrap.sh"
+    echo "Updating Conveyor from ${CONVEYOR_INSTALL_REF}..."
+    curl -fsSL "$url" | CONVEYOR_VERSION="$CONVEYOR_INSTALL_REF" CONVEYOR_MODE=update bash
+    ;;
+  uninstall)
+    need_root
+    exec bash "$CONVEYOR_DIR/scripts/install.sh" --uninstall
+    ;;
+  version)
+    echo "$CONVEYOR_INSTALL_REF"
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

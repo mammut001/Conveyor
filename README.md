@@ -238,25 +238,33 @@ Optional computer-use flow:
 
 ## Quick start
 
-**Prerequisites:** an Ubuntu VPS with SSH access, Codex CLI installed, and a Telegram account.
+**Prerequisites:** a Debian/Ubuntu VPS with SSH access, Codex CLI installed and authenticated, and a Telegram account.
+
+SSH into the host and run:
 
 ```bash
-git clone https://github.com/mammut001/Conveyor.git
-cd Conveyor
-sudo bash scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/mammut001/Conveyor/main/scripts/bootstrap.sh | sudo bash
 ```
 
-Then configure the minimum environment values in `/opt/conveyor/.env`:
+The installer downloads Conveyor, installs system dependencies, launches the interactive Telegram/provider configuration, installs systemd units, runs the smoke gate, and starts the services. After installation:
 
-```dotenv
-TELEGRAM_BOT_TOKEN=123456789:from_botfather
-TELEGRAM_ALLOWED_USER_ID=your_user_id
-CODEX_WORKSPACE_ROOT=/path/to/your/repo
+```bash
+conveyor status
+conveyor logs
+conveyor doctor
+sudo conveyor update
 ```
 
-Keep `.env` private (`chmod 600`), restart the Telegram service, and test with `/start` followed by a small `/run` task. Configure Feishu, Google/Gmail, GitHub, desktop nodes, or computer use only if you need them.
+For reproducible production installs, pin a release/tag instead of tracking `main`:
 
-Before deploying changes, run:
+```bash
+curl -fsSL https://raw.githubusercontent.com/mammut001/Conveyor/main/scripts/bootstrap.sh \
+  | sudo CONVEYOR_VERSION=v0.3.0 bash
+```
+
+Prefer to inspect network-delivered root scripts before running them? See the [installation guide](docs/installation.md), which also covers custom install paths/users and the manual `git clone` path.
+
+Before deploying source changes manually, run:
 
 ```bash
 make smoke
@@ -264,6 +272,7 @@ make smoke
 
 ## Documentation
 
+- [Installation](docs/installation.md)
 - [Architecture](docs/architecture.en.md)
 - [Desktop security](docs/desktop_security.md)
 - [Chinese README](README.zh.md)
