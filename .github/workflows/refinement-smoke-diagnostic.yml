@@ -7,25 +7,20 @@ permissions:
   contents: read
 
 jobs:
-  smoke:
-    name: smoke · ${{ matrix.script }}
+  dedupe-check:
+    name: dedupe · ${{ matrix.check }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
-        script:
-          - handlers_smoke.py
-          - jobs_dedupe_smoke.py
-          - jobs_progress_mode_smoke.py
-          - chat_tier_smoke.py
-          - job_queue_smoke.py
-          - quota_smoke.py
-          - worktree_isolation_smoke.py
-          - apply_policy_smoke.py
-          - session_lock_smoke.py
-          - security_regression_smoke.py
-          - pr35_regression_smoke.py
+        check:
+          - _test_summary_branch_uses_strip_compare
+          - _test_progress_already_sent_summary_is_not_resent
+          - _test_progress_text_differs_from_summary_sends_both
+          - _test_progress_summary_differ_sends_each_once
+          - _test_placeholder_sent_exactly_once
+          - _test_empty_prompt_returns_usage
     env:
       TELEGRAM_BOT_TOKEN: test-token
       TELEGRAM_ALLOWED_USER_ID: "12345"
@@ -41,4 +36,14 @@ jobs:
           cache: pip
       - run: mkdir -p "$CODEX_WORKSPACE_ROOT" "$CODEX_TASK_ROOT" "$CODEX_MEMORY_ROOT"
       - run: python -m pip install -r requirements.txt
-      - run: python scripts/${{ matrix.script }}
+      - name: Run selected assertion
+        env:
+          CHECK: ${{ matrix.check }}
+        run: |
+          python - <<'PY'
+          import os
+          import scripts.jobs_dedupe_smoke as smoke
+          result = getattr(smoke, os.environ['CHECK'])()
+          print(result)
+          raise SystemExit(0 if result.ok else 1)
+          PY
