@@ -1,0 +1,44 @@
+name: Refinement smoke diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke · ${{ matrix.script }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        script:
+          - handlers_smoke.py
+          - jobs_dedupe_smoke.py
+          - jobs_progress_mode_smoke.py
+          - chat_tier_smoke.py
+          - job_queue_smoke.py
+          - quota_smoke.py
+          - worktree_isolation_smoke.py
+          - apply_policy_smoke.py
+          - session_lock_smoke.py
+          - security_regression_smoke.py
+          - pr35_regression_smoke.py
+    env:
+      TELEGRAM_BOT_TOKEN: test-token
+      TELEGRAM_ALLOWED_USER_ID: "12345"
+      CODEX_WORKSPACE_ROOT: /tmp/conveyor-ci/workspace
+      CODEX_TASK_ROOT: /tmp/conveyor-ci/tasks
+      CODEX_MEMORY_ROOT: /tmp/conveyor-ci/memory
+      CONVEYOR_ENV_FILE: .env.test
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: mkdir -p "$CODEX_WORKSPACE_ROOT" "$CODEX_TASK_ROOT" "$CODEX_MEMORY_ROOT"
+      - run: python -m pip install -r requirements.txt
+      - run: python scripts/${{ matrix.script }}
