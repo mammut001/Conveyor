@@ -85,27 +85,6 @@ def _active_refinement(self, worktree_path: Path | None):
         return None, None
 
 
-def _refinement_has_running_job(store, session_id: str) -> bool:
-    """Guard Apply/Discard against concurrent mutation, but allow queued jobs.
-
-    Queued follow-ups are intentionally allowed: closing the chain makes them
-    stale, and their persisted refinement_intent then fails closed at start.
-    """
-    if store is None or not session_id:
-        return False
-    conn = store._connect()
-    try:
-        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(queued_jobs)")}
-        if "session_id" not in columns:
-            return False
-        return conn.execute(
-            "SELECT 1 FROM queued_jobs WHERE session_id = ? AND state = 'running' LIMIT 1",
-            (session_id,),
-        ).fetchone() is not None
-    finally:
-        conn.close()
-
-
 def _emit_refinement_closed(self, chain: dict | None, *, state: str, reason: str) -> None:
     if not chain:
         return
@@ -141,17 +120,24 @@ async def discard_job(self, job_id: str | None, worktree_path: Path | None) -> s
         return "No job worktree to discard."
 
     store, active = _active_refinement(self, worktree_path)
-    if active and _refinement_has_running_job(store, str(active.get("session_id") or "")):
+    guard = store.begin_mutation(worktree_path) if active and store is not None else None
+    if guard is not None and guard.running_conflict:
         return "A refinement job is still running in this worktree. Cancel or let it finish before Discard."
 
     closed = None
-    if active and store is not None:
-        # Close first so a queued continuation can never claim the path while
-        # removal is in progress. It will fail closed when it later starts.
-        closed = store.close_active_for_worktree(
-            worktree_path, state="discarded", reason=f"discarded from {job_id}"
-        )
-    await self._remove_worktree(worktree_path)
+    try:
+        if guard is not None and guard.active:
+            # Commit the closed state while holding the same SQLite write lock
+            # used by queue dequeue. A queued follow-up can only start after
+            # this commit and will therefore fail closed instead of touching
+            # the path while it is being removed.
+            closed = guard.close(state="discarded", reason=f"discarded from {job_id}")
+            guard = None
+        await self._remove_worktree(worktree_path)
+    finally:
+        if guard is not None:
+            guard.release()
+
     _emit_refinement_closed(self, closed, state="discarded", reason="discard")
     return f"Discarded worktree for {job_id}."
 
@@ -174,120 +160,124 @@ async def apply_job(self, job_id: str | None, worktree_path: Path | None) -> str
         return "No job worktree to apply."
 
     store, active = _active_refinement(self, worktree_path)
-    if active and _refinement_has_running_job(store, str(active.get("session_id") or "")):
-        return "A refinement job is still running in this worktree. Wait for it to finish before Apply."
-
     lock_path = self.settings.codex_task_root / "locks" / "apply.lock"
     with file_lock(lock_path):
-        root_status = await self._git(
-            ["status", "--short"], cwd=self.settings.codex_workspace_root, check=False
-        )
-        if root_status.strip():
-            return "Main workspace has uncommitted changes. I will not apply over a dirty repo."
+        # Acquire after apply.lock so every Apply process uses the same lock
+        # ordering. BEGIN IMMEDIATE blocks queue dequeue/enqueue from racing
+        # between the idle check and a successful close. Any failed policy
+        # path rolls back, keeping the chain active.
+        guard = store.begin_mutation(worktree_path) if active and store is not None else None
+        if guard is not None and guard.running_conflict:
+            return "A refinement job is still running in this worktree. Wait for it to finish before Apply."
 
-        tracked_result = collect_tracked_changed_files(worktree_path)
-        if not tracked_result.ok:
-            return f"Refused to apply job {job_id}: could not collect changed files safely."
-        untracked_result = collect_untracked_files(worktree_path)
-        if not untracked_result.ok:
-            return f"Refused to apply job {job_id}: could not collect changed files safely."
-
-        tracked_files = tracked_result.paths
-        untracked_files = untracked_result.paths
-
-        if tracked_files:
-            val_tracked = validate_apply_paths(
-                tracked_files,
-                kind="tracked",
-                settings=self.settings,
-                worktree_path=worktree_path,
-            )
-            if not val_tracked.allowed:
-                return (
-                    f"Refused to apply job {job_id}: blocked high-risk paths: "
-                    f"{val_tracked.reason}"
-                )
-
-        if untracked_files:
-            val_untracked = validate_apply_paths(
-                untracked_files,
-                kind="untracked",
-                settings=self.settings,
-                worktree_path=worktree_path,
-            )
-            if not val_untracked.allowed:
-                return (
-                    f"Refused to apply job {job_id}: blocked high-risk paths: "
-                    f"{val_untracked.reason}"
-                )
-
-        validated_untracked = set(untracked_files)
-        memory_pathspec = f":(exclude){MEMORY_FILENAME}"
-        # Preserve the historical status call because it also exercises the
-        # exclusion pathspec on the target worktree before mutation.
-        await self._git(
-            ["status", "--short", "--", ".", memory_pathspec],
-            cwd=worktree_path,
-            check=False,
-        )
-        if not tracked_files and not untracked_files:
-            return f"Job {job_id} has no changes to apply."
-
-        patch = await self._git(
-            ["diff", "--binary", "HEAD", "--", ".", memory_pathspec],
-            cwd=worktree_path,
-            check=False,
-        )
-        if patch.strip():
-            root_status_pre = await self._git(
+        try:
+            root_status = await self._git(
                 ["status", "--short"], cwd=self.settings.codex_workspace_root, check=False
             )
-            if root_status_pre.strip():
+            if root_status.strip():
                 return "Main workspace has uncommitted changes. I will not apply over a dirty repo."
 
-            process = await asyncio.create_subprocess_exec(
-                "git",
-                "apply",
-                "--binary",
-                "-",
-                cwd=self.settings.codex_workspace_root,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate(patch.encode("utf-8"))
-            if process.returncode != 0:
-                detail = (stderr or stdout).decode("utf-8", errors="replace").strip()
-                return f"Could not apply tracked diff for {job_id}: {truncate(detail, 1200)}"
+            tracked_result = collect_tracked_changed_files(worktree_path)
+            if not tracked_result.ok:
+                return f"Refused to apply job {job_id}: could not collect changed files safely."
+            untracked_result = collect_untracked_files(worktree_path)
+            if not untracked_result.ok:
+                return f"Refused to apply job {job_id}: could not collect changed files safely."
 
-        recheck_result = collect_untracked_files(worktree_path)
-        if not recheck_result.ok:
-            return f"Refused to apply job {job_id}: could not collect changed files safely."
-        current_untracked = set(recheck_result.paths)
-        if current_untracked != validated_untracked:
+            tracked_files = tracked_result.paths
+            untracked_files = untracked_result.paths
+
+            if tracked_files:
+                val_tracked = validate_apply_paths(
+                    tracked_files,
+                    kind="tracked",
+                    settings=self.settings,
+                    worktree_path=worktree_path,
+                )
+                if not val_tracked.allowed:
+                    return (
+                        f"Refused to apply job {job_id}: blocked high-risk paths: "
+                        f"{val_tracked.reason}"
+                    )
+
+            if untracked_files:
+                val_untracked = validate_apply_paths(
+                    untracked_files,
+                    kind="untracked",
+                    settings=self.settings,
+                    worktree_path=worktree_path,
+                )
+                if not val_untracked.allowed:
+                    return (
+                        f"Refused to apply job {job_id}: blocked high-risk paths: "
+                        f"{val_untracked.reason}"
+                    )
+
+            validated_untracked = set(untracked_files)
+            memory_pathspec = f":(exclude){MEMORY_FILENAME}"
+            await self._git(
+                ["status", "--short", "--", ".", memory_pathspec],
+                cwd=worktree_path,
+                check=False,
+            )
+            if not tracked_files and not untracked_files:
+                return f"Job {job_id} has no changes to apply."
+
+            patch = await self._git(
+                ["diff", "--binary", "HEAD", "--", ".", memory_pathspec],
+                cwd=worktree_path,
+                check=False,
+            )
+            if patch.strip():
+                root_status_pre = await self._git(
+                    ["status", "--short"], cwd=self.settings.codex_workspace_root, check=False
+                )
+                if root_status_pre.strip():
+                    return "Main workspace has uncommitted changes. I will not apply over a dirty repo."
+
+                process = await asyncio.create_subprocess_exec(
+                    "git",
+                    "apply",
+                    "--binary",
+                    "-",
+                    cwd=self.settings.codex_workspace_root,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await process.communicate(patch.encode("utf-8"))
+                if process.returncode != 0:
+                    detail = (stderr or stdout).decode("utf-8", errors="replace").strip()
+                    return f"Could not apply tracked diff for {job_id}: {truncate(detail, 1200)}"
+
+            recheck_result = collect_untracked_files(worktree_path)
+            if not recheck_result.ok:
+                return f"Refused to apply job {job_id}: could not collect changed files safely."
+            current_untracked = set(recheck_result.paths)
+            if current_untracked != validated_untracked:
+                return (
+                    f"Refused to apply job {job_id}: untracked files changed during apply. "
+                    "Please rerun /diff and /apply."
+                )
+
+            copied = await self._copy_validated_untracked_files(
+                worktree_path, list(validated_untracked)
+            )
+            status_summary = await self._git(
+                ["status", "--short"], cwd=self.settings.codex_workspace_root, check=False
+            )
+            safe_summary = redact_text(status_summary.strip())
+
+            closed = None
+            if guard is not None and guard.active:
+                closed = guard.close(state="applied", reason=f"applied from {job_id}")
+                guard = None
+            _emit_refinement_closed(self, closed, state="applied", reason="apply")
+
             return (
-                f"Refused to apply job {job_id}: untracked files changed during apply. "
-                "Please rerun /diff and /apply."
+                f"Applied {job_id}. Copied {copied} new files. Review main repo before committing.\n\n"
+                f"Workspace status:\n{safe_summary}"
             )
-
-        copied = await self._copy_validated_untracked_files(
-            worktree_path, list(validated_untracked)
-        )
-        status_summary = await self._git(
-            ["status", "--short"], cwd=self.settings.codex_workspace_root, check=False
-        )
-        safe_summary = redact_text(status_summary.strip())
-
-        # All existing Apply Policy checks have succeeded and the accumulated
-        # HEAD-relative worktree diff is now in main. Only now close the chain.
-        closed = None
-        if active and store is not None:
-            closed = store.close_active_for_worktree(
-                worktree_path, state="applied", reason=f"applied from {job_id}"
-            )
-        _emit_refinement_closed(self, closed, state="applied", reason="apply")
-
-        return (
-            f"Applied {job_id}. Copied {copied} new files. Review main repo before committing.\n\n"
-            f"Workspace status:\n{safe_summary}"
-        )
+        finally:
+            if guard is not None:
+                guard.release()
