@@ -34,24 +34,107 @@ STATIC_ROOT = Path(__file__).resolve().parent / "web" / "dist"
 
 
 class WebOutbound:
-    """Browser rendering is event-driven, so chat replies are no-ops."""
+    """Outbound port for Web Console requests.
+
+    Routes replies to TranscriptStore (for browser chat UI persistence)
+    and emits real-time events via emit_event.
+    """
 
     supports_inline_buttons = False
+    supports_attachments = False
+    wait_for_job = False
 
-    async def reply(self, _msg: InboundMessage, _text: str) -> str | None:
+    def __init__(
+        self,
+        settings: Any = None,
+        durable_session_id: str = "",
+        *,
+        is_codex: bool = False,
+        prompt: str = "",
+    ) -> None:
+        self.settings = settings
+        self.durable_session_id = durable_session_id
+        self.is_codex = is_codex
+        self.prompt = prompt
+        self.last_job: Any = None
+        self.turn_id = uuid.uuid4().hex
+        self._delivered_final = False
+
+    def on_job_submitted(self, job: Any) -> None:
+        self.last_job = job
+
+    async def reply(self, msg: InboundMessage, text: str) -> str | None:
+        if text in ("💭 …", "⏳ 收到，处理中...", "⏳ 收到, 处理中..."):
+            return "web-placeholder"
+        if self.is_codex:
+            return "web-reply"
+        self._persist_turn(msg, text, kind="chat")
+        return "web-reply"
+
+    async def send_new(self, msg: InboundMessage, text: str) -> str | None:
+        if self.is_codex:
+            return "web-event"
+        self._persist_turn(msg, text, kind="chat")
         return "web-event"
 
-    async def send_new(self, _msg: InboundMessage, _text: str) -> str | None:
-        return "web-event"
-
-    async def edit_progress(self, _msg: InboundMessage, _placeholder_id: str, _text: str) -> bool:
+    async def edit_progress(self, msg: InboundMessage, _placeholder_id: str, text: str) -> bool:
+        if self.is_codex:
+            return True
+        # Streaming chunk: ends with " ▍" or is intermediate search status
+        if text.endswith(" ▍") or text.startswith("🔎 搜索：") or text.startswith("↪️"):
+            clean = text[:-2].strip() if text.endswith(" ▍") else text
+            if self.settings:
+                try:
+                    from agent_events import emit_event
+                    emit_event(
+                        self.settings,
+                        "assistant.delta",
+                        self.turn_id,
+                        {"text": clean},
+                        session_id=msg.chat_id,
+                    )
+                except Exception:
+                    logger.debug("Could not emit assistant.delta", exc_info=True)
+            return True
+        # Final answer delivered via edit_progress
+        self._persist_turn(msg, text, kind="chat")
         return True
 
-    async def reply_with_buttons(self, _msg: InboundMessage, _text: str, _buttons: list[list[dict]]) -> str | None:
-        return "web-event"
+    async def reply_with_buttons(self, msg: InboundMessage, text: str, _buttons: list[list[dict]]) -> str | None:
+        return await self.reply(msg, text)
 
     async def send_image(self, _chat_id: str, _image_path: str, *, caption: str | None = None) -> None:
         return None
+
+    def _persist_turn(self, msg: InboundMessage, text: str, *, kind: str = "chat") -> None:
+        if self._delivered_final or not self.settings or not self.durable_session_id:
+            return
+        self._delivered_final = True
+        user_text = self.prompt or msg.text
+        try:
+            from transcript_store import get_transcript_store
+            get_transcript_store(self.settings).append_turn(
+                self.durable_session_id,
+                user_text,
+                text,
+                channel=msg.channel,
+                operator_id=msg.operator_id,
+                source_chat_id=msg.chat_id,
+                kind=kind,
+            )
+        except Exception:
+            logger.exception("Failed to persist web turn to TranscriptStore")
+        try:
+            from agent_events import emit_event
+            emit_event(
+                self.settings,
+                "assistant.completed",
+                self.turn_id,
+                {"text": text},
+                session_id=msg.chat_id,
+            )
+        except Exception:
+            logger.debug("Failed to emit assistant.completed", exc_info=True)
 
 
 class WebConsoleServer(ThreadingHTTPServer):
@@ -200,6 +283,46 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             logger.exception("GET request failed")
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"})
 
+    async def _handle_task(
+        self,
+        msg: InboundMessage,
+        outbound: WebOutbound,
+        settings: Any,
+        runner: Any,
+        mode: JobMode,
+        prompt: str,
+    ) -> tuple[bool, str, Any]:
+        if mode == JobMode.FIX:
+            return await submit_codex_job(
+                msg, outbound, runner, mode=mode, prompt=prompt, wait=False,
+            )
+
+        from handlers.commands import parse_command
+        from handlers.memo import detect_memory_intent
+        from handlers.chat import chat_enabled, needs_agent
+
+        parsed = parse_command(msg.text)
+        is_cmd = parsed is not None
+        cmd_name = parsed[0] if parsed else ""
+        if cmd_name in ("run", "fix"):
+            job_mode = JobMode.FIX if cmd_name == "fix" else JobMode.RUN
+            job_prompt = parsed[1] if parsed else prompt
+            return await submit_codex_job(
+                msg, outbound, runner, mode=job_mode, prompt=job_prompt, wait=False,
+            )
+
+        can_chat = chat_enabled(settings) and not needs_agent(msg.text)
+        if can_chat or is_cmd or detect_memory_intent(msg.text):
+            from handlers.dispatch import dispatch
+            await dispatch(msg, outbound, settings, runner)
+            job = outbound.last_job
+            return True, "task queued" if job else "ok", job
+
+        # Default fallback to Codex job when execution is needed or chat tier is off
+        return await submit_codex_job(
+            msg, outbound, runner, mode=JobMode.RUN, prompt=prompt, wait=False,
+        )
+
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if not parsed.path.startswith("/api/") or not self._require_auth():
@@ -231,9 +354,16 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     channel=channel, operator_id=operator_id, chat_id=source_chat_id,
                     message_id=uuid.uuid4().hex, text=prompt, chat_type="p2p",
                 )
-                ok, message, job = self._await(submit_codex_job(
-                    msg, WebOutbound(), self.server.control.runner,
-                    mode=mode, prompt=prompt, wait=False,
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_settings
+                    settings = load_settings()
+                outbound = WebOutbound(
+                    settings, durable_session_id,
+                    is_codex=(mode == JobMode.FIX), prompt=prompt,
+                )
+                ok, message, job = self._await(self._handle_task(
+                    msg, outbound, settings, self.server.control.runner, mode, prompt,
                 ))
                 self._json(HTTPStatus.ACCEPTED if ok else HTTPStatus.CONFLICT, {
                     "ok": ok, "message": message, "job_id": job.id if job else None,

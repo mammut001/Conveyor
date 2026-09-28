@@ -292,10 +292,11 @@ export default function App() {
       const result = await api<{ job_id: string; session_id?: string }>('/api/tasks', {
         method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSessionId || undefined }),
       })
-      setPrompt(''); await refresh()
+      setPrompt('')
       setCreatingSession(false)
       if (result.session_id) setSelectedSessionId(result.session_id)
-      if (result.job_id) setSelectedJobId(result.job_id)
+      setSelectedJobId(result.job_id || '')
+      await Promise.all([refresh(), refreshTranscript()])
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Submit failed') }
     finally { setBusy(false) }
   }
@@ -449,7 +450,7 @@ export default function App() {
           )}
 
           {/* Welcome state when empty */}
-          {!selectedJob && !selectedSessionId && !transcript.length && (
+          {!transcript.length && (!selectedJob || terminalJobState(selectedJob.state)) && (
             <div className="welcome-state">
               <div className="brand-mark">C</div>
               <h2>Conveyor Control Console</h2>

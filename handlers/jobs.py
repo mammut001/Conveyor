@@ -114,8 +114,12 @@ async def handle_codex_job(
     runner: CodexRunner,
     mode: JobMode = JobMode.RUN,
     prompt: str | None = None,
+    *,
+    wait: bool | None = None,
 ) -> None:
-    await submit_codex_job(msg, port, runner, mode=mode, prompt=prompt, wait=True)
+    if wait is None:
+        wait = getattr(port, "wait_for_job", True)
+    await submit_codex_job(msg, port, runner, mode=mode, prompt=prompt, wait=wait)
 
 
 async def submit_codex_job(
@@ -163,6 +167,9 @@ async def submit_codex_job(
     if not success:
         await port.reply(msg, f"无法排队：{queue_msg}")
         return False, queue_msg, None
+
+    if hasattr(port, "on_job_submitted"):
+        port.on_job_submitted(queued_job)
 
     # SQLite is authoritative because Telegram, Feishu and Web can be
     # separate processes sharing one queue.

@@ -10,6 +10,8 @@ from channel.types import ChannelName, InboundMessage
 
 
 def is_allowed(msg: InboundMessage, settings: Settings) -> bool:
+    if msg.channel == "web":
+        return True
     if msg.channel == "telegram":
         return msg.operator_id == str(settings.telegram_allowed_user_id)
     if msg.channel == "feishu":

@@ -140,6 +140,7 @@ class TranscriptStore:
                          channel = COALESCE(excluded.channel, sessions.channel),
                          operator_id = COALESCE(excluded.operator_id, sessions.operator_id),
                          source_chat_id = COALESCE(excluded.source_chat_id, sessions.source_chat_id),
+                         archived = 0,
                          updated_at = excluded.updated_at""",
                     (session_id, channel, operator_id, source_chat_id, safe_title, now, now),
                 )

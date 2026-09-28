@@ -189,6 +189,23 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 202); self.assertEqual(result["request"]["request_id"], "obs_test")
         self.assertEqual(self.request("POST", "/api/computer/stop", {})[0], 200)
 
+    def test_web_task_fix_mode_and_fast_command(self):
+        # Fix mode directly submits Codex job
+        with patch("web_console.submit_codex_job", fake_submit):
+            status, task = self.request("POST", "/api/tasks", {
+                "prompt": "fix a typo", "mode": "fix", "session_id": "web-a"
+            })
+            self.assertEqual(status, 202)
+            self.assertEqual(task["job_id"], "q2")
+
+        # Fast command (/help) executes through dispatch and returns ok without a job_id
+        status, res = self.request("POST", "/api/tasks", {
+            "prompt": "/help", "mode": "run", "session_id": "web-a"
+        })
+        self.assertEqual(status, 202)
+        self.assertIsNone(res["job_id"])
+        self.assertEqual(res["message"], "ok")
+
 
 if __name__ == "__main__":
     unittest.main()
