@@ -59,6 +59,7 @@ class WebOutbound:
         self.last_job: Any = None
         self.turn_id = uuid.uuid4().hex
         self._delivered_final = False
+        self.handles_transcript_directly = True
 
     def on_job_submitted(self, job: Any) -> None:
         self.last_job = job

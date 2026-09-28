@@ -247,7 +247,7 @@ def reset(
 
 
 def system_prompt(
-    settings: "Settings", *, has_evidence: bool, can_search: bool = False,
+    settings: "Settings", *, has_evidence: bool, can_search: bool = False, worktree_info: str = "",
 ) -> str:
     from config import load_operator_profile
 
@@ -275,9 +275,11 @@ def system_prompt(
             "No web evidence is provided; for anything that may have changed recently, say that "
             "you could not verify it."
         )
+    grounding = f"Latest host job status: {worktree_info}\n" if worktree_info else ""
     return (
         f"You are Conveyor's chat layer for {name}, its single operator. Today is {today}.\n"
         f"Reply in the operator's language ({language}), style: {style}. Keep answers chat-sized.\n"
+        f"{grounding}"
         "You have NO tools. You cannot run commands, read files, see the operator's servers, "
         "repositories, logs, mail or calendar, or browse the web. Only this conversation is "
         "available to you.\n"
@@ -462,6 +464,7 @@ async def ask_chat(
     reply: ReplyContext | None = None,
     images: list[tuple[str, str]] | None = None,
     evidence: str = "",
+    runner: "CodexRunner" | None = None,
 ) -> tuple[ChatOutcome, Checked | None]:
     """Stream a chat-model answer into the chat. Never raises."""
     from runner.chat_client import ChatError, config_from_settings, stream_chat
@@ -480,10 +483,19 @@ async def ask_chat(
     can_search = not evidence and getattr(settings, "web_search_backend", "disabled") != "disabled"
     past = history(key, settings.chat_history_turns, settings=settings)
 
+    worktree_info = ""
+    if runner is not None:
+        try:
+            last = runner.last_text()
+            if last and last != "No jobs yet.":
+                worktree_info = last[:300]
+        except Exception:
+            pass
+
     def _messages(content, *, has_evidence: bool, may_search: bool) -> list[dict]:
         return (
             [{"role": "system", "content": system_prompt(
-                settings, has_evidence=has_evidence, can_search=may_search)}]
+                settings, has_evidence=has_evidence, can_search=may_search, worktree_info=worktree_info)}]
             + past
             + [{"role": "user", "content": content}]
         )
@@ -573,6 +585,19 @@ async def ask_chat(
     if images:
         user_turn += f"\n[{len(images)} image(s) attached]"
     remember(key, user_turn, checked.body, settings.chat_history_turns, settings=settings)
+    try:
+        from handlers.session import append_turn
+        skip_transcript = getattr(port, "handles_transcript_directly", False)
+        append_turn(
+            settings,
+            msg,
+            user_turn,
+            checked.body,
+            kind="chat",
+            mirror_transcript=not skip_transcript,
+        )
+    except Exception:
+        logger.debug("Failed to bridge chat turn to session context", exc_info=True)
     return "answered", checked
 
 
@@ -602,7 +627,7 @@ async def chat_or_agent(
     untrusted = reply is not None or bool(images)
     key = chat_key(msg)
     outcome, checked = await ask_chat(
-        msg, port, settings, question=question, reply=reply, images=images, evidence=evidence,
+        msg, port, settings, question=question, reply=reply, images=images, evidence=evidence, runner=runner,
     )
     if outcome == "answered":
         set_last(key, LastRequest(codex_prompt=codex_prompt, confirm=False), settings=settings)

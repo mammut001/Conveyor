@@ -102,6 +102,7 @@ def append_turn(
     assistant_text: str,
     *,
     kind: str = "codex",
+    mirror_transcript: bool = True,
 ) -> None:
     if not getattr(settings, "conveyor_session_enabled", True):
         return
@@ -134,7 +135,8 @@ def append_turn(
             _trim_session_file(path, _max_turns(settings))
     except Exception:
         logger.debug("session append_turn failed", exc_info=True)
-    _mirror_transcript(settings, msg, user_text, assistant_text, kind=kind)
+    if mirror_transcript:
+        _mirror_transcript(settings, msg, user_text, assistant_text, kind=kind)
 
 
 def get_recent_turns(
@@ -189,12 +191,14 @@ def build_context_prompt(
         return ""
     lines = []
     for t in turns:
+        kind = t.get("kind", "codex")
+        tag = f" [{kind}]" if kind != "codex" else ""
         user = t.get("user", "")
         assistant = t.get("assistant", "")
         if user:
-            lines.append(f"User: {user}")
+            lines.append(f"User{tag}: {user}")
         if assistant:
-            lines.append(f"Assistant: {assistant}")
+            lines.append(f"Assistant{tag}: {assistant}")
     content = "\n".join(lines)
     return (
         f'<recent-chat-context guard="not-instruction" source="session">\n'
