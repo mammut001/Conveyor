@@ -84,22 +84,100 @@ Conveyor also supports a persistent single-concurrency queue, so jobs survive bo
 
 ## Architecture
 
+Conveyor operates on a **Dual-Tier Brain** architecture that unifies fast conversational intelligence with sandboxed coding and tool execution:
+
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Operator Request (Chat / Command)               │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                                    ▼
+                ┌───────────────────────────────────────┐
+                │ handlers/dispatch.py (Intent Router)  │
+                └───────┬───────────────────────┬───────┘
+                        │                       │
+      [Q&A / Ideation / Small Talk]             [Code Changes / CLI / /fix]
+                        │                       │
+                        ▼                       ▼
+        ┌────────────────────────┐      ┌────────────────────────┐
+        │  ⚡ Fast Chat Tier      │      │  🛠️ Codex Agent Tier    │
+        │  (DeepSeek Flash)      │      │  (Tool Execution)      │
+        └───────────┬────────────┘      └───────────┬────────────┘
+                    │                               │
+                    │ 1. Discussions synced         │ 2. Task summary synced
+                    │    to session context         │    to chat memory
+                    ▼                               ▼
+       ┌─────────────────────────────────────────────────────────┐
+       │             🌉 Shared Session & Memory Bridge           │
+       │                                                         │
+       │   • session.jsonl ◀── Chat turns injected for Codex     │
+       │   • chat_memory.db ◀── Job summaries injected for Chat  │
+       │   • Worktree Grounding ◀── Recent git diff/state snapshot│
+       └────────────────────────────┬────────────────────────────┘
+                                    │
+                                    ▼
+       ┌─────────────────────────────────────────────────────────┐
+       │             🖥️ Telegram / Feishu / Web Console          │
+       │       Unified chronological transcript & event stream   │
+       └─────────────────────────────────────────────────────────┘
+```
+
+### Dual-Tier Interaction Flow
+
+```text
+  Operator               Fast Chat Tier           Session Bridge          Codex Worktree
+     │                         │                         │                       │
+     │ 1. "Let's change button │                         │                       │
+     │    to blue with spinner"│                         │                       │
+     ├────────────────────────>│                         │                       │
+     │ 2. "Great plan: ..."    │                         │                       │
+     │<────────────────────────┤                         │                       │
+     │                         │ 3. Sync turn            │                       │
+     │                         ├────────────────────────>│                       │
+     │                         │                         │                       │
+     │ 4. "Implement it now"   │                         │                       │
+     ├─────────────────────────┼─────────────────────────┼──────────────────────>│
+     │                         │                         │ 5. Read recent context│
+     │                         │                         │<──────────────────────┤
+     │                         │                         │ 6. Modify code in wt  │
+     │                         │                         │    (Button.tsx, tests)│
+     │                         │                         │                       │
+     │ 7. "Completed: updated  │                         │                       │
+     │    Button.tsx"          │                         │                       │
+     │<────────────────────────┼─────────────────────────┼───────────────────────┤
+     │                         │                         │ 8. Send summary       │
+     │                         │                         │──────────────────────>│
+     │                         │ 9. Sync to chat memory  │                       │
+     │                         │<────────────────────────┤                       │
+     │                         │                         │                       │
+     │ 10. "Which files changed?"                        │                       │
+     ├────────────────────────>│                         │                       │
+     │ 11. "Codex updated      │                         │                       │
+     │     Button.tsx to blue" │                         │                       │
+     │<────────────────────────┤                         │                       │
+```
+
 ```mermaid
 flowchart LR
-    User[Telegram / Feishu]
-    Bot[Conveyor bot + router]
-    Queue[SQLite job queue]
+    User[Telegram / Feishu / Web]
+    Router[Dispatch Router]
+    Chat[Fast Chat Tier<br/>DeepSeek Flash]
+    Queue[SQLite Job Queue]
     Codex[Codex CLI]
-    WT[Detached git worktree]
-    Tools[Agent tool layer]
-    Node[Optional Mac node]
-    CUA[Local computer-use driver]
+    WT[Detached Git Worktree]
+    Bridge[Session & Memory Bridge]
+    Tools[Agent Tool Layer]
+    Node[Optional Mac Node]
+    CUA[Local Computer-Use Driver]
 
-    User --> Bot
-    Bot --> Queue
+    User --> Router
+    Router -->|Conversation| Chat
+    Router -->|Execution| Queue
     Queue --> Codex
     Codex --> WT
     Codex --> Tools
+    Chat <--> Bridge
+    Codex <--> Bridge
     Tools -. optional .-> Node
     Node -. local only .-> CUA
 ```
@@ -221,6 +299,25 @@ Conveyor is useful if you already use Codex CLI and want to:
 - optionally bridge the VPS control plane to a local Mac without exposing the desktop driver publicly
 
 If you need a public multi-user agent platform, this project is intentionally not that.
+
+## Roadmap
+
+### Current Capabilities (v0.2.0)
+- [x] **Isolated Git Worktrees** — Detached per-job worktrees with strict Apply Safety Policies (path allowlists, binary/symlink protection, size caps).
+- [x] **Persistent Job Queue** — SQLite-backed FIFO queue with pause/resume, priority handling, and crash recovery.
+- [x] **Multi-Channel Control Plane** — Unified behavior across Telegram, Feishu (interactive cards), and real-time Web Console.
+- [x] **Dual-Tier Brain Architecture** — Sub-second conversational responses via DeepSeek Flash alongside sandboxed Codex agent execution.
+- [x] **Cross-Tier Memory Bridge** — Bidirectional context sync: conversational design discussions inject into Codex prompts; job diff summaries inject into chat memory.
+- [x] **Worktree State Grounding & Hallucination Defense** — Chat tier awareness of recent host diffs; strict citation verification and link pruning.
+- [x] **Real-time Web Console** — Low-latency SSE streaming, scoped Apply/Discard approvals, node status, and session archive/management.
+- [x] **Transactional Deployment & CI Gates** — Pre-deploy verification, atomic rollback on health failure, and 120+ unit and smoke tests.
+
+### Upcoming Milestones
+- [ ] **Multi-turn Worktree Refinement** — Interactive follow-up sessions directly within an active worktree before applying to `main`.
+- [ ] **Proactive System & Topic Watchers** — Autonomous background checks for error log spikes, GitHub PR reviews, and scheduled dependency audits.
+- [ ] **Semantic Code & Commit Search** — Local vector + BM25 hybrid search over repository history and documentation.
+- [ ] **Multi-Worktree Parallel Execution** — Concurrent safe worktree scheduling across distinct project branches.
+- [ ] **Voice Control & Audio Processing** — Voice message transcription and hands-free intent dispatching via Telegram and Web.
 
 ## License
 
