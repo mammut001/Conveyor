@@ -11,7 +11,7 @@ type EventItem = {
 type Job = {
   id: string; state: string; mode: string; channel: string; chat_id: string; operator_id?: string
   created_at: string; updated_at?: string; started_at?: string; finished_at?: string
-  prompt_preview: string; metadata?: Record<string, string>; latest_event?: EventItem
+  prompt_preview: string; metadata?: Record<string, unknown>; latest_event?: EventItem
   error?: string
   changed_files?: { status: string; path: string }[]
   runtime?: Record<string, unknown>
@@ -119,7 +119,7 @@ export default function App() {
     if (sessionId) sessionStorage.setItem('conveyor-selected-session', sessionId)
     else sessionStorage.removeItem('conveyor-selected-session')
     setSelectedJobId(jobId || '')
-    setTranscript([]) // Clear immediately to prevent flashing stale session
+    setTranscript([])
   }, [])
 
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -233,7 +233,7 @@ export default function App() {
             const event = JSON.parse(line.slice(6)) as EventItem
             lastSequence.current = Math.max(lastSequence.current, event.sequence)
             setEvents(previous => previous.some(item => item.event_id === event.event_id) ? previous : [...previous, event].slice(-1000))
-            if (event.kind.startsWith('assistant.') || event.kind.startsWith('task.')) {
+            if (event.kind.startsWith('assistant.') || event.kind.startsWith('task.') || event.kind.startsWith('refinement.')) {
               void refresh()
               void refreshTranscript()
             }
@@ -259,6 +259,10 @@ export default function App() {
   const pendingForJob = approvals.filter(item => item.job_id === selectedJobId)
   const runtimeOwner = runtimeOwnerFromJob(selectedJob)
   const toolEvents = useMemo(() => events.filter(item => item.kind.startsWith('tool.')), [events])
+  const refinementTurn = Number(selectedJob?.metadata?.refinement_turn || 0)
+  const refinementClosed = useMemo(() => events.some(item => item.kind === 'refinement.closed'), [events])
+  const activeRefinement = Boolean(selectedJob?.metadata?.refinement_chain_id && !refinementClosed)
+  const activeChangedFiles = selectedJob?.changed_files?.length || 0
   const liveAssistantText = useMemo(() => {
     if (!selectedJob || terminalJobState(selectedJob.state)) return ''
     return events
@@ -379,13 +383,12 @@ export default function App() {
           {selectedJob && <StatusBadge state={selectedJob.state} />}
         </div>
         <div className="event-stream" ref={streamRef}>
+          {activeRefinement && <div className="job-notice"><strong>Active changes</strong><span>{refinementTurn || 1} refinement turn{(refinementTurn || 1) === 1 ? '' : 's'} · {activeChangedFiles} file{activeChangedFiles === 1 ? '' : 's'} changed · Fix feedback continues the same worktree.</span></div>}
           {!transcript.length && selectedJob?.state === 'failed' && <div className="job-notice failed"><strong>Task failed</strong><span>{selectedJob.error || 'See the execution details below.'}</span></div>}
           {!transcript.length && selectedJob?.state === 'cancelled' && <div className="job-notice"><strong>Task cancelled</strong><span>This task was cancelled; start a new message to continue.</span></div>}
 
-          {/* Conversation history */}
           {transcript.length > 0 && <TranscriptPanel messages={transcript} />}
 
-          {/* In-progress user prompt if not yet reflected in transcript */}
           {selectedJob && !terminalJobState(selectedJob.state) && !promptAlreadyInTranscript && (
             <article className="transcript-message role-user pending-turn">
               <div className="transcript-content">
@@ -394,7 +397,6 @@ export default function App() {
             </article>
           )}
 
-          {/* Live In-Progress execution & streaming state */}
           {selectedJob && !terminalJobState(selectedJob.state) && (
             <div className="live-job-turn">
               <div className={`live-job-banner ${selectedJob.state}`}>
@@ -431,7 +433,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Completed Tools Collapsible Summary (ONLY shown if tools were actually run) */}
           {selectedJob && terminalJobState(selectedJob.state) && toolEvents.length > 0 && (
             <details className="completed-tools-drawer">
               <summary className="completed-tools-summary">
@@ -449,7 +450,6 @@ export default function App() {
             </details>
           )}
 
-          {/* Welcome state when empty */}
           {!transcript.length && (!selectedJob || terminalJobState(selectedJob.state)) && (
             <div className="welcome-state">
               <div className="brand-mark">C</div>
@@ -471,7 +471,7 @@ export default function App() {
         </div>
         <form className="composer" onSubmit={submit}>
           <div className="mode-switch"><button type="button" className={mode === 'run' ? 'active' : ''} onClick={() => setMode('run')}>Ask</button><button type="button" className={mode === 'fix' ? 'active' : ''} onClick={() => setMode('fix')}>Fix</button></div>
-          <textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="Ask Conveyor…" rows={2} maxLength={8000} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
+          <textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={activeRefinement ? 'Refine the active changes…' : 'Ask Conveyor…'} rows={2} maxLength={8000} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
           <button className="send-button" disabled={!prompt.trim() || busy}>{busy ? '…' : 'Send'} <span>↗</span></button>
         </form>
       </section>
@@ -482,6 +482,7 @@ export default function App() {
             <KeyValue label="ID" value={selectedJob.id} mono /><KeyValue label="State" value={selectedJob.state} />
             <KeyValue label="Provider" value="Codex" /><KeyValue label="Mode" value={selectedJob.mode} />
             <KeyValue label="Started" value={formatTime(selectedJob.started_at)} />
+            {activeRefinement && <KeyValue label="Refinement" value={`${refinementTurn || 1} turn${(refinementTurn || 1) === 1 ? '' : 's'} · active`} />}
             <RuntimeOwnerCard owner={runtimeOwner} state={selectedJob.state} />
             <div className="action-row"><button disabled={busy || !['queued','running'].includes(selectedJob.state)} onClick={() => action(`/api/jobs/${selectedJob.id}/cancel`)}>Cancel</button></div>
             {events.length > 0 && (
@@ -510,8 +511,9 @@ export default function App() {
         </ContextSection>
         {pendingForJob.map(approval => <section className="approval-card" key={approval.id}><p className="eyebrow">APPROVAL REQUIRED</p><h3>{approval.action === 'apply' ? 'Apply changes' : 'Discard worktree'}?</h3><p>This decision is scoped to job <code>{approval.job_id}</code> and expires automatically.</p><div className="action-row"><button className="danger" onClick={() => action(`/api/approvals/${approval.id}/reject`)}>Reject</button><button className="primary" onClick={() => action(`/api/approvals/${approval.id}/approve`)}>Approve</button></div></section>)}
         <ContextSection title="Changes">
+          {activeRefinement && <KeyValue label="Active changes" value={`${activeChangedFiles} file${activeChangedFiles === 1 ? '' : 's'} · cumulative`} />}
           <div className="file-list">{selectedJob?.changed_files?.map(file => <div key={file.path}><span className="file-status">{file.status || 'M'}</span><code>{file.path}</code></div>)}{selectedJob && !selectedJob.changed_files?.length && <Empty text="No changed files" />}</div>
-          {selectedJob && <><details className="diff-view"><summary>Unified diff</summary><pre>{diff || 'No diff available.'}</pre></details><div className="action-row"><button className="danger" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/discard`)}>Discard…</button><button className="primary" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/apply`)}>Apply…</button></div></>}
+          {selectedJob && <><details className="diff-view"><summary>Unified diff</summary><pre>{diff || 'No diff available.'}</pre></details><div className="action-row"><button className="danger" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/discard`)}>{activeRefinement ? 'Discard active changes…' : 'Discard…'}</button><button className="primary" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/apply`)}>{activeRefinement ? 'Apply active changes…' : 'Apply…'}</button></div></>}
         </ContextSection>
         <ContextSection title="Computer">
           <KeyValue label="CUA" value={computer?.armed ? `Armed · ${computer.arm_remaining_seconds}s` : 'Disarmed'} />
