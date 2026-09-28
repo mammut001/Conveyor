@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from channel.types import InboundMessage
 from handlers.job_queue import JobQueue
@@ -133,6 +134,23 @@ class RefinementRaceGuardTests(unittest.TestCase):
         self.assertIn("still running", discard_result)
         self.assertEqual(self.store.active(self.session)["id"], active["id"])
         self.assertTrue(path.exists())
+
+    def test_refinement_state_failure_blocks_apply_and_discard(self):
+        path, active = self._active_worktree()
+        (path / "README.md").write_text("base\nrefined\n", encoding="utf-8")
+
+        with patch(
+            "refinement_store.RefinementStore.active_for_worktree",
+            side_effect=RuntimeError("control DB unavailable"),
+        ):
+            apply_result = asyncio.run(self.runner.apply_job("q-apply", path))
+            discard_result = asyncio.run(self.runner.discard_job("q-discard", path))
+
+        self.assertIn("Refinement state is unavailable", apply_result)
+        self.assertIn("Refinement state is unavailable", discard_result)
+        self.assertEqual((self.repo / "README.md").read_text(encoding="utf-8"), "base\n")
+        self.assertTrue(path.exists())
+        self.assertEqual(self.store.active(self.session)["id"], active["id"])
 
     def test_queued_followup_after_discard_fails_closed_on_start(self):
         path, _ = self._active_worktree()
