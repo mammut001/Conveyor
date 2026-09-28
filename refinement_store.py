@@ -27,10 +27,76 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+class RefinementMutation:
+    """SQLite write-lock guard for Apply/Discard vs queue dequeue races.
+
+    A live guard keeps a BEGIN IMMEDIATE transaction open on the same control
+    DB used by JobQueue. Queue enqueue/dequeue also require a write transaction,
+    so a continuation cannot transition to running between the idle check and
+    the final chain close. Failed Apply validation rolls the guard back and
+    leaves the chain active.
+    """
+
+    def __init__(
+        self,
+        conn: sqlite3.Connection | None,
+        row: dict[str, Any] | None,
+        *,
+        running_conflict: bool = False,
+    ) -> None:
+        self.conn = conn
+        self.row = row
+        self.running_conflict = running_conflict
+        self._finished = conn is None
+
+    @property
+    def active(self) -> bool:
+        return self.row is not None
+
+    def close(self, *, state: str, reason: str) -> dict[str, Any] | None:
+        if state not in _CLOSED_STATES:
+            raise ValueError(f"invalid refinement close state: {state}")
+        if self.conn is None or self.row is None:
+            self.release()
+            return None
+        now = _utc_now()
+        self.conn.execute(
+            """UPDATE session_worktrees
+               SET state = ?, closed_at = ?, updated_at = ?, close_reason = ?
+               WHERE id = ? AND state = 'active'""",
+            (state, now, now, reason[:500], self.row["id"]),
+        )
+        updated = self.conn.execute(
+            "SELECT * FROM session_worktrees WHERE id = ?", (self.row["id"],)
+        ).fetchone()
+        self.conn.commit()
+        self._finished = True
+        result = dict(updated) if updated is not None else None
+        self.conn.close()
+        self.conn = None
+        return result
+
+    def release(self) -> None:
+        if self.conn is None:
+            self._finished = True
+            return
+        try:
+            if self.conn.in_transaction:
+                self.conn.rollback()
+        finally:
+            self.conn.close()
+            self.conn = None
+            self._finished = True
+
+
 class RefinementStore:
-    def __init__(self, settings: Any) -> None:
+    def __init__(self, settings: Any, *, db_path: str | Path | None = None) -> None:
         self.settings = settings
-        self.db_path = Path(settings.codex_memory_root) / "state" / "job_queue.sqlite3"
+        self.db_path = (
+            Path(db_path)
+            if db_path is not None
+            else Path(settings.codex_memory_root) / "state" / "job_queue.sqlite3"
+        )
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -196,6 +262,37 @@ class RefinementStore:
         finally:
             conn.close()
 
+    def begin_mutation(self, worktree_path: str | Path) -> RefinementMutation:
+        """Acquire a DB guard for Apply/Discard or report an active writer."""
+        path = str(Path(worktree_path).resolve())
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM session_worktrees WHERE worktree_path = ? AND state = 'active' LIMIT 1",
+                (path,),
+            ).fetchone()
+            if row is None:
+                conn.rollback()
+                conn.close()
+                return RefinementMutation(None, None)
+            columns = {str(item[1]) for item in conn.execute("PRAGMA table_info(queued_jobs)").fetchall()}
+            if "session_id" in columns:
+                running = conn.execute(
+                    "SELECT 1 FROM queued_jobs WHERE session_id = ? AND state = 'running' LIMIT 1",
+                    (row["session_id"],),
+                ).fetchone()
+                if running is not None:
+                    conn.rollback()
+                    conn.close()
+                    return RefinementMutation(None, dict(row), running_conflict=True)
+            return RefinementMutation(conn, dict(row))
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            conn.close()
+            raise
+
     def close_active_for_worktree(
         self,
         worktree_path: str | Path,
@@ -285,8 +382,6 @@ class RefinementStore:
         }
 
 
-# Deliberately conservative. A short feedback phrase only becomes executable
-# refinement when the same stable session has an active/pending chain.
 _EXPLANATION_RE = re.compile(
     r"(?:为什么|为啥|怎么回事|解释|原因|风险|分别干嘛|做了什么|是什么|什么是|\?|？|"
     r"\b(?:why|explain|what\s+(?:is|are|did)|how\s+(?:does|did)|risk|reason)\b)",
