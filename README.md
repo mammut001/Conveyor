@@ -73,6 +73,7 @@ Conveyor also supports a persistent single-concurrency queue, so jobs survive bo
 
 - **Remote Codex jobs** — start, inspect, cancel, discard, and apply worktree-based tasks.
 - **Persistent job queue** — SQLite-backed FIFO execution with pause/resume and restart recovery.
+- **Multi-turn worktree refinement** — follow-up coding feedback in the same stable session can reuse one active worktree across independent jobs until Apply or Discard closes the accumulated changeset. See [docs/multi_turn_worktree_refinement.md](docs/multi_turn_worktree_refinement.md).
 - **Telegram + Feishu** — the same control model across both chat surfaces; Feishu can render interactive action cards.
 - **Chat tier (intent mode)** — optional: conversation and Q&A are answered in seconds by a direct chat-model call (streamed, no tools); only work that needs execution becomes a Codex job. Hallucination guards remove unverifiable links, flag low confidence and unverified fresh facts, and `/deep` re-runs any answer on Codex. See [docs/chat_tier.md](docs/chat_tier.md).
 - **Mention & reply context** — reply to any message with `@bot is this true?`, "explain", "summarize" or "translate" and Conveyor answers about that message; fact-checks pull web evidence first. Send or reply to a photo and it looks at the image too (a screenshot captioned `/fix …` works). In groups it only acts when mentioned or replied to. See [docs/reply_context.md](docs/reply_context.md).
@@ -305,6 +306,7 @@ If you need a public multi-user agent platform, this project is intentionally no
 ### Current Capabilities (v0.2.0)
 - [x] **Isolated Git Worktrees** — Detached per-job worktrees with strict Apply Safety Policies (path allowlists, binary/symlink protection, size caps).
 - [x] **Persistent Job Queue** — SQLite-backed FIFO queue with pause/resume, priority handling, and crash recovery.
+- [x] **Multi-turn Worktree Refinement** — Stable session-scoped active worktrees can accumulate follow-up changes across independent jobs until explicit Apply or Discard; restart recovery and fail-closed stale-chain behavior are included.
 - [x] **Multi-Channel Control Plane** — Unified behavior across Telegram, Feishu (interactive cards), and real-time Web Console.
 - [x] **Dual-Tier Brain Architecture** — Sub-second conversational responses via DeepSeek Flash alongside sandboxed Codex agent execution.
 - [x] **Cross-Tier Memory Bridge** — Bidirectional context sync: conversational design discussions inject into Codex prompts; job diff summaries inject into chat memory.
@@ -313,7 +315,6 @@ If you need a public multi-user agent platform, this project is intentionally no
 - [x] **Transactional Deployment & CI Gates** — Pre-deploy verification, atomic rollback on health failure, and 120+ unit and smoke tests.
 
 ### Upcoming Milestones
-- [ ] **Multi-turn Worktree Refinement** — Interactive follow-up sessions directly within an active worktree before applying to `main`.
 - [ ] **Proactive System & Topic Watchers** — Autonomous background checks for error log spikes, GitHub PR reviews, and scheduled dependency audits.
 - [ ] **Semantic Code & Commit Search** — Local vector + BM25 hybrid search over repository history and documentation.
 - [ ] **Multi-Worktree Parallel Execution** — Concurrent safe worktree scheduling across distinct project branches.
