@@ -13,6 +13,8 @@ NOVNC_PORT="${CONVEYOR_HANDOFF_NOVNC_PORT:-6080}"
 XAUTHORITY_FILE="${CONVEYOR_HANDOFF_XAUTHORITY:-${XAUTHORITY:-}}"
 LISTEN_HOST="127.0.0.1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$REPO_ROOT"
 HANDOFFCTL="$SCRIPT_DIR/handoffctl.py"
 RUNTIME_BASE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 if [[ ! -d "$RUNTIME_BASE" || ! -w "$RUNTIME_BASE" ]]; then
@@ -105,29 +107,34 @@ PY
   chmod 600 "$PASSWORD_FILE" "$VNC_AUTH_FILE"
 
   log "Starting x11vnc for display $DISPLAY_NAME on loopback:$VNC_PORT"
-  if ! x11vnc \
+  nohup x11vnc \
     -display "$DISPLAY_NAME" \
     "${auth_args[@]}" \
     -rfbauth "$VNC_AUTH_FILE" \
     -rfbport "$VNC_PORT" \
     -localhost \
+    -noipv6 \
     -forever \
     -shared \
     -noxdamage \
-    -bg \
-    -o /dev/null \
-    -pidfile "$X11VNC_PID" >/dev/null 2>&1; then
+    -o /dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$X11VNC_PID"
+  chmod 600 "$X11VNC_PID"
+  sleep 0.5
+  if ! pid_alive "$X11VNC_PID"; then
     rm -f "$PASSWORD_FILE" "$VNC_AUTH_FILE" "$X11VNC_PID"
     die "x11vnc failed to start; temporary credentials were removed"
   fi
 
   log "Starting noVNC/websockify on loopback:$NOVNC_PORT"
-  if ! websockify \
+  nohup websockify \
     --web "$novnc_root" \
-    --daemon \
-    --pidfile="$WEBSOCKIFY_PID" \
     "$LISTEN_HOST:$NOVNC_PORT" \
-    "$LISTEN_HOST:$VNC_PORT"; then
+    "$LISTEN_HOST:$VNC_PORT" >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$WEBSOCKIFY_PID"
+  chmod 600 "$WEBSOCKIFY_PID"
+  sleep 0.5
+  if ! pid_alive "$WEBSOCKIFY_PID"; then
     stop_transport
     die "websockify failed to start; temporary credentials were removed"
   fi
