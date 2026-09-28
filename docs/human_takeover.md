@@ -165,6 +165,44 @@ Open:
 http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale
 ```
 
+### Phone access with Tailscale Serve (opt-in)
+
+Install Tailscale on the VPS and phone, sign both into the same tailnet, enable
+MagicDNS and HTTPS certificates, and restrict tailnet access to the VPS's
+`8443` port to the operator's identity. Do not enable Funnel for this route.
+On Linux, the non-root user running the helper must be allowed to manage
+Tailscale Serve (for example, `sudo tailscale set --operator=ubuntu` for an
+Ubuntu user). Configure this before opening the lease; the helper will fail
+closed if Serve cannot be started.
+Tailscale Serve proxies HTTPS from the tailnet to the existing
+`127.0.0.1:6080` listener; VNC `5901` remains loopback-only. The VNC password
+is still required, and must be entered privately on the phone. No SSH tunnel
+needs to remain open for the phone connection.
+
+After `handoffctl.py start` has returned, opt in for this lease:
+
+```bash
+CONVEYOR_HANDOFF_TAILSCALE_SERVE=1 bash scripts/novnc_handoff.sh start
+```
+
+The helper prints the actual `https://<vps>.<tailnet>.ts.net:8443/vnc.html`
+address. With Tailscale connected on the phone, open it in Safari. Port `8443`
+is reserved for this handoff: startup refuses to overwrite any existing Serve
+route there. The helper uses a foreground Serve session and verifies that the
+route is removed on stop or shortly before lease expiry. It leaves other Serve
+routes alone. If route removal cannot be verified, it stops VNC/noVNC and
+blocks manual lease completion until `bash scripts/novnc_handoff.sh stop`
+successfully cleans the stale route.
+
+Never use `tailscale funnel`, put a VNC password in a URL, or allow the entire
+tailnet access to the handoff port when other members/devices are present.
+The operator's phone must remain connected to Tailscale while using noVNC.
+Before treating this route as production-ready, test from the actual phone on
+cellular data: load the page, verify the noVNC WebSocket remains connected for
+several minutes, perform a harmless tap and keyboard input, then stop the
+handoff and confirm the phone loses access. Check from outside the tailnet
+that `8443` is unreachable, alongside public `5901` and `6080`.
+
 Mark the lease active after entering:
 
 ```bash
@@ -179,8 +217,9 @@ python scripts/handoffctl.py complete <takeover-id>
 ```
 
 Stop the VNC/noVNC transport before completing or cancelling the lease. The
-CLI refuses to release the lease while either listener process is still live,
-so the Agent cannot resume while the operator still owns the desktop.
+CLI refuses to release the lease while either listener process is still live
+or a Tailscale Serve route still needs cleanup, so the Agent cannot resume
+while the operator still owns the desktop.
 
 The noVNC helper creates an ephemeral VNC password in a mode-0700 runtime
 directory and deletes the password/auth files on stop. Conveyor's takeover
