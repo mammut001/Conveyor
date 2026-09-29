@@ -32,6 +32,10 @@ def _transport_state_dir() -> Path:
 
 def _transport_running() -> bool:
     """Fail closed if a VNC/noVNC process still has a live pid file."""
+    # A Serve route survives in the daemon if its CLI exits unexpectedly.
+    # The marker is removed only after stop verified the route is absent.
+    if (_transport_state_dir() / "tailscale-serve.port").exists():
+        return True
     for name in ("x11vnc.pid", "websockify.pid"):
         try:
             raw_pid = (_transport_state_dir() / name).read_text(encoding="ascii").strip()

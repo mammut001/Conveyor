@@ -103,4 +103,19 @@ if [[ ${doctor_status} -ne 0 ]]; then
   echo "codex doctor reported warnings/failures; review output above"
 fi
 
+if [[ "${CONVEYOR_HANDOFF_TAILSCALE_SERVE:-0}" =~ ^(1|true|yes)$ ]]; then
+  if command -v tailscale >/dev/null 2>&1; then
+    ts_status="$(tailscale status --json 2>/dev/null || true)"
+    ts_state="$(printf '%s' "${ts_status}" | python3 -c 'import json,sys; print((json.load(sys.stdin) or {}).get("BackendState", ""))' 2>/dev/null || true)"
+    if [[ "${ts_state}" == "Running" ]]; then
+      ts_dns="$(printf '%s' "${ts_status}" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("Self") or {}).get("DNSName", "").rstrip("."))' 2>/dev/null || true)"
+      echo "tailscale ok: connected as ${ts_dns}"
+    else
+      echo "tailscale warning: CONVEYOR_HANDOFF_TAILSCALE_SERVE is enabled but Tailscale BackendState is '${ts_state:-unknown}'"
+    fi
+  else
+    echo "tailscale warning: CONVEYOR_HANDOFF_TAILSCALE_SERVE is enabled but tailscale binary is not installed"
+  fi
+fi
+
 echo "healthcheck ok"
