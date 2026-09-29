@@ -393,6 +393,10 @@ def arm_direct_mode(settings: Settings, ttl_minutes: int | None = None) -> dict:
     expires = now + timedelta(minutes=ttl_minutes)
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
+            # Do not re-arm direct computer use while a human owns the GUI.
+            from human_takeover import takeover_blocks_automation
+            if takeover_blocks_automation(settings):
+                return {"ok": False, "error": "human_takeover_active"}
             store = _load_unlocked(settings)
             store["arm"] = {
                 "active": True,
@@ -763,6 +767,11 @@ def create_computer_step(settings: Settings, task_id: str, action: dict) -> dict
     now = _utc_now()
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
+            # This is the final control-plane gate before an action is queued.
+            # claim_computer_step repeats the check at the desktop-node edge.
+            from human_takeover import takeover_blocks_automation
+            if takeover_blocks_automation(settings):
+                return {"ok": False, "error": "human_takeover_active"}
             store = _load_unlocked(settings)
             record = store.get("tasks", {}).get(task_id)
             if not isinstance(record, dict):
@@ -794,10 +803,78 @@ def create_computer_step(settings: Settings, task_id: str, action: dict) -> dict
     return {"ok": True, "step_id": step_id, "step": dict(step)}
 
 
+def cancel_pending_computer_steps(settings: Settings, reason: str = "human_takeover_active") -> int:
+    """Cancel queued actions when a human takes ownership of the desktop.
+
+    A pending action was planned against the pre-takeover screen. Replaying it
+    after the operator finishes could click/type into a different page, so it
+    must be discarded and replaced by a fresh observe.
+    """
+    reason = _truncate_text(reason or "human_takeover_active", 128)
+    changed = 0
+    with _lock:
+        with file_lock(computer_requests_lock_path(settings)):
+            store = _load_unlocked(settings)
+            now = _iso_z(_utc_now())
+            for record in store.get("tasks", {}).values():
+                if not isinstance(record, dict):
+                    continue
+                for step in (record.get("steps") or {}).values():
+                    if not isinstance(step, dict) or step.get("status") != "pending":
+                        continue
+                    step["status"] = "cancelled"
+                    step["updated_at"] = now
+                    step["error"] = reason
+                    changed += 1
+            if changed:
+                _save_unlocked(settings, store)
+    return changed
+
+
+def cancel_pending_computer_step(
+    settings: Settings,
+    task_id: str,
+    step_id: str,
+    reason: str = "human_takeover_active",
+) -> bool:
+    """Cancel one unclaimed stale action without interrupting an in-flight one."""
+    reason = _truncate_text(reason or "human_takeover_active", 128)
+    with _lock:
+        with file_lock(computer_requests_lock_path(settings)):
+            store = _load_unlocked(settings)
+            step, found_task_id = _find_step_unlocked(store, step_id)
+            if step is None or found_task_id != task_id or step.get("status") != "pending":
+                return False
+            step["status"] = "cancelled"
+            step["updated_at"] = _iso_z(_utc_now())
+            step["error"] = reason
+            _save_unlocked(settings, store)
+            return True
+
+
+def has_claimed_computer_steps(settings: Settings) -> bool:
+    """Return whether any desktop action is already in flight."""
+    expire_old_computer(settings)
+    with _lock:
+        with file_lock(computer_requests_lock_path(settings)):
+            store = _load_unlocked(settings)
+            return any(
+                isinstance(step, dict) and step.get("status") == "claimed"
+                for record in store.get("tasks", {}).values()
+                if isinstance(record, dict)
+                for step in (record.get("steps") or {}).values()
+            )
+
+
 def claim_computer_step(settings: Settings, step_id: str, node_id: str) -> dict:
     node_id = (node_id or "").strip()
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
+            # The loop's lease check alone is not enough: a pending step may
+            # be claimed by the desktop node after takeover begins.
+            from human_takeover import takeover_blocks_automation
+            if takeover_blocks_automation(settings):
+                return {"ok": False, "error": "human_takeover_active"}
             store = _load_unlocked(settings)
             step, task_id = _find_step_unlocked(store, step_id)
             if step is None:

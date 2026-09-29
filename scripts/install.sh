@@ -14,6 +14,7 @@ CONVEYOR_INSTALL_REF="${CONVEYOR_INSTALL_REF:-main}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 UPDATE_ONLY=false
+NO_TAILSCALE="${CONVEYOR_NO_TAILSCALE:-0}"
 
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_ok() { echo -e "${GREEN}[OK]${NC} $1"; }
@@ -71,6 +72,32 @@ check_deps() {
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_err "Missing dependencies after package installation: ${missing[*]}"
         exit 1
+    fi
+}
+
+install_tailscale() {
+    if [[ "${NO_TAILSCALE:-0}" == "1" ]]; then
+        log_info "Tailscale installation skipped (--no-tailscale or CONVEYOR_NO_TAILSCALE=1)."
+        return 0
+    fi
+    if command -v tailscale >/dev/null 2>&1; then
+        log_ok "Tailscale is already installed ($(tailscale version 2>/dev/null | head -n1 || echo 'present'))"
+    else
+        log_info "Installing Tailscale for mobile & tailnet access..."
+        if curl -fsSL https://tailscale.com/install.sh | sh; then
+            log_ok "Tailscale installed"
+        else
+            log_warn "Tailscale installation script exited non-zero; continuing without Tailscale."
+            return 0
+        fi
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable --now tailscaled >/dev/null 2>&1 || true
+    fi
+
+    if [[ -n "${CONVEYOR_USER:-}" && "${CONVEYOR_USER}" != "root" ]] && command -v tailscale >/dev/null 2>&1; then
+        tailscale set --operator="${CONVEYOR_USER}" >/dev/null 2>&1 || true
     fi
 }
 
@@ -291,6 +318,7 @@ do_install() {
     install_system_deps
     check_deps
     detect_service_identity
+    install_tailscale
     setup_directory
     sync_source
     setup_venv
@@ -311,6 +339,7 @@ do_update() {
     install_system_deps
     check_deps
     detect_service_identity
+    install_tailscale
     [[ -f "$CONVEYOR_DIR/.env" ]] || { log_err "No existing Conveyor install found at $CONVEYOR_DIR"; exit 1; }
     sync_source
     setup_venv
@@ -334,18 +363,29 @@ do_uninstall() {
     log_info "To remove files too: rm -rf '$CONVEYOR_DIR'"
 }
 
-case "${1:-}" in
-    --update) do_update ;;
-    --uninstall) do_uninstall ;;
-    --help|-h)
+ACTION="install"
+for arg in "$@"; do
+    case "$arg" in
+        --update) ACTION="update" ;;
+        --uninstall) ACTION="uninstall" ;;
+        --no-tailscale) NO_TAILSCALE=1 ;;
+        --help|-h) ACTION="help" ;;
+    esac
+done
+
+case "$ACTION" in
+    update) do_update ;;
+    uninstall) do_uninstall ;;
+    help)
         cat <<EOF
-Usage: bash scripts/install.sh [--update|--uninstall]
+Usage: bash scripts/install.sh [--update|--uninstall|--no-tailscale]
 
 Environment:
   CONVEYOR_DIR          install path (default: /opt/conveyor)
   CONVEYOR_USER         service user (auto-detected)
   CONVEYOR_GROUP        service group (auto-detected)
   CONVEYOR_INSTALL_REF  source tag/branch/sha for updates (default: main)
+  CONVEYOR_NO_TAILSCALE set to 1 to skip Tailscale installation
 EOF
         ;;
     *) do_install ;;

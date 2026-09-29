@@ -4,6 +4,7 @@ import getpass
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -93,7 +94,7 @@ def validate_token(token: str) -> None:
 
 
 def _managed_lines(values: dict[str, str]) -> dict[str, str]:
-    return {
+    managed = {
         "TELEGRAM_BOT_TOKEN": values["TELEGRAM_BOT_TOKEN"],
         "TELEGRAM_ALLOWED_USER_ID": values["TELEGRAM_ALLOWED_USER_ID"],
         "CODEX_WORKSPACE_ROOT": values["CODEX_WORKSPACE_ROOT"],
@@ -104,6 +105,68 @@ def _managed_lines(values: dict[str, str]) -> dict[str, str]:
         "CODEX_TIMEOUT_SECONDS": values["CODEX_TIMEOUT_SECONDS"],
         "TELEGRAM_PROGRESS_SECONDS": values["TELEGRAM_PROGRESS_SECONDS"],
     }
+    if "CONVEYOR_HANDOFF_TAILSCALE_SERVE" in values:
+        managed["CONVEYOR_HANDOFF_TAILSCALE_SERVE"] = values["CONVEYOR_HANDOFF_TAILSCALE_SERVE"]
+    return managed
+
+
+def get_tailscale_status() -> dict:
+    if not shutil.which("tailscale"):
+        return {}
+    try:
+        proc = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return json.loads(proc.stdout)
+    except Exception:
+        pass
+    return {}
+
+
+def configure_tailscale(existing: dict[str, str]) -> dict[str, str]:
+    print()
+    print("=" * 60)
+    print("Tailscale 远程安全访问配置（手机免 SSH 登录控制台与人工接管）")
+    print("=" * 60)
+
+    if not shutil.which("tailscale"):
+        print("未检测到 Tailscale 客户端，跳过 Tailnet 配置。")
+        return {}
+
+    status = get_tailscale_status()
+    backend_state = status.get("BackendState", "")
+
+    if backend_state != "Running":
+        print("当前节点尚未登录接入 Tailnet。")
+        login_choice = prompt_text("是否现在登录 Tailscale？(Y/n)", "y").lower()
+        if login_choice in ("y", "yes", ""):
+            print("\n请使用手机相机扫描终端二维码，或在浏览器中打开链接完成设备授权：\n")
+            try:
+                subprocess.run(
+                    ["tailscale", "up", "--qr", "--accept-routes"],
+                    timeout=180,
+                )
+            except Exception as exc:
+                print(f"Tailscale 登录交互异常: {exc}", file=sys.stderr)
+            status = get_tailscale_status()
+
+    dns_name = (status.get("Self") or {}).get("DNSName", "").rstrip(".")
+    if dns_name:
+        print(f"\nTailnet 节点已连接: {dns_name}")
+        default_serve = existing.get("CONVEYOR_HANDOFF_TAILSCALE_SERVE", "1")
+        enable_serve = prompt_text(
+            "是否开启手机接管 Tailscale 路由 (CONVEYOR_HANDOFF_TAILSCALE_SERVE)? (Y/n)",
+            "y" if default_serve in ("1", "true") else "n",
+        ).lower()
+        serve_val = "1" if enable_serve in ("y", "yes", "") else "0"
+        return {"CONVEYOR_HANDOFF_TAILSCALE_SERVE": serve_val}
+
+    print("Tailscale 暂未接入，可后续运行 `sudo tailscale up` 进行登录。")
+    return {"CONVEYOR_HANDOFF_TAILSCALE_SERVE": existing.get("CONVEYOR_HANDOFF_TAILSCALE_SERVE", "0")}
 
 
 def write_env(values: dict[str, str]) -> None:
@@ -175,6 +238,9 @@ def main() -> int:
         "CODEX_TIMEOUT_SECONDS": existing.get("CODEX_TIMEOUT_SECONDS", "3600"),
         "TELEGRAM_PROGRESS_SECONDS": existing.get("TELEGRAM_PROGRESS_SECONDS", "20"),
     }
+    tailscale_values = configure_tailscale(existing)
+    values.update(tailscale_values)
+
     write_env(values)
     print(f"Wrote {ENV_PATH} with mode 600.")
     print("Next: run conveyor doctor, then sudo conveyor restart all.")
