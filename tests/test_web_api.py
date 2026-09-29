@@ -7,6 +7,11 @@ import threading
 import unittest
 from unittest.mock import patch
 
+try:  # isolated defaults for load_settings() when the env is not configured
+    import _test_env  # noqa: F401  (python -m unittest discover -s tests)
+except ModuleNotFoundError:  # python -m unittest tests.<module>
+    from tests import _test_env  # noqa: F401
+
 from web_console import WebConsoleHandler, WebConsoleServer
 
 

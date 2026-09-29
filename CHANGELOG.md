@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Topic watches push only what is new, with a brief**: results are identified by normalized URL (scheme, `www.`, fragment, trailing slash and tracking parameters ignored) and each watch remembers the last 300 delivered URLs (`topic_watches.seen_urls`, migrated automatically), so re-ranked results no longer trigger false "updates"; only unseen sources are listed. With the chat tier configured, a 2-3 sentence brief grounded in the new results' titles/snippets heads the message (links stripped, untrusted-data framing) and the model can veto off-topic updates with `[[SKIP]]`; without it, or on errors, results are listed. Pre-existing watches baseline silently on their next check. Smoke: 3 new cases in `scripts/topic_watch_smoke.py`.
+- **Deploy workflow** only triggers for CI runs on `main` (`workflow_run.branches`), removing the skipped deploy runs every PR's CI used to create.
+
+### Fixed
+- Unit tests no longer need a configured environment: `tests/_test_env.py` supplies isolated defaults for `load_settings()` (never overriding set values).
+- README roadmap: multi-turn worktree refinement and topic watches marked implemented; hallucination wording no longer claims elimination.
+
 ### Added
 - **Model-requested web search (chat tier)**: with a search backend configured, the chat model can reply `[[SEARCH: <query>]]` when it is not sure or the facts may be recent; Conveyor shows "🔎 搜索：…", runs one search and re-asks with the evidence (one round max, 200-char query cap, control tokens never streamed). A failed search marks the answer unverified. Keyword pre-fetch for time-sensitive questions stays. Smoke: 3 new cases in `scripts/chat_tier_smoke.py`.
 - **Cross-restart persistent conversation memory**: `chat_memory.db` SQLite store under `settings.codex_memory_root` persists active conversation turns, session state, and `/deep` escalation requests across bot restarts. Commands `/chat_clear` and `/forget` reset active history in memory and database. Smoke: `scripts/chat_memory_smoke.py`.

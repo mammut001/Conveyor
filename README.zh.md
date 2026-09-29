@@ -1004,13 +1004,14 @@ python scripts/security_audit.py --env /opt/conveyor/.env --service conveyor-tel
 - [x] **全通道控制台矩阵** — 统一 Telegram、飞书（富文本交互卡片）与 Web 控制台的三位一体控制平面。
 - [x] **双脑系统架构 (Dual-Tier Brain)** — DeepSeek Flash 极速自然对话层（<1 秒首字返回）+ Codex 深度沙箱工具执行层协同运作。
 - [x] **跨层双向记忆穿透 (Cross-Tier Memory Bridge)** — 对话探讨自动注入后续 Codex 提示词上下文；Codex 执行结果与改动摘要自动回写 Flash 会话记忆。
-- [x] **工作区真实状态快照感知 (Grounding Context)** — 赋予对话层对宿主工作区最新 Diff 与任务状态的感知能力，杜绝幻觉。
+- [x] **工作区真实状态快照感知 (Grounding Context)** — 赋予对话层对宿主工作区最新 Diff 与任务状态的感知能力；配合先取证 / 模型主动搜索、链接校验、低把握标注来降低并标出幻觉（无法完全杜绝）。
+- [x] **Worktree 交互式多轮精修** — 在同一会话的活跃 Worktree 中跨多个任务累积修改，直到显式 Apply 或 Discard；支持重启恢复，状态异常时安全拒绝。
+- [x] **话题关注推送 (/watch)** — 只推送新出现的来源，并附对话层基于来源写的简短摘要（目前仅 Telegram）。
 - [x] **现代化实时 Web Console** — 支持 SSE 低延迟流式传输、会话归档/一键删除、按任务绑定的 Apply/Discard 审批授权、暗黑/精简模式与无干扰排版。
 - [x] **零中断事务部署与 CI 门禁** — 部署前全自动 Smoke 烟测与单元测试，健康检查失败自动回滚，120+ 测试用例保障稳定性。
 
 ### 即将推出计划 (Upcoming Milestones)
-- [ ] **Worktree 交互式多轮精修** — 在合并到主分支前，支持在当前活跃 Worktree 中直接进行多轮增量对话修改与调优。
-- [ ] **主动式系统与项目守护者 (Proactive Watchers)** — 自动化监控错误日志激增、定时 GitHub PR 审查提醒、依赖漏洞自动排查与每日晨报。
+- [ ] **主动式系统与项目守护者 (Proactive Watchers)** — 自动化监控错误日志激增、定时 GitHub PR 审查提醒、依赖漏洞自动排查。
 - [ ] **本地语义代码与提交历史检索** — 结合本地向量与 BM25 的混合语义搜索引擎，检索项目历史提交与文档知识库。
 - [ ] **多工作区安全并行调度** — 支持多项目、多分支间的安全独立 Worktree 并行并发排期与锁管理。
 - [ ] **语音交互与音频管线** — Telegram 与 Web 端语音输入转录，实现免动手的纯语音意图识别与任务分发。

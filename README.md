@@ -319,12 +319,13 @@ If you need a public multi-user agent platform, this project is intentionally no
 - [x] **Multi-Channel Control Plane** — Unified behavior across Telegram, Feishu (interactive cards), and real-time Web Console.
 - [x] **Dual-Tier Brain Architecture** — Sub-second conversational responses via DeepSeek Flash alongside sandboxed Codex agent execution.
 - [x] **Cross-Tier Memory Bridge** — Bidirectional context sync: conversational design discussions inject into Codex prompts; job diff summaries inject into chat memory.
-- [x] **Worktree State Grounding & Hallucination Defense** — Chat tier awareness of recent host diffs; strict citation verification and link pruning.
+- [x] **Worktree State Grounding & Hallucination Guards** — Chat tier awareness of recent host diffs, evidence-first and model-requested web search, citation verification and link pruning, low-confidence flags. These reduce and surface hallucinations; they cannot rule them out.
+- [x] **Topic Watches** — `/watch <topic>` pushes only newly seen sources, with a short grounded brief from the chat tier (Telegram).
 - [x] **Real-time Web Console** — Low-latency SSE streaming, scoped Apply/Discard approvals, node status, and session archive/management.
 - [x] **Transactional Deployment & CI Gates** — Pre-deploy verification, atomic rollback on health failure, and 120+ unit and smoke tests.
 
 ### Upcoming Milestones
-- [ ] **Proactive System & Topic Watchers** — Autonomous background checks for error log spikes, GitHub PR reviews, and scheduled dependency audits.
+- [ ] **Proactive System Watchers** — Autonomous background checks for error log spikes, GitHub PR reviews, and scheduled dependency audits.
 - [ ] **Semantic Code & Commit Search** — Local vector + BM25 hybrid search over repository history and documentation.
 - [ ] **Multi-Worktree Parallel Execution** — Concurrent safe worktree scheduling across distinct project branches.
 - [ ] **Voice Control & Audio Processing** — Voice message transcription and hands-free intent dispatching via Telegram and Web.

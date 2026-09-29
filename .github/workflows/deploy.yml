@@ -24,6 +24,10 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+    # Only CI runs for main start this workflow; without the filter every
+    # PR's CI created a (skipped) deploy run. The job-level `if` below
+    # stays as the authoritative guard.
+    branches: [main]
   workflow_dispatch:
 
 permissions:
