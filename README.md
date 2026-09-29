@@ -255,6 +255,12 @@ conveyor doctor
 sudo conveyor update
 ```
 
+Then switch on the optional capabilities with the interactive setup wizard — chat model, web search, email (Gmail / QQ / 163 / iCloud …), Feishu, GitHub and the Web console. Every secret is entered on the server and verified live before it is saved; see [docs/installation.md](docs/installation.md#setup-wizard-conveyor-setup).
+
+```bash
+sudo conveyor setup
+```
+
 For reproducible production installs, pin a release/tag instead of tracking `main`:
 
 ```bash

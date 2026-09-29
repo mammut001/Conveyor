@@ -23,7 +23,11 @@ Commands:
   logs [service]      Follow logs (telegram, feishu, web, desktop)
   restart [service]   Restart one service or all enabled services
   doctor              Run Conveyor healthcheck
-  configure           Re-run interactive environment configuration
+  setup [module]      Interactive setup wizard: telegram, codex, chat, search,
+                      email, feishu, github, web (live-tests before saving)
+  setup --status      Show what is configured
+  setup --check       Live-test every configured integration
+  configure           Re-run the basic first-install configuration
   update              Reinstall/update from the configured Conveyor ref
   uninstall           Remove Conveyor services (keeps files)
   version             Show configured install ref
@@ -82,6 +86,33 @@ case "$cmd" in
   doctor)
     [[ -x "$CONVEYOR_DIR/scripts/healthcheck.sh" ]] || { echo "Conveyor healthcheck not found under $CONVEYOR_DIR" >&2; exit 1; }
     exec bash "$CONVEYOR_DIR/scripts/healthcheck.sh"
+    ;;
+  setup)
+    need_root
+    [[ -x "$CONVEYOR_DIR/.venv/bin/python" ]] || { echo "Conveyor virtualenv not found." >&2; exit 1; }
+    service_user="$(stat -c '%U' "$CONVEYOR_DIR")"
+    restart_file="$(mktemp)"
+    chown "$service_user" "$restart_file"
+    set +e
+    (cd "$CONVEYOR_DIR" && sudo -u "$service_user" env CONVEYOR_DIR="$CONVEYOR_DIR" \
+      CONVEYOR_SETUP_RESTART_FILE="$restart_file" \
+      "$CONVEYOR_DIR/.venv/bin/python" -m setup_wizard "$@" </dev/tty)
+    rc=$?
+    set -e
+    mapfile -t to_restart < <(grep -E '^(telegram|feishu|web)$' "$restart_file" || true)
+    rm -f "$restart_file"
+    if [[ ${#to_restart[@]} -gt 0 ]]; then
+      read -r -p "现在重启 ${to_restart[*]} 让修改生效？[Y/n] " answer </dev/tty || answer=n
+      if [[ -z "$answer" || "$answer" =~ ^[Yy] ]]; then
+        for svc in "${to_restart[@]}"; do
+          unit="$(service_name "$svc")"
+          if systemctl is-enabled "$unit" >/dev/null 2>&1; then
+            systemctl restart "$unit" && echo "restarted $unit"
+          fi
+        done
+      fi
+    fi
+    exit "$rc"
     ;;
   configure)
     need_root

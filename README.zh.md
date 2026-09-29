@@ -498,6 +498,18 @@ sudo bash scripts/install.sh
 
 ### 2. 配 `.env`
 
+推荐用交互式向导（方向键选择、当场测试连接、测试通过才写入）：
+
+```bash
+sudo conveyor setup            # 总览：Telegram、Codex、对话模型、搜索、邮箱、飞书、GitHub、Web 控制台
+sudo conveyor setup email      # 只配某一项（邮箱支持 Gmail / QQ / 163 / 126 / iCloud）
+sudo conveyor setup --check    # 测试所有已配置的连接
+```
+
+密钥只在服务器上录入，不要发到聊天里。聊天里发 `/setup` 能看到同一份清单。
+
+也可以手动编辑：
+
 ```bash
 sudo nano /opt/conveyor/.env
 ```

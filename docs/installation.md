@@ -66,12 +66,54 @@ conveyor status
 conveyor logs
 conveyor doctor
 sudo conveyor restart all
+sudo conveyor setup
 sudo conveyor configure
 sudo conveyor update
 sudo conveyor uninstall
 ```
 
 `conveyor update` downloads the configured `CONVEYOR_INSTALL_REF`, runs the smoke gate, and only then restarts services.
+
+## Setup wizard (`conveyor setup`)
+
+The installer only asks for the basics (Telegram, Codex). Everything else
+is configured with the interactive wizard, on the server:
+
+```bash
+sudo conveyor setup            # dashboard: pick what to configure
+sudo conveyor setup email      # one module: telegram codex chat search email feishu github web
+conveyor setup --status        # what is configured (no secrets shown)
+sudo conveyor setup --check    # live-test every configured integration
+```
+
+| Module | Asks for | Verified live by |
+| --- | --- | --- |
+| `telegram` | bot token, your user id (auto-detected when you message the bot) | Telegram `getMe` / `getUpdates` |
+| `codex` | OpenAI / MiniMax key or an existing `codex login`, workspace repo, binary | git repo root check, `codex --version` |
+| `chat` | chat-tier provider (DeepSeek / MiniMax / OpenAI / any OpenAI-compatible), model, key, vision | one real chat request (reports first-token latency) |
+| `search` | Brave / Tavily / Serper key or SearXNG URL | one real search |
+| `email` | preset (Gmail / QQ / 163 / 126 / iCloud / custom), address, app password | IMAP login + SMTP login, optional test mail to yourself |
+| `feishu` | App ID / Secret, allowed open_id | tenant access token |
+| `github` | fine-grained token, default repo | `/user` (+ scopes) and repo access |
+| `web` | enable, port, access token (generated) | loopback binding check |
+
+How it behaves:
+
+- Arrow-key menus, hidden secret input (only the last 4 characters are ever
+  shown), spinners during checks. Without a TTY it falls back to numbered
+  prompts, so it also works over plain pipes.
+- A failed check offers: re-enter, retry, save unverified, or skip the module.
+- Each module shows a preview of the keys it will write (secrets masked) and
+  writes only after you confirm: previous `.env` backed up (last 5 kept),
+  atomic replace, mode `600`, comments and unrelated keys preserved.
+- Ctrl-C / Esc exits at any time; modules already saved stay saved.
+- At the end `conveyor setup` offers to restart exactly the services whose
+  settings changed.
+
+Secrets are entered only here, never in chat. In Telegram, `/setup` shows the
+same module checklist with the command to run for each gap, and
+`/setup_check` runs the same live tests. New operators get that checklist
+right after `/onboard`.
 
 ## Security note
 

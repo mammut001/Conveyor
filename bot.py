@@ -349,6 +349,20 @@ async def onboard_style_button(update: Update, context: ContextTypes.DEFAULT_TYP
         f"生效需要重启 bot（runner 启动时读这份 JSON）。\n"
         f"改用 /profile；重做问卷 /onboard。"
     )
+    # Onboarding step 2: what else can be switched on (secrets are entered
+    # on the server with `conveyor setup`, never in chat).
+    try:
+        from personal_tools.setup import module_lines, settings_env
+
+        checklist = module_lines(settings_env(settings))
+        if any(line.startswith(("⬜", "🟡")) for line in checklist):
+            await query.message.reply_text(
+                "下一步：这些能力还可以开启（密钥请在服务器上录入，不要发到聊天里）\n\n"
+                + "\n".join(checklist)
+                + "\n\n随时发 /setup 查看，/setup_check 测试连接。"
+            )
+    except Exception:
+        logger.debug("post-onboarding checklist failed", exc_info=True)
     return ConversationHandler.END
 
 

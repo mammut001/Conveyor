@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Interactive setup wizard (`conveyor setup`)**: stdlib-only terminal wizard (`setup_wizard/`) for Telegram, Codex, chat tier, web search, email, Feishu, GitHub and the Web console. Arrow-key menus (numbered fallback without a TTY), hidden secret input with masked echo, spinners, and a live check before saving (Telegram getMe / user auto-detection, git repo + codex binary, a real chat request with first-token latency, a real search, IMAP + SMTP login with an optional test mail, GitHub /user + repo, Feishu tenant token). Failed checks offer re-enter / retry / save unverified / skip. Each module previews its keys (secrets masked) and writes on confirmation with backup (last 5), atomic replace and mode 600. Email presets: Gmail, QQ, 163, 126, iCloud, custom. `--status` and `--check` modes; `conveyor setup` offers to restart only the affected services. Recognizes `codex login` credentials. Smoke: `scripts/setup_wizard_smoke.py` (14 cases, incl. a real pseudo-terminal arrow-key test).
+- **Chat-side setup**: `/setup` shows the same module checklist with the `sudo conveyor setup <module>` command for every gap; `/setup_check` adds live connection tests (off the event loop); the checklist is sent right after `/onboard`.
+
+### Changed
+- Email sending uses implicit TLS on port 465 (QQ / 163 / 126), STARTTLS otherwise.
+
 ### Changed
 - **Topic watches push only what is new, with a brief**: results are identified by normalized URL (scheme, `www.`, fragment, trailing slash and tracking parameters ignored) and each watch remembers the last 300 delivered URLs (`topic_watches.seen_urls`, migrated automatically), so re-ranked results no longer trigger false "updates"; only unseen sources are listed. With the chat tier configured, a 2-3 sentence brief grounded in the new results' titles/snippets heads the message (links stripped, untrusted-data framing) and the model can veto off-topic updates with `[[SKIP]]`; without it, or on errors, results are listed. Pre-existing watches baseline silently on their next check. Smoke: 3 new cases in `scripts/topic_watch_smoke.py`.
 - **Deploy workflow** only triggers for CI runs on `main` (`workflow_run.branches`), removing the skipped deploy runs every PR's CI used to create.

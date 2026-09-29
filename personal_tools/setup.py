@@ -37,36 +37,102 @@ def _check_systemd_timer(timer_name: str) -> bool:
         return False
 
 
+def settings_env(settings: Settings) -> dict[str, str]:
+    """The `.env` view `setup_wizard.modules` works with, rebuilt from the
+    loaded settings (plus provider keys that only live in the environment)."""
+    import os
+
+    def s(name: str, default: object = None) -> str:
+        value = getattr(settings, name, default)
+        return "" if value is None else str(value)
+
+    env = {
+        "TELEGRAM_BOT_TOKEN": s("telegram_bot_token"),
+        "TELEGRAM_ALLOWED_USER_ID": s("telegram_allowed_user_id"),
+        "CODEX_WORKSPACE_ROOT": s("codex_workspace_root"),
+        "CODEX_BIN": s("codex_bin"),
+        "CONVEYOR_CHAT_MODE": s("chat_mode", "off"),
+        "CONVEYOR_CHAT_BASE_URL": s("chat_base_url"),
+        "CONVEYOR_CHAT_API_KEY": s("chat_api_key"),
+        "CONVEYOR_CHAT_MODEL": s("chat_model"),
+        "CONVEYOR_CHAT_VISION": "true" if getattr(settings, "chat_vision", False) else "false",
+        "WEB_SEARCH_BACKEND": s("web_search_backend", "disabled"),
+        "WEB_SEARCH_API_KEY": s("web_search_api_key"),
+        "WEB_SEARCH_ENDPOINT": s("web_search_endpoint"),
+        "GMAIL_BACKEND": s("gmail_backend"),
+        "GMAIL_ADDRESS": s("gmail_address"),
+        "GMAIL_APP_PASSWORD": s("gmail_app_password"),
+        "GMAIL_IMAP_HOST": s("gmail_imap_host"),
+        "GMAIL_IMAP_PORT": s("gmail_imap_port"),
+        "GMAIL_SMTP_HOST": s("gmail_smtp_host"),
+        "GMAIL_SMTP_PORT": s("gmail_smtp_port"),
+        "LARK_APP_ID": s("lark_app_id") or os.environ.get("LARK_APP_ID", ""),
+        "LARK_APP_SECRET": s("lark_app_secret") or os.environ.get("LARK_APP_SECRET", ""),
+        "LARK_ALLOWED_OPEN_ID": s("lark_allowed_open_id") or os.environ.get("LARK_ALLOWED_OPEN_ID", ""),
+        "GITHUB_TOKEN": s("github_token"),
+        "GITHUB_DEFAULT_REPO": s("github_default_repo"),
+        "CONVEYOR_WEB_ENABLED": "true" if getattr(settings, "conveyor_web_enabled", False) else "false",
+        "CONVEYOR_WEB_HOST": s("conveyor_web_host", "127.0.0.1"),
+        "CONVEYOR_WEB_PORT": s("conveyor_web_port", 8787),
+        "CONVEYOR_WEB_TOKEN": s("conveyor_web_token"),
+        "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
+        "MINIMAX_API_KEY": os.environ.get("MINIMAX_API_KEY", ""),
+    }
+    return {k: v for k, v in env.items() if v}
+
+
+def module_lines(env: dict[str, str]) -> list[str]:
+    """One line per integration, with the server command for gaps."""
+    from setup_wizard.modules import MODULES, OK, STATUS_ICON
+
+    lines: list[str] = []
+    for m in MODULES:
+        state, text = m.status(env)
+        lines.append(f"{STATUS_ICON[state]} {m.title} — {text}")
+        if state != OK:
+            extra = "（Gmail / QQ / 163 / iCloud …）" if m.key == "email" else ""
+            lines.append(f"    → 在服务器上运行：sudo conveyor setup {m.key}{extra}")
+    return lines
+
+
+def live_check_lines(env: dict[str, str]) -> list[str]:
+    """Live connection tests for configured integrations (blocking I/O)."""
+    from setup_wizard.modules import MISSING, MODULES
+
+    lines: list[str] = []
+    for m in MODULES:
+        if m.status(env)[0] == MISSING:
+            continue
+        try:
+            result = m.verify(env)
+        except Exception as exc:  # a broken check must not break /setup_check
+            lines.append(f"❌ {m.title}：检查出错（{exc.__class__.__name__}）")
+            continue
+        if result is None:
+            continue
+        icon = "✅" if result.ok else "❌"
+        lines.append(f"{icon} {m.title}：{result.detail}")
+    return lines
+
+
 def setup_status(settings: Settings, operator_id: str) -> ToolResult:
     """Report integration status overview."""
     lines = ["🔧 Conveyor 配置状态", ""]
+    lines.extend(module_lines(settings_env(settings)))
+    lines.append("")
+    lines.append("密钥只在服务器上用 conveyor setup 录入，不要发到聊天里。")
+    lines.append("")
 
-    # Telegram
-    tg_ok = bool(settings.telegram_bot_token)
-    uid_ok = settings.telegram_allowed_user_id > 0
-    lines.append(f"{_check_icon(tg_ok)} Telegram Bot Token: {'已配置' if tg_ok else '未配置'}")
-    lines.append(f"{_check_icon(uid_ok)} Allowed User ID: {'已配置' if uid_ok else '未配置'}")
-
-    # Codex
+    # Codex binary / workspace presence on this host
     codex_bin = settings.codex_bin
     codex_avail = shutil.which(codex_bin) is not None
     ws_ok = settings.codex_workspace_root.exists()
     lines.append(f"{_opt_icon(codex_avail)} Codex Binary ({codex_bin}): {'可用' if codex_avail else '未找到'}")
     lines.append(f"{_check_icon(ws_ok)} Workspace Root: {'存在' if ws_ok else '不存在'}")
 
-    # Gmail
-    gmail_ok = bool(settings.gmail_address) and bool(settings.gmail_app_password)
-    lines.append(f"{_opt_icon(gmail_ok)} Gmail (IMAP): {'已配置' if gmail_ok else '未配置'}")
-
     # Google OAuth
     google_ok = bool(settings.google_client_secret_path)
     lines.append(f"{_opt_icon(google_ok)} Google OAuth: {'已配置' if google_ok else '未配置'}")
-
-    # GitHub
-    gh_token_ok = bool(settings.github_token)
-    gh_repo_ok = bool(settings.github_default_repo)
-    lines.append(f"{_opt_icon(gh_token_ok)} GitHub Token: {'已配置' if gh_token_ok else '未配置'}")
-    lines.append(f"{_opt_icon(gh_repo_ok)} GitHub Default Repo: {'已配置' if gh_repo_ok else '未配置'}")
 
     # Briefing (check from store)
     try:
@@ -108,17 +174,17 @@ def setup_status(settings: Settings, operator_id: str) -> ToolResult:
     return ToolResult(ok=True, text=truncate("\n".join(lines)))
 
 
-def setup_check(settings: Settings, operator_id: str) -> ToolResult:
-    """Produce a prioritized setup checklist."""
+def setup_check(settings: Settings, operator_id: str, *, live: bool = False) -> ToolResult:
+    """Produce a prioritized setup checklist; ``live`` adds connection tests."""
     required = []
     optional = []
     recommended = []
 
     # Required checks
     if not settings.telegram_bot_token:
-        required.append("❌ Telegram Bot Token 未配置 → 设置 TELEGRAM_BOT_TOKEN")
+        required.append("❌ Telegram Bot Token 未配置 → sudo conveyor setup telegram")
     if settings.telegram_allowed_user_id <= 0:
-        required.append("❌ Allowed User ID 未配置 → 设置 TELEGRAM_ALLOWED_USER_ID")
+        required.append("❌ Allowed User ID 未配置 → sudo conveyor setup telegram")
 
     codex_bin = settings.codex_bin
     if not shutil.which(codex_bin):
@@ -129,13 +195,13 @@ def setup_check(settings: Settings, operator_id: str) -> ToolResult:
 
     # Optional checks
     if not settings.gmail_address or not settings.gmail_app_password:
-        optional.append("⚪ Gmail 未配置 → /setup_gmail 查看指南")
+        optional.append("⚪ 邮箱 (Gmail / QQ / 163 …) 未配置 → sudo conveyor setup email")
 
     if not settings.google_client_secret_path:
         optional.append("⚪ Google OAuth 未配置 → /setup_google 查看指南")
 
     if not settings.github_token:
-        optional.append("⚪ GitHub Token 未配置 → /setup_github 查看指南")
+        optional.append("⚪ GitHub Token 未配置 → sudo conveyor setup github")
     elif not settings.github_default_repo:
         optional.append("⚪ GitHub Default Repo 未配置 → 设置 GITHUB_DEFAULT_REPO")
 
@@ -181,6 +247,12 @@ def setup_check(settings: Settings, operator_id: str) -> ToolResult:
         recommended.append("请先完成必需配置，然后运行 /setup_check 重新检查。")
 
     lines = ["📋 设置检查清单", ""]
+    if live:
+        tests = live_check_lines(settings_env(settings))
+        if tests:
+            lines.append("🔌 连接测试:")
+            lines.extend(tests)
+            lines.append("")
     if required:
         lines.append("必需 (必须修复):")
         lines.extend(required)
@@ -373,8 +445,11 @@ async def setup_status_adapter(settings: Settings, arg: str, **kw) -> ToolResult
 
 
 async def setup_check_adapter(settings: Settings, arg: str, **kw) -> ToolResult:
+    import asyncio
+
     operator_id = kw.get("operator_id", "")
-    return setup_check(settings, operator_id)
+    # Live tests do network I/O (IMAP / SMTP / HTTP); keep the bot loop free.
+    return await asyncio.to_thread(setup_check, settings, operator_id, live=True)
 
 
 async def setup_project_adapter(settings: Settings, arg: str, **kw) -> ToolResult:

@@ -79,17 +79,22 @@ def send_email(settings: Settings, to: str, subject: str, body: str) -> ToolResu
         msg["Subject"] = subject.strip()
         msg["Date"] = formatdate(localtime=True)
 
-        # Send via SMTP with STARTTLS
-        with smtplib.SMTP(settings.gmail_smtp_host, settings.gmail_smtp_port) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
+        # Port 465 is implicit TLS (QQ / 163 / 126); anything else STARTTLS.
+        if int(settings.gmail_smtp_port) == 465:
+            server_cm = smtplib.SMTP_SSL(settings.gmail_smtp_host, 465)
+        else:
+            server_cm = smtplib.SMTP(settings.gmail_smtp_host, settings.gmail_smtp_port)
+        with server_cm as server:
+            if int(settings.gmail_smtp_port) != 465:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
             server.login(settings.gmail_address, settings.gmail_app_password)
             server.send_message(msg)
 
         return ToolResult(ok=True, text=f"✅ 邮件已发送\nTo: {to}\nSubject: {subject}")
     except smtplib.SMTPAuthenticationError:
-        return ToolResult(ok=False, text="⚠️ Gmail 认证失败，请检查 App Password")
+        return ToolResult(ok=False, text="⚠️ 邮箱认证失败，请检查授权码 / App Password（可运行 conveyor setup email 重新配置）")
     except smtplib.SMTPRecipientsRefused:
         return ToolResult(ok=False, text=f"⚠️ 收件人被拒绝: {to}")
     except Exception as exc:

@@ -284,6 +284,8 @@ print_status() {
     echo "  conveyor doctor"
     echo "  sudo conveyor update"
     echo
+    echo "  Next: sudo conveyor setup   # chat model, web search, email, Feishu, GitHub, Web console"
+    echo
 }
 
 do_install() {
