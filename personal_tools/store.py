@@ -52,6 +52,14 @@ def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
+def _migrate_topic_watches(conn: sqlite3.Connection) -> None:
+    # seen_urls: JSON list of normalized result URLs already delivered, so
+    # a watch pushes only results it has not shown before.
+    if "seen_urls" not in _existing_columns(conn, "topic_watches"):
+        conn.execute("ALTER TABLE topic_watches ADD COLUMN seen_urls TEXT")
+        conn.commit()
+
+
 def _migrate_reminders(conn: sqlite3.Connection) -> None:
     """Add delivery columns to existing reminders table if missing."""
     existing = _existing_columns(conn, "reminders")
@@ -177,6 +185,7 @@ def init_db(settings: Settings) -> None:
         )
         conn.commit()
         _migrate_reminders(conn)
+        _migrate_topic_watches(conn)
         # Delivery index must exist after migration adds the column.
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_reminders_delivery "
@@ -260,6 +269,7 @@ class TopicWatchRow:
     status: str
     created_at: str
     updated_at: str
+    seen_urls: tuple[str, ...] = ()
 
 
 class PersonalToolsStore:
@@ -758,17 +768,33 @@ class PersonalToolsStore:
                 due.append(w)
         return due
 
-    def update_topic_watch_check(self, watch_id: int, last_checked_at: str, last_digest: str | None) -> None:
+    def update_topic_watch_check(
+        self,
+        watch_id: int,
+        last_checked_at: str,
+        last_digest: str | None,
+        seen_urls: list[str] | None = None,
+    ) -> None:
         now = _utc_now()
         with _connect(self._settings) as conn:
-            conn.execute(
-                """
-                UPDATE topic_watches
-                SET last_checked_at = ?, last_digest = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (last_checked_at, last_digest, now, watch_id),
-            )
+            if seen_urls is None:
+                conn.execute(
+                    """
+                    UPDATE topic_watches
+                    SET last_checked_at = ?, last_digest = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (last_checked_at, last_digest, now, watch_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE topic_watches
+                    SET last_checked_at = ?, last_digest = ?, seen_urls = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (last_checked_at, last_digest, json.dumps(seen_urls), now, watch_id),
+                )
             conn.commit()
 
 
@@ -835,6 +861,17 @@ def _project_profile_from_row(row: sqlite3.Row) -> ProjectProfileRow:
     )
 
 
+def _seen_urls(row: sqlite3.Row) -> tuple[str, ...]:
+    raw = row["seen_urls"] if "seen_urls" in row.keys() else None
+    if not raw:
+        return ()
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return ()
+    return tuple(str(u) for u in data if isinstance(u, str)) if isinstance(data, list) else ()
+
+
 def _topic_watch_from_row(row: sqlite3.Row) -> TopicWatchRow:
     return TopicWatchRow(
         id=int(row["id"]),
@@ -848,4 +885,5 @@ def _topic_watch_from_row(row: sqlite3.Row) -> TopicWatchRow:
         status=str(row["status"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        seen_urls=_seen_urls(row),
     )

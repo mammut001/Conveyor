@@ -94,8 +94,22 @@ Operators can subscribe to topics or search queries for proactive push notificat
 * `/watches` — view all active topic subscriptions.
 * `/unwatch <id>` — cancel a subscription.
 
-`conveyor-scheduler.timer` checks due watches on each tick. A SHA-256 fingerprint diffs
-new search results against the previous run's digest; notifications are sent only when
-genuine updates appear, citing verified sources only.
+`conveyor-scheduler.timer` checks due watches on each tick
+(`personal_tools/topic_watch.py`):
+
+* **What counts as new**: each result is identified by its normalized URL (scheme,
+  `www.`, fragment, trailing slash and tracking parameters such as `utm_*` ignored).
+  The watch remembers the last 300 URLs it delivered (`topic_watches.seen_urls`), so
+  re-ranked or re-titled results never trigger a push; only unseen URLs do.
+* **Brief**: with the chat tier configured, the chat model writes a 2-3 sentence brief
+  of what the new results say, from their titles and snippets only (no added facts,
+  links stripped, results treated as untrusted). It can answer `[[SKIP]]` when the new
+  results are off-topic or not substantive — then nothing is pushed and those URLs are
+  remembered. Without a chat model, or if the call fails, the new results are listed.
+* **Message**: the first check sends "🔔 开始关注" with the current sources; later
+  pushes list only the new sources (up to 5).
+* Watches created before this change take their next check as a silent baseline, so
+  the upgrade does not re-push old news.
+* Delivery is Telegram-only for now; Feishu watches are rejected at creation.
 
 Smoke suites: `scripts/chat_tier_smoke.py`, `scripts/chat_memory_smoke.py`, `scripts/topic_watch_smoke.py`.
