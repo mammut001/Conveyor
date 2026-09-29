@@ -349,6 +349,37 @@ def list_recent_observe_requests(settings: Settings, *, limit: int = 5) -> list[
             return _list_recent_unlocked(store, limit)
 
 
+def cancel_pending_observe_requests(settings: Settings, reason: str = "human_takeover_active") -> int:
+    """Discard queued screenshots when the operator takes over the desktop."""
+    reason = _truncate_text(reason or "human_takeover_active", 128)
+    changed = 0
+    with _lock:
+        with file_lock(observe_requests_lock_path(settings)):
+            store = _load_unlocked(settings)
+            now = _iso_z(_utc_now())
+            for record in store.values():
+                if not isinstance(record, dict) or record.get("status") != "pending":
+                    continue
+                record["status"] = "cancelled"
+                record["updated_at"] = now
+                record["error"] = reason
+                changed += 1
+            if changed:
+                _save_unlocked(settings, store)
+    return changed
+
+
+def has_claimed_observe_requests(settings: Settings) -> bool:
+    """Return whether a screenshot request is already being captured."""
+    with _lock:
+        with file_lock(observe_requests_lock_path(settings)):
+            store = _load_unlocked(settings)
+            return any(
+                isinstance(record, dict) and record.get("status") == "claimed"
+                for record in store.values()
+            )
+
+
 def create_observe_request(
     settings: Settings,
     msg: InboundMessage,
@@ -415,6 +446,9 @@ def create_observe_request(
 
     with _lock:
         with file_lock(observe_requests_lock_path(settings)):
+            from human_takeover import takeover_blocks_automation
+            if takeover_blocks_automation(settings):
+                return {"ok": False, "error": "human_takeover_active"}
             store = _load_unlocked(settings)
             _expire_old_unlocked(store, now)
             max_pending = settings.conveyor_desktop_observe_max_pending
@@ -434,6 +468,9 @@ def claim_observe_request(settings: Settings, request_id: str, node_id: str) -> 
     node_id = (node_id or "").strip()
     with _lock:
         with file_lock(observe_requests_lock_path(settings)):
+            from human_takeover import takeover_blocks_automation
+            if takeover_blocks_automation(settings):
+                return {"ok": False, "error": "human_takeover_active"}
             store = _load_unlocked(settings)
             _expire_old_unlocked(store)
             record = store.get(request_id)

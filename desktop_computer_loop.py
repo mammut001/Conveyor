@@ -12,7 +12,11 @@ Safety enforced here (see docs/desktop_security.md):
 - Every action is allow-listed (``is_action_allowed``) and scanned for
   blocked keywords (``contains_blocked_keyword``). Either hit stops
   the task and records why.
-- ``max_steps`` / ``max_seconds`` hard caps.
+- Human takeover owns the GUI exclusively: while a takeover session is
+  open the loop performs no observe/click/type/hotkey action and waits
+  for the operator to complete or cancel the handoff.
+- ``max_steps`` / ``max_seconds`` hard caps; human-owned pause time does
+  not consume the automation wall-clock budget.
 - Typed text / hotkey payloads are redacted before they enter the
   trajectory (``redact_computer_action``).
 """
@@ -32,6 +36,7 @@ from desktop_computer_planner import (
 from desktop_computer_requests import (
     append_trajectory,
     cancel_computer_task,
+    cancel_pending_computer_step,
     contains_blocked_keyword,
     create_computer_step,
     create_computer_task,
@@ -42,6 +47,7 @@ from desktop_computer_requests import (
     set_task_status,
 )
 from desktop_cua import CuaDriver, FakeCuaTransport
+from human_takeover import HumanTakeoverStore
 
 
 class ComputerBackendError(Exception):
@@ -61,6 +67,7 @@ class HttpComputerBackend:
 
     async def execute_step(self, settings: Settings, task_id: str, step_id: str, action: dict) -> dict:
         deadline = time.monotonic() + settings.conveyor_computer_max_seconds
+        takeover_store = HumanTakeoverStore(settings)
         while time.monotonic() < deadline:
             task = get_computer_task(settings, task_id)
             if not isinstance(task, dict):
@@ -69,12 +76,25 @@ class HttpComputerBackend:
             if not isinstance(step, dict):
                 raise ComputerBackendError("step_missing")
             status = step.get("status")
+            if status == "pending" and takeover_store.current() is not None:
+                cancel_pending_computer_step(
+                    settings,
+                    task_id,
+                    step_id,
+                    reason="human_takeover_active",
+                )
+                raise ComputerBackendError("human_takeover_active")
             if status == "completed":
                 result = step.get("result") or {}
                 if not isinstance(result, dict):
                     result = {}
                 return result
             if status in ("failed", "expired", "cancelled"):
+                if status == "cancelled" and (
+                    step.get("error") == "human_takeover_active"
+                    or takeover_store.current() is not None
+                ):
+                    raise ComputerBackendError("human_takeover_active")
                 raise ComputerBackendError(f"step_{status}")
             await asyncio.sleep(self.poll_interval)
         raise ComputerBackendError("step_timeout")
@@ -155,14 +175,17 @@ async def run_computer_loop(
                 "trajectory_len": len(existing.get("trajectory", []) or []),
             }
     start = time.monotonic()
+    pause_started: float | None = None
     steps_used = 0
     observation: dict[str, Any] = {"initial": True}
     trajectory: list[dict] = []
     followup_observe = False
+    takeover_store = HumanTakeoverStore(settings)
 
     try:
         while steps_used < max_steps:
-            # Operator stop or external cancel.
+            # Operator stop or external cancel remains authoritative even
+            # while a human owns the GUI.
             if stop_check is not None and stop_check():
                 set_task_status(settings, task_id, "stopped", blocked_reason="operator_stop")
                 break
@@ -170,6 +193,23 @@ async def run_computer_loop(
             if not isinstance(task, dict) or task.get("status") != "running":
                 # Cancelled by /computer_stop.
                 break
+
+            # Human takeover is an exclusive GUI lease. Do not even observe
+            # the desktop while a human may be typing secrets/payment data.
+            # The store has its own TTL, so a lost browser session cannot
+            # pause automation forever.
+            takeover = takeover_store.current()
+            if takeover is not None:
+                if pause_started is None:
+                    pause_started = time.monotonic()
+                await asyncio.sleep(0.25)
+                continue
+            if pause_started is not None:
+                start += time.monotonic() - pause_started
+                pause_started = None
+                # Discard any planner result and refresh the desktop after a
+                # handoff. The old plan was made against a pre-human screen.
+                followup_observe = True
 
             if followup_observe:
                 # Refresh the desktop after every mutating/wait action before
@@ -239,9 +279,21 @@ async def run_computer_loop(
                 set_task_status(settings, task_id, "blocked", blocked_reason=f"blocked_keyword:{hit}")
                 break
 
+            # Re-check the exclusive lease immediately before creating a
+            # mutating/observe step, closing the planner-to-executor race.
+            if takeover_store.current() is not None:
+                if pause_started is None:
+                    pause_started = time.monotonic()
+                continue
+
             # Create + execute the step.
             step = create_computer_step(settings, task_id, action)
             if not step.get("ok"):
+                if step.get("error") == "human_takeover_active":
+                    if pause_started is None:
+                        pause_started = time.monotonic()
+                    followup_observe = True
+                    continue
                 set_task_status(settings, task_id, "error", blocked_reason=step.get("error", "step_create_failed"))
                 break
             step_id = step["step_id"]
@@ -255,6 +307,12 @@ async def run_computer_loop(
                 current_task = get_computer_task(settings, task_id)
                 if isinstance(current_task, dict) and current_task.get("status") == "stopped":
                     break
+                if str(exc) == "human_takeover_active":
+                    # The pending step was never claimed/executed. Re-enter
+                    # the lease wait and, after release, observe before using
+                    # the planner again.
+                    followup_observe = True
+                    continue
                 if str(exc) in {"task_not_running", "step_cancelled"}:
                     set_task_status(settings, task_id, "stopped", blocked_reason="operator_stop")
                     break
