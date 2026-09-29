@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Loopback-only noVNC transport for an existing graphical X11 session.
 # This script intentionally does NOT open firewall ports or expose noVNC.
-# Reach it through an SSH tunnel, Tailscale/VPN, or a separately secured
-# reverse proxy. Conveyor itself never reads the VNC password or keystrokes.
+# Reach it through an SSH tunnel or optional tailnet-only Tailscale Serve.
+# Conveyor itself never reads the VNC password or keystrokes.
 
 COMMAND="${1:-status}"
 DISPLAY_NAME="${CONVEYOR_HANDOFF_DISPLAY:-${DISPLAY:-:0}}"
@@ -13,6 +13,9 @@ NOVNC_PORT="${CONVEYOR_HANDOFF_NOVNC_PORT:-6080}"
 XAUTHORITY_FILE="${CONVEYOR_HANDOFF_XAUTHORITY:-${XAUTHORITY:-}}"
 LISTEN_HOST="127.0.0.1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$REPO_ROOT"
+export CONVEYOR_ENV_FILE="${CONVEYOR_ENV_FILE:-$REPO_ROOT/.env}"
 HANDOFFCTL="$SCRIPT_DIR/handoffctl.py"
 RUNTIME_BASE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 if [[ ! -d "$RUNTIME_BASE" || ! -w "$RUNTIME_BASE" ]]; then
@@ -24,6 +27,10 @@ WEBSOCKIFY_PID="$STATE_DIR/websockify.pid"
 WATCHER_PID="$STATE_DIR/lease-watch.pid"
 PASSWORD_FILE="$STATE_DIR/password.txt"
 VNC_AUTH_FILE="$STATE_DIR/vnc.pass"
+TAILSCALE_PORT=8443
+TAILSCALE_PORT_FILE="$STATE_DIR/tailscale-serve.port"
+TAILSCALE_PID="$STATE_DIR/tailscale-serve.pid"
+TAILSCALE_DNS=""
 
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -40,6 +47,50 @@ pid_alive() {
   pid="$(cat "$file" 2>/dev/null || true)"
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   kill -0 "$pid" 2>/dev/null
+}
+
+# Serve status is checked before reserving our dedicated port. Never overwrite
+# another service's route or reset the node's unrelated Serve configuration.
+tailscale_port_in_use() {
+  local config
+  config="$(tailscale serve status --json)" || return 2
+  printf '%s' "$config" | python3 -c '
+import json, sys
+config = json.load(sys.stdin) or {}
+port = sys.argv[1]
+for section in ("Web", "TCP"):
+    for key in (config.get(section) or {}):
+        if str(key).rsplit(":", 1)[-1] == port:
+            sys.exit(0)
+sys.exit(1)
+' "$TAILSCALE_PORT"
+}
+
+start_tailnet_access() {
+  [[ "${CONVEYOR_HANDOFF_TAILSCALE_SERVE:-0}" == 1 ]] || return 0
+  if tailscale_port_in_use; then
+    stop_transport
+    die "Tailscale Serve port $TAILSCALE_PORT is already in use; refusing to replace it"
+  else
+    if [[ $? != 1 ]]; then
+      stop_transport
+      die "Could not inspect Tailscale Serve; handoff transport was stopped"
+    fi
+  fi
+
+  # A foreground Serve session disappears on exit/reboot. The marker ensures
+  # an unsuccessful shutdown blocks lease completion until cleanup succeeds.
+  printf '%s\n' "$TAILSCALE_PORT" > "$TAILSCALE_PORT_FILE"
+  chmod 600 "$TAILSCALE_PORT_FILE"
+  nohup tailscale serve --yes --https="$TAILSCALE_PORT" \
+    "http://127.0.0.1:$NOVNC_PORT" >/dev/null 2>&1 </dev/null &
+  printf '%s\n' "$!" > "$TAILSCALE_PID"
+  chmod 600 "$TAILSCALE_PID"
+  sleep 1
+  if ! pid_alive "$TAILSCALE_PID" || ! tailscale_port_in_use; then
+    stop_transport
+    die "Tailscale Serve failed to start; handoff transport was stopped"
+  fi
 }
 
 find_novnc_root() {
@@ -83,6 +134,25 @@ start_transport() {
   if pid_alive "$X11VNC_PID" || pid_alive "$WEBSOCKIFY_PID"; then
     die "handoff transport is already running; run '$0 status'"
   fi
+  [[ ! -e "$TAILSCALE_PORT_FILE" ]] || die "a prior tailnet route needs cleanup; run '$0 stop'"
+  if [[ "${CONVEYOR_HANDOFF_TAILSCALE_SERVE:-0}" == 1 ]]; then
+    command -v tailscale >/dev/null 2>&1 || die "tailscale is required for tailnet access"
+    TAILSCALE_DNS="$(tailscale status --json | python3 -c '
+import json, sys
+name = (json.load(sys.stdin).get("Self") or {}).get("DNSName", "").rstrip(".")
+if not name or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-" for c in name):
+    sys.exit(1)
+print(name)
+')" || die "Tailscale is not connected with a MagicDNS name"
+    if tailscale_port_in_use; then
+      die "Tailscale Serve port $TAILSCALE_PORT is already in use; refusing to replace it"
+    else
+      [[ $? == 1 ]] || die "Could not inspect Tailscale Serve; refusing to open a route"
+    fi
+  fi
+  # Once startup owns the transport, even an interrupted shell must shut it
+  # down. The watchdog takes responsibility only after it has started.
+  trap 'stop_transport' EXIT
 
   local novnc_root password
   local -a auth_args
@@ -105,38 +175,45 @@ PY
   chmod 600 "$PASSWORD_FILE" "$VNC_AUTH_FILE"
 
   log "Starting x11vnc for display $DISPLAY_NAME on loopback:$VNC_PORT"
-  if ! x11vnc \
+  nohup x11vnc \
     -display "$DISPLAY_NAME" \
     "${auth_args[@]}" \
     -rfbauth "$VNC_AUTH_FILE" \
     -rfbport "$VNC_PORT" \
     -localhost \
+    -noipv6 \
     -forever \
     -shared \
     -noxdamage \
-    -bg \
-    -o /dev/null \
-    -pidfile "$X11VNC_PID" >/dev/null 2>&1; then
+    -o /dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$X11VNC_PID"
+  chmod 600 "$X11VNC_PID"
+  sleep 0.5
+  if ! pid_alive "$X11VNC_PID"; then
     rm -f "$PASSWORD_FILE" "$VNC_AUTH_FILE" "$X11VNC_PID"
     die "x11vnc failed to start; temporary credentials were removed"
   fi
 
   log "Starting noVNC/websockify on loopback:$NOVNC_PORT"
-  if ! websockify \
+  nohup websockify \
     --web "$novnc_root" \
-    --daemon \
-    --pidfile="$WEBSOCKIFY_PID" \
     "$LISTEN_HOST:$NOVNC_PORT" \
-    "$LISTEN_HOST:$VNC_PORT"; then
+    "$LISTEN_HOST:$VNC_PORT" >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$WEBSOCKIFY_PID"
+  chmod 600 "$WEBSOCKIFY_PID"
+  sleep 0.5
+  if ! pid_alive "$WEBSOCKIFY_PID"; then
     stop_transport
     die "websockify failed to start; temporary credentials were removed"
   fi
+
+  start_tailnet_access
 
   local lease_json lease_id
   lease_json="$(takeover_snapshot)" || { stop_transport; die "Could not verify takeover state after startup"; }
   lease_id="$(printf '%s' "$lease_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("takeover") or {}; print(t.get("id", ""))')"
   [[ -n "$lease_id" ]] || { stop_transport; die "Takeover lease closed during startup"; }
-  nohup "$0" watch "$lease_id" >/dev/null 2>&1 </dev/null &
+  nohup /usr/bin/env bash "$SCRIPT_DIR/novnc_handoff.sh" watch "$lease_id" >/dev/null 2>&1 </dev/null &
   printf '%s\n' "$!" > "$WATCHER_PID"
   chmod 600 "$WATCHER_PID"
   if ! pid_alive "$WATCHER_PID"; then
@@ -159,11 +236,16 @@ Recommended access from your own computer:
 
 Then open the Local URL in your browser.
 
+$(if [[ -e "$TAILSCALE_PORT_FILE" ]]; then
+    printf 'Tailnet access (Tailscale connected on your phone):\n  https://%s:%s/vnc.html?autoconnect=1&resize=scale\n' "$TAILSCALE_DNS" "$TAILSCALE_PORT"
+  fi)
+
 IMPORTANT:
   - ports ${VNC_PORT}/${NOVNC_PORT} are loopback-only; do not expose them publicly
   - stop the handoff immediately after sensitive input is complete
   - do not enable screen recording / screenshots while entering secrets or payment data
 EOF
+  trap - EXIT
 }
 
 stop_pidfile() {
@@ -189,30 +271,58 @@ stop_pidfile() {
 stop_transport() {
   ensure_state_dir
   stop_pidfile "$WATCHER_PID"
+  local tailnet_cleanup_failed=0 port
+  if [[ -e "$TAILSCALE_PORT_FILE" ]]; then
+    port="$(cat "$TAILSCALE_PORT_FILE" 2>/dev/null || true)"
+    if [[ "$port" == "$TAILSCALE_PORT" ]] && command -v tailscale >/dev/null 2>&1; then
+      tailscale serve --https="$port" off >/dev/null 2>&1 || true
+      if tailscale_port_in_use; then
+        tailnet_cleanup_failed=1
+      else
+        if [[ $? == 1 ]]; then
+          rm -f "$TAILSCALE_PORT_FILE"
+        else
+          tailnet_cleanup_failed=1
+        fi
+      fi
+    else
+      tailnet_cleanup_failed=1
+    fi
+  fi
+  stop_pidfile "$TAILSCALE_PID"
   stop_pidfile "$WEBSOCKIFY_PID"
   stop_pidfile "$X11VNC_PID"
   rm -f "$PASSWORD_FILE" "$VNC_AUTH_FILE"
+  if [[ "$tailnet_cleanup_failed" == 1 ]]; then
+    die "Tailscale route could not be verified closed; lease remains blocked. Fix Tailscale and run '$0 stop' again"
+  fi
   log "Human handoff transport stopped and temporary credentials removed."
 }
 
 status_transport() {
   ensure_state_dir
-  local vnc=stopped ws=stopped
+  local vnc=stopped ws=stopped tailnet=off
   pid_alive "$X11VNC_PID" && vnc=running
   pid_alive "$WEBSOCKIFY_PID" && ws=running
-  printf 'x11vnc: %s\nwebsockify: %s\nurl: http://127.0.0.1:%s/vnc.html?autoconnect=1&resize=scale\n' "$vnc" "$ws" "$NOVNC_PORT"
+  [[ -e "$TAILSCALE_PORT_FILE" ]] && tailnet='active or needs cleanup'
+  printf 'x11vnc: %s\nwebsockify: %s\ntailnet route: %s\nurl: http://127.0.0.1:%s/vnc.html?autoconnect=1&resize=scale\n' "$vnc" "$ws" "$tailnet" "$NOVNC_PORT"
 }
 
 watch_transport() {
   local expected_id="$1"
   [[ -n "$expected_id" ]] || die "usage: $0 watch <takeover-id>"
-  while pid_alive "$X11VNC_PID" || pid_alive "$WEBSOCKIFY_PID"; do
+  while pid_alive "$X11VNC_PID" || pid_alive "$WEBSOCKIFY_PID" || [[ -e "$TAILSCALE_PORT_FILE" ]]; do
+    if ! pid_alive "$X11VNC_PID" || ! pid_alive "$WEBSOCKIFY_PID" || { [[ -e "$TAILSCALE_PORT_FILE" ]] && ! pid_alive "$TAILSCALE_PID"; }; then
+      log "A handoff component stopped; closing all access."
+      stop_transport
+      return 0
+    fi
     local snapshot current_id state remaining
     snapshot="$(takeover_snapshot 2>/dev/null || printf '{}')"
     current_id="$(printf '%s' "$snapshot" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("takeover") or {}; print(t.get("id", ""))' 2>/dev/null || true)"
     state="$(printf '%s' "$snapshot" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("takeover") or {}; print(t.get("state", ""))' 2>/dev/null || true)"
     remaining="$(printf '%s' "$snapshot" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("takeover") or {}; print(t.get("remaining_seconds", 0))' 2>/dev/null || printf '0')"
-    if [[ "$current_id" != "$expected_id" || "$state" != "waiting_for_human" && "$state" != "human_active" || ! "$remaining" =~ ^[0-9]+$ || "$remaining" -le 10 ]]; then
+    if [[ "$current_id" != "$expected_id" || ( "$state" != "waiting_for_human" && "$state" != "human_active" ) || ! "$remaining" =~ ^[0-9]+$ || "$remaining" -le 10 ]]; then
       log "Takeover lease closed or nearing expiry; stopping the remote desktop."
       stop_transport
       return 0
