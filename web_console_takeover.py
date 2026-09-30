@@ -2,7 +2,7 @@
 """Web Console entrypoint with Secure Human Takeover API routes.
 
 Kept as a thin extension of ``web_console.py`` so the existing task/session/SSE
-surface remains unchanged.  Only authenticated ``/api/takeover/*`` routes are
+surface remains unchanged. Only authenticated ``/api/takeover/*`` routes are
 added here.
 """
 from __future__ import annotations
@@ -19,7 +19,6 @@ from config import load_settings
 from handlers.job_queue import get_job_queue
 from redaction import SecretRedactingFilter, redact_text
 from runner import CodexRunner
-from transcript_store import session_identity  # imported to preserve startup parity
 from web_console import WebConsoleHandler, WebConsoleServer, validate_web_config
 from web_control import WebControl
 from web_takeover import WebTakeover
@@ -85,7 +84,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Conveyor Web Workbench")
     parser.add_argument("--check", action="store_true", help="validate configuration and exit")
     args = parser.parse_args()
-    logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s %(message)s", level=logging.INFO)
+    logging.basicConfig(
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        level=logging.INFO,
+    )
     for handler in logging.getLogger().handlers:
         handler.addFilter(SecretRedactingFilter())
 
@@ -110,9 +112,17 @@ def main() -> None:
         token=settings.conveyor_web_token,
         takeover=takeover,
     )
-    thread = threading.Thread(target=server.serve_forever, name="conveyor-web-http", daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever,
+        name="conveyor-web-http",
+        daemon=True,
+    )
     thread.start()
-    logger.info("Conveyor Web Workbench listening on http://%s:%d", settings.conveyor_web_host, settings.conveyor_web_port)
+    logger.info(
+        "Conveyor Web Workbench listening on http://%s:%d",
+        settings.conveyor_web_host,
+        settings.conveyor_web_port,
+    )
     try:
         loop.run_forever()
     except KeyboardInterrupt:
