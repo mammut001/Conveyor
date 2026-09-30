@@ -43,7 +43,8 @@ TinyFish without changing the code that asks Conveyor to search.
 
 The legacy `/web_search` and `/web_fetch` command surfaces remain compatible.
 Higher-level workflows should use `WebRuntime`; `research.py` is the first
-production consumer migrated to the abstraction.
+production consumer migrated to the abstraction. Provider-specific behavior is
+therefore contained below the workflow layer rather than scattered through it.
 
 ## TinyFish Search + Fetch
 
