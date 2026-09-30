@@ -41,6 +41,8 @@ export function HumanTakeoverPanel() {
   const [status, setStatus] = useState<TakeoverStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // Served by plain web_console.py (no takeover routes): stop polling entirely.
+  const [unavailable, setUnavailable] = useState(false)
 
   const load = useCallback(async () => {
     const token = sessionStorage.getItem('conveyor-token') || ''
@@ -48,12 +50,22 @@ export function HumanTakeoverPanel() {
     const response = await fetch('/api/takeover/status', {
       headers: { Authorization: `Bearer ${token}` },
     })
-    if (response.status === 401 || response.status === 404) {
+    if (response.status === 404) {
+      setUnavailable(true)
+      setStatus(null)
+      return null
+    }
+    if (response.status === 401) {
       setStatus(null)
       return null
     }
     const body = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(body.error || `Takeover status failed (${response.status})`)
+    if (body && body.available === false) {
+      setUnavailable(true)
+      setStatus(null)
+      return null
+    }
     setStatus(body as TakeoverStatus)
     return body as TakeoverStatus
   }, [])
@@ -87,15 +99,16 @@ export function HumanTakeoverPanel() {
   }, [])
 
   useEffect(() => {
+    if (unavailable) return
     let active = true
     const refresh = () => { void load().catch(reason => { if (active) setError(reason instanceof Error ? reason.message : 'Could not load takeover status') }) }
     refresh()
     const intervalMs = status?.enabled === false ? 30_000 : 2_000
     const timer = window.setInterval(refresh, intervalMs)
     return () => { active = false; window.clearInterval(timer) }
-  }, [load, status?.enabled])
+  }, [load, status?.enabled, unavailable])
 
-  if (!target || !status) return null
+  if (unavailable || !target || !status) return null
 
   if (status.enabled === false) {
     const disabledCard = (

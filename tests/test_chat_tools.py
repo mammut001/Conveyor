@@ -597,6 +597,19 @@ class TestAskChatToolWiring(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(len(self.port.edits), 0)
             self.assertEqual(self.port.edits[-1][2], "I will now send an email for you.")
 
+    async def test_confirmation_turn_memory_is_factual_not_bare_note(self) -> None:
+        # Remembering the bare "已请求确认" note made the model answer later
+        # write requests with that text and no tool call (live DeepSeek).
+        settings_on = _make_settings(Path(self.tmp.name), chat_tools_enabled=True)
+        loop_res = ToolLoopResult(text="", tools_called=["notes.add"], confirmation_requested=True)
+        with patch("handlers.chat_tools.run_tool_loop", AsyncMock(return_value=loop_res)):
+            await chat.ask_chat(self.msg, self.port, settings_on, question="记一条笔记：x")
+        past = chat.history(chat.chat_key(self.msg), 6, settings=settings_on)
+        self.assertEqual(past[-1]["role"], "assistant")
+        self.assertIn("notes.add", past[-1]["content"])
+        self.assertIn("Nothing has executed yet", past[-1]["content"])
+        self.assertEqual(self.port.edits[-1][2], "已请求确认")  # UI note unchanged
+
     async def test_flag_on_read_tool_end_to_end(self) -> None:
         settings_on = _make_settings(Path(self.tmp.name), chat_tools_enabled=True)
         round1 = {
