@@ -1,0 +1,177 @@
+.primary-interface .context-panel > .takeover-context {
+  order: 3;
+  border-color: #e3c8bf;
+  box-shadow: 0 4px 16px rgba(84, 50, 38, .06);
+}
+
+.primary-interface .context-panel > .context-section:has(.host-screen-card) {
+  order: 4;
+}
+
+.primary-interface .context-panel > .context-section:not(:first-of-type):not(:has(.file-list)):not(:has(.host-screen-card)):not(.takeover-context) {
+  order: 5;
+}
+
+.takeover-privacy-banner {
+  position: fixed;
+  z-index: 80;
+  top: 32px;
+  left: 0;
+  right: 0;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 7px 16px;
+  border-bottom: 1px solid #d7b0a2;
+  background: rgba(255, 246, 242, .98);
+  color: #5d4037;
+  box-shadow: 0 5px 18px rgba(62, 37, 29, .08);
+  backdrop-filter: blur(10px);
+  font: 12px/1.35 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.takeover-privacy-banner strong {
+  color: #963f2d;
+  letter-spacing: .02em;
+}
+
+.takeover-privacy-banner em {
+  color: #7b4a3d;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.takeover-idle,
+.takeover-active-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.takeover-idle strong,
+.takeover-active-heading strong {
+  display: block;
+  color: #2f3237;
+  font-size: 13px;
+}
+
+.takeover-idle p,
+.takeover-active-heading p,
+.takeover-secret-note {
+  margin: 4px 0 0;
+  color: #747983;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.takeover-lock {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #f0f1f3;
+  color: #6f747d;
+  font-size: 10px;
+}
+
+.takeover-lock.active {
+  background: #f9e8e1;
+  color: #b65339;
+}
+
+.takeover-status-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 10px;
+  margin: 10px 0 12px;
+  padding: 10px;
+  border: 1px solid #ece7e4;
+  border-radius: 9px;
+  background: #fbfaf9;
+  font-size: 11px;
+}
+
+.takeover-status-grid span {
+  color: #8a8f98;
+}
+
+.takeover-status-grid strong {
+  color: #3d4148;
+  text-align: right;
+  font-weight: 650;
+}
+
+.takeover-actions {
+  display: grid;
+  gap: 7px;
+}
+
+.takeover-actions button,
+.takeover-primary,
+.takeover-open {
+  width: 100%;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 1px solid #d9dbdf;
+  border-radius: 8px;
+  background: #fff;
+  color: #3b3f45;
+  font: 650 12px/1 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.takeover-actions button:disabled,
+.takeover-primary:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+.takeover-primary,
+.takeover-open {
+  border-color: #bd5c40;
+  background: #bd5c40;
+  color: #fff;
+}
+
+.takeover-primary:hover:not(:disabled),
+.takeover-open:hover {
+  border-color: #a94c34;
+  background: #a94c34;
+}
+
+.takeover-cancel {
+  color: #8a4635 !important;
+}
+
+.takeover-error {
+  margin: 8px 0;
+  padding: 8px 9px;
+  border: 1px solid #f0c8bc;
+  border-radius: 8px;
+  background: #fff5f1;
+  color: #8d3d2b;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.takeover-secret-note {
+  margin-top: 10px;
+}
+
+@media (max-width: 920px) {
+  .takeover-privacy-banner {
+    top: 32px;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
