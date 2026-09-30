@@ -1,10 +1,10 @@
 """Web-safe coordination for Secure Human Takeover.
 
 The Web Console may create/activate a takeover lease and request that it close,
-but it never starts or kills the remote-desktop transport itself.  Transport
+but it never starts or kills the remote-desktop transport itself. Transport
 lifecycle belongs to ``handoff_sidecar.py`` running under systemd.
 
-Only coordination metadata and a private-network URL are exposed.  VNC
+Only coordination metadata and a private-network URL are exposed. VNC
 passwords, typed text, screenshots, clipboard contents, and other secret UI
 material never enter this module's persisted state or API payloads.
 """
@@ -31,6 +31,10 @@ def _state_root(settings: Any) -> Path:
 
 def close_request_path(settings: Any) -> Path:
     return _state_root(settings) / "human_takeover_close.json"
+
+
+def transport_gate_path(settings: Any) -> Path:
+    return _state_root(settings) / "human_takeover_transport_ready.json"
 
 
 def sidecar_status_path(settings: Any) -> Path:
@@ -94,17 +98,56 @@ def request_close(settings: Any, session_id: str, action: str) -> dict[str, Any]
         raise ValueError("takeover session_id is required")
     if action not in CLOSE_ACTIONS:
         raise ValueError("unsupported takeover close action")
-    _atomic_json(close_request_path(settings), {
-        "session_id": session_id,
-        "action": action,
-        "requested_at": time.time(),
-    })
+    _atomic_json(
+        close_request_path(settings),
+        {
+            "session_id": session_id,
+            "action": action,
+            "requested_at": time.time(),
+        },
+    )
     return read_close_request(settings) or {}
+
+
+def read_transport_gate(settings: Any) -> dict[str, Any] | None:
+    value = _read_json(transport_gate_path(settings))
+    if not value:
+        return None
+    session_id = str(value.get("session_id") or "").strip()[:64]
+    if not session_id:
+        return None
+    return {
+        "session_id": session_id,
+        "ready_at": float(value.get("ready_at") or 0),
+    }
+
+
+def allow_transport(settings: Any, session_id: str) -> dict[str, Any]:
+    session_id = str(session_id or "").strip()[:64]
+    if not session_id:
+        raise ValueError("takeover session_id is required")
+    _atomic_json(
+        transport_gate_path(settings),
+        {"session_id": session_id, "ready_at": time.time()},
+    )
+    return read_transport_gate(settings) or {}
+
+
+def clear_transport_gate(settings: Any, *, session_id: str | None = None) -> None:
+    path = transport_gate_path(settings)
+    if session_id:
+        current = read_transport_gate(settings)
+        if current and current.get("session_id") != session_id:
+            return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def read_sidecar_status(settings: Any) -> dict[str, Any]:
     value = _read_json(sidecar_status_path(settings)) or {}
-    # Explicit allow-list.  Never pass arbitrary sidecar output through to Web.
+    # Explicit allow-list. Never pass arbitrary sidecar output through to Web.
     return {
         "phase": str(value.get("phase") or "unknown")[:32],
         "running": bool(value.get("running")),
@@ -121,8 +164,8 @@ class WebTakeover:
 
     ``start`` performs the same idle barrier as the operator CLI: pending
     computer/screenshot claims are cancelled, and an already-claimed operation
-    must finish before the remote desktop may be opened.  The systemd sidecar
-    notices the lease and owns transport start/stop.
+    must finish before the remote desktop may be opened. Only after that barrier
+    succeeds is a session-scoped transport gate written for the systemd sidecar.
     """
 
     def __init__(self, settings: Any) -> None:
@@ -134,13 +177,24 @@ class WebTakeover:
         public = HumanTakeoverStore.public(current)
         close = read_close_request(self.settings)
         if close and (not current or close.get("session_id") != current.get("id")):
-            clear_close_request(self.settings, session_id=str(close.get("session_id") or ""))
+            clear_close_request(
+                self.settings,
+                session_id=str(close.get("session_id") or ""),
+            )
             close = None
+        gate = read_transport_gate(self.settings)
+        if gate and (not current or gate.get("session_id") != current.get("id")):
+            # The sidecar owns cleanup for a stale gate. Do not delete it here,
+            # otherwise it could lose ownership of an old transport.
+            gate = None
         transport = read_sidecar_status(self.settings)
         return {
             "takeover": public,
             "privacy_mode": bool(public),
             "closing": close.get("action") if close else None,
+            "transport_allowed": bool(
+                current and gate and gate.get("session_id") == current.get("id")
+            ),
             "transport": transport,
         }
 
@@ -150,6 +204,13 @@ class WebTakeover:
             raise ValueError(f"unsupported takeover reason: {reason}")
         ttl = int(payload.get("ttl_seconds") or 300)
         task_id = str(payload.get("task_id") or "").strip() or None
+
+        # A stale gate belongs to a previous Web-managed lease and must be
+        # cleaned by the sidecar before a new lease can safely start.
+        stale_gate = read_transport_gate(self.settings)
+        if stale_gate:
+            raise RuntimeError("a previous handoff transport still needs sidecar cleanup")
+
         result = self.store.start(
             reason=reason,
             task_id=task_id,
@@ -158,31 +219,48 @@ class WebTakeover:
         )
         clear_close_request(self.settings)
 
-        # Establish exclusive GUI ownership before the sidecar opens noVNC.
+        # Establish exclusive GUI ownership before authorizing the sidecar to
+        # open noVNC. This ordering prevents a human from entering while an
+        # already-claimed Agent click/type/screenshot is still in flight.
         cancel_pending_computer_steps(self.settings)
         cancel_pending_observe_requests(self.settings)
-        max_seconds = max(1, int(getattr(self.settings, "conveyor_computer_max_seconds", 120)))
+        max_seconds = max(
+            1,
+            int(getattr(self.settings, "conveyor_computer_max_seconds", 120)),
+        )
         deadline = time.monotonic() + max(30, max_seconds + 5)
-        while has_claimed_computer_steps(self.settings) or has_claimed_observe_requests(self.settings):
+        while has_claimed_computer_steps(self.settings) or has_claimed_observe_requests(
+            self.settings
+        ):
             current = self.store.current()
             if current is None or current.get("id") != result.get("id"):
                 raise RuntimeError("takeover expired before the desktop became idle")
             if time.monotonic() >= deadline:
                 raise RuntimeError(
-                    "a computer-use action is still in flight; takeover remains open and remote desktop stays closed"
+                    "a computer-use action is still in flight; takeover remains open "
+                    "and remote desktop stays closed"
                 )
             time.sleep(0.1)
         current = self.store.current()
         if current is None or current.get("id") != result.get("id"):
             raise RuntimeError("takeover expired before the desktop became idle")
+
+        allow_transport(self.settings, str(result["id"]))
         return self.status()
 
     def activate(self, session_id: str) -> dict[str, Any]:
         session_id = str(session_id or "").strip()
+        gate = read_transport_gate(self.settings)
+        if not gate or gate.get("session_id") != session_id:
+            raise ValueError("takeover transport is not authorized for this session")
         result = self.store.activate(session_id)
         if result is None:
             current = self.store.current()
-            if not current or current.get("id") != session_id or current.get("state") != "human_active":
+            if (
+                not current
+                or current.get("id") != session_id
+                or current.get("state") != "human_active"
+            ):
                 raise ValueError("takeover session not found or invalid state")
         return self.status()
 
@@ -192,6 +270,6 @@ class WebTakeover:
         if not current or current.get("id") != session_id:
             raise ValueError("takeover session not found or invalid state")
         request_close(self.settings, session_id, action)
-        # Lease deliberately remains open.  Agent automation stays paused until
+        # Lease deliberately remains open. Agent automation stays paused until
         # the sidecar verifies noVNC/Tailscale are gone and finalizes the lease.
         return self.status()
