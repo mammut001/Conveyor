@@ -1,9 +1,11 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { HumanTakeoverPanel } from './components/HumanTakeoverPanel'
 import './styles.css'
 import './v2.css'
 import './primary.css'
+import './takeover.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -14,6 +16,7 @@ createRoot(document.getElementById('root')!).render(
         <span className="workbench-channel-note">Telegram / Feishu · quick control from anywhere</span>
       </div>
       <App />
+      <HumanTakeoverPanel />
     </div>
   </StrictMode>,
 )
