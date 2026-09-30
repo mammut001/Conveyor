@@ -60,6 +60,58 @@ def test_exception_traceback_redaction() -> CheckResult:
     )
 
 
+def test_non_str_arg_and_bare_token_redaction() -> CheckResult:
+    import re
+    from redaction import SecretRedactingFilter
+
+    logger = logging.getLogger("test_redact_non_str")
+
+    class FakeUrl:
+        def __init__(self, url: str) -> None:
+            self._url = url
+
+        def __str__(self) -> str:
+            return self._url
+
+    bare_token = "123456789:AAHfakefakefakefakefakefakefakefake1"
+    url_obj = FakeUrl(f"https://api.telegram.org/bot{bare_token}/getMe")
+    try:
+        import httpx
+        url_obj = httpx.URL(f"https://api.telegram.org/bot{bare_token}/getMe")
+    except ImportError:
+        pass
+
+    record = logger.makeRecord(
+        name="test_logger",
+        level=logging.INFO,
+        fn="foo.py",
+        lno=10,
+        msg="Requesting %s with bare token %s",
+        args=(url_obj, bare_token),
+        exc_info=None,
+    )
+
+    filt = SecretRedactingFilter()
+    filt.filter(record)
+
+    formatter = logging.Formatter("%(message)s")
+    formatted = formatter.format(record)
+
+    ok_token_absent = bare_token not in formatted
+    ok_redacted_present = "[REDACTED]" in formatted
+
+    no_bare_match = re.search(r"\d{6,}:[A-Za-z0-9_-]{20,}", formatted) is None
+    no_bot_match = re.search(r"bot\d+:[A-Za-z0-9_-]{20,}", formatted) is None
+
+    ok = ok_token_absent and ok_redacted_present and no_bare_match and no_bot_match
+
+    return CheckResult(
+        "non_str_arg_and_bare_token_redaction",
+        ok,
+        f"token_absent={ok_token_absent} redacted_present={ok_redacted_present} no_bare={no_bare_match} no_bot={no_bot_match} formatted={formatted}",
+    )
+
+
 def test_desktop_observe_validation() -> CheckResult:
     # Test path traversal and symlink rejection inside validate_observe_result
     from desktop_observe_requests import validate_observe_result
@@ -112,6 +164,7 @@ def main() -> int:
     
     # 2. Run traceback log redaction check
     results.append(test_exception_traceback_redaction())
+    results.append(test_non_str_arg_and_bare_token_redaction())
     
     # 3. Run desktop observe validation check
     results.append(test_desktop_observe_validation())

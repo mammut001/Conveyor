@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import load_settings
+from logging_setup import configure_logging
 from personal_tools.store import PersonalToolsStore
 from redaction import redact_text
 
@@ -96,7 +97,7 @@ def run_tick(*, dry_run: bool = False) -> tuple[int, int]:
             logger.info("reminder #%d delivered (%s)", r.id, r.channel)
         else:
             if not dry_run:
-                store.mark_reminder_failed(r.id, err, r.retry_count + 1)
+                store.mark_reminder_failed(r.id, redact_text(err), r.retry_count + 1)
             failed += 1
             logger.warning("reminder #%d failed: %s", r.id, redact_text(err))
 
@@ -109,9 +110,10 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true", help="Debug logging")
     args = parser.parse_args()
 
-    logging.basicConfig(
+    configure_logging(
+        service_name="scheduler_tick",
         level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        fmt="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
     delivered, failed = run_tick(dry_run=args.dry_run)

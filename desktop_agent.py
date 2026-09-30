@@ -17,9 +17,12 @@ from config import Settings, load_settings
 from desktop_screenshot import capture_screenshot_once
 from desktop_cua import build_driver
 
-logging.basicConfig(
+from logging_setup import configure_logging
+
+configure_logging(
+    service_name="desktop_agent",
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("desktop_agent")
 

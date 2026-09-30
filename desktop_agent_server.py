@@ -35,9 +35,12 @@ from nodes.state import register_desktop_node, record_heartbeat
 from nodes.registry import list_nodes
 
 
-logging.basicConfig(
+from logging_setup import configure_logging
+
+configure_logging(
+    service_name="desktop_agent_server",
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("desktop_agent_server")
 
