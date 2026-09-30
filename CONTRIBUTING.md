@@ -24,7 +24,7 @@ a single-operator private control surface on your own machine. Read
   Codex `danger-full-access` on purpose for a personal VPS. Narrowing
   sandbox scope is a future hardening item, not a drive-by doc/code drift.
 * **Never commit secrets.** `.env` is git-ignored. `.env.example` and
-  `.env.test` are the only env-shaped files in the repo, and both use
+  `.env.test.example` are the only env-shaped files in the repo, and both use
   placeholders. If you find a real token in a commit, rotate it.
 * **One job at a time.** The runner serializes Codex invocations by
   design. Do not add concurrent-job paths without explaining why the

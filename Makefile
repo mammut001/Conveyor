@@ -15,15 +15,17 @@ help:
 	@echo 'make web-test     run event/API unit tests'
 	@echo 'make web-build    typecheck and build static console assets'
 
+ENV_TEST ?= $(if $(wildcard .env.test),.env.test,.env.test.example)
+
 smoke:
-	@set -e; for s in $(SMOKE_FREE); do echo '>>>' $$s; CONVEYOR_ENV_FILE=.env.test $(PY) $$s; done
+	@set -e; for s in $(SMOKE_FREE); do echo '>>>' $$s; CONVEYOR_ENV_FILE=$(ENV_TEST) $(PY) $$s; done
 
 smoke-all: smoke
 	@echo '>>> scripts/memo_smoke.py (requires .env)'
 	@$(PY) scripts/memo_smoke.py
 
 web-test:
-	@$(PY) -m unittest discover -s tests -v
+	@CONVEYOR_ENV_FILE=$(ENV_TEST) $(PY) -m unittest discover -s tests -v
 
 web-build:
 	@cd web && npm ci && npm run typecheck && npm run lint && npm run build

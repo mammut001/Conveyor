@@ -20,7 +20,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from channel.types import InboundMessage
-from config import load_settings
+from config import load_runtime_settings
 from handlers.job_queue import get_job_queue
 from handlers.jobs import submit_codex_job
 from logging_setup import configure_logging
@@ -184,6 +184,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'")
         if length is not None:
             self.send_header("Content-Length", str(length))
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
 
     def _json(self, status: int, value: Any) -> None:
@@ -197,19 +199,51 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         supplied = header[len(prefix):] if header.startswith(prefix) else ""
         return bool(supplied) and hmac.compare_digest(supplied, self.server.token)
 
+    def _drain_body(self) -> None:
+        if "Transfer-Encoding" in self.headers:
+            self.close_connection = True
+            return
+        cl_header = self.headers.get("Content-Length")
+        if cl_header is None:
+            return
+        try:
+            length = int(cl_header.strip())
+        except ValueError:
+            self.close_connection = True
+            return
+        if length == 0:
+            return
+        if 1 <= length <= MAX_BODY_BYTES:
+            try:
+                data = self.rfile.read(length)
+                if len(data) < length:
+                    self.close_connection = True
+            except Exception:
+                self.close_connection = True
+        else:
+            self.close_connection = True
+
     def _require_auth(self) -> bool:
         if self._authorized():
             return True
+        self._drain_body()
         self._json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
         return False
 
     def _body(self) -> dict[str, Any] | None:
+        if "Transfer-Encoding" in self.headers:
+            self.close_connection = True
+            self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid content length"})
+            return None
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
+            self.close_connection = True
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid content length"})
             return None
         if length <= 0 or length > MAX_BODY_BYTES:
+            if length < 0 or length > MAX_BODY_BYTES:
+                self.close_connection = True
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid request body size"})
             return None
         try:
@@ -358,8 +392,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 )
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
-                    from config import load_settings
-                    settings = load_settings()
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
                 outbound = WebOutbound(
                     settings, durable_session_id,
                     is_codex=(mode == JobMode.FIX), prompt=prompt,
@@ -499,7 +533,7 @@ def main() -> None:
         level=logging.INFO,
         fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    settings = load_settings()
+    settings = load_runtime_settings()
     validate_web_config(settings)
     if args.check:
         print("web console configuration: ok")
