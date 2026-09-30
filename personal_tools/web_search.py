@@ -1,6 +1,6 @@
 """personal_tools/web_search.py — Web Search for Conveyor (P4.1 Phase B).
 
-Supports multiple backends: disabled, searxng, brave, tavily, serper.
+Supports multiple backends: disabled, searxng, brave, tavily, serper, tinyfish.
 Degrades gracefully when backend is disabled or unconfigured.
 All output passes redact_text + truncate.
 
@@ -24,7 +24,7 @@ from redaction import redact_text, truncate
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_BACKENDS = ("disabled", "searxng", "brave", "tavily", "serper")
+SUPPORTED_BACKENDS = ("disabled", "searxng", "brave", "tavily", "serper", "tinyfish")
 
 
 @dataclass(frozen=True)
@@ -47,28 +47,27 @@ def _normalize_result(raw: dict, rank: int, backend: str) -> SearchResult:
     )
 
 
-def _fetch_json(url: str, settings: Settings, headers: dict[str, str] | None = None, 
+def _fetch_json(url: str, settings: Settings, headers: dict[str, str] | None = None,
                 data: bytes | None = None, method: str = "GET") -> tuple[int, dict | list | None, str]:
     """Fetch JSON via urllib.request (no subprocess, no API keys in argv).
-    
+
     Returns (status_code, parsed_json, error).
     """
     req = urllib.request.Request(url, method=method)
     req.add_header("User-Agent", settings.web_user_agent)
     req.add_header("Accept", "application/json")
-    
+
     if headers:
         for k, v in headers.items():
             req.add_header(k, v)
-    
+
     if data is not None:
         req.data = data
         if "Content-Type" not in (headers or {}):
             req.add_header("Content-Type", "application/json")
-    
-    # Create SSL context that verifies certificates
+
     ctx = ssl.create_default_context()
-    
+
     try:
         with urllib.request.urlopen(req, timeout=settings.web_fetch_timeout_seconds, context=ctx) as resp:
             status = resp.status
@@ -93,13 +92,11 @@ def _search_brave(settings: Settings, query: str, limit: int) -> tuple[list[Sear
     if not settings.web_search_api_key:
         return [], "Brave API key 未配置"
     endpoint = settings.web_search_endpoint or "https://api.search.brave.com/res/v1/web/search"
-    
-    # Validate endpoint URL
+
     ok, err = validate_url(endpoint)
     if not ok:
         return [], f"Brave endpoint 无效: {err}"
-    
-    # URL encode query
+
     url = f"{endpoint}?{urlencode({'q': query, 'count': limit})}"
     headers = {
         "X-Subscription-Token": settings.web_search_api_key,
@@ -116,18 +113,17 @@ def _search_tavily(settings: Settings, query: str, limit: int) -> tuple[list[Sea
     if not settings.web_search_api_key:
         return [], "Tavily API key 未配置"
     endpoint = settings.web_search_endpoint or "https://api.tavily.com/search"
-    
-    # Validate endpoint URL
+
     ok, err = validate_url(endpoint)
     if not ok:
         return [], f"Tavily endpoint 无效: {err}"
-    
+
     payload = json.dumps({
         "api_key": settings.web_search_api_key,
         "query": query,
         "max_results": limit,
     }).encode("utf-8")
-    
+
     rc, data, err = _fetch_json(endpoint, settings, data=payload, method="POST")
     if rc != 200 or data is None:
         return [], f"Tavily 搜索失败: {redact_text(err)}"
@@ -140,15 +136,14 @@ def _search_serper(settings: Settings, query: str, limit: int) -> tuple[list[Sea
     if not settings.web_search_api_key:
         return [], "Serper API key 未配置"
     endpoint = settings.web_search_endpoint or "https://google.serper.dev/search"
-    
-    # Validate endpoint URL
+
     ok, err = validate_url(endpoint)
     if not ok:
         return [], f"Serper endpoint 无效: {err}"
-    
+
     payload = json.dumps({"q": query, "num": limit}).encode("utf-8")
     headers = {"X-API-KEY": settings.web_search_api_key}
-    
+
     rc, data, err = _fetch_json(endpoint, settings, headers=headers, data=payload, method="POST")
     if rc != 200 or data is None:
         return [], f"Serper 搜索失败: {redact_text(err)}"
@@ -161,19 +156,49 @@ def _search_searxng(settings: Settings, query: str, limit: int) -> tuple[list[Se
     endpoint = settings.web_search_endpoint
     if not endpoint:
         return [], "SearXNG endpoint 未配置"
-    
-    # Validate endpoint URL
+
     ok, err = validate_url(endpoint)
     if not ok:
         return [], f"SearXNG endpoint 无效: {err}"
-    
-    # URL encode query
+
     url = f"{endpoint}/search?{urlencode({'q': query, 'format': 'json', 'pageno': 1})}"
     rc, data, err = _fetch_json(url, settings)
     if rc != 200 or data is None:
         return [], f"SearXNG 搜索失败: {redact_text(err)}"
     results = data.get("results", [])
     return [_normalize_result(r, i + 1, "searxng") for i, r in enumerate(results[:limit])], ""
+
+
+def _search_tinyfish(settings: Settings, query: str, limit: int) -> tuple[list[SearchResult], str]:
+    """Search via TinyFish's agent-oriented live web search API."""
+    if not settings.web_search_api_key:
+        return [], "TinyFish API key 未配置"
+
+    endpoint = settings.web_search_endpoint or "https://api.search.tinyfish.ai"
+    ok, err = validate_url(endpoint)
+    if not ok:
+        return [], f"TinyFish endpoint 无效: {err}"
+
+    separator = "&" if "?" in endpoint else "?"
+    url = f"{endpoint}{separator}{urlencode({'query': query})}"
+    headers = {"X-API-Key": settings.web_search_api_key}
+
+    rc, data, err = _fetch_json(url, settings, headers=headers)
+    if rc != 200 or not isinstance(data, dict):
+        return [], f"TinyFish 搜索失败: {redact_text(err)}"
+
+    raw_results = data.get("results", [])
+    if not isinstance(raw_results, list):
+        return [], "TinyFish 搜索失败: results 格式无效"
+
+    normalized: list[SearchResult] = []
+    for i, raw in enumerate(raw_results[:limit]):
+        if not isinstance(raw, dict):
+            continue
+        position = raw.get("position")
+        rank = position if isinstance(position, int) and position > 0 else i + 1
+        normalized.append(_normalize_result(raw, rank, "tinyfish"))
+    return normalized, ""
 
 
 def search_web(settings: Settings, query: str, limit: int | None = None) -> tuple[list[SearchResult], str]:
@@ -196,6 +221,7 @@ def search_web(settings: Settings, query: str, limit: int | None = None) -> tupl
         "tavily": _search_tavily,
         "serper": _search_serper,
         "searxng": _search_searxng,
+        "tinyfish": _search_tinyfish,
     }
     dispatcher = dispatchers.get(backend)
     if dispatcher is None:
@@ -216,8 +242,6 @@ def format_results(results: list[SearchResult]) -> str:
         lines.append("")
     return "\n".join(lines)
 
-
-# --- Adapter for personal_tools/registry.py ---
 
 async def web_search_adapter(settings: Settings, arg: str, **kw) -> ToolResult:
     if not arg.strip():

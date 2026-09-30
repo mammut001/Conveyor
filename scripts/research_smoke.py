@@ -3,7 +3,7 @@
 Tests:
   - missing web search backend graceful
   - fake search results normalize
-  - fake fetch creates evidence pack
+  - WebRuntime-backed fetch creates evidence pack
   - research uses only READ tools
   - project_research degrades without active project
   - no network calls
@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import replace
+import tempfile
 from pathlib import Path
+from dataclasses import replace
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -25,9 +27,9 @@ os.environ.setdefault("CODEX_TASK_ROOT", "/tmp/codex-smoke-task")
 os.environ.setdefault("CODEX_BIN", "codex")
 os.environ.setdefault("USER_TIMEZONE", "UTC")
 
-import tempfile
 from config import Settings, load_settings
 from handlers.tools.registry import DangerLevel
+from personal_tools.base import ToolResult
 from personal_tools.registry import get_personal_tool
 from personal_tools.web_search import SearchResult, format_results, _normalize_result
 
@@ -37,6 +39,16 @@ def _settings(tmp_path: Path | None = None) -> Settings:
     if tmp_path:
         return replace(base, codex_memory_root=tmp_path, telegram_allowed_user_id=12345, user_timezone="UTC")
     return replace(base, telegram_allowed_user_id=12345, user_timezone="UTC")
+
+
+def _fake_runtime():
+    runtime = MagicMock()
+    runtime.search.return_value = (
+        [SearchResult("Test Title", "https://example.com", "Test snippet", "test", 1)],
+        "",
+    )
+    runtime.fetch.return_value = ToolResult(ok=True, text="Test content")
+    return runtime
 
 
 # ---- Tests ----
@@ -172,41 +184,34 @@ async def _test_output_redacted():
 
 
 async def _test_research_returns_hybrid_prompt():
-    """Research returns [HYBRID_PROMPT] marker for Codex synthesis."""
+    """Research runs Search + Fetch through WebRuntime."""
     from personal_tools.research import research_collect
-    # Mock search_web to return fake results
-    from unittest.mock import patch, MagicMock
-    from personal_tools.web_search import SearchResult
-    
-    fake_results = [
-        SearchResult("Test Title", "https://example.com", "Test snippet", "test", 1),
-    ]
-    
-    with patch("personal_tools.research.search_web", return_value=(fake_results, "")):
-        with patch("personal_tools.research.fetch_text", return_value=MagicMock(ok=True, text="Test content")):
-            settings = _settings()
-            result = research_collect(settings, "test question")
-            assert result.ok, f"Expected ok=True, got {result.ok}"
-            assert result.text.startswith("[HYBRID_PROMPT]"), f"Expected [HYBRID_PROMPT] prefix, got {result.text[:50]}"
+    runtime = _fake_runtime()
+    settings = _settings()
+
+    with patch("personal_tools.research.WebRuntime.from_settings", return_value=runtime):
+        result = research_collect(settings, "test question")
+
+    assert result.ok, f"Expected ok=True, got {result.ok}"
+    assert result.text.startswith("[HYBRID_PROMPT]"), result.text[:50]
+    assert "Test content" in result.text
+    runtime.search.assert_called_once()
+    runtime.fetch.assert_called_once_with("https://example.com")
 
 
 async def _test_project_research_returns_hybrid_prompt():
-    """Project research returns [HYBRID_PROMPT] marker for Codex synthesis."""
+    """Project research runs through WebRuntime too."""
     from personal_tools.research import project_research_collect
-    from unittest.mock import patch, MagicMock
-    from personal_tools.web_search import SearchResult
-    
-    fake_results = [
-        SearchResult("Test Title", "https://example.com", "Test snippet", "test", 1),
-    ]
-    
+    runtime = _fake_runtime()
+
     with tempfile.TemporaryDirectory() as td:
         settings = _settings(Path(td))
-        with patch("personal_tools.research.search_web", return_value=(fake_results, "")):
-            with patch("personal_tools.research.fetch_text", return_value=MagicMock(ok=True, text="Test content")):
-                result = project_research_collect(settings, "op1", "test question")
-                assert result.ok, f"Expected ok=True, got {result.ok}"
-                assert result.text.startswith("[HYBRID_PROMPT]"), f"Expected [HYBRID_PROMPT] prefix, got {result.text[:50]}"
+        with patch("personal_tools.research.WebRuntime.from_settings", return_value=runtime):
+            result = project_research_collect(settings, "op1", "test question")
+
+    assert result.ok, f"Expected ok=True, got {result.ok}"
+    assert result.text.startswith("[HYBRID_PROMPT]"), result.text[:50]
+    runtime.fetch.assert_called_once_with("https://example.com")
 
 
 # ---- Runner ----
