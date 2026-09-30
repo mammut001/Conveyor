@@ -24,7 +24,7 @@ You should hear back within a week. We will coordinate a fix and a release note 
 
 ### Mitigation Layers
 1. **Channel Allowlists:** Access is gated by strict allowlists (`TELEGRAM_ALLOWED_USER_ID`, `CONVEYOR_FEISHU_ALLOWED_USERS`).
-2. **Output Redaction:** The redaction layer in `redaction.py` strips API tokens, credentials, and sensitive patterns from logs, stdout, stderr, and exception tracebacks before they return to the operator.
+2. **Output Redaction:** The redaction layer in `redaction.py` strips API tokens, credentials, and sensitive patterns from logs, stdout, stderr, and exception tracebacks before they return to the operator. Note: any Telegram bot token that may have leaked into logs must be rotated via BotFather `/revoke`.
 3. **Low-Privilege User:** The service runs under a dedicated, low-privilege system user.
 4. **Worktree Isolation:** Codex execution occurs inside temporary per-day or per-job Git worktrees rather than modifying the main repository directly.
 5. **Apply Gate:** Merging changes back into the main repository requires explicit `/diff` and `/apply` commands.

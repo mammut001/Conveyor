@@ -23,7 +23,8 @@ from channel.types import InboundMessage
 from config import load_settings
 from handlers.job_queue import get_job_queue
 from handlers.jobs import submit_codex_job
-from redaction import SecretRedactingFilter, redact_text
+from logging_setup import configure_logging
+from redaction import redact_text
 from runner import CodexRunner, JobMode
 from web_control import WebControl
 from transcript_store import session_identity
@@ -493,9 +494,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Conveyor Web Console")
     parser.add_argument("--check", action="store_true", help="validate configuration and exit")
     args = parser.parse_args()
-    logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s %(message)s", level=logging.INFO)
-    for handler in logging.getLogger().handlers:
-        handler.addFilter(SecretRedactingFilter())
+    configure_logging(
+        service_name="conveyor.web",
+        level=logging.INFO,
+        fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     settings = load_settings()
     validate_web_config(settings)
     if args.check:

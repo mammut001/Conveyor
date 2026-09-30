@@ -31,19 +31,15 @@ from config import load_feishu_settings
 from handlers import dispatch
 from handlers.context import is_addressed_to_bot
 from handlers.tools.runner import cancel_pending, execute_confirmed
-from redaction import redact_text, SecretRedactingFilter
+from logging_setup import configure_logging
+from redaction import redact_text
 from runner import CodexRunner
 
-logging.basicConfig(
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+configure_logging(
+    service_name="codex_feishu_bot",
     level=logging.INFO,
+    fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-
-for handler in logging.getLogger().handlers:
-    handler.addFilter(SecretRedactingFilter())
-for name in ("urllib3", "googleapiclient", "google_auth_httplib2", "lark_oapi", "httpx", "httpcore"):
-    logging.getLogger(name).setLevel(logging.WARNING)
-
 logger = logging.getLogger("codex_feishu_bot")
 
 settings = load_feishu_settings()

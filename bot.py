@@ -28,22 +28,15 @@ from handlers.onboarding import (
     save_operator_profile,
 )
 from handlers.tools.runner import cancel_pending, execute_confirmed, parse_tool_callback
-from redaction import redact_text, SecretRedactingFilter
+from logging_setup import configure_logging
 from runner import CodexRunner
 
 
-logging.basicConfig(
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+configure_logging(
+    service_name="conveyor.telegram",
     level=logging.INFO,
+    fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-
-
-for handler in logging.getLogger().handlers:
-    handler.addFilter(SecretRedactingFilter())
-for name in ("urllib3", "googleapiclient", "google_auth_httplib2", "lark_oapi", "httpx", "httpcore"):
-    logging.getLogger(name).setLevel(logging.WARNING)
-
-
 logger = logging.getLogger("conveyor.telegram")
 
 settings = load_settings()

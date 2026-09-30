@@ -33,6 +33,7 @@ SECRET_KEY_RE = re.compile(
 SECRET_VALUE_PATTERNS = [
     re.compile(r"(api\.telegram\.org/bot)[A-Za-z0-9:_-]+"),
     re.compile(r"(bot)\d+:[A-Za-z0-9_-]{20,}"),
+    re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{30,}\b"),
     re.compile(r"\b(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
     re.compile(r"\b(ya29\.)[A-Za-z0-9_-]{20,}\b"),
