@@ -1,24 +1,38 @@
 # Conveyor Web Console
 
 The Web Console is a browser control surface over Conveyor's existing queue,
-Codex runner, worktrees, apply policy, node registry, and computer kill switch.
-It is not a second execution engine and it does not require a browser or Node.js
-process on the VPS.
+Codex runner, worktrees, apply policy, node registry, computer kill switch, and
+Secure Human Takeover coordinator. It is not a second execution engine and it
+does not require a browser or Node.js process on the VPS.
 
 ## Runtime shape
 
 ```text
-browser ── bearer-authenticated REST + SSE ── web_console.py
+browser ── bearer-authenticated REST + SSE ── web_console_takeover.py
                                                    │
 Telegram ─┐                                        │
 Feishu ───┼── shared SQLite FIFO ── CodexRunner ── worktrees
 Web ──────┘             │
                        agent_events (ordered replay)
+
+browser ── takeover API ── HumanTakeoverStore
+                               │
+                               v
+                     conveyor-handoff.service
+                               │
+                               v
+                     loopback noVNC / x11vnc
+                               │
+                        optional Tailscale Serve
 ```
 
-The frontend in `web/` is built ahead of deployment. `web_console.py` serves
+The frontend in `web/` is built ahead of deployment. The Web entrypoint serves
 `web/dist`, the API, and one low-frequency SSE replay stream per selected job.
 Production does not run Vite or any other Node server.
+
+The handoff transport is deliberately owned by a separate systemd sidecar. The
+Web server cannot spawn arbitrary GUI transport commands; it only creates or
+updates secret-free takeover coordination state.
 
 ## Secure setup
 
@@ -38,17 +52,19 @@ CONVEYOR_WEB_TOKEN=<generated 64-hex-character value>
 CONVEYOR_EVENT_RETENTION_PER_JOB=2000
 ```
 
-Install/start the unit:
+The standard installer installs both `conveyor-web.service` and
+`conveyor-handoff.service`. For a manual source deployment:
 
 ```bash
+sudo cp /opt/conveyor/systemd/conveyor-handoff.service /etc/systemd/system/
 sudo cp /opt/conveyor/systemd/conveyor-web.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now conveyor-web.service
-sudo systemctl status conveyor-web.service
+sudo systemctl enable --now conveyor-handoff.service conveyor-web.service
+sudo systemctl status conveyor-handoff.service conveyor-web.service
 ```
 
-The service refuses to start when the feature flag is off or the token is under
-32 characters. Keep the default loopback bind.
+The Web service refuses to start when the feature flag is off or the token is
+under 32 characters. Keep the default loopback bind.
 
 ### SSH tunnel
 
@@ -65,6 +81,10 @@ Loopback plus an SSH tunnel is the smallest secure default. A Tailscale Serve
 or TLS reverse proxy may forward to `127.0.0.1:8787`; keep TLS and an additional
 proxy authentication layer when the proxy is reachable beyond a private tailnet.
 Do not open the port directly in UFW.
+
+Secure Human Takeover has its own private route requirements. See
+[`human_takeover.md`](human_takeover.md); public VNC/noVNC ports and Tailscale
+Funnel are outside the supported model.
 
 ## Build and test
 
@@ -95,9 +115,31 @@ requires `Authorization: Bearer <token>`.
 - `GET /api/computer/status`, `POST /api/computer/stop`
 - `POST /api/computer/screenshot` for an explicit, one-shot host screenshot request
 - `GET /api/artifacts/{id}` for allow-listed screenshot thumbnails
+- `GET /api/takeover/status`
+- `POST /api/takeover/start`
+- `POST /api/takeover/activate`
+- `POST /api/takeover/complete`
+- `POST /api/takeover/cancel`
 
-Host-screen capture is read-only and opt-in. `POST /api/computer/screenshot` is
-available only when `CONVEYOR_DESKTOP_UPLOAD_ENABLED=true`, the Mac desktop
+### Human takeover semantics
+
+`POST /api/takeover/start` establishes exclusive GUI ownership before a remote
+desktop is opened. It cancels pending pre-handoff computer/screenshot work and
+waits for already-claimed work to finish. The systemd handoff sidecar then
+starts the fixed noVNC transport.
+
+`complete` and `cancel` are intentionally asynchronous close requests. They do
+**not** immediately release the lease. The Web Workbench continues showing
+Privacy Mode while `conveyor-handoff.service` removes remote access and verifies
+cleanup; only then is the takeover transitioned to its terminal state and Agent
+GUI automation allowed to continue.
+
+Takeover API responses contain coordination metadata and a safe handoff URL
+only. They never contain the temporary VNC credential, typed text, payment data,
+passwords, clipboard contents, screenshots, or password-manager material.
+
+Host-screen capture remains read-only and opt-in. `POST /api/computer/screenshot`
+is available only when `CONVEYOR_DESKTOP_UPLOAD_ENABLED=true`, the Mac desktop
 agent is online, and its screenshot helper is configured. It requests one
 capture; Conveyor transfers only the configured, size-limited thumbnail to the
 VPS for the authenticated Web Console. The original stays on the Mac. The
@@ -121,10 +163,11 @@ artifact identifier. The default retains the latest 2,000 events per job.
 
 ## Resource profile
 
-At idle the feature adds one Python process plus one sleeping HTTP thread. There
-is no Node process, Chromium, broker, or metrics worker. System status refreshes
-every 15 seconds in an open browser; SSE checks SQLite every 750 ms only while a
-job view is open. No browser connection means no event polling thread.
+At idle the Web feature adds one Python Web process and the lightweight sleeping
+handoff coordinator process. There is no Node process, Chromium, broker, or
+metrics worker. The handoff sidecar does not start x11vnc/websockify unless an
+open takeover lease exists, and it throttles failed transport retries and
+unchanged status writes.
 
 ## Current limitations
 
@@ -134,3 +177,6 @@ job view is open. No browser connection means no event polling thread.
   cancellation returns a conflict instead of lying about success.
 - Events created before this feature have queue/job metadata but no reconstructed
   historical transcript.
+- Web takeover still requires the same validated VPS X11/XAUTHORITY and noVNC
+  prerequisites as the CLI flow. The Web API does not provision a graphical
+  session or weaken VNC authentication.
