@@ -275,6 +275,7 @@ class WebControl:
         return {"id": approval_id, "job_id": job_id, "action": action, "status": "pending", "event_id": event.event_id}
 
     def list_approvals(self) -> list[dict[str, Any]]:
+        approvals: list[dict[str, Any]] = []
         connection = self._connect()
         try:
             now = time.time()
@@ -286,9 +287,44 @@ class WebControl:
             rows = connection.execute(
                 "SELECT * FROM web_approvals WHERE status = 'pending' ORDER BY created_at DESC"
             ).fetchall()
-            return [{key: row[key] for key in row.keys() if key != "result"} for row in rows]
+            for row in rows:
+                item = {key: row[key] for key in row.keys() if key != "result"}
+                item["kind"] = "job"
+                approvals.append(item)
         finally:
             connection.close()
+
+        from handlers.tools.confirm import list_pending, _CONFIRM_TTL_SECONDS
+        from handlers.tools.registry import get_tool
+        from personal_tools.registry import get_personal_tool
+        from transcript_store import session_identity
+
+        try:
+            import handlers.tools.executors  # register builtin tools
+            from personal_tools.registry import register_personal_tools
+            register_personal_tools()
+        except Exception:
+            pass
+
+        for action in list_pending(channel="web"):
+            spec = get_tool(action.tool_name)
+            if spec is not None:
+                summary = spec.summary
+            else:
+                pspec = get_personal_tool(action.tool_name)
+                summary = pspec.summary if pspec else action.tool_name
+
+            approvals.append({
+                "id": action.token,
+                "kind": "tool",
+                "tool_name": action.tool_name,
+                "arg": action.arg,
+                "summary": summary,
+                "session_id": session_identity(action.channel, action.chat_id, action.operator_id),
+                "status": "pending",
+                "expires_at": action.created_at + _CONFIRM_TTL_SECONDS,
+            })
+        return approvals
 
     async def decide_approval(self, approval_id: str, approve: bool) -> dict[str, Any] | None:
         connection = self._connect()

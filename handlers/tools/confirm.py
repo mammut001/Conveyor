@@ -102,6 +102,19 @@ def matches_context(action: PendingToolAction, operator_id: str, chat_id: str, c
     )
 
 
+def list_pending(channel: str | None = None) -> list[PendingToolAction]:
+    """Return all non-expired pending tool actions, optionally filtered by channel."""
+    now = time.time()
+    for token, action in list(_pending.items()):
+        if now - action.created_at > _CONFIRM_TTL_SECONDS:
+            pop_pending(token)
+    actions = list(_pending.values())
+    if channel is not None:
+        actions = [a for a in actions if a.channel == channel]
+    actions.sort(key=lambda a: a.created_at, reverse=True)
+    return actions
+
+
 def is_confirmation_text(text: str) -> bool:
     body = (text or "").strip().lower()
     explicit = (

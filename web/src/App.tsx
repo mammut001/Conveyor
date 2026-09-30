@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ChatPanel } from './components/ChatPanel'
 import { FormattedText } from './components/FormattedText'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
@@ -21,7 +22,19 @@ type Session = {
   operator_id?: string; source_chat_id?: string; job_count: number; message_count?: number; latest_job?: Job
 }
 type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[] }
-type Approval = { id: string; job_id: string; action: string; status: string; created_at?: string }
+type Approval = {
+  id: string
+  kind?: 'job' | 'tool'
+  job_id?: string
+  tool_name?: string
+  arg?: string
+  summary?: string
+  session_id?: string
+  action?: string
+  status: string
+  created_at?: string
+  expires_at?: number
+}
 type NodeInfo = {
   id: string; name: string; type: string; status: string; last_seen_at?: string
   capabilities: string[]; metadata?: Record<string, unknown>
@@ -110,6 +123,7 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
+  const [view, setView] = useState<'tasks' | 'chat'>('tasks')
   const lastSequence = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
 
@@ -256,7 +270,8 @@ export default function App() {
     const target = matching?.id || selectedJob.chat_id
     if (target && target !== selectedSessionId) setSelectedSessionId(target)
   }, [creatingSession, selectedJob, selectedSessionId, sessions])
-  const pendingForJob = approvals.filter(item => item.job_id === selectedJobId)
+  const pendingForJob = approvals.filter(item => (!item.kind || item.kind === 'job') && Boolean(item.job_id && item.job_id === selectedJobId))
+  const pendingToolApprovals = approvals.filter(item => item.kind === 'tool' && (!selectedSessionId || item.session_id === selectedSessionId))
   const runtimeOwner = runtimeOwnerFromJob(selectedJob)
   const toolEvents = useMemo(() => events.filter(item => item.kind.startsWith('tool.')), [events])
   const refinementTurn = Number(selectedJob?.metadata?.refinement_turn || 0)
@@ -379,101 +394,117 @@ export default function App() {
 
       <section className="stream-panel panel">
         <div className="stream-header">
-          <div><p className="eyebrow">CONVERSATION + LIVE EXECUTION</p><h2>{creatingSession ? 'New session' : sessionLabel(selectedSession)}</h2></div>
-          {selectedJob && <StatusBadge state={selectedJob.state} />}
+          <div><p className="eyebrow">{view === 'chat' ? 'DIRECT CHAT TIER' : 'CONVERSATION + LIVE EXECUTION'}</p><h2>{view === 'chat' ? 'Chat' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}</h2></div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div className="mode-switch">
+              <button type="button" className={view === 'tasks' ? 'active' : ''} onClick={() => setView('tasks')}>Tasks</button>
+              <button type="button" className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>Chat</button>
+            </div>
+            {view === 'tasks' && selectedJob && <StatusBadge state={selectedJob.state} />}
+          </div>
         </div>
-        <div className="event-stream" ref={streamRef}>
-          {activeRefinement && <div className="job-notice"><strong>Active changes</strong><span>{refinementTurn || 1} refinement turn{(refinementTurn || 1) === 1 ? '' : 's'} · {activeChangedFiles} file{activeChangedFiles === 1 ? '' : 's'} changed · Fix feedback continues the same worktree.</span></div>}
-          {!transcript.length && selectedJob?.state === 'failed' && <div className="job-notice failed"><strong>Task failed</strong><span>{selectedJob.error || 'See the execution details below.'}</span></div>}
-          {!transcript.length && selectedJob?.state === 'cancelled' && <div className="job-notice"><strong>Task cancelled</strong><span>This task was cancelled; start a new message to continue.</span></div>}
+        {view === 'chat' ? (
+          <ChatPanel
+            token={token}
+            onApprovalDecided={refresh}
+            onSessionChange={refresh}
+          />
+        ) : (
+          <>
+            <div className="event-stream" ref={streamRef}>
+              {activeRefinement && <div className="job-notice"><strong>Active changes</strong><span>{refinementTurn || 1} refinement turn{(refinementTurn || 1) === 1 ? '' : 's'} · {activeChangedFiles} file{activeChangedFiles === 1 ? '' : 's'} changed · Fix feedback continues the same worktree.</span></div>}
+              {!transcript.length && selectedJob?.state === 'failed' && <div className="job-notice failed"><strong>Task failed</strong><span>{selectedJob.error || 'See the execution details below.'}</span></div>}
+              {!transcript.length && selectedJob?.state === 'cancelled' && <div className="job-notice"><strong>Task cancelled</strong><span>This task was cancelled; start a new message to continue.</span></div>}
 
-          {transcript.length > 0 && <TranscriptPanel messages={transcript} />}
+              {transcript.length > 0 && <TranscriptPanel messages={transcript} />}
 
-          {selectedJob && !terminalJobState(selectedJob.state) && !promptAlreadyInTranscript && (
-            <article className="transcript-message role-user pending-turn">
-              <div className="transcript-content">
-                <p className="formatted-paragraph">{selectedJob.prompt_preview}</p>
-              </div>
-            </article>
-          )}
-
-          {selectedJob && !terminalJobState(selectedJob.state) && (
-            <div className="live-job-turn">
-              <div className={`live-job-banner ${selectedJob.state}`}>
-                <span className={`live-pulse ${selectedJob.state}`} />
-                <span>
-                  {selectedJob.state === 'queued'
-                    ? `排队中 · 等待执行 (${selectedJob.id})…`
-                    : `Conveyor 正在执行 (${selectedJob.id})…`}
-                </span>
-              </div>
-
-              {toolEvents.length > 0 && (
-                <div className="live-tools-list">
-                  {toolEvents.map(tool => (
-                    <EventCard key={tool.event_id} item={tool} />
-                  ))}
-                </div>
-              )}
-
-              {liveAssistantText && (
-                <article className="transcript-message role-assistant live-streaming">
-                  <div className="transcript-avatar" aria-hidden="true">🤖</div>
-                  <div className="transcript-body">
-                    <div className="transcript-header" style={{ marginBottom: 4 }}>
-                      <span className="streaming-indicator">● 生成中</span>
-                    </div>
-                    <div className="transcript-content">
-                      <FormattedText content={liveAssistantText} />
-                      <span className="typing-cursor">▌</span>
-                    </div>
+              {selectedJob && !terminalJobState(selectedJob.state) && !promptAlreadyInTranscript && (
+                <article className="transcript-message role-user pending-turn">
+                  <div className="transcript-content">
+                    <p className="formatted-paragraph">{selectedJob.prompt_preview}</p>
                   </div>
                 </article>
               )}
-            </div>
-          )}
 
-          {selectedJob && terminalJobState(selectedJob.state) && toolEvents.length > 0 && (
-            <details className="completed-tools-drawer">
-              <summary className="completed-tools-summary">
-                <span className="tool-summary-icon">⚡</span>
-                <span>
-                  <strong>{toolEvents.length} 个工具操作</strong> 已在任务 {selectedJob.id} 中执行
-                </span>
-                <span className="expand-hint">点击查看明细 ⌄</span>
-              </summary>
-              <div className="completed-tools-body">
-                {toolEvents.map(tool => (
-                  <EventCard key={tool.event_id} item={tool} />
-                ))}
-              </div>
-            </details>
-          )}
+              {selectedJob && !terminalJobState(selectedJob.state) && (
+                <div className="live-job-turn">
+                  <div className={`live-job-banner ${selectedJob.state}`}>
+                    <span className={`live-pulse ${selectedJob.state}`} />
+                    <span>
+                      {selectedJob.state === 'queued'
+                        ? `排队中 · 等待执行 (${selectedJob.id})…`
+                        : `Conveyor 正在执行 (${selectedJob.id})…`}
+                    </span>
+                  </div>
 
-          {!transcript.length && (!selectedJob || terminalJobState(selectedJob.state)) && (
-            <div className="welcome-state">
-              <div className="brand-mark">C</div>
-              <h2>Conveyor Control Console</h2>
-              <p>你的个人常驻 Agent 控制台。在下方输入任务，或通过 Telegram、飞书随时交流。</p>
-              <div className="suggested-prompts">
-                <button type="button" className="prompt-chip" onClick={() => setPrompt('检查当前系统状态和任务队列')}>
-                  🔍 检查系统与任务队列
-                </button>
-                <button type="button" className="prompt-chip" onClick={() => setPrompt('查看最近的代码修改和 Git 提交记录')}>
-                  🛠️ 查看最近代码变更
-                </button>
-                <button type="button" className="prompt-chip" onClick={() => setPrompt('帮我梳理今天的工作进展和待办事项')}>
-                  📝 总结今日工作进展
-                </button>
-              </div>
+                  {toolEvents.length > 0 && (
+                    <div className="live-tools-list">
+                      {toolEvents.map(tool => (
+                        <EventCard key={tool.event_id} item={tool} />
+                      ))}
+                    </div>
+                  )}
+
+                  {liveAssistantText && (
+                    <article className="transcript-message role-assistant live-streaming">
+                      <div className="transcript-avatar" aria-hidden="true">🤖</div>
+                      <div className="transcript-body">
+                        <div className="transcript-header" style={{ marginBottom: 4 }}>
+                          <span className="streaming-indicator">● 生成中</span>
+                        </div>
+                        <div className="transcript-content">
+                          <FormattedText content={liveAssistantText} />
+                          <span className="typing-cursor">▌</span>
+                        </div>
+                      </div>
+                    </article>
+                  )}
+                </div>
+              )}
+
+              {selectedJob && terminalJobState(selectedJob.state) && toolEvents.length > 0 && (
+                <details className="completed-tools-drawer">
+                  <summary className="completed-tools-summary">
+                    <span className="tool-summary-icon">⚡</span>
+                    <span>
+                      <strong>{toolEvents.length} 个工具操作</strong> 已在任务 {selectedJob.id} 中执行
+                    </span>
+                    <span className="expand-hint">点击查看明细 ⌄</span>
+                  </summary>
+                  <div className="completed-tools-body">
+                    {toolEvents.map(tool => (
+                      <EventCard key={tool.event_id} item={tool} />
+                    ))}
+                  </div>
+                </details>
+              )}
+
+              {!transcript.length && (!selectedJob || terminalJobState(selectedJob.state)) && (
+                <div className="welcome-state">
+                  <div className="brand-mark">C</div>
+                  <h2>Conveyor Control Console</h2>
+                  <p>你的个人常驻 Agent 控制台。在下方输入任务，或通过 Telegram、飞书随时交流。</p>
+                  <div className="suggested-prompts">
+                    <button type="button" className="prompt-chip" onClick={() => setPrompt('检查当前系统状态和任务队列')}>
+                      🔍 检查系统与任务队列
+                    </button>
+                    <button type="button" className="prompt-chip" onClick={() => setPrompt('查看最近的代码修改和 Git 提交记录')}>
+                      🛠️ 查看最近代码变更
+                    </button>
+                    <button type="button" className="prompt-chip" onClick={() => setPrompt('帮我梳理今天的工作进展和待办事项')}>
+                      📝 总结今日工作进展
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        <form className="composer" onSubmit={submit}>
-          <div className="mode-switch"><button type="button" className={mode === 'run' ? 'active' : ''} onClick={() => setMode('run')}>Ask</button><button type="button" className={mode === 'fix' ? 'active' : ''} onClick={() => setMode('fix')}>Fix</button></div>
-          <textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={activeRefinement ? 'Refine the active changes…' : 'Ask Conveyor…'} rows={2} maxLength={8000} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
-          <button className="send-button" disabled={!prompt.trim() || busy}>{busy ? '…' : 'Send'} <span>↗</span></button>
-        </form>
+            <form className="composer" onSubmit={submit}>
+              <div className="mode-switch"><button type="button" className={mode === 'run' ? 'active' : ''} onClick={() => setMode('run')}>Ask</button><button type="button" className={mode === 'fix' ? 'active' : ''} onClick={() => setMode('fix')}>Fix</button></div>
+              <textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={activeRefinement ? 'Refine the active changes…' : 'Ask Conveyor…'} rows={2} maxLength={8000} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
+              <button className="send-button" disabled={!prompt.trim() || busy}>{busy ? '…' : 'Send'} <span>↗</span></button>
+            </form>
+          </>
+        )}
       </section>
 
       <aside className="context-panel panel">
@@ -510,6 +541,18 @@ export default function App() {
           </> : <Empty text="Select a job" />}
         </ContextSection>
         {pendingForJob.map(approval => <section className="approval-card" key={approval.id}><p className="eyebrow">APPROVAL REQUIRED</p><h3>{approval.action === 'apply' ? 'Apply changes' : 'Discard worktree'}?</h3><p>This decision is scoped to job <code>{approval.job_id}</code> and expires automatically.</p><div className="action-row"><button className="danger" onClick={() => action(`/api/approvals/${approval.id}/reject`)}>Reject</button><button className="primary" onClick={() => action(`/api/approvals/${approval.id}/approve`)}>Approve</button></div></section>)}
+        {pendingToolApprovals.map(approval => (
+          <section className="approval-card" key={approval.id}>
+            <p className="eyebrow">TOOL APPROVAL REQUIRED</p>
+            <h3>Execute tool <code>{approval.tool_name}</code>?</h3>
+            <p>{approval.summary || approval.arg || 'Tool confirmation required'}</p>
+            {approval.arg && <p style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>Target: {approval.arg}</p>}
+            <div className="action-row">
+              <button className="danger" onClick={() => action(`/api/approvals/${approval.id}/reject`)}>Reject</button>
+              <button className="primary" onClick={() => action(`/api/approvals/${approval.id}/approve`)}>Approve</button>
+            </div>
+          </section>
+        ))}
         <ContextSection title="Changes">
           {activeRefinement && <KeyValue label="Active changes" value={`${activeChangedFiles} file${activeChangedFiles === 1 ? '' : 's'} · cumulative`} />}
           <div className="file-list">{selectedJob?.changed_files?.map(file => <div key={file.path}><span className="file-status">{file.status || 'M'}</span><code>{file.path}</code></div>)}{selectedJob && !selectedJob.changed_files?.length && <Empty text="No changed files" />}</div>

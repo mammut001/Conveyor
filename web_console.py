@@ -299,6 +299,27 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK if item else HTTPStatus.NOT_FOUND, item or {"error": "not found"})
             elif path == "/api/approvals":
                 self._json(HTTPStatus.OK, {"approvals": self.server.control.list_approvals()})
+            elif path == "/api/chat/history":
+                session_id = str((query.get("session_id") or [""])[0]).strip()
+                if not session_id:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "session_id is required"})
+                    return
+                session = self.server.control.get_session(session_id)
+                if session is None:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "session not found"})
+                    return
+                messages = [
+                    {
+                        "role": m.get("role"),
+                        "text": m.get("content") or "",
+                        "created_at": m.get("created_at") or "",
+                    }
+                    for m in (session.get("messages") or [])
+                ]
+                self._json(HTTPStatus.OK, {
+                    "session_id": session_id,
+                    "messages": messages,
+                })
             elif path == "/api/nodes":
                 self._json(HTTPStatus.OK, {"nodes": self.server.control.nodes()})
             elif path == "/api/computer/status":
@@ -369,23 +390,53 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if body is None:
             return
         try:
-            if parsed.path == "/api/tasks":
+            if parsed.path == "/api/chat":
+                raw_message = body.get("message")
+                message = str(raw_message or "").strip() if isinstance(raw_message, str) else ""
+                if not message or len(message) > 8_000:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "message must be 1-8000 characters"})
+                    return
+                requested_session_id = str(body.get("session_id") or "")
+                from web_chat import resolve_or_create_session
+                session_info = resolve_or_create_session(self.server.control, requested_session_id)
+                if not session_info:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid session_id"})
+                    return
+                channel, operator_id, source_chat_id, durable_session_id = session_info
+                if channel != "web":
+                    # Tool confirmations from web chat are only decidable for
+                    # web-channel sessions; don't act as a Telegram/Feishu chat.
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "web chat only supports web sessions"})
+                    return
+
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+
+                from handlers.chat import chat_enabled
+                if not chat_enabled(settings):
+                    self._json(HTTPStatus.CONFLICT, {"error": "chat tier is disabled (set CONVEYOR_CHAT_MODE and CONVEYOR_CHAT_*)"})
+                    return
+
+                msg = InboundMessage(
+                    channel=channel, operator_id=operator_id, chat_id=source_chat_id,
+                    message_id=uuid.uuid4().hex, text=message, chat_type="p2p",
+                )
+                self._handle_chat_stream(msg, settings, durable_session_id, message)
+                return
+            elif parsed.path == "/api/tasks":
                 prompt = str(body.get("prompt") or "").strip()
                 if not prompt or len(prompt) > 8_000:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "prompt must be 1-8000 characters"})
                     return
                 requested_session_id = str(body.get("session_id") or "")
-                resolved = self.server.control.resolve_session_identity(requested_session_id) if requested_session_id else None
-                if resolved:
-                    channel, operator_id, source_chat_id = resolved
-                    durable_session_id = requested_session_id
-                else:
-                    source_chat_id = requested_session_id or f"web-{uuid.uuid4().hex[:12]}"
-                    if len(source_chat_id) > 128 or not all(ch.isalnum() or ch in "-_" for ch in source_chat_id):
-                        self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid session_id"})
-                        return
-                    channel, operator_id = "web", "web-console"
-                    durable_session_id = session_identity(channel, source_chat_id, operator_id)
+                from web_chat import resolve_or_create_session
+                session_info = resolve_or_create_session(self.server.control, requested_session_id)
+                if not session_info:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid session_id"})
+                    return
+                channel, operator_id, source_chat_id, durable_session_id = session_info
                 mode = JobMode.FIX if body.get("mode") == "fix" else JobMode.RUN
                 msg = InboundMessage(
                     channel=channel, operator_id=operator_id, chat_id=source_chat_id,
@@ -422,7 +473,23 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 approval = self.server.control.request_approval(parts[2], parts[3])
                 self._json(HTTPStatus.ACCEPTED, {"approval": approval})
             elif len(parts) == 4 and parts[:2] == ["api", "approvals"] and parts[3] in ("approve", "reject"):
-                result = self._await(self.server.control.decide_approval(parts[2], parts[3] == "approve"), timeout=120)
+                approval_id = parts[2]
+                is_approve = (parts[3] == "approve")
+                from handlers.tools.confirm import get_pending
+                pending = get_pending(approval_id)
+                if pending is not None:
+                    if pending.channel != "web":
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                        return
+                    settings = getattr(self.server.control, "settings", None)
+                    if settings is None:
+                        from config import load_runtime_settings
+                        settings = load_runtime_settings()
+                    from web_chat import decide_tool_approval
+                    result = self._await(decide_tool_approval(pending, is_approve, settings), timeout=120)
+                    self._json(HTTPStatus.OK, result)
+                    return
+                result = self._await(self.server.control.decide_approval(parts[2], is_approve), timeout=120)
                 self._json(HTTPStatus.OK if result else HTTPStatus.NOT_FOUND, result or {"error": "not found"})
             elif parsed.path == "/api/computer/screenshot":
                 result = self.server.control.request_host_screen()
@@ -488,6 +555,75 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 time.sleep(0.75)
         except (BrokenPipeError, ConnectionResetError):
             return
+
+    def _handle_chat_stream(
+        self,
+        msg: InboundMessage,
+        settings: Any,
+        durable_session_id: str,
+        prompt: str,
+    ) -> None:
+        import queue
+        from web_chat import WebChatPort, run_web_chat
+
+        event_queue: queue.Queue = queue.Queue()
+        port = WebChatPort(event_queue, settings, durable_session_id, prompt=prompt)
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        self.close_connection = True
+
+        # Emit session event first
+        session_data = json.dumps({"session_id": durable_session_id}, ensure_ascii=False)
+        self.wfile.write(f"event: session\ndata: {session_data}\n\n".encode("utf-8"))
+        self.wfile.flush()
+
+        runner = getattr(self.server.control, "runner", None)
+        future = asyncio.run_coroutine_threadsafe(
+            run_web_chat(msg, port, settings, runner, prompt),
+            self.server.loop,
+        )
+
+        deadline = time.monotonic() + 180.0
+        done = False
+        try:
+            while not done:
+                now = time.monotonic()
+                if now > deadline:
+                    future.cancel()
+                    err_data = json.dumps({"error": "Request timed out"}, ensure_ascii=False)
+                    done_data = json.dumps({"outcome": "timeout"}, ensure_ascii=False)
+                    self.wfile.write(f"event: error\ndata: {err_data}\n\nevent: done\ndata: {done_data}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                    break
+
+                try:
+                    event_name, data = event_queue.get(timeout=0.25)
+                except queue.Empty:
+                    if future.done():
+                        exc = future.exception()
+                        if exc is not None:
+                            logger.error("Chat coroutine failed", exc_info=exc)
+                            err_data = json.dumps({"error": "Internal error"}, ensure_ascii=False)
+                            done_data = json.dumps({"outcome": "error"}, ensure_ascii=False)
+                            self.wfile.write(f"event: error\ndata: {err_data}\n\nevent: done\ndata: {done_data}\n\n".encode("utf-8"))
+                            self.wfile.flush()
+                        break
+                    continue
+
+                payload = json.dumps(data, ensure_ascii=False)
+                self.wfile.write(f"event: {event_name}\ndata: {payload}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                if event_name == "done":
+                    done = True
+                    self.close_connection = True
+        except (BrokenPipeError, ConnectionResetError):
+            future.cancel()
+            logger.debug("Chat client disconnected: %s", self.client_address[0])
 
     def _static(self, path: str) -> None:
         relative = path.lstrip("/") or "index.html"

@@ -107,6 +107,8 @@ requires `Authorization: Bearer <token>`.
 - `GET /api/jobs`, `GET /api/jobs/{id}`
 - `GET /api/jobs/{id}/events`, `GET /api/jobs/{id}/diff`
 - `GET /api/events/stream?job_id=...&after=...`
+- `POST /api/chat` (SSE streaming conversation without Codex)
+- `GET /api/chat/history?session_id=...` (retrieves session chat transcript)
 - `POST /api/tasks`, `POST /api/jobs/{id}/cancel`
 - `POST /api/jobs/{id}/apply`, `POST /api/jobs/{id}/discard`
 - `GET /api/approvals`
@@ -120,6 +122,65 @@ requires `Authorization: Bearer <token>`.
 - `POST /api/takeover/activate`
 - `POST /api/takeover/complete`
 - `POST /api/takeover/cancel`
+
+### Chat tier and SSE streaming (`/api/chat`)
+
+The web console exposes Conveyor's direct chat tier (`handlers.chat.ask_chat`) via `POST /api/chat`. It answers conversation in seconds without queuing a Codex agent job.
+
+- **Request**: `POST /api/chat` with JSON body:
+  ```json
+  {
+    "message": "Check system status",
+    "session_id": "web:web-console:web-12345"
+  }
+  ```
+  `session_id` is optional; when omitted, a fresh web session is generated. If the chat tier is disabled (`chat_enabled(settings)` is false), the endpoint returns `409 Conflict`.
+- **Response**: Server-Sent Events (`text/event-stream`, `Cache-Control: no-store`, `X-Accel-Buffering: no`). Event types:
+  - `session`: `{"session_id": "<id>"}` emitted first.
+  - `delta`: `{"text": "<partial>"}` live streaming tokens.
+  - `status`: `{"text": "<note>"}` progress notes (e.g. search status or delegation hints).
+  - `approval`: `{"id": "<token>", "tool_name": "...", "arg": "...", "summary": "...", "text": "...", "expires_in_seconds": 300}` when a write/dangerous tool requires confirmation.
+  - `message`: `{"text": "<final answer>"}` complete assistant response.
+  - `error`: `{"error": "<redacted error>"}` on execution failure or timeout.
+  - `done`: `{"outcome": "answered" | "escalate" | "unavailable"}` emitted last.
+
+If the model escalates or the tier is unavailable, a message advises the operator to submit the request as a task via the composer, and `done` finishes with the respective outcome.
+
+### Chat history (`/api/chat/history`)
+
+- `GET /api/chat/history?session_id=<id>` retrieves the transcript for a session from `TranscriptStore`.
+- Response:
+  ```json
+  {
+    "session_id": "web:web-console:web-12345",
+    "messages": [
+      { "role": "user", "text": "...", "created_at": "..." },
+      { "role": "assistant", "text": "...", "created_at": "..." }
+    ]
+  }
+  ```
+  Returns `404 Not Found` if the session does not exist.
+
+### Tool approvals (`/api/approvals`)
+
+- `GET /api/approvals`: Returns pending decisions including both Codex job diff approvals (`"kind": "job"`) and live chat tool confirmations (`"kind": "tool"`). Tool approvals have the shape:
+  ```json
+  {
+    "id": "<token>",
+    "kind": "tool",
+    "tool_name": "service_restart",
+    "arg": "conveyor",
+    "summary": "重启 Conveyor systemd 服务",
+    "session_id": "web:web-console:web-12345",
+    "status": "pending",
+    "expires_at": 1790764680.0
+  }
+  ```
+- `POST /api/approvals/{id}/approve` and `POST /api/approvals/{id}/reject`:
+  - For pending web tool actions, executes or cancels the tool, appends the outcome to the session transcript as an assistant message, and returns `{"id": "<token>", "kind": "tool", "status": "accepted"|"rejected", "result": "..."}`.
+  - Subsequent approval attempts return `404 Not Found`.
+  - Non-web pending actions (from Telegram or Feishu) cannot be decided from the web console and return `404 Not Found`.
+  - For job approvals, falls through to the existing apply/discard logic unchanged.
 
 ### Human takeover semantics
 
