@@ -248,6 +248,7 @@ def reset(
 
 def system_prompt(
     settings: "Settings", *, has_evidence: bool, can_search: bool = False, worktree_info: str = "", tools_enabled: bool = False,
+    operator_id: str = "",
 ) -> str:
     from config import load_operator_profile
 
@@ -285,16 +286,29 @@ def system_prompt(
             "earlier in the conversation; never reply that confirmation was requested without "
             "calling the tool.\n"
         )
+        if getattr(settings, "long_term_memory_enabled", False):
+            tool_section += (
+                "Durable memory is on. When the operator explicitly asks to remember or forget "
+                "one fact, call memory.remember or memory.forget with that single sentence. "
+                "Do not remember the whole chat, and never store secrets, tokens, or keys. "
+                "This is not the daily journal (/memo).\n"
+            )
         rule_1 = (
             f"1. If a good answer needs complex execution or capabilities beyond your tools, "
             f"reply with exactly {ESCALATE_TOKEN} and a one-line reason, nothing else. An agent will take over."
         )
         rule_2 = "2. Never claim you ran, checked, changed, sent or looked up anything without a tool executing it."
     else:
+        extra = ""
+        if getattr(settings, "long_term_memory_enabled", False):
+            extra = (
+                " Durable facts the operator asked you to keep may be listed below; use them, "
+                "but you cannot add or delete them in this mode."
+            )
         tool_section = (
             "You have NO tools. You cannot run commands, read files, see the operator's servers, "
             "repositories, logs, mail or calendar, or browse the web. Only this conversation is "
-            "available to you.\n"
+            "available to you." + extra + "\n"
         )
         rule_1 = (
             f"1. If a good answer needs any of that — running or changing something, facts about "
@@ -302,11 +316,18 @@ def system_prompt(
             "one-line reason, nothing else. An agent with tools will take over."
         )
         rule_2 = "2. Never claim you ran, checked, changed, sent or looked up anything."
+    memory_section = ""
+    if getattr(settings, "long_term_memory_enabled", False):
+        from personal_tools.long_term_memory import prompt_block
+        block = prompt_block(settings, operator_id)
+        if block:
+            memory_section = block + "\n"
     return (
         f"You are Conveyor's chat layer for {name}, its single operator. Today is {today}.\n"
         f"Reply in the operator's language ({language}), style: {style}. Keep answers chat-sized.\n"
         f"{grounding}"
         f"{tool_section}"
+        f"{memory_section}"
         "Rules:\n"
         f"{rule_1}\n"
         f"{rule_2}\n"
@@ -523,6 +544,7 @@ async def ask_chat(
                 can_search=may_search,
                 worktree_info=worktree_info,
                 tools_enabled=use_tools,
+                operator_id=msg.operator_id,
             )}]
             + past
             + [{"role": "user", "content": content}]

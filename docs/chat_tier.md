@@ -86,6 +86,10 @@ conversations survive service restarts and deployments.
 * Follow-ups within the active session window carry the recent turns.
 * Stale turns beyond session TTL are archived; `/deep` requests persist across restarts.
 
+That store is per chat and short-lived. Durable facts the operator explicitly
+asks to keep live in a separate database; see `docs/long_term_memory.md`
+(`CONVEYOR_LONG_TERM_MEMORY`, default off). `/chat_clear` does not delete them.
+
 ## Proactive Topic Watches
 
 Operators can subscribe to topics or search queries for proactive push notifications:

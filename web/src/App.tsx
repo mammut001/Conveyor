@@ -5,6 +5,7 @@ import { InboxPanel } from './components/InboxPanel'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
+import { dropApproval, isStale, shouldRefreshForEvent } from './approvalFreshness'
 
 type EventItem = {
   schema_version: number; event_id: string; sequence: number; timestamp: string
@@ -131,6 +132,7 @@ export default function App() {
   const [view, setView] = useState<'tasks' | 'chat' | 'inbox'>('tasks')
   const [inboxUnread, setInboxUnread] = useState(0)
   const lastSequence = useRef(0)
+  const refreshGen = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
 
   const selectSession = useCallback((sessionId: string, jobId?: string) => {
@@ -176,12 +178,17 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     if (!token) return
+    const gen = ++refreshGen.current
     try {
       const [sessionData, jobData, approvalData, nodeData, systemData, computerData] = await Promise.all([
         api<{ sessions: Session[] }>('/api/sessions'), api<{ jobs: Job[] }>('/api/jobs'),
         api<{ approvals: Approval[] }>('/api/approvals'), api<{ nodes: NodeInfo[] }>('/api/nodes'),
         api<SystemStatus>('/api/system/status'), api<ComputerStatus>('/api/computer/status'),
       ])
+      // A newer refresh (or a decision that bumped the generation) started
+      // while this one was in flight. Drop it so a late poll cannot restore
+      // a pending approval or an old job state.
+      if (isStale(gen, refreshGen.current)) return
       const taskSessions = taskSessionsOnly(sessionData.sessions)
       setSessions(taskSessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setError('')
@@ -259,7 +266,7 @@ export default function App() {
             const event = JSON.parse(line.slice(6)) as EventItem
             lastSequence.current = Math.max(lastSequence.current, event.sequence)
             setEvents(previous => previous.some(item => item.event_id === event.event_id) ? previous : [...previous, event].slice(-1000))
-            if (event.kind.startsWith('assistant.') || event.kind.startsWith('task.') || event.kind.startsWith('refinement.')) {
+            if (shouldRefreshForEvent(event.kind)) {
               void refresh()
               void refreshTranscript()
             }
@@ -333,8 +340,19 @@ export default function App() {
   }
   async function action(path: string, body: object = {}) {
     setBusy(true); setError('')
+    const decided = path.match(/^\/api\/approvals\/([^/]+)\/(approve|reject)$/)
+    if (decided) {
+      const approvalId = decodeURIComponent(decided[1])
+      setApprovals(prev => dropApproval(prev, approvalId))
+    }
+    // Invalidate a poll that started before this decision.
+    refreshGen.current += 1
     try { await api(path, { method: 'POST', body: JSON.stringify(body) }); await refresh() }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Action failed') }
+    catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Action failed')
+      // The optimistic drop may have been wrong (network error). Re-read.
+      try { await refresh() } catch { /* status already reported */ }
+    }
     finally { setBusy(false) }
   }
   async function captureHostScreen() {

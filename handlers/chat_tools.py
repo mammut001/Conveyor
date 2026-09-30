@@ -68,6 +68,8 @@ def is_exposed(name: str, spec: Any, settings: Any = None) -> bool:
         return False
     if name.startswith("routine.") and not getattr(settings, "routines_enabled", False):
         return False
+    if name.startswith("memory.") and not getattr(settings, "long_term_memory_enabled", False):
+        return False
     if spec.danger not in (DangerLevel.READ, DangerLevel.WRITE_SAFE, DangerLevel.WRITE):
         return False
     if name in NETWORK_TOOLS and name not in _network_allowlist(settings):
@@ -198,6 +200,19 @@ async def run_tool_loop(
                 continue
 
             danger = spec.danger
+            if real_tool_name.startswith("memory.") and danger in (
+                DangerLevel.WRITE_SAFE, DangerLevel.WRITE,
+            ):
+                from personal_tools.long_term_memory import screen_write_arg
+                screened = screen_write_arg(real_tool_name, arg)
+                if screened.error:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": screened.error,
+                    })
+                    continue
+                arg = screened.arg
             if danger in (DangerLevel.WRITE_SAFE, DangerLevel.WRITE):
                 # Non-READ tools must NOT execute automatically
                 logger.info("Chat tier tool call requested confirmation: %s", real_tool_name)

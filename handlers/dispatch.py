@@ -92,6 +92,22 @@ async def dispatch(
         await handle_context_job(msg, port, settings, runner)
         return
 
+    if (
+        getattr(settings, "long_term_memory_enabled", False)
+        and getattr(settings, "chat_tools_enabled", False)
+    ):
+        from personal_tools.long_term_memory import classify_explicit, screen_write_arg
+        explicit = classify_explicit(msg.text)
+        if explicit is not None:
+            tool_name, raw_arg = explicit
+            screened = screen_write_arg(tool_name, raw_arg)
+            if screened.error:
+                await port.reply(msg, screened.error)
+                return
+            from handlers.tools.runner import _request_confirmation
+            await _request_confirmation(msg, port, settings, tool_name, screened.arg)
+            return
+
     if detect_memory_intent(msg.text):
         if msg.reply_to is not None:
             await handle_memo(

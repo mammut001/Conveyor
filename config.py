@@ -206,6 +206,7 @@ class Settings:
     routines_enabled: bool = False
     routines_feishu_chat_id: str | None = None
     routines_approval_ttl_seconds: int = 86_400
+    long_term_memory_enabled: bool = False
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -559,6 +560,10 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "routines_approval_ttl_seconds": max(
             300, min(7 * 86_400, _int_env("CONVEYOR_ROUTINES_APPROVAL_TTL_SECONDS", 86_400))
         ),
+        # Durable cross-chat memory. Off: tools hidden, prompts unchanged.
+        "long_term_memory_enabled": os.getenv(
+            "CONVEYOR_LONG_TERM_MEMORY", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
     }
 
 
