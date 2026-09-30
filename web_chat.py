@@ -286,6 +286,13 @@ async def decide_tool_approval(
     except Exception:
         logger.exception("Failed to append tool approval result to transcript store")
 
+    try:
+        from routines import record_approval_decision
+        decision_label = "approved" if approve else "denied"
+        record_approval_decision(settings, token, decision_label, safe_result)
+    except Exception:
+        logger.debug("Failed to record routine approval decision", exc_info=True)
+
     return {
         "id": token,
         "kind": "tool",

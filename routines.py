@@ -1,0 +1,1056 @@
+"""routines.py — Scheduled natural-language tasks executed by chat tier + tools.
+
+Features:
+- Minimal in-house 5-field cron parser/evaluator with standard dom/dow OR semantics and DST safety.
+- SQLite store at <codex_memory_root>/routines.db with max 50 routines and 20 runs kept per routine.
+- Routine runner executing through ask_chat and capturing tool approvals into the host process.
+- Delivery to Web inbox (always) and optional Telegram / Feishu channels.
+"""
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+import json
+import logging
+import os
+from pathlib import Path
+import sqlite3
+from typing import Any
+import uuid
+from zoneinfo import ZoneInfo
+
+from channel.types import InboundMessage, OutboundPort
+from redaction import redact_text, truncate
+
+logger = logging.getLogger("conveyor.routines")
+
+DB_FILENAME = "routines.db"
+MAX_ROUTINES = 50
+MAX_RUNS_PER_ROUTINE = 20
+MAX_CONSECUTIVE_FAILURES = 3
+PER_RUN_TIMEOUT_SECONDS = 120.0
+ALLOWED_DELIVERY = ("web", "telegram", "feishu")
+WORKER_INTERVAL_SECONDS = 30
+
+
+# -----------------------------------------------------------------------------
+# 1. 5-Field Cron Parser & Evaluator (In-house, no external dependencies)
+# -----------------------------------------------------------------------------
+
+def _parse_cron_field(
+    field_str: str,
+    min_val: int,
+    max_val: int,
+    field_name: str,
+    is_dow: bool = False,
+) -> set[int]:
+    field_str = field_str.strip()
+    if not field_str:
+        raise ValueError(f"empty cron field for {field_name}")
+
+    parts = field_str.split(",")
+    result: set[int] = set()
+    limit_max = 7 if is_dow else max_val
+
+    for p in parts:
+        p = p.strip()
+        if not p:
+            raise ValueError(f"invalid empty item in {field_name}: '{field_str}'")
+
+        if "/" in p:
+            subparts = p.split("/", 1)
+            item, step_s = subparts[0].strip(), subparts[1].strip()
+            if not step_s.isdigit() or int(step_s) <= 0:
+                raise ValueError(f"invalid step in {field_name}: '{step_s}'")
+            step = int(step_s)
+            if item == "*":
+                start, end = min_val, max_val
+            elif "-" in item:
+                range_parts = item.split("-", 1)
+                s_s, e_s = range_parts[0].strip(), range_parts[1].strip()
+                if not (s_s.isdigit() and e_s.isdigit()):
+                    raise ValueError(f"invalid range in {field_name}: '{item}'")
+                start, end = int(s_s), int(e_s)
+            elif item.isdigit():
+                start, end = int(item), max_val
+            else:
+                raise ValueError(f"invalid expression before step in {field_name}: '{item}'")
+        elif p == "*":
+            start, end, step = min_val, max_val, 1
+        elif "-" in p:
+            range_parts = p.split("-", 1)
+            s_s, e_s = range_parts[0].strip(), range_parts[1].strip()
+            if not (s_s.isdigit() and e_s.isdigit()):
+                raise ValueError(f"invalid range in {field_name}: '{p}'")
+            start, end, step = int(s_s), int(e_s), 1
+        elif p.isdigit():
+            start, end, step = int(p), int(p), 1
+        else:
+            raise ValueError(f"invalid element in {field_name}: '{p}'")
+
+        if start > end:
+            raise ValueError(f"range start > end in {field_name}: '{start}-{end}'")
+        if start < min_val or start > limit_max or end < min_val or end > limit_max:
+            raise ValueError(f"value out of range ({min_val}-{limit_max}) in {field_name}: '{p}'")
+
+        for v in range(start, end + 1, step):
+            result.add(0 if (is_dow and v == 7) else v)
+
+    return result
+
+
+def parse_cron(
+    cron_expr: str,
+) -> tuple[set[int], set[int], set[int], set[int], set[int], bool, bool]:
+    """Parse a 5-field cron expression.
+
+    Returns (minutes, hours, dom, months, dow, dom_restricted, dow_restricted).
+    Raises ValueError with descriptive message on any invalid token.
+    """
+    tokens = cron_expr.strip().split()
+    if len(tokens) != 5:
+        raise ValueError(
+            f"cron expression must have exactly 5 fields (minute hour day-of-month month day-of-week), got {len(tokens)}"
+        )
+    m_s, h_s, dom_s, mon_s, dow_s = tokens
+    minutes = _parse_cron_field(m_s, 0, 59, "minute")
+    hours = _parse_cron_field(h_s, 0, 23, "hour")
+    dom = _parse_cron_field(dom_s, 1, 31, "day-of-month")
+    months = _parse_cron_field(mon_s, 1, 12, "month")
+    dow = _parse_cron_field(dow_s, 0, 6, "day-of-week", is_dow=True)
+
+    dom_restricted = (dom_s != "*")
+    dow_restricted = (dow_s != "*")
+    return minutes, hours, dom, months, dow, dom_restricted, dow_restricted
+
+
+def validate_cron(cron_expr: str) -> None:
+    """Validate a 5-field cron expression, raising ValueError on failure."""
+    parse_cron(cron_expr)
+
+
+def next_fire(
+    cron_expr: str,
+    after_dt: datetime | None = None,
+    tz: ZoneInfo | str | Any = None,
+) -> datetime:
+    """Evaluate the next aware UTC fire time strictly after after_dt in the given timezone.
+
+    Follows standard cron dom/dow OR semantics when both are restricted.
+    """
+    minutes, hours, dom, months, dow, dom_res, dow_res = parse_cron(cron_expr)
+
+    if hasattr(tz, "user_timezone"):
+        tz = getattr(tz, "user_timezone")
+    if tz is None:
+        tz = ZoneInfo("America/Toronto")
+    elif isinstance(tz, str):
+        try:
+            tz = ZoneInfo(tz)
+        except Exception:
+            tz = ZoneInfo("UTC")
+
+    if after_dt is None:
+        after_dt = datetime.now(timezone.utc)
+    elif after_dt.tzinfo is None:
+        after_dt = after_dt.replace(tzinfo=timezone.utc)
+
+    # Start searching strictly after after_dt at the start of the next minute
+    after_utc = after_dt.astimezone(timezone.utc).replace(second=0, microsecond=0) + timedelta(minutes=1)
+    curr_utc = after_utc
+
+    # Safety iteration limit (5 years)
+    max_days = 365 * 5 + 2
+    for _ in range(max_days * 24):
+        local = curr_utc.astimezone(tz)
+
+        # Check month
+        if local.month not in months:
+            next_day_utc = (
+                (local.astimezone(timezone.utc) + timedelta(days=1))
+                .astimezone(tz)
+                .replace(hour=0, minute=0, second=0, microsecond=0)
+                .astimezone(timezone.utc)
+            )
+            if next_day_utc <= curr_utc:
+                next_day_utc = curr_utc + timedelta(days=1)
+            curr_utc = next_day_utc
+            continue
+
+        # Check day
+        cron_dow = (local.weekday() + 1) % 7
+        dom_match = local.day in dom
+        dow_match = cron_dow in dow
+        if dom_res and dow_res:
+            day_match = dom_match or dow_match
+        else:
+            day_match = dom_match and dow_match
+
+        if not day_match:
+            next_day_utc = (
+                (local.astimezone(timezone.utc) + timedelta(days=1))
+                .astimezone(tz)
+                .replace(hour=0, minute=0, second=0, microsecond=0)
+                .astimezone(timezone.utc)
+            )
+            if next_day_utc <= curr_utc:
+                next_day_utc = curr_utc + timedelta(days=1)
+            curr_utc = next_day_utc
+            continue
+
+        # Check hour
+        if local.hour not in hours:
+            next_hour_utc = (
+                (local.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
+                .astimezone(tz)
+                .astimezone(timezone.utc)
+            )
+            if next_hour_utc <= curr_utc:
+                next_hour_utc = curr_utc + timedelta(hours=1)
+            curr_utc = next_hour_utc
+            continue
+
+        # Check minute
+        if local.minute not in minutes:
+            curr_utc = curr_utc + timedelta(minutes=1)
+            continue
+
+        return curr_utc.astimezone(timezone.utc)
+
+    raise ValueError(f"No matching fire time found for cron '{cron_expr}' within 5 years")
+
+
+# -----------------------------------------------------------------------------
+# 2. SQLite Database & Storage
+# -----------------------------------------------------------------------------
+
+def db_path(settings: Any) -> Path:
+    return Path(settings.codex_memory_root) / DB_FILENAME
+
+
+def _connect(settings: Any) -> sqlite3.Connection:
+    path = db_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=10000")
+    if path.is_file():
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    return conn
+
+
+def init_db(settings: Any) -> None:
+    conn = _connect(settings)
+    try:
+        with conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS routines (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    schedule_cron TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    deliver_json TEXT NOT NULL DEFAULT '["web"]',
+                    origin_channel TEXT NOT NULL DEFAULT 'web',
+                    origin_chat_id TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_run_at TEXT,
+                    next_run_at TEXT,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_routines_next_run
+                    ON routines(enabled, next_run_at);
+
+                CREATE TABLE IF NOT EXISTS routine_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    routine_id INTEGER NOT NULL,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    output TEXT NOT NULL,
+                    approval_id TEXT,
+                    delivery_json TEXT NOT NULL DEFAULT '{}',
+                    read_at TEXT,
+                    approval_status TEXT,
+                    FOREIGN KEY(routine_id) REFERENCES routines(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_routine_runs_routine_started
+                    ON routine_runs(routine_id, started_at DESC, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_routine_runs_inbox
+                    ON routine_runs(read_at, started_at DESC, id DESC);
+                """
+            )
+    finally:
+        conn.close()
+
+
+def _row_to_routine(row: sqlite3.Row | dict) -> dict[str, Any]:
+    item = dict(row)
+    try:
+        item["deliver"] = json.loads(item.get("deliver_json") or "[]")
+    except Exception:
+        item["deliver"] = ["web"]
+    item["schedule"] = item.get("schedule_cron", "")
+    item["enabled"] = bool(item.get("enabled", 1))
+    return item
+
+
+def _row_to_run(row: sqlite3.Row | dict) -> dict[str, Any]:
+    item = dict(row)
+    try:
+        item["delivery"] = json.loads(item.get("delivery_json") or "{}")
+    except Exception:
+        item["delivery"] = {}
+    return item
+
+
+def create_routine(
+    settings: Any,
+    name: str,
+    schedule: str,
+    prompt: str,
+    deliver: list[str] | None = None,
+    origin_channel: str = "web",
+    origin_chat_id: str = "",
+    enabled: bool = True,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Create a new routine. Validates name, cron, prompt, and limits."""
+    init_db(settings)
+    name = (name or "").strip()
+    if not name or len(name) > 80:
+        raise ValueError("name must be 1-80 characters")
+
+    prompt = (prompt or "").strip()
+    if not prompt or len(prompt) > 2000:
+        raise ValueError("prompt must be 1-2000 characters")
+
+    validate_cron(schedule)
+
+    if deliver is not None and not isinstance(deliver, (list, tuple)):
+        raise ValueError("deliver must be a list of channels")
+    deliver_list: list[str] = []
+    for item in deliver or ["web"]:
+        channel_name = str(item).strip().lower()
+        if channel_name not in ALLOWED_DELIVERY:
+            raise ValueError(f"unsupported delivery channel: {channel_name!r} (allowed: web, telegram, feishu)")
+        if channel_name not in deliver_list:
+            deliver_list.append(channel_name)
+    if "web" not in deliver_list:
+        deliver_list.insert(0, "web")
+
+    now_dt = now or datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
+    tz_name = getattr(settings, "user_timezone", "America/Toronto")
+    next_run_iso = next_fire(schedule, now_dt, tz_name).isoformat() if enabled else None
+
+    conn = _connect(settings)
+    try:
+        with conn:
+            count = conn.execute("SELECT count(*) FROM routines").fetchone()[0]
+            if count >= MAX_ROUTINES:
+                raise ValueError(f"maximum of {MAX_ROUTINES} routines reached (limit {MAX_ROUTINES})")
+
+            cur = conn.execute(
+                """
+                INSERT INTO routines (
+                    name, schedule_cron, prompt, deliver_json, origin_channel, origin_chat_id,
+                    enabled, created_at, updated_at, next_run_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    name,
+                    schedule,
+                    prompt,
+                    json.dumps(deliver_list),
+                    origin_channel or "web",
+                    str(origin_chat_id or ""),
+                    1 if enabled else 0,
+                    now_iso,
+                    now_iso,
+                    next_run_iso,
+                ),
+            )
+            routine_id = cur.lastrowid
+            row = conn.execute("SELECT * FROM routines WHERE id = ?", (routine_id,)).fetchone()
+            return _row_to_routine(row)
+    finally:
+        conn.close()
+
+
+def list_routines(settings: Any) -> list[dict[str, Any]]:
+    """List all routines with latest run status."""
+    init_db(settings)
+    conn = _connect(settings)
+    try:
+        rows = conn.execute(
+            """
+            SELECT r.*,
+                (SELECT status FROM routine_runs WHERE routine_id = r.id ORDER BY started_at DESC, id DESC LIMIT 1) as last_run_status
+            FROM routines r
+            ORDER BY r.id ASC
+            """
+        ).fetchall()
+        return [_row_to_routine(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_routine(settings: Any, routine_id: int) -> dict[str, Any] | None:
+    init_db(settings)
+    conn = _connect(settings)
+    try:
+        row = conn.execute(
+            """
+            SELECT r.*,
+                (SELECT status FROM routine_runs WHERE routine_id = r.id ORDER BY started_at DESC, id DESC LIMIT 1) as last_run_status
+            FROM routines r WHERE r.id = ?
+            """,
+            (routine_id,),
+        ).fetchone()
+        return _row_to_routine(row) if row else None
+    finally:
+        conn.close()
+
+
+def pause_routine(settings: Any, routine_id: int, now: datetime | None = None) -> dict[str, Any] | None:
+    init_db(settings)
+    now_iso = (now or datetime.now(timezone.utc)).isoformat()
+    conn = _connect(settings)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE routines SET enabled = 0, updated_at = ? WHERE id = ?",
+                (now_iso, routine_id),
+            )
+            if cur.rowcount == 0:
+                return None
+            row = conn.execute("SELECT * FROM routines WHERE id = ?", (routine_id,)).fetchone()
+            return _row_to_routine(row)
+    finally:
+        conn.close()
+
+
+def resume_routine(settings: Any, routine_id: int, now: datetime | None = None) -> dict[str, Any] | None:
+    init_db(settings)
+    now_dt = now or datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
+    tz_name = getattr(settings, "user_timezone", "America/Toronto")
+    conn = _connect(settings)
+    try:
+        with conn:
+            row = conn.execute("SELECT * FROM routines WHERE id = ?", (routine_id,)).fetchone()
+            if not row:
+                return None
+            next_run_iso = next_fire(row["schedule_cron"], now_dt, tz_name).isoformat()
+            conn.execute(
+                """
+                UPDATE routines
+                SET enabled = 1, consecutive_failures = 0, next_run_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_run_iso, now_iso, routine_id),
+            )
+            updated = conn.execute("SELECT * FROM routines WHERE id = ?", (routine_id,)).fetchone()
+            return _row_to_routine(updated)
+    finally:
+        conn.close()
+
+
+def delete_routine(settings: Any, routine_id: int) -> bool:
+    init_db(settings)
+    conn = _connect(settings)
+    try:
+        with conn:
+            cur = conn.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def record_run(
+    settings: Any,
+    routine_id: int,
+    started_at: str,
+    finished_at: str,
+    status: str,
+    output: str,
+    approval_id: str | None = None,
+    delivery: dict | None = None,
+    approval_status: str | None = None,
+) -> dict[str, Any]:
+    """Record a routine run, auto-pause on 3 consecutive errors, and prune runs beyond 20."""
+    init_db(settings)
+    safe_output = truncate(redact_text(output or ""), 4_000)
+    del_json = json.dumps(delivery or {})
+
+    conn = _connect(settings)
+    try:
+        with conn:
+            cur = conn.execute(
+                """
+                INSERT INTO routine_runs (
+                    routine_id, started_at, finished_at, status, output,
+                    approval_id, delivery_json, approval_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    routine_id,
+                    started_at,
+                    finished_at,
+                    status,
+                    safe_output,
+                    approval_id,
+                    del_json,
+                    approval_status,
+                ),
+            )
+            run_id = cur.lastrowid
+
+            # Update failure counts and auto-pause
+            row = conn.execute(
+                "SELECT consecutive_failures, enabled FROM routines WHERE id = ?",
+                (routine_id,),
+            ).fetchone()
+            if row:
+                failures = row["consecutive_failures"]
+                enabled = row["enabled"]
+                if status == "error":
+                    failures += 1
+                    if failures >= MAX_CONSECUTIVE_FAILURES:
+                        enabled = 0
+                else:
+                    failures = 0
+                conn.execute(
+                    """
+                    UPDATE routines
+                    SET last_run_at = ?, consecutive_failures = ?, enabled = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (finished_at, failures, enabled, finished_at, routine_id),
+                )
+
+            # Prune runs beyond MAX_RUNS_PER_ROUTINE
+            conn.execute(
+                """
+                DELETE FROM routine_runs
+                WHERE routine_id = ?
+                  AND id NOT IN (
+                    SELECT id FROM routine_runs
+                    WHERE routine_id = ?
+                    ORDER BY started_at DESC, id DESC
+                    LIMIT ?
+                  )
+                """,
+                (routine_id, routine_id, MAX_RUNS_PER_ROUTINE),
+            )
+
+            run_row = conn.execute("SELECT * FROM routine_runs WHERE id = ?", (run_id,)).fetchone()
+            return _row_to_run(run_row)
+    finally:
+        conn.close()
+
+
+def list_inbox(settings: Any, limit: int = 50) -> tuple[list[dict[str, Any]], int]:
+    """Return inbox items across routines with resolved approval status and unread count."""
+    init_db(settings)
+    from handlers.tools.confirm import get_pending
+
+    conn = _connect(settings)
+    try:
+        rows = conn.execute(
+            """
+            SELECT rr.*, r.name as routine_name
+            FROM routine_runs rr
+            JOIN routines r ON rr.routine_id = r.id
+            ORDER BY rr.started_at DESC, rr.id DESC
+            LIMIT ?
+            """,
+            (max(1, min(200, limit)),),
+        ).fetchall()
+
+        unread = conn.execute(
+            "SELECT count(*) FROM routine_runs WHERE read_at IS NULL"
+        ).fetchone()[0]
+
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            item = _row_to_run(r)
+            item["routine_name"] = r["routine_name"]
+            approval_id = item.get("approval_id")
+            if approval_id:
+                recorded_status = item.get("approval_status")
+                if recorded_status:
+                    item["approval"] = {"id": approval_id, "status": recorded_status}
+                else:
+                    pending = get_pending(approval_id)
+                    status = "pending" if pending is not None else "expired"
+                    item["approval"] = {"id": approval_id, "status": status}
+            else:
+                item["approval"] = None
+            items.append(item)
+
+        return items, int(unread)
+    finally:
+        conn.close()
+
+
+def mark_inbox_read(settings: Any, run_id: int, now: datetime | None = None) -> bool:
+    init_db(settings)
+    now_iso = (now or datetime.now(timezone.utc)).isoformat()
+    conn = _connect(settings)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE routine_runs SET read_at = ? WHERE id = ? AND read_at IS NULL",
+                (now_iso, run_id),
+            )
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def mark_inbox_read_all(settings: Any, now: datetime | None = None) -> int:
+    init_db(settings)
+    now_iso = (now or datetime.now(timezone.utc)).isoformat()
+    conn = _connect(settings)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE routine_runs SET read_at = ? WHERE read_at IS NULL",
+                (now_iso,),
+            )
+            return cur.rowcount
+    finally:
+        conn.close()
+
+
+def unread_inbox_count(settings: Any) -> int:
+    init_db(settings)
+    conn = _connect(settings)
+    try:
+        row = conn.execute("SELECT count(*) FROM routine_runs WHERE read_at IS NULL").fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
+def record_approval_decision(
+    settings: Any,
+    approval_id: str,
+    decision: str,
+    result_text: str = "",
+) -> bool:
+    """Record the decision on a routine run row when its pending approval is decided."""
+    init_db(settings)
+    conn = _connect(settings)
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT id, output FROM routine_runs WHERE approval_id = ?",
+                (approval_id,),
+            ).fetchone()
+            if not row:
+                return False
+
+            extra = f"\n\n[{decision.capitalize()}: {truncate(result_text, 1000)}]" if result_text else f"\n\n[{decision.capitalize()}]"
+            new_output = truncate(row["output"] + extra, 4_000)
+            conn.execute(
+                "UPDATE routine_runs SET approval_status = ?, output = ? WHERE id = ?",
+                (decision, new_output, row["id"]),
+            )
+            return True
+    finally:
+        conn.close()
+
+
+# -----------------------------------------------------------------------------
+# 3. Runner & Execution Engine
+# -----------------------------------------------------------------------------
+
+class RoutinePort(OutboundPort):
+    """Collecting OutboundPort that captures inline button approvals and output messages."""
+
+    supports_inline_buttons = True
+    supports_attachments = False
+
+    def __init__(self) -> None:
+        self.approval_id: str | None = None
+        self.messages: list[str] = []
+        self.last_text: str = ""
+
+    async def reply(self, msg: InboundMessage, text: str) -> str:
+        if not text.startswith("💭") and not text.startswith("⏳"):
+            self.last_text = text
+            self.messages.append(text)
+        return "ok"
+
+    async def send_new(self, msg: InboundMessage, text: str) -> str:
+        if not text.startswith("💭") and not text.startswith("⏳"):
+            self.last_text = text
+            self.messages.append(text)
+        return "ok"
+
+    async def edit_progress(self, msg: InboundMessage, placeholder_id: Any, text: str) -> bool:
+        if not text.startswith("💭") and not text.startswith("⏳") and not text.endswith(" ▍"):
+            self.last_text = text
+        return True
+
+    async def reply_with_buttons(
+        self, msg: InboundMessage, text: str, buttons: list[list[dict]]
+    ) -> str:
+        self.last_text = text
+        self.messages.append(text)
+        for row in buttons:
+            for btn in row:
+                cb = btn.get("callback_data", "")
+                if cb.startswith("tool:confirm:"):
+                    self.approval_id = cb[len("tool:confirm:"):]
+                    break
+            if self.approval_id:
+                break
+        return "ok"
+
+    async def fetch_attachment(self, msg: InboundMessage, attachment: Any) -> bytes | None:
+        return None
+
+
+async def run_single_routine(
+    settings: Any,
+    runner: Any,
+    routine: dict[str, Any],
+) -> dict[str, Any]:
+    """Execute a single routine through ask_chat and handle delivery."""
+    from handlers.chat import ask_chat, reset
+
+    routine_id = int(routine["id"])
+    name = routine.get("name", f"Routine #{routine_id}")
+    prompt = routine.get("prompt", "")
+    deliver = routine.get("deliver", ["web"])
+    origin_channel = routine.get("origin_channel", "web")
+    origin_chat_id = routine.get("origin_chat_id", "")
+
+    # Reset chat memory for this routine chat key so runs don't imitate previous turns
+    routine_chat_key = f"web:routine-{routine_id}"
+    reset(routine_chat_key, settings=settings)
+
+    tz_name = getattr(settings, "user_timezone", "America/Toronto")
+    tz = ZoneInfo(tz_name) if isinstance(tz_name, str) else ZoneInfo("America/Toronto")
+    now_dt = datetime.now(timezone.utc)
+    started_at = now_dt.isoformat()
+    local_time = now_dt.astimezone(tz).strftime("%Y-%m-%d %H:%M %Z")
+
+    prefixed_prompt = (
+        f"[Scheduled routine '{name}' running at {local_time}; the operator is not watching live]\n\n"
+        f"{prompt}"
+    )
+
+    msg = InboundMessage(
+        channel="web",
+        operator_id="web-console",
+        chat_id=f"routine-{routine_id}",
+        message_id=f"routine-run-{uuid.uuid4().hex[:12]}",
+        text=prompt,
+    )
+    port = RoutinePort()
+
+    status = "ok"
+    raw_output = ""
+    approval_id = None
+
+    try:
+        outcome, checked = await asyncio.wait_for(
+            ask_chat(msg, port, settings, question=prefixed_prompt, runner=runner),
+            timeout=PER_RUN_TIMEOUT_SECONDS,
+        )
+        if port.approval_id:
+            status = "approval_pending"
+            approval_id = port.approval_id
+            raw_output = port.last_text or "Approval pending"
+        elif outcome == "answered":
+            status = "ok"
+            raw_output = port.last_text or (checked.body if checked else "")
+        elif outcome == "escalate":
+            status = "escalate"
+            reason = f" ({checked.reason})" if checked and checked.reason else ""
+            raw_output = (
+                f"This routine requested task execution on Codex{reason}, "
+                "which is not auto-run for scheduled routines. Please run it manually if needed."
+            )
+        elif outcome == "unavailable":
+            status = "unavailable"
+            raw_output = "The chat tier was unavailable to run this routine."
+        else:
+            status = "ok"
+            raw_output = port.last_text
+    except asyncio.TimeoutError:
+        status = "error"
+        raw_output = f"Routine execution timed out after {int(PER_RUN_TIMEOUT_SECONDS)} seconds."
+    except Exception as exc:
+        logger.exception("Error executing routine #%d", routine_id)
+        status = "error"
+        raw_output = f"Routine execution error: {type(exc).__name__}: {exc}"
+
+    finished_at = datetime.now(timezone.utc).isoformat()
+    safe_output = truncate(redact_text(raw_output), 4_000)
+
+    # Deliver output (best-effort, never raises)
+    delivery_record: dict[str, str] = {"web": "ok"}
+    try:
+        from agent_events import emit_event
+        emit_event(settings, "routine.run", str(routine_id), {
+            "routine_id": routine_id,
+            "status": status,
+            "approval_id": approval_id,
+        })
+    except Exception:
+        pass
+
+    # Telegram delivery
+    if "telegram" in deliver:
+        token = getattr(settings, "telegram_bot_token", None)
+        if token and token != "feishu-only-unused":
+            try:
+                tg_target = None
+                if origin_channel == "telegram" and origin_chat_id:
+                    try:
+                        tg_target = int(origin_chat_id)
+                    except ValueError:
+                        pass
+                if tg_target is None:
+                    tg_target = getattr(settings, "telegram_allowed_user_id", None)
+
+                if tg_target:
+                    from scripts.telegram_api import send_message
+                    if status == "approval_pending":
+                        tg_text = (
+                            f"⏰ Routine '{name}' needs approval:\n\n"
+                            f"{safe_output}\n\n"
+                            f"⚠️ Action requires confirmation. Please decide this approval in the Web Console inbox."
+                        )
+                    else:
+                        tg_text = f"⏰ Routine '{name}' ({status}):\n\n{safe_output}"
+                    await asyncio.to_thread(send_message, settings, tg_text, chat_id=tg_target)
+                    delivery_record["telegram"] = "ok"
+                else:
+                    delivery_record["telegram"] = "skipped: no target user id"
+            except Exception as exc:
+                logger.warning("Routine telegram delivery failed: %s", exc)
+                delivery_record["telegram"] = f"error: {type(exc).__name__}"
+        else:
+            delivery_record["telegram"] = "skipped: telegram not configured"
+
+    # Feishu delivery
+    if "feishu" in deliver:
+        lark_id = getattr(settings, "lark_app_id", None)
+        lark_secret = getattr(settings, "lark_app_secret", None)
+        if lark_id and lark_secret:
+            try:
+                fs_target = (
+                    origin_chat_id
+                    if (origin_channel == "feishu" and origin_chat_id)
+                    else (
+                        getattr(settings, "routines_feishu_chat_id", None)
+                        or os.getenv("CONVEYOR_ROUTINES_FEISHU_CHAT_ID")
+                    )
+                )
+                if fs_target:
+                    from lark_oapi.channel import FeishuChannel
+                    channel = FeishuChannel(app_id=lark_id, app_secret=lark_secret)
+                    if status == "approval_pending":
+                        fs_text = (
+                            f"⏰ Routine '{name}' needs approval:\n\n"
+                            f"{safe_output}\n\n"
+                            f"⚠️ Action requires confirmation. Please decide this approval in the Web Console inbox."
+                        )
+                    else:
+                        fs_text = f"⏰ Routine '{name}' ({status}):\n\n{safe_output}"
+                    result = await channel.send(fs_target, {"text": truncate(fs_text)})
+                    ok = bool(getattr(result, "success", True))
+                    delivery_record["feishu"] = "ok" if ok else "error: send failed"
+                else:
+                    delivery_record["feishu"] = "skipped: no target chat id"
+            except Exception as exc:
+                logger.warning("Routine feishu delivery failed: %s", exc)
+                delivery_record["feishu"] = f"error: {type(exc).__name__}"
+        else:
+            delivery_record["feishu"] = "skipped: feishu not configured"
+
+    run_record = record_run(
+        settings,
+        routine_id=routine_id,
+        started_at=started_at,
+        finished_at=finished_at,
+        status=status,
+        output=safe_output,
+        approval_id=approval_id,
+        delivery=delivery_record,
+        approval_status="pending" if approval_id else None,
+    )
+    return run_record
+
+
+async def run_due_routines(
+    settings: Any,
+    runner: Any,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Atomically claim due routines and run each sequentially."""
+    init_db(settings)
+    now_dt = now or datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
+    tz_name = getattr(settings, "user_timezone", "America/Toronto")
+
+    conn = _connect(settings)
+    claimed_routines: list[dict[str, Any]] = []
+    try:
+        due_rows = conn.execute(
+            """
+            SELECT * FROM routines
+            WHERE enabled = 1
+              AND next_run_at IS NOT NULL
+              AND next_run_at <= ?
+            ORDER BY next_run_at ASC
+            """,
+            (now_iso,),
+        ).fetchall()
+
+        for row in due_rows:
+            r_id = row["id"]
+            cron = row["schedule_cron"]
+            old_next = row["next_run_at"]
+            new_next = next_fire(cron, now_dt, tz_name).isoformat()
+            with conn:
+                cur = conn.execute(
+                    """
+                    UPDATE routines
+                    SET next_run_at = ?, updated_at = ?
+                    WHERE id = ? AND next_run_at = ? AND enabled = 1
+                    """,
+                    (new_next, now_iso, r_id, old_next),
+                )
+                if cur.rowcount == 1:
+                    claimed_routines.append(_row_to_routine(row))
+    finally:
+        conn.close()
+
+    results: list[dict[str, Any]] = []
+    for routine in claimed_routines:
+        try:
+            record = await run_single_routine(settings, runner, routine)
+            results.append(record)
+        except Exception:
+            logger.exception("Failed running claimed routine #%s", routine.get("id"))
+
+    return results
+
+
+async def run_routine_now(
+    settings: Any,
+    routine_id: int,
+    runner: Any = None,
+) -> dict[str, Any]:
+    """Manually run a routine now and return the run record."""
+    routine = get_routine(settings, routine_id)
+    if not routine:
+        raise ValueError(f"Routine #{routine_id} not found")
+    return await run_single_routine(settings, runner, routine)
+
+
+def init_routine_schedules(settings: Any, now: datetime | None = None) -> None:
+    """Initialize missing next_run_at and skip missed runs older than 10 minutes."""
+    init_db(settings)
+    now_dt = now or datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
+    cutoff_iso = (now_dt - timedelta(minutes=10)).isoformat()
+    tz_name = getattr(settings, "user_timezone", "America/Toronto")
+
+    conn = _connect(settings)
+    try:
+        with conn:
+            rows = conn.execute(
+                """
+                SELECT id, schedule_cron, next_run_at
+                FROM routines
+                WHERE enabled = 1
+                """
+            ).fetchall()
+            for r in rows:
+                r_id = r["id"]
+                cron = r["schedule_cron"]
+                curr_next = r["next_run_at"]
+                if not curr_next or curr_next < cutoff_iso:
+                    new_next = next_fire(cron, now_dt, tz_name).isoformat()
+                    conn.execute(
+                        "UPDATE routines SET next_run_at = ?, updated_at = ? WHERE id = ?",
+                        (new_next, now_iso, r_id),
+                    )
+    finally:
+        conn.close()
+
+
+def request_run_now(settings: Any, routine_id: int, now: datetime | None = None) -> dict[str, Any] | None:
+    """Queue an immediate run: the web console worker picks it up on its next tick.
+
+    Used by the ``routine.run`` chat tool, which may execute in the Telegram or
+    Feishu bot process. Routines must only execute inside the web console,
+    because approvals they create are held in that process's memory.
+    """
+    init_db(settings)
+    now_iso = (now or datetime.now(timezone.utc)).isoformat()
+    conn = _connect(settings)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE routines SET next_run_at = ?, updated_at = ? WHERE id = ? AND enabled = 1",
+                (now_iso, now_iso, routine_id),
+            )
+            if cur.rowcount == 0:
+                return None
+            row = conn.execute("SELECT * FROM routines WHERE id = ?", (routine_id,)).fetchone()
+            return _row_to_routine(row)
+    finally:
+        conn.close()
+
+
+def format_local(settings: Any, iso_value: str | None) -> str:
+    """Render a stored UTC ISO timestamp in the operator's timezone."""
+    if not iso_value:
+        return "—"
+    try:
+        tz = ZoneInfo(getattr(settings, "user_timezone", "America/Toronto") or "America/Toronto")
+        return datetime.fromisoformat(iso_value).astimezone(tz).strftime("%Y-%m-%d %H:%M %Z")
+    except Exception:
+        return str(iso_value)
+
+
+def start_routines_worker(loop: asyncio.AbstractEventLoop, settings: Any, runner: Any) -> asyncio.Task | None:
+    """Start the in-process routine scheduler on the web console's event loop.
+
+    Called by both web console entry points (web_console.py and
+    web_console_takeover.py). No-op when routines are disabled.
+    """
+    if not getattr(settings, "routines_enabled", False):
+        return None
+
+    async def _worker() -> None:
+        try:
+            init_routine_schedules(settings)
+        except Exception:
+            logger.exception("Failed to initialize routine schedules on startup")
+        while True:
+            try:
+                await run_due_routines(settings, runner)
+            except Exception:
+                logger.exception("Error running due routines")
+            await asyncio.sleep(WORKER_INTERVAL_SECONDS)
+
+    logger.info("Routines enabled: scheduler running every %ss in the web console", WORKER_INTERVAL_SECONDS)
+    return loop.create_task(_worker())

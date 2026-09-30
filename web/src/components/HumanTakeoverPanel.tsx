@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 type TakeoverLease = {
@@ -43,14 +43,17 @@ export function HumanTakeoverPanel() {
   const [error, setError] = useState('')
   // Served by plain web_console.py (no takeover routes): stop polling entirely.
   const [unavailable, setUnavailable] = useState(false)
+  const unavailableRef = useRef(false)
 
   const load = useCallback(async () => {
+    if (unavailableRef.current) return null
     const token = sessionStorage.getItem('conveyor-token') || ''
     if (!token) { setStatus(null); return null }
     const response = await fetch('/api/takeover/status', {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (response.status === 404) {
+      unavailableRef.current = true
       setUnavailable(true)
       setStatus(null)
       return null
@@ -62,6 +65,7 @@ export function HumanTakeoverPanel() {
     const body = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(body.error || `Takeover status failed (${response.status})`)
     if (body && body.available === false) {
+      unavailableRef.current = true
       setUnavailable(true)
       setStatus(null)
       return null
@@ -99,9 +103,16 @@ export function HumanTakeoverPanel() {
   }, [])
 
   useEffect(() => {
-    if (unavailable) return
+    if (unavailable || unavailableRef.current) return
     let active = true
-    const refresh = () => { void load().catch(reason => { if (active) setError(reason instanceof Error ? reason.message : 'Could not load takeover status') }) }
+    const refresh = () => {
+      if (unavailableRef.current) return
+      void load().catch(reason => {
+        if (active && !unavailableRef.current) {
+          setError(reason instanceof Error ? reason.message : 'Could not load takeover status')
+        }
+      })
+    }
     refresh()
     const intervalMs = status?.enabled === false ? 30_000 : 2_000
     const timer = window.setInterval(refresh, intervalMs)

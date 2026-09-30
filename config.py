@@ -203,6 +203,8 @@ class Settings:
         "Keychain Access", "System Settings", "Terminal"
     )
     conveyor_takeover_enabled: bool = False
+    routines_enabled: bool = False
+    routines_feishu_chat_id: str | None = None
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -548,6 +550,10 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_takeover_enabled": os.getenv(
             "CONVEYOR_TAKEOVER_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
+        "routines_enabled": os.getenv(
+            "CONVEYOR_ROUTINES_ENABLED", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "routines_feishu_chat_id": os.getenv("CONVEYOR_ROUTINES_FEISHU_CHAT_ID") or None,
     }
 
 

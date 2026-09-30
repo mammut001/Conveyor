@@ -237,6 +237,13 @@ metrics worker. The handoff sidecar does not start x11vnc/websockify unless an
 open takeover lease exists, and it throttles failed transport retries and
 unchanged status writes.
 
+## General Routines and Inbox
+
+The Web Console serves as the execution host and inbox for [General Routines](routines.md).
+Because pending tool approvals live in-memory in the process that spawned them, routine
+execution runs on the server loop of `web_console.py`. Scheduled runs and tool approvals
+appear directly in the Web Console Inbox tab.
+
 ## Current limitations
 
 - The first version is single-operator bearer authentication, not multi-user RBAC.
