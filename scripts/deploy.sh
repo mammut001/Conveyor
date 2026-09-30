@@ -48,7 +48,7 @@ die() { log "ERROR: $*" >&2; exit 1; }
 # ---- rsync ----------------------------------------------------------------
 log "Syncing to ${REMOTE}:${REMOTE_DIR} ..."
 for sub in \
-  scripts runner bot.py feishu_bot.py web_console.py web_control.py provider_config.py agent_events.py config.py runner.py redaction.py \
+  scripts runner bot.py feishu_bot.py web_console.py web_console_takeover.py web_control.py web_takeover.py handoff_sidecar.py provider_config.py agent_events.py config.py runner.py redaction.py \
   transcript_store.py runtime_control.py refinement_store.py \
   desktop_agent.py desktop_agent_server.py desktop_cua.py \
   desktop_computer_loop.py desktop_computer_planner.py desktop_computer_requests.py \
@@ -118,6 +118,9 @@ log "Smoke passed."
 
 # ---- restart services ------------------------------------------------------
 SERVICES=(conveyor-telegram-bot conveyor-feishu-bot)
+if systemctl is-enabled --quiet conveyor-handoff.service 2>/dev/null; then
+  SERVICES+=(conveyor-handoff.service)
+fi
 if systemctl is-enabled --quiet conveyor-web.service 2>/dev/null; then
   SERVICES+=(conveyor-web.service)
 fi
