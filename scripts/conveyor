@@ -20,7 +20,7 @@ Usage: conveyor <command>
 
 Commands:
   status              Show Conveyor service status
-  logs [service]      Follow logs (telegram, feishu, web, desktop)
+  logs [service]      Follow logs (telegram, feishu, web, desktop, handoff)
   restart [service]   Restart one service or all enabled services
   doctor              Run Conveyor healthcheck
   configure           Re-run interactive environment configuration
@@ -36,6 +36,7 @@ service_name() {
     feishu) echo conveyor-feishu-bot.service ;;
     web) echo conveyor-web.service ;;
     desktop) echo conveyor-desktop-agent.service ;;
+    handoff) echo conveyor-handoff.service ;;
     maintain) echo conveyor-maintain.timer ;;
     scheduler) echo conveyor-scheduler.timer ;;
     *) return 1 ;;
@@ -54,7 +55,15 @@ shift || true
 
 case "$cmd" in
   status)
-    units=(conveyor-telegram-bot.service conveyor-feishu-bot.service conveyor-web.service conveyor-desktop-agent.service conveyor-maintain.timer conveyor-scheduler.timer)
+    units=(
+      conveyor-telegram-bot.service
+      conveyor-feishu-bot.service
+      conveyor-web.service
+      conveyor-desktop-agent.service
+      conveyor-handoff.service
+      conveyor-maintain.timer
+      conveyor-scheduler.timer
+    )
     for unit in "${units[@]}"; do
       if systemctl list-unit-files "$unit" --no-legend 2>/dev/null | grep -q "^$unit"; then
         printf '%-36s %s\n' "$unit" "$(systemctl is-active "$unit" 2>/dev/null || true)"
@@ -68,7 +77,10 @@ case "$cmd" in
   restart)
     need_root
     if [[ "${1:-all}" == "all" ]]; then
-      for unit in conveyor-telegram-bot.service conveyor-feishu-bot.service conveyor-web.service conveyor-desktop-agent.service conveyor-maintain.timer conveyor-scheduler.timer; do
+      for unit in \
+        conveyor-telegram-bot.service conveyor-feishu-bot.service \
+        conveyor-web.service conveyor-desktop-agent.service conveyor-handoff.service \
+        conveyor-maintain.timer conveyor-scheduler.timer; do
         if systemctl is-enabled "$unit" >/dev/null 2>&1; then
           systemctl restart "$unit"
           echo "restarted $unit"
