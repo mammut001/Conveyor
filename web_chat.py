@@ -134,7 +134,7 @@ class WebChatPort(OutboundPort):
 
             expires_in = int(_CONFIRM_TTL_SECONDS)
             if pending:
-                expires_in = max(0, int(_CONFIRM_TTL_SECONDS - (time.time() - pending.created_at)))
+                expires_in = max(0, int(pending.expires_at - time.time()))
 
             self._approval_emitted = True
             self.emit("approval", {
@@ -336,7 +336,7 @@ def build_history(session: dict[str, Any] | None) -> list[dict[str, Any]]:
             }
             if pending is not None and status == "pending":
                 item["approval"]["expires_in_seconds"] = max(
-                    0, int(_CONFIRM_TTL_SECONDS - (time.time() - pending.created_at))
+                    0, int(pending.expires_at - time.time())
                 )
         elif m.get("role") == "assistant" and text.startswith(APPROVAL_PROMPT_PREFIX):
             # Legacy prompt without metadata: no longer decidable, outcome unknown.

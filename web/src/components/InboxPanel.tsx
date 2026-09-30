@@ -31,6 +31,7 @@ export type InboxItem = {
   approval?: {
     id: string;
     status: string;
+    expires_at?: string;
   } | null;
 };
 
@@ -142,7 +143,8 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
     try {
       await fetch(`/api/inbox/${runId}/read`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: '{}',
       });
       setItems((prev) =>
         prev.map((it) => (it.id === runId ? { ...it, read_at: new Date().toISOString() } : it))
@@ -158,7 +160,8 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
     try {
       await fetch('/api/inbox/read-all', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: '{}',
       });
       setItems((prev) =>
         prev.map((it) => ({ ...it, read_at: it.read_at || new Date().toISOString() }))
@@ -180,6 +183,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
+        body: '{}',
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -199,7 +203,8 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
     try {
       const res = await fetch(`/api/routines/${r.id}/${action}`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: '{}',
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -215,7 +220,8 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
     try {
       const res = await fetch(`/api/routines/${id}/run`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: '{}',
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -473,7 +479,11 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
               const inProgress = appr ? Boolean(approvalsInProgress[appr.id]) : false;
 
               let statusBadgeClass = 'completed';
-              if (item.status === 'approval_pending') statusBadgeClass = 'queued';
+              let statusLabel = item.status;
+              if (item.status === 'approval_pending' && appr && appr.status !== 'pending') {
+                statusLabel = `approval ${appr.status}`;
+                statusBadgeClass = appr.status === 'approved' ? 'completed' : 'interrupted';
+              } else if (item.status === 'approval_pending') statusBadgeClass = 'queued';
               else if (item.status === 'error') statusBadgeClass = 'failed';
               else if (item.status === 'escalate') statusBadgeClass = 'interrupted';
 
@@ -498,7 +508,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <strong>{item.routine_name}</strong>
                       <span className={`status-badge ${statusBadgeClass}`} style={{ fontSize: '0.75rem', padding: '2px 6px' }}>
-                        {item.status}
+                        {statusLabel}
                       </span>
                       {isUnread && (
                         <span style={{ fontSize: '0.75rem', color: '#1677ff', fontWeight: 600 }}>● New</span>
@@ -517,7 +527,10 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
                     <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed #444' }}>
                       {appr.status === 'pending' ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <span style={{ fontSize: '0.8rem', color: '#faad14' }}>⚠️ Approval Required</span>
+                          <span style={{ fontSize: '0.8rem', color: '#faad14' }}>
+                            ⚠️ Approval Required
+                            {appr.expires_at ? ` (expires ${formatLocalTime(appr.expires_at)})` : ''}
+                          </span>
                           <button
                             type="button"
                             className="action-btn"
@@ -549,7 +562,9 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
                             ? '✅ Approved'
                             : appr.status === 'denied'
                             ? '❌ Denied'
-                            : '⌛ Expired'}
+                            : appr.status === 'cancelled'
+                            ? '🚫 Cancelled (routine deleted)'
+                            : '⌛ Expired — not executed'}
                         </div>
                       )}
                     </div>

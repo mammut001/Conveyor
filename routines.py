@@ -285,6 +285,23 @@ def init_db(settings: Any) -> None:
                     ON routine_runs(routine_id, started_at DESC, id DESC);
                 CREATE INDEX IF NOT EXISTS idx_routine_runs_inbox
                     ON routine_runs(read_at, started_at DESC, id DESC);
+
+                -- Routine-generated tool approvals, persisted so they survive
+                -- a web console restart (the live store is in-memory).
+                CREATE TABLE IF NOT EXISTS routine_approvals (
+                    token TEXT PRIMARY KEY,
+                    routine_id INTEGER NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    arg TEXT NOT NULL,
+                    operator_id TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                );
+                CREATE INDEX IF NOT EXISTS idx_routine_approvals_status
+                    ON routine_approvals(status, expires_at);
                 """
             )
     finally:
@@ -470,7 +487,20 @@ def delete_routine(settings: Any, routine_id: int) -> bool:
     try:
         with conn:
             cur = conn.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
-            return cur.rowcount > 0
+            if cur.rowcount <= 0:
+                return False
+            # Undecided approvals of a deleted routine must not stay executable.
+            from handlers.tools.confirm import pop_pending
+            for row in conn.execute(
+                "SELECT token FROM routine_approvals WHERE routine_id = ? AND status = 'pending'",
+                (routine_id,),
+            ).fetchall():
+                pop_pending(row["token"])
+            conn.execute(
+                "UPDATE routine_approvals SET status = 'cancelled' WHERE routine_id = ? AND status = 'pending'",
+                (routine_id,),
+            )
+            return True
     finally:
         conn.close()
 
@@ -587,12 +617,20 @@ def list_inbox(settings: Any, limit: int = 50) -> tuple[list[dict[str, Any]], in
             approval_id = item.get("approval_id")
             if approval_id:
                 recorded_status = item.get("approval_status")
-                if recorded_status:
+                if recorded_status and recorded_status != "pending":
                     item["approval"] = {"id": approval_id, "status": recorded_status}
                 else:
+                    # Only decidable while it is live in this process's store.
                     pending = get_pending(approval_id)
-                    status = "pending" if pending is not None else "expired"
-                    item["approval"] = {"id": approval_id, "status": status}
+                    if pending is not None:
+                        item["approval"] = {
+                            "id": approval_id,
+                            "status": "pending",
+                            "expires_at": datetime.fromtimestamp(pending.expires_at, timezone.utc).isoformat(),
+                        }
+                    else:
+                        item["approval"] = {"id": approval_id, "status": "expired"}
+                        item["approval_status"] = "expired"
             else:
                 item["approval"] = None
             items.append(item)
@@ -653,6 +691,10 @@ def record_approval_decision(
     conn = _connect(settings)
     try:
         with conn:
+            conn.execute(
+                "UPDATE routine_approvals SET status = ? WHERE token = ?",
+                (decision, approval_id),
+            )
             row = conn.execute(
                 "SELECT id, output FROM routine_runs WHERE approval_id = ?",
                 (approval_id,),
@@ -674,6 +716,97 @@ def record_approval_decision(
 # -----------------------------------------------------------------------------
 # 3. Runner & Execution Engine
 # -----------------------------------------------------------------------------
+
+def approval_ttl_seconds(settings: Any) -> int:
+    try:
+        value = int(getattr(settings, "routines_approval_ttl_seconds", 86_400) or 86_400)
+    except (TypeError, ValueError):
+        value = 86_400
+    return max(300, min(7 * 86_400, value))
+
+
+def persist_routine_approval(settings: Any, token: str, routine_id: int) -> bool:
+    """Extend a routine-generated pending approval's TTL and persist it to SQLite."""
+    from handlers.tools.confirm import set_pending_ttl
+
+    action = set_pending_ttl(token, approval_ttl_seconds(settings))
+    if action is None:
+        return False
+    init_db(settings)
+    conn = _connect(settings)
+    try:
+        with conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO routine_approvals (
+                    token, routine_id, tool_name, arg, operator_id, chat_id,
+                    channel, created_at, expires_at, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                """,
+                (
+                    action.token, int(routine_id), action.tool_name, action.arg,
+                    action.operator_id, action.chat_id, action.channel,
+                    float(action.created_at), float(action.expires_at),
+                ),
+            )
+        return True
+    finally:
+        conn.close()
+
+
+def expire_routine_approvals(settings: Any, now: float | None = None) -> int:
+    """Mark persisted routine approvals past their TTL as expired (DB + inbox)."""
+    import time as _time
+    from handlers.tools.confirm import pop_pending
+
+    now_ts = _time.time() if now is None else now
+    init_db(settings)
+    conn = _connect(settings)
+    try:
+        with conn:
+            rows = conn.execute(
+                "SELECT token FROM routine_approvals WHERE status = 'pending' AND expires_at <= ?",
+                (now_ts,),
+            ).fetchall()
+            tokens = [r["token"] for r in rows]
+            for token in tokens:
+                pop_pending(token)
+                conn.execute("UPDATE routine_approvals SET status = 'expired' WHERE token = ?", (token,))
+                conn.execute(
+                    "UPDATE routine_runs SET approval_status = 'expired', "
+                    "output = substr(output || char(10) || char(10) || '[Expired]', 1, 4000) "
+                    "WHERE approval_id = ? AND (approval_status IS NULL OR approval_status = 'pending')",
+                    (token,),
+                )
+        return len(tokens)
+    finally:
+        conn.close()
+
+
+def restore_routine_approvals(settings: Any, now: float | None = None) -> int:
+    """Re-load pending routine approvals into the in-memory store after a restart."""
+    from handlers.tools.confirm import PendingToolAction, restore_pending
+
+    expire_routine_approvals(settings, now=now)
+    conn = _connect(settings)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM routine_approvals WHERE status = 'pending' ORDER BY created_at"
+        ).fetchall()
+    finally:
+        conn.close()
+    restored = 0
+    for r in rows:
+        action = PendingToolAction(
+            token=r["token"], tool_name=r["tool_name"], arg=r["arg"],
+            operator_id=r["operator_id"], chat_id=r["chat_id"], channel=r["channel"],
+            created_at=float(r["created_at"]),
+            ttl_seconds=float(r["expires_at"]) - float(r["created_at"]),
+        )
+        if restore_pending(action):
+            restored += 1
+    return restored
+
 
 class RoutinePort(OutboundPort):
     """Collecting OutboundPort that captures inline button approvals and output messages."""
@@ -773,6 +906,10 @@ async def run_single_routine(
         if port.approval_id:
             status = "approval_pending"
             approval_id = port.approval_id
+            try:
+                persist_routine_approval(settings, approval_id, routine_id)
+            except Exception:
+                logger.exception("Failed to persist approval for routine #%d", routine_id)
             raw_output = port.last_text or "Approval pending"
         elif outcome == "answered":
             status = "ok"
@@ -1045,7 +1182,17 @@ def start_routines_worker(loop: asyncio.AbstractEventLoop, settings: Any, runner
             init_routine_schedules(settings)
         except Exception:
             logger.exception("Failed to initialize routine schedules on startup")
+        try:
+            restored = restore_routine_approvals(settings)
+            if restored:
+                logger.info("Restored %d pending routine approval(s)", restored)
+        except Exception:
+            logger.exception("Failed to restore routine approvals on startup")
         while True:
+            try:
+                expire_routine_approvals(settings)
+            except Exception:
+                logger.exception("Failed to expire routine approvals")
             try:
                 await run_due_routines(settings, runner)
             except Exception:

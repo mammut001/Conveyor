@@ -236,15 +236,20 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid content length"})
             return None
+        cl_header = self.headers.get("Content-Length")
+        if cl_header is None or not cl_header.strip():
+            # Bodiless POST (e.g. fetch without body, curl -X POST): treat as {}.
+            return {}
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            length = int(cl_header.strip())
         except ValueError:
             self.close_connection = True
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid content length"})
             return None
-        if length <= 0 or length > MAX_BODY_BYTES:
-            if length < 0 or length > MAX_BODY_BYTES:
-                self.close_connection = True
+        if length == 0:
+            return {}
+        if length < 0 or length > MAX_BODY_BYTES:
+            self.close_connection = True
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid request body size"})
             return None
         try:

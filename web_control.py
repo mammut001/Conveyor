@@ -322,7 +322,7 @@ class WebControl:
                 "summary": summary,
                 "session_id": session_identity(action.channel, action.chat_id, action.operator_id),
                 "status": "pending",
-                "expires_at": action.created_at + _CONFIRM_TTL_SECONDS,
+                "expires_at": action.expires_at,
             })
         return approvals
 

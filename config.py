@@ -205,6 +205,7 @@ class Settings:
     conveyor_takeover_enabled: bool = False
     routines_enabled: bool = False
     routines_feishu_chat_id: str | None = None
+    routines_approval_ttl_seconds: int = 86_400
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -554,6 +555,10 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
             "CONVEYOR_ROUTINES_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
         "routines_feishu_chat_id": os.getenv("CONVEYOR_ROUTINES_FEISHU_CHAT_ID") or None,
+        # Routine approvals outlive the 5-minute interactive TTL: clamp 5 min .. 7 days.
+        "routines_approval_ttl_seconds": max(
+            300, min(7 * 86_400, _int_env("CONVEYOR_ROUTINES_APPROVAL_TTL_SECONDS", 86_400))
+        ),
     }
 
 

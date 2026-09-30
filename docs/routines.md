@@ -18,6 +18,8 @@ CONVEYOR_ROUTINES_ENABLED=true
 
 # Optional default Feishu delivery chat ID for routine runs
 # CONVEYOR_ROUTINES_FEISHU_CHAT_ID=oc_xxx
+# Lifetime of routine-generated approvals (seconds, 300..604800; default 24h)
+# CONVEYOR_ROUTINES_APPROVAL_TTL_SECONDS=86400
 ```
 
 When disabled, all routine API endpoints return HTTP 409 (`{"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)"}`) and `routine.*` tools are hidden from the chat model.
@@ -109,7 +111,13 @@ Routines can also be managed through conversation in Telegram, Feishu, or Web Ch
 - `routine.delete` (WRITE): Delete a routine by ID.
 - `routine.run` (WRITE): Queue a routine to run on the Web Console worker's next tick (within ~30s). The chat tool never executes the routine inline, because routine approvals must live in the Web Console process.
 
+## Routine approvals: persistence and expiry
+
+- Approvals created by a routine run get a long TTL (`CONVEYOR_ROUTINES_APPROVAL_TTL_SECONDS`, default 86400 = 24h, clamped to 5 min .. 7 days). Interactive chat approvals keep the 5-minute TTL.
+- They are persisted in `routines.db` (`routine_approvals`) and re-loaded into the live approval store when the Web Console starts, so they can still be approved/denied from the Inbox after a restart.
+- Past their TTL they are marked `expired` in the Inbox (and never executed). Deleting a routine cancels its undecided approvals.
+- Web chat approvals are not persisted (5-minute lifetime).
+
 ## Limitations
 
-- Pending approvals are in-memory; restarting the Web Console drops undecided routine approvals (the inbox entry stays `approval_pending`).
 - Personal data created by routines is owned by the `web-console` operator.

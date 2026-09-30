@@ -348,6 +348,17 @@ class TestRoutineRunner(unittest.TestCase):
                 pending_action = get_pending(rec["approval_id"])
                 self.assertIsNotNone(pending_action)
                 self.assertEqual(pending_action.channel, "web")
+                # Routine approvals get the long TTL and are persisted for restart.
+                self.assertEqual(pending_action.ttl_seconds, routines.approval_ttl_seconds(self.settings))
+                conn = routines._connect(self.settings)
+                try:
+                    row = conn.execute(
+                        "SELECT status, routine_id FROM routine_approvals WHERE token = ?",
+                        (rec["approval_id"],),
+                    ).fetchone()
+                finally:
+                    conn.close()
+                self.assertEqual((row["status"], row["routine_id"]), ("pending", r["id"]))
                 self.assertEqual(pending_action.tool_name, "reminders.create")
 
                 # Verify Telegram delivery was called with approval reminder
@@ -409,6 +420,7 @@ class TestWebAPI(unittest.TestCase):
             with conn:
                 conn.execute("DELETE FROM routines")
                 conn.execute("DELETE FROM routine_runs")
+                conn.execute("DELETE FROM routine_approvals")
         finally:
             conn.close()
 
@@ -544,6 +556,131 @@ class TestWebAPI(unittest.TestCase):
         self.assertEqual(updated_item["approval"]["status"], "approved")
         self.assertIn("Approved", updated_item["output"])
 
+    def raw_post(self, path: str, *, content_length: str | None):
+        """POST exactly like a browser fetch() without a body: no Content-Length, or 0."""
+        conn = http.client.HTTPConnection("127.0.0.1", self.port)
+        conn.putrequest("POST", path)
+        conn.putheader("Authorization", f"Bearer {TOKEN}")
+        if content_length is not None:
+            conn.putheader("Content-Length", content_length)
+        conn.endheaders()
+        res = conn.getresponse()
+        raw = res.read()
+        conn.close()
+        try:
+            return res.status, json.loads(raw.decode("utf-8"))
+        except Exception:
+            return res.status, raw
+
+    def test_bodiless_posts_accepted(self):
+        self.settings.routines_enabled = True
+        r = routines.create_routine(self.settings, "Bodiless", "0 8 * * *", "p")
+        run = routines.record_run(
+            self.settings, routine_id=r["id"],
+            started_at=datetime.now(timezone.utc).isoformat(),
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            status="ok", output="hi",
+        )
+        for cl in (None, "0"):
+            with self.subTest(content_length=cl):
+                status, data = self.raw_post(f"/api/routines/{r['id']}/pause", content_length=cl)
+                self.assertEqual(status, 200, data)
+                self.assertFalse(data["routine"]["enabled"])
+                status, data = self.raw_post(f"/api/routines/{r['id']}/resume", content_length=cl)
+                self.assertEqual(status, 200, data)
+                self.assertTrue(data["routine"]["enabled"])
+                status, data = self.raw_post(f"/api/inbox/{run['id']}/read", content_length=cl)
+                self.assertEqual(status, 200, data)
+                status, data = self.raw_post("/api/inbox/read-all", content_length=cl)
+                self.assertEqual(status, 200, data)
+                with patch("handlers.chat.ask_chat", new=AsyncMock(return_value=("answered", SimpleNamespace(body="ok", reason="", confidence="high", removed_links=0)))):
+                    status, data = self.raw_post(f"/api/routines/{r['id']}/run", content_length=cl)
+                self.assertEqual(status, 200, data)
+                self.assertEqual(data["status"], "ok")
+        # Oversized / negative lengths are still rejected.
+        status, data = self.raw_post(f"/api/routines/{r['id']}/pause", content_length="-1")
+        self.assertEqual(status, 400)
+        # Bodiless approval decision on an unknown id is a clean 404, not a 400.
+        status, _ = self.raw_post("/api/approvals/deadbeef0000/approve", content_length=None)
+        self.assertEqual(status, 404)
+
+    def test_bodiless_post_still_requires_auth(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port)
+        conn.putrequest("POST", "/api/inbox/read-all")
+        conn.endheaders()
+        res = conn.getresponse(); res.read(); conn.close()
+        self.assertEqual(res.status, 401)
+
+    def test_routine_approval_survives_restart_and_is_approvable(self):
+        self.settings.routines_enabled = True
+        self.settings.routines_approval_ttl_seconds = 86_400
+        r = routines.create_routine(self.settings, "Persist", "0 8 * * *", "p")
+        pending = create_pending("notes.add", "persisted note", "web-console", f"routine-{r['id']}", "web")
+        self.assertTrue(routines.persist_routine_approval(self.settings, pending.token, r["id"]))
+        self.assertEqual(get_pending(pending.token).ttl_seconds, 86_400)
+        routines.record_run(
+            self.settings, routine_id=r["id"],
+            started_at=datetime.now(timezone.utc).isoformat(),
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            status="approval_pending", output="needs approval",
+            approval_id=pending.token, approval_status="pending",
+        )
+        # Simulate a process restart: the in-memory store is wiped.
+        clear_all_pending()
+        status, inbox = self.request("GET", "/api/inbox")
+        self.assertEqual(inbox["items"][0]["approval"]["status"], "expired")
+        self.assertEqual(routines.restore_routine_approvals(self.settings), 1)
+        restored = get_pending(pending.token)
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored.chat_id, f"routine-{r['id']}")
+        status, inbox = self.request("GET", "/api/inbox")
+        self.assertEqual(inbox["items"][0]["approval"]["status"], "pending")
+        self.assertIn("expires_at", inbox["items"][0]["approval"])
+        status, approvals = self.request("GET", "/api/approvals")
+        self.assertIn(pending.token, [a["id"] for a in approvals["approvals"]])
+        with patch("handlers.tools.runner.run_tool", new=AsyncMock(return_value="saved")):
+            status, dec = self.raw_post(f"/api/approvals/{pending.token}/approve", content_length=None)
+        self.assertEqual(status, 200, dec)
+        self.assertEqual(dec["status"], "accepted")
+        status, inbox = self.request("GET", "/api/inbox")
+        self.assertEqual(inbox["items"][0]["approval"]["status"], "approved")
+        # Decided approvals are not restored again.
+        clear_all_pending()
+        self.assertEqual(routines.restore_routine_approvals(self.settings), 0)
+
+    def test_routine_approval_expiry_is_marked(self):
+        import time as _time
+        self.settings.routines_enabled = True
+        r = routines.create_routine(self.settings, "Expire", "0 8 * * *", "p")
+        pending = create_pending("notes.add", "x", "web-console", f"routine-{r['id']}", "web")
+        routines.persist_routine_approval(self.settings, pending.token, r["id"])
+        routines.record_run(
+            self.settings, routine_id=r["id"],
+            started_at=datetime.now(timezone.utc).isoformat(),
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            status="approval_pending", output="needs approval",
+            approval_id=pending.token, approval_status="pending",
+        )
+        self.assertEqual(routines.expire_routine_approvals(self.settings, now=_time.time() + 90_000), 1)
+        self.assertIsNone(get_pending(pending.token))
+        status, inbox = self.request("GET", "/api/inbox")
+        item = inbox["items"][0]
+        self.assertEqual(item["approval"]["status"], "expired")
+        self.assertIn("[Expired]", item["output"])
+        clear_all_pending()
+        self.assertEqual(routines.restore_routine_approvals(self.settings), 0)
+
+    def test_deleting_routine_cancels_its_pending_approvals(self):
+        self.settings.routines_enabled = True
+        r = routines.create_routine(self.settings, "Del", "0 8 * * *", "p")
+        pending = create_pending("notes.add", "x", "web-console", f"routine-{r['id']}", "web")
+        routines.persist_routine_approval(self.settings, pending.token, r["id"])
+        status, _ = self.request("DELETE", f"/api/routines/{r['id']}")
+        self.assertEqual(status, 200)
+        self.assertIsNone(get_pending(pending.token))
+        clear_all_pending()
+        self.assertEqual(routines.restore_routine_approvals(self.settings), 0)
+
 
 class TestChatTools(unittest.TestCase):
     def setUp(self):
@@ -652,3 +789,19 @@ class TestReviewFixes(unittest.TestCase):
             self.assertIsNone(routines.start_routines_worker(loop, self.settings, None))
         finally:
             loop.close()
+
+
+class TestApprovalTTL(unittest.TestCase):
+    def test_default_and_clamped_ttl(self):
+        import os
+        from config import load_settings  # noqa: F401  (import check only)
+        self.assertEqual(routines.approval_ttl_seconds(SimpleNamespace()), 86_400)
+        self.assertEqual(routines.approval_ttl_seconds(SimpleNamespace(routines_approval_ttl_seconds=10)), 300)
+        self.assertEqual(routines.approval_ttl_seconds(SimpleNamespace(routines_approval_ttl_seconds=10**9)), 7 * 86_400)
+
+    def test_interactive_ttl_unchanged(self):
+        pending = create_pending("notes.add", "x", "op", "c", "web")
+        try:
+            self.assertEqual(pending.ttl_seconds, 300.0)
+        finally:
+            clear_all_pending()
