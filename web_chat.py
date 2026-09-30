@@ -134,7 +134,7 @@ class WebChatPort(OutboundPort):
 
             expires_in = int(_CONFIRM_TTL_SECONDS)
             if pending:
-                expires_in = max(0, int(_CONFIRM_TTL_SECONDS - (time.time() - pending.created_at)))
+                expires_in = max(0, int(pending.expires_at - time.time()))
 
             self._approval_emitted = True
             self.emit("approval", {
@@ -286,6 +286,13 @@ async def decide_tool_approval(
     except Exception:
         logger.exception("Failed to append tool approval result to transcript store")
 
+    try:
+        from routines import record_approval_decision
+        decision_label = "approved" if approve else "denied"
+        record_approval_decision(settings, token, decision_label, safe_result)
+    except Exception:
+        logger.debug("Failed to record routine approval decision", exc_info=True)
+
     return {
         "id": token,
         "kind": "tool",
@@ -329,7 +336,7 @@ def build_history(session: dict[str, Any] | None) -> list[dict[str, Any]]:
             }
             if pending is not None and status == "pending":
                 item["approval"]["expires_in_seconds"] = max(
-                    0, int(_CONFIRM_TTL_SECONDS - (time.time() - pending.created_at))
+                    0, int(pending.expires_at - time.time())
                 )
         elif m.get("role") == "assistant" and text.startswith(APPROVAL_PROMPT_PREFIX):
             # Legacy prompt without metadata: no longer decidable, outcome unknown.

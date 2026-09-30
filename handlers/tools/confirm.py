@@ -23,6 +23,14 @@ class PendingToolAction:
     chat_id: str
     channel: str
     created_at: float = field(default_factory=time.time)
+    ttl_seconds: float = _CONFIRM_TTL_SECONDS
+
+    @property
+    def expires_at(self) -> float:
+        return self.created_at + self.ttl_seconds
+
+    def is_expired(self, now: float | None = None) -> bool:
+        return (time.time() if now is None else now) > self.expires_at
 
 
 _pending: dict[str, PendingToolAction] = {}
@@ -58,10 +66,33 @@ def get_pending(token: str) -> PendingToolAction | None:
     action = _pending.get(token)
     if action is None:
         return None
-    if time.time() - action.created_at > _CONFIRM_TTL_SECONDS:
+    if action.is_expired():
         pop_pending(token)
         return None
     return action
+
+
+def set_pending_ttl(token: str, ttl_seconds: float) -> PendingToolAction | None:
+    """Extend/shorten the lifetime of a live pending action (e.g. routine approvals)."""
+    action = get_pending(token)
+    if action is not None:
+        action.ttl_seconds = float(ttl_seconds)
+    return action
+
+
+def restore_pending(action: PendingToolAction) -> bool:
+    """Re-insert a persisted pending action after a restart. Returns False if expired.
+
+    Does not claim the per-context slot if a newer action already holds it.
+    """
+    if action.is_expired():
+        return False
+    _pending[action.token] = action
+    key = _context_key(action.operator_id, action.chat_id, action.channel)
+    current = _pending.get(_by_context.get(key, ""))
+    if current is None or current.created_at <= action.created_at:
+        _by_context[key] = action.token
+    return True
 
 
 def pop_pending(token: str) -> PendingToolAction | None:
@@ -106,7 +137,7 @@ def list_pending(channel: str | None = None) -> list[PendingToolAction]:
     """Return all non-expired pending tool actions, optionally filtered by channel."""
     now = time.time()
     for token, action in list(_pending.items()):
-        if now - action.created_at > _CONFIRM_TTL_SECONDS:
+        if action.is_expired(now):
             pop_pending(token)
     actions = list(_pending.values())
     if channel is not None:

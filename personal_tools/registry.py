@@ -26,6 +26,7 @@ from personal_tools import research as research_tools
 from personal_tools import file_search as file_search_tools
 from personal_tools import kb as kb_tools
 from personal_tools import queue_tools as queue_tools
+from personal_tools import routines as routines_tools
 
 if TYPE_CHECKING:
     pass
@@ -616,6 +617,49 @@ def register_personal_tools() -> None:
         DangerLevel.READ,
         queue_tools.queue_status_adapter,
         keywords=("队列", "queue"),
+    )
+    # General Routines (P1-4)
+    _register(
+        "routine.list",
+        "列出定时任务",
+        DangerLevel.READ,
+        routines_tools.routine_list,
+        keywords=("定时任务", "routine"),
+    )
+    _register(
+        "routine.create",
+        "创建定时任务 (<5-field cron> | <prompt> [| <name>])",
+        DangerLevel.WRITE,
+        routines_tools.routine_create,
+        keywords=("创建定时任务", "新建routine"),
+    )
+    _register(
+        "routine.pause",
+        "暂停定时任务 (<id>)",
+        DangerLevel.WRITE_SAFE,
+        routines_tools.routine_pause,
+        keywords=("暂停定时任务",),
+    )
+    _register(
+        "routine.resume",
+        "恢复定时任务 (<id>)",
+        DangerLevel.WRITE_SAFE,
+        routines_tools.routine_resume,
+        keywords=("恢复定时任务",),
+    )
+    _register(
+        "routine.delete",
+        "删除定时任务 (<id>)",
+        DangerLevel.WRITE,
+        routines_tools.routine_delete,
+        keywords=("删除定时任务",),
+    )
+    _register(
+        "routine.run",
+        "立即运行定时任务 (<id>)",
+        DangerLevel.WRITE,
+        routines_tools.routine_run,
+        keywords=("运行定时任务", "跑routine"),
     )
 
 

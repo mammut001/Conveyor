@@ -236,15 +236,20 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid content length"})
             return None
+        cl_header = self.headers.get("Content-Length")
+        if cl_header is None or not cl_header.strip():
+            # Bodiless POST (e.g. fetch without body, curl -X POST): treat as {}.
+            return {}
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            length = int(cl_header.strip())
         except ValueError:
             self.close_connection = True
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid content length"})
             return None
-        if length <= 0 or length > MAX_BODY_BYTES:
-            if length < 0 or length > MAX_BODY_BYTES:
-                self.close_connection = True
+        if length == 0:
+            return {}
+        if length < 0 or length > MAX_BODY_BYTES:
+            self.close_connection = True
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid request body size"})
             return None
         try:
@@ -299,6 +304,28 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK if item else HTTPStatus.NOT_FOUND, item or {"error": "not found"})
             elif path == "/api/approvals":
                 self._json(HTTPStatus.OK, {"approvals": self.server.control.list_approvals()})
+            elif path == "/api/routines" or path.startswith("/api/routines"):
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                if not getattr(settings, "routines_enabled", False):
+                    self._json(HTTPStatus.CONFLICT, {"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)"})
+                    return
+                import routines
+                self._json(HTTPStatus.OK, {"routines": routines.list_routines(settings)})
+            elif path == "/api/inbox" or path.startswith("/api/inbox"):
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                if not getattr(settings, "routines_enabled", False):
+                    self._json(HTTPStatus.CONFLICT, {"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)"})
+                    return
+                limit = int((query.get("limit") or ["50"])[0])
+                import routines
+                items, unread = routines.list_inbox(settings, limit=limit)
+                self._json(HTTPStatus.OK, {"items": items, "unread": unread})
             elif path == "/api/takeover/status":
                 # Plain web console has no takeover routes (see web_console_takeover.py);
                 # answer explicitly so the panel stops polling instead of hitting 404s.
@@ -385,6 +412,79 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if body is None:
             return
         try:
+            if parsed.path.startswith("/api/routines") or parsed.path.startswith("/api/inbox"):
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                if not getattr(settings, "routines_enabled", False):
+                    self._json(HTTPStatus.CONFLICT, {"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)"})
+                    return
+
+                import routines
+                if parsed.path == "/api/routines":
+                    name = body.get("name")
+                    schedule = body.get("schedule") or body.get("schedule_cron")
+                    prompt = body.get("prompt")
+                    deliver = body.get("deliver")
+                    enabled = body.get("enabled", True)
+                    try:
+                        routine = routines.create_routine(
+                            settings,
+                            name=str(name or ""),
+                            schedule=str(schedule or ""),
+                            prompt=str(prompt or ""),
+                            deliver=deliver,
+                            enabled=bool(enabled),
+                        )
+                        self._json(HTTPStatus.CREATED, routine)
+                    except ValueError as exc:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+                elif len(parts) == 4 and parts[:2] == ["api", "routines"] and parts[3] in ("pause", "resume", "run"):
+                    routine_id_str = parts[2]
+                    action = parts[3]
+                    if not routine_id_str.isdigit():
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid routine id"})
+                        return
+                    routine_id = int(routine_id_str)
+                    if action == "pause":
+                        r = routines.pause_routine(settings, routine_id)
+                        if not r:
+                            self._json(HTTPStatus.NOT_FOUND, {"error": "routine not found"})
+                            return
+                        self._json(HTTPStatus.OK, {"ok": True, "routine": r})
+                    elif action == "resume":
+                        r = routines.resume_routine(settings, routine_id)
+                        if not r:
+                            self._json(HTTPStatus.NOT_FOUND, {"error": "routine not found"})
+                            return
+                        self._json(HTTPStatus.OK, {"ok": True, "routine": r})
+                    elif action == "run":
+                        try:
+                            runner = getattr(self.server.control, "runner", None)
+                            run_record = self._await(routines.run_routine_now(settings, routine_id, runner=runner), timeout=130)
+                            self._json(HTTPStatus.OK, run_record)
+                        except ValueError as exc:
+                            self._json(HTTPStatus.NOT_FOUND, {"error": str(exc)})
+                        except Exception:
+                            logger.exception("Routine run request failed")
+                            self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"})
+                    return
+                elif parsed.path == "/api/inbox/read-all":
+                    marked = routines.mark_inbox_read_all(settings)
+                    self._json(HTTPStatus.OK, {"ok": True, "marked": marked})
+                    return
+                elif len(parts) == 4 and parts[:2] == ["api", "inbox"] and parts[3] == "read":
+                    run_id_str = parts[2]
+                    if not run_id_str.isdigit():
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid run id"})
+                        return
+                    run_id = int(run_id_str)
+                    ok = routines.mark_inbox_read(settings, run_id)
+                    self._json(HTTPStatus.OK, {"ok": ok})
+                    return
+
             if parsed.path == "/api/chat":
                 raw_message = body.get("message")
                 message = str(raw_message or "").strip() if isinstance(raw_message, str) else ""
@@ -510,6 +610,25 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         parts = self._segments(parsed.path)
         try:
+            if parsed.path.startswith("/api/routines"):
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                if not getattr(settings, "routines_enabled", False):
+                    self._json(HTTPStatus.CONFLICT, {"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)"})
+                    return
+                if len(parts) == 3 and parts[:2] == ["api", "routines"]:
+                    routine_id_str = parts[2]
+                    if not routine_id_str.isdigit():
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid routine id"})
+                        return
+                    routine_id = int(routine_id_str)
+                    import routines
+                    ok = routines.delete_routine(settings, routine_id)
+                    self._json(HTTPStatus.OK if ok else HTTPStatus.NOT_FOUND, {"ok": ok})
+                    return
+
             if len(parts) == 3 and parts[:2] == ["api", "sessions"]:
                 ok = self.server.control.archive_session(parts[2])
                 self._json(HTTPStatus.OK if ok else HTTPStatus.NOT_FOUND, {"ok": ok})
@@ -710,6 +829,9 @@ def main() -> None:
     thread = threading.Thread(target=server.serve_forever, name="conveyor-web-http", daemon=True)
     thread.start()
     logger.info("Conveyor Web Console listening on http://%s:%d", settings.conveyor_web_host, settings.conveyor_web_port)
+
+    import routines
+    routines.start_routines_worker(loop, settings, runner)
     try:
         loop.run_forever()
     except KeyboardInterrupt:

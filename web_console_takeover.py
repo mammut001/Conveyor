@@ -173,6 +173,8 @@ def main() -> None:
         daemon=True,
     )
     thread.start()
+    import routines
+    routines.start_routines_worker(loop, settings, runner)
     logger.info(
         "Conveyor Web Workbench listening on http://%s:%d",
         settings.conveyor_web_host,

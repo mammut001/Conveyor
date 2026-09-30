@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatPanel } from './components/ChatPanel'
 import { FormattedText } from './components/FormattedText'
+import { InboxPanel } from './components/InboxPanel'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
@@ -127,7 +128,8 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [view, setView] = useState<'tasks' | 'chat'>('tasks')
+  const [view, setView] = useState<'tasks' | 'chat' | 'inbox'>('tasks')
+  const [inboxUnread, setInboxUnread] = useState(0)
   const lastSequence = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
 
@@ -404,16 +406,32 @@ export default function App() {
 
       <section className="stream-panel panel">
         <div className="stream-header">
-          <div><p className="eyebrow">{view === 'chat' ? 'DIRECT CHAT TIER' : 'TASKS · CODEX EXECUTION'}</p><h2>{view === 'chat' ? 'Chat' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}</h2></div>
+          <div>
+            <p className="eyebrow">
+              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : 'TASKS · CODEX EXECUTION'}
+            </p>
+            <h2>
+              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
+            </h2>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div className="mode-switch">
               <button type="button" className={view === 'tasks' ? 'active' : ''} onClick={() => setView('tasks')}>Tasks</button>
               <button type="button" className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>Chat</button>
+              <button type="button" className={view === 'inbox' ? 'active' : ''} onClick={() => setView('inbox')}>
+                Inbox{inboxUnread > 0 ? ` (${inboxUnread})` : ''}
+              </button>
             </div>
             {view === 'tasks' && selectedJob && <StatusBadge state={selectedJob.state} />}
           </div>
         </div>
-        {view === 'chat' ? (
+        {view === 'inbox' ? (
+          <InboxPanel
+            token={token}
+            onUnreadChange={setInboxUnread}
+            onApprovalDecided={refresh}
+          />
+        ) : view === 'chat' ? (
           <ChatPanel
             token={token}
             onApprovalDecided={refresh}

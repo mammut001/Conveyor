@@ -66,6 +66,8 @@ def is_exposed(name: str, spec: Any, settings: Any = None) -> bool:
     """Single policy used for both schema exposure and execution."""
     if spec is None or name.startswith("desktop."):
         return False
+    if name.startswith("routine.") and not getattr(settings, "routines_enabled", False):
+        return False
     if spec.danger not in (DangerLevel.READ, DangerLevel.WRITE_SAFE, DangerLevel.WRITE):
         return False
     if name in NETWORK_TOOLS and name not in _network_allowlist(settings):

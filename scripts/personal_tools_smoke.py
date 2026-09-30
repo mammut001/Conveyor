@@ -173,6 +173,13 @@ def _test_registry() -> CheckResult:
             "kb.collect_facts",
             # P4.3.1 Queue Status
             "queue.status",
+            # P1-4 General Routines
+            "routine.list",
+            "routine.create",
+            "routine.pause",
+            "routine.resume",
+            "routine.delete",
+            "routine.run",
         }
         ok_names = expected == set(PERSONAL_TOOL_REGISTRY)
         add_level = PERSONAL_TOOL_REGISTRY["notes.add"].danger
@@ -227,8 +234,21 @@ def _test_registry() -> CheckResult:
         web_search_level = PERSONAL_TOOL_REGISTRY["web.search"].danger
         research_run_level = PERSONAL_TOOL_REGISTRY["research.run"].danger
         research_project_level = PERSONAL_TOOL_REGISTRY["research.project"].danger
+        # P1-4 General Routines
+        routine_list_level = PERSONAL_TOOL_REGISTRY["routine.list"].danger
+        routine_create_level = PERSONAL_TOOL_REGISTRY["routine.create"].danger
+        routine_pause_level = PERSONAL_TOOL_REGISTRY["routine.pause"].danger
+        routine_resume_level = PERSONAL_TOOL_REGISTRY["routine.resume"].danger
+        routine_delete_level = PERSONAL_TOOL_REGISTRY["routine.delete"].danger
+        routine_run_level = PERSONAL_TOOL_REGISTRY["routine.run"].danger
         ok_levels = (
-            add_level == DangerLevel.WRITE_SAFE
+            routine_list_level == DangerLevel.READ
+            and routine_create_level == DangerLevel.WRITE
+            and routine_pause_level == DangerLevel.WRITE_SAFE
+            and routine_resume_level == DangerLevel.WRITE_SAFE
+            and routine_delete_level == DangerLevel.WRITE
+            and routine_run_level == DangerLevel.WRITE
+            and add_level == DangerLevel.WRITE_SAFE
             and create_level == DangerLevel.WRITE_SAFE
             and delete_level == DangerLevel.DESTRUCTIVE
             and cancel_level == DangerLevel.WRITE
