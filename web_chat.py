@@ -16,9 +16,15 @@ from transcript_store import get_transcript_store, session_identity
 logger = logging.getLogger("conveyor.web_chat")
 
 
+WEB_CHAT_PREFIX = "webchat-"
+APPROVAL_PROMPT_PREFIX = "⚠️ 危险操作需确认"
+
+
 def resolve_or_create_session(
     control: Any,
     requested_session_id: str,
+    *,
+    new_prefix: str = "web-",
 ) -> tuple[str, str, str, str] | None:
     """Return (channel, operator_id, source_chat_id, durable_session_id) or None if invalid."""
     if requested_session_id:
@@ -26,7 +32,12 @@ def resolve_or_create_session(
         if resolved:
             channel, operator_id, source_chat_id = resolved
             return channel, operator_id, source_chat_id, requested_session_id
-    source_chat_id = requested_session_id or f"web-{uuid.uuid4().hex[:12]}"
+        # A durable web id handed out by a previous /api/chat call whose turn
+        # has not been persisted yet: keep using it instead of rejecting it.
+        durable_prefix = "web:web-console:"
+        if requested_session_id.startswith(durable_prefix):
+            requested_session_id = requested_session_id[len(durable_prefix):]
+    source_chat_id = requested_session_id or f"{new_prefix}{uuid.uuid4().hex[:12]}"
     if len(source_chat_id) > 128 or not all(ch.isalnum() or ch in "-_" for ch in source_chat_id):
         return None
     channel, operator_id = "web", "web-console"
@@ -53,6 +64,7 @@ class WebChatPort(OutboundPort):
         self.prompt = prompt
         self._delivered_final = False
         self.placeholder_id = "web-chat-placeholder"
+        self._approval_emitted = False
 
     def emit(self, event: str, data: dict[str, Any]) -> None:
         self.queue.put((event, data))
@@ -65,13 +77,22 @@ class WebChatPort(OutboundPort):
         return self.placeholder_id
 
     async def send_new(self, msg: InboundMessage, text: str) -> str | None:
+        if self._is_redundant_note(text):
+            return "web-chat-msg"
         if text.startswith("💭") or text.startswith("⏳"):
             return self.placeholder_id
         self.emit("message", {"text": text})
         self._persist_turn(msg, text, kind="chat")
         return "web-chat-msg"
 
+    def _is_redundant_note(self, text: str) -> bool:
+        # ask_chat's default placeholder note after a confirmation request;
+        # the approval card already says it.
+        return self._approval_emitted and text.strip() == "已请求确认"
+
     async def edit_progress(self, msg: InboundMessage, placeholder_id: str, text: str) -> bool:
+        if self._is_redundant_note(text):
+            return True
         if text.endswith(" ▍"):
             clean = text[:-2].strip()
             self.emit("delta", {"text": clean})
@@ -115,6 +136,7 @@ class WebChatPort(OutboundPort):
             if pending:
                 expires_in = max(0, int(_CONFIRM_TTL_SECONDS - (time.time() - pending.created_at)))
 
+            self._approval_emitted = True
             self.emit("approval", {
                 "id": token,
                 "tool_name": tool_name,
@@ -123,7 +145,10 @@ class WebChatPort(OutboundPort):
                 "text": text,
                 "expires_in_seconds": expires_in,
             })
-            self._persist_turn(msg, text, kind="chat")
+            self._persist_turn(
+                msg, text, kind="tool_approval",
+                metadata={"approval_id": token, "tool_name": tool_name, "arg": arg},
+            )
             return "web-chat-approval"
 
         self.emit("message", {"text": text})
@@ -133,20 +158,24 @@ class WebChatPort(OutboundPort):
     async def fetch_attachment(self, msg: InboundMessage, attachment: Any) -> bytes | None:
         return None
 
-    def _persist_turn(self, msg: InboundMessage, text: str, *, kind: str = "chat") -> None:
+    def _persist_turn(
+        self,
+        msg: InboundMessage,
+        text: str,
+        *,
+        kind: str = "chat",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         if self._delivered_final or not self.settings or not self.durable_session_id:
             return
         self._delivered_final = True
         user_text = self.prompt or msg.text
+        ident = dict(channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id)
         try:
-            get_transcript_store(self.settings).append_turn(
-                self.durable_session_id,
-                user_text,
-                text,
-                channel=msg.channel,
-                operator_id=msg.operator_id,
-                source_chat_id=msg.chat_id,
-                kind=kind,
+            store = get_transcript_store(self.settings)
+            store.append(self.durable_session_id, "user", user_text, kind="chat", **ident)
+            store.append(
+                self.durable_session_id, "assistant", text, kind=kind, metadata=metadata, **ident,
             )
         except Exception:
             logger.exception("Failed to persist web chat turn to TranscriptStore")
@@ -247,7 +276,12 @@ async def decide_tool_approval(
             channel=pending.channel,
             operator_id=pending.operator_id,
             source_chat_id=pending.chat_id,
-            kind="tool",
+            kind="tool_result",
+            metadata={
+                "approval_id": token,
+                "tool_name": pending.tool_name,
+                "decision": "approved" if approve else "denied",
+            },
         )
     except Exception:
         logger.exception("Failed to append tool approval result to transcript store")
@@ -258,3 +292,47 @@ async def decide_tool_approval(
         "status": status,
         "result": safe_result,
     }
+
+
+def build_history(session: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Transcript messages for the chat view, with approval prompts resolved.
+
+    An approval prompt is shown as pending only while its token is still live;
+    otherwise it is resolved from the later decision record (approved/denied)
+    or reported as expired, so reloading never shows a stale live prompt.
+    """
+    raw = list((session or {}).get("messages") or [])
+    decisions: dict[str, str] = {}
+    for m in raw:
+        meta = m.get("metadata") or {}
+        if m.get("kind") == "tool_result" and meta.get("approval_id"):
+            decisions[str(meta["approval_id"])] = str(meta.get("decision") or "")
+    out: list[dict[str, Any]] = []
+    for m in raw:
+        meta = m.get("metadata") or {}
+        item: dict[str, Any] = {
+            "role": m.get("role"),
+            "text": m.get("content") or "",
+            "created_at": m.get("created_at") or "",
+            "kind": m.get("kind") or "",
+        }
+        text = item["text"]
+        if m.get("kind") == "tool_approval" and meta.get("approval_id"):
+            token = str(meta["approval_id"])
+            pending = get_pending(token)
+            status = decisions.get(token) or ("pending" if pending else "expired")
+            item["approval"] = {
+                "id": token,
+                "tool_name": meta.get("tool_name") or "",
+                "arg": meta.get("arg") or "",
+                "status": status,
+            }
+            if pending is not None and status == "pending":
+                item["approval"]["expires_in_seconds"] = max(
+                    0, int(_CONFIRM_TTL_SECONDS - (time.time() - pending.created_at))
+                )
+        elif m.get("role") == "assistant" and text.startswith(APPROVAL_PROMPT_PREFIX):
+            # Legacy prompt without metadata: no longer decidable, outcome unknown.
+            item["approval"] = {"id": "", "tool_name": "", "arg": "", "status": "closed"}
+        out.append(item)
+    return out

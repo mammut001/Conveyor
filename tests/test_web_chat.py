@@ -192,7 +192,7 @@ class WebChatTests(unittest.TestCase):
         event_names = [e[0] for e in events]
         self.assertEqual(event_names[0], "session")
         session_id = events[0][1]["session_id"]
-        self.assertTrue(session_id.startswith("web:web-console:web-"))
+        self.assertTrue(session_id.startswith("web:web-console:webchat-"))
 
         self.assertEqual(event_names[-1], "done")
         self.assertEqual(events[-1][1]["outcome"], "answered")
@@ -322,6 +322,81 @@ class WebChatTests(unittest.TestCase):
         self.assertIn("已取消", reject_result["result"])
         # Executor must NOT run on reject
         run_mock.assert_not_called()
+
+    def test_history_unknown_session_is_empty_200(self):
+        status, body = self.request("GET", "/api/chat/history?session_id=web%3Aweb-console%3Awebchat-doesnotexist")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["messages"], [])
+
+    def test_unpersisted_durable_session_id_is_accepted(self):
+        self.settings.chat_tools_enabled = False
+
+        async def fake_stream_chat(_config, _messages):
+            yield "ok"
+
+        sid = "web:web-console:webchat-abc123def456"
+        with patch("runner.chat_client.stream_chat", side_effect=fake_stream_chat):
+            status, events = self.request_sse("/api/chat", {"message": "hi", "session_id": sid})
+        self.assertEqual(status, 200)
+        self.assertEqual(events[0][1]["session_id"], sid)
+
+    def test_history_resolves_approval_prompts(self):
+        self.settings.chat_tools_enabled = True
+        tool_resp = {
+            "role": "assistant",
+            "tool_calls": [{"id": "tc-h", "type": "function", "function": {
+                "name": "service_restart", "arguments": json.dumps({"arg": "conveyor"}),
+            }}],
+        }
+
+        async def fake_complete_chat(_config, _messages, tools=None):
+            return tool_resp
+
+        def ask(sid=None):
+            body = {"message": "Restart conveyor"}
+            if sid:
+                body["session_id"] = sid
+            with patch("handlers.chat_tools.complete_chat", side_effect=fake_complete_chat):
+                _, events = self.request_sse("/api/chat", body)
+            names = [e[0] for e in events]
+            self.assertNotIn("message", names)  # redundant "已请求确认" note suppressed
+            return events[0][1]["session_id"], next(e[1]["id"] for e in events if e[0] == "approval")
+
+        sid, t1 = ask()
+        _, t2 = ask(sid)
+        _, t3 = ask(sid)
+
+        def approvals():
+            _, body = self.request("GET", f"/api/chat/history?session_id={sid}")
+            return [m["approval"] for m in body["messages"] if m.get("approval")]
+
+        self.assertEqual([a["status"] for a in approvals()], ["pending", "pending", "pending"])
+        with patch("handlers.tools.runner.run_tool", AsyncMock(return_value="Restarted.")):
+            self.assertEqual(self.request("POST", f"/api/approvals/{t1}/approve")[0], 200)
+        self.assertEqual(self.request("POST", f"/api/approvals/{t2}/reject")[0], 200)
+        from handlers.tools.confirm import pop_pending
+        pop_pending(t3)  # simulate TTL expiry / restart
+        result = approvals()
+        self.assertEqual([a["status"] for a in result], ["approved", "denied", "expired"])
+        self.assertEqual({a["tool_name"] for a in result}, {"service_restart"})
+
+    def test_history_legacy_prompt_without_metadata_is_closed(self):
+        from web_chat import build_history
+        session = {"messages": [
+            {"role": "user", "content": "add note", "kind": "chat", "metadata": {}},
+            {"role": "assistant", "content": "⚠️ 危险操作需确认\n\n工具: notes.add\n\n确认执行？", "kind": "chat", "metadata": {}},
+        ]}
+        out = build_history(session)
+        self.assertNotIn("approval", out[0])
+        self.assertEqual(out[1]["approval"]["status"], "closed")
+        self.assertEqual(build_history(None), [])
+
+    def test_plain_console_takeover_status_unavailable(self):
+        status, body = self.request("GET", "/api/takeover/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"available": False, "enabled": False})
+        status, _ = self.request("GET", "/api/takeover/status", authorized=False)
+        self.assertEqual(status, 401)
 
     def test_telegram_token_rejected_from_web(self):
         tg_action = create_pending("service_restart", "nginx", "user1", "tg1", "telegram")

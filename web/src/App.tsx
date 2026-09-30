@@ -22,6 +22,10 @@ type Session = {
   operator_id?: string; source_chat_id?: string; job_count: number; message_count?: number; latest_job?: Job
 }
 type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[] }
+// Sessions created by the Chat view (POST /api/chat) live only in the Chat view.
+const isChatSessionId = (id: string) => id.includes(':webchat-') || id.startsWith('webchat-')
+const isChatSession = (session: Session) => isChatSessionId(session.id) || (session.source_chat_id || '').startsWith('webchat-')
+const taskSessionsOnly = (items: Session[]) => items.filter(item => !isChatSession(item))
 type Approval = {
   id: string
   kind?: 'job' | 'tool'
@@ -157,9 +161,10 @@ export default function App() {
         setTranscript([])
       }
       void api<{ sessions: Session[] }>('/api/sessions').then(data => {
-        setSessions(data.sessions)
-        if (selectedSessionId === sessionId && data.sessions[0]) {
-          selectSession(data.sessions[0].id, data.sessions[0].latest_job?.id)
+        const taskSessions = taskSessionsOnly(data.sessions)
+        setSessions(taskSessions)
+        if (selectedSessionId === sessionId && taskSessions[0]) {
+          selectSession(taskSessions[0].id, taskSessions[0].latest_job?.id)
         }
       })
     } catch (err) {
@@ -175,12 +180,13 @@ export default function App() {
         api<{ approvals: Approval[] }>('/api/approvals'), api<{ nodes: NodeInfo[] }>('/api/nodes'),
         api<SystemStatus>('/api/system/status'), api<ComputerStatus>('/api/computer/status'),
       ])
-      setSessions(sessionData.sessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
+      const taskSessions = taskSessionsOnly(sessionData.sessions)
+      setSessions(taskSessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setError('')
       if (!creatingSession) {
         const savedSessionId = sessionStorage.getItem('conveyor-selected-session')
         const currentTargetId = selectedSessionId || savedSessionId
-        const matched = sessionData.sessions.find(item => item.id === currentTargetId)
+        const matched = taskSessions.find(item => item.id === currentTargetId)
         if (matched) {
           if (selectedSessionId !== matched.id) {
             setSelectedSessionId(matched.id)
@@ -188,12 +194,16 @@ export default function App() {
           } else if (!selectedJobId && matched.latest_job) {
             setSelectedJobId(matched.latest_job.id)
           }
-        } else if (!selectedSessionId) {
-          const initial = sessionData.sessions[0]
+        } else if (!selectedSessionId || isChatSessionId(selectedSessionId)) {
+          const initial = taskSessions[0]
           if (initial) {
             setSelectedSessionId(initial.id)
             setSelectedJobId(initial.latest_job?.id || '')
             sessionStorage.setItem('conveyor-selected-session', initial.id)
+          } else if (selectedSessionId) {
+            setSelectedSessionId('')
+            setSelectedJobId('')
+            sessionStorage.removeItem('conveyor-selected-session')
           }
         }
       }
@@ -271,7 +281,7 @@ export default function App() {
     if (target && target !== selectedSessionId) setSelectedSessionId(target)
   }, [creatingSession, selectedJob, selectedSessionId, sessions])
   const pendingForJob = approvals.filter(item => (!item.kind || item.kind === 'job') && Boolean(item.job_id && item.job_id === selectedJobId))
-  const pendingToolApprovals = approvals.filter(item => item.kind === 'tool' && (!selectedSessionId || item.session_id === selectedSessionId))
+  const pendingToolApprovals = approvals.filter(item => item.kind === 'tool' && !isChatSessionId(item.session_id || '') && (!selectedSessionId || item.session_id === selectedSessionId))
   const runtimeOwner = runtimeOwnerFromJob(selectedJob)
   const toolEvents = useMemo(() => events.filter(item => item.kind.startsWith('tool.')), [events])
   const refinementTurn = Number(selectedJob?.metadata?.refinement_turn || 0)
@@ -394,7 +404,7 @@ export default function App() {
 
       <section className="stream-panel panel">
         <div className="stream-header">
-          <div><p className="eyebrow">{view === 'chat' ? 'DIRECT CHAT TIER' : 'CONVERSATION + LIVE EXECUTION'}</p><h2>{view === 'chat' ? 'Chat' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}</h2></div>
+          <div><p className="eyebrow">{view === 'chat' ? 'DIRECT CHAT TIER' : 'TASKS · CODEX EXECUTION'}</p><h2>{view === 'chat' ? 'Chat' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}</h2></div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div className="mode-switch">
               <button type="button" className={view === 'tasks' ? 'active' : ''} onClick={() => setView('tasks')}>Tasks</button>

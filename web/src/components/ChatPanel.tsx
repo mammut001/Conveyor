@@ -14,7 +14,17 @@ export type ChatMessage = {
     text: string;
     expires_in_seconds?: number;
   };
+  // A decided/expired approval prompt restored from history: rendered as a
+  // compact resolved record instead of a live-looking confirmation prompt.
+  resolvedApproval?: {
+    tool_name: string;
+    arg: string;
+    status: 'approved' | 'denied' | 'expired' | string;
+  };
 };
+
+type HistoryApproval = { id: string; tool_name: string; arg: string; status: string; expires_in_seconds?: number };
+type HistoryMessage = { role: 'user' | 'assistant'; text: string; created_at?: string; kind?: string; approval?: HistoryApproval };
 
 export type ChatPanelProps = {
   token: string;
@@ -43,12 +53,6 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange }: ChatPan
       const res = await fetch(`/api/chat/history?session_id=${encodeURIComponent(sid)}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.status === 404) {
-        setSessionId('');
-        localStorage.removeItem('conveyor-chat-session');
-        setMessages([]);
-        return;
-      }
       if (res.status === 401) {
         setError('Token rejected');
         return;
@@ -60,12 +64,26 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange }: ChatPan
       const data = await res.json();
       if (Array.isArray(data.messages)) {
         setMessages(
-          data.messages.map((m: any, idx: number) => ({
-            id: `hist-${idx}-${m.created_at || Date.now()}`,
-            role: m.role,
-            text: m.text,
-            created_at: m.created_at || new Date().toISOString(),
-          }))
+          (data.messages as HistoryMessage[]).map((m, idx) => {
+            const base: ChatMessage = {
+              id: `hist-${idx}-${m.created_at || Date.now()}`,
+              role: m.role,
+              text: m.text,
+              created_at: m.created_at || new Date().toISOString(),
+            };
+            const appr = m.approval;
+            if (!appr) return base;
+            if (appr.status === 'pending' && appr.id) {
+              return {
+                ...base,
+                pendingApproval: {
+                  id: appr.id, tool_name: appr.tool_name, arg: appr.arg, summary: '',
+                  text: m.text, expires_in_seconds: appr.expires_in_seconds,
+                },
+              };
+            }
+            return { ...base, resolvedApproval: { tool_name: appr.tool_name, arg: appr.arg, status: appr.status } };
+          })
         );
       }
     } catch (err) {
@@ -73,11 +91,15 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange }: ChatPan
     }
   }, [token]);
 
+  // Load history once for the session restored from localStorage. Sessions
+  // assigned mid-request (SSE `session` event) must not trigger a reload:
+  // that raced the first persisted turn and wiped the in-flight messages.
+  const initialSessionId = useRef(sessionId);
   useEffect(() => {
-    if (sessionId) {
-      void loadHistory(sessionId);
+    if (initialSessionId.current) {
+      void loadHistory(initialSessionId.current);
     }
-  }, [sessionId, loadHistory]);
+  }, [loadHistory]);
 
   useEffect(() => {
     const node = streamRef.current;
@@ -108,23 +130,31 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange }: ChatPan
         },
         body: JSON.stringify({}),
       });
-      if (!res.ok) {
+      // 404 = token already decided elsewhere or expired.
+      if (!res.ok && res.status !== 404) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `Approval action failed (${res.status})`);
       }
-      const data = await res.json();
-      setMessages(prev =>
-        prev.map(m => {
+      const data = res.ok ? await res.json() : { status: 'expired', result: '' };
+      const status = data.status === 'accepted' ? 'approved' : data.status === 'rejected' ? 'denied' : 'expired';
+      setMessages(prev => {
+        const next: ChatMessage[] = [];
+        for (const m of prev) {
           if (m.pendingApproval?.id === approvalId) {
-            return {
+            next.push({
               ...m,
               pendingApproval: undefined,
-              text: data.result || (approve ? 'Tool confirmed.' : 'Tool cancelled.'),
-            };
+              resolvedApproval: { tool_name: m.pendingApproval.tool_name, arg: m.pendingApproval.arg, status },
+            });
+            if (data.result) {
+              next.push({ id: `result-${approvalId}`, role: 'assistant', text: data.result, created_at: new Date().toISOString() });
+            }
+          } else {
+            next.push(m);
           }
-          return m;
-        })
-      );
+        }
+        return next;
+      });
       if (onApprovalDecided) onApprovalDecided();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Approval failed');
@@ -324,6 +354,28 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange }: ChatPan
                       </button>
                     </div>
                   </section>
+                </div>
+              </article>
+            );
+          }
+
+          if (message.resolvedApproval) {
+            const r = message.resolvedApproval;
+            const label = r.status === 'approved' ? '✅ Approved'
+              : r.status === 'denied' ? '❌ Denied'
+              : r.status === 'expired' ? '⌛ Expired'
+              : '☑️ No longer pending';
+            return (
+              <article key={message.id} className="transcript-message role-assistant">
+                <div className="transcript-avatar" aria-hidden="true">⚙</div>
+                <div className="transcript-body">
+                  <div className="transcript-content">
+                    <p className="formatted-paragraph">
+                      <strong>{label}</strong>
+                      {r.tool_name ? <> · tool <code>{r.tool_name}</code></> : ' · tool confirmation'}
+                      {r.arg ? <> · <code>{r.arg}</code></> : null}
+                    </p>
+                  </div>
                 </div>
               </article>
             );

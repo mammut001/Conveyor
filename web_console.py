@@ -299,26 +299,21 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK if item else HTTPStatus.NOT_FOUND, item or {"error": "not found"})
             elif path == "/api/approvals":
                 self._json(HTTPStatus.OK, {"approvals": self.server.control.list_approvals()})
+            elif path == "/api/takeover/status":
+                # Plain web console has no takeover routes (see web_console_takeover.py);
+                # answer explicitly so the panel stops polling instead of hitting 404s.
+                self._json(HTTPStatus.OK, {"available": False, "enabled": False})
             elif path == "/api/chat/history":
                 session_id = str((query.get("session_id") or [""])[0]).strip()
                 if not session_id:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "session_id is required"})
                     return
+                from web_chat import build_history
+                # Unknown (e.g. brand-new, not yet persisted) sessions are simply empty.
                 session = self.server.control.get_session(session_id)
-                if session is None:
-                    self._json(HTTPStatus.NOT_FOUND, {"error": "session not found"})
-                    return
-                messages = [
-                    {
-                        "role": m.get("role"),
-                        "text": m.get("content") or "",
-                        "created_at": m.get("created_at") or "",
-                    }
-                    for m in (session.get("messages") or [])
-                ]
                 self._json(HTTPStatus.OK, {
                     "session_id": session_id,
-                    "messages": messages,
+                    "messages": build_history(session),
                 })
             elif path == "/api/nodes":
                 self._json(HTTPStatus.OK, {"nodes": self.server.control.nodes()})
@@ -397,8 +392,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "message must be 1-8000 characters"})
                     return
                 requested_session_id = str(body.get("session_id") or "")
-                from web_chat import resolve_or_create_session
-                session_info = resolve_or_create_session(self.server.control, requested_session_id)
+                from web_chat import WEB_CHAT_PREFIX, resolve_or_create_session
+                session_info = resolve_or_create_session(
+                    self.server.control, requested_session_id, new_prefix=WEB_CHAT_PREFIX,
+                )
                 if not session_info:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid session_id"})
                     return
