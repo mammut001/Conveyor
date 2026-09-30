@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Systemd-owned remote-desktop lifecycle for Secure Human Takeover.
 
-The Web Console never launches x11vnc/websockify.  It only creates a takeover
-lease or writes a close request.  This sidecar observes that secret-free state,
+The Web Console never launches x11vnc/websockify. It only creates a takeover
+lease or writes a close request. This sidecar observes that secret-free state,
 invokes the fixed ``scripts/novnc_handoff.sh`` helper, and only finalizes a
 lease after transport cleanup has been verified.
 """
@@ -28,6 +28,9 @@ from web_takeover import (
 )
 
 POLL_SECONDS = 0.5
+START_RETRY_SECONDS = 5.0
+CLOSE_RETRY_SECONDS = 2.0
+STATUS_HEARTBEAT_SECONDS = 30.0
 _STOP = False
 
 
@@ -81,7 +84,10 @@ def _extract_urls(output: str) -> tuple[str | None, str | None]:
     urls = re.findall(r"https?://[^\s]+", output or "")
     clean = [_safe_url(url.rstrip(".,)")) for url in urls]
     clean = [url for url in clean if url]
-    local = next((url for url in clean if url.startswith("http://127.0.0.1") or url.startswith("http://localhost")), None)
+    local = next(
+        (url for url in clean if url.startswith("http://127.0.0.1") or url.startswith("http://localhost")),
+        None,
+    )
     remote = next((url for url in clean if url.startswith("https://")), None)
     override = _safe_url(os.environ.get("CONVEYOR_HANDOFF_WEB_URL", ""))
     return override or remote, local
@@ -116,10 +122,18 @@ def _run_transport(command: str) -> tuple[bool, str, str | None, str | None]:
     return True, "", remote, local
 
 
-def _write_status(settings: Any, *, phase: str, running: bool, ready: bool,
-                  url: str | None = None, local_url: str | None = None,
-                  error: str | None = None) -> None:
+def _write_status(
+    settings: Any,
+    *,
+    phase: str,
+    running: bool,
+    ready: bool,
+    url: str | None = None,
+    local_url: str | None = None,
+    error: str | None = None,
+) -> None:
     path = sidecar_status_path(settings)
+    now = time.time()
     value = {
         "phase": phase[:32],
         "running": bool(running),
@@ -127,8 +141,15 @@ def _write_status(settings: Any, *, phase: str, running: bool, ready: bool,
         "url": _safe_url(url or ""),
         "local_url": _safe_url(local_url or ""),
         "error": (" ".join(str(error or "").split())[:500] or None),
-        "updated_at": time.time(),
+        "updated_at": now,
     }
+    previous = read_sidecar_status(settings)
+    comparable = ("phase", "running", "ready", "url", "local_url", "error")
+    if all(previous.get(key) == value.get(key) for key in comparable):
+        age = now - float(previous.get("updated_at") or 0)
+        if age < STATUS_HEARTBEAT_SECONDS:
+            return
+
     tmp = path.with_suffix(path.suffix + ".tmp")
     old_umask = os.umask(0o077)
     try:
@@ -143,6 +164,12 @@ def _write_status(settings: Any, *, phase: str, running: bool, ready: bool,
             pass
 
 
+def _recent_failure(previous: dict[str, Any], phase: str, delay: float) -> bool:
+    if previous.get("phase") != phase or not previous.get("error"):
+        return False
+    return time.time() - float(previous.get("updated_at") or 0) < delay
+
+
 def run_once(settings: Any) -> None:
     store = HumanTakeoverStore(settings)
     current = store.current()
@@ -154,53 +181,109 @@ def run_once(settings: Any) -> None:
         close = None
 
     if close and current:
+        if _recent_failure(previous, "closing", CLOSE_RETRY_SECONDS):
+            return
         action = str(close.get("action"))
         _write_status(
-            settings, phase="closing", running=transport_running(), ready=False,
-            url=previous.get("url"), local_url=previous.get("local_url"),
+            settings,
+            phase="closing",
+            running=transport_running(),
+            ready=False,
+            url=previous.get("url"),
+            local_url=previous.get("local_url"),
         )
         ok, error, _, _ = _run_transport("stop")
-        if not ok or transport_running():
+        still_running = transport_running()
+        if not ok or still_running:
             _write_status(
-                settings, phase="closing", running=transport_running(), ready=False,
-                url=previous.get("url"), local_url=previous.get("local_url"),
+                settings,
+                phase="closing",
+                running=still_running,
+                ready=False,
+                url=previous.get("url"),
+                local_url=previous.get("local_url"),
                 error=error or "handoff transport is still running",
             )
             return
-        result = store.complete(str(current["id"])) if action == "complete" else store.cancel(str(current["id"]))
+        result = (
+            store.complete(str(current["id"]))
+            if action == "complete"
+            else store.cancel(str(current["id"]))
+        )
         if result is None:
-            _write_status(settings, phase="error", running=False, ready=False, error="takeover close transition failed")
+            _write_status(
+                settings,
+                phase="error",
+                running=False,
+                ready=False,
+                error="takeover close transition failed",
+            )
             return
         clear_close_request(settings, session_id=str(current["id"]))
-        _write_status(settings, phase=str(result.get("state") or action), running=False, ready=False)
+        _write_status(
+            settings,
+            phase=str(result.get("state") or action),
+            running=False,
+            ready=False,
+        )
         return
 
     if current:
         if transport_running():
             _write_status(
-                settings, phase="ready", running=True, ready=True,
-                url=previous.get("url"), local_url=previous.get("local_url") or "http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale",
+                settings,
+                phase="ready",
+                running=True,
+                ready=True,
+                url=previous.get("url"),
+                local_url=(
+                    previous.get("local_url")
+                    or "http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale"
+                ),
             )
+            return
+        if _recent_failure(previous, "error", START_RETRY_SECONDS):
             return
         _write_status(settings, phase="starting", running=False, ready=False)
         ok, error, remote, local = _run_transport("start")
         running = transport_running()
         if not ok or not running:
             _write_status(
-                settings, phase="error", running=running, ready=False,
-                url=remote, local_url=local, error=error or "handoff transport did not remain running",
+                settings,
+                phase="error",
+                running=running,
+                ready=False,
+                url=remote,
+                local_url=local,
+                error=error or "handoff transport did not remain running",
             )
             return
         _write_status(
-            settings, phase="ready", running=True, ready=True,
-            url=remote, local_url=local or "http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale",
+            settings,
+            phase="ready",
+            running=True,
+            ready=True,
+            url=remote,
+            local_url=(
+                local
+                or "http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale"
+            ),
         )
         return
 
     if transport_running():
+        if _recent_failure(previous, "cleanup_error", CLOSE_RETRY_SECONDS):
+            return
         ok, error, _, _ = _run_transport("stop")
-        if not ok or transport_running():
-            _write_status(settings, phase="cleanup_error", running=transport_running(), ready=False, error=error)
+        still_running = transport_running()
+        if not ok or still_running:
+            _write_status(
+                settings,
+                phase="cleanup_error",
+                running=still_running,
+                ready=False,
+                error=error or "handoff transport is still running",
+            )
             return
     clear_close_request(settings)
     _write_status(settings, phase="idle", running=False, ready=False)
@@ -229,10 +312,15 @@ def main() -> None:
         time.sleep(POLL_SECONDS)
 
     # A service stop must close any transport, but it deliberately does not
-    # mark an active takeover completed.  The lease keeps automation paused.
+    # mark an active takeover completed. The lease keeps automation paused.
     if transport_running():
         _run_transport("stop")
-    _write_status(settings, phase="stopped", running=transport_running(), ready=False)
+    _write_status(
+        settings,
+        phase="stopped",
+        running=transport_running(),
+        ready=False,
+    )
 
 
 if __name__ == "__main__":
