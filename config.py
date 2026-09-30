@@ -199,6 +199,7 @@ class Settings:
     conveyor_computer_blocked_apps: tuple[str, ...] = (
         "Keychain Access", "System Settings", "Terminal"
     )
+    conveyor_takeover_enabled: bool = False
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -536,6 +537,9 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
             ).split(",")
             if a.strip()
         ),
+        "conveyor_takeover_enabled": os.getenv(
+            "CONVEYOR_TAKEOVER_ENABLED", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
     }
 
 

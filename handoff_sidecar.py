@@ -289,6 +289,29 @@ def run_once(settings: Any) -> None:
         )
         return
 
+    takeover_enabled = bool(getattr(settings, "conveyor_takeover_enabled", False))
+    if not takeover_enabled:
+        # Kill switch: never start transport. If a sidecar-owned (gated)
+        # session is still live from before the flag was turned off, stop its
+        # transport and cancel the lease so nothing stays exposed.
+        if current and gate and gate.get("session_id") == current.get("id"):
+            if transport_running() and not _stop_owned_transport(
+                settings,
+                previous,
+                phase="disabled_cleanup_error",
+            ):
+                return
+            store.cancel(str(current["id"]))
+            clear_transport_gate(settings, session_id=str(current["id"]))
+        clear_close_request(settings)
+        _write_status(
+            settings,
+            phase="disabled",
+            running=transport_running(),
+            ready=False,
+        )
+        return
+
     if current:
         gate_matches = bool(gate and gate.get("session_id") == current.get("id"))
         if not gate_matches:
@@ -372,6 +395,10 @@ def main() -> None:
     )
     settings = load_runtime_settings()
     logger.info("Conveyor handoff sidecar started")
+    if not getattr(settings, "conveyor_takeover_enabled", False):
+        logger.info("Human takeover is disabled (set CONVEYOR_TAKEOVER_ENABLED=true)")
+    else:
+        logger.info("Human takeover is enabled")
     while not _STOP:
         try:
             run_once(settings)

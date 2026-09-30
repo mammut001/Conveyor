@@ -123,6 +123,13 @@ requires `Authorization: Bearer <token>`.
 
 ### Human takeover semantics
 
+Secure Human Takeover is off by default (`CONVEYOR_TAKEOVER_ENABLED=false`).
+To enable takeover endpoints and the transport sidecar, set
+`CONVEYOR_TAKEOVER_ENABLED=true` in `.env` (honored by both the web entrypoint
+`web_console_takeover.py` and the sidecar `handoff_sidecar.py`). When disabled,
+`/api/takeover/status` returns `enabled: false` and mutation endpoints respond
+with `403 Forbidden`.
+
 `POST /api/takeover/start` establishes exclusive GUI ownership before a remote
 desktop is opened. It cancels pending pre-handoff computer/screenshot work and
 waits for already-claimed work to finish. The systemd handoff sidecar then
