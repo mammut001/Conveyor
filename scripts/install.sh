@@ -185,6 +185,7 @@ install_systemd_units() {
         conveyor-telegram-bot.service
         conveyor-feishu-bot.service
         conveyor-desktop-agent.service
+        conveyor-handoff.service
         conveyor-web.service
         conveyor-maintain.service
         conveyor-maintain.timer
@@ -255,6 +256,7 @@ run_smoke() {
 enable_services() {
     systemctl enable conveyor-telegram-bot.service >/dev/null
     systemctl enable conveyor-desktop-agent.service >/dev/null
+    systemctl enable conveyor-handoff.service >/dev/null
     if grep -Eqi '^CONVEYOR_WEB_ENABLED=(true|1|yes|on)$' "$CONVEYOR_DIR/.env"; then
         systemctl enable conveyor-web.service >/dev/null
     fi
@@ -266,6 +268,7 @@ start_services() {
     log_info "Starting Conveyor services..."
     systemctl restart conveyor-telegram-bot.service
     systemctl restart conveyor-desktop-agent.service
+    systemctl restart conveyor-handoff.service
     if systemctl is-enabled conveyor-web.service >/dev/null 2>&1; then
         systemctl restart conveyor-web.service
     fi
@@ -277,7 +280,7 @@ start_services() {
 stop_services() {
     for unit in \
         conveyor-telegram-bot.service conveyor-feishu-bot.service \
-        conveyor-desktop-agent.service conveyor-web.service \
+        conveyor-desktop-agent.service conveyor-handoff.service conveyor-web.service \
         conveyor-maintain.timer conveyor-maintain.service \
         conveyor-scheduler.timer conveyor-scheduler.service; do
         systemctl stop "$unit" 2>/dev/null || true
@@ -288,7 +291,7 @@ remove_systemd_units() {
     local unit
     for unit in \
         conveyor-telegram-bot.service conveyor-feishu-bot.service \
-        conveyor-desktop-agent.service conveyor-web.service \
+        conveyor-desktop-agent.service conveyor-handoff.service conveyor-web.service \
         conveyor-maintain.service conveyor-maintain.timer \
         conveyor-scheduler.service conveyor-scheduler.timer; do
         systemctl disable "$unit" 2>/dev/null || true
