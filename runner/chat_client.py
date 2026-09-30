@@ -2,8 +2,8 @@
 
 The chat tier answers conversation without starting a Codex job. This is
 a tiny stdlib client for ``POST {base_url}/chat/completions`` with SSE
-streaming, run in a worker thread so the bot's event loop never blocks.
-The model gets no tools: it can only return text.
+streaming or non-streaming tool completion, run in a worker thread so
+the bot's event loop never blocks.
 """
 from __future__ import annotations
 
@@ -54,14 +54,23 @@ def config_from_settings(settings: Any) -> ChatConfig | None:
     )
 
 
-def _request(config: ChatConfig, messages: list[dict], stream: bool) -> urllib.request.Request:
-    body = json.dumps({
+def _request(
+    config: ChatConfig,
+    messages: list[dict],
+    stream: bool,
+    tools: list[dict] | None = None,
+) -> urllib.request.Request:
+    payload: dict[str, Any] = {
         "model": config.model,
         "messages": messages,
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
         "stream": stream,
-    }).encode("utf-8")
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    body = json.dumps(payload).encode("utf-8")
     return urllib.request.Request(
         f"{config.base_url}/chat/completions",
         data=body,
@@ -137,3 +146,50 @@ async def stream_chat(config: ChatConfig, messages: list[dict]) -> AsyncIterator
             raise ChatError(value)
         elif kind == "done":
             return
+
+
+def _clean_chat_error(text: str, api_key: str | None) -> str:
+    msg = text
+    if api_key:
+        msg = msg.replace(api_key, "[REDACTED]")
+    return redact_text(msg)[:200]
+
+
+def _complete_worker(
+    config: ChatConfig,
+    messages: list[dict],
+    tools: list[dict] | None,
+) -> dict:
+    try:
+        req = _request(config, messages, stream=False, tools=tools)
+        with urllib.request.urlopen(req, timeout=config.timeout) as resp:
+            data = resp.read().decode("utf-8", errors="replace")
+        try:
+            obj = json.loads(data)
+        except ValueError as exc:
+            raise ChatError(f"invalid JSON response: {data[:100]}") from exc
+        if isinstance(obj, dict) and obj.get("base_resp", {}).get("status_code"):
+            raise ChatError(f"provider error: {obj.get('base_resp')}")
+        choices = obj.get("choices") if isinstance(obj, dict) else None
+        if not choices or not isinstance(choices, list) or not isinstance(choices[0], dict):
+            raise ChatError(f"invalid response: no choices in {data[:100]}")
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            raise ChatError("invalid response: message is not dict")
+        return message
+    except ChatError as exc:
+        raise ChatError(_clean_chat_error(str(exc), config.api_key)) from exc
+    except urllib.error.HTTPError as exc:
+        raise ChatError(_clean_chat_error(f"HTTP {exc.code}", config.api_key)) from exc
+    except Exception as exc:
+        raise ChatError(_clean_chat_error(str(exc), config.api_key)) from exc
+
+
+async def complete_chat(
+    config: ChatConfig,
+    messages: list[dict],
+    tools: list[dict] | None = None,
+) -> dict:
+    """Non-streaming chat completion; returns the first choice's message dict."""
+    return await asyncio.to_thread(_complete_worker, config, messages, tools)
+
