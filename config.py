@@ -131,6 +131,8 @@ class Settings:
     chat_history_turns: int = 6
     chat_timeout_seconds: int = 60
     chat_max_tokens: int = 1500
+    chat_tools_enabled: bool = False
+    chat_tool_max_steps: int = 3
     # File Search / Knowledge Base (P4.2). Natural-language-first file search.
     file_search_enabled: bool = True
     file_search_allowed_roots: str | None = None  # comma-separated extra roots
@@ -439,6 +441,8 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "chat_history_turns": _int_env("CONVEYOR_CHAT_HISTORY_TURNS", 6),
         "chat_timeout_seconds": _int_env("CONVEYOR_CHAT_TIMEOUT_SECONDS", 60),
         "chat_max_tokens": _int_env("CONVEYOR_CHAT_MAX_TOKENS", 1500),
+        "chat_tools_enabled": os.getenv("CONVEYOR_CHAT_TOOLS", "false").strip().lower() in ("true", "1", "yes", "on"),
+        "chat_tool_max_steps": _int_env("CONVEYOR_CHAT_TOOL_MAX_STEPS", 3),
         # File Search / Knowledge Base (P4.2)
         "file_search_enabled": os.getenv("FILE_SEARCH_ENABLED", "true").strip().lower() in ("true", "1", "yes"),
         "file_search_allowed_roots": os.getenv("FILE_SEARCH_ALLOWED_ROOTS") or None,
