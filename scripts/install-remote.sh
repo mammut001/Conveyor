@@ -69,6 +69,7 @@ cd '$REMOTE_DIR'
 sudo cp systemd/conveyor-telegram-bot.service /etc/systemd/system/
 sudo cp systemd/conveyor-feishu-bot.service /etc/systemd/system/
 sudo cp systemd/conveyor-desktop-agent.service /etc/systemd/system/
+sudo cp systemd/conveyor-handoff.service /etc/systemd/system/
 sudo cp systemd/conveyor-web.service /etc/systemd/system/
 sudo cp systemd/conveyor-maintain.service /etc/systemd/system/
 sudo cp systemd/conveyor-maintain.timer /etc/systemd/system/
@@ -88,8 +89,8 @@ echo "==> Running healthcheck"
 ssh "$REMOTE" "cd '$REMOTE_DIR' && bash scripts/healthcheck.sh"
 
 echo "==> Enabling and starting services"
-ssh "$REMOTE" "sudo systemctl enable --now conveyor-telegram-bot conveyor-feishu-bot conveyor-desktop-agent conveyor-maintain.timer && \
-  sleep 2 && sudo systemctl is-active conveyor-telegram-bot.service"
+ssh "$REMOTE" "sudo systemctl enable --now conveyor-telegram-bot conveyor-feishu-bot conveyor-desktop-agent conveyor-handoff conveyor-maintain.timer && \
+  sleep 2 && sudo systemctl is-active conveyor-telegram-bot.service conveyor-handoff.service"
 
 if ssh "$REMOTE" "grep -Eq '^CONVEYOR_WEB_ENABLED=(true|1|yes|on)$' '$REMOTE_DIR/.env'"; then
   echo "==> Enabling Web Console"
