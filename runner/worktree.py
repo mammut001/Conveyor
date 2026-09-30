@@ -5,6 +5,7 @@ import asyncio
 import os
 import re
 import shutil
+import time
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -163,6 +164,7 @@ async def _create_worktree(self, job: Job) -> Path:
             queue_job_id=getattr(job, "external_id", None),
         )
         job.worktree_path = target
+        job.worktree_created = False
         _set_chain_metadata(job, chain, reused=True)
         _persist_refinement_binding(self, job, "refinement.continued")
         return target
@@ -185,6 +187,7 @@ async def _create_worktree(self, job: Job) -> Path:
     if not worktree.exists():
         await self._git(["worktree", "add", "--detach", str(worktree), "HEAD"], cwd=root)
         created_here = True
+    job.worktree_created = created_here
     resolved = worktree.resolve()
 
     # Only queue jobs carrying a stable session identity participate in the
@@ -355,3 +358,116 @@ async def cleanup_job_worktree(self, job: Job) -> None:
     if not job.worktree_path:
         return
     await self._remove_worktree(job.worktree_path)
+
+
+async def reconcile_orphans(
+    self,
+    *,
+    dry_run: bool = False,
+    ttl_seconds: int = 24 * 3600,
+) -> dict:
+    import logging
+    from refinement_store import RefinementStore
+
+    logger = logging.getLogger("conveyor.worktree")
+
+    if not dry_run:
+        try:
+            await self._git(["worktree", "prune"], cwd=self.settings.codex_workspace_root, check=False)
+        except Exception as exc:
+            logger.warning("git worktree prune failed: %s", exc)
+
+    worktrees_root = self.settings.codex_task_root / "worktrees"
+    if not worktrees_root.exists() or not worktrees_root.is_dir():
+        return {"orphans": [], "removed": [], "dry_run": dry_run}
+
+    protected_paths: set[Path] = set()
+
+    if hasattr(self, "_last_worktree_path"):
+        try:
+            last_wt = self._last_worktree_path()
+            if last_wt:
+                protected_paths.add(Path(last_wt).resolve())
+        except Exception:
+            pass
+    if getattr(self, "last_job", None) and getattr(self.last_job, "worktree_path", None):
+        protected_paths.add(Path(self.last_job.worktree_path).resolve())
+
+    if hasattr(self, "job_records"):
+        try:
+            for record in self.job_records(10000):
+                # Any job whose metadata still exists may be awaiting
+                # /diff, /apply or /discard, so its worktree is referenced.
+                if record.worktree_path:
+                    protected_paths.add(Path(record.worktree_path).resolve())
+        except Exception:
+            pass
+
+    if getattr(self, "current_job", None) and getattr(self.current_job, "worktree_path", None):
+        protected_paths.add(Path(self.current_job.worktree_path).resolve())
+
+    store = None
+    try:
+        store = RefinementStore(self.settings)
+    except Exception:
+        pass
+
+    now = time.time()
+    orphans: list[str] = []
+    removed: list[str] = []
+
+    for child in sorted(worktrees_root.iterdir()):
+        if not child.is_dir():
+            continue
+
+        if re.match(r"^day-\d{4}-\d{2}-\d{2}$", child.name):
+            continue
+
+        try:
+            resolved_child = child.resolve()
+        except OSError:
+            resolved_child = child
+
+        if resolved_child in protected_paths or child in protected_paths:
+            continue
+
+        if store is not None:
+            try:
+                if store.active_for_worktree(child) is not None:
+                    continue
+            except Exception:
+                continue
+
+        try:
+            mtime = child.stat().st_mtime
+        except OSError:
+            continue
+
+        if (now - mtime) <= ttl_seconds:
+            continue
+
+        orphans.append(str(child))
+
+        if not dry_run:
+            try:
+                await self._remove_worktree(child)
+                removed.append(str(child))
+                logger.info("Removed orphan worktree: %s", child)
+                try:
+                    from agent_events import emit_event
+                    emit_event(
+                        self.settings,
+                        "worktree.orphan_reconciled",
+                        child.name,
+                        {"path": str(child)},
+                    )
+                except Exception:
+                    pass
+            except Exception as exc:
+                logger.warning("Failed to remove orphan worktree %s: %s", child, exc)
+
+    return {
+        "orphans": orphans,
+        "removed": removed,
+        "dry_run": dry_run,
+    }

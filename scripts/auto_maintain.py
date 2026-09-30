@@ -76,6 +76,11 @@ async def run_maintenance(env_file: str, service_name: str, clean_threshold: int
     actions.append(f"Wrote health snapshots: {fast_path.name}, {full_path.name}.")
 
     runner = CodexRunner(settings)
+    orphan_result = await runner.reconcile_orphans()
+    actions.append(
+        f"Reconciled orphan worktrees: {len(orphan_result.get('removed', []))} removed "
+        f"({len(orphan_result.get('orphans', []))} found)."
+    )
     if log_count >= clean_threshold or worktree_count >= clean_threshold:
         actions.append(await runner.clean_old_jobs(keep))
         actions.append(await runner.clean_old_worktrees(keep_days=7))

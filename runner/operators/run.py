@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -28,6 +29,8 @@ from runner.file_lock import file_lock
 from runner.types import Job, JobMode, JobState, ProgressCallback
 from redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
+
+logger = logging.getLogger("conveyor.worktree")
 
 def _extract_command_name(command: str) -> str | None:
     """Pull a short human-readable executable name out of a codex
@@ -237,6 +240,57 @@ async def _run_job(self, job: Job, on_progress: ProgressCallback) -> None:
         self._write_job_metadata(job)
         await on_progress(f"这次没跑成：{truncate(redacted_exc, 2500)}")
     finally:
+        try:
+            if (
+                job.state in (JobState.FAILED, JobState.CANCELLED)
+                and job.worktree_path is not None
+                and getattr(job, "worktree_created", False)
+                and getattr(job, "reuse_worktree_path", None) is None
+                and not getattr(job, "reused_worktree", False)
+            ):
+                wt_path = job.worktree_path
+                has_changes = True
+                if wt_path.exists():
+                    status = await self._git(["status", "--porcelain"], cwd=wt_path, check=False)
+                    has_changes = bool(status.strip())
+                else:
+                    has_changes = False
+
+                if not has_changes:
+                    await self._remove_worktree(wt_path)
+                    try:
+                        from refinement_store import RefinementStore
+                        store = RefinementStore(self.settings)
+                        closed = store.close_active_for_worktree(
+                            wt_path,
+                            state="discarded",
+                            reason=f"job {job.id} {job.state.value} without changes",
+                        )
+                        if closed:
+                            try:
+                                from agent_events import emit_event
+                                q_id = str(closed.get("latest_queue_job_id") or closed.get("root_queue_job_id") or "")
+                                if q_id:
+                                    emit_event(
+                                        self.settings,
+                                        "refinement.closed",
+                                        q_id,
+                                        {
+                                            "chain_id": closed.get("id"),
+                                            "state": "discarded",
+                                            "turn_count": closed.get("turn_count"),
+                                            "reason": f"job {job.id} {job.state.value} without changes",
+                                        },
+                                        session_id=closed.get("source_chat_id"),
+                                    )
+                            except Exception:
+                                pass
+                    except Exception as ref_exc:
+                        logger.warning("Failed closing refinement chain for %s: %s", wt_path, redact_text(str(ref_exc)))
+                    job.worktree_path = None
+        except Exception as cleanup_exc:
+            logger.warning("Worktree cleanup failed for job %s: %s", job.id, redact_text(str(cleanup_exc)))
+
         job.finished_at = datetime.now(timezone.utc)
         self._write_job_metadata(job)
         if self.current_job and self.current_job.id == job.id:

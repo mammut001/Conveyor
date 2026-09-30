@@ -86,6 +86,7 @@ class Job:
     # Stable queue/control-plane id. The runner keeps its existing timestamp
     # id for logs/worktrees; clients correlate through this optional adapter.
     external_id: str | None = None
+    worktree_created: bool = False
 
 
 @dataclass(frozen=True)

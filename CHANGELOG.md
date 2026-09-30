@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - Unreleased (draft; tag to be created by the maintainer)
+
+### Fixed
+- **Worktree failure cleanup & orphan reconcile**:
+  - Automatically remove newly created worktrees when jobs fail or are cancelled without working tree changes (`git status --porcelain` empty), and close any associated active refinement chain.
+  - Added `runner.reconcile_orphans` to sweep orphan worktrees older than TTL, exposed via `scripts/reconcile_worktrees.py` and auto-maintain integration.
+  - Added `CODEX_BIN` resolution verification to `web_console.py --check`.
+
 ### Added
 - **Model-requested web search (chat tier)**: with a search backend configured, the chat model can reply `[[SEARCH: <query>]]` when it is not sure or the facts may be recent; Conveyor shows "🔎 搜索：…", runs one search and re-asks with the evidence (one round max, 200-char query cap, control tokens never streamed). A failed search marks the answer unverified. Keyword pre-fetch for time-sensitive questions stays. Smoke: 3 new cases in `scripts/chat_tier_smoke.py`.
 - **Cross-restart persistent conversation memory**: `chat_memory.db` SQLite store under `settings.codex_memory_root` persists active conversation turns, session state, and `/deep` escalation requests across bot restarts. Commands `/chat_clear` and `/forget` reset active history in memory and database. Smoke: `scripts/chat_memory_smoke.py`.
