@@ -2,9 +2,14 @@
 """Systemd-owned remote-desktop lifecycle for Secure Human Takeover.
 
 The Web Console never launches x11vnc/websockify. It only creates a takeover
-lease or writes a close request. This sidecar observes that secret-free state,
-invokes the fixed ``scripts/novnc_handoff.sh`` helper, and only finalizes a
-lease after transport cleanup has been verified.
+lease, authorizes transport after the desktop-idle barrier, or writes a close
+request. This sidecar observes that secret-free state, invokes the fixed
+``scripts/novnc_handoff.sh`` helper, and only finalizes a lease after transport
+cleanup has been verified.
+
+A session-scoped transport gate is also the sidecar's ownership marker. CLI
+leases without that gate stay manual and are never started/stopped by this
+service.
 """
 from __future__ import annotations
 
@@ -22,8 +27,10 @@ from config import load_settings
 from human_takeover import HumanTakeoverStore
 from web_takeover import (
     clear_close_request,
+    clear_transport_gate,
     read_close_request,
     read_sidecar_status,
+    read_transport_gate,
     sidecar_status_path,
 )
 
@@ -85,7 +92,12 @@ def _extract_urls(output: str) -> tuple[str | None, str | None]:
     clean = [_safe_url(url.rstrip(".,)")) for url in urls]
     clean = [url for url in clean if url]
     local = next(
-        (url for url in clean if url.startswith("http://127.0.0.1") or url.startswith("http://localhost")),
+        (
+            url
+            for url in clean
+            if url.startswith("http://127.0.0.1")
+            or url.startswith("http://localhost")
+        ),
         None,
     )
     remote = next((url for url in clean if url.startswith("https://")), None)
@@ -170,14 +182,58 @@ def _recent_failure(previous: dict[str, Any], phase: str, delay: float) -> bool:
     return time.time() - float(previous.get("updated_at") or 0) < delay
 
 
+def _stop_owned_transport(
+    settings: Any,
+    previous: dict[str, Any],
+    *,
+    phase: str,
+) -> bool:
+    """Stop the gate-owned transport; return True only after verified cleanup."""
+    if _recent_failure(previous, phase, CLOSE_RETRY_SECONDS):
+        return False
+    ok, error, _, _ = _run_transport("stop")
+    still_running = transport_running()
+    if not ok or still_running:
+        _write_status(
+            settings,
+            phase=phase,
+            running=still_running,
+            ready=False,
+            url=previous.get("url"),
+            local_url=previous.get("local_url"),
+            error=error or "handoff transport is still running",
+        )
+        return False
+    return True
+
+
 def run_once(settings: Any) -> None:
     store = HumanTakeoverStore(settings)
     current = store.current()
     close = read_close_request(settings)
+    gate = read_transport_gate(settings)
     previous = read_sidecar_status(settings)
 
+    # A transport gate is also the sidecar's ownership marker. If its lease is
+    # gone/replaced, clean that owned transport before touching any new lease.
+    if gate and (not current or gate.get("session_id") != current.get("id")):
+        if transport_running() and not _stop_owned_transport(
+            settings,
+            previous,
+            phase="cleanup_error",
+        ):
+            return
+        clear_transport_gate(
+            settings,
+            session_id=str(gate.get("session_id") or ""),
+        )
+        gate = None
+
     if close and (not current or close.get("session_id") != current.get("id")):
-        clear_close_request(settings, session_id=str(close.get("session_id") or ""))
+        clear_close_request(
+            settings,
+            session_id=str(close.get("session_id") or ""),
+        )
         close = None
 
     if close and current:
@@ -220,6 +276,7 @@ def run_once(settings: Any) -> None:
             )
             return
         clear_close_request(settings, session_id=str(current["id"]))
+        clear_transport_gate(settings, session_id=str(current["id"]))
         _write_status(
             settings,
             phase=str(result.get("state") or action),
@@ -229,6 +286,19 @@ def run_once(settings: Any) -> None:
         return
 
     if current:
+        gate_matches = bool(gate and gate.get("session_id") == current.get("id"))
+        if not gate_matches:
+            # This is either the short Web idle-barrier window or a manual CLI
+            # lease. Do not start or stop transport without sidecar ownership.
+            running = transport_running()
+            _write_status(
+                settings,
+                phase="manual_transport" if running else "waiting_for_idle",
+                running=running,
+                ready=False,
+            )
+            return
+
         if transport_running():
             _write_status(
                 settings,
@@ -271,22 +341,16 @@ def run_once(settings: Any) -> None:
         )
         return
 
-    if transport_running():
-        if _recent_failure(previous, "cleanup_error", CLOSE_RETRY_SECONDS):
-            return
-        ok, error, _, _ = _run_transport("stop")
-        still_running = transport_running()
-        if not ok or still_running:
-            _write_status(
-                settings,
-                phase="cleanup_error",
-                running=still_running,
-                ready=False,
-                error=error or "handoff transport is still running",
-            )
-            return
+    # No open lease and no sidecar ownership. Never kill an unrelated/manual
+    # VNC process just because this coordinator is running.
     clear_close_request(settings)
-    _write_status(settings, phase="idle", running=False, ready=False)
+    unmanaged_running = transport_running()
+    _write_status(
+        settings,
+        phase="unmanaged_transport" if unmanaged_running else "idle",
+        running=unmanaged_running,
+        ready=False,
+    )
 
 
 def _handle_signal(_signum: int, _frame: object) -> None:
@@ -311,9 +375,10 @@ def main() -> None:
             )
         time.sleep(POLL_SECONDS)
 
-    # A service stop must close any transport, but it deliberately does not
-    # mark an active takeover completed. The lease keeps automation paused.
-    if transport_running():
+    # Service shutdown only stops a transport this sidecar owns. A manual CLI
+    # handoff must not be killed merely because the coordinator is restarted.
+    gate = read_transport_gate(settings)
+    if gate and transport_running():
         _run_transport("stop")
     _write_status(
         settings,
