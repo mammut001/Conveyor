@@ -624,11 +624,14 @@ async def ask_chat(
     allowed = evidence_urls(evidence) | extract_urls(question)
     if reply is not None:
         allowed |= extract_urls(reply.text)
+    tool_evidence = False
     if use_tools:
         all_tool_msgs = getattr(loop_res, "messages", None) or tool_messages
         for m in all_tool_msgs:
             if m.get("role") == "tool" and isinstance(m.get("content"), str):
                 allowed |= extract_urls(m["content"])
+                if m["content"].startswith("<tool-result"):
+                    tool_evidence = True
     checked = check_answer(buf, allowed)
     if checked.escalate:
         if placeholder:
@@ -640,7 +643,8 @@ async def ask_chat(
             await port.edit_progress(msg, placeholder, "↪️ 没得到有效回答，转交 Codex…")
         return "unavailable", None
 
-    unverified = (is_time_sensitive(question) and not evidence) or search_failed
+    # A READ tool result counts as evidence: the answer is grounded in live local data.
+    unverified = (is_time_sensitive(question) and not evidence and not tool_evidence) or search_failed
     # One line per answer so the hallucination guards can be tracked from
     # the logs (how often confidence is low / links get removed).
     logger.info(

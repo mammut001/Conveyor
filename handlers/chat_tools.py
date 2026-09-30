@@ -43,11 +43,42 @@ def _get_tool_spec(name: str) -> Any | None:
     return TOOL_REGISTRY.get(name)
 
 
+# Read-only tools that reach arbitrary network targets. Tool output is fed back
+# to the model, so a prompt-injected page could use these to exfiltrate data.
+# Excluded from chat tool mode unless allowlisted via CONVEYOR_CHAT_TOOLS_NETWORK_ALLOW.
+NETWORK_TOOLS = frozenset({
+    "web.fetch", "web.text", "web.headers", "web.search",
+    "research.run", "research.project",
+})
+
+
+def _network_allowlist(settings: Any) -> set[str]:
+    raw = getattr(settings, "chat_tools_network_allow", ()) or ()
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    items = {str(x).strip() for x in raw if str(x).strip()}
+    if "*" in items or "all" in items:
+        return set(NETWORK_TOOLS)
+    return items & NETWORK_TOOLS
+
+
+def is_exposed(name: str, spec: Any, settings: Any = None) -> bool:
+    """Single policy used for both schema exposure and execution."""
+    if spec is None or name.startswith("desktop."):
+        return False
+    if spec.danger not in (DangerLevel.READ, DangerLevel.WRITE_SAFE, DangerLevel.WRITE):
+        return False
+    if name in NETWORK_TOOLS and name not in _network_allowlist(settings):
+        return False
+    return True
+
+
 def build_tool_schemas(settings: Settings | None = None) -> list[dict]:
     """OpenAI function schemas for exposed tools.
 
     Exposes personal tools and TOOL_REGISTRY tools whose danger is READ,
-    WRITE_SAFE, or WRITE. Excludes DESTRUCTIVE tools and desktop.* tools.
+    WRITE_SAFE, or WRITE. Excludes DESTRUCTIVE tools, desktop.* tools, and
+    network-reaching READ tools unless allowlisted.
     """
     register_personal_tools()
     schemas: list[dict] = []
@@ -65,11 +96,7 @@ def build_tool_schemas(settings: Settings | None = None) -> list[dict]:
             continue
         seen.add(name)
 
-        if spec.danger == DangerLevel.DESTRUCTIVE:
-            continue
-        if name.startswith("desktop."):
-            continue
-        if spec.danger not in (DangerLevel.READ, DangerLevel.WRITE_SAFE, DangerLevel.WRITE):
+        if not is_exposed(name, spec, settings):
             continue
 
         func_name = tool_to_func_name(name)
@@ -160,7 +187,7 @@ async def run_tool_loop(
             arg = _parse_tool_arg(fn_info.get("arguments"))
 
             spec = _get_tool_spec(real_tool_name)
-            if spec is None or real_tool_name.startswith("desktop.") or spec.danger == DangerLevel.DESTRUCTIVE:
+            if not is_exposed(real_tool_name, spec, settings):
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,

