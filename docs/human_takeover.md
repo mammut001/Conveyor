@@ -21,9 +21,12 @@ human_active
     |
     | operator completes the sensitive step
     v
+transport cleanup verified
+    |
+    v
 completed
     |
-    | transport closes + Agent observes the new state
+    | Agent observes the new state
     v
 Agent continues
 ```
@@ -73,7 +76,7 @@ number.
 
 ### Privacy mode
 
-During a human takeover, Conveyor must treat the desktop as privacy-sensitive:
+During a human takeover, Conveyor treats the desktop as privacy-sensitive:
 
 - no screenshot recording for the Agent;
 - no OCR/vision analysis;
@@ -103,7 +106,10 @@ Conveyor opens takeover lease
 Operator enters card number / CVV directly in remote desktop
         |
         v
-Operator closes handoff
+Operator requests handoff completion
+        |
+        v
+sidecar closes remote access and verifies cleanup
         |
         v
 Agent receives only the post-handoff page state
@@ -128,7 +134,14 @@ single-operator installation.
 Default TTL is five minutes; the API/store accepts 30–1800 seconds. TTL expiry
 prevents a lost browser tab from pausing automation indefinitely.
 
-## Current CLI flow
+Web completion/cancellation uses a small close-request coordination file rather
+than adding a permissive transitional database state. The lease deliberately
+stays open, so `takeover_blocks_automation()` continues to pause the Agent,
+until the systemd sidecar has stopped the remote desktop and verified that no
+Tailscale Serve marker or local VNC/noVNC process remains. Only then does the
+sidecar call `complete()` or `cancel()`.
+
+## CLI flow
 
 Start the coordination lease:
 
@@ -174,6 +187,7 @@ On Linux, the non-root user running the helper must be allowed to manage
 Tailscale Serve (for example, `sudo tailscale set --operator=ubuntu` for an
 Ubuntu user). Configure this before opening the lease; the helper will fail
 closed if Serve cannot be started.
+
 Tailscale Serve proxies HTTPS from the tailnet to the existing
 `127.0.0.1:6080` listener; VNC `5901` remains loopback-only. The VNC password
 is still required, and must be entered privately on the phone. No SSH tunnel
@@ -191,8 +205,8 @@ is reserved for this handoff: startup refuses to overwrite any existing Serve
 route there. The helper uses a foreground Serve session and verifies that the
 route is removed on stop or shortly before lease expiry. It leaves other Serve
 routes alone. If route removal cannot be verified, it stops VNC/noVNC and
-blocks manual lease completion until `bash scripts/novnc_handoff.sh stop`
-successfully cleans the stale route.
+blocks lease completion until `bash scripts/novnc_handoff.sh stop` successfully
+cleans the stale route.
 
 Never use `tailscale funnel`, put a VNC password in a URL, or allow the entire
 tailnet access to the handoff port when other members/devices are present.
@@ -223,37 +237,61 @@ while the operator still owns the desktop.
 
 The noVNC helper creates an ephemeral VNC password in a mode-0700 runtime
 directory and deletes the password/auth files on stop. Conveyor's takeover
-database never stores that password, and the helper no longer prints it during
+database never stores that password, and the helper does not print it during
 startup. If an operator needs the credential, retrieve it only in a private
 VPS terminal that is not being recorded; never place it in chat, shell command
 arguments, screenshots, clipboard, or a report.
 
-## Web Workbench integration
+## Web Workbench flow
 
-This PR intentionally keeps the transport separate from `App.tsx`, because the
-Web Primary Interface work is landing independently.
+The Web Workbench exposes the same safety contract through authenticated APIs
+and a dedicated `Human takeover` inspector card:
 
-The follow-up Web integration should add a `Human takeover` card with:
+1. **Take over** calls `POST /api/takeover/start`. Conveyor opens the lease,
+   cancels stale pending computer/screenshot work, waits for in-flight work to
+   finish, and immediately shows `Privacy mode — Agent paused`.
+2. `conveyor-handoff.service` notices the open lease and starts the fixed
+   `scripts/novnc_handoff.sh` transport. The Web process never receives
+   permission to run arbitrary shell commands.
+3. **Open Remote Desktop** opens the configured/private handoff route in a new
+   browser tab. It is never embedded in the Workbench and no VNC password is
+   placed in the URL or Web API response.
+4. Opening the remote desktop marks the coordination lease `human_active`.
+5. **Done, resume Agent** or **Cancel handoff** writes a close request. The
+   lease remains open and Privacy Mode remains active while the sidecar removes
+   Tailscale Serve and local noVNC/x11vnc access.
+6. Only after cleanup is verified does the sidecar transition the lease to
+   `completed` or `cancelled`. The computer-use loop can then obtain a fresh
+   post-handoff observation before continuing.
 
-1. **Take over** — creates the lease and pauses automation.
-2. **Open remote desktop** — opens a configured, authenticated handoff route in
-   a new tab; do not iframe an arbitrary VNC origin.
-3. A visible `Privacy mode — Agent paused` banner.
-4. **Done, resume Agent** — completes the lease, closes/invalidates the remote
-   transport, then performs one fresh observe after the sensitive page is gone.
-5. **Cancel** — closes the lease without claiming the sensitive step succeeded.
+Authenticated endpoints:
+
+```text
+GET  /api/takeover/status
+POST /api/takeover/start
+POST /api/takeover/activate
+POST /api/takeover/complete
+POST /api/takeover/cancel
+```
 
 The Web bearer token and the VNC credential are separate secrets. Do not place
 VNC passwords in URLs, browser history, analytics, SSE events, transcripts, or
 server logs.
 
-## Remaining hardening before exposing this as a one-click Web feature
+## Sidecar deployment
 
-- Add authenticated Web API endpoints for takeover start/status/complete/cancel.
-- Make the noVNC sidecar lifecycle systemd-managed rather than giving the Web
-  process privilege to spawn or kill arbitrary commands.
-- Put the handoff route behind the same private network / TLS boundary as the
-  Web Workbench.
-- Verify x11vnc against the actual VPS display manager/XAUTHORITY setup.
+`conveyor-handoff.service` is installed and enabled by the standard installer.
+It runs as the same configured service user as the rest of Conveyor and owns
+only the fixed takeover transport helper. `conveyor status`, `conveyor logs
+handoff`, and `sudo conveyor restart handoff` expose its operational state.
 
-Do not expose the noVNC or VNC port publicly as a shortcut for those steps.
+The optional `CONVEYOR_HANDOFF_WEB_URL` may provide an already-authenticated,
+private HTTPS entrypoint to the handoff page. It is metadata only; never embed
+a password, token, userinfo, or other secret in that URL. When Tailscale Serve
+is enabled, the sidecar instead uses the verified HTTPS URL printed by the
+existing helper.
+
+Operational prerequisites remain unchanged: the VPS needs the validated X11
+session, x11vnc/websockify/noVNC tooling, and a readable XAUTHORITY setup. Phone
+access additionally requires the previously validated Tailscale configuration.
+Do not expose VNC/noVNC ports publicly as a shortcut.

@@ -46,6 +46,17 @@ class InstallerTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIn(command, text)
 
+    def test_handoff_sidecar_is_installed_and_exposed_by_cli(self) -> None:
+        installer = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
+        cli = (ROOT / "scripts/conveyor").read_text(encoding="utf-8")
+        unit = (ROOT / "systemd/conveyor-handoff.service").read_text(encoding="utf-8")
+        self.assertIn("conveyor-handoff.service", installer)
+        self.assertIn("systemctl enable conveyor-handoff.service", installer)
+        self.assertIn("systemctl restart conveyor-handoff.service", installer)
+        self.assertIn("handoff) echo conveyor-handoff.service", cli)
+        self.assertIn("handoff_sidecar.py", unit)
+        self.assertNotIn("web_console.py", unit)
+
     def test_configurator_honors_conveyor_dir_and_preserves_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             old = os.environ.get("CONVEYOR_DIR")
