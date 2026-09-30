@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
-from config import load_settings
+from config import load_runtime_settings
 from desktop_observe_requests import (
     claim_observe_request,
     complete_observe_request,
@@ -46,7 +46,7 @@ logger = logging.getLogger("desktop_agent_server")
 
 # Load settings once at startup
 try:
-    settings = load_settings()
+    settings = load_runtime_settings()
 except Exception as e:
     logger.exception("Failed to load settings")
     sys.exit(1)

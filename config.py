@@ -310,11 +310,16 @@ def load_operator_profile(memory_root: Path) -> dict[str, str | None]:
     }
 
 
-def load_settings(env_file: str | Path = ".env") -> Settings:
+def _resolve_env_file(env_file: str | Path = ".env") -> str | Path:
     if env_file == ".env":
         alt = os.getenv("CONVEYOR_ENV_FILE")
         if alt and Path(alt).exists():
-            env_file = alt
+            return alt
+    return env_file
+
+
+def load_settings(env_file: str | Path = ".env") -> Settings:
+    env_file = _resolve_env_file(env_file)
     codex = _load_codex_fields(env_file)
     return Settings(
         telegram_bot_token=_required("TELEGRAM_BOT_TOKEN"),
@@ -323,12 +328,20 @@ def load_settings(env_file: str | Path = ".env") -> Settings:
     )
 
 
+def load_runtime_settings(env_file: str | Path = ".env") -> Settings:
+    """Load settings for processes that do not require chat channels (web console, desktop agent)."""
+    env_file = _resolve_env_file(env_file)
+    codex = _load_codex_fields(env_file)
+    return Settings(
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+        telegram_allowed_user_id=_int_env("TELEGRAM_ALLOWED_USER_ID", 0),
+        **codex,
+    )
+
+
 def _load_codex_fields(env_file: str | Path = ".env") -> dict:
     """Shared Codex/operator fields for Telegram and Feishu bots."""
-    if env_file == ".env":
-        alt = os.getenv("CONVEYOR_ENV_FILE")
-        if alt and Path(alt).exists():
-            env_file = alt
+    env_file = _resolve_env_file(env_file)
     load_dotenv(env_file)
 
     workspace_root = Path(_required("CODEX_WORKSPACE_ROOT")).expanduser().resolve()

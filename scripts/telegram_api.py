@@ -9,6 +9,8 @@ from redaction import truncate
 
 
 def send_message(settings: Settings, text: str, chat_id: int | None = None) -> None:
+    if not settings.telegram_bot_token:
+        raise RuntimeError("Telegram is not configured (TELEGRAM_BOT_TOKEN is empty)")
     target_chat_id = chat_id or settings.telegram_allowed_user_id
     payload = urllib.parse.urlencode(
         {

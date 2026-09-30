@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from config import Settings, load_settings
+from config import Settings, load_runtime_settings
 from desktop_screenshot import capture_screenshot_once
 from desktop_cua import build_driver
 
@@ -702,7 +702,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    settings = load_settings()
+    settings = load_runtime_settings()
 
     if args.observe_once:
         result = observe_once(settings)

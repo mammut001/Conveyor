@@ -250,6 +250,8 @@ def _send_briefing(channel: str, chat_id: str, text: str, settings: Settings) ->
     Currently only Telegram is implemented. Feishu can be added later.
     """
     if channel == "telegram":
+        if not settings.telegram_bot_token:
+            raise RuntimeError("Telegram is not configured (TELEGRAM_BOT_TOKEN is empty)")
         # Import here to avoid circular imports
         import asyncio
         try:

@@ -13,6 +13,7 @@ venv/
 .env
 .env.*
 !.env.example
+!.env.test.example
 
 # Per-day worktrees (their MEMORY.md is generated at runtime; never tracked).
 worktrees/
