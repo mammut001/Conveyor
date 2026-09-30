@@ -117,6 +117,7 @@ Routines can also be managed through conversation in Telegram, Feishu, or Web Ch
 - They are persisted in `routines.db` (`routine_approvals`) and re-loaded into the live approval store when the Web Console starts, so they can still be approved/denied from the Inbox after a restart.
 - Past their TTL they are marked `expired` in the Inbox (and never executed). Deleting a routine cancels its undecided approvals.
 - Web chat approvals are not persisted (5-minute lifetime).
+- Once an approval is resolved, the run's stored `status` changes from `approval_pending` to `executed` (approved), `denied`, `expired` or `cancelled`, so the routine card (`last_run_status`), `/api/inbox` and `routine.list` show the final state.
 
 ## Limitations
 

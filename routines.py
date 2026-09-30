@@ -304,6 +304,13 @@ def init_db(settings: Any) -> None:
                     ON routine_approvals(status, expires_at);
                 """
             )
+            # Backfill runs decided before run status tracked the decision.
+            for decision, run_status in APPROVAL_RUN_STATUS.items():
+                conn.execute(
+                    "UPDATE routine_runs SET status = ? "
+                    "WHERE status = 'approval_pending' AND approval_status = ?",
+                    (run_status, decision),
+                )
     finally:
         conn.close()
 
@@ -680,6 +687,20 @@ def unread_inbox_count(settings: Any) -> int:
         conn.close()
 
 
+# Final run status once a routine's pending approval is resolved, so the
+# routine card / API no longer show a stale ``approval_pending``.
+APPROVAL_RUN_STATUS = {
+    "approved": "executed",
+    "denied": "denied",
+    "expired": "expired",
+    "cancelled": "cancelled",
+}
+
+
+def _run_status_for_decision(decision: str) -> str:
+    return APPROVAL_RUN_STATUS.get(decision, "approval_pending")
+
+
 def record_approval_decision(
     settings: Any,
     approval_id: str,
@@ -705,8 +726,10 @@ def record_approval_decision(
             extra = f"\n\n[{decision.capitalize()}: {truncate(result_text, 1000)}]" if result_text else f"\n\n[{decision.capitalize()}]"
             new_output = truncate(row["output"] + extra, 4_000)
             conn.execute(
-                "UPDATE routine_runs SET approval_status = ?, output = ? WHERE id = ?",
-                (decision, new_output, row["id"]),
+                "UPDATE routine_runs SET approval_status = ?, output = ?, "
+                "status = CASE WHEN status = 'approval_pending' THEN ? ELSE status END "
+                "WHERE id = ?",
+                (decision, new_output, _run_status_for_decision(decision), row["id"]),
             )
             return True
     finally:
@@ -774,6 +797,7 @@ def expire_routine_approvals(settings: Any, now: float | None = None) -> int:
                 conn.execute("UPDATE routine_approvals SET status = 'expired' WHERE token = ?", (token,))
                 conn.execute(
                     "UPDATE routine_runs SET approval_status = 'expired', "
+                    "status = CASE WHEN status = 'approval_pending' THEN 'expired' ELSE status END, "
                     "output = substr(output || char(10) || char(10) || '[Expired]', 1, 4000) "
                     "WHERE approval_id = ? AND (approval_status IS NULL OR approval_status = 'pending')",
                     (token,),
