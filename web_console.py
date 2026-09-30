@@ -9,6 +9,7 @@ import json
 import logging
 import mimetypes
 import os
+import shutil
 import sys
 import threading
 import time
@@ -524,6 +525,21 @@ def validate_web_config(settings: Any) -> None:
         raise RuntimeError("CONVEYOR_WEB_PORT is invalid")
 
 
+def validate_codex_bin(settings: Any) -> None:
+    codex_bin = getattr(settings, "codex_bin", "") or ""
+    if not codex_bin:
+        raise RuntimeError(f"CODEX_BIN not found: {codex_bin}")
+    resolved = None
+    if os.path.sep in codex_bin or (os.path.altsep and os.path.altsep in codex_bin):
+        path = Path(codex_bin).expanduser()
+        if path.is_file() and os.access(path, os.X_OK):
+            resolved = str(path)
+    else:
+        resolved = shutil.which(codex_bin)
+    if not resolved:
+        raise RuntimeError(f"CODEX_BIN not found: {codex_bin}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Conveyor Web Console")
     parser.add_argument("--check", action="store_true", help="validate configuration and exit")
@@ -536,6 +552,11 @@ def main() -> None:
     settings = load_runtime_settings()
     validate_web_config(settings)
     if args.check:
+        try:
+            validate_codex_bin(settings)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
         print("web console configuration: ok")
         return
     runner = CodexRunner(settings)

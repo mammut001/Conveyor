@@ -67,7 +67,7 @@ from runner.streaming import (
     _capture_usage,
     _event_summary,
 )
-from runner.worktree import _job_worktree_path, _create_worktree, _user_today, _today_worktree_path, _memory_path, _memory_context_text, _ensure_today_worktree, _remove_worktree, _copy_untracked_files, _copy_validated_untracked_files, _git, cleanup_job_worktree
+from runner.worktree import _job_worktree_path, _create_worktree, _user_today, _today_worktree_path, _memory_path, _memory_context_text, _ensure_today_worktree, _remove_worktree, _copy_untracked_files, _copy_validated_untracked_files, _git, cleanup_job_worktree, reconcile_orphans
 
 for _name, _func in [
     ("_day_brief_state_path", _day_brief_state_path),
@@ -144,6 +144,7 @@ for _name, _func in [
     ("_copy_validated_untracked_files", _copy_validated_untracked_files),
     ("_git", _git),
     ("cleanup_job_worktree", cleanup_job_worktree),
+    ("reconcile_orphans", reconcile_orphans),
 ]:
     setattr(CodexRunner, _name, _func)
 
