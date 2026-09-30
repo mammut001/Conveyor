@@ -1,31 +1,23 @@
 """personal_tools/research.py — Research tool for Conveyor (P4.1 Phase C).
 
-Hybrid web.search + fetch + Codex synthesis.
-Collects evidence from web search, fetches top sources, builds
-evidence pack, then passes to Codex for structured analysis.
-All READ-only, no WRITE tools.
+Hybrid WebRuntime search + fetch + Codex synthesis.
+Collects evidence from web search, fetches top sources, builds an evidence pack,
+then passes it to Codex for structured analysis. All READ-only, no WRITE tools.
 """
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from config import Settings
 from personal_tools.base import ToolResult
-from personal_tools.web_fetch import validate_url, fetch_text
-from personal_tools.web_search import search_web, SearchResult
-from redaction import redact_text, truncate
-
-if TYPE_CHECKING:
-    pass
-
-logger = logging.getLogger(__name__)
+from personal_tools.web_runtime import WebRuntime
+from personal_tools.web_search import SearchResult
 
 
 @dataclass(frozen=True)
 class EvidenceItem:
     """A single piece of evidence from a web source."""
+
     title: str
     url: str
     snippet: str
@@ -51,32 +43,24 @@ def _dedupe_domains(results: list[SearchResult], max_results: int) -> list[Searc
 
 
 def _fetch_evidence(
-    settings: Settings,
+    runtime: WebRuntime,
     results: list[SearchResult],
     fetch_top_n: int,
     max_chars: int,
 ) -> list[EvidenceItem]:
-    """Fetch text from top N search results for evidence."""
+    """Fetch text from top N search results through the configured runtime."""
     evidence: list[EvidenceItem] = []
     for r in results[:fetch_top_n]:
-        ok, err = validate_url(r.url)
-        if not ok:
-            logger.debug("Skipping %s: %s", r.url, err)
-            evidence.append(EvidenceItem(
-                title=r.title, url=r.url,
-                snippet=r.snippet, text_excerpt="",
-            ))
-            continue
-
-        result = fetch_text(settings, r.url)
+        result = runtime.fetch(r.url)
         text = result.text if result.ok else ""
-        # Truncate to max_chars
         if len(text) > max_chars:
             text = text[:max_chars] + "..."
 
         evidence.append(EvidenceItem(
-            title=r.title, url=r.url,
-            snippet=r.snippet, text_excerpt=text,
+            title=r.title,
+            url=r.url,
+            snippet=r.snippet,
+            text_excerpt=text,
         ))
     return evidence
 
@@ -111,36 +95,45 @@ def _build_research_prompt(question: str, evidence_pack: str) -> str:
     )
 
 
+def _search_and_fetch(
+    settings: Settings,
+    query: str,
+) -> tuple[list[EvidenceItem], str]:
+    """Collect deduplicated evidence through WebRuntime."""
+    runtime = WebRuntime.from_settings(settings)
+    results, err = runtime.search(query, settings.research_max_sources * 2)
+    if err:
+        return [], err
+    if not results:
+        return [], "no search results"
+
+    deduped = _dedupe_domains(results, settings.research_max_sources)
+    evidence = _fetch_evidence(
+        runtime,
+        deduped,
+        settings.research_fetch_top_n,
+        settings.research_max_chars_per_source,
+    )
+    return evidence, ""
+
+
 def research_collect(settings: Settings, question: str) -> ToolResult:
     """Run research: search + fetch + build evidence pack.
-    
+
     Returns [HYBRID_PROMPT] prefix for Codex synthesis.
     """
     question = question.strip()
     if not question:
         return ToolResult(ok=False, text="⚠️ 用法: /research <问题>")
 
-    # Step 1: Search
-    results, err = search_web(settings, question, settings.research_max_sources * 2)
+    evidence, err = _search_and_fetch(settings, question)
     if err:
+        if err == "no search results":
+            return ToolResult(ok=False, text="⚠️ 无搜索结果")
         return ToolResult(ok=False, text=f"⚠️ 搜索失败: {err}")
-    if not results:
-        return ToolResult(ok=False, text="⚠️ 无搜索结果")
 
-    # Step 2: Dedupe domains
-    deduped = _dedupe_domains(results, settings.research_max_sources)
-
-    # Step 3: Fetch evidence
-    evidence = _fetch_evidence(
-        settings, deduped,
-        settings.research_fetch_top_n,
-        settings.research_max_chars_per_source,
-    )
-
-    # Step 4: Build evidence pack and return as hybrid prompt
     evidence_pack = _build_evidence_pack(evidence)
     prompt = _build_research_prompt(question, evidence_pack)
-
     return ToolResult(ok=True, text=f"[HYBRID_PROMPT]{prompt}")
 
 
@@ -151,7 +144,7 @@ def project_research_collect(
     project_id: str = "",
 ) -> ToolResult:
     """Run research with project context.
-    
+
     Returns [HYBRID_PROMPT] prefix for Codex synthesis.
     """
     from personal_tools.store import PersonalToolsStore
@@ -161,8 +154,6 @@ def project_research_collect(
         return ToolResult(ok=False, text="⚠️ 用法: /project_research [项目ID] <问题>")
 
     store = PersonalToolsStore(settings)
-
-    # Get project
     proj = None
     if project_id.strip():
         try:
@@ -173,7 +164,6 @@ def project_research_collect(
     else:
         proj = store.get_active_or_first_project(operator_id)
 
-    # Build search query with project context
     search_query = question
     if proj:
         context_parts = [proj.name, proj.type, proj.description]
@@ -182,26 +172,13 @@ def project_research_collect(
         context = " ".join(p for p in context_parts if p)
         search_query = f"{context} {question}"
 
-    # Step 1: Search
-    results, err = search_web(settings, search_query, settings.research_max_sources * 2)
+    evidence, err = _search_and_fetch(settings, search_query)
     if err:
+        if err == "no search results":
+            return ToolResult(ok=False, text="⚠️ 无搜索结果")
         return ToolResult(ok=False, text=f"⚠️ 搜索失败: {err}")
-    if not results:
-        return ToolResult(ok=False, text="⚠️ 无搜索结果")
 
-    # Step 2: Dedupe domains
-    deduped = _dedupe_domains(results, settings.research_max_sources)
-
-    # Step 3: Fetch evidence
-    evidence = _fetch_evidence(
-        settings, deduped,
-        settings.research_fetch_top_n,
-        settings.research_max_chars_per_source,
-    )
-
-    # Step 4: Build evidence pack with project context
     evidence_pack = _build_evidence_pack(evidence)
-
     project_context = ""
     if proj:
         project_context = (
@@ -226,31 +203,23 @@ def project_research_collect(
         f"5. 🔗 参考来源\n"
         f"6. 💡 对项目的建议\n"
     )
-
     return ToolResult(ok=True, text=f"[HYBRID_PROMPT]{prompt}")
 
 
 def factcheck_evidence(settings: Settings, claim: str) -> tuple[str, str]:
     """Collect a web evidence pack for fact-checking ``claim``.
 
-    Returns ``(evidence_pack, error)``. Callers fall back to letting the
-    agent check on its own when ``error`` is set (search disabled, no
-    results, backend failure), so this never raises for those cases.
+    Returns ``(evidence_pack, error)``. Callers fall back to letting the agent
+    check on its own when ``error`` is set, so this never raises for normal
+    backend/search failures.
     """
     claim = claim.strip()
     if not claim:
         return "", "empty claim"
-    results, err = search_web(settings, claim, settings.research_max_sources * 2)
+
+    evidence, err = _search_and_fetch(settings, claim)
     if err:
         return "", err
-    if not results:
-        return "", "no search results"
-    deduped = _dedupe_domains(results, settings.research_max_sources)
-    evidence = _fetch_evidence(
-        settings, deduped,
-        settings.research_fetch_top_n,
-        settings.research_max_chars_per_source,
-    )
     return _build_evidence_pack(evidence), ""
 
 
@@ -262,7 +231,6 @@ async def research_adapter(settings: Settings, arg: str, **kw) -> ToolResult:
 
 async def project_research_adapter(settings: Settings, arg: str, **kw) -> ToolResult:
     operator_id = kw.get("operator_id", "")
-    # Parse optional project_id from arg
     parts = arg.strip().split(None, 1)
     if len(parts) == 2 and parts[0].isdigit():
         return project_research_collect(settings, operator_id, parts[1], parts[0])

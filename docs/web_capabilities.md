@@ -27,36 +27,82 @@ TinyFish without changing the code that asks Conveyor to search.
 | Primitive | Current provider | Status |
 | --- | --- | --- |
 | Search | `WEB_SEARCH_BACKEND` adapter | implemented |
-| Fetch | existing SSRF-hardened `web_fetch` path | implemented |
+| Fetch | local safe fetch, or TinyFish when Search uses TinyFish | implemented |
 | Browser | provider slot | not configured by default |
 | Agent | provider slot | not configured by default |
 
-`WebRuntime.from_settings(settings)` preserves the existing behavior:
-Search is available only when `WEB_SEARCH_BACKEND` is enabled, and Fetch is
-available only when `WEB_FETCH_ENABLED=true`. Browser and Agent fail closed
-until an explicit provider is wired.
+`WebRuntime.from_settings(settings)` keeps existing defaults:
 
-Existing `/web_search` and `/web_fetch` commands remain compatible.
+- Search is available only when `WEB_SEARCH_BACKEND` is enabled.
+- Fetch is available only when `WEB_FETCH_ENABLED=true`.
+- non-TinyFish search backends use Conveyor's existing SSRF-hardened local
+  Fetch implementation.
+- `WEB_SEARCH_BACKEND=tinyfish` pairs TinyFish Search with TinyFish Fetch using
+  the same API key.
+- Browser and Agent fail closed until an explicit provider is wired.
 
-## TinyFish Search
+The legacy `/web_search` and `/web_fetch` command surfaces remain compatible.
+Higher-level workflows should use `WebRuntime`; `research.py` is the first
+production consumer migrated to the abstraction.
 
-TinyFish is available as a Search backend:
+## TinyFish Search + Fetch
+
+TinyFish is available through the existing search configuration:
 
 ```bash
 WEB_SEARCH_BACKEND=tinyfish
 WEB_SEARCH_API_KEY=...
-# optional override:
+# optional Search endpoint override:
 # WEB_SEARCH_ENDPOINT=https://api.search.tinyfish.ai
 ```
 
-Conveyor sends the key in the `X-API-Key` header, never in a subprocess
-argument, and normalizes TinyFish results into the existing `SearchResult`
-shape.
+Search sends the key in the `X-API-Key` header and normalizes results into the
+existing `SearchResult` shape.
 
-TinyFish Search is only a provider for the Search primitive in this phase.
-Adding TinyFish Fetch, Browser, or Agent should be done through the matching
-provider slot rather than adding provider-specific branches to orchestration
-code.
+When the runtime sees `WEB_SEARCH_BACKEND=tinyfish`, its Fetch primitive uses
+TinyFish's `POST https://api.fetch.tinyfish.ai` endpoint with:
+
+```json
+{"urls": ["https://example.com/page"]}
+```
+
+The clean text returned by TinyFish is normalized into Conveyor's existing
+`ToolResult` shape. Before calling the provider, Conveyor still validates the
+target URL using its existing public-web/SSRF policy. The TinyFish endpoint is
+also validated, response size is capped by `WEB_FETCH_MAX_BYTES`, and output is
+redacted/truncated through the existing safety helpers.
+
+This pairing is deliberate because TinyFish currently uses one API key across
+Search and Fetch. Conveyor never sends Brave/Tavily/Serper credentials to the
+TinyFish Fetch endpoint.
+
+## Research routing
+
+`personal_tools/research.py` no longer calls concrete Search and Fetch helpers
+directly. Its path is now:
+
+```text
+research question
+      |
+      v
+WebRuntime.search()
+      |
+      v
+dedupe sources
+      |
+      v
+WebRuntime.fetch()
+      |
+      v
+evidence pack
+      |
+      v
+Codex synthesis
+```
+
+This makes Research provider-neutral. With TinyFish configured it uses
+TinyFish Search + rendered clean Fetch; with the existing Brave/Tavily/Serper/
+SearXNG configurations it preserves the previous local Fetch path.
 
 ## Routing rule
 
@@ -71,12 +117,9 @@ Human Takeover remains a separate safety boundary. Browser or Agent providers
 must not bypass Conveyor's existing human-only handling for secrets, payment
 details, CAPTCHA, identity verification, or consent-sensitive steps.
 
-## Migration path
+## Next migration steps
 
-New web-oriented workflows should accept or construct a `WebRuntime`. Existing
-Search and Fetch call sites can migrate incrementally; the compatibility
-functions in `web_search.py` and `web_fetch.py` remain stable.
-
-A later PR can add a provider router that chooses among local Browser,
-TinyFish Browser, or other remote browser infrastructure while preserving the
-same orchestration contract.
+New web-oriented workflows should construct a `WebRuntime` rather than import a
+provider directly. The next safe migrations are chat grounding and topic watch.
+Browser provider selection should remain a separate change because it crosses
+into Computer Use and Human Takeover policy.
