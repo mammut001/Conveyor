@@ -31,7 +31,7 @@ class WebTakeoverTests(unittest.TestCase):
             claimed = mock.Mock(side_effect=[True, False])
             gate_seen_while_claimed: list[object] = []
 
-            def observe_claimed():
+            def observe_claimed(_settings):
                 gate_seen_while_claimed.append(read_transport_gate(settings))
                 return False
 
