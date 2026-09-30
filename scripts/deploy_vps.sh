@@ -183,6 +183,7 @@ ALL_CANDIDATE_SERVICES=(
   conveyor-feishu-bot.service
   conveyor-desktop-agent.service
   conveyor-web.service
+  conveyor-handoff.service
   conveyor-maintain.timer
 )
 SERVICES=()

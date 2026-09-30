@@ -10,16 +10,23 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import sys
 import threading
 from http import HTTPStatus
 from typing import Any
 from urllib.parse import urlparse
 
-from config import load_settings
+from config import load_runtime_settings
 from handlers.job_queue import get_job_queue
-from redaction import SecretRedactingFilter, redact_text
+from logging_setup import configure_logging
+from redaction import redact_text
 from runner import CodexRunner
-from web_console import WebConsoleHandler, WebConsoleServer, validate_web_config
+from web_console import (
+    WebConsoleHandler,
+    WebConsoleServer,
+    validate_codex_bin,
+    validate_web_config,
+)
 from web_control import WebControl
 from web_takeover import WebTakeover
 
@@ -84,16 +91,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Conveyor Web Workbench")
     parser.add_argument("--check", action="store_true", help="validate configuration and exit")
     args = parser.parse_args()
-    logging.basicConfig(
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    configure_logging(
+        service_name="conveyor.web",
         level=logging.INFO,
+        fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    for handler in logging.getLogger().handlers:
-        handler.addFilter(SecretRedactingFilter())
 
-    settings = load_settings()
+    settings = load_runtime_settings()
     validate_web_config(settings)
     if args.check:
+        try:
+            validate_codex_bin(settings)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
         print("web console configuration: ok")
         return
 

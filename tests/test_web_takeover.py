@@ -155,5 +155,24 @@ class WebTakeoverTests(unittest.TestCase):
             )
 
 
+class TakeoverEntrypointConfigTests(unittest.TestCase):
+    """Takeover processes must run in web-only deployments (no Telegram)."""
+
+    def test_entrypoints_use_runtime_settings_and_shared_logging(self) -> None:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        for rel in ("web_console_takeover.py", "handoff_sidecar.py", "scripts/handoffctl.py"):
+            text = (root / rel).read_text(encoding="utf-8")
+            with self.subTest(file=rel):
+                self.assertIn("load_runtime_settings", text)
+                self.assertNotRegex(text, r"\bload_settings\(")
+        for rel in ("web_console_takeover.py", "handoff_sidecar.py"):
+            text = (root / rel).read_text(encoding="utf-8")
+            with self.subTest(file=rel):
+                self.assertIn("configure_logging(", text)
+                self.assertNotIn("logging.basicConfig", text)
+
+
 if __name__ == "__main__":
     unittest.main()

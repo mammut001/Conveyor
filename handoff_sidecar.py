@@ -14,6 +14,7 @@ service.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import signal
@@ -23,8 +24,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from config import load_settings
+from config import load_runtime_settings
 from human_takeover import HumanTakeoverStore
+from logging_setup import configure_logging
 from web_takeover import (
     clear_close_request,
     clear_transport_gate,
@@ -39,6 +41,8 @@ START_RETRY_SECONDS = 5.0
 CLOSE_RETRY_SECONDS = 2.0
 STATUS_HEARTBEAT_SECONDS = 30.0
 _STOP = False
+
+logger = logging.getLogger("conveyor.handoff")
 
 
 def _runtime_state_dir() -> Path:
@@ -361,11 +365,18 @@ def _handle_signal(_signum: int, _frame: object) -> None:
 def main() -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
-    settings = load_settings()
+    configure_logging(
+        service_name="conveyor.handoff",
+        level=logging.INFO,
+        fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    settings = load_runtime_settings()
+    logger.info("Conveyor handoff sidecar started")
     while not _STOP:
         try:
             run_once(settings)
         except Exception as exc:
+            logger.exception("handoff sidecar iteration failed")
             _write_status(
                 settings,
                 phase="error",
