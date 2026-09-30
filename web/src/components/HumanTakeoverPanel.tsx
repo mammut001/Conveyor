@@ -10,9 +10,12 @@ type TakeoverLease = {
 }
 
 type TakeoverStatus = {
+  enabled?: boolean
   takeover: TakeoverLease | null
   privacy_mode: boolean
   closing: 'complete' | 'cancel' | null
+  transport_allowed?: boolean
+  message?: string | null
   transport: {
     phase: string
     running: boolean
@@ -21,7 +24,7 @@ type TakeoverStatus = {
     local_url?: string | null
     error?: string | null
     updated_at?: number
-  }
+  } | null
 }
 
 function remaining(seconds: number) {
@@ -45,7 +48,10 @@ export function HumanTakeoverPanel() {
     const response = await fetch('/api/takeover/status', {
       headers: { Authorization: `Bearer ${token}` },
     })
-    if (response.status === 401) { setStatus(null); return null }
+    if (response.status === 401 || response.status === 404) {
+      setStatus(null)
+      return null
+    }
     const body = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(body.error || `Takeover status failed (${response.status})`)
     setStatus(body as TakeoverStatus)
@@ -84,14 +90,30 @@ export function HumanTakeoverPanel() {
     let active = true
     const refresh = () => { void load().catch(reason => { if (active) setError(reason instanceof Error ? reason.message : 'Could not load takeover status') }) }
     refresh()
-    const timer = window.setInterval(refresh, 2_000)
+    const intervalMs = status?.enabled === false ? 30_000 : 2_000
+    const timer = window.setInterval(refresh, intervalMs)
     return () => { active = false; window.clearInterval(timer) }
-  }, [load])
+  }, [load, status?.enabled])
 
   if (!target || !status) return null
 
+  if (status.enabled === false) {
+    const disabledCard = (
+      <section className="context-section takeover-context" aria-label="Human takeover">
+        <h3 className="eyebrow">HUMAN TAKEOVER</h3>
+        <div className="takeover-idle">
+          <span className="takeover-lock" aria-hidden="true">◇</span>
+          <div>
+            <p>Human takeover disabled — set CONVEYOR_TAKEOVER_ENABLED=true on the server</p>
+          </div>
+        </div>
+      </section>
+    )
+    return createPortal(disabledCard, target)
+  }
+
   const lease = status.takeover
-  const route = status.transport.url || status.transport.local_url || ''
+  const route = status.transport?.url || status.transport?.local_url || ''
   const closing = Boolean(status.closing)
   const activate = () => {
     if (!lease || lease.state !== 'waiting_for_human') return
@@ -120,13 +142,13 @@ export function HumanTakeoverPanel() {
       </div>
       <div className="takeover-status-grid">
         <span>Lease</span><strong>{lease.state === 'human_active' ? 'Human active' : 'Waiting for human'}</strong>
-        <span>Transport</span><strong>{closing ? 'Closing safely…' : status.transport.ready ? 'Ready' : status.transport.phase.replaceAll('_', ' ')}</strong>
+        <span>Transport</span><strong>{closing ? 'Closing safely…' : status.transport?.ready ? 'Ready' : (status.transport?.phase || 'unknown').replaceAll('_', ' ')}</strong>
       </div>
-      {status.transport.error && <p className="takeover-error" role="alert">{status.transport.error}</p>}
+      {status.transport?.error && <p className="takeover-error" role="alert">{status.transport.error}</p>}
       <div className="takeover-actions">
-        {route && status.transport.ready && !closing
+        {route && status.transport?.ready && !closing
           ? <a className="takeover-open" href={route} target="_blank" rel="noreferrer" onClick={activate}>Open Remote Desktop ↗</a>
-          : <button type="button" disabled>Remote desktop {status.transport.phase === 'starting' ? 'starting…' : 'not ready'}</button>}
+          : <button type="button" disabled>Remote desktop {status.transport?.phase === 'starting' ? 'starting…' : 'not ready'}</button>}
         <button
           type="button"
           className="takeover-primary"

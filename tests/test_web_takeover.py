@@ -18,10 +18,11 @@ from web_takeover import (
 
 
 class WebTakeoverTests(unittest.TestCase):
-    def settings(self, root: str):
+    def settings(self, root: str, enabled: bool = True):
         return SimpleNamespace(
             codex_memory_root=root,
             conveyor_computer_max_seconds=1,
+            conveyor_takeover_enabled=enabled,
         )
 
     def test_web_start_opens_transport_gate_only_after_idle_barrier(self):
@@ -46,6 +47,7 @@ class WebTakeoverTests(unittest.TestCase):
 
             lease = status["takeover"]
             self.assertIsNotNone(lease)
+            self.assertTrue(status["enabled"])
             self.assertEqual(lease["state"], "waiting_for_human")
             self.assertTrue(status["transport_allowed"])
             self.assertTrue(takeover_blocks_automation(settings))
@@ -54,9 +56,11 @@ class WebTakeoverTests(unittest.TestCase):
 
             active = web.activate(lease["id"])
             self.assertEqual(active["takeover"]["state"], "human_active")
+            self.assertTrue(active["enabled"])
 
             closing = web.close(lease["id"], "complete")
             self.assertEqual(closing["closing"], "complete")
+            self.assertTrue(closing["enabled"])
             self.assertTrue(takeover_blocks_automation(settings))
             self.assertEqual(read_close_request(settings)["session_id"], lease["id"])
 
@@ -153,6 +157,145 @@ class WebTakeoverTests(unittest.TestCase):
                 status["url"],
                 "https://vps.tailnet.ts.net:8443/vnc.html",
             )
+
+    def test_web_takeover_disabled_status_and_start_raises(self):
+        with tempfile.TemporaryDirectory() as root:
+            settings = self.settings(root, enabled=False)
+            web = WebTakeover(settings)
+            status = web.status()
+            self.assertEqual(
+                status,
+                {
+                    "enabled": False,
+                    "takeover": None,
+                    "privacy_mode": False,
+                    "closing": None,
+                    "transport_allowed": False,
+                    "transport": None,
+                    "message": "Human takeover is disabled (set CONVEYOR_TAKEOVER_ENABLED=true)",
+                },
+            )
+            with self.assertRaises(RuntimeError) as ctx:
+                web.start({"reason": "operator_requested"})
+            self.assertIn("Human takeover is disabled", str(ctx.exception))
+
+    def test_sidecar_disabled_does_not_start_transport(self):
+        with tempfile.TemporaryDirectory() as root:
+            settings = self.settings(root, enabled=False)
+            HumanTakeoverStore(settings).start(reason="operator_requested", ttl_seconds=300)
+            allow_transport(settings, "fake-session")
+            with (
+                mock.patch("handoff_sidecar.transport_running", return_value=False),
+                mock.patch("handoff_sidecar._run_transport") as transport,
+            ):
+                handoff_sidecar.run_once(settings)
+
+            transport.assert_not_called()
+            status = read_sidecar_status(settings)
+            self.assertEqual(status["phase"], "disabled")
+            self.assertFalse(status["ready"])
+
+    def test_sidecar_disabled_close_request_stops_and_finalizes(self):
+        with tempfile.TemporaryDirectory() as root:
+            settings = self.settings(root, enabled=False)
+            store = HumanTakeoverStore(settings)
+            lease = store.start(reason="operator_requested", ttl_seconds=300)
+            store.activate(lease["id"])
+            allow_transport(settings, lease["id"])
+            request_close(settings, lease["id"], "complete")
+
+            with (
+                mock.patch("handoff_sidecar.transport_running", side_effect=[True, False]),
+                mock.patch(
+                    "handoff_sidecar._run_transport",
+                    return_value=(True, "", None, None),
+                ) as stop,
+            ):
+                handoff_sidecar.run_once(settings)
+
+            stop.assert_called_once_with("stop")
+            self.assertIsNone(store.current())
+            self.assertEqual(store.get(lease["id"])["state"], "completed")
+            self.assertIsNone(read_close_request(settings))
+            self.assertIsNone(read_transport_gate(settings))
+            self.assertFalse(takeover_blocks_automation(settings))
+
+
+    def test_sidecar_disabled_stops_live_owned_transport_and_cancels(self):
+        with tempfile.TemporaryDirectory() as root:
+            settings = self.settings(root, enabled=False)
+            store = HumanTakeoverStore(settings)
+            lease = store.start(reason="operator_requested", ttl_seconds=300)
+            store.activate(lease["id"])
+            allow_transport(settings, lease["id"])
+
+            with (
+                mock.patch("handoff_sidecar.transport_running", side_effect=[True, False, False]),
+                mock.patch(
+                    "handoff_sidecar._run_transport",
+                    return_value=(True, "", None, None),
+                ) as transport,
+            ):
+                handoff_sidecar.run_once(settings)
+
+            transport.assert_called_once_with("stop")
+            self.assertIsNone(store.current())
+            self.assertEqual(store.get(lease["id"])["state"], "cancelled")
+            self.assertIsNone(read_transport_gate(settings))
+            self.assertEqual(read_sidecar_status(settings)["phase"], "disabled")
+
+class TakeoverSettingsTests(unittest.TestCase):
+    def test_settings_default_and_env_flag(self):
+        import os
+        from pathlib import Path
+        from config import Settings, load_runtime_settings, load_settings
+
+        s = Settings(
+            telegram_bot_token="token",
+            telegram_allowed_user_id=123,
+            codex_workspace_root=Path("/tmp"),
+            codex_bin="codex",
+            codex_task_root=Path("/tmp"),
+            codex_model=None,
+            codex_timeout_seconds=3600,
+            telegram_progress_seconds=3,
+            codex_retry_429_delays_seconds=(300,),
+            codex_memory_root=Path("/tmp"),
+            user_timezone="UTC",
+        )
+        self.assertFalse(s.conveyor_takeover_enabled)
+
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            ws = tdp / "workspace"
+            tasks = tdp / "tasks"
+            mem = tdp / "memory"
+            ws.mkdir()
+            tasks.mkdir()
+            mem.mkdir()
+            env_file = tdp / "test.env"
+            env_file.write_text(
+                f"CODEX_WORKSPACE_ROOT={ws}\n"
+                f"CODEX_TASK_ROOT={tasks}\n"
+                f"CODEX_MEMORY_ROOT={mem}\n"
+            )
+
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CONVEYOR_TAKEOVER_ENABLED", None)
+                os.environ["TELEGRAM_BOT_TOKEN"] = "token"
+                os.environ["TELEGRAM_ALLOWED_USER_ID"] = "123"
+
+                loaded = load_settings(env_file=env_file)
+                self.assertFalse(loaded.conveyor_takeover_enabled)
+                loaded_rt = load_runtime_settings(env_file=env_file)
+                self.assertFalse(loaded_rt.conveyor_takeover_enabled)
+
+                for truthy in ("true", "1", "yes", "on"):
+                    os.environ["CONVEYOR_TAKEOVER_ENABLED"] = truthy
+                    loaded = load_settings(env_file=env_file)
+                    self.assertTrue(loaded.conveyor_takeover_enabled)
+                    loaded_rt = load_runtime_settings(env_file=env_file)
+                    self.assertTrue(loaded_rt.conveyor_takeover_enabled)
 
 
 class TakeoverEntrypointConfigTests(unittest.TestCase):

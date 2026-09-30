@@ -42,6 +42,22 @@ class TakeoverWebConsoleServer(WebConsoleServer):
 class TakeoverWebConsoleHandler(WebConsoleHandler):
     server: TakeoverWebConsoleServer
 
+    def _takeover_enabled(self) -> bool:
+        takeover = getattr(self.server, "takeover", None)
+        if takeover is not None:
+            enabled = getattr(takeover, "enabled", None)
+            if enabled is not None:
+                return bool(enabled() if callable(enabled) else enabled)
+            settings = getattr(takeover, "settings", None)
+            if settings is not None:
+                return bool(getattr(settings, "conveyor_takeover_enabled", False))
+        control = getattr(self.server, "control", None)
+        if control is not None:
+            settings = getattr(control, "settings", None)
+            if settings is not None:
+                return bool(getattr(settings, "conveyor_takeover_enabled", False))
+        return False
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path != "/api/takeover/status":
@@ -49,8 +65,25 @@ class TakeoverWebConsoleHandler(WebConsoleHandler):
             return
         if not self._require_auth():
             return
+        if not self._takeover_enabled():
+            self._json(
+                HTTPStatus.OK,
+                {
+                    "enabled": False,
+                    "takeover": None,
+                    "privacy_mode": False,
+                    "closing": None,
+                    "transport_allowed": False,
+                    "transport": None,
+                    "message": "Human takeover is disabled (set CONVEYOR_TAKEOVER_ENABLED=true)",
+                },
+            )
+            return
         try:
-            self._json(HTTPStatus.OK, self.server.takeover.status())
+            status = self.server.takeover.status()
+            if isinstance(status, dict) and "enabled" not in status:
+                status["enabled"] = True
+            self._json(HTTPStatus.OK, status)
         except Exception:
             logger.exception("Takeover status request failed")
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"})
@@ -61,6 +94,12 @@ class TakeoverWebConsoleHandler(WebConsoleHandler):
             super().do_POST()
             return
         if not self._require_auth():
+            return
+        if not self._takeover_enabled():
+            self._json(
+                HTTPStatus.FORBIDDEN,
+                {"error": "Human takeover is disabled (set CONVEYOR_TAKEOVER_ENABLED=true)"},
+            )
             return
         body = self._body()
         if body is None:
@@ -107,6 +146,11 @@ def main() -> None:
             sys.exit(1)
         print("web console configuration: ok")
         return
+
+    logger.info(
+        "Human takeover is %s",
+        "enabled" if settings.conveyor_takeover_enabled else "disabled",
+    )
 
     runner = CodexRunner(settings)
     queue = get_job_queue()

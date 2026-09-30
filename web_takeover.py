@@ -172,7 +172,21 @@ class WebTakeover:
         self.settings = settings
         self.store = HumanTakeoverStore(settings)
 
+    @property
+    def enabled(self) -> bool:
+        return bool(getattr(self.settings, "conveyor_takeover_enabled", False))
+
     def status(self) -> dict[str, Any]:
+        if not self.enabled:
+            return {
+                "enabled": False,
+                "takeover": None,
+                "privacy_mode": False,
+                "closing": None,
+                "transport_allowed": False,
+                "transport": None,
+                "message": "Human takeover is disabled (set CONVEYOR_TAKEOVER_ENABLED=true)",
+            }
         current = self.store.current()
         public = HumanTakeoverStore.public(current)
         close = read_close_request(self.settings)
@@ -189,6 +203,7 @@ class WebTakeover:
             gate = None
         transport = read_sidecar_status(self.settings)
         return {
+            "enabled": True,
             "takeover": public,
             "privacy_mode": bool(public),
             "closing": close.get("action") if close else None,
@@ -199,6 +214,8 @@ class WebTakeover:
         }
 
     def start(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self.enabled:
+            raise RuntimeError("Human takeover is disabled (set CONVEYOR_TAKEOVER_ENABLED=true)")
         reason = str(payload.get("reason") or "operator_requested").strip().lower()
         if reason not in ALLOWED_REASONS:
             raise ValueError(f"unsupported takeover reason: {reason}")
