@@ -72,6 +72,9 @@ When disabled, zero DB files are created, no background consumer threads/tasks r
    - It claims decisions matching its local memory store via atomic `UPDATE ... RETURNING *`.
    - The owning process executes the confirmed action locally through existing audit and dispatch paths (`decide_tool_approval` or `execute_confirmed`), prefixing results sent back to the user with `✅ 已在 <Surface> 批准`.
    - Finally, `approval_relay.mark_local` records completion status (`done` or `cancelled`).
+5. **Local resolution gate**:
+   - The origin chat keeps its own buttons / text YES. Before `execute_confirmed` or `cancel_pending` act, `approval_relay.claim_local` compare-and-sets the shared row (`decided_via='origin'`). If another surface already decided differently (e.g. rejected on Web), the local action is dropped and the operator is told "该审批已在其他端处理（已拒绝），本次操作未执行。". A row that already carries the same decision (the consumer executing a remote approval) passes.
+   - `mark_local` only transitions rows that are still open (`pending`/`approved`/`rejected`), so each notification is updated to its outcome exactly once.
 
 ---
 
@@ -112,3 +115,6 @@ When disabled, zero DB files are created, no background consumer threads/tasks r
 - **Single-Host Only**: Conveyor processes must reside on the same host (or share a filesystem supporting POSIX file locks) to access the SQLite relay database.
 - **Execution Latency**: Because the origin process claims decisions via polling, execution starts within ~1 second after approval.
 - **Feishu Push Requirements**: Feishu push notifications require `LARK_ALLOWED_OPEN_ID` configured to identify the operator recipient. If unset, Feishu outbound notifications are skipped, though button approvals on existing cards still function.
+- **Notification I/O off the event loop**: real Telegram/Feishu notifier HTTP calls run on one background worker thread; bot callbacks run `decide` via `asyncio.to_thread`. (A test notifier factory makes dispatch synchronous.)
+- **SQLite ≥ 3.35** is required (`UPDATE ... RETURNING`).
+- **Click-testing without bots**: `scripts/approval_relay_fake_bot.py` simulates a Telegram process fully offline (stub tool runner, fake notifier). See the PR description for steps.
