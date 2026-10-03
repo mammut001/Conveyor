@@ -323,6 +323,24 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK if item else HTTPStatus.NOT_FOUND, item or {"error": "not found"})
             elif path == "/api/approvals":
                 self._json(HTTPStatus.OK, {"approvals": self.server.control.list_approvals()})
+            elif path == "/api/approval-inbox":
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                if not getattr(settings, "approval_inbox_enabled", False):
+                    self._json(HTTPStatus.CONFLICT, {"error": "approval inbox is disabled (set CONVEYOR_APPROVAL_INBOX_ENABLED=true)"})
+                    return
+                import approval_inbox
+                items = approval_inbox.list_items(settings, self.server.control)
+                counts = {
+                    "total": len(items),
+                    "chat": sum(1 for it in items if it.get("source") == "chat"),
+                    "routine": sum(1 for it in items if it.get("source") == "routine"),
+                    "webhook": sum(1 for it in items if it.get("source") == "webhook"),
+                    "job": sum(1 for it in items if it.get("source") == "job"),
+                }
+                self._json(HTTPStatus.OK, {"items": items, "counts": counts})
             elif path == "/api/memory":
                 settings = self._memory_settings()
                 if settings is None:
@@ -825,6 +843,76 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     return
                 result = self._await(self.server.control.decide_approval(parts[2], is_approve), timeout=120)
                 self._json(HTTPStatus.OK if result else HTTPStatus.NOT_FOUND, result or {"error": "not found"})
+            elif len(parts) == 4 and parts[:2] == ["api", "approval-inbox"] and parts[3] in ("approve", "reject"):
+                approval_id = parts[2]
+                is_approve = (parts[3] == "approve")
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                if not getattr(settings, "approval_inbox_enabled", False):
+                    self._json(HTTPStatus.CONFLICT, {"error": "approval inbox is disabled (set CONVEYOR_APPROVAL_INBOX_ENABLED=true)"})
+                    return
+
+                from handlers.tools.confirm import get_pending
+                pending = get_pending(approval_id)
+                if pending is not None:
+                    if pending.channel != "web":
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                        return
+                    if is_approve:
+                        draft = body.get("draft") if isinstance(body, dict) else None
+                        expected_arg = body.get("expected_arg") if isinstance(body, dict) else None
+                        # Optimistic check against what the operator saw. The list shows the
+                        # redacted arg, so the redacted form of the current arg also matches.
+                        from redaction import redact_text as _redact
+                        if expected_arg is not None and expected_arg not in (pending.arg, _redact(pending.arg)):
+                            self._json(HTTPStatus.CONFLICT, {"error": "draft changed, reload"})
+                            return
+                        if draft is not None:
+                            import approval_inbox
+                            try:
+                                pending = approval_inbox.edit_pending(settings, approval_id, draft)
+                            except KeyError:
+                                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                                return
+                            except (ValueError, PermissionError) as exc:
+                                self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                                return
+                        from web_chat import decide_tool_approval
+                        result = self._await(decide_tool_approval(pending, True, settings), timeout=120)
+                        if result.get("status") == "expired":
+                            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                            return
+                        self._json(HTTPStatus.OK, result)
+                        return
+                    else:
+                        from web_chat import decide_tool_approval
+                        result = self._await(decide_tool_approval(pending, False, settings), timeout=120)
+                        if result.get("status") == "expired":
+                            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                            return
+                        self._json(HTTPStatus.OK, result)
+                        return
+
+                # Not a pending tool action; check job approval
+                if is_approve:
+                    if isinstance(body, dict) and "draft" in body and body.get("draft") is not None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "job approvals do not support drafts"})
+                        return
+                    result = self._await(self.server.control.decide_approval(approval_id, True), timeout=120)
+                    if result is None or result.get("status") == "expired":
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                        return
+                    self._json(HTTPStatus.OK, result)
+                    return
+                else:
+                    result = self._await(self.server.control.decide_approval(approval_id, False), timeout=120)
+                    if result is None or result.get("status") == "expired":
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                        return
+                    self._json(HTTPStatus.OK, result)
+                    return
             elif parsed.path == "/api/computer/screenshot":
                 result = self.server.control.request_host_screen()
                 self._json(HTTPStatus.ACCEPTED if result.get("ok") else HTTPStatus.CONFLICT, result)

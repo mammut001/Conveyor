@@ -973,6 +973,25 @@ def persist_routine_approval(settings: Any, token: str, routine_id: int) -> bool
         conn.close()
 
 
+def update_routine_approval_arg(settings: Any, token: str, new_arg: str) -> bool:
+    """Update the arg of a persisted pending routine approval."""
+    try:
+        init_db(settings)
+        conn = _connect(settings)
+        try:
+            with conn:
+                cursor = conn.execute(
+                    "UPDATE routine_approvals SET arg = ? WHERE token = ? AND status = 'pending'",
+                    (new_arg, token),
+                )
+                return cursor.rowcount > 0
+        finally:
+            conn.close()
+    except Exception:
+        logger.debug("Failed to update routine approval arg in DB", exc_info=True)
+        return False
+
+
 def expire_routine_approvals(settings: Any, now: float | None = None) -> int:
     """Mark persisted routine approvals past their TTL as expired (DB + inbox)."""
     import time as _time

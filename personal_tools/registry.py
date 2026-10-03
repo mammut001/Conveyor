@@ -139,7 +139,7 @@ def register_personal_tools() -> None:
     )
     _register(
         "email.send",
-        "发送邮件 (需确认)",
+        "发送邮件 (需确认) (<收件人> | <主题> | <正文>)",
         DangerLevel.WRITE,
         email_tools.email_send_adapter,
         keywords=("发邮件", "send email"),
@@ -310,14 +310,14 @@ def register_personal_tools() -> None:
     )
     _register(
         "github.create_issue",
-        "创建 Issue (审计)",
+        "创建 Issue (审计) (<标题> | <正文>)",
         DangerLevel.WRITE_SAFE,
         github_tools.github_create_issue_adapter,
         keywords=("创建 issue",),
     )
     _register(
         "github.comment",
-        "评论 Issue/PR (需确认)",
+        "评论 Issue/PR (需确认) (<编号> | <正文>)",
         DangerLevel.WRITE,
         github_tools.github_comment_adapter,
         keywords=("评论",),

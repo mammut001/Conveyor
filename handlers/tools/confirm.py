@@ -5,6 +5,7 @@ the operator confirms via Telegram inline button or text YES/确认.
 """
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -33,6 +34,7 @@ class PendingToolAction:
         return (time.time() if now is None else now) > self.expires_at
 
 
+_lock = threading.RLock()
 _pending: dict[str, PendingToolAction] = {}
 _by_context: dict[ContextKey, str] = {}
 
@@ -57,27 +59,44 @@ def create_pending(
         chat_id=chat_id,
         channel=channel,
     )
-    _pending[token] = action
-    _by_context[_context_key(operator_id, chat_id, channel)] = token
+    with _lock:
+        _pending[token] = action
+        _by_context[_context_key(operator_id, chat_id, channel)] = token
     return action
 
 
 def get_pending(token: str) -> PendingToolAction | None:
-    action = _pending.get(token)
-    if action is None:
-        return None
-    if action.is_expired():
-        pop_pending(token)
-        return None
-    return action
+    with _lock:
+        action = _pending.get(token)
+        if action is None:
+            return None
+        if action.is_expired():
+            pop_pending(token)
+            return None
+        return action
+
+
+def replace_pending_arg(token: str, new_arg: str) -> PendingToolAction | None:
+    """Atomically replace the arg of an unexpired pending action.
+
+    Keeps token, tool_name, channel, chat_id, operator_id, created_at,
+    and ttl_seconds unchanged. Returns None if not found or expired.
+    """
+    with _lock:
+        action = get_pending(token)
+        if action is None:
+            return None
+        action.arg = new_arg
+        return action
 
 
 def set_pending_ttl(token: str, ttl_seconds: float) -> PendingToolAction | None:
     """Extend/shorten the lifetime of a live pending action (e.g. routine approvals)."""
-    action = get_pending(token)
-    if action is not None:
-        action.ttl_seconds = float(ttl_seconds)
-    return action
+    with _lock:
+        action = get_pending(token)
+        if action is not None:
+            action.ttl_seconds = float(ttl_seconds)
+        return action
 
 
 def restore_pending(action: PendingToolAction) -> bool:
@@ -85,23 +104,25 @@ def restore_pending(action: PendingToolAction) -> bool:
 
     Does not claim the per-context slot if a newer action already holds it.
     """
-    if action.is_expired():
-        return False
-    _pending[action.token] = action
-    key = _context_key(action.operator_id, action.chat_id, action.channel)
-    current = _pending.get(_by_context.get(key, ""))
-    if current is None or current.created_at <= action.created_at:
-        _by_context[key] = action.token
-    return True
+    with _lock:
+        if action.is_expired():
+            return False
+        _pending[action.token] = action
+        key = _context_key(action.operator_id, action.chat_id, action.channel)
+        current = _pending.get(_by_context.get(key, ""))
+        if current is None or current.created_at <= action.created_at:
+            _by_context[key] = action.token
+        return True
 
 
 def pop_pending(token: str) -> PendingToolAction | None:
-    action = _pending.pop(token, None)
-    if action is not None:
-        key = _context_key(action.operator_id, action.chat_id, action.channel)
-        if _by_context.get(key) == token:
-            _by_context.pop(key, None)
-    return action
+    with _lock:
+        action = _pending.pop(token, None)
+        if action is not None:
+            key = _context_key(action.operator_id, action.chat_id, action.channel)
+            if _by_context.get(key) == token:
+                _by_context.pop(key, None)
+        return action
 
 
 def get_pending_for_context(
@@ -109,20 +130,22 @@ def get_pending_for_context(
     chat_id: str,
     channel: str,
 ) -> PendingToolAction | None:
-    token = _by_context.get(_context_key(operator_id, chat_id, channel))
-    if not token:
-        return None
-    return get_pending(token)
+    with _lock:
+        token = _by_context.get(_context_key(operator_id, chat_id, channel))
+        if not token:
+            return None
+        return get_pending(token)
 
 
 def get_pending_for_operator(operator_id: str) -> PendingToolAction | None:
     """Backward-compatible helper; prefer get_pending_for_context."""
-    for key, token in list(_by_context.items()):
-        if key[0] == operator_id:
-            action = get_pending(token)
-            if action is not None:
-                return action
-    return None
+    with _lock:
+        for key, token in list(_by_context.items()):
+            if key[0] == operator_id:
+                action = get_pending(token)
+                if action is not None:
+                    return action
+        return None
 
 
 def matches_context(action: PendingToolAction, operator_id: str, chat_id: str, channel: str) -> bool:
@@ -135,15 +158,16 @@ def matches_context(action: PendingToolAction, operator_id: str, chat_id: str, c
 
 def list_pending(channel: str | None = None) -> list[PendingToolAction]:
     """Return all non-expired pending tool actions, optionally filtered by channel."""
-    now = time.time()
-    for token, action in list(_pending.items()):
-        if action.is_expired(now):
-            pop_pending(token)
-    actions = list(_pending.values())
-    if channel is not None:
-        actions = [a for a in actions if a.channel == channel]
-    actions.sort(key=lambda a: a.created_at, reverse=True)
-    return actions
+    with _lock:
+        now = time.time()
+        for token, action in list(_pending.items()):
+            if action.is_expired(now):
+                pop_pending(token)
+        actions = list(_pending.values())
+        if channel is not None:
+            actions = [a for a in actions if a.channel == channel]
+        actions.sort(key=lambda a: a.created_at, reverse=True)
+        return actions
 
 
 def is_confirmation_text(text: str) -> bool:
@@ -161,8 +185,9 @@ def is_confirmation_text(text: str) -> bool:
 
 def clear_all_pending() -> None:
     """Test helper: drop all pending confirmations."""
-    _pending.clear()
-    _by_context.clear()
+    with _lock:
+        _pending.clear()
+        _by_context.clear()
 
 
 def is_cancellation_text(text: str) -> bool:
