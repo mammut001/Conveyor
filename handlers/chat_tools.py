@@ -36,7 +36,10 @@ def func_to_tool_name(func_name: str) -> str:
     return REVERSE_TOOL_MAP.get(func_name, func_name.replace("__", "."))
 
 
-def _get_tool_spec(name: str) -> Any | None:
+def _get_tool_spec(name: str, settings: Settings | None = None) -> Any | None:
+    if name.startswith("mcp."):
+        from mcp_client import get_mcp_tool_spec
+        return get_mcp_tool_spec(settings, name)
     register_personal_tools()
     if name in PERSONAL_TOOL_REGISTRY:
         return PERSONAL_TOOL_REGISTRY[name]
@@ -66,6 +69,10 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
     """Single policy used for both schema exposure and execution."""
     if spec is None or name.startswith("desktop."):
         return False
+    if name.startswith("mcp."):
+        if not getattr(settings, "mcp_enabled", False):
+            return False
+        return spec.danger in (DangerLevel.READ, DangerLevel.WRITE_SAFE, DangerLevel.WRITE)
     if name.startswith("memory.") and not memory_allowed:
         return False
     if name.startswith("routine.") and not getattr(settings, "routines_enabled", False):
@@ -131,6 +138,11 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
         }
         schemas.append(schema)
 
+    if settings and getattr(settings, "mcp_enabled", False):
+        from mcp_client import get_mcp_manager
+        mcp_schemas = get_mcp_manager().get_exposed_schemas(settings)
+        schemas.extend(mcp_schemas)
+
     return schemas
 
 
@@ -170,6 +182,12 @@ async def run_tool_loop(
     """Execute up to chat_tool_max_steps rounds of complete_chat with tools."""
     from personal_tools.long_term_memory import allowed_for
     memory_allowed = allowed_for(settings, msg)
+    if getattr(settings, "mcp_enabled", False):
+        from mcp_client import get_mcp_manager
+        try:
+            await get_mcp_manager().ensure_fresh(settings)
+        except Exception:
+            logger.warning("MCP tool discovery failed", exc_info=True)
     schemas = build_tool_schemas(settings, memory_allowed=memory_allowed)
     max_steps_val = getattr(settings, "chat_tool_max_steps", 3)
     max_steps = 3 if max_steps_val is None else int(max_steps_val)
@@ -194,9 +212,38 @@ async def run_tool_loop(
             fn_info = tc.get("function") or {}
             func_name = fn_info.get("name") or ""
             real_tool_name = func_to_tool_name(func_name)
-            arg = _parse_tool_arg(fn_info.get("arguments"))
 
-            spec = _get_tool_spec(real_tool_name)
+            if real_tool_name.startswith("mcp."):
+                raw_arg_val = fn_info.get("arguments")
+                arg_dict = None
+                if isinstance(raw_arg_val, dict):
+                    arg_dict = raw_arg_val
+                elif isinstance(raw_arg_val, str):
+                    trimmed = raw_arg_val.strip()
+                    if trimmed:
+                        try:
+                            parsed = json.loads(trimmed)
+                            if isinstance(parsed, dict):
+                                arg_dict = parsed
+                        except Exception:
+                            arg_dict = None
+                    else:
+                        arg_dict = {}
+                else:
+                    arg_dict = None
+
+                if arg_dict is None:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": "invalid arguments",
+                    })
+                    continue
+                arg = json.dumps(arg_dict, sort_keys=True, ensure_ascii=False)
+            else:
+                arg = _parse_tool_arg(fn_info.get("arguments"))
+
+            spec = _get_tool_spec(real_tool_name, settings)
             if not is_exposed(real_tool_name, spec, settings, memory_allowed=memory_allowed):
                 messages.append({
                     "role": "tool",

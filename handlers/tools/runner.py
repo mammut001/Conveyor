@@ -34,7 +34,13 @@ CALLBACK_CANCEL_PREFIX = "tool:cancel:"
 _HYBRID_DEFAULT_TOOLS = ("load", "ps", "disk", "service_status")
 
 
-def _requires_confirmation(tool_name: str) -> bool:
+def _requires_confirmation(tool_name: str, settings: Settings | None = None) -> bool:
+    if tool_name.startswith("mcp."):
+        from mcp_client import get_mcp_tool_spec
+        spec = get_mcp_tool_spec(settings, tool_name)
+        if spec is not None:
+            return spec.danger in (DangerLevel.WRITE, DangerLevel.DESTRUCTIVE)
+        return True
     spec = get_tool(tool_name)
     if spec is not None:
         return requires_confirmation(spec)
@@ -62,6 +68,16 @@ async def run_tool(
     channel: str = "",
     chat_id: str = "",
 ) -> str:
+    if tool_name.startswith("mcp."):
+        from mcp_client import run_mcp_tool
+        return await run_mcp_tool(
+            settings,
+            tool_name,
+            arg,
+            operator_id=operator_id,
+            channel=channel,
+            chat_id=chat_id,
+        )
     from personal_tools.registry import execute_personal_tool, get_personal_tool
 
     if get_personal_tool(tool_name) is not None:
@@ -102,7 +118,13 @@ async def run_tools_collected(
     return "\n\n".join(parts)
 
 
-def _danger_label(tool_name: str) -> str:
+def _danger_label(tool_name: str, settings: Settings | None = None) -> str:
+    if tool_name.startswith("mcp."):
+        from mcp_client import get_mcp_tool_spec
+        spec = get_mcp_tool_spec(settings, tool_name)
+        if spec is not None:
+            return spec.danger.value
+        return "write"
     spec = get_tool(tool_name)
     if spec is not None:
         return spec.danger.value
@@ -205,14 +227,14 @@ async def _invoke_tool(
     from personal_tools.registry import get_personal_tool
 
     spec = get_tool(tool_name)
-    if spec is None and get_personal_tool(tool_name) is None:
+    if spec is None and get_personal_tool(tool_name) is None and not tool_name.startswith("mcp."):
         await port.reply(msg, f"未知工具: {tool_name}")
         return
     if _memory_blocked(settings, msg, tool_name):
         from personal_tools.long_term_memory import GROUP_REFUSAL
         await port.reply(msg, GROUP_REFUSAL)
         return
-    if _requires_confirmation(tool_name):
+    if _requires_confirmation(tool_name, settings):
         await _request_confirmation(msg, port, settings, tool_name, arg)
         return
     if tool_name == "desktop.observe.request":
@@ -310,6 +332,10 @@ async def _request_confirmation(
     spec = get_tool(tool_name)
     if spec is not None:
         summary = spec.summary
+    elif tool_name.startswith("mcp."):
+        from mcp_client import get_mcp_tool_spec
+        mspec = get_mcp_tool_spec(settings, tool_name)
+        summary = mspec.summary if mspec else tool_name
     else:
         from personal_tools.registry import get_personal_tool
         pspec = get_personal_tool(tool_name)
@@ -328,7 +354,7 @@ async def _request_confirmation(
         channel=msg.channel,
         tool_name=tool_name,
         arg=arg,
-        danger=_danger_label(tool_name),
+        danger=_danger_label(tool_name, settings),
         action="requested",
     )
     text = (
@@ -380,7 +406,7 @@ def _audit_rejected(settings: Settings, action: PendingToolAction, msg: InboundM
         channel=msg.channel,
         tool_name=action.tool_name,
         arg=action.arg,
-        danger=_danger_label(action.tool_name),
+        danger=_danger_label(action.tool_name, settings),
         action="rejected",
         error_preview="context_mismatch",
     )
@@ -410,7 +436,7 @@ async def execute_confirmed(
         channel=action.channel,
         tool_name=action.tool_name,
         arg=action.arg,
-        danger=_danger_label(action.tool_name),
+        danger=_danger_label(action.tool_name, settings),
         action="confirmed",
     )
     try:
@@ -430,7 +456,7 @@ async def execute_confirmed(
             channel=action.channel,
             tool_name=action.tool_name,
             arg=action.arg,
-            danger=_danger_label(action.tool_name),
+            danger=_danger_label(action.tool_name, settings),
             action="executed",
             error_preview=str(exc),
         )
@@ -443,7 +469,7 @@ async def execute_confirmed(
         channel=action.channel,
         tool_name=action.tool_name,
         arg=action.arg,
-        danger=_danger_label(action.tool_name),
+        danger=_danger_label(action.tool_name, settings),
         action="executed",
         result_preview=result,
     )

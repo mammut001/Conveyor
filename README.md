@@ -79,6 +79,8 @@ Conveyor also supports a persistent single-concurrency queue, so jobs survive bo
 - **Mention & reply context** — reply to any message with `@bot is this true?`, "explain", "summarize" or "translate" and Conveyor answers about that message; fact-checks pull web evidence first. Send or reply to a photo and it looks at the image too (a screenshot captioned `/fix …` works). In groups it only acts when mentioned or replied to. See [docs/reply_context.md](docs/reply_context.md).
 - **Developer ops** — load, process, disk, logs, services, git status, diagnostics, smoke checks, and maintenance commands.
 - **Personal tools** — notes, reminders, memory, daily briefs, project profiles, and planning helpers.
+- **Skills library** — reusable operator-authored procedures and decision rules. See [docs/skills.md](docs/skills.md).
+- **MCP connectors** — operator-configured Model Context Protocol tools over stdio and streamable HTTP with approval gates and isolated environments. See [docs/mcp.md](docs/mcp.md).
 - **Optional integrations** — Gmail, Google Calendar/Contacts, GitHub, files/knowledge base, and web research when configured.
 - **Execution nodes** — keep the control plane on the VPS while an optional Mac node performs desktop-side work.
 - **Direct computer use** — opt-in Codex → Cua → Mac actions with arming, limits, blocked targets, redacted logs, and a kill switch.
@@ -276,6 +278,8 @@ make smoke
 - [Installation](docs/installation.md)
 - [Architecture](docs/architecture.en.md)
 - [Desktop security](docs/desktop_security.md)
+- [MCP connectors](docs/mcp.md)
+- [Skills library](docs/skills.md)
 - [Chinese README](README.zh.md)
 - [Previous long-form README reference](README.full.md)
 - [`CONTRIBUTING.md`](CONTRIBUTING.md)

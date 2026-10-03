@@ -4,6 +4,7 @@ import { FormattedText } from './components/FormattedText'
 import { InboxPanel } from './components/InboxPanel'
 import { MemoryPanel } from './components/MemoryPanel'
 import { SkillsPanel } from './components/SkillsPanel'
+import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
@@ -62,6 +63,7 @@ type SystemStatus = {
     skills?: boolean
     provider_key_scoping?: boolean
     mobile_ui?: boolean
+    mcp?: boolean
   }
 }
 type ComputerStatus = {
@@ -145,7 +147,7 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'skills'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : 'tasks'))
+  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'skills' | 'connectors'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : window.location.hash === '#connectors' || window.location.pathname === '/connectors' ? 'connectors' : 'tasks'))
   const [inboxUnread, setInboxUnread] = useState(0)
   const [approvalInboxCount, setApprovalInboxCount] = useState(0)
   const [chatDraft, setChatDraft] = useState('')
@@ -592,10 +594,10 @@ export default function App() {
         <div className="stream-header">
           <div>
             <p className="eyebrow">
-              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'skills' ? 'SKILLS LIBRARY' : 'TASKS · CODEX EXECUTION'}
+              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'connectors' ? 'MCP CONNECTORS' : 'TASKS · CODEX EXECUTION'}
             </p>
             <h2>
-              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'skills' ? 'Skills' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
+              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'skills' ? 'Skills' : view === 'connectors' ? 'Connectors' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -615,6 +617,9 @@ export default function App() {
               )}
               {(Boolean(system?.features?.skills) || view === 'skills') && (
                 <button type="button" className={view === 'skills' ? 'active' : ''} onClick={() => setView('skills')}>Skills</button>
+              )}
+              {(Boolean(system?.features?.mcp) || view === 'connectors') && (
+                <button type="button" className={view === 'connectors' ? 'active' : ''} onClick={() => setView('connectors')}>Connectors</button>
               )}
             </div>
             {view === 'tasks' && selectedJob && <StatusBadge state={selectedJob.state} />}
@@ -637,6 +642,8 @@ export default function App() {
               setView('chat')
             }}
           />
+        ) : view === 'connectors' ? (
+          <ConnectorsPanel token={token} />
         ) : view === 'memory' ? (
           <MemoryPanel token={token} />
         ) : view === 'inbox' ? (
@@ -872,6 +879,15 @@ export default function App() {
                 onClick={() => { setView('memory'); setMoreSheetOpen(false); }}
               >
                 <span>🧠 Long-term Memory</span>
+              </button>
+            )}
+            {(Boolean(system?.features?.mcp) || view === 'connectors') && (
+              <button
+                type="button"
+                className={`mobile-sheet-item ${view === 'connectors' ? 'active' : ''}`}
+                onClick={() => { setView('connectors'); setMoreSheetOpen(false); }}
+              >
+                <span>🔌 Connectors</span>
               </button>
             )}
             <button
