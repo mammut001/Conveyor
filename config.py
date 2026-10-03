@@ -219,6 +219,12 @@ class Settings:
     approval_relay_enabled: bool = False
     approval_relay_channels: tuple[str, ...] = ()
     approval_relay_db: Path | None = None
+    subagents_enabled: bool = False
+    subagents_max_tasks: int = 4
+    subagents_max_parallel: int = 3
+    subagents_timeout_seconds: int = 90
+    subagents_max_steps: int = 3
+    subagents_max_output_chars: int = 2500
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -626,7 +632,21 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
             if os.getenv("CONVEYOR_APPROVAL_RELAY_DB")
             else (memory_root / "approval_relay.db")
         ),
+        "subagents_enabled": (
+            (os.getenv("CONVEYOR_SUBAGENTS_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on"))
+            and (os.getenv("CONVEYOR_CHAT_TOOLS", "false").strip().lower() in ("true", "1", "yes", "on"))
+        ),
+        "subagents_max_tasks": max(1, min(6, _int_env("CONVEYOR_SUBAGENTS_MAX_TASKS", 4))),
+        "subagents_max_parallel": max(1, min(6, _int_env("CONVEYOR_SUBAGENTS_MAX_PARALLEL", 3))),
+        "subagents_timeout_seconds": max(10, min(300, _int_env("CONVEYOR_SUBAGENTS_TIMEOUT_SECONDS", 90))),
+        "subagents_max_steps": max(0, min(6, _int_env("CONVEYOR_SUBAGENTS_MAX_STEPS", 3))),
+        "subagents_max_output_chars": max(500, min(8000, _int_env("CONVEYOR_SUBAGENTS_MAX_OUTPUT_CHARS", 2500))),
     }
+
+
+def is_subagents_enabled(settings: Any) -> bool:
+    """True when subagents are enabled and chat tools are available."""
+    return bool(getattr(settings, "subagents_enabled", False)) and bool(getattr(settings, "chat_tools_enabled", False))
 
 
 def load_feishu_settings(env_file: str | Path = ".env") -> Settings:

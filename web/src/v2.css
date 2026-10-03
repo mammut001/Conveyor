@@ -1321,3 +1321,160 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   color: #94a3b8;
   font-style: italic;
 }
+
+/* ==========================================================================
+   Subagent Tasks Progress & Summary (P3-1 Parallel Subagents)
+   ========================================================================== */
+
+.subagent-card-group {
+  margin: 6px 0 8px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 8px;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.subagent-group-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475467;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.subagent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #edf2f7;
+  font-size: 12px;
+  flex-wrap: wrap;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.subagent-row:last-child {
+  border-bottom: none;
+}
+
+.subagent-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.subagent-title {
+  font-weight: 500;
+  color: #1d2939;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+
+.subagent-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #667085;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  flex-shrink: 0;
+}
+
+.subagent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.subagent-chip.chip-running {
+  background: #eff8ff;
+  color: #175cd3;
+  border: 1px solid #b2ddff;
+}
+
+.subagent-chip.chip-ok {
+  background: #ecfdf3;
+  color: #027a48;
+  border: 1px solid #a6f4c5;
+}
+
+.subagent-chip.chip-timeout {
+  background: #fffcf5;
+  color: #b54708;
+  border: 1px solid #fedf89;
+}
+
+.subagent-chip.chip-error {
+  background: #fef3f2;
+  color: #b42318;
+  border: 1px solid #fecdca;
+}
+
+.subagent-tools code {
+  font-size: 10px;
+  background: #f1f5f9;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #475467;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.subagent-spinner {
+  display: inline-block;
+  animation: subagent-spin 1s linear infinite;
+}
+
+@keyframes subagent-spin {
+  100% { transform: rotate(360deg); }
+}
+
+.subagent-summary-details {
+  margin: 4px 0 8px 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.subagent-summary-summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #475467;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid var(--line, #e2e8f0);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.subagent-summary-summary:hover {
+  background: #f1f5f9;
+}
+

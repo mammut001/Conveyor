@@ -37,6 +37,9 @@ def func_to_tool_name(func_name: str) -> str:
 
 
 def _get_tool_spec(name: str, settings: Settings | None = None) -> Any | None:
+    if name == "agents.parallel":
+        from handlers.subagents import get_subagent_tool_spec
+        return get_subagent_tool_spec(settings)
     if name.startswith("mcp."):
         from mcp_client import get_mcp_tool_spec
         return get_mcp_tool_spec(settings, name)
@@ -44,6 +47,14 @@ def _get_tool_spec(name: str, settings: Settings | None = None) -> Any | None:
     if name in PERSONAL_TOOL_REGISTRY:
         return PERSONAL_TOOL_REGISTRY[name]
     return TOOL_REGISTRY.get(name)
+
+
+def format_tool_result(tool_name: str, raw_res: Any, max_len: int = 4000) -> str:
+    """Format, redact, truncate, and wrap tool result as untrusted XML."""
+    raw_str = redact_text(str(raw_res or ""))
+    truncated = raw_str[:max_len] if len(raw_str) > max_len else raw_str
+    neutralized = re.sub(r"</tool-result\s*>", "&lt;/tool-result&gt;", truncated, flags=re.IGNORECASE)
+    return f'<tool-result name="{tool_name}" untrusted="true">\n{neutralized}\n</tool-result>'
 
 
 # Read-only tools that reach arbitrary network targets. Tool output is fed back
@@ -65,10 +76,25 @@ def _network_allowlist(settings: Any) -> set[str]:
     return items & NETWORK_TOOLS
 
 
+# Tools that need a configured web search backend (WEB_SEARCH_BACKEND).
+SEARCH_BACKED_TOOLS = frozenset({"web.search", "research.run", "research.project"})
+
+
+def web_search_configured(settings: Any) -> bool:
+    backend = str(getattr(settings, "web_search_backend", "disabled") or "disabled").strip().lower()
+    return backend not in ("", "disabled")
+
+
 def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bool = True) -> bool:
     """Single policy used for both schema exposure and execution."""
     if spec is None or name.startswith("desktop."):
         return False
+    if name == "agents.parallel":
+        from config import is_subagents_enabled
+        from handlers.subagents import is_in_subagent
+        if not is_subagents_enabled(settings) or is_in_subagent():
+            return False
+        return True
     if name.startswith("mcp."):
         if not getattr(settings, "mcp_enabled", False):
             return False
@@ -84,6 +110,11 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
     if spec.danger not in (DangerLevel.READ, DangerLevel.WRITE_SAFE, DangerLevel.WRITE):
         return False
     if name in NETWORK_TOOLS and name not in _network_allowlist(settings):
+        return False
+    if name in SEARCH_BACKED_TOOLS and not web_search_configured(settings):
+        # Allowlisted but no search backend: the tool can only ever answer
+        # "Web 搜索能力未配置", so don't offer it (the model then plans with
+        # web.fetch / local tools instead of retrying a dead tool).
         return False
     return True
 
@@ -143,6 +174,30 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
         mcp_schemas = get_mcp_manager().get_exposed_schemas(settings)
         schemas.extend(mcp_schemas)
 
+    from config import is_subagents_enabled
+    if settings and is_subagents_enabled(settings):
+        from handlers.subagents import (
+            PARALLEL_TOOL_DESCRIPTION,
+            PARALLEL_TOOL_NAME,
+            PARALLEL_TOOL_PARAMETERS,
+            get_subagent_tool_spec,
+            is_in_subagent,
+        )
+        if not is_in_subagent():
+            sub_spec = get_subagent_tool_spec(settings)
+            if sub_spec and is_exposed(PARALLEL_TOOL_NAME, sub_spec, settings, memory_allowed=memory_allowed):
+                func_name = tool_to_func_name(PARALLEL_TOOL_NAME)
+                REVERSE_TOOL_MAP[func_name] = PARALLEL_TOOL_NAME
+                danger_str = sub_spec.danger.value if hasattr(sub_spec.danger, "value") else str(sub_spec.danger)
+                schemas.append({
+                    "type": "function",
+                    "function": {
+                        "name": func_name,
+                        "description": f"{PARALLEL_TOOL_DESCRIPTION} [{danger_str}]",
+                        "parameters": PARALLEL_TOOL_PARAMETERS,
+                    },
+                })
+
     return schemas
 
 
@@ -178,6 +233,8 @@ async def run_tool_loop(
     settings: Settings,
     messages: list[dict],
     config: ChatConfig,
+    *,
+    placeholder: str | None = None,
 ) -> ToolLoopResult:
     """Execute up to chat_tool_max_steps rounds of complete_chat with tools."""
     from personal_tools.long_term_memory import allowed_for
@@ -213,7 +270,7 @@ async def run_tool_loop(
             func_name = fn_info.get("name") or ""
             real_tool_name = func_to_tool_name(func_name)
 
-            if real_tool_name.startswith("mcp."):
+            if real_tool_name.startswith("mcp.") or real_tool_name == "agents.parallel":
                 raw_arg_val = fn_info.get("arguments")
                 arg_dict = None
                 if isinstance(raw_arg_val, dict):
@@ -281,19 +338,33 @@ async def run_tool_loop(
             if danger == DangerLevel.READ:
                 logger.info("Chat tier tool call executed: %s", real_tool_name)
                 tools_called.append(real_tool_name)
-                raw_res = await run_tool(
-                    settings,
-                    real_tool_name,
-                    arg,
-                    operator_id=msg.operator_id,
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                )
-                # Tool output leaves the host (sent to the chat provider): redact secrets first.
-                raw_str = redact_text(str(raw_res or ""))
-                truncated = raw_str[:4000] if len(raw_str) > 4000 else raw_str
-                neutralized = re.sub(r"</tool-result\s*>", "&lt;/tool-result&gt;", truncated, flags=re.IGNORECASE)
-                wrapped = f'<tool-result name="{real_tool_name}" untrusted="true">\n{neutralized}\n</tool-result>'
+                if real_tool_name == "agents.parallel":
+                    raw_res = await run_tool(
+                        settings,
+                        real_tool_name,
+                        arg,
+                        operator_id=msg.operator_id,
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        port=port,
+                        msg=msg,
+                        config=config,
+                        placeholder=placeholder,
+                    )
+                else:
+                    raw_res = await run_tool(
+                        settings,
+                        real_tool_name,
+                        arg,
+                        operator_id=msg.operator_id,
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                    )
+                max_tasks = int(getattr(settings, "subagents_max_tasks", 4))
+                max_output = int(getattr(settings, "subagents_max_output_chars", 2500))
+                # Tool result cap: bounded at 16000 chars for agents.parallel specifically, else 4000
+                tool_cap = min(16000, max_tasks * max_output) if real_tool_name == "agents.parallel" else 4000
+                wrapped = format_tool_result(real_tool_name, raw_res, max_len=tool_cap)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
