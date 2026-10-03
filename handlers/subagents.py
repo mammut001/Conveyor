@@ -16,6 +16,7 @@ import re
 import threading
 import time
 import uuid
+import weakref
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,7 +70,9 @@ PARALLEL_TOOL_PARAMETERS = {
 
 _SUBAGENT_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar("subagent_depth", default=0)
 
-_SEMAPHORES: dict[tuple[asyncio.AbstractEventLoop, int], asyncio.Semaphore] = {}
+# Keyed weakly by event loop (web console thread loop and bot loop differ;
+# tests create many short-lived loops).
+_SEMAPHORES: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[int, asyncio.Semaphore]]" = weakref.WeakKeyDictionary()
 _SEMAPHORE_LOCK = threading.Lock()
 
 
@@ -82,11 +85,11 @@ def get_subagent_semaphore(max_parallel: int) -> asyncio.Semaphore:
     """Return a process-wide semaphore for the current event loop, keyed by loop and limit."""
     loop = asyncio.get_running_loop()
     with _SEMAPHORE_LOCK:
-        key = (loop, max_parallel)
-        sem = _SEMAPHORES.get(key)
+        per_loop = _SEMAPHORES.setdefault(loop, {})
+        sem = per_loop.get(max_parallel)
         if sem is None:
             sem = asyncio.Semaphore(max_parallel)
-            _SEMAPHORES[key] = sem
+            per_loop[max_parallel] = sem
         return sem
 
 
@@ -229,25 +232,29 @@ async def _run_single_subagent(
     tools_used: list[str] = []
     start_time = time.monotonic()
 
-    # Emit initial progress (running)
-    if port and hasattr(port, "emit_subagent"):
-        try:
-            port.emit_subagent({
-                "call_id": call_id,
-                "index": index,
-                "title": title,
-                "status": "running",
-                "elapsed": 0.0,
-                "tools": [],
-            })
-        except Exception:
-            logger.debug("Failed to emit initial subagent progress", exc_info=True)
+    def _emit(status_value: str, elapsed_value: float) -> None:
+        if port and hasattr(port, "emit_subagent"):
+            try:
+                port.emit_subagent({
+                    "call_id": call_id,
+                    "index": index,
+                    "title": title,
+                    "status": status_value,
+                    "elapsed": round(elapsed_value, 1),
+                    "tools": list(tools_used),
+                })
+            except Exception:
+                logger.debug("Failed to emit subagent progress", exc_info=True)
+
+    # Queued until a process-wide slot is free; the per-subagent timeout only
+    # starts once the subagent actually runs.
+    _emit("queued", 0.0)
 
     status = "ok"
     output_text = ""
 
     async def _execute() -> str:
-        async with sem:
+        if True:
             # Set subagent depth guard
             cur_depth = _SUBAGENT_DEPTH.get()
             token = _SUBAGENT_DEPTH.set(cur_depth + 1)
@@ -289,15 +296,18 @@ async def _run_single_subagent(
             finally:
                 _SUBAGENT_DEPTH.reset(token)
 
-    try:
-        raw_output = await asyncio.wait_for(_execute(), timeout=timeout_seconds)
-        output_text = raw_output or ""
-    except asyncio.TimeoutError:
-        status = "timeout"
-        output_text = "Subagent error: TimeoutError"
-    except Exception as exc:
-        status = "error"
-        output_text = f"Subagent error: {type(exc).__name__}"
+    async with sem:
+        start_time = time.monotonic()
+        _emit("running", 0.0)
+        try:
+            raw_output = await asyncio.wait_for(_execute(), timeout=timeout_seconds)
+            output_text = raw_output or ""
+        except asyncio.TimeoutError:
+            status = "timeout"
+            output_text = "Subagent error: TimeoutError"
+        except Exception as exc:
+            status = "error"
+            output_text = f"Subagent error: {type(exc).__name__}"
 
     elapsed = time.monotonic() - start_time
 
@@ -306,18 +316,7 @@ async def _run_single_subagent(
         output_text = output_text[:max_output_chars] + "\n[... truncated ...]"
 
     # Emit final task progress
-    if port and hasattr(port, "emit_subagent"):
-        try:
-            port.emit_subagent({
-                "call_id": call_id,
-                "index": index,
-                "title": title,
-                "status": status,
-                "elapsed": round(elapsed, 1),
-                "tools": list(tools_used),
-            })
-        except Exception:
-            logger.debug("Failed to emit final subagent progress", exc_info=True)
+    _emit(status, elapsed)
 
     if progress_callback:
         try:
@@ -480,6 +479,10 @@ async def execute_parallel_subagents(
     async def on_task_completed(idx: int, status: str) -> None:
         nonlocal completed_count
         completed_count += 1
+        # Ports with structured progress (Web SSE) get `subagent` events
+        # instead; WebChatPort would treat a plain edit as the final answer.
+        if hasattr(port, "emit_subagent"):
+            return
         if port and placeholder and hasattr(port, "edit_progress") and msg:
             try:
                 await port.edit_progress(

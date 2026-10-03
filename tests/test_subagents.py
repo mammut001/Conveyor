@@ -500,8 +500,8 @@ class TestSubagentsSuite(unittest.IsolatedAsyncioTestCase):
 
         subagent_events = [data for name, data in events if name == "subagent"]
         self.assertTrue(len(subagent_events) >= 2)
-        # First event is running
-        self.assertEqual(subagent_events[0]["status"], "running")
+        # queued -> running -> ok
+        self.assertEqual([e["status"] for e in subagent_events], ["queued", "running", "ok"])
         self.assertEqual(subagent_events[0]["title"], "Web subagent")
         # Second event is ok
         self.assertEqual(subagent_events[-1]["status"], "ok")
@@ -512,6 +512,43 @@ class TestSubagentsSuite(unittest.IsolatedAsyncioTestCase):
         transcript = get_transcript_store(self.settings).get_session(session_id)
         # Should be None since WebChatPort only persists final turns, not subagent progress
         self.assertIsNone(transcript)
+
+    async def test_queue_wait_does_not_count_against_timeout(self) -> None:
+        # max_parallel=1, three tasks of 0.05s each with a 0.08s timeout: each
+        # run fits, though the last one waits ~0.1s for its slot.
+        async def fake_complete(config, messages, tools=None):
+            await asyncio.sleep(0.05)
+            return {"role": "assistant", "content": "done"}
+
+        settings = _make_settings(self.tmp_path, subagents_max_parallel=1)
+        arg = json.dumps({"tasks": [{"title": f"T{i}", "prompt": f"p{i}"} for i in range(3)]})
+        real_wait_for = asyncio.wait_for
+
+        async def custom_wait_for(coro, timeout):
+            return await real_wait_for(coro, timeout=0.08)
+
+        with patch("handlers.subagents.complete_chat", side_effect=fake_complete):
+            with patch("handlers.subagents.asyncio.wait_for", side_effect=custom_wait_for):
+                res = await execute_parallel_subagents(settings, arg, config=self.cfg)
+        self.assertEqual(res.count(" — ok "), 3, res)
+
+    async def test_web_port_gets_no_plain_progress_edits(self) -> None:
+        event_q: queue.Queue = queue.Queue()
+        port = WebChatPort(event_q, self.settings, "s-progress", prompt="x")
+
+        async def fake_complete(config, messages, tools=None):
+            return {"role": "assistant", "content": "ok"}
+
+        arg = json.dumps({"tasks": [{"title": "A", "prompt": "a"}, {"title": "B", "prompt": "b"}]})
+        with patch("handlers.subagents.complete_chat", side_effect=fake_complete):
+            await execute_parallel_subagents(
+                self.settings, arg, config=self.cfg, port=port, msg=self.msg, placeholder="ph"
+            )
+        names = []
+        while not event_q.empty():
+            names.append(event_q.get_nowait()[0])
+        self.assertNotIn("message", names)
+        self.assertIn("subagent", names)
 
     def test_features_subagents_system_status(self) -> None:
         from unittest.mock import MagicMock

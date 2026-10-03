@@ -5,7 +5,7 @@ export type SubagentProgress = {
   call_id: string;
   index: number;
   title: string;
-  status: 'running' | 'ok' | 'timeout' | 'error';
+  status: 'queued' | 'running' | 'ok' | 'timeout' | 'error';
   elapsed: number;
   tools: string[];
 };
@@ -50,7 +50,7 @@ function SubagentCardGroup({ tasks, live }: { tasks: SubagentProgress[]; live?: 
   const okCount = tasks.filter(t => t.status === 'ok').length;
   const timeoutCount = tasks.filter(t => t.status === 'timeout').length;
   const errorCount = tasks.filter(t => t.status === 'error').length;
-  const runningCount = tasks.filter(t => t.status === 'running').length;
+  const runningCount = tasks.filter(t => t.status === 'running' || t.status === 'queued').length;
 
   const summaryParts: string[] = [];
   summaryParts.push(`${tasks.length} 个子任务`);
@@ -70,7 +70,9 @@ function SubagentCardGroup({ tasks, live }: { tasks: SubagentProgress[]; live?: 
       )}
       {tasks.map(task => {
         let chip = null;
-        if (task.status === 'running') {
+        if (task.status === 'queued') {
+          chip = <span className="subagent-chip chip-running">… 排队中</span>;
+        } else if (task.status === 'running') {
           chip = <span className="subagent-chip chip-running"><span className="subagent-spinner">⟳</span> 运行中</span>;
         } else if (task.status === 'ok') {
           chip = <span className="subagent-chip chip-ok">✓ 完成</span>;

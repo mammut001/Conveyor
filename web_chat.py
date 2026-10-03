@@ -100,7 +100,7 @@ class WebChatPort(OutboundPort):
             clean = text[:-2].strip()
             self.emit("delta", {"text": clean})
             return True
-        if text.startswith("🔎 搜索") or text.startswith("↪️"):
+        if text.startswith("🔎 搜索") or text.startswith("↪️") or text.startswith("🧩"):
             self.emit("status", {"text": text})
             return True
         # Final answer delivered via edit_progress
