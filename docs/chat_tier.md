@@ -107,3 +107,5 @@ Smoke suites: `scripts/chat_tier_smoke.py`, `scripts/chat_memory_smoke.py`, `scr
 Tool write actions requiring confirmation can be reviewed and edited in the Web Console; see `docs/approval_inbox.md`.
 
 Reusable operator procedures can be saved, indexed, and loaded as skills; see `docs/skills.md` (`CONVEYOR_SKILLS_ENABLED`, default off).
+
+Parallel read-only research subagents can be spawned by the chat agent for multi-task lookup; see `docs/subagents.md` (`CONVEYOR_SUBAGENTS_ENABLED`, default off).

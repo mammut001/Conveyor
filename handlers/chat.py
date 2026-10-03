@@ -625,7 +625,7 @@ async def ask_chat(
         from handlers.chat_tools import run_tool_loop
         tool_messages = _messages(user_content, has_evidence=bool(evidence), may_search=False)
         try:
-            loop_res = await run_tool_loop(msg, port, settings, tool_messages, config)
+            loop_res = await run_tool_loop(msg, port, settings, tool_messages, config, placeholder=placeholder)
         except ChatError as exc:
             logger.warning("chat tier failed, falling back to agent: %s", exc)
             if placeholder:

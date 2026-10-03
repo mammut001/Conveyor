@@ -69,6 +69,9 @@ class WebChatPort(OutboundPort):
     def emit(self, event: str, data: dict[str, Any]) -> None:
         self.queue.put((event, data))
 
+    def emit_subagent(self, data: dict[str, Any]) -> None:
+        self.emit("subagent", data)
+
     async def reply(self, msg: InboundMessage, text: str) -> str | None:
         if text.startswith("💭") or text.startswith("⏳"):
             return self.placeholder_id

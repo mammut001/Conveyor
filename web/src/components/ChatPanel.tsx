@@ -1,11 +1,21 @@
 import React, { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { FormattedText } from './FormattedText';
 
+export type SubagentProgress = {
+  call_id: string;
+  index: number;
+  title: string;
+  status: 'running' | 'ok' | 'timeout' | 'error';
+  elapsed: number;
+  tools: string[];
+};
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
   created_at: string;
+  subagents?: SubagentProgress[];
   pendingApproval?: {
     id: string;
     tool_name: string;
@@ -34,6 +44,77 @@ export type ChatPanelProps = {
   onInitialInputConsumed?: () => void;
 };
 
+function SubagentCardGroup({ tasks, live }: { tasks: SubagentProgress[]; live?: boolean }) {
+  if (!tasks || tasks.length === 0) return null;
+
+  const okCount = tasks.filter(t => t.status === 'ok').length;
+  const timeoutCount = tasks.filter(t => t.status === 'timeout').length;
+  const errorCount = tasks.filter(t => t.status === 'error').length;
+  const runningCount = tasks.filter(t => t.status === 'running').length;
+
+  const summaryParts: string[] = [];
+  summaryParts.push(`${tasks.length} 个子任务`);
+  if (okCount > 0) summaryParts.push(`${okCount} ✓`);
+  if (timeoutCount > 0) summaryParts.push(`${timeoutCount} timeout`);
+  if (errorCount > 0) summaryParts.push(`${errorCount} error`);
+  if (runningCount > 0) summaryParts.push(`${runningCount} 运行中`);
+  const summaryText = summaryParts.join(' · ');
+
+  const content = (
+    <div className="subagent-card-group">
+      {live && (
+        <div className="subagent-group-header">
+          <span className="subagent-spinner">🧩</span>
+          <span>子任务执行中 ({tasks.length - runningCount}/{tasks.length})</span>
+        </div>
+      )}
+      {tasks.map(task => {
+        let chip = null;
+        if (task.status === 'running') {
+          chip = <span className="subagent-chip chip-running"><span className="subagent-spinner">⟳</span> 运行中</span>;
+        } else if (task.status === 'ok') {
+          chip = <span className="subagent-chip chip-ok">✓ 完成</span>;
+        } else if (task.status === 'timeout') {
+          chip = <span className="subagent-chip chip-timeout">⌛ 超时</span>;
+        } else {
+          chip = <span className="subagent-chip chip-error">⚠ 错误</span>;
+        }
+
+        return (
+          <div key={`${task.call_id}-${task.index}`} className="subagent-row">
+            <div className="subagent-row-main">
+              {chip}
+              <span className="subagent-title" title={task.title}>{task.title}</span>
+            </div>
+            <div className="subagent-row-meta">
+              <span>{task.elapsed.toFixed(1)}s</span>
+              {task.tools && task.tools.length > 0 && (
+                <span className="subagent-tools" title={task.tools.join(', ')}>
+                  <code>{task.tools.join(', ')}</code>
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  if (live) {
+    return content;
+  }
+
+  return (
+    <details className="subagent-summary-details">
+      <summary className="subagent-summary-summary">
+        <span>🧩</span>
+        <span>{summaryText}</span>
+      </summary>
+      {content}
+    </details>
+  );
+}
+
 export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -42,6 +123,9 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
   const [error, setError] = useState('');
   const [streamingDelta, setStreamingDelta] = useState('');
   const [statusText, setStatusText] = useState('');
+  const [subagents, setSubagents] = useState<SubagentProgress[]>([]);
+  const subagentsRef = useRef<SubagentProgress[]>([]);
+  subagentsRef.current = subagents;
   const [approvalsInProgress, setApprovalsInProgress] = useState<Record<string, boolean>>({});
   const streamRef = useRef<HTMLDivElement>(null);
 
@@ -115,7 +199,7 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
     if (node) {
       node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' });
     }
-  }, [messages.length, streamingDelta, statusText]);
+  }, [messages.length, streamingDelta, statusText, subagents.length]);
 
   const handleNewChat = () => {
     setSessionId('');
@@ -123,6 +207,8 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
     setMessages([]);
     setStreamingDelta('');
     setStatusText('');
+    setSubagents([]);
+    subagentsRef.current = [];
     setError('');
     if (onSessionChange) onSessionChange('');
   };
@@ -182,6 +268,8 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
     setError('');
     setStatusText('');
     setStreamingDelta('');
+    setSubagents([]);
+    subagentsRef.current = [];
 
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -259,6 +347,19 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
               if (payload.text) {
                 setStatusText(payload.text);
               }
+            } else if (eventName === 'subagent') {
+              setSubagents(prev => {
+                const existingIdx = prev.findIndex(item => item.call_id === payload.call_id && item.index === payload.index);
+                let updated: SubagentProgress[];
+                if (existingIdx >= 0) {
+                  updated = [...prev];
+                  updated[existingIdx] = { ...updated[existingIdx], ...payload };
+                } else {
+                  updated = [...prev, payload];
+                }
+                subagentsRef.current = updated;
+                return updated;
+              });
             } else if (eventName === 'approval') {
               setStreamingDelta('');
               setStatusText('');
@@ -275,6 +376,7 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
             } else if (eventName === 'message') {
               setStreamingDelta('');
               setStatusText('');
+              const finishedSubagents = subagentsRef.current.length > 0 ? [...subagentsRef.current] : undefined;
               setMessages(prev => [
                 ...prev,
                 {
@@ -282,8 +384,11 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
                   role: 'assistant',
                   text: payload.text,
                   created_at: new Date().toISOString(),
+                  subagents: finishedSubagents,
                 },
               ]);
+              setSubagents([]);
+              subagentsRef.current = [];
             } else if (eventName === 'error') {
               setError(payload.error || 'Chat request failed');
             } else if (eventName === 'done') {
@@ -301,6 +406,8 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
       setBusy(false);
       setStreamingDelta('');
       setStatusText('');
+      setSubagents([]);
+      subagentsRef.current = [];
     }
   };
 
@@ -394,6 +501,9 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
             <article key={message.id} className="transcript-message role-assistant">
               <div className="transcript-avatar" aria-hidden="true">🤖</div>
               <div className="transcript-body">
+                {message.subagents && message.subagents.length > 0 && (
+                  <SubagentCardGroup tasks={message.subagents} />
+                )}
                 <div className="transcript-content">
                   <FormattedText content={message.text} />
                 </div>
@@ -411,6 +521,15 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
             </article>
           );
         })}
+
+        {subagents.length > 0 && (
+          <article className="transcript-message role-assistant live-streaming">
+            <div className="transcript-avatar" aria-hidden="true">🧩</div>
+            <div className="transcript-body">
+              <SubagentCardGroup tasks={subagents} live />
+            </div>
+          </article>
+        )}
 
         {statusText && (
           <div className="live-job-turn" style={{ padding: '4px 0' }}>
