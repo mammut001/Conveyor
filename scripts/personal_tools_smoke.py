@@ -185,6 +185,10 @@ def _test_registry() -> CheckResult:
             "memory.forget",
             "memory.list",
             "memory.search",
+            # P2-4 Skills library
+            "skill.list",
+            "skill.load",
+            "skill.create",
         }
         ok_names = expected == set(PERSONAL_TOOL_REGISTRY)
         add_level = PERSONAL_TOOL_REGISTRY["notes.add"].danger
@@ -310,6 +314,10 @@ def _test_registry() -> CheckResult:
             and PERSONAL_TOOL_REGISTRY["memory.forget"].danger == DangerLevel.WRITE
             and PERSONAL_TOOL_REGISTRY["memory.list"].danger == DangerLevel.READ
             and PERSONAL_TOOL_REGISTRY["memory.search"].danger == DangerLevel.READ
+            # P2-4 Skills library
+            and PERSONAL_TOOL_REGISTRY["skill.list"].danger == DangerLevel.READ
+            and PERSONAL_TOOL_REGISTRY["skill.load"].danger == DangerLevel.READ
+            and PERSONAL_TOOL_REGISTRY["skill.create"].danger == DangerLevel.WRITE
         )
         return CheckResult(name, ok_names and ok_levels, f"names={ok_names} levels={ok_levels}")
     except Exception as exc:

@@ -30,9 +30,11 @@ export type ChatPanelProps = {
   token: string;
   onApprovalDecided?: () => void;
   onSessionChange?: (sessionId: string) => void;
+  initialInput?: string;
+  onInitialInputConsumed?: () => void;
 };
 
-export function ChatPanel({ token, onApprovalDecided, onSessionChange }: ChatPanelProps) {
+export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -42,6 +44,13 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange }: ChatPan
   const [statusText, setStatusText] = useState('');
   const [approvalsInProgress, setApprovalsInProgress] = useState<Record<string, boolean>>({});
   const streamRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (initialInput) {
+      setInput(initialInput);
+      onInitialInputConsumed?.();
+    }
+  }, [initialInput, onInitialInputConsumed]);
 
   const loadHistory = useCallback(async (sid: string) => {
     if (!sid) {

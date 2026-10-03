@@ -103,6 +103,16 @@ class TestDraftParsingAndValidation(unittest.TestCase):
         built = approval_inbox.build_arg("routine.create", draft)
         self.assertEqual(built, arg)
 
+    def test_skill_create_roundtrip(self):
+        arg = "Deploy Web App | Steps to build and deploy | Step 1: build | Step 2: run"
+        draft = approval_inbox.parse_draft("skill.create", arg)
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft["name"], "Deploy Web App")
+        self.assertEqual(draft["description"], "Steps to build and deploy")
+        self.assertEqual(draft["body"], "Step 1: build | Step 2: run")
+        built = approval_inbox.build_arg("skill.create", draft)
+        self.assertEqual(built, arg)
+
     def test_non_editable_tool_returns_none_and_raises(self):
         self.assertIsNone(approval_inbox.parse_draft("service_restart", "conveyor"))
         with self.assertRaises(ValueError) as ctx:

@@ -120,6 +120,21 @@ export function ApprovalInboxPanel({
   const [confirmRejectId, setConfirmRejectId] = useState<string | null>(null);
 
   const fetchGen = useRef(0);
+  const itemsRef = useRef<ApprovalInboxItem[]>([]);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  // Remove a decided item and update the tab badge immediately (not on the next poll).
+  const dropItem = useCallback(
+    (id: string) => {
+      const next = itemsRef.current.filter((it) => it.id !== id);
+      itemsRef.current = next;
+      setItems(next);
+      onPendingCountChange?.(next.length);
+    },
+    [onPendingCountChange],
+  );
 
   const fetchItems = useCallback(async () => {
     const gen = ++fetchGen.current;
@@ -180,7 +195,7 @@ export function ApprovalInboxPanel({
         throw new Error(data.error || `HTTP ${res.status}`);
       }
       fetchGen.current++;
-      setItems((prev) => prev.filter((it) => it.id !== item.id));
+      dropItem(item.id);
       onApprovalDecided?.();
       void fetchItems();
     } catch (err) {
@@ -236,7 +251,7 @@ export function ApprovalInboxPanel({
         throw new Error(data.error || `HTTP ${res.status}`);
       }
       fetchGen.current++;
-      setItems((prev) => prev.filter((it) => it.id !== item.id));
+      dropItem(item.id);
       cancelEdit();
       onApprovalDecided?.();
       void fetchItems();
@@ -267,7 +282,7 @@ export function ApprovalInboxPanel({
         throw new Error(data.error || `HTTP ${res.status}`);
       }
       fetchGen.current++;
-      setItems((prev) => prev.filter((it) => it.id !== item.id));
+      dropItem(item.id);
       setConfirmRejectId(null);
       onApprovalDecided?.();
       void fetchItems();

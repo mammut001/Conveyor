@@ -3,6 +3,7 @@ import { ChatPanel } from './components/ChatPanel'
 import { FormattedText } from './components/FormattedText'
 import { InboxPanel } from './components/InboxPanel'
 import { MemoryPanel } from './components/MemoryPanel'
+import { SkillsPanel } from './components/SkillsPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
@@ -53,7 +54,7 @@ type SystemStatus = {
   disk: { total: number; used: number; free: number }
   queue: { depth: number; paused: boolean; states: Record<string, number> }
   channels: Record<string, { configured: boolean }>; nodes: NodeInfo[]
-  features?: { long_term_memory?: boolean; routines?: boolean; webhooks?: boolean; approval_inbox?: boolean }
+  features?: { long_term_memory?: boolean; routines?: boolean; webhooks?: boolean; approval_inbox?: boolean; skills?: boolean }
 }
 type ComputerStatus = {
   armed: boolean; arm_remaining_seconds: number; active_task?: Record<string, unknown> | null
@@ -132,9 +133,10 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : 'tasks'))
+  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'skills'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : 'tasks'))
   const [inboxUnread, setInboxUnread] = useState(0)
   const [approvalInboxCount, setApprovalInboxCount] = useState(0)
+  const [chatDraft, setChatDraft] = useState('')
   const lastSequence = useRef(0)
   const refreshGen = useRef(0)
   const approvalInboxFetchGen = useRef(0)
@@ -258,6 +260,13 @@ export default function App() {
     } catch {}
   }, [system?.features?.approval_inbox, authenticated, token])
 
+  // Count reported by the Approvals panel (fresh after a decision): drop any
+  // badge poll that started earlier so it cannot overwrite the new value.
+  const setApprovalInboxCountFresh = useCallback((count: number) => {
+    approvalInboxFetchGen.current += 1
+    setApprovalInboxCount(count)
+  }, [])
+
   useEffect(() => {
     if (!system?.features?.approval_inbox || !authenticated) return
     void fetchApprovalInboxCount()
@@ -378,7 +387,7 @@ export default function App() {
     }
     // Invalidate a poll that started before this decision.
     refreshGen.current += 1
-    try { await api(path, { method: 'POST', body: JSON.stringify(body) }); await refresh() }
+    try { await api(path, { method: 'POST', body: JSON.stringify(body) }); await refresh(); if (decided) void fetchApprovalInboxCount() }
     catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Action failed')
       // The optimistic drop may have been wrong (network error). Re-read.
@@ -457,10 +466,10 @@ export default function App() {
         <div className="stream-header">
           <div>
             <p className="eyebrow">
-              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : 'TASKS · CODEX EXECUTION'}
+              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'skills' ? 'SKILLS LIBRARY' : 'TASKS · CODEX EXECUTION'}
             </p>
             <h2>
-              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
+              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'skills' ? 'Skills' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -478,6 +487,9 @@ export default function App() {
                   Approvals{approvalInboxCount > 0 ? ` (${approvalInboxCount})` : ''}
                 </button>
               )}
+              {(Boolean(system?.features?.skills) || view === 'skills') && (
+                <button type="button" className={view === 'skills' ? 'active' : ''} onClick={() => setView('skills')}>Skills</button>
+              )}
             </div>
             {view === 'tasks' && selectedJob && <StatusBadge state={selectedJob.state} />}
           </div>
@@ -489,7 +501,15 @@ export default function App() {
               void refresh()
               void fetchApprovalInboxCount()
             }}
-            onPendingCountChange={setApprovalInboxCount}
+            onPendingCountChange={setApprovalInboxCountFresh}
+          />
+        ) : view === 'skills' ? (
+          <SkillsPanel
+            token={token}
+            onUseInChat={(skillSlug) => {
+              setChatDraft(`/skill ${skillSlug} `)
+              setView('chat')
+            }}
           />
         ) : view === 'memory' ? (
           <MemoryPanel token={token} />
@@ -498,13 +518,21 @@ export default function App() {
             token={token}
             webhooksEnabled={Boolean(system?.features?.webhooks)}
             onUnreadChange={setInboxUnread}
-            onApprovalDecided={refresh}
+            onApprovalDecided={() => {
+              void refresh()
+              void fetchApprovalInboxCount()
+            }}
           />
         ) : view === 'chat' ? (
           <ChatPanel
             token={token}
-            onApprovalDecided={refresh}
+            onApprovalDecided={() => {
+              void refresh()
+              void fetchApprovalInboxCount()
+            }}
             onSessionChange={refresh}
+            initialInput={chatDraft}
+            onInitialInputConsumed={() => setChatDraft('')}
           />
         ) : (
           <>
