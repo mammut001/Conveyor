@@ -68,7 +68,7 @@ When `CONVEYOR_SUBAGENTS_ENABLED=true`, the `agents.parallel` tool is exposed to
 | **No Recursion** | A context variable depth guard (`_SUBAGENT_DEPTH`) enforces that `agents.parallel` is only exposed to and callable by depth 0 (the top-level agent). Subagents cannot spawn child subagents. |
 | **Clean Context** | Each subagent starts with a fresh system prompt instructing it to be concise, cite tools used, and refuse actions. Subagents do not receive conversation history, long-term memory, or preloaded skills. They inherit the parent's `ChatConfig` (provider endpoint, model, temperature). |
 | **Untrusted Output** | Subagent outputs are treated as untrusted data. Tool results returned to the parent are sanitized, redacted via `redact_text`, and wrapped in `<tool-result untrusted="true">`. |
-| **Fault Isolation** | Each task runs in an isolated `asyncio.wait_for` wrapper. A timeout or failure in one subagent does not fail peer subagents. If the parent request is cancelled, all child tasks are cancelled. |
+| **Fault Isolation** | Each task runs in an isolated `asyncio.wait_for` wrapper. A timeout or failure in one subagent does not fail peer subagents. The timeout starts when the subagent obtains a `MAX_PARALLEL` slot (`queued` → `running`), so waiting for a slot never counts against it. If the parent request is cancelled, all child tasks are cancelled. |
 | **Concurrency Control** | Process-wide concurrency is bounded by a lazy `asyncio.Semaphore` keyed to the active event loop, preventing resource exhaustion across concurrent requests. |
 | **Result Caps** | Individual subagent answers are capped to `CONVEYOR_SUBAGENTS_MAX_OUTPUT_CHARS` with `... [truncated]`. The combined result returned to the parent is bounded up to 16,000 characters. |
 | **Audit Trail** | In addition to the top-level tool event, each completed subagent emits an audit log event (`audit_tool_event`, `action="subagent"`, tool `agents.parallel`, preview of status, elapsed time, and tools used). Full prompts and raw outputs are not logged. |
@@ -82,7 +82,7 @@ When `CONVEYOR_SUBAGENTS_ENABLED=true`, the `agents.parallel` tool is exposed to
     "call_id": "call_xyz",
     "index": 0,
     "title": "Query CI status",
-    "status": "running|ok|timeout|error",
+    "status": "queued|running|ok|timeout|error",
     "elapsed": 1.4,
     "tools": ["web_fetch"]
   }
@@ -91,3 +91,9 @@ When `CONVEYOR_SUBAGENTS_ENABLED=true`, the `agents.parallel` tool is exposed to
   - In the Web Chat interface, active subagents appear as a compact progress card group beneath the assistant message turn.
   - Upon completion, the card group collapses into an unobtrusive summary badge (e.g., `3 个子任务 · 3 ✓`), expandable on click.
   - Fully responsive on mobile layouts (360–430px screens) without horizontal overflow.
+
+## Notes
+
+- Subagent progress cards are live-only: they are not stored in the transcript, so a reloaded session shows the final answer without the card group.
+- Non-Web channels get a `🧩 子任务 n/N 完成 …` placeholder edit; the Web port receives structured `subagent` SSE events instead (a plain edit there would be taken as the final answer).
+- Web tools (`web.search`, `web.fetch`, …) are only available to subagents if they are already allowlisted for the parent via `CONVEYOR_CHAT_TOOLS_NETWORK_ALLOW`.
