@@ -1019,3 +1019,305 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 }
 
 
+
+/* Connectors Panel styles */
+.connectors-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 20px;
+}
+
+.connectors-config-hint {
+  padding: 12px 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.connectors-config-hint code {
+  background: #eff6ff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #1d4ed8;
+}
+
+.connectors-config-note {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.connectors-disabled-banner {
+  padding: 16px;
+  background: #fef2f2;
+  border: 1px solid #fee2e2;
+  border-radius: 8px;
+  color: #991b1b;
+  font-size: 13px;
+}
+
+.connectors-loading,
+.connectors-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--muted, #64748b);
+  font-size: 14px;
+}
+
+.connectors-secondary {
+  color: #94a3b8;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.connectors-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.connectors-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.connectors-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.connectors-server-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.connectors-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.connectors-server-name {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.connectors-transport-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: #475569;
+  letter-spacing: 0.04em;
+}
+
+.connectors-status-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+  text-transform: capitalize;
+}
+
+.connectors-status-badge.status-ok {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.connectors-status-badge.status-error,
+.connectors-status-badge.status-config_error {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.connectors-status-badge.status-disabled {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.connectors-status-badge.status-unknown {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.connectors-target-row code {
+  font-size: 12px;
+  color: #64748b;
+  background: #f8fafc;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.connectors-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.connectors-toggle-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #64748b;
+  transition: all 0.15s;
+}
+
+.connectors-toggle-btn.active {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #166534;
+}
+
+.connectors-refresh-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  transition: all 0.15s;
+}
+
+.connectors-refresh-btn:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.connectors-refresh-btn:disabled,
+.connectors-toggle-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.connectors-error-banner {
+  padding: 8px 12px;
+  background: #fff2f3;
+  border: 1px solid #fecdd3;
+  border-radius: 6px;
+  color: #b42332;
+  font-size: 12px;
+}
+
+.connectors-tools-section {
+  border-top: 1px solid #f1f5f9;
+  padding-top: 10px;
+}
+
+.connectors-tools-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.connectors-tools-header h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.connectors-checked-at {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.connectors-tools-empty {
+  padding: 12px 0;
+  font-size: 12px;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+.connectors-tools-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.connectors-tool-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border-radius: 6px;
+}
+
+.connectors-tool-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.connectors-tool-name code {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.connectors-pill {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.connectors-pill.pill-read {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.connectors-pill.pill-write {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.connectors-pill.pill-exposed {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.connectors-pill.pill-blocked {
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
+.connectors-tool-desc {
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.4;
+}
+
+.connectors-muted {
+  color: #94a3b8;
+  font-style: italic;
+}

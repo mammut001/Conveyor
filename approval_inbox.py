@@ -336,6 +336,11 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
         if spec is not None:
             summary = spec.summary
             danger = spec.danger.value
+        elif action.tool_name.startswith("mcp."):
+            from mcp_client import get_mcp_tool_spec
+            mspec = get_mcp_tool_spec(settings, action.tool_name)
+            summary = mspec.summary if mspec else action.tool_name
+            danger = mspec.danger.value if mspec else "write"
         else:
             pspec = get_personal_tool(action.tool_name)
             summary = pspec.summary if pspec else action.tool_name

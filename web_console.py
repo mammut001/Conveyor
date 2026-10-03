@@ -300,6 +300,17 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return None
         return settings
 
+    def _mcp_settings(self) -> Any:
+        """Settings when MCP connectors are on; otherwise answer 409 and return None."""
+        settings = getattr(self.server.control, "settings", None)
+        if settings is None:
+            from config import load_runtime_settings
+            settings = load_runtime_settings()
+        if not getattr(settings, "mcp_enabled", False):
+            self._json(HTTPStatus.CONFLICT, {"error": "MCP connectors are disabled (set CONVEYOR_MCP_ENABLED=true)"})
+            return None
+        return settings
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
@@ -401,6 +412,20 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 from personal_tools import skills
                 items = skills.list_skills(settings, include_disabled=True)
                 self._json(HTTPStatus.OK, {"items": items, "count": len(items)})
+            elif path == "/api/mcp/servers":
+                settings = self._mcp_settings()
+                if settings is None:
+                    return
+                from mcp_client import get_mcp_manager
+                manager = get_mcp_manager()
+                # Discover tools of enabled servers whose cached list is missing or stale
+                # (same TTL as the chat loop), so the panel shows real status on first load.
+                try:
+                    self._await(manager.ensure_fresh(settings), timeout=60.0)
+                except Exception:
+                    logger.warning("MCP discovery for status failed", exc_info=True)
+                result = manager.get_servers_status(settings)
+                self._json(HTTPStatus.OK, result)
             elif path == "/api/routines" or path.startswith("/api/routines"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
@@ -735,6 +760,17 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
 
+            parts = self._segments(parsed.path)
+            if len(parts) == 5 and parts[:3] == ["api", "mcp", "servers"] and parts[4] == "refresh":
+                settings = self._mcp_settings()
+                if settings is None:
+                    return
+                server_name = parts[3]
+                from mcp_client import get_mcp_manager
+                item, status = self._await(get_mcp_manager().refresh_server(settings, server_name), timeout=60.0)
+                self._json(status, item)
+                return
+
             if parsed.path.startswith("/api/routines") or parsed.path.startswith("/api/inbox"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
@@ -1054,6 +1090,18 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.NOT_FOUND, {"error": str(exc)})
                 except ValueError as exc:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            if len(parts) == 4 and parts[:3] == ["api", "mcp", "servers"]:
+                settings = self._mcp_settings()
+                if settings is None:
+                    return
+                server_name = parts[3]
+                if "enabled" not in body or not isinstance(body["enabled"], bool):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "enabled must be true or false"})
+                    return
+                from mcp_client import get_mcp_manager
+                item, status = get_mcp_manager().set_server_enabled(settings, server_name, body["enabled"])
+                self._json(status, item)
                 return
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         except Exception:

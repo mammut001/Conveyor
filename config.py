@@ -214,6 +214,8 @@ class Settings:
     skills_enabled: bool = False
     child_env_scope_provider_keys: bool = False
     web_mobile_ui: bool = False
+    mcp_enabled: bool = False
+    mcp_config_path: Path | None = None
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -594,6 +596,14 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "web_mobile_ui": os.getenv(
             "CONVEYOR_WEB_MOBILE_UI", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
+        "mcp_enabled": os.getenv(
+            "CONVEYOR_MCP_ENABLED", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "mcp_config_path": (
+            Path(os.getenv("CONVEYOR_MCP_CONFIG")).expanduser().resolve()
+            if os.getenv("CONVEYOR_MCP_CONFIG")
+            else (memory_root / "mcp_servers.json")
+        ),
     }
 
 

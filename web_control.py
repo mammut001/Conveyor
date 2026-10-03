@@ -619,5 +619,6 @@ class WebControl:
                 "skills": bool(getattr(self.settings, "skills_enabled", False)),
                 "provider_key_scoping": bool(getattr(self.settings, "child_env_scope_provider_keys", False)),
                 "mobile_ui": bool(getattr(self.settings, "web_mobile_ui", False)),
+                "mcp": bool(getattr(self.settings, "mcp_enabled", False)),
             },
         }
