@@ -417,7 +417,14 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if settings is None:
                     return
                 from mcp_client import get_mcp_manager
-                result = get_mcp_manager().get_servers_status(settings)
+                manager = get_mcp_manager()
+                # Discover tools of enabled servers whose cached list is missing or stale
+                # (same TTL as the chat loop), so the panel shows real status on first load.
+                try:
+                    self._await(manager.ensure_fresh(settings), timeout=60.0)
+                except Exception:
+                    logger.warning("MCP discovery for status failed", exc_info=True)
+                result = manager.get_servers_status(settings)
                 self._json(HTTPStatus.OK, result)
             elif path == "/api/routines" or path.startswith("/api/routines"):
                 settings = getattr(self.server.control, "settings", None)
