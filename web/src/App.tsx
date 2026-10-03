@@ -52,7 +52,7 @@ type SystemStatus = {
   disk: { total: number; used: number; free: number }
   queue: { depth: number; paused: boolean; states: Record<string, number> }
   channels: Record<string, { configured: boolean }>; nodes: NodeInfo[]
-  features?: { long_term_memory?: boolean; routines?: boolean }
+  features?: { long_term_memory?: boolean; routines?: boolean; webhooks?: boolean }
 }
 type ComputerStatus = {
   armed: boolean; arm_remaining_seconds: number; active_task?: Record<string, unknown> | null
@@ -453,6 +453,7 @@ export default function App() {
         ) : view === 'inbox' ? (
           <InboxPanel
             token={token}
+            webhooksEnabled={Boolean(system?.features?.webhooks)}
             onUnreadChange={setInboxUnread}
             onApprovalDecided={refresh}
           />

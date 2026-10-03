@@ -613,5 +613,7 @@ class WebControl:
             "features": {
                 "long_term_memory": bool(getattr(self.settings, "long_term_memory_enabled", False)),
                 "routines": bool(getattr(self.settings, "routines_enabled", False)),
+                "webhooks": bool(getattr(self.settings, "webhooks_enabled", False))
+                and bool(getattr(self.settings, "routines_enabled", False)),
             },
         }

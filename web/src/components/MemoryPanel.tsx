@@ -19,13 +19,6 @@ type MemoryList = {
 
 export type MemoryPanelProps = { token: string };
 
-const card = {
-  padding: 14,
-  background: 'var(--panel-bg, #1a1a1a)',
-  borderRadius: 8,
-  border: '1px solid var(--border-color, #333)',
-} as const;
-
 export function MemoryPanel({ token }: MemoryPanelProps) {
   const [disabled, setDisabled] = useState(false);
   const disabledRef = useRef(false);
@@ -90,6 +83,11 @@ export function MemoryPanel({ token }: MemoryPanelProps) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `Failed to save (${res.status})`);
       }
+      const respData = await res.json().catch(() => ({}));
+      if (respData.ok === false) {
+        setFormError(respData.error || 'Failed to save');
+        return;
+      }
       setNewText('');
       await load();
     } catch (err) {
@@ -140,24 +138,25 @@ export function MemoryPanel({ token }: MemoryPanelProps) {
         </div>
       )}
 
-      <section style={card}>
+      <section className="memory-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600 }}>
             Long-term memory · profile {data?.counts.profile ?? 0}/{data?.profile_cap ?? 8} · log {data?.counts.log ?? 0}
           </h3>
-          <span style={{ fontSize: '0.75rem', color: '#888' }}>
+          <span className="memory-secondary" style={{ fontSize: '0.75rem' }}>
             {data ? (data.shared ? 'Shared across Web, Telegram and Feishu' : 'Web Console memory only') : ''}
           </span>
         </div>
-        <p style={{ fontSize: '0.8rem', color: '#888', margin: '8px 0 0' }}>
+        <p className="memory-secondary" style={{ fontSize: '0.8rem', margin: '8px 0 0' }}>
           Facts you asked Conveyor to keep. In chat, say “记住 …” / “remember …” (needs approval). Secrets are refused.
         </p>
       </section>
 
-      <section style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <section className="memory-card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <form onSubmit={handleAdd} style={{ display: 'flex', gap: 8 }}>
           <input
             type="text"
+            className="memory-input"
             value={newText}
             maxLength={280}
             placeholder="Add one fact (one sentence, max 280 chars)"
@@ -169,7 +168,7 @@ export function MemoryPanel({ token }: MemoryPanelProps) {
             {formBusy ? 'Saving…' : 'Remember'}
           </button>
         </form>
-        {formError && <div style={{ color: '#ff7875', fontSize: '0.8rem' }}>{formError}</div>}
+        {formError && <div className="memory-error">{formError}</div>}
 
         <form
           onSubmit={(e) => {
@@ -178,13 +177,14 @@ export function MemoryPanel({ token }: MemoryPanelProps) {
           }}
           style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
         >
-          <select value={kind} onChange={(e) => setKind(e.target.value as 'all' | 'profile' | 'log')} aria-label="Tier">
+          <select className="memory-input" value={kind} onChange={(e) => setKind(e.target.value as 'all' | 'profile' | 'log')} aria-label="Tier">
             <option value="all">All</option>
             <option value="profile">Profile</option>
             <option value="log">Log</option>
           </select>
           <input
             type="search"
+            className="memory-input"
             value={query}
             placeholder="Search (中文 / English)"
             onChange={(e) => setQuery(e.target.value)}
@@ -209,14 +209,14 @@ export function MemoryPanel({ token }: MemoryPanelProps) {
 
       <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {items.length === 0 ? (
-          <p style={{ color: '#888', fontSize: '0.85rem' }}>
+          <p className="memory-secondary" style={{ fontSize: '0.85rem' }}>
             {activeQuery ? `No memory matches “${activeQuery}”.` : 'No long-term memory yet.'}
           </p>
         ) : (
           items.map((item) => (
-            <article key={item.id} style={{ ...card, padding: 12 }}>
+            <article key={item.id} className="memory-card" style={{ padding: 12 }}>
               <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.75rem', color: '#888' }}>
+                <div className="memory-secondary" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.75rem' }}>
                   <strong style={{ color: 'inherit' }}>#{item.id}</strong>
                   <span className={`status-badge ${item.kind === 'profile' ? 'completed' : 'queued'}`} style={{ padding: '1px 6px' }}>
                     {item.kind}
@@ -226,11 +226,11 @@ export function MemoryPanel({ token }: MemoryPanelProps) {
                 </div>
                 {confirmId === item.id ? (
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <span style={{ fontSize: '0.8rem', color: '#faad14' }}>Delete permanently?</span>
+                    <span className="memory-confirm-warning">Delete permanently?</span>
                     <button
                       type="button"
-                      className="action-btn"
-                      style={{ background: '#cf1322', color: '#fff', fontSize: '0.8rem', padding: '3px 10px' }}
+                      className="action-btn memory-btn-danger"
+                      style={{ fontSize: '0.8rem', padding: '3px 10px' }}
                       disabled={deleting}
                       onClick={() => void handleDelete(item.id)}
                     >

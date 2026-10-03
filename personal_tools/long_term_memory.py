@@ -168,6 +168,9 @@ def allowed_in_chat(settings: Any, channel: str, chat_type: str) -> bool:
 
 
 def allowed_for(settings: Any, msg: Any) -> bool:
+    raw = getattr(msg, "raw", None)
+    if isinstance(raw, dict) and raw.get("untrusted_event"):
+        return False  # webhook-triggered routine runs: payload is outside data
     return allowed_in_chat(
         settings,
         str(getattr(msg, "channel", "") or ""),

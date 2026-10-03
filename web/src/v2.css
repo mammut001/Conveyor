@@ -941,3 +941,81 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   overflow-wrap: anywhere;
 }
 
+/* Memory Panel */
+.memory-card {
+  padding: 14px;
+  background: var(--panel);
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.memory-input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.memory-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.memory-secondary {
+  color: var(--muted);
+}
+
+.memory-error {
+  color: var(--red);
+  font-size: 0.8rem;
+}
+
+.memory-confirm-warning {
+  color: var(--yellow);
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.memory-btn-danger {
+  background: #cf1322 !important;
+  color: #fff !important;
+  border: 1px solid #cf1322 !important;
+}
+
+.memory-btn-danger:hover {
+  background: #a8071a !important;
+  border-color: #a8071a !important;
+}
+
+.action-btn {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  padding: 5px 10px;
+  font-size: 0.82rem;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.action-btn:hover {
+  background: var(--panel-2);
+  border-color: #cfd6e2;
+}
+
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.status-badge.webhook {
+  border-color: #dbeafe;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+

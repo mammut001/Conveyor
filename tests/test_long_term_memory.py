@@ -545,6 +545,7 @@ class MemoryWebApiTests(unittest.TestCase):
         ltm.remember_fact(self.settings, "12345", "我的猫叫 Mochi，是一只橘猫。", source_channel="telegram")
         status, created = self.request("POST", "/api/memory", {"text": "Favorite editor is Neovim"})
         self.assertEqual(status, 201)
+        self.assertTrue(created.get("ok"))
         self.assertEqual(created["source_channel"], "web")
         status, data = self.request("GET", "/api/memory")
         self.assertEqual(status, 200)
@@ -564,9 +565,12 @@ class MemoryWebApiTests(unittest.TestCase):
     def test_add_uses_secret_and_sentence_filter(self) -> None:
         for text in ("my key sk-proj-AbCdEf0123456789AbCdEf0123456789xyz", "我家 wifi 密码是 sunflower88", "One. Two."):
             status, data = self.request("POST", "/api/memory", {"text": text})
-            self.assertEqual(status, 400, text)
+            self.assertEqual(status, 200, text)
+            self.assertFalse(data.get("ok"), text)
+            self.assertTrue(data.get("refused"), text)
             self.assertIn("error", data)
         self.assertEqual(self.request("POST", "/api/memory", {})[0], 400)
+        self.assertEqual(self.request("POST", "/api/memory", {"text": 123})[0], 400)
         self.assertEqual(ltm.list_facts(self.settings, ltm.WEB_OPERATOR), [])
 
 
