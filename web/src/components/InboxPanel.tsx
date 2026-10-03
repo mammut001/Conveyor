@@ -485,7 +485,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
                 statusBadgeClass = appr.status === 'approved' ? 'completed' : 'interrupted';
               } else if (item.status === 'approval_pending') statusBadgeClass = 'queued';
               else if (item.status === 'error') statusBadgeClass = 'failed';
-              else if (item.status === 'escalate') statusBadgeClass = 'interrupted';
+              else if (['escalate', 'denied', 'expired', 'cancelled'].includes(item.status)) statusBadgeClass = 'interrupted';
 
               return (
                 <article

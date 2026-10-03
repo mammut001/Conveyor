@@ -805,3 +805,93 @@ class TestApprovalTTL(unittest.TestCase):
             self.assertEqual(pending.ttl_seconds, 300.0)
         finally:
             clear_all_pending()
+
+
+class TestRunStatusAfterDecision(unittest.TestCase):
+    """The stored run status must follow the approval decision (no stale approval_pending)."""
+
+    def setUp(self):
+        clear_all_pending()
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.settings = SimpleNamespace(
+            codex_memory_root=Path(self.temp_dir.name),
+            user_timezone="America/Toronto",
+            routines_enabled=True,
+            routines_approval_ttl_seconds=86_400,
+        )
+        self.r = routines.create_routine(self.settings, "S", "0 8 * * *", "p")
+
+    def tearDown(self):
+        clear_all_pending()
+        self.temp_dir.cleanup()
+
+    def _pending_run(self):
+        pending = create_pending("notes.add", "x", "web-console", f"routine-{self.r['id']}", "web")
+        routines.persist_routine_approval(self.settings, pending.token, self.r["id"])
+        run = routines.record_run(
+            self.settings, routine_id=self.r["id"],
+            started_at=datetime.now(timezone.utc).isoformat(),
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            status="approval_pending", output="needs approval",
+            approval_id=pending.token, approval_status="pending",
+        )
+        return pending, run
+
+    def _run_status(self, run_id):
+        items, _ = routines.list_inbox(self.settings)
+        return next(i for i in items if i["id"] == run_id)["status"]
+
+    def _card_status(self):
+        return routines.get_routine(self.settings, self.r["id"])["last_run_status"]
+
+    def test_approved_denied(self):
+        for decision, expected in (("approved", "executed"), ("denied", "denied")):
+            with self.subTest(decision=decision):
+                pending, run = self._pending_run()
+                self.assertEqual(self._card_status(), "approval_pending")
+                self.assertTrue(routines.record_approval_decision(self.settings, pending.token, decision, "r"))
+                self.assertEqual(self._run_status(run["id"]), expected)
+                self.assertEqual(self._card_status(), expected)
+                self.assertEqual(
+                    [r for r in routines.list_routines(self.settings) if r["id"] == self.r["id"]][0]["last_run_status"],
+                    expected,
+                )
+
+    def test_expired(self):
+        import time as _time
+        _, run = self._pending_run()
+        self.assertEqual(routines.expire_routine_approvals(self.settings, now=_time.time() + 90_000), 1)
+        self.assertEqual(self._run_status(run["id"]), "expired")
+        self.assertEqual(self._card_status(), "expired")
+
+    def test_non_pending_status_not_overwritten(self):
+        pending, run = self._pending_run()
+        conn = routines._connect(self.settings)
+        try:
+            with conn:
+                conn.execute("UPDATE routine_runs SET status = 'error' WHERE id = ?", (run["id"],))
+        finally:
+            conn.close()
+        routines.record_approval_decision(self.settings, pending.token, "approved", "r")
+        self.assertEqual(self._run_status(run["id"]), "error")
+
+    def test_backfill_of_stale_rows(self):
+        _, run = self._pending_run()
+        conn = routines._connect(self.settings)
+        try:
+            with conn:
+                conn.execute("UPDATE routine_runs SET approval_status = 'approved' WHERE id = ?", (run["id"],))
+        finally:
+            conn.close()
+        routines.init_db(self.settings)
+        self.assertEqual(self._run_status(run["id"]), "executed")
+
+    def test_chat_tool_list_shows_final_status(self):
+        pending, _ = self._pending_run()
+        routines.record_approval_decision(self.settings, pending.token, "denied", "")
+        register_personal_tools()
+        res = asyncio.run(execute_personal_tool(
+            self.settings, "routine.list", "", operator_id="u", channel="web", chat_id="c",
+        ))
+        self.assertIn("last: denied", res)
+        self.assertNotIn("approval_pending", res)
