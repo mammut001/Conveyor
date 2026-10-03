@@ -53,6 +53,16 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
   const [deleting, setDeleting] = useState(false);
   const fetchGen = useRef(0);
 
+  // Non-blocking export toast
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) window.clearTimeout(toastTimeoutRef.current);
+    };
+  }, []);
+
   const load = useCallback(async () => {
     if (disabledRef.current || !token) return;
     const gen = ++fetchGen.current;
@@ -232,6 +242,14 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+
+    if (toastTimeoutRef.current) {
+      window.clearTimeout(toastTimeoutRef.current);
+    }
+    setToastMessage(`Exported "${skill.name}" as ${skill.slug}.md — check your browser's Downloads folder.`);
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+    }, 6000);
   };
 
   if (disabled) {
@@ -259,6 +277,46 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
 
   return (
     <div className="stream-body" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', padding: 16, gap: 16 }}>
+      {toastMessage && (
+        <div
+          role="status"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: '10px 14px',
+            borderRadius: 8,
+            border: '1px solid #bbf7d0',
+            background: '#f0fdf4',
+            color: '#166534',
+            fontSize: '0.85rem',
+            lineHeight: 1.4,
+          }}
+        >
+          <span>{toastMessage}</span>
+          <button
+            type="button"
+            aria-label="Dismiss notice"
+            onClick={() => {
+              if (toastTimeoutRef.current) window.clearTimeout(toastTimeoutRef.current);
+              setToastMessage(null);
+            }}
+            style={{
+              background: 'transparent',
+              border: 0,
+              color: '#166534',
+              cursor: 'pointer',
+              fontSize: '18px',
+              padding: '0 4px',
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {error && (
         <div className="error-banner global" style={{ margin: 0 }}>
           {error}

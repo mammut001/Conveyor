@@ -52,6 +52,9 @@ class ClaudeCodeBackend(CodexRunner):
             "CONVEYOR_CLAUDE_PERMISSION_MODE", "acceptEdits"
         )).strip() or "acceptEdits"
 
+    def _provider_credential_keys(self) -> set[str]:
+        return {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
+
     async def validate(self) -> None:
         await super().validate()
         binary = self.claude_bin

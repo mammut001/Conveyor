@@ -212,6 +212,8 @@ class Settings:
     long_term_memory_groups: bool = False
     approval_inbox_enabled: bool = False
     skills_enabled: bool = False
+    child_env_scope_provider_keys: bool = False
+    web_mobile_ui: bool = False
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -585,6 +587,12 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         ).strip().lower() in ("true", "1", "yes", "on"),
         "skills_enabled": os.getenv(
             "CONVEYOR_SKILLS_ENABLED", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "child_env_scope_provider_keys": os.getenv(
+            "CONVEYOR_CHILD_ENV_SCOPE_PROVIDER_KEYS", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "web_mobile_ui": os.getenv(
+            "CONVEYOR_WEB_MOBILE_UI", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
     }
 

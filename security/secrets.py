@@ -146,3 +146,49 @@ def child_env_from(os_environ: Mapping[str, str]) -> dict[str, str]:
         logger.info("Stripped %d sensitive keys from child environment: %s", len(stripped), ", ".join(sorted(stripped)))
         
     return env
+
+
+PROVIDER_KEY_PREFIXES = frozenset({
+    "OPENAI_",
+    "AZURE_OPENAI_",
+    "MINIMAX_",
+    "ANTHROPIC_",
+    "DEEPSEEK_",
+})
+
+
+def scope_provider_keys(
+    env: Mapping[str, str],
+    keep: set[str] | Sequence[str] | None = None,
+    explicit_prefixes: set[str] | Sequence[str] | None = None,
+) -> tuple[dict[str, str], list[str]]:
+    """Scope provider credential variables in child environment to only selected keys.
+
+    Drops every credential-like variable (is_sensitive_key) starting with any of
+    PROVIDER_KEY_PREFIXES unless:
+      - The key is in `keep`, OR
+      - The key matches a prefix in `explicit_prefixes`.
+
+    Non-credential variables (e.g. OPENAI_BASE_URL, ANTHROPIC_MODEL) still pass.
+    Variables matching explicit_prefixes are never dropped.
+    Returns (scoped_env, sorted_dropped_names).
+    """
+    keep_set = set(keep or ())
+    explicit_set = set(explicit_prefixes or ())
+    explicit_tuple = tuple(explicit_set)
+    provider_prefixes_tuple = tuple(PROVIDER_KEY_PREFIXES)
+
+    scoped: dict[str, str] = {}
+    dropped: list[str] = []
+
+    for key, val in env.items():
+        if key.startswith(provider_prefixes_tuple):
+            if is_sensitive_key(key):
+                is_kept = key in keep_set or (bool(explicit_tuple) and key.startswith(explicit_tuple))
+                if not is_kept:
+                    dropped.append(key)
+                    continue
+        scoped[key] = val
+
+    return scoped, sorted(dropped)
+

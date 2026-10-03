@@ -200,6 +200,7 @@ For coding jobs:
 - dangerous-action confirmation
 - cancellation and queue controls
 - audit logging for mutating tools
+- child process environment filtering and provider API key scoping (`CONVEYOR_CHILD_ENV_SCOPE_PROVIDER_KEYS`)
 
 For direct computer use:
 

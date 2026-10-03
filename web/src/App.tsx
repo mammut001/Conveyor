@@ -54,7 +54,15 @@ type SystemStatus = {
   disk: { total: number; used: number; free: number }
   queue: { depth: number; paused: boolean; states: Record<string, number> }
   channels: Record<string, { configured: boolean }>; nodes: NodeInfo[]
-  features?: { long_term_memory?: boolean; routines?: boolean; webhooks?: boolean; approval_inbox?: boolean; skills?: boolean }
+  features?: {
+    long_term_memory?: boolean
+    routines?: boolean
+    webhooks?: boolean
+    approval_inbox?: boolean
+    skills?: boolean
+    provider_key_scoping?: boolean
+    mobile_ui?: boolean
+  }
 }
 type ComputerStatus = {
   armed: boolean; arm_remaining_seconds: number; active_task?: Record<string, unknown> | null
@@ -141,6 +149,37 @@ export default function App() {
   const refreshGen = useRef(0)
   const approvalInboxFetchGen = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
+
+  const [moreSheetOpen, setMoreSheetOpen] = useState(false)
+  const [sessionsDrawerOpen, setSessionsDrawerOpen] = useState(false)
+  const [contextDrawerOpen, setContextDrawerOpen] = useState(false)
+
+  useEffect(() => {
+    if (system?.features?.mobile_ui) {
+      let link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
+      if (!link) {
+        link = document.createElement('link')
+        link.rel = 'manifest'
+        link.href = '/manifest.webmanifest'
+        document.head.appendChild(link)
+      }
+    } else {
+      const link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
+      if (link) link.remove()
+    }
+  }, [system?.features?.mobile_ui])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMoreSheetOpen(false)
+        setSessionsDrawerOpen(false)
+        setContextDrawerOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   const selectSession = useCallback((sessionId: string, jobId?: string) => {
     setCreatingSession(false)
@@ -422,15 +461,19 @@ export default function App() {
     </form>
   </main>
 
-  return <main className="app-shell">
+  return <main className={`app-shell ${system?.features?.mobile_ui ? 'mobile-ui' : ''}`}>
     <header className="topbar">
       <div className="brand"><span className="brand-mark small">C</span><div><strong>Conveyor</strong><small>CONTROL CONSOLE</small></div></div>
       <div className="top-actions"><button className="settings-button" onClick={() => void openSettings()}>⚙ Settings</button><div className="top-status"><span className="live-dot" /> Online <span className="separator" /> Queue {system?.queue.depth ?? 0}</div></div>
     </header>
     {error && <div className="error-banner global">{error}<button onClick={() => setError('')}>×</button></div>}
     <section className="workspace">
-      <aside className="sessions-panel panel">
-        <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { selectSession('', ''); setCreatingSession(true); setPrompt('') }} aria-label="New session">＋</button></div>
+      <aside className={`sessions-panel panel ${sessionsDrawerOpen ? 'drawer-open' : ''}`}>
+        <div className="mobile-drawer-header">
+          <strong>Sessions</strong>
+          <button type="button" className="drawer-close-btn" aria-label="Close sessions" onClick={() => setSessionsDrawerOpen(false)}>×</button>
+        </div>
+        <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { selectSession('', ''); setCreatingSession(true); setPrompt(''); setSessionsDrawerOpen(false); }} aria-label="New session">＋</button></div>
         <div className="session-list">
           {sessions.map(session => (
             <div key={session.id} className="session-item-row">
@@ -438,7 +481,7 @@ export default function App() {
                 className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`}
                 title={sessionLabel(session)}
                 aria-pressed={session.id === selectedSessionId}
-                onClick={() => selectSession(session.id, session.latest_job?.id)}
+                onClick={() => { selectSession(session.id, session.latest_job?.id); setSessionsDrawerOpen(false); }}
               >
                 <span className={`status-rail ${session.latest_job?.state || ''}`} />
                 <span>
@@ -632,7 +675,11 @@ export default function App() {
         )}
       </section>
 
-      <aside className="context-panel panel">
+      <aside className={`context-panel panel ${contextDrawerOpen ? 'drawer-open' : ''}`}>
+        <div className="mobile-drawer-header">
+          <strong>Context & Changes</strong>
+          <button type="button" className="drawer-close-btn" aria-label="Close context" onClick={() => setContextDrawerOpen(false)}>×</button>
+        </div>
         <ContextSection title="Job">
           {selectedJob ? <>
             <KeyValue label="ID" value={selectedJob.id} mono /><KeyValue label="State" value={selectedJob.state} />
@@ -678,7 +725,7 @@ export default function App() {
             </div>
           </section>
         ))}
-        <ContextSection title="Changes">
+        <ContextSection title="Changes" collapsible storageKey="conveyor-changes-collapsed">
           {activeRefinement && <KeyValue label="Active changes" value={`${activeChangedFiles} file${activeChangedFiles === 1 ? '' : 's'} · cumulative`} />}
           <div className="file-list">{selectedJob?.changed_files?.map(file => <div key={file.path}><span className="file-status">{file.status || 'M'}</span><code>{file.path}</code></div>)}{selectedJob && !selectedJob.changed_files?.length && <Empty text="No changed files" />}</div>
           {selectedJob && <><details className="diff-view"><summary>Unified diff</summary><pre>{diff || 'No diff available.'}</pre></details><div className="action-row"><button className="danger" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/discard`)}>{activeRefinement ? 'Discard active changes…' : 'Discard…'}</button><button className="primary" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/apply`)}>{activeRefinement ? 'Apply active changes…' : 'Apply…'}</button></div></>}
@@ -711,6 +758,119 @@ export default function App() {
         </ContextSection>
       </aside>
     </section>
+    {Boolean(system?.features?.mobile_ui) && sessionsDrawerOpen && (
+      <div className="mobile-backdrop" onClick={() => setSessionsDrawerOpen(false)} aria-hidden="true" />
+    )}
+    {Boolean(system?.features?.mobile_ui) && contextDrawerOpen && (
+      <div className="mobile-backdrop" onClick={() => setContextDrawerOpen(false)} aria-hidden="true" />
+    )}
+    {Boolean(system?.features?.mobile_ui) && moreSheetOpen && (
+      <div className="mobile-sheet-overlay" onClick={() => setMoreSheetOpen(false)}>
+        <div className="mobile-sheet" onClick={e => e.stopPropagation()} role="dialog" aria-label="More options">
+          <div className="mobile-sheet-header">
+            <strong>More views & tools</strong>
+            <button type="button" className="drawer-close-btn" aria-label="Close more menu" onClick={() => setMoreSheetOpen(false)}>×</button>
+          </div>
+          <div className="mobile-sheet-items">
+            {(Boolean(system?.features?.routines) || view === 'inbox') && (
+              <button
+                type="button"
+                className={`mobile-sheet-item ${view === 'inbox' ? 'active' : ''}`}
+                onClick={() => { setView('inbox'); setMoreSheetOpen(false); }}
+              >
+                <span>📬 Inbox & Routines</span>
+                {inboxUnread > 0 && <span className="mobile-badge">{inboxUnread}</span>}
+              </button>
+            )}
+            {(Boolean(system?.features?.long_term_memory) || view === 'memory') && (
+              <button
+                type="button"
+                className={`mobile-sheet-item ${view === 'memory' ? 'active' : ''}`}
+                onClick={() => { setView('memory'); setMoreSheetOpen(false); }}
+              >
+                <span>🧠 Long-term Memory</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="mobile-sheet-item"
+              onClick={() => { setSessionsDrawerOpen(true); setMoreSheetOpen(false); }}
+            >
+              <span>📑 Sessions</span>
+            </button>
+            <button
+              type="button"
+              className="mobile-sheet-item"
+              onClick={() => { setContextDrawerOpen(true); setMoreSheetOpen(false); }}
+            >
+              <span>🔍 Context & Changes</span>
+            </button>
+            <button
+              type="button"
+              className="mobile-sheet-item"
+              onClick={() => { void openSettings(); setMoreSheetOpen(false); }}
+            >
+              <span>⚙ Settings</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    {Boolean(system?.features?.mobile_ui) && (
+      <nav className="mobile-bottom-nav" aria-label="Mobile navigation">
+        <button
+          type="button"
+          className={`mobile-nav-item ${view === 'tasks' && !moreSheetOpen ? 'active' : ''}`}
+          onClick={() => { setView('tasks'); setMoreSheetOpen(false); }}
+        >
+          <span className="mobile-nav-icon">⚡</span>
+          <span>Tasks</span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${view === 'chat' && !moreSheetOpen ? 'active' : ''}`}
+          onClick={() => { setView('chat'); setMoreSheetOpen(false); }}
+        >
+          <span className="mobile-nav-icon">💬</span>
+          <span>Chat</span>
+        </button>
+
+        {Boolean(system?.features?.approval_inbox) && (
+          <button
+            type="button"
+            className={`mobile-nav-item ${view === 'approvals' && !moreSheetOpen ? 'active' : ''}`}
+            onClick={() => { setView('approvals'); setMoreSheetOpen(false); }}
+          >
+            <span className="mobile-nav-icon" style={{ position: 'relative' }}>
+              ✓
+              {approvalInboxCount > 0 && <span className="mobile-badge-pill">{approvalInboxCount}</span>}
+            </span>
+            <span>Approvals</span>
+          </button>
+        )}
+
+        {(Boolean(system?.features?.skills) || view === 'skills') && (
+          <button
+            type="button"
+            className={`mobile-nav-item ${view === 'skills' && !moreSheetOpen ? 'active' : ''}`}
+            onClick={() => { setView('skills'); setMoreSheetOpen(false); }}
+          >
+            <span className="mobile-nav-icon">🛠</span>
+            <span>Skills</span>
+          </button>
+        )}
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${moreSheetOpen ? 'active' : ''}`}
+          onClick={() => setMoreSheetOpen(prev => !prev)}
+        >
+          <span className="mobile-nav-icon">⋯</span>
+          <span>More</span>
+        </button>
+      </nav>
+    )}
     {settingsOpen && <ProviderSettings config={providerConfig} busy={busy} onClose={() => setSettingsOpen(false)} onSave={async payload => {
       setBusy(true); setError('')
       try {
@@ -754,7 +914,64 @@ function ProviderSettings({ config, busy, onClose, onSave }: {
 function StatusBadge({ state }: { state: string }) { return <span className={`status-badge ${state}`}><i />{stateLabel(state)}</span> }
 function Empty({ text }: { text: string }) { return <div className="empty">{text}</div> }
 function KeyValue({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) { return <div className="key-value"><span>{label}</span><strong className={mono ? 'mono' : ''}>{value}</strong></div> }
-function ContextSection({ title, children }: { title: string; children: React.ReactNode }) { return <section className="context-section"><h3 className="eyebrow">{title.toUpperCase()}</h3>{children}</section> }
+function ContextSection({
+  title,
+  children,
+  collapsible = false,
+  storageKey,
+  defaultCollapsed = false,
+}: {
+  title: string
+  children: React.ReactNode
+  collapsible?: boolean
+  storageKey?: string
+  defaultCollapsed?: boolean
+}) {
+  const [collapsed, setCollapsed] = useState(() => {
+    if (!collapsible || !storageKey) return defaultCollapsed
+    try {
+      const stored = localStorage.getItem(storageKey)
+      return stored !== null ? stored === 'true' : defaultCollapsed
+    } catch {
+      return defaultCollapsed
+    }
+  })
+
+  const toggle = () => {
+    setCollapsed(prev => {
+      const next = !prev
+      if (storageKey) {
+        try {
+          localStorage.setItem(storageKey, String(next))
+        } catch {}
+      }
+      return next
+    })
+  }
+
+  return (
+    <section className={`context-section ${collapsible ? 'is-collapsible' : ''} ${collapsed ? 'is-collapsed' : ''}`}>
+      <h3 className="eyebrow context-section-header">
+        {collapsible ? (
+          <button
+            type="button"
+            className="context-section-toggle"
+            aria-expanded={!collapsed}
+            onClick={toggle}
+          >
+            <span>{title.toUpperCase()}</span>
+            <span className="context-collapse-icon" aria-hidden="true">
+              {collapsed ? '▸' : '▾'}
+            </span>
+          </button>
+        ) : (
+          title.toUpperCase()
+        )}
+      </h3>
+      {!collapsed && children}
+    </section>
+  )
+}
 function AuthenticatedImage({ artifact, token }: { artifact: ComputerStatus['screenshots'][number]; token: string }) {
   const [url, setUrl] = useState('')
   const [expanded, setExpanded] = useState(false)
