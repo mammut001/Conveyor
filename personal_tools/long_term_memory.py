@@ -55,6 +55,18 @@ _FORGET_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _ID_RE = re.compile(r"^#?(\d+)$")
+# Natural-language credentials redact_text does not catch ("我的密码是 Hunter2x").
+_CREDENTIAL_WORD_RE = re.compile(
+    r"(?i)(密码|口令|密钥|私钥|验证码|\b(?:password|passwd|passcode|passphrase|api[\s_-]?key|"
+    r"secret|token|private[\s_-]?key|pin(?:\s*code)?)\b)"
+)
+_CREDENTIAL_VALUE_RE = re.compile(r"(?=[^\s，。,:：]*\d)(?=[^\s，。,:：]*[A-Za-z])[A-Za-z0-9!@#$%^&*_+=./~-]{6,}|\b\d{4,}\b")
+
+
+def _looks_like_credential(fact: str) -> bool:
+    """A credential word plus a password-like value (letters+digits, or a PIN)."""
+    m = _CREDENTIAL_WORD_RE.search(fact)
+    return bool(m and _CREDENTIAL_VALUE_RE.search(fact[m.end():]))
 
 
 @dataclass(frozen=True)
@@ -133,7 +145,7 @@ def normalize_fact(text: str) -> str:
     fact = " ".join((text or "").split())
     if not fact:
         return _fail("用法: memory.remember <一句话事实>")
-    if redact_text(fact) != fact:
+    if redact_text(fact) != fact or _looks_like_credential(fact):
         return _fail("不能记住密钥、token 或密码。")
     body = fact.rstrip("。！？!?…. ")
     if _SENTENCE_BREAK.search(body):

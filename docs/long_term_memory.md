@@ -33,7 +33,9 @@ stored are still injected, but the model cannot add or delete them.
 `/memo`, `记一下`, and the daily `MEMORY.md` file are unchanged. `/chat_clear`
 clears short-term history only.
 
-Secrets, API keys, and tokens are refused (`redact_text`). They are not
+Secrets, API keys, and tokens are refused (`redact_text`), as are plain-language
+credentials: a credential word (密码 / password / PIN / token / API key …) followed by a
+password-like value (letters + digits, or 4+ digits). They are not
 stored, including not stored in redacted form, and they are not copied into
 the pending approval.
 

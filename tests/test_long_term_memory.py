@@ -381,3 +381,29 @@ class ApprovalFreshnessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NaturalLanguageCredentialTests(unittest.TestCase):
+    def test_plain_language_credentials_refused(self):
+        from personal_tools.long_term_memory import normalize_fact, screen_write_arg
+        for text in (
+            "我的密码是 Hunter2Hunter2",
+            "my wifi password is sunflower88",
+            "银行卡 PIN 是 4821",
+            "github token is abc123def",
+        ):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    normalize_fact(text)
+                self.assertTrue(screen_write_arg("memory.remember", text).error)
+
+    def test_ordinary_facts_mentioning_words_accepted(self):
+        from personal_tools.long_term_memory import normalize_fact
+        for text in (
+            "我每个月要换一次密码",
+            "Remember to rotate the API key every quarter",
+            "my shopping budget is 1200",
+            "我的生日是 1990 年 5 月",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(normalize_fact(text), text)
