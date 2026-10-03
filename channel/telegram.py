@@ -19,7 +19,7 @@ from typing import Any, Sequence
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
 from channel.mentions import mentions, strip_mention
-from channel.types import Attachment, InboundMessage, ReplyContext
+from channel.types import Attachment, InboundMessage, OutboundPort, ReplyContext
 from redaction import truncate
 
 logger = logging.getLogger("conveyor.channel.telegram")
@@ -325,6 +325,55 @@ class TelegramOutbound:
 
 def make_outbound(update: Update) -> TelegramOutbound:
     return TelegramOutbound(update)
+
+
+class TelegramChatOutbound(OutboundPort):
+    supports_inline_buttons: bool = True
+    supports_attachments: bool = False
+
+    def __init__(self, bot: Any, chat_id: str | int) -> None:
+        self.bot = bot
+        self.chat_id = chat_id
+
+    async def reply(self, msg: InboundMessage, text: str) -> str | None:
+        return await self.send_new(msg, text)
+
+    async def send_new(self, msg: InboundMessage, text: str) -> str | None:
+        try:
+            sent = await self.bot.send_message(
+                chat_id=int(self.chat_id),
+                text=truncate(text),
+                disable_web_page_preview=True,
+            )
+            return str(getattr(sent, "message_id", "") or "")
+        except Exception:
+            logger.exception("Failed to send Telegram message from TelegramChatOutbound")
+            return None
+
+    async def edit_progress(self, msg: InboundMessage, placeholder_id: str, text: str) -> bool:
+        return True
+
+    async def reply_with_buttons(
+        self,
+        msg: InboundMessage,
+        text: str,
+        buttons: Sequence[Sequence[dict]],
+    ) -> str | None:
+        try:
+            keyboard = [
+                [InlineKeyboardButton(b["text"], callback_data=b["callback_data"]) for b in row]
+                for row in buttons
+            ]
+            sent = await self.bot.send_message(
+                chat_id=int(self.chat_id),
+                text=truncate(text),
+                disable_web_page_preview=True,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+            return str(getattr(sent, "message_id", "") or "")
+        except Exception:
+            logger.exception("Failed to send Telegram message with buttons")
+            return None
 
 
 # ---- Low-level send/edit helpers ------------------------------------------

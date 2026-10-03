@@ -216,6 +216,9 @@ class Settings:
     web_mobile_ui: bool = False
     mcp_enabled: bool = False
     mcp_config_path: Path | None = None
+    approval_relay_enabled: bool = False
+    approval_relay_channels: tuple[str, ...] = ()
+    approval_relay_db: Path | None = None
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -603,6 +606,25 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
             Path(os.getenv("CONVEYOR_MCP_CONFIG")).expanduser().resolve()
             if os.getenv("CONVEYOR_MCP_CONFIG")
             else (memory_root / "mcp_servers.json")
+        ),
+        "approval_relay_enabled": (
+            (os.getenv("CONVEYOR_APPROVAL_RELAY_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on"))
+            and (
+                True if (os.getenv("CONVEYOR_APPROVAL_INBOX_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on"))
+                else (logger.warning("CONVEYOR_APPROVAL_RELAY_ENABLED is true but CONVEYOR_APPROVAL_INBOX_ENABLED is false; approval relay disabled") or False)
+            )
+        ),
+        "approval_relay_channels": tuple(
+            ch for ch in (c.strip().lower() for c in os.getenv("CONVEYOR_APPROVAL_RELAY_CHANNELS", "").split(","))
+            if ch and (
+                ch in ("telegram", "feishu")
+                or (logger.warning("Unknown channel %r in CONVEYOR_APPROVAL_RELAY_CHANNELS, ignored", ch) or False)
+            )
+        ),
+        "approval_relay_db": (
+            Path(os.getenv("CONVEYOR_APPROVAL_RELAY_DB")).expanduser().resolve()
+            if os.getenv("CONVEYOR_APPROVAL_RELAY_DB")
+            else (memory_root / "approval_relay.db")
         ),
     }
 

@@ -347,6 +347,19 @@ async def _request_confirmation(
         chat_id=msg.chat_id,
         channel=msg.channel,
     )
+    danger_label = _danger_label(tool_name, settings)
+    source = "routine" if msg.chat_id.startswith("routine-") else "chat"
+    try:
+        import approval_relay
+        approval_relay.publish(
+            settings,
+            pending,
+            summary=summary,
+            danger=danger_label,
+            source=source,
+        )
+    except Exception:
+        logger.debug("Failed to publish to approval relay", exc_info=True)
     audit_tool_event(
         settings,
         operator_id=msg.operator_id,
@@ -354,7 +367,7 @@ async def _request_confirmation(
         channel=msg.channel,
         tool_name=tool_name,
         arg=arg,
-        danger=_danger_label(tool_name, settings),
+        danger=danger_label,
         action="requested",
     )
     text = (
@@ -460,6 +473,11 @@ async def execute_confirmed(
             action="executed",
             error_preview=str(exc),
         )
+        try:
+            import approval_relay
+            approval_relay.mark_local(settings, token, "failed", result_preview=str(exc))
+        except Exception:
+            pass
         await port.reply(msg, f"工具 {action.tool_name} 执行失败: {type(exc).__name__}")
         return True
     audit_tool_event(
@@ -473,6 +491,11 @@ async def execute_confirmed(
         action="executed",
         result_preview=result,
     )
+    try:
+        import approval_relay
+        approval_relay.mark_local(settings, token, "done", result_preview=result)
+    except Exception:
+        pass
     await port.reply(msg, result)
     return True
 
@@ -503,6 +526,11 @@ async def cancel_pending(
         danger=_danger_label(action.tool_name),
         action="cancelled",
     )
+    try:
+        import approval_relay
+        approval_relay.mark_local(settings, token, "cancelled")
+    except Exception:
+        pass
     label = action.arg.strip() or action.tool_name
     await port.reply(msg, f"已取消: {action.tool_name} ({label})")
     return True

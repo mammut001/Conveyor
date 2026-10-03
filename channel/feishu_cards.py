@@ -43,6 +43,10 @@ ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "cancel",
     "confirm",
     "cancel_confirm",
+    "relay_approve",
+    "relay_reject",
+    "relay_confirm",
+    "relay_cancel",
     # P5.0: Execution-node layer actions. Both are read-only
     # refreshes — no token, no command argument, no chat-changing
     # behavior. They are mapped to the existing /nodes and
@@ -134,7 +138,7 @@ def parse_action(value: Any) -> dict[str, Any] | None:
     # a token, slash-style actions may carry a job_id. Don't enforce
     # job_id presence (a `status` action has no job_id) but reject
     # token on slash actions since it's meaningless.
-    if action in ("confirm", "cancel_confirm") and "token" not in payload:
+    if action in ("confirm", "cancel_confirm", "relay_approve", "relay_reject", "relay_confirm", "relay_cancel") and "token" not in payload:
         return None
     slash_actions = (
         "status", "diff", "apply", "discard", "cancel",

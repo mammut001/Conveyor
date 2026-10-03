@@ -393,7 +393,69 @@ async def tool_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await cancel_pending(inbound, port, settings, token)
 
 
+async def relay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline-button confirmation for cross-channel approval relay."""
+    query = update.callback_query
+    if query is None:
+        return
+    user = update.effective_user
+    user_id = str(getattr(user, "id", "") or "")
+    if not await _guard(update):
+        try:
+            await query.answer("Unauthorized.", show_alert=True)
+        except Exception:
+            pass
+        chat = update.effective_chat
+        chat_id = str(getattr(chat, "id", "") or "")
+        from handlers.tools.audit import audit_tool_event
+        audit_tool_event(
+            settings,
+            operator_id=user_id,
+            chat_id=chat_id,
+            channel="telegram",
+            tool_name="approval_relay",
+            arg="",
+            danger="high",
+            action="relay_rejected_unauthorized",
+            token="relay_unauthorized",
+        )
+        return
+
+    if not getattr(settings, "approval_relay_enabled", False):
+        await query.answer("Approval relay is disabled.", show_alert=True)
+        return
+
+    import approval_relay
+    data = query.data or ""
+    parts = data.split(":")
+    if len(parts) != 3 or parts[0] != "relay" or parts[1] not in ("approve", "reject"):
+        await query.answer("Invalid relay action.")
+        return
+
+    action, token = parts[1], parts[2]
+    approve = (action == "approve")
+
+    outcome = approval_relay.decide(
+        settings,
+        token,
+        approve=approve,
+        via="telegram",
+        decided_by=user_id or "telegram",
+    )
+
+    if outcome == "won":
+        msg = "已批准，正在原端执行…" if approve else "已拒绝。"
+        await query.answer(msg)
+    elif outcome == "already_decided":
+        await query.answer("已被其他端处理", show_alert=True)
+    elif outcome == "expired":
+        await query.answer("已过期", show_alert=True)
+    else:
+        await query.answer("未找到该审批或已失效", show_alert=True)
+
+
 async def deep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
     """"🔍 用 Codex 处理" button under a chat-tier answer → /deep."""
     if not await _guard(update):
         return
@@ -611,11 +673,36 @@ async def post_init(application: Application) -> None:
             ("audit_tools", "危险工具审计"),
         ]
     )
+    if getattr(settings, "approval_relay_enabled", False):
+        try:
+            import approval_relay
+            from channel.telegram import TelegramChatOutbound
+
+            def make_tg_port(chat_id: str):
+                return TelegramChatOutbound(application.bot, chat_id=chat_id)
+
+            consumer = approval_relay.RelayConsumer(settings, channel="telegram", port_factory=make_tg_port)
+            application.bot_data["approval_relay_consumer"] = consumer
+            consumer.start()
+        except Exception:
+            logger.exception("Failed to start approval relay consumer in telegram bot")
     logger.info("Codex Telegram bot ready. Workspace=%s task_root=%s", settings.codex_workspace_root, settings.codex_task_root)
 
 
+async def post_shutdown(application: Application) -> None:
+    consumer = application.bot_data.get("approval_relay_consumer")
+    if consumer is not None:
+        consumer.stop()
+
+
 def main() -> None:
-    application = Application.builder().token(settings.telegram_bot_token).post_init(post_init).build()
+    application = (
+        Application.builder()
+        .token(settings.telegram_bot_token)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CommandHandler("run", run_cmd))
     application.add_handler(CommandHandler("fix", fix_cmd))
@@ -667,6 +754,7 @@ def main() -> None:
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
     application.add_handler(CallbackQueryHandler(tool_callback, pattern=r"^tool:"))
+    application.add_handler(CallbackQueryHandler(relay_callback, pattern=r"^relay:"))
     application.add_handler(CallbackQueryHandler(deep_callback, pattern=r"^deep$"))
     # Catch-all for COMMAND_TABLE entries without explicit CommandHandler above.
     application.add_handler(MessageHandler(filters.COMMAND, generic_command_cmd))
