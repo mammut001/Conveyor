@@ -155,6 +155,11 @@ The Web Console provides real-time status and control over connectors:
   ```
   A server is effectively enabled if `enabled: true` in config AND its name is not in `disabled`.
 - **Refresh**: Clicking refresh re-lists tools from the server and refreshes the memory cache (cached with a 300 s TTL).
+- **Automatic discovery**: every process discovers tools on its own. Before each chat tool loop (Web chat, Telegram/Feishu chat, routines) and when the Connectors tab loads, enabled servers whose cached tool list is missing or older than 300 s (60 s after a failure) are re-listed concurrently, each bounded by its `timeout_seconds`. A slow or unreachable server therefore delays a chat turn by at most its timeout, at most once per minute.
+
+### Session lifecycle
+
+Sessions are ephemeral: each `tools/list` or `tools/call` spawns the stdio server (or opens an HTTP session), runs `initialize`, performs the one operation and closes. stdio servers run in their own process group, so wrappers such as `npx`/`uvx` and their children are terminated together (SIGTERM, then SIGKILL after 2 s) on completion or timeout. There is no long-lived MCP process to supervise; servers that are expensive to start are better exposed over HTTP.
 
 ## Endpoints
 
@@ -165,3 +170,15 @@ All endpoints require Bearer authentication. When `CONVEYOR_MCP_ENABLED=false`, 
 | `GET` | `/api/mcp/servers` | List all servers, status, cleaned target, and tools. Leaks no secrets or environment variables. |
 | `POST` | `/api/mcp/servers/<name>/refresh` | Connect, fetch tool list, and update cache. Returns 200 or 502 with server status. |
 | `PUT` | `/api/mcp/servers/<name>` | Toggle server enabled state (`{"enabled": bool}`). Returns 200 with updated item. |
+
+## Security notes
+
+- **Tool descriptions, schemas and results are untrusted input.** A malicious or compromised server can try prompt injection through them. Descriptions are stripped of control characters and capped at 500 chars, results are redacted, capped and wrapped as `<tool-result untrusted="true">`, but the model still reads them.
+- **Read-only means "auto-runs without asking".** Only mark a tool read-only (`read_only_tools`, or `trust_read_only_hint`) if calling it with model-chosen arguments is harmless. A "read" tool that reaches the network (search, fetch) can leak conversation content through its arguments, the same exfiltration risk as `web.*` tools.
+- **stdio servers run as the Conveyor user.** They get a minimal environment but full filesystem and network access unless you sandbox them yourself (container, separate user, bubblewrap). Only configure servers you trust.
+- **HTTP servers see every argument** the model sends. Use `https://` for anything off-host. Literal `headers` live in the config file, so prefer `headers_from` with an `MCP_*` variable for credentials.
+- Group chats: MCP tools follow the same exposure rules as the other chat tools. Write tools always need confirmation, but read-only tool results can appear in a group reply.
+
+## Out of scope (v1)
+
+OAuth flows and connection cards; MCP resources, prompts and sampling; server-initiated requests other than `ping`; streaming/progress notifications; long-lived sessions; exposing MCP to Codex/Claude Code jobs (child CLIs still run with MCP disabled); editing the server config from the Web UI.
