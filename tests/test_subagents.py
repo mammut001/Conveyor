@@ -281,6 +281,66 @@ class TestSubagentsSuite(unittest.IsolatedAsyncioTestCase):
         pending = get_pending_for_context("test-op", "telegram", "chat-subagents-test")
         self.assertIsNone(pending)
 
+    async def test_write_tool_refused_before_any_workspace_check(self) -> None:
+        # Round-2 click-test: CODEX_WORKSPACE_ROOT missing must not turn a
+        # subagent's write request into a workspace error — the read-only
+        # refusal happens first and nothing reaches run_tool.
+        missing_ws = self.tmp_path / "does-not-exist"
+        settings = _make_settings(self.tmp_path, codex_workspace_root=missing_ws)
+        calls = 0
+
+        async def fake_complete(config, messages, tools=None):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return {"role": "assistant", "content": None, "tool_calls": [{
+                    "id": "tc-notes", "type": "function",
+                    "function": {"name": tool_to_func_name("notes.add"),
+                                 "arguments": json.dumps({"arg": "子代理写入测试"})},
+                }]}
+            self.assertEqual(messages[-1].get("content"), "not allowed for subagents")
+            return {"role": "assistant", "content": "read-only: cannot add notes"}
+
+        arg = json.dumps({"tasks": [{"title": "Write note", "prompt": "Use notes.add"}]})
+        with patch("handlers.subagents.complete_chat", side_effect=fake_complete), \
+                patch("handlers.tools.runner.run_tool", new_callable=AsyncMock) as mock_run:
+            res = await execute_parallel_subagents(settings, arg, config=self.cfg, msg=self.msg)
+        mock_run.assert_not_called()
+        self.assertFalse(missing_ws.exists())
+        self.assertIn("### [1] Write note — ok", res)
+        self.assertIn("read-only: cannot add notes", res)
+        self.assertNotIn("CODEX_WORKSPACE_ROOT", res)
+        self.assertIsNone(get_pending_for_context(self.msg.operator_id, self.msg.chat_id, self.msg.channel))
+
+    async def test_web_search_hidden_when_backend_unconfigured(self) -> None:
+        from handlers.chat_tools import build_tool_schemas
+
+        def names(schemas):
+            return {func_to_tool_name(t["function"]["name"]) for t in schemas}
+
+        allow = ("web.search", "web.fetch", "research.run")
+        off = _make_settings(self.tmp_path, chat_tools_network_allow=allow, web_search_backend="disabled")
+        on = _make_settings(self.tmp_path, chat_tools_network_allow=allow, web_search_backend="searxng")
+        self.assertNotIn("web.search", names(build_tool_schemas(off)))
+        self.assertNotIn("research.run", names(build_tool_schemas(off)))
+        self.assertIn("web.fetch", names(build_tool_schemas(off)))
+        self.assertIn("web.search", names(build_tool_schemas(on)))
+
+        captured: list[set[str]] = []
+
+        async def fake_complete(config, messages, tools=None):
+            if tools is not None:
+                captured.append(names(tools))
+            return {"role": "assistant", "content": "ok"}
+
+        arg = json.dumps({"tasks": [{"title": "Research", "prompt": "look it up"}]})
+        for settings, expect_search in ((off, False), (on, True)):
+            captured.clear()
+            with patch("handlers.subagents.complete_chat", side_effect=fake_complete):
+                await execute_parallel_subagents(settings, arg, config=self.cfg, msg=self.msg)
+            self.assertEqual("web.search" in captured[0], expect_search)
+            self.assertIn("web.fetch", captured[0])
+
     async def test_recursion_guard_blocks_recursive_call(self) -> None:
         self.assertFalse(is_in_subagent())
 

@@ -76,6 +76,15 @@ def _network_allowlist(settings: Any) -> set[str]:
     return items & NETWORK_TOOLS
 
 
+# Tools that need a configured web search backend (WEB_SEARCH_BACKEND).
+SEARCH_BACKED_TOOLS = frozenset({"web.search", "research.run", "research.project"})
+
+
+def web_search_configured(settings: Any) -> bool:
+    backend = str(getattr(settings, "web_search_backend", "disabled") or "disabled").strip().lower()
+    return backend not in ("", "disabled")
+
+
 def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bool = True) -> bool:
     """Single policy used for both schema exposure and execution."""
     if spec is None or name.startswith("desktop."):
@@ -101,6 +110,11 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
     if spec.danger not in (DangerLevel.READ, DangerLevel.WRITE_SAFE, DangerLevel.WRITE):
         return False
     if name in NETWORK_TOOLS and name not in _network_allowlist(settings):
+        return False
+    if name in SEARCH_BACKED_TOOLS and not web_search_configured(settings):
+        # Allowlisted but no search backend: the tool can only ever answer
+        # "Web 搜索能力未配置", so don't offer it (the model then plans with
+        # web.fetch / local tools instead of retrying a dead tool).
         return False
     return True
 

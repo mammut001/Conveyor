@@ -109,3 +109,5 @@ Tool write actions requiring confirmation can be reviewed and edited in the Web 
 Reusable operator procedures can be saved, indexed, and loaded as skills; see `docs/skills.md` (`CONVEYOR_SKILLS_ENABLED`, default off).
 
 Parallel read-only research subagents can be spawned by the chat agent for multi-task lookup; see `docs/subagents.md` (`CONVEYOR_SUBAGENTS_ENABLED`, default off).
+
+> Network tools: `web.search` / `research.*` are exposed only when allowlisted via `CONVEYOR_CHAT_TOOLS_NETWORK_ALLOW` **and** a search backend is configured (`WEB_SEARCH_BACKEND`).

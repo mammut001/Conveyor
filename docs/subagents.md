@@ -97,3 +97,6 @@ When `CONVEYOR_SUBAGENTS_ENABLED=true`, the `agents.parallel` tool is exposed to
 - Subagent progress cards are live-only: they are not stored in the transcript, so a reloaded session shows the final answer without the card group.
 - Non-Web channels get a `🧩 子任务 n/N 完成 …` placeholder edit; the Web port receives structured `subagent` SSE events instead (a plain edit there would be taken as the final answer).
 - Web tools (`web.search`, `web.fetch`, …) are only available to subagents if they are already allowlisted for the parent via `CONVEYOR_CHAT_TOOLS_NETWORK_ALLOW`.
+- `web.search`, `research.run` and `research.project` are offered (to the parent and therefore to subagents) only when a search backend is configured (`WEB_SEARCH_BACKEND` ≠ `disabled`) **and** they are allowlisted. Without a backend they could only answer "Web 搜索能力未配置", so the model is not offered a dead tool; `web.fetch` / `web.text` still work for known URLs, and subagents are told to state a missing capability in one line instead of guessing.
+- Subagents refuse non-READ tool calls before anything is executed, so environment problems of write paths (e.g. a missing `CODEX_WORKSPACE_ROOT`) can never surface from a subagent.
+- `agents.parallel` lives in the **Chat** tab (`POST /api/chat`, chat tier). The **Tasks** tab (`POST /api/tasks`) is the Codex execution path and never calls it.
