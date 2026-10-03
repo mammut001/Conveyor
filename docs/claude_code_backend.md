@@ -19,6 +19,6 @@ Security and compatibility:
 - hidden thinking deltas and raw Claude envelopes are never persisted;
 - logs/events contain only bounded, redacted text and compact tool state; tool inputs and tool-result content are discarded;
 - prompts are sent over stdin rather than exposed in the process argument list;
-- the child receives Conveyor's filtered execution environment instead of the service's complete environment;
+- the child receives Conveyor's filtered execution environment instead of the service's complete environment; when `CONVEYOR_CHILD_ENV_SCOPE_PROVIDER_KEYS=true`, credentials are automatically scoped to `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, dropping other provider API keys;
 - execution still occurs inside Conveyor's detached worktree and changes still require the existing Apply policy;
 - the backend is experimental until it receives the same VPS/live validation coverage as Codex.

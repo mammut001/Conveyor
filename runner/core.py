@@ -53,7 +53,7 @@ from runner.operators.jobs import (
     discard_last_job, discard_job, apply_last_job, apply_job,
 )
 from runner.operators.maintain import clean_old_jobs, clean_old_worktrees
-from runner.operators.run import validate, start, cancel, _run_job, _wait_until_cancelled, _is_rate_limited, _should_send_event_progress, _is_user_visible_event, _is_prose_event, _tool_call_name, _agent_message_text, _completed_message, _failed_message, _codex_command, _child_env, _new_job_id, _elapsed
+from runner.operators.run import validate, start, cancel, _run_job, _wait_until_cancelled, _is_rate_limited, _should_send_event_progress, _is_user_visible_event, _is_prose_event, _tool_call_name, _agent_message_text, _completed_message, _failed_message, _codex_command, _child_env, _provider_credential_keys, _new_job_id, _elapsed
 from runner.provider_guard import guarded_run_codex_attempt
 from runner.prefetch import _tool_registry_text, _operator_profile_text, _prefetch_memory, today_memory_text, list_journal, _now_local_str
 from runner.streaming import (
@@ -115,6 +115,7 @@ for _name, _func in [
     ("_failed_message", _failed_message),
     ("_codex_command", _codex_command),
     ("_child_env", _child_env),
+    ("_provider_credential_keys", _provider_credential_keys),
     ("_new_job_id", _new_job_id),
     ("_elapsed", _elapsed),
     ("_tool_registry_text", _tool_registry_text),

@@ -503,9 +503,41 @@ def _codex_command(self, job: Job) -> list[str]:
     return command
 
 
+def _provider_credential_keys(self) -> set[str]:
+    try:
+        from provider_config import get_provider_config
+        cfg = get_provider_config(self.settings)
+        env_key = str(cfg.get("env_key") or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY"
+        return {env_key}
+    except Exception as exc:
+        logger.warning(
+            "Failed resolving provider config for child env scoping: %s; falling back to OPENAI_API_KEY",
+            exc.__class__.__name__,
+        )
+        return {"OPENAI_API_KEY"}
+
+
 def _child_env(self) -> dict[str, str]:
     from security.secrets import child_env_from
     env = child_env_from(os.environ)
+    if getattr(self.settings, "child_env_scope_provider_keys", False):
+        from security.secrets import scope_provider_keys
+        explicit_prefixes = set()
+        for env_var in ("CONVEYOR_CHILD_ENV_PREFIXES", "CONVEYOR_CHILD_ENV_EXTRA_PREFIXES"):
+            val = os.environ.get(env_var)
+            if val:
+                for part in val.split(","):
+                    part = part.strip()
+                    if part:
+                        explicit_prefixes.add(part)
+        keep = self._provider_credential_keys()
+        env, dropped = scope_provider_keys(env, keep=keep, explicit_prefixes=explicit_prefixes)
+        if dropped:
+            sec_logger = logging.getLogger("conveyor.security")
+            sec_logger.info(
+                "Scoped provider keys in child environment; dropped: %s",
+                ", ".join(sorted(dropped)),
+            )
     env["CODEX_TELEGRAM_JOB"] = "1"
     env["CODEX_RUNNER_HOME"] = str(RUNNER_HOME)
     return env

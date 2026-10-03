@@ -54,7 +54,15 @@ type SystemStatus = {
   disk: { total: number; used: number; free: number }
   queue: { depth: number; paused: boolean; states: Record<string, number> }
   channels: Record<string, { configured: boolean }>; nodes: NodeInfo[]
-  features?: { long_term_memory?: boolean; routines?: boolean; webhooks?: boolean; approval_inbox?: boolean; skills?: boolean }
+  features?: {
+    long_term_memory?: boolean
+    routines?: boolean
+    webhooks?: boolean
+    approval_inbox?: boolean
+    skills?: boolean
+    provider_key_scoping?: boolean
+    mobile_ui?: boolean
+  }
 }
 type ComputerStatus = {
   armed: boolean; arm_remaining_seconds: number; active_task?: Record<string, unknown> | null
@@ -109,6 +117,10 @@ function hostScreenRequestPending(request: ComputerStatus['screen_request']) {
   ))
 }
 
+function isEscapeKey(e: Pick<KeyboardEvent, 'key' | 'code' | 'keyCode'>): boolean {
+  return e.key === 'Escape' || e.key === 'Esc' || e.code === 'Escape' || e.keyCode === 27
+}
+
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem('conveyor-token') || '')
   const [tokenDraft, setTokenDraft] = useState('')
@@ -141,6 +153,116 @@ export default function App() {
   const refreshGen = useRef(0)
   const approvalInboxFetchGen = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
+
+  const [moreSheetOpen, setMoreSheetOpen] = useState(false)
+  const [sessionsDrawerOpen, setSessionsDrawerOpen] = useState(false)
+  const [contextDrawerOpen, setContextDrawerOpen] = useState(false)
+
+  useEffect(() => {
+    if (system?.features?.mobile_ui) {
+      let link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
+      if (!link) {
+        link = document.createElement('link')
+        link.rel = 'manifest'
+        link.href = '/manifest.webmanifest'
+        document.head.appendChild(link)
+      }
+    } else {
+      const link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
+      if (link) link.remove()
+    }
+  }, [system?.features?.mobile_ui])
+
+  const sessionsDrawerRef = useRef<HTMLElement>(null)
+  const contextDrawerRef = useRef<HTMLElement>(null)
+  const moreButtonRef = useRef<HTMLButtonElement>(null)
+  const anyMobileOverlayOpen = moreSheetOpen || sessionsDrawerOpen || contextDrawerOpen
+
+  // Latest overlay state for the always-on listeners below (read through a ref so the
+  // listeners never depend on React re-registering them at the right moment).
+  const overlayStateRef = useRef({ more: false, sessions: false, context: false })
+  overlayStateRef.current = { more: moreSheetOpen, sessions: sessionsDrawerOpen, context: contextDrawerOpen }
+  const mobileUiOn = Boolean(system?.features?.mobile_ui)
+
+  // Close drawers / the More sheet on Escape and on any tap or click outside the
+  // open drawer. The listeners are registered once (whenever the mobile UI is on),
+  // on `window` in the CAPTURE phase, so they run before any element handler,
+  // regardless of focus (a focused textarea cannot swallow Esc) and regardless of
+  // which input path produced the tap: pointerdown (mouse, pen, touch and DevTools
+  // touch emulation), touchend (touch without pointer events) and click (keyboard /
+  // synthetic). After closing on pointerdown, the click that follows it is swallowed
+  // so the tap does not also activate whatever was underneath the drawer.
+  useEffect(() => {
+    if (!mobileUiOn) return
+    let swallowClicksUntil = 0
+    const anyOpen = () => { const s = overlayStateRef.current; return s.more || s.sessions || s.context }
+    const openDrawer = () => {
+      const s = overlayStateRef.current
+      return s.sessions ? sessionsDrawerRef.current : s.context ? contextDrawerRef.current : null
+    }
+    const closeAll = () => {
+      setMoreSheetOpen(false)
+      setSessionsDrawerOpen(false)
+      setContextDrawerOpen(false)
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!anyOpen() || !isEscapeKey(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      closeAll()
+    }
+    const onTap = (e: Event) => {
+      if (e.type === 'click' && Date.now() < swallowClicksUntil) {
+        swallowClicksUntil = 0
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+      const drawer = openDrawer()
+      if (!drawer) return // the More sheet handles its own overlay click
+      const target = e.target as Node | null
+      if (!target || drawer.contains(target)) return
+      if (e.cancelable) e.preventDefault()
+      e.stopPropagation()
+      if (e.type !== 'click') swallowClicksUntil = Date.now() + 800
+      closeAll()
+    }
+    const tapEvents = ['pointerdown', 'touchend', 'click'] as const
+    window.addEventListener('keydown', onKeyDown, true)
+    tapEvents.forEach(type => window.addEventListener(type, onTap, { capture: true, passive: false }))
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      tapEvents.forEach(type => window.removeEventListener(type, onTap, { capture: true }))
+    }
+  }, [mobileUiOn])
+
+  // While a drawer or the sheet is open, pin the page zoom to 1: fixed overlays are
+  // laid out against the layout viewport, so a pinch-zoomed / panned visual viewport
+  // (e.g. DevTools device mode after a Shift-drag or trackpad pinch) can hide the
+  // backdrop strip and part of the drawer off-screen. Clamping maximum-scale resets the
+  // zoom; the original viewport (user zoom allowed) is restored on close.
+  useEffect(() => {
+    if (!mobileUiOn || !anyMobileOverlayOpen) return
+    const meta = document.querySelector('meta[name="viewport"]')
+    if (!meta) return
+    const previous = meta.getAttribute('content') || 'width=device-width, initial-scale=1.0'
+    meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0')
+    return () => meta.setAttribute('content', previous)
+  }, [mobileUiOn, anyMobileOverlayOpen])
+
+  // Move focus into an opened drawer so keyboard users (and Esc) target the page;
+  // when it closes, hand focus back to the More button instead of the hidden drawer.
+  useEffect(() => {
+    const drawer = sessionsDrawerOpen ? sessionsDrawerRef.current : contextDrawerOpen ? contextDrawerRef.current : null
+    if (drawer) {
+      drawer.focus({ preventScroll: true })
+      return
+    }
+    const active = document.activeElement
+    if (active && (sessionsDrawerRef.current?.contains(active) || contextDrawerRef.current?.contains(active))) {
+      moreButtonRef.current?.focus({ preventScroll: true })
+    }
+  }, [sessionsDrawerOpen, contextDrawerOpen])
 
   const selectSession = useCallback((sessionId: string, jobId?: string) => {
     setCreatingSession(false)
@@ -422,15 +544,19 @@ export default function App() {
     </form>
   </main>
 
-  return <main className="app-shell">
+  return <main className={`app-shell ${system?.features?.mobile_ui ? 'mobile-ui' : ''}`}>
     <header className="topbar">
       <div className="brand"><span className="brand-mark small">C</span><div><strong>Conveyor</strong><small>CONTROL CONSOLE</small></div></div>
       <div className="top-actions"><button className="settings-button" onClick={() => void openSettings()}>⚙ Settings</button><div className="top-status"><span className="live-dot" /> Online <span className="separator" /> Queue {system?.queue.depth ?? 0}</div></div>
     </header>
     {error && <div className="error-banner global">{error}<button onClick={() => setError('')}>×</button></div>}
     <section className="workspace">
-      <aside className="sessions-panel panel">
-        <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { selectSession('', ''); setCreatingSession(true); setPrompt('') }} aria-label="New session">＋</button></div>
+      <aside ref={sessionsDrawerRef} tabIndex={sessionsDrawerOpen ? -1 : undefined} role={sessionsDrawerOpen ? 'dialog' : undefined} aria-modal={sessionsDrawerOpen ? true : undefined} aria-label={sessionsDrawerOpen ? 'Sessions' : undefined} className={`sessions-panel panel ${sessionsDrawerOpen ? 'drawer-open' : ''}`}>
+        <div className="mobile-drawer-header">
+          <strong>Sessions</strong>
+          <button type="button" className="drawer-close-btn" aria-label="Close sessions" onClick={() => setSessionsDrawerOpen(false)}>×</button>
+        </div>
+        <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { selectSession('', ''); setCreatingSession(true); setPrompt(''); setSessionsDrawerOpen(false); }} aria-label="New session">＋</button></div>
         <div className="session-list">
           {sessions.map(session => (
             <div key={session.id} className="session-item-row">
@@ -438,7 +564,7 @@ export default function App() {
                 className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`}
                 title={sessionLabel(session)}
                 aria-pressed={session.id === selectedSessionId}
-                onClick={() => selectSession(session.id, session.latest_job?.id)}
+                onClick={() => { selectSession(session.id, session.latest_job?.id); setSessionsDrawerOpen(false); }}
               >
                 <span className={`status-rail ${session.latest_job?.state || ''}`} />
                 <span>
@@ -632,7 +758,11 @@ export default function App() {
         )}
       </section>
 
-      <aside className="context-panel panel">
+      <aside ref={contextDrawerRef} tabIndex={contextDrawerOpen ? -1 : undefined} role={contextDrawerOpen ? 'dialog' : undefined} aria-modal={contextDrawerOpen ? true : undefined} aria-label={contextDrawerOpen ? 'Context and changes' : undefined} className={`context-panel panel ${contextDrawerOpen ? 'drawer-open' : ''}`}>
+        <div className="mobile-drawer-header">
+          <strong>Context & Changes</strong>
+          <button type="button" className="drawer-close-btn" aria-label="Close context" onClick={() => setContextDrawerOpen(false)}>×</button>
+        </div>
         <ContextSection title="Job">
           {selectedJob ? <>
             <KeyValue label="ID" value={selectedJob.id} mono /><KeyValue label="State" value={selectedJob.state} />
@@ -678,7 +808,7 @@ export default function App() {
             </div>
           </section>
         ))}
-        <ContextSection title="Changes">
+        <ContextSection title="Changes" className="context-section--changes" collapsible storageKey="conveyor-changes-collapsed">
           {activeRefinement && <KeyValue label="Active changes" value={`${activeChangedFiles} file${activeChangedFiles === 1 ? '' : 's'} · cumulative`} />}
           <div className="file-list">{selectedJob?.changed_files?.map(file => <div key={file.path}><span className="file-status">{file.status || 'M'}</span><code>{file.path}</code></div>)}{selectedJob && !selectedJob.changed_files?.length && <Empty text="No changed files" />}</div>
           {selectedJob && <><details className="diff-view"><summary>Unified diff</summary><pre>{diff || 'No diff available.'}</pre></details><div className="action-row"><button className="danger" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/discard`)}>{activeRefinement ? 'Discard active changes…' : 'Discard…'}</button><button className="primary" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/apply`)}>{activeRefinement ? 'Apply active changes…' : 'Apply…'}</button></div></>}
@@ -711,6 +841,120 @@ export default function App() {
         </ContextSection>
       </aside>
     </section>
+    {Boolean(system?.features?.mobile_ui) && sessionsDrawerOpen && (
+      <div className="mobile-backdrop" role="button" aria-label="Close sessions panel" onClick={() => setSessionsDrawerOpen(false)} />
+    )}
+    {Boolean(system?.features?.mobile_ui) && contextDrawerOpen && (
+      <div className="mobile-backdrop" role="button" aria-label="Close context panel" onClick={() => setContextDrawerOpen(false)} />
+    )}
+    {Boolean(system?.features?.mobile_ui) && moreSheetOpen && (
+      <div className="mobile-sheet-overlay" onClick={() => setMoreSheetOpen(false)}>
+        <div className="mobile-sheet" onClick={e => e.stopPropagation()} role="dialog" aria-label="More options">
+          <div className="mobile-sheet-header">
+            <strong>More views & tools</strong>
+            <button type="button" className="drawer-close-btn" aria-label="Close more menu" onClick={() => setMoreSheetOpen(false)}>×</button>
+          </div>
+          <div className="mobile-sheet-items">
+            {(Boolean(system?.features?.routines) || view === 'inbox') && (
+              <button
+                type="button"
+                className={`mobile-sheet-item ${view === 'inbox' ? 'active' : ''}`}
+                onClick={() => { setView('inbox'); setMoreSheetOpen(false); }}
+              >
+                <span>📬 Inbox & Routines</span>
+                {inboxUnread > 0 && <span className="mobile-badge">{inboxUnread}</span>}
+              </button>
+            )}
+            {(Boolean(system?.features?.long_term_memory) || view === 'memory') && (
+              <button
+                type="button"
+                className={`mobile-sheet-item ${view === 'memory' ? 'active' : ''}`}
+                onClick={() => { setView('memory'); setMoreSheetOpen(false); }}
+              >
+                <span>🧠 Long-term Memory</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="mobile-sheet-item"
+              onClick={() => { setSessionsDrawerOpen(true); setMoreSheetOpen(false); }}
+            >
+              <span>📑 Sessions</span>
+            </button>
+            <button
+              type="button"
+              className="mobile-sheet-item"
+              onClick={() => { setContextDrawerOpen(true); setMoreSheetOpen(false); }}
+            >
+              <span>🔍 Context & Changes</span>
+            </button>
+            <button
+              type="button"
+              className="mobile-sheet-item"
+              onClick={() => { void openSettings(); setMoreSheetOpen(false); }}
+            >
+              <span>⚙ Settings</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    {Boolean(system?.features?.mobile_ui) && (
+      <nav className="mobile-bottom-nav" aria-label="Mobile navigation">
+        <button
+          type="button"
+          className={`mobile-nav-item ${view === 'tasks' && !moreSheetOpen ? 'active' : ''}`}
+          onClick={() => { setView('tasks'); setMoreSheetOpen(false); }}
+        >
+          <span className="mobile-nav-icon">⚡</span>
+          <span>Tasks</span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${view === 'chat' && !moreSheetOpen ? 'active' : ''}`}
+          onClick={() => { setView('chat'); setMoreSheetOpen(false); }}
+        >
+          <span className="mobile-nav-icon">💬</span>
+          <span>Chat</span>
+        </button>
+
+        {Boolean(system?.features?.approval_inbox) && (
+          <button
+            type="button"
+            className={`mobile-nav-item ${view === 'approvals' && !moreSheetOpen ? 'active' : ''}`}
+            onClick={() => { setView('approvals'); setMoreSheetOpen(false); }}
+          >
+            <span className="mobile-nav-icon" style={{ position: 'relative' }}>
+              ✓
+              {approvalInboxCount > 0 && <span className="mobile-badge-pill">{approvalInboxCount}</span>}
+            </span>
+            <span>Approvals</span>
+          </button>
+        )}
+
+        {(Boolean(system?.features?.skills) || view === 'skills') && (
+          <button
+            type="button"
+            className={`mobile-nav-item ${view === 'skills' && !moreSheetOpen ? 'active' : ''}`}
+            onClick={() => { setView('skills'); setMoreSheetOpen(false); }}
+          >
+            <span className="mobile-nav-icon">🛠</span>
+            <span>Skills</span>
+          </button>
+        )}
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${moreSheetOpen ? 'active' : ''}`}
+          ref={moreButtonRef}
+          onClick={() => setMoreSheetOpen(prev => !prev)}
+        >
+          <span className="mobile-nav-icon">⋯</span>
+          <span>More</span>
+        </button>
+      </nav>
+    )}
     {settingsOpen && <ProviderSettings config={providerConfig} busy={busy} onClose={() => setSettingsOpen(false)} onSave={async payload => {
       setBusy(true); setError('')
       try {
@@ -754,7 +998,66 @@ function ProviderSettings({ config, busy, onClose, onSave }: {
 function StatusBadge({ state }: { state: string }) { return <span className={`status-badge ${state}`}><i />{stateLabel(state)}</span> }
 function Empty({ text }: { text: string }) { return <div className="empty">{text}</div> }
 function KeyValue({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) { return <div className="key-value"><span>{label}</span><strong className={mono ? 'mono' : ''}>{value}</strong></div> }
-function ContextSection({ title, children }: { title: string; children: React.ReactNode }) { return <section className="context-section"><h3 className="eyebrow">{title.toUpperCase()}</h3>{children}</section> }
+function ContextSection({
+  title,
+  children,
+  collapsible = false,
+  storageKey,
+  defaultCollapsed = false,
+  className = '',
+}: {
+  title: string
+  className?: string
+  children: React.ReactNode
+  collapsible?: boolean
+  storageKey?: string
+  defaultCollapsed?: boolean
+}) {
+  const [collapsed, setCollapsed] = useState(() => {
+    if (!collapsible || !storageKey) return defaultCollapsed
+    try {
+      const stored = localStorage.getItem(storageKey)
+      return stored !== null ? stored === 'true' : defaultCollapsed
+    } catch {
+      return defaultCollapsed
+    }
+  })
+
+  const toggle = () => {
+    setCollapsed(prev => {
+      const next = !prev
+      if (storageKey) {
+        try {
+          localStorage.setItem(storageKey, String(next))
+        } catch {}
+      }
+      return next
+    })
+  }
+
+  return (
+    <section className={`context-section ${className} ${collapsible ? 'is-collapsible' : ''} ${collapsed ? 'is-collapsed' : ''}`}>
+      <h3 className="eyebrow context-section-header">
+        {collapsible ? (
+          <button
+            type="button"
+            className="context-section-toggle"
+            aria-expanded={!collapsed}
+            onClick={toggle}
+          >
+            <span>{title.toUpperCase()}</span>
+            <span className="context-collapse-icon" aria-hidden="true">
+              {collapsed ? '▸' : '▾'}
+            </span>
+          </button>
+        ) : (
+          title.toUpperCase()
+        )}
+      </h3>
+      {!collapsed && children}
+    </section>
+  )
+}
 function AuthenticatedImage({ artifact, token }: { artifact: ComputerStatus['screenshots'][number]; token: string }) {
   const [url, setUrl] = useState('')
   const [expanded, setExpanded] = useState(false)

@@ -8,7 +8,7 @@
   order: 4;
 }
 
-.primary-interface .context-panel > .context-section:not(:first-of-type):not(:has(.file-list)):not(:has(.host-screen-card)):not(.takeover-context) {
+.primary-interface .context-panel > .context-section:not(:first-of-type):not(.context-section--changes):not(:has(.host-screen-card)):not(.takeover-context) {
   order: 5;
 }
 

@@ -306,6 +306,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._json(HTTPStatus.OK, {"ok": True, "service": "conveyor-web", "schema_version": 1})
             return
+        if path == "/manifest.webmanifest":
+            self._manifest()
+            return
         if path.startswith("/api/") and not self._require_auth():
             return
         query = parse_qs(parsed.query)
@@ -1239,6 +1242,17 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             future.cancel()
             logger.debug("Chat client disconnected: %s", self.client_address[0])
+
+    def _manifest(self) -> None:
+        candidate = (STATIC_ROOT / "manifest.webmanifest").resolve()
+        if not candidate.is_file():
+            candidate = (Path(__file__).resolve().parent / "web" / "public" / "manifest.webmanifest").resolve()
+        if not candidate.is_file():
+            self._json(HTTPStatus.NOT_FOUND, {"error": "manifest not found"})
+            return
+        data = candidate.read_bytes()
+        self._headers(HTTPStatus.OK, "application/manifest+json", len(data))
+        self.wfile.write(data)
 
     def _static(self, path: str) -> None:
         relative = path.lstrip("/") or "index.html"
