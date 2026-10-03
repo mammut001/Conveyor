@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import http.client
 import json
+from pathlib import Path
 import threading
 import unittest
 from unittest.mock import patch
@@ -191,3 +192,44 @@ class WebConsoleManifestAndIconsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMobileUiRegressions(unittest.TestCase):
+    """Static guards for the PR #60 second-round fixes (no JS test runner in this repo;
+    the real-input browser checks live in scripts/ui_regress/)."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def _read(self, rel: str) -> str:
+        return (self.ROOT / rel).read_text(encoding="utf-8")
+
+    def test_changes_section_uses_stable_class_not_has_file_list(self) -> None:
+        app = self._read("web/src/App.tsx")
+        self.assertIn('title="Changes" className="context-section--changes" collapsible storageKey="conveyor-changes-collapsed"', app)
+        # Collapsing removes .file-list from the DOM, so no layout rule may key on it.
+        for css in ("web/src/primary.css", "web/src/takeover.css"):
+            text = self._read(css)
+            rules = [line for line in text.splitlines() if ":has(.file-list)" in line and not line.lstrip().startswith("/*") and "Stable class" not in line]
+            self.assertEqual(rules, [], f"{css} still keys layout on :has(.file-list)")
+        self.assertIn(".context-section--changes", self._read("web/src/primary.css"))
+
+    def test_built_css_matches_source(self) -> None:
+        dist = self.ROOT / "web" / "dist" / "assets"
+        css = "".join(p.read_text(encoding="utf-8") for p in dist.glob("*.css"))
+        self.assertIn("context-section--changes", css)
+        self.assertNotIn("has(.file-list)", css)
+
+    def test_collapse_state_read_from_local_storage_on_mount(self) -> None:
+        app = self._read("web/src/App.tsx")
+        self.assertIn("localStorage.getItem(storageKey)", app)
+        self.assertIn("localStorage.setItem(storageKey, String(next))", app)
+
+    def test_drawers_close_via_document_capture_listeners(self) -> None:
+        app = self._read("web/src/App.tsx")
+        self.assertIn("document.addEventListener('keydown', onKeyDown, true)", app)
+        self.assertIn("document.addEventListener('click', onOutside, true)", app)
+        self.assertIn("drawer.contains(target)", app)
+        # The backdrop must be a real, labelled click target (not aria-hidden).
+        self.assertNotIn('className="mobile-backdrop" onClick={() => setSessionsDrawerOpen(false)} aria-hidden="true"', app)
+        self.assertIn('aria-label="Close sessions panel"', app)
+        self.assertIn('aria-label="Close context panel"', app)

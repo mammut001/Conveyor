@@ -91,3 +91,12 @@ Conveyor explicitly **does not register a Service Worker** for the Web Console:
 
 - **Computer Screen Preview**: Read-only desktop screenshots from Mac nodes are displayed as downscaled thumbnails; full inspection is best on a tablet or desktop screen.
 - **Large Unified Diffs**: Very large diffs with thousands of changed lines require horizontal and vertical scrolling within the diff viewer card; desktop remains recommended for massive multi-file code reviews.
+
+## UI regression scripts (manual)
+
+Two browser scripts under `scripts/ui_regress/` exercise the things unit tests cannot (they are not run in CI):
+
+- `cdp_regress.py <url> <token_file> <outdir>` — headless Chrome over CDP with real input events (`Input.dispatchMouseEvent` / `dispatchTouchEvent` / `dispatchKeyEvent`). Desktop 1280x800: collapse CHANGES, `Page.reload`, check it is still collapsed **and still the top section of the panel**, survives polling, re-expand persists. Mobile 390x844 with touch emulation: open Sessions / Context drawers from More and close each by an outside tap, an outside mouse click and a real Escape key, checking both the state and that the drawer is visually off-screen.
+- `x11_regress.py <url> <token_file> [outdir]` — headful Chrome on `$DISPLAY` (~500px window) driven by real X11 mouse/keyboard events via `xdotool`.
+
+Both read the Web token from a file and never print it.
