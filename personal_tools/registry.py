@@ -27,6 +27,7 @@ from personal_tools import file_search as file_search_tools
 from personal_tools import kb as kb_tools
 from personal_tools import queue_tools as queue_tools
 from personal_tools import routines as routines_tools
+from personal_tools import long_term_memory as memory_tools
 
 if TYPE_CHECKING:
     pass
@@ -660,6 +661,36 @@ def register_personal_tools() -> None:
         DangerLevel.WRITE,
         routines_tools.routine_run,
         keywords=("运行定时任务", "跑routine"),
+    )
+
+    # Durable long-term memory (flagged off in is_exposed / chat_tools).
+    _register(
+        "memory.remember",
+        "记住一句话事实（跨会话；需确认；不存密钥）",
+        DangerLevel.WRITE,
+        memory_tools.memory_remember,
+        keywords=("记住", "remember"),
+    )
+    _register(
+        "memory.forget",
+        "删除一条长期记忆（<#id 或原句>；需确认；真正删除）",
+        DangerLevel.WRITE,
+        memory_tools.memory_forget,
+        keywords=("忘掉", "忘记", "forget"),
+    )
+    _register(
+        "memory.list",
+        "列出长期记忆（档案 + 日志）",
+        DangerLevel.READ,
+        memory_tools.memory_list,
+        keywords=("记忆列表",),
+    )
+    _register(
+        "memory.search",
+        "搜索长期记忆",
+        DangerLevel.READ,
+        memory_tools.memory_search,
+        keywords=("搜索记忆",),
     )
 
 

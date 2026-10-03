@@ -62,11 +62,15 @@ def _network_allowlist(settings: Any) -> set[str]:
     return items & NETWORK_TOOLS
 
 
-def is_exposed(name: str, spec: Any, settings: Any = None) -> bool:
+def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bool = True) -> bool:
     """Single policy used for both schema exposure and execution."""
     if spec is None or name.startswith("desktop."):
         return False
+    if name.startswith("memory.") and not memory_allowed:
+        return False
     if name.startswith("routine.") and not getattr(settings, "routines_enabled", False):
+        return False
+    if name.startswith("memory.") and not getattr(settings, "long_term_memory_enabled", False):
         return False
     if spec.danger not in (DangerLevel.READ, DangerLevel.WRITE_SAFE, DangerLevel.WRITE):
         return False
@@ -75,7 +79,7 @@ def is_exposed(name: str, spec: Any, settings: Any = None) -> bool:
     return True
 
 
-def build_tool_schemas(settings: Settings | None = None) -> list[dict]:
+def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool = True) -> list[dict]:
     """OpenAI function schemas for exposed tools.
 
     Exposes personal tools and TOOL_REGISTRY tools whose danger is READ,
@@ -98,7 +102,7 @@ def build_tool_schemas(settings: Settings | None = None) -> list[dict]:
             continue
         seen.add(name)
 
-        if not is_exposed(name, spec, settings):
+        if not is_exposed(name, spec, settings, memory_allowed=memory_allowed):
             continue
 
         func_name = tool_to_func_name(name)
@@ -162,7 +166,9 @@ async def run_tool_loop(
     config: ChatConfig,
 ) -> ToolLoopResult:
     """Execute up to chat_tool_max_steps rounds of complete_chat with tools."""
-    schemas = build_tool_schemas(settings)
+    from personal_tools.long_term_memory import allowed_for
+    memory_allowed = allowed_for(settings, msg)
+    schemas = build_tool_schemas(settings, memory_allowed=memory_allowed)
     max_steps_val = getattr(settings, "chat_tool_max_steps", 3)
     max_steps = 3 if max_steps_val is None else int(max_steps_val)
     max_steps = max(0, max_steps)
@@ -189,7 +195,7 @@ async def run_tool_loop(
             arg = _parse_tool_arg(fn_info.get("arguments"))
 
             spec = _get_tool_spec(real_tool_name)
-            if not is_exposed(real_tool_name, spec, settings):
+            if not is_exposed(real_tool_name, spec, settings, memory_allowed=memory_allowed):
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
@@ -198,6 +204,19 @@ async def run_tool_loop(
                 continue
 
             danger = spec.danger
+            if real_tool_name.startswith("memory.") and danger in (
+                DangerLevel.WRITE_SAFE, DangerLevel.WRITE,
+            ):
+                from personal_tools.long_term_memory import screen_write_arg
+                screened = screen_write_arg(real_tool_name, arg)
+                if screened.error:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": screened.error,
+                    })
+                    continue
+                arg = screened.arg
             if danger in (DangerLevel.WRITE_SAFE, DangerLevel.WRITE):
                 # Non-READ tools must NOT execute automatically
                 logger.info("Chat tier tool call requested confirmation: %s", real_tool_name)

@@ -206,6 +206,9 @@ class Settings:
     routines_enabled: bool = False
     routines_feishu_chat_id: str | None = None
     routines_approval_ttl_seconds: int = 86_400
+    long_term_memory_enabled: bool = False
+    long_term_memory_shared: bool = True
+    long_term_memory_groups: bool = False
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -559,6 +562,18 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "routines_approval_ttl_seconds": max(
             300, min(7 * 86_400, _int_env("CONVEYOR_ROUTINES_APPROVAL_TTL_SECONDS", 86_400))
         ),
+        # Durable cross-chat memory. Off: tools hidden, prompts unchanged.
+        "long_term_memory_enabled": os.getenv(
+            "CONVEYOR_LONG_TERM_MEMORY", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        # Single-operator: one memory shared by web/Telegram/Feishu (false = per operator id).
+        "long_term_memory_shared": os.getenv(
+            "CONVEYOR_LONG_TERM_MEMORY_SHARED", "true"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        # Group chats get no durable memory (no injection, memory.* refused) unless true.
+        "long_term_memory_groups": os.getenv(
+            "CONVEYOR_LONG_TERM_MEMORY_GROUPS", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
     }
 
 

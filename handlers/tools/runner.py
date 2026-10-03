@@ -208,6 +208,10 @@ async def _invoke_tool(
     if spec is None and get_personal_tool(tool_name) is None:
         await port.reply(msg, f"未知工具: {tool_name}")
         return
+    if _memory_blocked(settings, msg, tool_name):
+        from personal_tools.long_term_memory import GROUP_REFUSAL
+        await port.reply(msg, GROUP_REFUSAL)
+        return
     if _requires_confirmation(tool_name):
         await _request_confirmation(msg, port, settings, tool_name, arg)
         return
@@ -284,6 +288,14 @@ async def _invoke_tool(
     await port.reply(msg, result)
 
 
+def _memory_blocked(settings: Settings, msg: InboundMessage, tool_name: str) -> bool:
+    """memory.* is refused in group chats (shared memory must not leak there)."""
+    if not tool_name.startswith("memory."):
+        return False
+    from personal_tools.long_term_memory import allowed_for
+    return not allowed_for(settings, msg)
+
+
 async def _request_confirmation(
     msg: InboundMessage,
     port: OutboundPort,
@@ -291,6 +303,10 @@ async def _request_confirmation(
     tool_name: str,
     arg: str,
 ) -> None:
+    if _memory_blocked(settings, msg, tool_name):
+        from personal_tools.long_term_memory import GROUP_REFUSAL
+        await port.reply(msg, GROUP_REFUSAL)
+        return
     spec = get_tool(tool_name)
     if spec is not None:
         summary = spec.summary

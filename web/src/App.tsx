@@ -2,9 +2,11 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import { ChatPanel } from './components/ChatPanel'
 import { FormattedText } from './components/FormattedText'
 import { InboxPanel } from './components/InboxPanel'
+import { MemoryPanel } from './components/MemoryPanel'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
+import { dropApproval, isStale, shouldRefreshForEvent } from './approvalFreshness'
 
 type EventItem = {
   schema_version: number; event_id: string; sequence: number; timestamp: string
@@ -50,6 +52,7 @@ type SystemStatus = {
   disk: { total: number; used: number; free: number }
   queue: { depth: number; paused: boolean; states: Record<string, number> }
   channels: Record<string, { configured: boolean }>; nodes: NodeInfo[]
+  features?: { long_term_memory?: boolean; routines?: boolean }
 }
 type ComputerStatus = {
   armed: boolean; arm_remaining_seconds: number; active_task?: Record<string, unknown> | null
@@ -128,9 +131,10 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [view, setView] = useState<'tasks' | 'chat' | 'inbox'>('tasks')
+  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : 'tasks'))
   const [inboxUnread, setInboxUnread] = useState(0)
   const lastSequence = useRef(0)
+  const refreshGen = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
 
   const selectSession = useCallback((sessionId: string, jobId?: string) => {
@@ -176,12 +180,17 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     if (!token) return
+    const gen = ++refreshGen.current
     try {
       const [sessionData, jobData, approvalData, nodeData, systemData, computerData] = await Promise.all([
         api<{ sessions: Session[] }>('/api/sessions'), api<{ jobs: Job[] }>('/api/jobs'),
         api<{ approvals: Approval[] }>('/api/approvals'), api<{ nodes: NodeInfo[] }>('/api/nodes'),
         api<SystemStatus>('/api/system/status'), api<ComputerStatus>('/api/computer/status'),
       ])
+      // A newer refresh (or a decision that bumped the generation) started
+      // while this one was in flight. Drop it so a late poll cannot restore
+      // a pending approval or an old job state.
+      if (isStale(gen, refreshGen.current)) return
       const taskSessions = taskSessionsOnly(sessionData.sessions)
       setSessions(taskSessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setError('')
@@ -259,7 +268,7 @@ export default function App() {
             const event = JSON.parse(line.slice(6)) as EventItem
             lastSequence.current = Math.max(lastSequence.current, event.sequence)
             setEvents(previous => previous.some(item => item.event_id === event.event_id) ? previous : [...previous, event].slice(-1000))
-            if (event.kind.startsWith('assistant.') || event.kind.startsWith('task.') || event.kind.startsWith('refinement.')) {
+            if (shouldRefreshForEvent(event.kind)) {
               void refresh()
               void refreshTranscript()
             }
@@ -333,8 +342,19 @@ export default function App() {
   }
   async function action(path: string, body: object = {}) {
     setBusy(true); setError('')
+    const decided = path.match(/^\/api\/approvals\/([^/]+)\/(approve|reject)$/)
+    if (decided) {
+      const approvalId = decodeURIComponent(decided[1])
+      setApprovals(prev => dropApproval(prev, approvalId))
+    }
+    // Invalidate a poll that started before this decision.
+    refreshGen.current += 1
     try { await api(path, { method: 'POST', body: JSON.stringify(body) }); await refresh() }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Action failed') }
+    catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Action failed')
+      // The optimistic drop may have been wrong (network error). Re-read.
+      try { await refresh() } catch { /* status already reported */ }
+    }
     finally { setBusy(false) }
   }
   async function captureHostScreen() {
@@ -408,10 +428,10 @@ export default function App() {
         <div className="stream-header">
           <div>
             <p className="eyebrow">
-              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : 'TASKS · CODEX EXECUTION'}
+              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : 'TASKS · CODEX EXECUTION'}
             </p>
             <h2>
-              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
+              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -421,11 +441,16 @@ export default function App() {
               <button type="button" className={view === 'inbox' ? 'active' : ''} onClick={() => setView('inbox')}>
                 Inbox{inboxUnread > 0 ? ` (${inboxUnread})` : ''}
               </button>
+              {(system?.features?.long_term_memory || view === 'memory') && (
+                <button type="button" className={view === 'memory' ? 'active' : ''} onClick={() => setView('memory')}>Memory</button>
+              )}
             </div>
             {view === 'tasks' && selectedJob && <StatusBadge state={selectedJob.state} />}
           </div>
         </div>
-        {view === 'inbox' ? (
+        {view === 'memory' ? (
+          <MemoryPanel token={token} />
+        ) : view === 'inbox' ? (
           <InboxPanel
             token={token}
             onUnreadChange={setInboxUnread}

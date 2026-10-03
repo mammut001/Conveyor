@@ -610,4 +610,8 @@ class WebControl:
                 "feishu": {"configured": bool(self.settings.lark_app_id and self.settings.lark_app_secret)},
             },
             "nodes": self.nodes(),
+            "features": {
+                "long_term_memory": bool(getattr(self.settings, "long_term_memory_enabled", False)),
+                "routines": bool(getattr(self.settings, "routines_enabled", False)),
+            },
         }

@@ -1,4 +1,5 @@
 import React, { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { applyInboxDecision, isStale } from '../approvalFreshness';
 import { FormattedText } from './FormattedText';
 
 export type Routine = {
@@ -62,6 +63,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
   const [routinesList, setRoutinesList] = useState<Routine[]>([]);
   const [error, setError] = useState('');
   const [approvalsInProgress, setApprovalsInProgress] = useState<Record<string, boolean>>({});
+  const fetchGen = useRef(0);
 
   // Create form state
   const [formOpen, setFormOpen] = useState(false);
@@ -75,6 +77,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
 
   const fetchInbox = useCallback(async () => {
     if (disabledRef.current || !token) return;
+    const gen = ++fetchGen.current;
     try {
       const res = await fetch('/api/inbox?limit=50', {
         headers: { Authorization: `Bearer ${token}` },
@@ -89,14 +92,14 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
         throw new Error(body.error || `Failed to load inbox (${res.status})`);
       }
       const data = await res.json();
+      if (isStale(gen, fetchGen.current)) return;
       setItems(data.items || []);
       const count = Number(data.unread || 0);
       setUnreadCount(count);
       onUnreadChange?.(count);
     } catch (err) {
-      if (!disabledRef.current) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch inbox');
-      }
+      if (isStale(gen, fetchGen.current) || disabledRef.current) return;
+      setError(err instanceof Error ? err.message : 'Failed to fetch inbox');
     }
   }, [token, onUnreadChange]);
 
@@ -185,10 +188,14 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided }: InboxPa
         },
         body: '{}',
       });
-      if (!res.ok) {
+      if (!res.ok && res.status !== 404) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `Approval failed (${res.status})`);
       }
+      const status = !res.ok ? 'expired' : approve ? 'approved' : 'denied';
+      // Drop an in-flight poll, then paint the decision before the refetch returns.
+      fetchGen.current += 1;
+      setItems((prev) => applyInboxDecision(prev, approvalId, status));
       await fetchInbox();
       onApprovalDecided?.();
     } catch (err) {
