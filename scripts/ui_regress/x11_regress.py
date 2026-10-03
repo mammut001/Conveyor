@@ -31,7 +31,9 @@ async def main():
             await send("Page.navigate", {"url": URL}); time.sleep(4)
             await send("Page.bringToFront")
             wid = subprocess.run(["xdotool", "search", "--sync", "--onlyvisible", "--pid", str(chrome.pid)], capture_output=True, text=True).stdout.split()
-            if wid: xdo("windowactivate", "--sync", wid[-1])
+            if wid:  # windowactivate needs a window manager; plain Xvfb only supports windowfocus
+                if subprocess.run(["xdotool", "windowactivate", "--sync", wid[-1]], capture_output=True).returncode != 0:
+                    xdo("windowfocus", "--sync", wid[-1])
             info = await js("({iw:innerWidth, ih:innerHeight, sx:screenX, sy:screenY, ow:outerWidth, oh:outerHeight})")
             print("viewport", info)
             W = wid[-1]

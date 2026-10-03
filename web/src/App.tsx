@@ -117,6 +117,10 @@ function hostScreenRequestPending(request: ComputerStatus['screen_request']) {
   ))
 }
 
+function isEscapeKey(e: Pick<KeyboardEvent, 'key' | 'code' | 'keyCode'>): boolean {
+  return e.key === 'Escape' || e.key === 'Esc' || e.code === 'Escape' || e.keyCode === 27
+}
+
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem('conveyor-token') || '')
   const [tokenDraft, setTokenDraft] = useState('')
@@ -174,42 +178,77 @@ export default function App() {
   const moreButtonRef = useRef<HTMLButtonElement>(null)
   const anyMobileOverlayOpen = moreSheetOpen || sessionsDrawerOpen || contextDrawerOpen
 
+  // Latest overlay state for the always-on listeners below (read through a ref so the
+  // listeners never depend on React re-registering them at the right moment).
+  const overlayStateRef = useRef({ more: false, sessions: false, context: false })
+  overlayStateRef.current = { more: moreSheetOpen, sessions: sessionsDrawerOpen, context: contextDrawerOpen }
+  const mobileUiOn = Boolean(system?.features?.mobile_ui)
+
   // Close drawers / the More sheet on Escape and on any tap or click outside the
-  // open drawer. Listeners sit on `document` in the CAPTURE phase so they work no
-  // matter which element has focus (the sheet button that opened a drawer is
-  // unmounted, leaving focus on <body>) and no matter which element is on top at
-  // the tapped point; they do not depend on the backdrop receiving the event.
+  // open drawer. The listeners are registered once (whenever the mobile UI is on),
+  // on `window` in the CAPTURE phase, so they run before any element handler,
+  // regardless of focus (a focused textarea cannot swallow Esc) and regardless of
+  // which input path produced the tap: pointerdown (mouse, pen, touch and DevTools
+  // touch emulation), touchend (touch without pointer events) and click (keyboard /
+  // synthetic). After closing on pointerdown, the click that follows it is swallowed
+  // so the tap does not also activate whatever was underneath the drawer.
   useEffect(() => {
-    if (!anyMobileOverlayOpen) return
+    if (!mobileUiOn) return
+    let swallowClicksUntil = 0
+    const anyOpen = () => { const s = overlayStateRef.current; return s.more || s.sessions || s.context }
+    const openDrawer = () => {
+      const s = overlayStateRef.current
+      return s.sessions ? sessionsDrawerRef.current : s.context ? contextDrawerRef.current : null
+    }
     const closeAll = () => {
       setMoreSheetOpen(false)
       setSessionsDrawerOpen(false)
       setContextDrawerOpen(false)
     }
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' || e.key === 'Esc') {
-        e.preventDefault()
-        closeAll()
-      }
-    }
-    const onOutside = (e: Event) => {
-      const target = e.target as Node | null
-      if (!target) return
-      const drawer = sessionsDrawerOpen ? sessionsDrawerRef.current : contextDrawerOpen ? contextDrawerRef.current : null
-      if (!drawer) return // the More sheet handles its own overlay click
-      if (drawer.contains(target)) return
-      // Swallow the outside click so it does not also activate whatever is underneath.
+      if (!anyOpen() || !isEscapeKey(e)) return
       e.preventDefault()
       e.stopPropagation()
       closeAll()
     }
-    document.addEventListener('keydown', onKeyDown, true)
-    document.addEventListener('click', onOutside, true)
-    return () => {
-      document.removeEventListener('keydown', onKeyDown, true)
-      document.removeEventListener('click', onOutside, true)
+    const onTap = (e: Event) => {
+      if (e.type === 'click' && Date.now() < swallowClicksUntil) {
+        swallowClicksUntil = 0
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+      const drawer = openDrawer()
+      if (!drawer) return // the More sheet handles its own overlay click
+      const target = e.target as Node | null
+      if (!target || drawer.contains(target)) return
+      if (e.cancelable) e.preventDefault()
+      e.stopPropagation()
+      if (e.type !== 'click') swallowClicksUntil = Date.now() + 800
+      closeAll()
     }
-  }, [anyMobileOverlayOpen, sessionsDrawerOpen, contextDrawerOpen])
+    const tapEvents = ['pointerdown', 'touchend', 'click'] as const
+    window.addEventListener('keydown', onKeyDown, true)
+    tapEvents.forEach(type => window.addEventListener(type, onTap, { capture: true, passive: false }))
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      tapEvents.forEach(type => window.removeEventListener(type, onTap, { capture: true }))
+    }
+  }, [mobileUiOn])
+
+  // While a drawer or the sheet is open, pin the page zoom to 1: fixed overlays are
+  // laid out against the layout viewport, so a pinch-zoomed / panned visual viewport
+  // (e.g. DevTools device mode after a Shift-drag or trackpad pinch) can hide the
+  // backdrop strip and part of the drawer off-screen. Clamping maximum-scale resets the
+  // zoom; the original viewport (user zoom allowed) is restored on close.
+  useEffect(() => {
+    if (!mobileUiOn || !anyMobileOverlayOpen) return
+    const meta = document.querySelector('meta[name="viewport"]')
+    if (!meta) return
+    const previous = meta.getAttribute('content') || 'width=device-width, initial-scale=1.0'
+    meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0')
+    return () => meta.setAttribute('content', previous)
+  }, [mobileUiOn, anyMobileOverlayOpen])
 
   // Move focus into an opened drawer so keyboard users (and Esc) target the page;
   // when it closes, hand focus back to the More button instead of the hidden drawer.

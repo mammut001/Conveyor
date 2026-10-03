@@ -224,12 +224,54 @@ class TestMobileUiRegressions(unittest.TestCase):
         self.assertIn("localStorage.getItem(storageKey)", app)
         self.assertIn("localStorage.setItem(storageKey, String(next))", app)
 
-    def test_drawers_close_via_document_capture_listeners(self) -> None:
+    def test_drawers_close_via_window_capture_listeners(self) -> None:
         app = self._read("web/src/App.tsx")
-        self.assertIn("document.addEventListener('keydown', onKeyDown, true)", app)
-        self.assertIn("document.addEventListener('click', onOutside, true)", app)
+        # Round 3: listeners live on window in the capture phase and cover every tap path
+        # (pointerdown for mouse/touch/DevTools touch emulation, touchend, click) plus Esc keydown.
+        self.assertIn("window.addEventListener('keydown', onKeyDown, true)", app)
+        self.assertIn("const tapEvents = ['pointerdown', 'touchend', 'click'] as const", app)
+        self.assertIn("window.addEventListener(type, onTap, { capture: true, passive: false })", app)
         self.assertIn("drawer.contains(target)", app)
+        # They must not be (re)registered only while an overlay state is set: registered once
+        # for the mobile UI and reading the current state through a ref.
+        self.assertIn("}, [mobileUiOn])", app)
+        self.assertIn("overlayStateRef.current = { more: moreSheetOpen, sessions: sessionsDrawerOpen, context: contextDrawerOpen }", app)
+        self.assertNotIn("document.addEventListener('click', onOutside, true)", app)
+        # The click that follows a pointerdown-close is swallowed (no click-through).
+        self.assertIn("swallowClicksUntil", app)
         # The backdrop must be a real, labelled click target (not aria-hidden).
         self.assertNotIn('className="mobile-backdrop" onClick={() => setSessionsDrawerOpen(false)} aria-hidden="true"', app)
         self.assertIn('aria-label="Close sessions panel"', app)
         self.assertIn('aria-label="Close context panel"', app)
+
+    def test_escape_detection_accepts_all_key_forms(self) -> None:
+        app = self._read("web/src/App.tsx")
+        self.assertIn("e.key === 'Escape' || e.key === 'Esc' || e.code === 'Escape' || e.keyCode === 27", app)
+
+    def test_page_zoom_pinned_while_overlay_open(self) -> None:
+        app = self._read("web/src/App.tsx")
+        self.assertIn("meta[name=\"viewport\"]", app)
+        self.assertIn("'width=device-width, initial-scale=1.0, maximum-scale=1.0'", app)
+        self.assertIn("return () => meta.setAttribute('content', previous)", app)
+        # The static page itself keeps user zoom available.
+        index = self._read("web/index.html")
+        self.assertIn('content="width=device-width, initial-scale=1.0"', index)
+        self.assertNotIn("maximum-scale", index)
+        self.assertNotIn("user-scalable=no", index)
+
+    def test_closed_drawers_hidden_and_no_horizontal_scroll(self) -> None:
+        css = self._read("web/src/primary.css")
+        self.assertIn("overflow-x: clip;", css)
+        self.assertIn("visibility: hidden !important;", css)
+        self.assertIn("visibility: visible !important;", css)
+        self.assertIn("width: min(80vw, 320px) !important;", css)
+        self.assertIn("touch-action: none !important;", css)
+        built = "".join(p.read_text(encoding="utf-8") for p in (self.ROOT / "web" / "dist" / "assets").glob("*.css"))
+        self.assertIn("overflow-x:clip", built.replace(" ", ""))
+        self.assertIn("min(80vw,320px)", built.replace(" ", ""))
+
+    def test_devtools_emulation_regression_script_present(self) -> None:
+        script = self._read("scripts/ui_regress/devtools_emulation_regress.py")
+        self.assertIn('"Emulation.setEmitTouchEventsForMouse", {"enabled": True, "configuration": "mobile"}', script)
+        self.assertIn('"Input.dispatchMouseEvent"', script)
+        self.assertIn('"windowsVirtualKeyCode": 27', script)
