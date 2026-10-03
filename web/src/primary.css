@@ -448,6 +448,8 @@
   /* Condensed top bar: logo + status dot + settings icon */
   .primary-interface .mobile-ui .topbar {
     height: 48px;
+    min-height: 48px; /* v2.css sets min-height: 60px; 48 + content + 56px nav must fit 100dvh exactly */
+    box-sizing: border-box;
     padding: 0 12px;
     display: flex;
     justify-content: space-between;

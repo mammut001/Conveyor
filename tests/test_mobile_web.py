@@ -266,6 +266,7 @@ class TestMobileUiRegressions(unittest.TestCase):
         self.assertIn("visibility: visible !important;", css)
         self.assertIn("width: min(80vw, 320px) !important;", css)
         self.assertIn("touch-action: none !important;", css)
+        self.assertIn("min-height: 48px; /* v2.css sets min-height: 60px", css)
         built = "".join(p.read_text(encoding="utf-8") for p in (self.ROOT / "web" / "dist" / "assets").glob("*.css"))
         self.assertIn("overflow-x:clip", built.replace(" ", ""))
         self.assertIn("min(80vw,320px)", built.replace(" ", ""))

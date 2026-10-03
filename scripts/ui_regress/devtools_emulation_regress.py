@@ -25,7 +25,7 @@ W, H = 390, 844
 FAIL: list[str] = []
 STATE = """(()=>{const vv=visualViewport, d=document.querySelector('aside.drawer-open');
 return {drawer:d?d.className.split(' ')[0]:null, sx:scrollX, vvL:Math.round(vv.offsetLeft), vvT:Math.round(vv.offsetTop),
-scale:+vv.scale.toFixed(3), sw:document.documentElement.scrollWidth, active:document.activeElement?document.activeElement.tagName:''}})()"""
+scale:+vv.scale.toFixed(3), sw:document.documentElement.scrollWidth, sh:document.documentElement.scrollHeight, ih:innerHeight, active:document.activeElement?document.activeElement.tagName:''}})()"""
 
 
 def check(name, cond, detail=""):
@@ -114,6 +114,7 @@ async def main():
             check("mobile UI active", bool(await js("!!document.querySelector('.app-shell.mobile-ui')")))
             s0 = await js(STATE)
             check("no horizontal overflow at load", s0["sw"] <= W and s0["sx"] == 0 and s0["vvL"] == 0, json.dumps(s0))
+            check("no vertical document overflow at load (shell fits 100dvh)", s0["sh"] <= s0["ih"], json.dumps(s0))
 
             async def open_drawer(which, pinch=False):
                 if pinch:
