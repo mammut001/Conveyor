@@ -180,6 +180,11 @@ def _test_registry() -> CheckResult:
             "routine.resume",
             "routine.delete",
             "routine.run",
+            # P2-3 Long-term memory
+            "memory.remember",
+            "memory.forget",
+            "memory.list",
+            "memory.search",
         }
         ok_names = expected == set(PERSONAL_TOOL_REGISTRY)
         add_level = PERSONAL_TOOL_REGISTRY["notes.add"].danger
@@ -300,6 +305,11 @@ def _test_registry() -> CheckResult:
             and web_search_level == DangerLevel.READ
             and research_run_level == DangerLevel.READ
             and research_project_level == DangerLevel.READ
+            # P2-3 Long-term memory: writes need confirmation, reads auto
+            and PERSONAL_TOOL_REGISTRY["memory.remember"].danger == DangerLevel.WRITE
+            and PERSONAL_TOOL_REGISTRY["memory.forget"].danger == DangerLevel.WRITE
+            and PERSONAL_TOOL_REGISTRY["memory.list"].danger == DangerLevel.READ
+            and PERSONAL_TOOL_REGISTRY["memory.search"].danger == DangerLevel.READ
         )
         return CheckResult(name, ok_names and ok_levels, f"names={ok_names} levels={ok_levels}")
     except Exception as exc:
