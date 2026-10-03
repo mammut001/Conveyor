@@ -124,6 +124,34 @@ async def _handle_card_action(msg: Any) -> None:
             else:
                 await cancel_pending(inbound, port, settings, token)
             return
+        if action in ("relay_approve", "relay_reject", "relay_confirm", "relay_cancel"):
+            if not getattr(settings, "approval_relay_enabled", False):
+                await port.send_new(inbound, "Approval relay is disabled.")
+                return
+            token = payload.get("token", "")
+            if not token:
+                await port.send_new(inbound, "无效的确认 token。")
+                return
+            approve = action in ("relay_approve", "relay_confirm")
+            import approval_relay
+            outcome = await asyncio.to_thread(
+                approval_relay.decide,
+                settings,
+                token,
+                approve=approve,
+                via="feishu",
+                decided_by=inbound.operator_id or "feishu",
+            )
+            if outcome == "won":
+                msg = "已批准，正在原端执行…" if approve else "已拒绝。"
+                await port.send_new(inbound, msg)
+            elif outcome == "already_decided":
+                await port.send_new(inbound, "已被其他端处理。")
+            elif outcome == "expired":
+                await port.send_new(inbound, "已过期。")
+            else:
+                await port.send_new(inbound, "未找到该审批或已失效。")
+            return
         cmd = action_to_command(action)
         if cmd is None:
             await port.send_new(inbound, f"未知卡片操作: {action}")
@@ -240,7 +268,22 @@ async def main() -> None:
         settings.codex_workspace_root,
         settings.lark_allowed_open_id or "(bootstrap mode)",
     )
-    await channel.connect()
+    consumer = None
+    if getattr(settings, "approval_relay_enabled", False):
+        try:
+            import approval_relay
+            def make_feishu_port(chat_id: str):
+                return FeishuOutbound(_get_channel())
+            consumer = approval_relay.RelayConsumer(settings, channel="feishu", port_factory=make_feishu_port)
+            consumer.start()
+        except Exception:
+            logger.exception("Failed to start approval relay consumer in feishu bot")
+
+    try:
+        await channel.connect()
+    finally:
+        if consumer:
+            consumer.stop()
 
 
 if __name__ == "__main__":

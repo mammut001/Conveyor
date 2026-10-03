@@ -175,6 +175,8 @@ def main() -> None:
     thread.start()
     import routines
     routines.start_routines_worker(loop, settings, runner)
+    import approval_relay
+    relay_consumer = approval_relay.start_relay_worker(loop, settings, channel="web")
     logger.info(
         "Conveyor Web Workbench listening on http://%s:%d",
         settings.conveyor_web_host,
@@ -185,6 +187,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if relay_consumer is not None:
+            relay_consumer.stop()
         server.shutdown()
         server.server_close()
         loop.stop()

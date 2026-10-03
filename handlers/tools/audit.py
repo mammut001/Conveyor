@@ -26,7 +26,7 @@ AUDIT_MAX_ROTATED = 3                # keep tools.log.1 … .3
 
 
 def audit_log_path(settings: Settings) -> Path:
-    return settings.codex_memory_root / "audit" / AUDIT_FILENAME
+    return Path(settings.codex_memory_root) / "audit" / AUDIT_FILENAME
 
 
 def _rotate_if_needed(path: Path) -> None:
@@ -69,6 +69,10 @@ def audit_tool_event(
     result_preview: str = "",
     error_preview: str = "",
     old_arg: str = "",
+    via: str = "",
+    decided_by: str = "",
+    outcome: str = "",
+    **extra: Any,
 ) -> None:
     """Append one JSONL record.  Rotates before writing if needed.  Never raises."""
     try:
@@ -91,6 +95,17 @@ def audit_tool_event(
             record["result_preview"] = truncate(redact_text(result_preview), PREVIEW_LIMIT)
         if error_preview:
             record["error_preview"] = truncate(redact_text(error_preview), PREVIEW_LIMIT)
+        if via:
+            record["via"] = via
+        if decided_by:
+            record["decided_by"] = truncate(redact_text(decided_by), PREVIEW_LIMIT)
+        if outcome:
+            record["outcome"] = outcome
+        for k, v in extra.items():
+            if isinstance(v, str):
+                record[k] = truncate(redact_text(v), PREVIEW_LIMIT)
+            else:
+                record[k] = v
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:

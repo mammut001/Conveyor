@@ -427,7 +427,31 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
     except Exception:
         logger.exception("Failed to fetch job approvals in list_items")
 
-    # 3. Sort newest first
+    # 3. Foreign relay items
+    if getattr(settings, "approval_relay_enabled", False):
+        try:
+            import approval_relay
+            local_tokens = {action.token for action in list_pending()}
+            foreign_rows = approval_relay.list_foreign_pending(settings, local_tokens=local_tokens)
+            for row in foreign_rows:
+                items.append({
+                    "id": row["token"],
+                    "kind": "relay",
+                    "source": row.get("origin_channel") or "relay",
+                    "tool_name": row.get("tool_name") or "",
+                    "summary": row.get("summary") or row.get("tool_name") or "",
+                    "danger": row.get("danger") or "write",
+                    "arg": row.get("arg_preview") or "",
+                    "editable": False,
+                    "draft": None,
+                    "created_at": row.get("created_at"),
+                    "expires_at": row.get("expires_at"),
+                    "origin_channel": row.get("origin_channel") or "",
+                })
+        except Exception:
+            logger.exception("Failed to fetch foreign relay approvals in list_items")
+
+    # 4. Sort newest first
     def _sort_ts(it: dict[str, Any]) -> float:
         ca = it.get("created_at")
         if isinstance(ca, (int, float)):

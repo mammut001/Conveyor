@@ -365,6 +365,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     "webhook": sum(1 for it in items if it.get("source") == "webhook"),
                     "job": sum(1 for it in items if it.get("source") == "job"),
                 }
+                if getattr(settings, "approval_relay_enabled", False):
+                    counts["telegram"] = sum(1 for it in items if it.get("origin_channel") == "telegram" or it.get("source") == "telegram")
+                    counts["feishu"] = sum(1 for it in items if it.get("origin_channel") == "feishu" or it.get("source") == "feishu")
                 self._json(HTTPStatus.OK, {"items": items, "counts": counts})
             elif path == "/api/memory":
                 settings = self._memory_settings()
@@ -1018,6 +1021,37 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         self._json(HTTPStatus.OK, result)
                         return
 
+                # Not a pending tool action; check if it is a relay approval
+                if getattr(settings, "approval_relay_enabled", False):
+                    import approval_relay
+                    relay_row = approval_relay.get_relay_row(settings, approval_id)
+                    if relay_row is not None:
+                        if isinstance(body, dict) and "draft" in body and body.get("draft") is not None:
+                            self._json(HTTPStatus.BAD_REQUEST, {"error": "relay items cannot be edited from web console"})
+                            return
+                        outcome = approval_relay.decide(
+                            settings,
+                            approval_id,
+                            approve=is_approve,
+                            via="web",
+                            decided_by="web",
+                        )
+                        if outcome == "won":
+                            status_val = "accepted" if is_approve else "rejected"
+                        elif outcome == "already_decided":
+                            status_val = "already_decided"
+                        elif outcome == "expired":
+                            status_val = "expired"
+                        else:
+                            status_val = outcome
+                        self._json(HTTPStatus.OK, {
+                            "id": approval_id,
+                            "kind": "relay",
+                            "status": status_val,
+                            "result": "",
+                        })
+                        return
+
                 # Not a pending tool action; check job approval
                 if is_approve:
                     if isinstance(body, dict) and "draft" in body and body.get("draft") is not None:
@@ -1393,11 +1427,15 @@ def main() -> None:
 
     import routines
     routines.start_routines_worker(loop, settings, runner)
+    import approval_relay
+    relay_consumer = approval_relay.start_relay_worker(loop, settings, channel="web")
     try:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if relay_consumer is not None:
+            relay_consumer.stop()
         server.shutdown()
         server.server_close()
         loop.stop()

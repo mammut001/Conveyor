@@ -347,6 +347,19 @@ async def _request_confirmation(
         chat_id=msg.chat_id,
         channel=msg.channel,
     )
+    danger_label = _danger_label(tool_name, settings)
+    source = "routine" if msg.chat_id.startswith("routine-") else "chat"
+    try:
+        import approval_relay
+        approval_relay.publish(
+            settings,
+            pending,
+            summary=summary,
+            danger=danger_label,
+            source=source,
+        )
+    except Exception:
+        logger.debug("Failed to publish to approval relay", exc_info=True)
     audit_tool_event(
         settings,
         operator_id=msg.operator_id,
@@ -354,7 +367,7 @@ async def _request_confirmation(
         channel=msg.channel,
         tool_name=tool_name,
         arg=arg,
-        danger=_danger_label(tool_name, settings),
+        danger=danger_label,
         action="requested",
     )
     text = (
@@ -412,6 +425,40 @@ def _audit_rejected(settings: Settings, action: PendingToolAction, msg: InboundM
     )
 
 
+async def _relay_gate(
+    settings: Settings,
+    action: PendingToolAction,
+    msg: InboundMessage,
+    port: OutboundPort,
+    approve: bool,
+) -> bool:
+    """First-decision-wins check against the shared approval relay.
+
+    Returns True when the local resolution may proceed. When another surface
+    already decided differently (or the shared row expired/finished), the
+    local pending action is dropped and the operator is told why.
+    """
+    try:
+        import approval_relay
+        verdict = approval_relay.claim_local(settings, action.token, approve)
+    except Exception:
+        logger.debug("approval relay gate failed; allowing local action", exc_info=True)
+        return True
+    if verdict == "ok":
+        return True
+    pop_pending(action.token)
+    label = {
+        "approved": "已批准",
+        "rejected": "已拒绝",
+        "expired": "已过期",
+        "done": "已执行",
+        "failed": "执行失败",
+        "cancelled": "已取消",
+    }.get(verdict, verdict)
+    await port.reply(msg, f"该审批已在其他端处理（{label}），本次操作未执行。")
+    return False
+
+
 async def execute_confirmed(
     msg: InboundMessage,
     port: OutboundPort,
@@ -427,8 +474,12 @@ async def execute_confirmed(
         _audit_rejected(settings, action, msg)
         await port.reply(msg, "Unauthorized.")
         return True
+    if not await _relay_gate(settings, action, msg, port, approve=True):
+        return True
     action = pop_pending(token)
-    assert action is not None
+    if action is None:
+        await port.reply(msg, "确认已过期或无效，请重新发起。")
+        return True
     audit_tool_event(
         settings,
         operator_id=action.operator_id,
@@ -460,6 +511,11 @@ async def execute_confirmed(
             action="executed",
             error_preview=str(exc),
         )
+        try:
+            import approval_relay
+            approval_relay.mark_local(settings, token, "failed", result_preview=str(exc))
+        except Exception:
+            pass
         await port.reply(msg, f"工具 {action.tool_name} 执行失败: {type(exc).__name__}")
         return True
     audit_tool_event(
@@ -473,6 +529,11 @@ async def execute_confirmed(
         action="executed",
         result_preview=result,
     )
+    try:
+        import approval_relay
+        approval_relay.mark_local(settings, token, "done", result_preview=result)
+    except Exception:
+        pass
     await port.reply(msg, result)
     return True
 
@@ -491,8 +552,12 @@ async def cancel_pending(
         _audit_rejected(settings, action, msg)
         await port.reply(msg, "Unauthorized.")
         return True
+    if not await _relay_gate(settings, action, msg, port, approve=False):
+        return True
     action = pop_pending(token)
-    assert action is not None
+    if action is None:
+        await port.reply(msg, "没有待确认的操作。")
+        return True
     audit_tool_event(
         settings,
         operator_id=action.operator_id,
@@ -503,6 +568,11 @@ async def cancel_pending(
         danger=_danger_label(action.tool_name),
         action="cancelled",
     )
+    try:
+        import approval_relay
+        approval_relay.mark_local(settings, token, "cancelled")
+    except Exception:
+        pass
     label = action.arg.strip() or action.tool_name
     await port.reply(msg, f"已取消: {action.tool_name} ({label})")
     return True

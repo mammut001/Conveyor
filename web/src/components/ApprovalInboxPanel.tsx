@@ -3,8 +3,8 @@ import { isStale } from '../approvalFreshness';
 
 export type ApprovalInboxItem = {
   id: string;
-  kind: 'tool' | 'job';
-  source: 'chat' | 'routine' | 'webhook' | 'job';
+  kind: 'tool' | 'job' | 'relay';
+  source: 'chat' | 'routine' | 'webhook' | 'job' | 'telegram' | 'feishu' | string;
   action?: string; // apply | discard for job
   job_id?: string;
   tool_name?: string;
@@ -19,6 +19,7 @@ export type ApprovalInboxItem = {
   session_id?: string;
   routine_id?: number | null;
   routine_name?: string | null;
+  origin_channel?: string;
 };
 
 export type ApprovalInboxPanelProps = {
@@ -315,6 +316,10 @@ export function ApprovalInboxPanel({
         return { background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe' };
       case 'job':
         return { background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' };
+      case 'telegram':
+        return { background: '#f0f9ff', color: '#0284c7', border: '1px solid #bae6fd' };
+      case 'feishu':
+        return { background: '#f0fdf4', color: '#059669', border: '1px solid #a7f3d0' };
       case 'chat':
       default:
         return { background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0' };
@@ -375,7 +380,7 @@ export function ApprovalInboxPanel({
                 </span>
 
                 <strong style={{ fontSize: '0.95rem' }}>
-                  {item.kind === 'tool' ? item.tool_name : `Job ${item.action || 'Approval'}`}
+                  {item.kind === 'tool' || item.kind === 'relay' ? item.tool_name : `Job ${item.action || 'Approval'}`}
                 </strong>
 
                 {item.summary && (
@@ -427,6 +432,22 @@ export function ApprovalInboxPanel({
                 }}
               >
                 ⚠️ Triggered by an external webhook - review carefully
+              </div>
+            )}
+
+            {/* Relay origin notice */}
+            {item.kind === 'relay' && (
+              <div
+                style={{
+                  fontSize: '0.82rem',
+                  padding: '6px 10px',
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 6,
+                  color: '#475569',
+                }}
+              >
+                ℹ️ 跨端中继审批：将在原会话（{item.origin_channel === 'telegram' ? 'Telegram' : item.origin_channel === 'feishu' ? '飞书' : (item.origin_channel || item.source)}）中执行
               </div>
             )}
 

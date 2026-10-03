@@ -927,6 +927,11 @@ def record_approval_decision(
                 "WHERE id = ?",
                 (decision, new_output, _run_status_for_decision(decision), row["id"]),
             )
+            try:
+                import approval_relay
+                approval_relay.mark_local(settings, approval_id, decision, result_preview=result_text)
+            except Exception:
+                pass
             return True
     finally:
         conn.close()
@@ -984,7 +989,14 @@ def update_routine_approval_arg(settings: Any, token: str, new_arg: str) -> bool
                     "UPDATE routine_approvals SET arg = ? WHERE token = ? AND status = 'pending'",
                     (new_arg, token),
                 )
-                return cursor.rowcount > 0
+                if cursor.rowcount > 0:
+                    try:
+                        import approval_relay
+                        approval_relay.update_arg(settings, token, new_arg)
+                    except Exception:
+                        pass
+                    return True
+                return False
         finally:
             conn.close()
     except Exception:
@@ -1017,6 +1029,12 @@ def expire_routine_approvals(settings: Any, now: float | None = None) -> int:
                     "WHERE approval_id = ? AND (approval_status IS NULL OR approval_status = 'pending')",
                     (token,),
                 )
+        try:
+            import approval_relay
+            for token in tokens:
+                approval_relay.mark_local(settings, token, "expired")
+        except Exception:
+            pass
         return len(tokens)
     finally:
         conn.close()
@@ -1044,6 +1062,17 @@ def restore_routine_approvals(settings: Any, now: float | None = None) -> int:
         )
         if restore_pending(action):
             restored += 1
+            try:
+                import approval_relay
+                approval_relay.publish(
+                    settings,
+                    action,
+                    summary=r["tool_name"],
+                    danger="write",
+                    source="routine",
+                )
+            except Exception:
+                pass
     return restored
 
 

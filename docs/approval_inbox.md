@@ -136,9 +136,9 @@ Body: `{}`
 
 ---
 
-## 7. Out of Scope for v1
+## 7. Cross-Channel Approval Relay (Roadmap P2-2, v2)
 
-- **Telegram & Feishu Bot Pending Actions**: Confirmations generated directly in private Telegram or Feishu bot chats reside in those bot processes' memory stores and are decided via in-channel inline buttons / text keywords. They are not aggregated into the Web Console inbox in v1.
+With the **Cross-Channel Approval Relay** (`CONVEYOR_APPROVAL_RELAY_ENABLED=true`), pending dangerous tool actions from Telegram and Feishu are synchronized with the Web Approval Inbox, and approvals can be decided from any surface. See [Cross-Channel Approval Relay Documentation](approval_relay.md) for full architecture, data flow, and configuration details.
 
 ---
 
