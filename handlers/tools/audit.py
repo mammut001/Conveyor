@@ -68,6 +68,7 @@ def audit_tool_event(
     action: str,
     result_preview: str = "",
     error_preview: str = "",
+    old_arg: str = "",
 ) -> None:
     """Append one JSONL record.  Rotates before writing if needed.  Never raises."""
     try:
@@ -84,6 +85,8 @@ def audit_tool_event(
             "danger": danger,
             "action": action,
         }
+        if old_arg:
+            record["old_arg"] = truncate(redact_text(old_arg), PREVIEW_LIMIT)
         if result_preview:
             record["result_preview"] = truncate(redact_text(result_preview), PREVIEW_LIMIT)
         if error_preview:

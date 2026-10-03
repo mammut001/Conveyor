@@ -103,3 +103,5 @@ new search results against the previous run's digest; notifications are sent onl
 genuine updates appear, citing verified sources only.
 
 Smoke suites: `scripts/chat_tier_smoke.py`, `scripts/chat_memory_smoke.py`, `scripts/topic_watch_smoke.py`.
+
+Tool write actions requiring confirmation can be reviewed and edited in the Web Console; see `docs/approval_inbox.md`.

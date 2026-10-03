@@ -3,6 +3,7 @@ import { ChatPanel } from './components/ChatPanel'
 import { FormattedText } from './components/FormattedText'
 import { InboxPanel } from './components/InboxPanel'
 import { MemoryPanel } from './components/MemoryPanel'
+import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
@@ -52,7 +53,7 @@ type SystemStatus = {
   disk: { total: number; used: number; free: number }
   queue: { depth: number; paused: boolean; states: Record<string, number> }
   channels: Record<string, { configured: boolean }>; nodes: NodeInfo[]
-  features?: { long_term_memory?: boolean; routines?: boolean; webhooks?: boolean }
+  features?: { long_term_memory?: boolean; routines?: boolean; webhooks?: boolean; approval_inbox?: boolean }
 }
 type ComputerStatus = {
   armed: boolean; arm_remaining_seconds: number; active_task?: Record<string, unknown> | null
@@ -131,10 +132,12 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : 'tasks'))
+  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : 'tasks'))
   const [inboxUnread, setInboxUnread] = useState(0)
+  const [approvalInboxCount, setApprovalInboxCount] = useState(0)
   const lastSequence = useRef(0)
   const refreshGen = useRef(0)
+  const approvalInboxFetchGen = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
 
   const selectSession = useCallback((sessionId: string, jobId?: string) => {
@@ -239,6 +242,32 @@ export default function App() {
   useEffect(() => {
     void refreshTranscript()
   }, [refreshTranscript])
+
+  const fetchApprovalInboxCount = useCallback(async () => {
+    if (!system?.features?.approval_inbox || !authenticated) return
+    const gen = ++approvalInboxFetchGen.current
+    try {
+      const res = await fetch('/api/approval-inbox', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (isStale(gen, approvalInboxFetchGen.current)) return
+      if (!res.ok) return
+      const data = await res.json()
+      if (isStale(gen, approvalInboxFetchGen.current)) return
+      setApprovalInboxCount(data.counts?.total ?? data.items?.length ?? 0)
+    } catch {}
+  }, [system?.features?.approval_inbox, authenticated, token])
+
+  useEffect(() => {
+    if (!system?.features?.approval_inbox || !authenticated) return
+    void fetchApprovalInboxCount()
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void fetchApprovalInboxCount()
+      }
+    }, 5_000)
+    return () => window.clearInterval(timer)
+  }, [fetchApprovalInboxCount, system?.features?.approval_inbox, authenticated])
 
   useEffect(() => {
     if (!authenticated || !selectedJobId) return
@@ -428,10 +457,10 @@ export default function App() {
         <div className="stream-header">
           <div>
             <p className="eyebrow">
-              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : 'TASKS · CODEX EXECUTION'}
+              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : 'TASKS · CODEX EXECUTION'}
             </p>
             <h2>
-              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
+              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -444,11 +473,25 @@ export default function App() {
               {(system?.features?.long_term_memory || view === 'memory') && (
                 <button type="button" className={view === 'memory' ? 'active' : ''} onClick={() => setView('memory')}>Memory</button>
               )}
+              {Boolean(system?.features?.approval_inbox) && (
+                <button type="button" className={view === 'approvals' ? 'active' : ''} onClick={() => setView('approvals')}>
+                  Approvals{approvalInboxCount > 0 ? ` (${approvalInboxCount})` : ''}
+                </button>
+              )}
             </div>
             {view === 'tasks' && selectedJob && <StatusBadge state={selectedJob.state} />}
           </div>
         </div>
-        {view === 'memory' ? (
+        {view === 'approvals' ? (
+          <ApprovalInboxPanel
+            token={token}
+            onApprovalDecided={() => {
+              void refresh()
+              void fetchApprovalInboxCount()
+            }}
+            onPendingCountChange={setApprovalInboxCount}
+          />
+        ) : view === 'memory' ? (
           <MemoryPanel token={token} />
         ) : view === 'inbox' ? (
           <InboxPanel

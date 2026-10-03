@@ -182,6 +182,10 @@ If the model escalates or the tier is unavailable, a message advises the operato
   - Non-web pending actions (from Telegram or Feishu) cannot be decided from the web console and return `404 Not Found`.
   - For job approvals, falls through to the existing apply/discard logic unchanged.
 
+### Unified Approval Inbox (`/api/approval-inbox`)
+
+For advanced review with editable drafts across Web Chat, routines, webhooks, and job worktrees, see [Unified Approval Inbox](approval_inbox.md). Enabled via `CONVEYOR_APPROVAL_INBOX_ENABLED=true`.
+
 ### Human takeover semantics
 
 Secure Human Takeover is off by default (`CONVEYOR_TAKEOVER_ENABLED=false`).
