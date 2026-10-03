@@ -228,7 +228,9 @@
   order: 2;
 }
 
-.primary-interface .context-panel > .context-section:has(.file-list) {
+/* Stable class, not :has(.file-list): collapsing removes the file list and the
+   section used to lose its order/sticky and jump to the bottom of the panel. */
+.primary-interface .context-panel > .context-section--changes {
   order: 1;
   position: sticky;
   top: 0;
@@ -275,7 +277,7 @@
   color: #6f747d;
 }
 
-.primary-interface .context-section:has(.file-list) > .eyebrow {
+.primary-interface .context-section--changes > .eyebrow {
   color: #9a4d37;
 }
 
@@ -322,14 +324,14 @@
   line-height: 1.55;
 }
 
-.primary-interface .context-section:has(.file-list) .action-row {
+.primary-interface .context-section--changes .action-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   margin-top: 11px;
 }
 
-.primary-interface .context-section:has(.file-list) .action-row button {
+.primary-interface .context-section--changes .action-row button {
   width: 100%;
   min-height: 36px;
 }
@@ -394,7 +396,7 @@
     overflow: visible;
   }
   .primary-interface .context-panel > .context-section,
-  .primary-interface .context-panel > .context-section:has(.file-list),
+  .primary-interface .context-panel > .context-section--changes,
   .primary-interface .context-panel > .approval-card {
     position: static;
     order: initial;
@@ -409,7 +411,7 @@
     padding-left: 14px;
     padding-right: 14px;
   }
-  .primary-interface .context-section:has(.file-list) .action-row {
+  .primary-interface .context-section--changes .action-row {
     grid-template-columns: 1fr;
   }
 }

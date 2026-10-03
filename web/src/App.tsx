@@ -169,17 +169,52 @@ export default function App() {
     }
   }, [system?.features?.mobile_ui])
 
+  const sessionsDrawerRef = useRef<HTMLElement>(null)
+  const contextDrawerRef = useRef<HTMLElement>(null)
+  const anyMobileOverlayOpen = moreSheetOpen || sessionsDrawerOpen || contextDrawerOpen
+
+  // Close drawers / the More sheet on Escape and on any tap or click outside the
+  // open drawer. Listeners sit on `document` in the CAPTURE phase so they work no
+  // matter which element has focus (the sheet button that opened a drawer is
+  // unmounted, leaving focus on <body>) and no matter which element is on top at
+  // the tapped point; they do not depend on the backdrop receiving the event.
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setMoreSheetOpen(false)
-        setSessionsDrawerOpen(false)
-        setContextDrawerOpen(false)
+    if (!anyMobileOverlayOpen) return
+    const closeAll = () => {
+      setMoreSheetOpen(false)
+      setSessionsDrawerOpen(false)
+      setContextDrawerOpen(false)
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        e.preventDefault()
+        closeAll()
       }
     }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
+    const onOutside = (e: Event) => {
+      const target = e.target as Node | null
+      if (!target) return
+      const drawer = sessionsDrawerOpen ? sessionsDrawerRef.current : contextDrawerOpen ? contextDrawerRef.current : null
+      if (!drawer) return // the More sheet handles its own overlay click
+      if (drawer.contains(target)) return
+      // Swallow the outside click so it does not also activate whatever is underneath.
+      e.preventDefault()
+      e.stopPropagation()
+      closeAll()
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    document.addEventListener('click', onOutside, true)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true)
+      document.removeEventListener('click', onOutside, true)
+    }
+  }, [anyMobileOverlayOpen, sessionsDrawerOpen, contextDrawerOpen])
+
+  // Move focus into an opened drawer so keyboard users (and Esc) target the page.
+  useEffect(() => {
+    const drawer = sessionsDrawerOpen ? sessionsDrawerRef.current : contextDrawerOpen ? contextDrawerRef.current : null
+    drawer?.focus({ preventScroll: true })
+  }, [sessionsDrawerOpen, contextDrawerOpen])
 
   const selectSession = useCallback((sessionId: string, jobId?: string) => {
     setCreatingSession(false)
@@ -468,7 +503,7 @@ export default function App() {
     </header>
     {error && <div className="error-banner global">{error}<button onClick={() => setError('')}>×</button></div>}
     <section className="workspace">
-      <aside className={`sessions-panel panel ${sessionsDrawerOpen ? 'drawer-open' : ''}`}>
+      <aside ref={sessionsDrawerRef} tabIndex={sessionsDrawerOpen ? -1 : undefined} role={sessionsDrawerOpen ? 'dialog' : undefined} aria-modal={sessionsDrawerOpen ? true : undefined} aria-label={sessionsDrawerOpen ? 'Sessions' : undefined} className={`sessions-panel panel ${sessionsDrawerOpen ? 'drawer-open' : ''}`}>
         <div className="mobile-drawer-header">
           <strong>Sessions</strong>
           <button type="button" className="drawer-close-btn" aria-label="Close sessions" onClick={() => setSessionsDrawerOpen(false)}>×</button>
@@ -675,7 +710,7 @@ export default function App() {
         )}
       </section>
 
-      <aside className={`context-panel panel ${contextDrawerOpen ? 'drawer-open' : ''}`}>
+      <aside ref={contextDrawerRef} tabIndex={contextDrawerOpen ? -1 : undefined} role={contextDrawerOpen ? 'dialog' : undefined} aria-modal={contextDrawerOpen ? true : undefined} aria-label={contextDrawerOpen ? 'Context and changes' : undefined} className={`context-panel panel ${contextDrawerOpen ? 'drawer-open' : ''}`}>
         <div className="mobile-drawer-header">
           <strong>Context & Changes</strong>
           <button type="button" className="drawer-close-btn" aria-label="Close context" onClick={() => setContextDrawerOpen(false)}>×</button>
@@ -725,7 +760,7 @@ export default function App() {
             </div>
           </section>
         ))}
-        <ContextSection title="Changes" collapsible storageKey="conveyor-changes-collapsed">
+        <ContextSection title="Changes" className="context-section--changes" collapsible storageKey="conveyor-changes-collapsed">
           {activeRefinement && <KeyValue label="Active changes" value={`${activeChangedFiles} file${activeChangedFiles === 1 ? '' : 's'} · cumulative`} />}
           <div className="file-list">{selectedJob?.changed_files?.map(file => <div key={file.path}><span className="file-status">{file.status || 'M'}</span><code>{file.path}</code></div>)}{selectedJob && !selectedJob.changed_files?.length && <Empty text="No changed files" />}</div>
           {selectedJob && <><details className="diff-view"><summary>Unified diff</summary><pre>{diff || 'No diff available.'}</pre></details><div className="action-row"><button className="danger" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/discard`)}>{activeRefinement ? 'Discard active changes…' : 'Discard…'}</button><button className="primary" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/apply`)}>{activeRefinement ? 'Apply active changes…' : 'Apply…'}</button></div></>}
@@ -920,8 +955,10 @@ function ContextSection({
   collapsible = false,
   storageKey,
   defaultCollapsed = false,
+  className = '',
 }: {
   title: string
+  className?: string
   children: React.ReactNode
   collapsible?: boolean
   storageKey?: string
@@ -950,7 +987,7 @@ function ContextSection({
   }
 
   return (
-    <section className={`context-section ${collapsible ? 'is-collapsible' : ''} ${collapsed ? 'is-collapsed' : ''}`}>
+    <section className={`context-section ${className} ${collapsible ? 'is-collapsible' : ''} ${collapsed ? 'is-collapsed' : ''}`}>
       <h3 className="eyebrow context-section-header">
         {collapsible ? (
           <button
