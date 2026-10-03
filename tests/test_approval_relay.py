@@ -681,5 +681,112 @@ class TestApprovalRelayFakeBotScript(unittest.TestCase):
         self.assertEqual(row["status"], "approved")
 
 
+
+class TestApprovalRelayLocalGateAndIdempotency(unittest.TestCase):
+    """Review fixes: local resolution is gated by the shared store, terminal
+    marks notify exactly once, and expired decisions don't self-deadlock."""
+
+    def setUp(self):
+        clear_all_pending()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmpdir = Path(self.tmp.name)
+        (self.tmpdir / "memory").mkdir(parents=True, exist_ok=True)
+        self.settings = make_test_settings(self.tmpdir, enabled=True, channels=("feishu",))
+        self.fake = approval_relay.FakeNotifier("feishu")
+        approval_relay.set_notifier_factory(lambda ch, s: self.fake if ch == "feishu" else None)
+
+    def tearDown(self):
+        clear_all_pending()
+        approval_relay.reset_notifier_factory()
+        self.tmp.cleanup()
+
+    def _msg(self, action):
+        return InboundMessage(
+            channel=action.channel, operator_id=action.operator_id, chat_id=action.chat_id,
+            message_id="m1", text="确认", chat_type="p2p",
+        )
+
+    def test_local_confirm_refused_after_remote_reject(self):
+        from handlers.tools.runner import execute_confirmed
+        action = create_pending("notes.add", "x", "tg_user", "tg_chat", "telegram")
+        approval_relay.publish(self.settings, action, summary="s", danger="write", source="chat")
+        self.assertEqual(
+            approval_relay.decide(self.settings, action.token, False, via="web", decided_by="web"), "won"
+        )
+        port = MockOutbound()
+        with patch("handlers.tools.runner.run_tool", new_callable=AsyncMock) as mock_tool:
+            asyncio.run(execute_confirmed(self._msg(action), port, self.settings, action.token))
+        mock_tool.assert_not_called()
+        self.assertIsNone(get_pending(action.token))
+        self.assertIn("已在其他端处理", port.messages[-1])
+
+    def test_local_confirm_wins_and_blocks_remote(self):
+        from handlers.tools.runner import execute_confirmed
+        action = create_pending("notes.add", "x", "tg_user", "tg_chat", "telegram")
+        approval_relay.publish(self.settings, action, summary="s", danger="write", source="chat")
+        port = MockOutbound()
+        with patch("handlers.tools.runner.run_tool", new_callable=AsyncMock) as mock_tool:
+            mock_tool.return_value = "ok"
+            asyncio.run(execute_confirmed(self._msg(action), port, self.settings, action.token))
+        mock_tool.assert_called_once()
+        self.assertEqual(approval_relay.get_relay_row(self.settings, action.token)["status"], "done")
+        self.assertEqual(
+            approval_relay.decide(self.settings, action.token, False, via="web", decided_by="web"),
+            "already_decided",
+        )
+        # Exactly one outcome update for the notification sent on publish.
+        self.assertEqual(len(self.fake.sent), 1)
+        self.assertEqual(len(self.fake.updated), 1)
+
+    def test_mark_local_is_idempotent(self):
+        action = create_pending("notes.add", "x", "op", "routine-1", "web")
+        approval_relay.publish(self.settings, action, summary="s", danger="write", source="routine")
+        self.assertTrue(approval_relay.mark_local(self.settings, action.token, "done", result_preview="r"))
+        self.assertFalse(approval_relay.mark_local(self.settings, action.token, "approved", result_preview="r2"))
+        row = approval_relay.get_relay_row(self.settings, action.token)
+        self.assertEqual(row["status"], "done")
+        self.assertEqual(len(self.fake.updated), 1)
+
+    def test_decide_on_expired_row_does_not_block(self):
+        action = create_pending("notes.add", "x", "op", "chat", "telegram")
+        action.ttl_seconds = 0.01
+        approval_relay.publish(self.settings, action, summary="s", danger="write", source="chat")
+        time.sleep(0.05)
+        t0 = time.monotonic()
+        self.assertEqual(
+            approval_relay.decide(self.settings, action.token, True, via="web", decided_by="web"), "expired"
+        )
+        self.assertLess(time.monotonic() - t0, 2.0)
+        self.assertEqual(approval_relay.get_relay_row(self.settings, action.token)["status"], "expired")
+        self.assertTrue(any("过期" in u["text"] for u in self.fake.updated))
+
+    def test_fake_bot_create_consumes_remote_approval_without_side_effects(self):
+        import handlers.tools.runner as tool_runner
+        import scripts.approval_relay_fake_bot as fake_bot
+
+        settings = fake_bot.make_settings(str(self.tmpdir / "fake.db"))
+        original_run_tool = tool_runner.run_tool
+
+        def presser():
+            for _ in range(200):
+                rows = approval_relay.list_pending(settings)
+                if rows:
+                    fake_bot.press(settings, rows[0]["token"], "approve", decided_by="web")
+                    return
+                time.sleep(0.02)
+
+        t = threading.Thread(target=presser)
+        t.start()
+        try:
+            result = asyncio.run(
+                fake_bot.create_and_consume(settings, "notes.add", "hello", timeout=5.0, poll_interval=0.02)
+            )
+        finally:
+            tool_runner.run_tool = original_run_tool
+            t.join()
+        self.assertEqual(result["status"], "done")
+        self.assertTrue(any("[fake bot] executed notes.add" in m for m in result["messages"]))
+
+
 if __name__ == "__main__":
     unittest.main()

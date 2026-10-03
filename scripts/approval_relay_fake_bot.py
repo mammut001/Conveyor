@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """scripts/approval_relay_fake_bot.py — Simulates a Telegram bot process against a relay DB without network.
 
-This script operates in 100% offline mode and never transmits network traffic.
+This script operates in 100% offline mode and never transmits network traffic:
+relay notifications go to an in-memory FakeNotifier (optionally logged with
+--notify-log) and approved tools are NOT really executed — a stub tool runner
+returns "[fake bot] executed <tool>" so click-tests have no side effects.
 """
 from __future__ import annotations
 
@@ -54,7 +57,7 @@ class FakeSettings:
     approval_relay_enabled: bool = True
     approval_inbox_enabled: bool = True
     approval_relay_db: Path | None = None
-    approval_relay_channels: tuple[str, ...] = ("telegram",)
+    approval_relay_channels: tuple[str, ...] = ()
     codex_workspace_root: str = "/tmp"
     codex_task_root: str = "/tmp"
     codex_memory_root: str = "/tmp"
@@ -106,6 +109,13 @@ async def create_and_consume(
     }
     print(json.dumps(created_event), flush=True)
 
+    import handlers.tools.runner as tool_runner
+
+    async def _stub_run_tool(_settings: Any, name: str, tool_arg: str, **_kw: Any) -> str:
+        return f"[fake bot] executed {name} ({redact_text(tool_arg)[:200]})"
+
+    tool_runner.run_tool = _stub_run_tool  # type: ignore[assignment]
+
     consumer = approval_relay.RelayConsumer(
         settings,
         channel="telegram",
@@ -119,7 +129,7 @@ async def create_and_consume(
     while time.time() < deadline:
         await consumer.poll_once()
         row = approval_relay.get_relay_row(settings, action.token)
-        if row and row["status"] != "pending":
+        if row and row["status"] in ("done", "failed", "cancelled", "expired"):
             result_event = {
                 "event": "resolved",
                 "token": action.token,
@@ -184,7 +194,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Approval relay fake bot runner — simulates Telegram bot without network traffic."
     )
-    parser.add_argument("--allow-network", action="store_true", help="Disallowed when real bot token is set.")
+    parser.add_argument("--allow-network", action="store_true", help="Ignored (the script never uses the network); refused when a real-looking TELEGRAM_BOT_TOKEN is set.")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     create_p = subparsers.add_parser("create", help="Create a pending action and wait for decision.")
@@ -202,8 +212,13 @@ def main() -> None:
     list_p = subparsers.add_parser("list", help="List pending relay approvals.")
     list_p.add_argument("--db", required=True, help="Path to relay SQLite database.")
 
+    parser.add_argument("--notify-log", default="", help="Append fake notification sends/updates as JSON lines here.")
     args = parser.parse_args()
     check_network_safety(args.allow_network)
+    fake_notifiers = {
+        ch: approval_relay.FakeNotifier(ch, args.notify_log or None) for ch in ("telegram", "feishu")
+    }
+    approval_relay.set_notifier_factory(lambda ch, _s: fake_notifiers.get(ch))
 
     settings = make_settings(args.db)
 

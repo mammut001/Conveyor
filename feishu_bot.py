@@ -134,7 +134,8 @@ async def _handle_card_action(msg: Any) -> None:
                 return
             approve = action in ("relay_approve", "relay_confirm")
             import approval_relay
-            outcome = approval_relay.decide(
+            outcome = await asyncio.to_thread(
+                approval_relay.decide,
                 settings,
                 token,
                 approve=approve,

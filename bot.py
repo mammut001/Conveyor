@@ -435,7 +435,8 @@ async def relay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     action, token = parts[1], parts[2]
     approve = (action == "approve")
 
-    outcome = approval_relay.decide(
+    outcome = await asyncio.to_thread(
+        approval_relay.decide,
         settings,
         token,
         approve=approve,
@@ -455,7 +456,6 @@ async def relay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def deep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-
     """"🔍 用 Codex 处理" button under a chat-tier answer → /deep."""
     if not await _guard(update):
         return

@@ -37,6 +37,26 @@ PID: int = os.getpid()
 _HOUSEKEEPING_INTERVAL_SECONDS = 3600.0
 _last_housekeeping: float = 0.0
 _housekeeping_lock = threading.Lock()
+_schema_ready: set[str] = set()
+_schema_lock = threading.Lock()
+
+# Real notifiers do blocking HTTPS calls; run them on one background worker
+# thread so they never stall the bot / web console event loops. When a test
+# notifier factory is installed, notifications are dispatched synchronously.
+_notify_executor: Any = None
+_notify_executor_lock = threading.Lock()
+
+
+def _dispatch_notification(fn: Callable[..., None], *args: Any, **kwargs: Any) -> None:
+    if _notifier_factory is not None:
+        fn(*args, **kwargs)
+        return
+    global _notify_executor
+    with _notify_executor_lock:
+        if _notify_executor is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _notify_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="approval-relay-notify")
+    _notify_executor.submit(fn, *args, **kwargs)
 
 
 def is_relay_enabled(settings: Any) -> bool:
@@ -69,13 +89,15 @@ def _connect(settings: Any) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=10000")
 
-    if is_new or path.is_file():
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+    key = str(path)
+    if key in _schema_ready and not is_new:
+        return conn
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
-    with conn:
+    with _schema_lock, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS relay_approvals (
@@ -136,6 +158,7 @@ def _connect(settings: Any) -> sqlite3.Connection:
                 except Exception:
                     logger.debug("Housekeeping pruning failed", exc_info=True)
 
+    _schema_ready.add(key)
     return conn
 
 
@@ -647,7 +670,7 @@ def publish(
         finally:
             conn.close()
 
-        _notify_publish(settings, action, summary=summary, danger=danger, source=source)
+        _dispatch_notification(_notify_publish, settings, action, summary=summary, danger=danger, source=source)
         return True
     except Exception:
         logger.exception("Failed to publish approval %s to relay", action.token)
@@ -706,32 +729,42 @@ def decide(
                 if row["status"] != "pending":
                     return "already_decided"
                 if float(row["expires_at"]) <= now:
-                    conn.execute("UPDATE relay_approvals SET status = 'expired' WHERE token = ?", (token,))
-                    _notify_outcome(settings, token, "expired", via="system")
-                    return "expired"
-
-                cur = conn.execute(
-                    """
-                    UPDATE relay_approvals
-                    SET status = ?, decided_via = ?, decided_by = ?, decided_at = ?
-                    WHERE token = ? AND status = 'pending' AND expires_at > ?
-                    """,
-                    (new_status, via, clean_decided_by, now, token, now),
-                )
-                if cur.rowcount == 1:
-                    outcome = "won"
-                else:
-                    row2 = conn.execute(
-                        "SELECT status, expires_at FROM relay_approvals WHERE token = ?",
+                    cur = conn.execute(
+                        "UPDATE relay_approvals SET status = 'expired' WHERE token = ? AND status = 'pending'",
                         (token,),
-                    ).fetchone()
-                    if row2 and float(row2["expires_at"]) <= now:
-                        outcome = "expired"
+                    )
+                    expired_now = cur.rowcount == 1
+                    outcome = "expired"
+                else:
+                    expired_now = False
+                    outcome = ""
+                if outcome != "expired":
+                    cur = conn.execute(
+                        """
+                        UPDATE relay_approvals
+                        SET status = ?, decided_via = ?, decided_by = ?, decided_at = ?
+                        WHERE token = ? AND status = 'pending' AND expires_at > ?
+                        """,
+                        (new_status, via, clean_decided_by, now, token, now),
+                    )
+                    if cur.rowcount == 1:
+                        outcome = "won"
                     else:
-                        outcome = "already_decided"
+                        row2 = conn.execute(
+                            "SELECT status, expires_at FROM relay_approvals WHERE token = ?",
+                            (token,),
+                        ).fetchone()
+                        if row2 and float(row2["expires_at"]) <= now:
+                            outcome = "expired"
+                        else:
+                            outcome = "already_decided"
         finally:
             conn.close()
 
+        if outcome == "expired":
+            if expired_now:
+                _dispatch_notification(_notify_outcome, settings, token, "expired", via="system")
+            return outcome
         if outcome == "won":
             audit_tool_event(
                 settings,
@@ -746,7 +779,7 @@ def decide(
                 decided_by=clean_decided_by,
                 outcome=new_status,
             )
-            _notify_outcome(settings, token, new_status, via=via)
+            _dispatch_notification(_notify_outcome, settings, token, new_status, via=via)
 
         return outcome
     except Exception:
@@ -769,32 +802,85 @@ def mark_local(
         conn = _connect(settings)
         try:
             with conn:
-                row = conn.execute(
-                    "SELECT status, decided_via FROM relay_approvals WHERE token = ?",
-                    (token,),
-                ).fetchone()
-                if row is None:
-                    return False
-                conn.execute(
+                # Only the first local resolution of a still-open row counts;
+                # later marks (e.g. routine bookkeeping after execute_confirmed)
+                # are no-ops so other surfaces are updated exactly once.
+                cur = conn.execute(
                     """
                     UPDATE relay_approvals
                     SET status = ?,
                         decided_via = COALESCE(decided_via, 'origin'),
                         decided_at = COALESCE(decided_at, ?),
                         result_preview = COALESCE(?, result_preview)
-                    WHERE token = ?
+                    WHERE token = ? AND status IN ('pending', 'approved', 'rejected')
                     """,
                     (status, now, safe_result, token),
                 )
+                changed = cur.rowcount == 1
+            row = conn.execute(
+                "SELECT decided_via FROM relay_approvals WHERE token = ?",
+                (token,),
+            ).fetchone()
         finally:
             conn.close()
 
+        if not changed:
+            return False
         via = row["decided_via"] if (row and row["decided_via"]) else "origin"
-        _notify_outcome(settings, token, status, via=via, result_preview=safe_result)
+        _dispatch_notification(_notify_outcome, settings, token, status, via=via, result_preview=safe_result)
         return True
     except Exception:
         logger.debug("Failed to mark_local in relay for token %s", token, exc_info=True)
         return False
+
+
+def claim_local(settings: Any, token: str, approve: bool) -> str:
+    """Gate a local (origin-process) resolution against the shared store.
+
+    Called by ``execute_confirmed`` / ``cancel_pending`` before they act, so a
+    local button press and a remote decision cannot both win. Returns
+    ``"ok"`` when the local action may proceed (relay off, no row, the row was
+    still pending and is now decided by the origin, or the row already carries
+    the same decision, e.g. the consumer executing a remote approval).
+    Otherwise returns the conflicting status (``"rejected"``, ``"approved"``,
+    ``"expired"``, ``"done"``, ...).
+    """
+    if not is_relay_enabled(settings):
+        return "ok"
+    want = "approved" if approve else "rejected"
+    try:
+        now = time.time()
+        conn = _connect(settings)
+        try:
+            with conn:
+                cur = conn.execute(
+                    """
+                    UPDATE relay_approvals
+                    SET status = ?, decided_via = 'origin', decided_by = 'origin',
+                        decided_at = ?, claimed_at = ?
+                    WHERE token = ? AND status = 'pending'
+                    """,
+                    (want, now, now, token),
+                )
+                if cur.rowcount == 1:
+                    won = True
+                    current = want
+                else:
+                    won = False
+                    row = conn.execute(
+                        "SELECT status FROM relay_approvals WHERE token = ?", (token,)
+                    ).fetchone()
+                    current = row["status"] if row else None
+        finally:
+            conn.close()
+        if won:
+            return "ok"
+        if current is None or current == want:
+            return "ok"
+        return str(current)
+    except Exception:
+        logger.debug("claim_local failed for token %s; allowing local action", token, exc_info=True)
+        return "ok"
 
 
 def claim_decisions_for_instance(
@@ -858,7 +944,7 @@ def list_pending(settings: Any) -> list[dict[str, Any]]:
             conn.close()
 
         for s in stale_rows:
-            _notify_outcome(settings, s["token"], "expired", via="system")
+            _dispatch_notification(_notify_outcome, settings, s["token"], "expired", via="system")
 
         return result
     except Exception:
@@ -988,8 +1074,10 @@ class RelayConsumer:
             if self.channel == "web":
                 from web_chat import decide_tool_approval
                 res = await decide_tool_approval(action, approve, self.settings)
-                status = "done" if approve else "cancelled"
-                mark_local(self.settings, token, status, result_preview=res.get("result", ""))
+                # execute_confirmed / cancel_pending already marked the row
+                # done/failed/cancelled; only handle the raced-expiry case.
+                if res.get("status") == "expired":
+                    mark_local(self.settings, token, "expired")
             else:
                 from handlers.tools.runner import cancel_pending, execute_confirmed
                 msg = InboundMessage(
