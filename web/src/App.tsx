@@ -171,6 +171,7 @@ export default function App() {
 
   const sessionsDrawerRef = useRef<HTMLElement>(null)
   const contextDrawerRef = useRef<HTMLElement>(null)
+  const moreButtonRef = useRef<HTMLButtonElement>(null)
   const anyMobileOverlayOpen = moreSheetOpen || sessionsDrawerOpen || contextDrawerOpen
 
   // Close drawers / the More sheet on Escape and on any tap or click outside the
@@ -210,10 +211,18 @@ export default function App() {
     }
   }, [anyMobileOverlayOpen, sessionsDrawerOpen, contextDrawerOpen])
 
-  // Move focus into an opened drawer so keyboard users (and Esc) target the page.
+  // Move focus into an opened drawer so keyboard users (and Esc) target the page;
+  // when it closes, hand focus back to the More button instead of the hidden drawer.
   useEffect(() => {
     const drawer = sessionsDrawerOpen ? sessionsDrawerRef.current : contextDrawerOpen ? contextDrawerRef.current : null
-    drawer?.focus({ preventScroll: true })
+    if (drawer) {
+      drawer.focus({ preventScroll: true })
+      return
+    }
+    const active = document.activeElement
+    if (active && (sessionsDrawerRef.current?.contains(active) || contextDrawerRef.current?.contains(active))) {
+      moreButtonRef.current?.focus({ preventScroll: true })
+    }
   }, [sessionsDrawerOpen, contextDrawerOpen])
 
   const selectSession = useCallback((sessionId: string, jobId?: string) => {
@@ -794,10 +803,10 @@ export default function App() {
       </aside>
     </section>
     {Boolean(system?.features?.mobile_ui) && sessionsDrawerOpen && (
-      <div className="mobile-backdrop" onClick={() => setSessionsDrawerOpen(false)} aria-hidden="true" />
+      <div className="mobile-backdrop" role="button" aria-label="Close sessions panel" onClick={() => setSessionsDrawerOpen(false)} />
     )}
     {Boolean(system?.features?.mobile_ui) && contextDrawerOpen && (
-      <div className="mobile-backdrop" onClick={() => setContextDrawerOpen(false)} aria-hidden="true" />
+      <div className="mobile-backdrop" role="button" aria-label="Close context panel" onClick={() => setContextDrawerOpen(false)} />
     )}
     {Boolean(system?.features?.mobile_ui) && moreSheetOpen && (
       <div className="mobile-sheet-overlay" onClick={() => setMoreSheetOpen(false)}>
@@ -899,6 +908,7 @@ export default function App() {
         <button
           type="button"
           className={`mobile-nav-item ${moreSheetOpen ? 'active' : ''}`}
+          ref={moreButtonRef}
           onClick={() => setMoreSheetOpen(prev => !prev)}
         >
           <span className="mobile-nav-icon">⋯</span>
