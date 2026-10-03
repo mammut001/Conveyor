@@ -109,7 +109,7 @@ and pressing Add is the confirmation.
 Authenticated API (same bearer token as the rest of `/api/*`, 401 otherwise):
 
 - `GET /api/memory?q=&kind=profile|log&limit=` → `{items, counts, shared, profile_cap}`
-- `POST /api/memory {"text": "..."}` → 201, or 400 if refused (secret, empty, too long)
+- `POST /api/memory {"text": "..."}` → 201 `{"ok": true, ...}`, or 200 `{"ok": false, "refused": true, "error": "<reason>"}` if refused (secret, empty, too long), or 400 if malformed (not JSON object, `text` missing / not a string)
 - `DELETE /api/memory/<id>` → 200, 404 if missing
 
 All return 409 while `CONVEYOR_LONG_TERM_MEMORY` is off.

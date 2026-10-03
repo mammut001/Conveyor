@@ -9,6 +9,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import shutil
 import sys
 import threading
@@ -149,6 +150,9 @@ class WebConsoleServer(ThreadingHTTPServer):
         self.control = control
         self.loop = loop
         self.token = token
+        self._active_routine_runs: set[int] = set()
+        self._hook_last_accepted: dict[str, float] = {}
+        self._rate_limit_lock = threading.Lock()
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         error = sys.exc_info()[1]
@@ -167,7 +171,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.info("%s %s", self.client_address[0], fmt % args)
 
-    def _headers(self, status: int, content_type: str, length: int | None = None) -> None:
+    def _headers(self, status: int, content_type: str, length: int | None = None,
+                 extra_headers: list[tuple[str, str]] | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -185,13 +190,16 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'")
         if length is not None:
             self.send_header("Content-Length", str(length))
+        if extra_headers:
+            for k, v in extra_headers:
+                self.send_header(k, v)
         if self.close_connection:
             self.send_header("Connection", "close")
         self.end_headers()
 
-    def _json(self, status: int, value: Any) -> None:
+    def _json(self, status: int, value: Any, extra_headers: list[tuple[str, str]] | None = None) -> None:
         data = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        self._headers(status, "application/json; charset=utf-8", len(data))
+        self._headers(status, "application/json; charset=utf-8", len(data), extra_headers=extra_headers)
         self.wfile.write(data)
 
     def _authorized(self) -> bool:
@@ -429,11 +437,175 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             msg, outbound, runner, mode=JobMode.RUN, prompt=prompt, wait=False,
         )
 
+    def _audit_webhook(self, hook_id: str, status_code: int, event_type: str) -> None:
+        prefix = hook_id[:8] if len(hook_id) >= 8 else hook_id
+        logger.info("webhook delivery [%s] status=%d event=%s", prefix, status_code, event_type)
+
+    def _handle_webhook(self, hook_id: str) -> None:
+        raw_event = self.headers.get("X-GitHub-Event") or self.headers.get("X-Conveyor-Event") or "webhook"
+        event_type = re.sub(r"[^A-Za-z0-9_.-]", "", str(raw_event))[:64] or "webhook"
+
+        settings = getattr(self.server.control, "settings", None)
+        if settings is None:
+            settings = load_runtime_settings()
+
+        import routines
+
+        # 1. Flag off or unknown hook_id -> 404 {"error": "not found"} (drain body).
+        webhooks_on = bool(getattr(settings, "webhooks_enabled", False))
+        routines_on = bool(getattr(settings, "routines_enabled", False))
+        if not (webhooks_on and routines_on):
+            self._drain_body()
+            self._audit_webhook(hook_id, HTTPStatus.NOT_FOUND, event_type)
+            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            return
+
+        hook = routines.get_hook_by_id(settings, hook_id)
+        if hook is None:
+            self._drain_body()
+            self._audit_webhook(hook_id, HTTPStatus.NOT_FOUND, event_type)
+            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            return
+
+        # 2. Content-Length required, <= 65536 (existing MAX_BODY_BYTES) else 413; read raw bytes exactly once.
+        if "Transfer-Encoding" in self.headers:
+            self.close_connection = True
+            self._audit_webhook(hook_id, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, event_type)
+            self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "invalid content length"})
+            return
+
+        cl_header = self.headers.get("Content-Length")
+        if cl_header is None or not cl_header.strip():
+            self._drain_body()
+            self._audit_webhook(hook_id, HTTPStatus.LENGTH_REQUIRED, event_type)
+            self._json(HTTPStatus.LENGTH_REQUIRED, {"error": "content-length required"})
+            return
+
+        try:
+            length = int(cl_header.strip())
+        except ValueError:
+            self.close_connection = True
+            self._audit_webhook(hook_id, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, event_type)
+            self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "invalid content length"})
+            return
+
+        if length < 0 or length > MAX_BODY_BYTES:
+            self.close_connection = True
+            self._audit_webhook(hook_id, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, event_type)
+            self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "payload too large"})
+            return
+
+        raw_body = self.rfile.read(length)
+        if len(raw_body) < length:
+            self.close_connection = True
+            self._audit_webhook(hook_id, HTTPStatus.BAD_REQUEST, event_type)
+            self._json(HTTPStatus.BAD_REQUEST, {"error": "incomplete body"})
+            return
+
+        # 3. Signature header X-Conveyor-Signature or GitHub's X-Hub-Signature-256
+        sig_header = self.headers.get("X-Conveyor-Signature") or self.headers.get("X-Hub-Signature-256") or ""
+        if not sig_header or not routines.verify_signature(hook["secret"], raw_body, sig_header):
+            self._audit_webhook(hook_id, HTTPStatus.UNAUTHORIZED, event_type)
+            self._json(HTTPStatus.UNAUTHORIZED, {"error": "invalid signature"})
+            return
+
+        # 4. Delivery id from X-Conveyor-Delivery or X-GitHub-Delivery (optional; max 200 chars).
+        delivery_id = self.headers.get("X-Conveyor-Delivery") or self.headers.get("X-GitHub-Delivery")
+        if delivery_id:
+            delivery_id = delivery_id.strip()[:200]
+            # Read-only here: a delivery rejected below (paused / busy) must stay
+            # retryable with the same id. It is recorded only once accepted.
+            if routines.delivery_seen(settings, hook_id, delivery_id):
+                self._audit_webhook(hook_id, HTTPStatus.OK, event_type)
+                self._json(HTTPStatus.OK, {"ok": True, "duplicate": True})
+                return
+
+        # 5. Routine paused (enabled=0) -> 409 {"error": "routine is paused"}.
+        routine = routines.get_routine(settings, hook["routine_id"])
+        if routine is None:
+            self._audit_webhook(hook_id, HTTPStatus.NOT_FOUND, event_type)
+            self._json(HTTPStatus.NOT_FOUND, {"error": "routine not found"})
+            return
+
+        if not routine.get("enabled", True):
+            self._audit_webhook(hook_id, HTTPStatus.CONFLICT, event_type)
+            self._json(HTTPStatus.CONFLICT, {"error": "routine is paused"})
+            return
+
+        # 6. Rate limit: at most one run in flight per routine and at most one accepted delivery per 10 seconds per hook -> 429 {"error": "busy"} with Retry-After.
+        now = time.time()
+        routine_id = int(routine["id"])
+        with getattr(self.server, "_rate_limit_lock", threading.Lock()):
+            active = getattr(self.server, "_active_routine_runs", None)
+            if active is None:
+                self.server._active_routine_runs = set()
+                active = self.server._active_routine_runs
+            last_accepted_map = getattr(self.server, "_hook_last_accepted", None)
+            if last_accepted_map is None:
+                self.server._hook_last_accepted = {}
+                last_accepted_map = self.server._hook_last_accepted
+
+            if routine_id in active:
+                self._audit_webhook(hook_id, HTTPStatus.TOO_MANY_REQUESTS, event_type)
+                self._json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "busy"}, extra_headers=[("Retry-After", "10")])
+                return
+
+            last_time = last_accepted_map.get(hook_id, 0.0)
+            elapsed = now - last_time
+            if elapsed < 10.0:
+                retry_after = max(1, int(10.0 - elapsed + 0.999))
+                self._audit_webhook(hook_id, HTTPStatus.TOO_MANY_REQUESTS, event_type)
+                self._json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "busy"}, extra_headers=[("Retry-After", str(retry_after))])
+                return
+
+            if delivery_id and not routines.record_delivery(settings, hook_id, delivery_id):
+                self._audit_webhook(hook_id, HTTPStatus.OK, event_type)
+                self._json(HTTPStatus.OK, {"ok": True, "duplicate": True})
+                return
+            last_accepted_map[hook_id] = now
+            active.add(routine_id)
+
+        routines.record_hook_fired(settings, hook_id)
+
+        # 7. Accept: 202 {"ok": true, "accepted": true} immediately; schedule the run on console loop
+        formatted_payload = routines.format_webhook_payload(raw_body)
+        event_dict = {"type": event_type, "payload": formatted_payload}
+
+        runner = getattr(self.server.control, "runner", None)
+
+        async def _do_run():
+            try:
+                await routines.run_single_routine(
+                    settings, runner, routine, trigger="webhook", event=event_dict
+                )
+            except Exception:
+                logger.exception("Webhook routine execution failed for routine #%d", routine_id)
+            finally:
+                with getattr(self.server, "_rate_limit_lock", threading.Lock()):
+                    getattr(self.server, "_active_routine_runs", set()).discard(routine_id)
+
+        asyncio.run_coroutine_threadsafe(_do_run(), self.server.loop)
+
+        self._audit_webhook(hook_id, HTTPStatus.ACCEPTED, event_type)
+        self._json(HTTPStatus.ACCEPTED, {"ok": True, "accepted": True})
+
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if not parsed.path.startswith("/api/") or not self._require_auth():
-            return
         parts = self._segments(parsed.path)
+
+        # Webhook receiver: POST /hooks/<hook_id> (handled before /api/ auth check)
+        if len(parts) == 2 and parts[0] == "hooks":
+            self._handle_webhook(parts[1])
+            return
+
+        if not self._require_auth():
+            return
+
+        if not parsed.path.startswith("/api/"):
+            self._drain_body()
+            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            return
+
         body = self._body()
         if body is None:
             return
@@ -451,9 +623,11 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     # Same filter as chat writes: one sentence, length cap, secrets refused.
                     row = ltm.remember_fact(settings, ltm.WEB_OPERATOR, raw_text, source_channel="web")
                 except ValueError as exc:
-                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    self._json(HTTPStatus.OK, {"ok": False, "refused": True, "error": str(exc)})
                     return
-                self._json(HTTPStatus.CREATED, ltm.api_item(settings, row))
+                resp = {"ok": True}
+                resp.update(ltm.api_item(settings, row))
+                self._json(HTTPStatus.CREATED, resp)
                 return
 
             if parsed.path.startswith("/api/routines") or parsed.path.startswith("/api/inbox"):
@@ -484,6 +658,25 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         self._json(HTTPStatus.CREATED, routine)
                     except ValueError as exc:
                         self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+                elif len(parts) == 4 and parts[:2] == ["api", "routines"] and parts[3] == "hook":
+                    if not (getattr(settings, "webhooks_enabled", False) and getattr(settings, "routines_enabled", False)):
+                        self._json(HTTPStatus.CONFLICT, {"error": "webhooks are disabled (set CONVEYOR_WEBHOOKS_ENABLED=true and CONVEYOR_ROUTINES_ENABLED=true)"})
+                        return
+                    routine_id_str = parts[2]
+                    if not routine_id_str.isdigit():
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid routine id"})
+                        return
+                    routine_id = int(routine_id_str)
+                    try:
+                        hook = routines.create_or_rotate_hook(settings, routine_id)
+                        self._json(HTTPStatus.CREATED, {
+                            "hook_id": hook["hook_id"],
+                            "secret": hook["secret"],
+                            "path": hook["path"],
+                        })
+                    except KeyError:
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "routine not found"})
                     return
                 elif len(parts) == 4 and parts[:2] == ["api", "routines"] and parts[3] in ("pause", "resume", "run"):
                     routine_id_str = parts[2]
@@ -650,7 +843,11 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
-        if not parsed.path.startswith("/api/") or not self._require_auth():
+        if not self._require_auth():
+            return
+        if not parsed.path.startswith("/api/"):
+            self._drain_body()
+            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         self._drain_body()
         parts = self._segments(parsed.path)
@@ -677,6 +874,19 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     settings = load_runtime_settings()
                 if not getattr(settings, "routines_enabled", False):
                     self._json(HTTPStatus.CONFLICT, {"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)"})
+                    return
+                if len(parts) == 4 and parts[:2] == ["api", "routines"] and parts[3] == "hook":
+                    if not (getattr(settings, "webhooks_enabled", False) and getattr(settings, "routines_enabled", False)):
+                        self._json(HTTPStatus.CONFLICT, {"error": "webhooks are disabled (set CONVEYOR_WEBHOOKS_ENABLED=true and CONVEYOR_ROUTINES_ENABLED=true)"})
+                        return
+                    routine_id_str = parts[2]
+                    if not routine_id_str.isdigit():
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid routine id"})
+                        return
+                    routine_id = int(routine_id_str)
+                    import routines
+                    ok = routines.delete_hook(settings, routine_id)
+                    self._json(HTTPStatus.OK if ok else HTTPStatus.NOT_FOUND, {"ok": True} if ok else {"error": "hook not found"})
                     return
                 if len(parts) == 3 and parts[:2] == ["api", "routines"]:
                     routine_id_str = parts[2]
