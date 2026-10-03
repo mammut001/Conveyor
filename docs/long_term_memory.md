@@ -13,6 +13,8 @@ short-term history) still receives those facts.
 ```dotenv
 # default false — tools hidden, prompts unchanged
 CONVEYOR_LONG_TERM_MEMORY=false
+# default true — one store shared by web, Telegram and Feishu
+CONVEYOR_LONG_TERM_MEMORY_SHARED=true
 ```
 
 Writes also need the chat tool bridge (`CONVEYOR_CHAT_TOOLS=true`), same as
@@ -41,8 +43,14 @@ the pending approval.
 
 ## What a new chat sees
 
-Facts are keyed by operator, not by chat id, so web, Telegram, and Feishu
-chats for the same operator share them.
+Facts are not keyed by chat id. With `CONVEYOR_LONG_TERM_MEMORY_SHARED=true`
+(default) every channel reads and writes one store (operator key `owner`), so a
+fact remembered on Telegram is seen on Feishu and in the Web Console. This is
+safe because Conveyor is single-operator: Telegram accepts one user id, Feishu
+one open_id, the Web Console one token. Each row records `source_channel` for
+provenance. Caveat: if the Feishu bot is added to a group chat, the operator's
+facts can surface in replies in that group. Set the flag to `false` to key
+facts by channel-specific operator id instead.
 
 Each prompt gets a bounded slice, not the whole store:
 
@@ -56,4 +64,31 @@ SQLite until forgotten or until the log itself is past 200 rows (oldest log
 rows are pruned; profile rows are not). Use `memory.search` for anything
 outside the slice.
 
+- **Relevant older log** — up to 3 older log rows that match the current
+  message (about 400 chars), so a fact pushed out of the recent slice can still
+  come back when asked about.
+
 The block is labeled as data, not instructions.
+
+## Search
+
+`memory.search`, the Web page and relevance injection share one matcher.
+Chinese text is split into overlapping 2-character terms with filler words
+(什么 / 我的 / 一下 …) dropped, so `我的猫叫什么` finds `我的猫叫团子`.
+Latin words are matched case-insensitively with stopwords dropped. Rows are
+ranked by matched terms; a whole-query substring match ranks first.
+
+## Web Console
+
+The **Memory** view lists, searches, adds and deletes facts. Delete needs an
+explicit second click (`Confirm delete`). Adding from the page runs the same
+secret / credential filter; there is no model in the loop, so typing the fact
+and pressing Add is the confirmation.
+
+Authenticated API (same bearer token as the rest of `/api/*`, 401 otherwise):
+
+- `GET /api/memory?q=&kind=profile|log&limit=` → `{items, counts, shared, profile_cap}`
+- `POST /api/memory {"text": "..."}` → 201, or 400 if refused (secret, empty, too long)
+- `DELETE /api/memory/<id>` → 200, 404 if missing
+
+All return 409 while `CONVEYOR_LONG_TERM_MEMORY` is off.

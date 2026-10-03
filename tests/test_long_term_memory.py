@@ -145,7 +145,11 @@ class LongTermMemoryStoreTests(unittest.TestCase):
 
     def test_other_operator_and_flag_off_injection(self) -> None:
         ltm.remember_fact(self.settings, self.op, "I prefer dark mode.")
-        self.assertEqual(ltm.prompt_block(self.settings, "someone-else"), "")
+        # Per-operator mode keeps stores apart; default shared mode is tested below.
+        isolated = _settings(Path(self.tmp.name), long_term_memory_shared=False)
+        ltm.remember_fact(isolated, self.op, "I prefer dark mode.")
+        self.assertEqual(ltm.prompt_block(isolated, "someone-else"), "")
+        self.assertIn("dark mode", ltm.prompt_block(isolated, self.op))
         off = _settings(Path(self.tmp.name) / "off", long_term_memory_enabled=False)
         # Same file is not shared (different root); flag off yields no block
         # even if we point at the populated root.
@@ -379,9 +383,6 @@ class ApprovalFreshnessTests(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class NaturalLanguageCredentialTests(unittest.TestCase):
     def test_plain_language_credentials_refused(self):
@@ -407,3 +408,168 @@ class NaturalLanguageCredentialTests(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 self.assertEqual(normalize_fact(text), text)
+
+
+class SharedMemoryAndSearchTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.settings = _settings(Path(self.tmp.name))
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_shared_default_across_channels(self) -> None:
+        self.assertTrue(Settings.__dataclass_fields__["long_term_memory_shared"].default)
+        row = ltm.remember_fact(self.settings, "12345", "我的猫叫 Mochi，是一只橘猫。", source_channel="telegram")
+        self.assertEqual(row["source_channel"], "telegram")
+        self.assertEqual(row["source_operator"], "12345")
+        # Recalled from the web console and Feishu operators.
+        self.assertIn("Mochi", ltm.prompt_block(self.settings, ltm.WEB_OPERATOR))
+        self.assertIn("Mochi", ltm.prompt_block(self.settings, "ou_feishu"))
+        gone, status = ltm.forget_fact(self.settings, "ou_feishu", f"#{row['id']}")
+        self.assertEqual(status, "deleted")
+        self.assertEqual(ltm.prompt_block(self.settings, ltm.WEB_OPERATOR), "")
+
+    def test_chinese_question_search(self) -> None:
+        ltm.remember_fact(self.settings, "op", "我的猫叫 Mochi，是一只橘猫。")
+        ltm.remember_fact(self.settings, "op", "下周三要去多伦多出差")
+        ltm.remember_fact(self.settings, "op", "Favorite editor is Neovim")
+        hits = ltm.search_facts(self.settings, "op", "我的猫叫什么名字？")
+        self.assertEqual(hits[0]["text"], "我的猫叫 Mochi，是一只橘猫。")
+        self.assertNotIn("下周三要去多伦多出差", [h["text"] for h in hits])
+        hits = ltm.search_facts(self.settings, "op", "什么时候去多伦多")
+        self.assertEqual([h["text"] for h in hits], ["下周三要去多伦多出差"])
+        hits = ltm.search_facts(self.settings, "op", "what is my editor")
+        self.assertEqual([h["text"] for h in hits], ["Favorite editor is Neovim"])
+        self.assertEqual(ltm.search_facts(self.settings, "op", "什么"), [])
+        # FTS/LIKE metacharacters are plain text here.
+        self.assertEqual(ltm.search_facts(self.settings, "op", '%_"* NEAR -'), [])
+
+    def test_old_relevant_log_is_injected(self) -> None:
+        with patch.object(ltm, "PROFILE_CAP", 1), patch.object(ltm, "LOG_INJECT_COUNT", 1):
+            ltm.remember_fact(self.settings, "op", "我是素食者。", now=1)
+            ltm.remember_fact(self.settings, "op", "下周三要去多伦多出差", now=2)
+            for i in range(5):
+                ltm.remember_fact(self.settings, "op", f"Filler fact number {i}", now=10 + i)
+            plain = ltm.prompt_block(self.settings, "op")
+            self.assertNotIn("多伦多", plain)
+            asked = ltm.prompt_block(self.settings, "op", "我什么时候去多伦多？")
+            self.assertIn("多伦多出差", asked)
+            self.assertIn("Older log matching this message:", asked)
+
+    def test_schema_migrates_old_db(self) -> None:
+        db = Path(self.settings.codex_memory_root) / ltm.DB_NAME
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE memories (id INTEGER PRIMARY KEY AUTOINCREMENT, operator_id TEXT NOT NULL, "
+            "kind TEXT NOT NULL CHECK (kind IN ('profile','log')), text TEXT NOT NULL, "
+            "created_at REAL NOT NULL, updated_at REAL NOT NULL)"
+        )
+        conn.execute("INSERT INTO memories (operator_id, kind, text, created_at, updated_at) VALUES ('owner','profile','old fact',1,1)")
+        conn.commit(); conn.close()
+        rows = ltm.list_facts(self.settings, "x")
+        self.assertEqual(rows[0]["text"], "old fact")
+        self.assertEqual(rows[0]["source_channel"], "")
+
+
+class MemoryWebApiTests(unittest.TestCase):
+    TOKEN = "test-web-token-not-secret"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import threading
+        from types import SimpleNamespace
+        from web_console import WebConsoleHandler, WebConsoleServer
+
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.settings = _settings(Path(cls.tmp.name))
+        cls.control = SimpleNamespace(settings=cls.settings)
+        cls.loop = asyncio.new_event_loop()
+        cls.loop_thread = threading.Thread(target=cls.loop.run_forever, daemon=True)
+        cls.loop_thread.start()
+        cls.server = WebConsoleServer(
+            ("127.0.0.1", 0), WebConsoleHandler, control=cls.control, loop=cls.loop, token=cls.TOKEN,
+        )
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.server_thread.start()
+        cls.port = cls.server.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.loop.call_soon_threadsafe(cls.loop.stop)
+        cls.loop_thread.join(timeout=2)
+        cls.loop.close()
+        cls.tmp.cleanup()
+
+    def _set_enabled(self, value: bool) -> None:
+        import dataclasses
+        type(self).settings = dataclasses.replace(self.settings, long_term_memory_enabled=value)
+        self.control.settings = type(self).settings
+
+    def setUp(self) -> None:
+        self._set_enabled(True)
+        for row in ltm.list_facts(self.settings, ltm.WEB_OPERATOR):
+            ltm.forget_fact(self.settings, ltm.WEB_OPERATOR, f"#{row['id']}")
+
+    def request(self, method: str, path: str, body: dict | None = None, *, auth: bool = True, raw_body: bool = True):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        headers = {}
+        if auth:
+            headers["Authorization"] = f"Bearer {self.TOKEN}"
+        payload = None
+        if body is not None:
+            payload = json.dumps(body).encode()
+            headers["Content-Type"] = "application/json"
+        conn.request(method, path, body=payload, headers=headers)
+        res = conn.getresponse()
+        data = res.read()
+        conn.close()
+        try:
+            return res.status, json.loads(data or b"{}")
+        except Exception:
+            return res.status, data
+
+    def test_auth_and_disabled(self) -> None:
+        self.assertEqual(self.request("GET", "/api/memory", auth=False)[0], 401)
+        self.assertEqual(self.request("POST", "/api/memory", {"text": "x"}, auth=False)[0], 401)
+        self.assertEqual(self.request("DELETE", "/api/memory/1", auth=False)[0], 401)
+        self._set_enabled(False)
+        status, data = self.request("GET", "/api/memory")
+        self.assertEqual(status, 409)
+        self.assertIn("CONVEYOR_LONG_TERM_MEMORY", data["error"])
+
+    def test_list_search_add_delete(self) -> None:
+        ltm.remember_fact(self.settings, "12345", "我的猫叫 Mochi，是一只橘猫。", source_channel="telegram")
+        status, created = self.request("POST", "/api/memory", {"text": "Favorite editor is Neovim"})
+        self.assertEqual(status, 201)
+        self.assertEqual(created["source_channel"], "web")
+        status, data = self.request("GET", "/api/memory")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["shared"])
+        self.assertEqual(data["counts"], {"profile": 2, "log": 0})
+        self.assertEqual(len(data["items"]), 2)  # Telegram fact visible on the web (shared)
+        from urllib.parse import quote
+        status, data = self.request("GET", "/api/memory?q=" + quote("我的猫叫什么"))
+        self.assertEqual([i["text"] for i in data["items"]], ["我的猫叫 Mochi，是一只橘猫。"])
+        self.assertEqual(self.request("GET", "/api/memory?kind=bogus")[0], 400)
+        status, data = self.request("DELETE", f"/api/memory/{created['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["deleted"]["text"], "Favorite editor is Neovim")
+        self.assertEqual(self.request("DELETE", f"/api/memory/{created['id']}")[0], 404)
+        self.assertEqual(self.request("DELETE", "/api/memory/abc")[0], 400)
+
+    def test_add_uses_secret_and_sentence_filter(self) -> None:
+        for text in ("my key sk-proj-AbCdEf0123456789AbCdEf0123456789xyz", "我家 wifi 密码是 sunflower88", "One. Two."):
+            status, data = self.request("POST", "/api/memory", {"text": text})
+            self.assertEqual(status, 400, text)
+            self.assertIn("error", data)
+        self.assertEqual(self.request("POST", "/api/memory", {})[0], 400)
+        self.assertEqual(ltm.list_facts(self.settings, ltm.WEB_OPERATOR), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
+

@@ -248,7 +248,7 @@ def reset(
 
 def system_prompt(
     settings: "Settings", *, has_evidence: bool, can_search: bool = False, worktree_info: str = "", tools_enabled: bool = False,
-    operator_id: str = "",
+    operator_id: str = "", memory_query: str = "",
 ) -> str:
     from config import load_operator_profile
 
@@ -319,7 +319,7 @@ def system_prompt(
     memory_section = ""
     if getattr(settings, "long_term_memory_enabled", False):
         from personal_tools.long_term_memory import prompt_block
-        block = prompt_block(settings, operator_id)
+        block = prompt_block(settings, operator_id, memory_query)
         if block:
             memory_section = block + "\n"
     return (
@@ -545,6 +545,7 @@ async def ask_chat(
                 worktree_info=worktree_info,
                 tools_enabled=use_tools,
                 operator_id=msg.operator_id,
+                memory_query=question,
             )}]
             + past
             + [{"role": "user", "content": content}]

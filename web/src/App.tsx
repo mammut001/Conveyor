@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import { ChatPanel } from './components/ChatPanel'
 import { FormattedText } from './components/FormattedText'
 import { InboxPanel } from './components/InboxPanel'
+import { MemoryPanel } from './components/MemoryPanel'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
@@ -129,7 +130,7 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [view, setView] = useState<'tasks' | 'chat' | 'inbox'>('tasks')
+  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory'>('tasks')
   const [inboxUnread, setInboxUnread] = useState(0)
   const lastSequence = useRef(0)
   const refreshGen = useRef(0)
@@ -426,10 +427,10 @@ export default function App() {
         <div className="stream-header">
           <div>
             <p className="eyebrow">
-              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : 'TASKS · CODEX EXECUTION'}
+              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : 'TASKS · CODEX EXECUTION'}
             </p>
             <h2>
-              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
+              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -443,7 +444,9 @@ export default function App() {
             {view === 'tasks' && selectedJob && <StatusBadge state={selectedJob.state} />}
           </div>
         </div>
-        {view === 'inbox' ? (
+        {view === 'memory' ? (
+          <MemoryPanel token={token} />
+        ) : view === 'inbox' ? (
           <InboxPanel
             token={token}
             onUnreadChange={setInboxUnread}

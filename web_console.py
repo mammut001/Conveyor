@@ -270,6 +270,17 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
     def _segments(path: str) -> list[str]:
         return [unquote(part) for part in path.strip("/").split("/") if part]
 
+    def _memory_settings(self) -> Any:
+        """Settings when long-term memory is on; otherwise answer 409 and return None."""
+        settings = getattr(self.server.control, "settings", None)
+        if settings is None:
+            from config import load_runtime_settings
+            settings = load_runtime_settings()
+        if not getattr(settings, "long_term_memory_enabled", False):
+            self._json(HTTPStatus.CONFLICT, {"error": "long-term memory is disabled (set CONVEYOR_LONG_TERM_MEMORY=true)"})
+            return None
+        return settings
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
@@ -304,6 +315,21 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK if item else HTTPStatus.NOT_FOUND, item or {"error": "not found"})
             elif path == "/api/approvals":
                 self._json(HTTPStatus.OK, {"approvals": self.server.control.list_approvals()})
+            elif path == "/api/memory":
+                settings = self._memory_settings()
+                if settings is None:
+                    return
+                from personal_tools import long_term_memory as ltm
+                kind = (query.get("kind") or [""])[0].strip() or None
+                if kind not in (None, "profile", "log"):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "kind must be profile or log"})
+                    return
+                q = (query.get("q") or [""])[0].strip()
+                try:
+                    limit = max(1, min(500, int((query.get("limit") or ["200"])[0])))
+                except ValueError:
+                    limit = 200
+                self._json(HTTPStatus.OK, ltm.api_list(settings, q=q, kind=kind, limit=limit))
             elif path == "/api/routines" or path.startswith("/api/routines"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
@@ -412,6 +438,24 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if body is None:
             return
         try:
+            if parsed.path == "/api/memory":
+                settings = self._memory_settings()
+                if settings is None:
+                    return
+                from personal_tools import long_term_memory as ltm
+                raw_text = body.get("text", body.get("content"))
+                if not isinstance(raw_text, str):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "text is required"})
+                    return
+                try:
+                    # Same filter as chat writes: one sentence, length cap, secrets refused.
+                    row = ltm.remember_fact(settings, ltm.WEB_OPERATOR, raw_text, source_channel="web")
+                except ValueError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+                self._json(HTTPStatus.CREATED, ltm.api_item(settings, row))
+                return
+
             if parsed.path.startswith("/api/routines") or parsed.path.startswith("/api/inbox"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
@@ -608,8 +652,24 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if not parsed.path.startswith("/api/") or not self._require_auth():
             return
+        self._drain_body()
         parts = self._segments(parsed.path)
         try:
+            if len(parts) == 3 and parts[:2] == ["api", "memory"]:
+                settings = self._memory_settings()
+                if settings is None:
+                    return
+                if not parts[2].isdigit():
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid memory id"})
+                    return
+                from personal_tools import long_term_memory as ltm
+                gone, status = ltm.forget_fact(settings, ltm.WEB_OPERATOR, f"#{parts[2]}")
+                if status != "deleted":
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "memory not found"})
+                    return
+                self._json(HTTPStatus.OK, {"ok": True, "deleted": ltm.api_item(settings, gone[0])})
+                return
+
             if parsed.path.startswith("/api/routines"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
