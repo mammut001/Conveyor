@@ -248,9 +248,12 @@ def reset(
 
 def system_prompt(
     settings: "Settings", *, has_evidence: bool, can_search: bool = False, worktree_info: str = "", tools_enabled: bool = False,
-    operator_id: str = "", memory_query: str = "",
+    operator_id: str = "", memory_query: str = "", memory_allowed: bool = True,
 ) -> str:
     from config import load_operator_profile
+
+    # Group chats (or memory flag off): no durable memory in the prompt at all.
+    memory_on = bool(getattr(settings, "long_term_memory_enabled", False)) and memory_allowed
 
     try:
         live = load_operator_profile(settings.codex_memory_root)
@@ -286,7 +289,7 @@ def system_prompt(
             "earlier in the conversation; never reply that confirmation was requested without "
             "calling the tool.\n"
         )
-        if getattr(settings, "long_term_memory_enabled", False):
+        if memory_on:
             tool_section += (
                 "Durable memory is on. When the operator explicitly asks to remember or forget "
                 "one fact, call memory.remember or memory.forget with that single sentence. "
@@ -300,7 +303,7 @@ def system_prompt(
         rule_2 = "2. Never claim you ran, checked, changed, sent or looked up anything without a tool executing it."
     else:
         extra = ""
-        if getattr(settings, "long_term_memory_enabled", False):
+        if memory_on:
             extra = (
                 " Durable facts the operator asked you to keep may be listed below; use them, "
                 "but you cannot add or delete them in this mode."
@@ -317,7 +320,7 @@ def system_prompt(
         )
         rule_2 = "2. Never claim you ran, checked, changed, sent or looked up anything."
     memory_section = ""
-    if getattr(settings, "long_term_memory_enabled", False):
+    if memory_on:
         from personal_tools.long_term_memory import prompt_block
         block = prompt_block(settings, operator_id, memory_query)
         if block:
@@ -536,6 +539,9 @@ async def ask_chat(
         except Exception:
             pass
 
+    from personal_tools.long_term_memory import allowed_for as _memory_allowed_for
+    memory_allowed = _memory_allowed_for(settings, msg)
+
     def _messages(content, *, has_evidence: bool, may_search: bool) -> list[dict]:
         return (
             [{"role": "system", "content": system_prompt(
@@ -546,6 +552,7 @@ async def ask_chat(
                 tools_enabled=use_tools,
                 operator_id=msg.operator_id,
                 memory_query=question,
+                memory_allowed=memory_allowed,
             )}]
             + past
             + [{"role": "user", "content": content}]

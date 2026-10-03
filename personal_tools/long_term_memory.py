@@ -149,6 +149,32 @@ def shared(settings: Any) -> bool:
     return bool(getattr(settings, "long_term_memory_shared", True))
 
 
+GROUP_REFUSAL = "长期记忆只在私聊和 Web 控制台可用，群聊里不能读取或修改。"
+
+
+def allowed_in_chat(settings: Any, channel: str, chat_type: str) -> bool:
+    """Whether this conversation may see or change durable memory.
+
+    The authenticated web console and private chats (Telegram ``private``,
+    Feishu ``p2p``) may. Group chats -- and any chat whose type is unknown --
+    may not, because other people read the replies there.
+    CONVEYOR_LONG_TERM_MEMORY_GROUPS=true opts groups back in.
+    """
+    if channel == "web":
+        return True
+    if chat_type == "p2p":
+        return True
+    return bool(getattr(settings, "long_term_memory_groups", False))
+
+
+def allowed_for(settings: Any, msg: Any) -> bool:
+    return allowed_in_chat(
+        settings,
+        str(getattr(msg, "channel", "") or ""),
+        str(getattr(msg, "chat_type", "") or "unknown"),
+    )
+
+
 def _operator(operator_id: str, settings: Any = None) -> str:
     if settings is not None and shared(settings):
         return SHARED_OWNER

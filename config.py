@@ -208,6 +208,7 @@ class Settings:
     routines_approval_ttl_seconds: int = 86_400
     long_term_memory_enabled: bool = False
     long_term_memory_shared: bool = True
+    long_term_memory_groups: bool = False
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -568,6 +569,10 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         # Single-operator: one memory shared by web/Telegram/Feishu (false = per operator id).
         "long_term_memory_shared": os.getenv(
             "CONVEYOR_LONG_TERM_MEMORY_SHARED", "true"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        # Group chats get no durable memory (no injection, memory.* refused) unless true.
+        "long_term_memory_groups": os.getenv(
+            "CONVEYOR_LONG_TERM_MEMORY_GROUPS", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
     }
 

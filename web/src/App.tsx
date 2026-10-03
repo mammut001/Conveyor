@@ -52,6 +52,7 @@ type SystemStatus = {
   disk: { total: number; used: number; free: number }
   queue: { depth: number; paused: boolean; states: Record<string, number> }
   channels: Record<string, { configured: boolean }>; nodes: NodeInfo[]
+  features?: { long_term_memory?: boolean; routines?: boolean }
 }
 type ComputerStatus = {
   armed: boolean; arm_remaining_seconds: number; active_task?: Record<string, unknown> | null
@@ -130,7 +131,7 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory'>('tasks')
+  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : 'tasks'))
   const [inboxUnread, setInboxUnread] = useState(0)
   const lastSequence = useRef(0)
   const refreshGen = useRef(0)
@@ -440,6 +441,9 @@ export default function App() {
               <button type="button" className={view === 'inbox' ? 'active' : ''} onClick={() => setView('inbox')}>
                 Inbox{inboxUnread > 0 ? ` (${inboxUnread})` : ''}
               </button>
+              {(system?.features?.long_term_memory || view === 'memory') && (
+                <button type="button" className={view === 'memory' ? 'active' : ''} onClick={() => setView('memory')}>Memory</button>
+              )}
             </div>
             {view === 'tasks' && selectedJob && <StatusBadge state={selectedJob.state} />}
           </div>

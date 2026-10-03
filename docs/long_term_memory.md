@@ -15,6 +15,8 @@ short-term history) still receives those facts.
 CONVEYOR_LONG_TERM_MEMORY=false
 # default true — one store shared by web, Telegram and Feishu
 CONVEYOR_LONG_TERM_MEMORY_SHARED=true
+# default false — group chats get no durable memory
+CONVEYOR_LONG_TERM_MEMORY_GROUPS=false
 ```
 
 Writes also need the chat tool bridge (`CONVEYOR_CHAT_TOOLS=true`), same as
@@ -48,9 +50,26 @@ Facts are not keyed by chat id. With `CONVEYOR_LONG_TERM_MEMORY_SHARED=true`
 fact remembered on Telegram is seen on Feishu and in the Web Console. This is
 safe because Conveyor is single-operator: Telegram accepts one user id, Feishu
 one open_id, the Web Console one token. Each row records `source_channel` for
-provenance. Caveat: if the Feishu bot is added to a group chat, the operator's
-facts can surface in replies in that group. Set the flag to `false` to key
-facts by channel-specific operator id instead.
+provenance. Set the flag to `false` to key facts by channel-specific operator
+id instead.
+
+## Group chats get no memory
+
+Other people read the replies in a group, so by default a group chat neither
+sees nor changes durable memory:
+
+- nothing is injected into the prompt (no profile, no log, no "memory is on"
+  instructions);
+- `memory.*` tools are not offered to the model, and a call to one anyway is
+  answered `unknown tool`;
+- `记住 …` / `忘掉 …` and any direct `memory.*` invocation reply
+  "长期记忆只在私聊和 Web 控制台可用…" and create no approval.
+
+Chat type comes from the channel event: Feishu `chat_type` (`p2p` allowed,
+`group` refused, anything else treated as unknown and refused), Telegram
+`chat.type` (`private` allowed; `group`, `supergroup`, `channel` refused). The
+authenticated Web Console always has memory. `CONVEYOR_LONG_TERM_MEMORY_GROUPS=true`
+opts groups back in.
 
 Each prompt gets a bounded slice, not the whole store:
 
@@ -80,7 +99,9 @@ ranked by matched terms; a whole-query substring match ranks first.
 
 ## Web Console
 
-The **Memory** view lists, searches, adds and deletes facts. Delete needs an
+A **Memory** tab sits next to Tasks / Chat / Inbox when the flag is on
+(`/api/system/status` reports `features.long_term_memory`). `/#memory` or
+`/memory` opens it directly. The view lists, searches, adds and deletes facts. Delete needs an
 explicit second click (`Confirm delete`). Adding from the page runs the same
 secret / credential filter; there is no model in the loop, so typing the fact
 and pressing Add is the confirmation.

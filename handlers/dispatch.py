@@ -96,9 +96,14 @@ async def dispatch(
         getattr(settings, "long_term_memory_enabled", False)
         and getattr(settings, "chat_tools_enabled", False)
     ):
-        from personal_tools.long_term_memory import classify_explicit, screen_write_arg
+        from personal_tools.long_term_memory import (
+            GROUP_REFUSAL, allowed_for, classify_explicit, screen_write_arg,
+        )
         explicit = classify_explicit(msg.text)
         if explicit is not None:
+            if not allowed_for(settings, msg):
+                await port.reply(msg, GROUP_REFUSAL)
+                return
             tool_name, raw_arg = explicit
             screened = screen_write_arg(tool_name, raw_arg)
             if screened.error:

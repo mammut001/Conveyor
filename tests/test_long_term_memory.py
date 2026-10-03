@@ -573,3 +573,191 @@ class MemoryWebApiTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+def _feishu_msg(text: str, chat_type: str) -> InboundMessage:
+    from types import SimpleNamespace
+    from channel.feishu import inbound_from_event
+    event = SimpleNamespace(
+        sender_id="ou_owner", chat_id=f"oc_{chat_type}", message_id="om_1",
+        chat_type=chat_type, content_text=text, mentioned_bot=True,
+    )
+    return inbound_from_event(event)
+
+
+def _telegram_msg(text: str, chat_type: str) -> InboundMessage:
+    from types import SimpleNamespace
+    from channel.telegram import inbound_from_update
+    message = SimpleNamespace(
+        text=text, caption=None, message_id=7, reply_to_message=None, external_reply=None,
+        quote=None, entities=(), caption_entities=(), photo=None, document=None,
+    )
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=12345, full_name="Owner", username="owner"),
+        effective_chat=SimpleNamespace(id=-100 if chat_type != "private" else 12345, type=chat_type),
+        effective_message=message,
+    )
+    return inbound_from_update(update)  # type: ignore[arg-type]
+
+
+class GroupChatBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    """Shared memory must not surface in group chats (Feishu group / Telegram group)."""
+
+    FACT = "我的猫叫团子"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.settings = _settings(Path(self.tmp.name))
+        ltm.remember_fact(self.settings, "ou_owner", self.FACT)
+        self.port = MagicMock()
+        self.port.supports_inline_buttons = False
+        self.port.reply = AsyncMock()
+        self.port.send_new = AsyncMock()
+        self.port.edit_progress = AsyncMock(return_value=True)
+
+    def tearDown(self) -> None:
+        clear_all_pending()
+        chat.reset()
+        self.tmp.cleanup()
+
+    def _groups(self, text: str) -> list[InboundMessage]:
+        return [
+            _feishu_msg(text, "group"),
+            _telegram_msg(text, "group"),
+            _telegram_msg(text, "supergroup"),
+            _feishu_msg(text, "topic"),  # unknown Feishu type -> fail closed
+        ]
+
+    def _privates(self, text: str) -> list[InboundMessage]:
+        return [_feishu_msg(text, "p2p"), _telegram_msg(text, "private")]
+
+    def _replies(self) -> str:
+        return " ".join(str(c.args[1]) for c in self.port.reply.await_args_list if len(c.args) > 1)
+
+    def test_chat_type_detection_and_policy(self) -> None:
+        self.assertEqual(_feishu_msg("x", "group").chat_type, "group")
+        self.assertEqual(_feishu_msg("x", "p2p").chat_type, "p2p")
+        self.assertEqual(_feishu_msg("x", "topic").chat_type, "unknown")
+        self.assertEqual(_telegram_msg("x", "group").chat_type, "group")
+        self.assertEqual(_telegram_msg("x", "supergroup").chat_type, "group")
+        self.assertEqual(_telegram_msg("x", "private").chat_type, "p2p")
+        for msg in self._groups("x"):
+            self.assertFalse(ltm.allowed_for(self.settings, msg), msg)
+        for msg in self._privates("x"):
+            self.assertTrue(ltm.allowed_for(self.settings, msg), msg)
+        self.assertTrue(ltm.allowed_for(self.settings, _msg("x")))
+        self.assertFalse(Settings.__dataclass_fields__["long_term_memory_groups"].default)
+        opted_in = _settings(Path(self.tmp.name), long_term_memory_groups=True)
+        for msg in self._groups("x"):
+            self.assertTrue(ltm.allowed_for(opted_in, msg))
+
+    def test_env_flag_default_false(self) -> None:
+        from config import load_settings
+        env = {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_ALLOWED_USER_ID": "1",
+               "CODEX_WORKSPACE_ROOT": self.tmp.name}
+        with patch.dict(os.environ, env, clear=False):
+            os.environ.pop("CONVEYOR_LONG_TERM_MEMORY_GROUPS", None)
+            self.assertFalse(load_settings("/nonexistent").long_term_memory_groups)
+            os.environ["CONVEYOR_LONG_TERM_MEMORY_GROUPS"] = "true"
+            try:
+                self.assertTrue(load_settings("/nonexistent").long_term_memory_groups)
+            finally:
+                os.environ.pop("CONVEYOR_LONG_TERM_MEMORY_GROUPS", None)
+
+    async def _system_prompt_for(self, msg: InboundMessage) -> str:
+        captured: dict = {}
+
+        async def fake_stream(_cfg, messages):
+            captured["messages"] = messages
+            yield "ok\n[[CONFIDENCE: high]]"
+
+        settings = _settings(Path(self.tmp.name), chat_tools_enabled=False)
+        with patch("runner.chat_client.stream_chat", side_effect=fake_stream):
+            await chat.ask_chat(msg, self.port, settings, question="我的猫叫什么")
+        return captured["messages"][0]["content"]
+
+    async def test_group_prompt_has_no_memory_private_does(self) -> None:
+        for msg in self._groups("我的猫叫什么"):
+            system = await self._system_prompt_for(msg)
+            self.assertNotIn(self.FACT, system, msg)
+            self.assertNotIn("Durable", system, msg)
+        for msg in self._privates("我的猫叫什么"):
+            self.assertIn(self.FACT, await self._system_prompt_for(msg), msg)
+
+    async def test_group_tool_loop_hides_and_refuses_memory_tools(self) -> None:
+        cfg = ChatConfig(base_url="http://127.0.0.1:9", api_key="k", model="m", timeout=5)
+        for name in ("memory__list", "memory__search", "memory__remember", "memory__forget"):
+            for msg in self._groups("x"):
+                call = {
+                    "role": "assistant", "content": None,
+                    "tool_calls": [{"id": "c1", "type": "function", "function": {
+                        "name": name, "arguments": json.dumps({"arg": "猫"}),
+                    }}],
+                }
+                final = {"role": "assistant", "content": "done"}
+                mock = AsyncMock(side_effect=[call, final])
+                with patch("handlers.chat_tools.complete_chat", mock):
+                    result = await run_tool_loop(msg, self.port, self.settings, [{"role": "user", "content": "x"}], cfg)
+                offered = [s["function"]["name"] for s in mock.call_args_list[0].kwargs["tools"]]
+                self.assertFalse([n for n in offered if n.startswith("memory__")], (name, msg.channel))
+                self.assertFalse(result.confirmation_requested)
+                self.assertEqual(result.tools_called, [])
+                tool_msg = mock.call_args_list[1][0][1][-1]
+                self.assertEqual(tool_msg["content"], "unknown tool")
+                self.assertIsNone(get_pending_for_context(msg.operator_id, msg.chat_id, msg.channel))
+        # Private chats still get the tools.
+        schemas = build_tool_schemas(self.settings)
+        self.assertTrue(any(s["function"]["name"] == "memory__list" for s in schemas))
+
+    async def test_group_explicit_remember_and_forget_refused(self) -> None:
+        for text in ("记住 我喜欢深色模式", "忘掉 #1"):
+            for msg in self._groups(text):
+                self.port.reply.reset_mock()
+                with patch("handlers.dispatch.handle_memo", new_callable=AsyncMock) as memo:
+                    await dispatch(msg, self.port, self.settings, MagicMock())
+                memo.assert_not_awaited()
+                self.assertIn(ltm.GROUP_REFUSAL, self._replies())
+                self.assertIsNone(get_pending_for_context(msg.operator_id, msg.chat_id, msg.channel))
+        self.assertEqual([r["text"] for r in ltm.list_facts(self.settings, "x")], [self.FACT])
+        # Private Feishu still asks for confirmation.
+        msg = _feishu_msg("记住 我喜欢深色模式", "p2p")
+        await dispatch(msg, self.port, self.settings, MagicMock())
+        self.assertIsNotNone(get_pending_for_context(msg.operator_id, msg.chat_id, "feishu"))
+
+    async def test_group_direct_tool_entry_points_refused(self) -> None:
+        from handlers.tools.runner import _invoke_tool, _request_confirmation
+        for msg in self._groups("x"):
+            self.port.reply.reset_mock()
+            await _invoke_tool(msg, self.port, self.settings, "memory.search", "猫")
+            await _invoke_tool(msg, self.port, self.settings, "memory.list", "")
+            await _request_confirmation(msg, self.port, self.settings, "memory.forget", "#1")
+            replies = self._replies()
+            self.assertNotIn(self.FACT, replies)
+            self.assertEqual(replies.count(ltm.GROUP_REFUSAL), 3)
+            self.assertIsNone(get_pending_for_context(msg.operator_id, msg.chat_id, msg.channel))
+        self.port.reply.reset_mock()
+        await _invoke_tool(_telegram_msg("x", "private"), self.port, self.settings, "memory.search", "猫")
+        self.assertIn(self.FACT, self._replies())
+
+
+class MemoryUiReachableTests(unittest.TestCase):
+    def test_system_status_reports_memory_feature(self) -> None:
+        import time
+        from types import SimpleNamespace
+        from web_control import WebControl
+        with tempfile.TemporaryDirectory() as tmp:
+            for flag in (True, False):
+                fake = SimpleNamespace(
+                    settings=_settings(Path(tmp), long_term_memory_enabled=flag),
+                    queue=SimpleNamespace(list_jobs=lambda n: [], queue_length=0, is_paused=False),
+                    started_at=time.time(), nodes=lambda: [],
+                )
+                status = WebControl.system_status(fake)  # type: ignore[arg-type]
+                self.assertIs(status["features"]["long_term_memory"], flag)
+
+    def test_memory_tab_next_to_tasks_chat_inbox(self) -> None:
+        app = (Path(__file__).resolve().parents[1] / "web" / "src" / "App.tsx").read_text(encoding="utf-8")
+        switch = app[app.index("onClick={() => setView('tasks')}"):]
+        switch = switch[: switch.index("</div>")]
+        self.assertIn("setView('memory')", switch)
+        self.assertIn("features?.long_term_memory", switch)
