@@ -211,6 +211,7 @@ class Settings:
     long_term_memory_shared: bool = True
     long_term_memory_groups: bool = False
     approval_inbox_enabled: bool = False
+    skills_enabled: bool = False
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -581,6 +582,9 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         ).strip().lower() in ("true", "1", "yes", "on"),
         "approval_inbox_enabled": os.getenv(
             "CONVEYOR_APPROVAL_INBOX_ENABLED", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "skills_enabled": os.getenv(
+            "CONVEYOR_SKILLS_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
     }
 

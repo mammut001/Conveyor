@@ -29,14 +29,16 @@ EDITABLE_TOOLS: frozenset[str] = frozenset({
     "notes.add",
     "memory.remember",
     "routine.create",
+    "skill.create",
 })
 
-_SINGLE_LINE_FIELDS = frozenset({"to", "subject", "number", "title", "cron", "name"})
+_SINGLE_LINE_FIELDS = frozenset({"to", "subject", "number", "title", "cron", "name", "description"})
 _LENGTH_CAPS = {
     "to": 320,
     "subject": 200,
     "title": 200,
     "name": 80,
+    "description": 300,
     "body": 20000,
     "text": 4000,
     "prompt": 4000,
@@ -135,6 +137,17 @@ def parse_draft(tool_name: str, arg: str) -> dict[str, str] | None:
             return None
         return {"cron": cron, "prompt": prompt, "name": name}
 
+    if tool_name == "skill.create":
+        parts = raw.split("|", 2)
+        if len(parts) < 3:
+            return None
+        name = parts[0].strip()
+        description = parts[1].strip()
+        body = parts[2].strip()
+        if not name or not description or not body:
+            return None
+        return {"name": name, "description": description, "body": body}
+
     return None
 
 
@@ -221,6 +234,21 @@ def build_arg(tool_name: str, draft: dict[str, Any]) -> str:
             raise ValueError(f"Invalid cron expression: {exc}") from exc
 
         return f"{cron} | {prompt} | {name}"
+
+    if tool_name == "skill.create":
+        _validate_common_rules(draft, {"name", "description", "body"})
+        name = draft["name"].strip()
+        description = draft["description"].strip()
+        body = draft["body"].strip()
+        if not name:
+            raise ValueError("Field 'name' cannot be empty")
+        if not description:
+            raise ValueError("Field 'description' cannot be empty")
+        if not body:
+            raise ValueError("Field 'body' cannot be empty")
+        from personal_tools.skills import validate_skill_fields
+        validate_skill_fields(name=name, description=description, body=body)
+        return f"{name} | {description} | {body}"
 
     raise ValueError(f"Unsupported tool: {tool_name}")
 

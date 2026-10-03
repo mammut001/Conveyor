@@ -616,5 +616,6 @@ class WebControl:
                 "webhooks": bool(getattr(self.settings, "webhooks_enabled", False))
                 and bool(getattr(self.settings, "routines_enabled", False)),
                 "approval_inbox": bool(getattr(self.settings, "approval_inbox_enabled", False)),
+                "skills": bool(getattr(self.settings, "skills_enabled", False)),
             },
         }

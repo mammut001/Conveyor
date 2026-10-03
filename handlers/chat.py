@@ -248,7 +248,7 @@ def reset(
 
 def system_prompt(
     settings: "Settings", *, has_evidence: bool, can_search: bool = False, worktree_info: str = "", tools_enabled: bool = False,
-    operator_id: str = "", memory_query: str = "", memory_allowed: bool = True,
+    operator_id: str = "", memory_query: str = "", memory_allowed: bool = True, active_skill: str = "",
 ) -> str:
     from config import load_operator_profile
 
@@ -325,12 +325,23 @@ def system_prompt(
         block = prompt_block(settings, operator_id, memory_query)
         if block:
             memory_section = block + "\n"
+    skills_section = ""
+    if getattr(settings, "skills_enabled", False):
+        from personal_tools.skills import prompt_block as skills_prompt_block
+        s_block = skills_prompt_block(settings)
+        if s_block:
+            skills_section = s_block + "\n"
+    active_skill_section = ""
+    if active_skill:
+        active_skill_section = f"{active_skill}\n"
     return (
         f"You are Conveyor's chat layer for {name}, its single operator. Today is {today}.\n"
         f"Reply in the operator's language ({language}), style: {style}. Keep answers chat-sized.\n"
         f"{grounding}"
         f"{tool_section}"
         f"{memory_section}"
+        f"{skills_section}"
+        f"{active_skill_section}"
         "Rules:\n"
         f"{rule_1}\n"
         f"{rule_2}\n"
@@ -501,6 +512,33 @@ def evidence_urls(evidence: str) -> set[str]:
     return extract_urls(evidence)
 
 
+def _extract_skill_invocation(text: str) -> tuple[str, str, str, str] | None:
+    raw = (text or "").strip()
+    prefix = ""
+    suffix = ""
+
+    # Check for routine header prefix: [Scheduled routine ...] or [Routine ...]
+    if raw.startswith("[") and "]\n\n" in raw:
+        head, sep, rest = raw.partition("]\n\n")
+        prefix = head + sep
+        raw = rest.strip()
+
+    # Check for webhook suffix: \n\n<webhook-event
+    if "\n\n<webhook-event" in raw:
+        cmd_part, sep, tail = raw.partition("\n\n<webhook-event")
+        raw = cmd_part.strip()
+        suffix = sep + tail
+
+    # Check if raw starts with /skill
+    if raw == "/skill" or raw.startswith("/skill ") or raw.startswith("/skill\t") or raw.startswith("/skill\n"):
+        parts = raw.split(maxsplit=2)
+        slug = parts[1].strip() if len(parts) >= 2 else ""
+        remaining = parts[2].strip() if len(parts) >= 3 else ""
+        return prefix, slug, remaining, suffix
+
+    return None
+
+
 async def ask_chat(
     msg: InboundMessage,
     port: OutboundPort,
@@ -514,6 +552,27 @@ async def ask_chat(
 ) -> tuple[ChatOutcome, Checked | None]:
     """Stream a chat-model answer into the chat. Never raises."""
     from runner.chat_client import ChatError, config_from_settings, stream_chat
+
+    active_skill_block = ""
+    if getattr(settings, "skills_enabled", False):
+        invoked = _extract_skill_invocation(question)
+        if invoked is not None:
+            prefix, slug, remaining, suffix = invoked
+            from personal_tools import skills as skills_store
+            skill = skills_store.get_skill(settings, slug) if slug else None
+            if not skill or not skill["enabled"]:
+                enabled_skills = skills_store.list_skills(settings, include_disabled=False)
+                if enabled_skills:
+                    slugs_str = ", ".join(s["slug"] for s in enabled_skills)
+                    err_msg = f"Unknown or disabled skill '{slug}'. Available skills: {slugs_str}"
+                else:
+                    err_msg = f"Unknown skill '{slug}'. There are currently no enabled skills."
+                await port.reply(msg, err_msg)
+                return "answered", Checked(body=err_msg, confidence="high", removed_links=0, escalate=False, reason="")
+            skills_store.mark_used(settings, slug)
+            active_skill_block = skills_store.wrap_skill_body(skill["slug"], skill["body"])
+            req_text = remaining.strip() or "Run this skill."
+            question = f"{prefix}{req_text}{suffix}".strip()
 
     images = images or []
     config = config_from_settings(settings)
@@ -553,6 +612,7 @@ async def ask_chat(
                 operator_id=msg.operator_id,
                 memory_query=question,
                 memory_allowed=memory_allowed,
+                active_skill=active_skill_block,
             )}]
             + past
             + [{"role": "user", "content": content}]

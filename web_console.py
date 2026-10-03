@@ -289,6 +289,17 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return None
         return settings
 
+    def _skills_settings(self) -> Any:
+        """Settings when skills library is on; otherwise answer 409 and return None."""
+        settings = getattr(self.server.control, "settings", None)
+        if settings is None:
+            from config import load_runtime_settings
+            settings = load_runtime_settings()
+        if not getattr(settings, "skills_enabled", False):
+            self._json(HTTPStatus.CONFLICT, {"error": "skills are disabled (set CONVEYOR_SKILLS_ENABLED=true)"})
+            return None
+        return settings
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
@@ -356,6 +367,37 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 except ValueError:
                     limit = 200
                 self._json(HTTPStatus.OK, ltm.api_list(settings, q=q, kind=kind, limit=limit))
+            elif len(parts) == 4 and parts[:2] == ["api", "skills"] and parts[3] == "export":
+                settings = self._skills_settings()
+                if settings is None:
+                    return
+                slug = parts[2]
+                from personal_tools import skills
+                item = skills.get_skill(settings, slug)
+                if item is None:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": f"skill '{slug}' not found"})
+                    return
+                exported = skills.export_markdown(item).encode("utf-8")
+                self._headers(HTTPStatus.OK, "text/markdown; charset=utf-8", len(exported))
+                self.wfile.write(exported)
+            elif len(parts) == 3 and parts[:2] == ["api", "skills"]:
+                settings = self._skills_settings()
+                if settings is None:
+                    return
+                slug = parts[2]
+                from personal_tools import skills
+                item = skills.get_skill(settings, slug)
+                if item is None:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": f"skill '{slug}' not found"})
+                    return
+                self._json(HTTPStatus.OK, item)
+            elif path == "/api/skills":
+                settings = self._skills_settings()
+                if settings is None:
+                    return
+                from personal_tools import skills
+                items = skills.list_skills(settings, include_disabled=True)
+                self._json(HTTPStatus.OK, {"items": items, "count": len(items)})
             elif path == "/api/routines" or path.startswith("/api/routines"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
@@ -648,6 +690,48 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.CREATED, resp)
                 return
 
+            if parsed.path == "/api/skills":
+                settings = self._skills_settings()
+                if settings is None:
+                    return
+                from personal_tools import skills
+                try:
+                    if "markdown" in body:
+                        md_text = body.get("markdown")
+                        if not isinstance(md_text, str):
+                            self._json(HTTPStatus.BAD_REQUEST, {"error": "markdown must be a string"})
+                            return
+                        parsed_fields = skills.parse_markdown(md_text)
+                        item = skills.create_skill(settings, **parsed_fields)
+                    else:
+                        name = body.get("name")
+                        description = body.get("description")
+                        skill_body = body.get("body")
+                        if not isinstance(name, str) or not isinstance(description, str) or not isinstance(skill_body, str):
+                            self._json(HTTPStatus.BAD_REQUEST, {"error": "name, description, and body are required strings"})
+                            return
+                        slug = body.get("slug") or ""
+                        triggers = body.get("triggers") or ""
+                        enabled = body.get("enabled", True)
+                        if not isinstance(slug, str) or not isinstance(triggers, str) or not isinstance(enabled, bool):
+                            self._json(HTTPStatus.BAD_REQUEST, {"error": "slug and triggers must be strings, enabled must be true or false"})
+                            return
+                        item = skills.create_skill(
+                            settings,
+                            name=name,
+                            description=description,
+                            body=skill_body,
+                            slug=slug,
+                            triggers=triggers,
+                            enabled=enabled,
+                        )
+                    self._json(HTTPStatus.CREATED, item)
+                except skills.SkillConflictError as exc:
+                    self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                except ValueError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+
             if parsed.path.startswith("/api/routines") or parsed.path.startswith("/api/inbox"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
@@ -929,6 +1013,50 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             logger.exception("POST request failed")
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"})
 
+    def do_PUT(self) -> None:
+        parsed = urlparse(self.path)
+        if not self._require_auth():
+            return
+        if not parsed.path.startswith("/api/"):
+            self._drain_body()
+            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            return
+        body = self._body()
+        if body is None:
+            return
+        parts = self._segments(parsed.path)
+        try:
+            if len(parts) == 3 and parts[:2] == ["api", "skills"]:
+                settings = self._skills_settings()
+                if settings is None:
+                    return
+                slug = parts[2]
+                from personal_tools import skills
+                allowed = {"name", "description", "triggers", "body", "enabled"}
+                unknown = sorted(set(body) - allowed)
+                if unknown:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown or immutable fields: {', '.join(unknown)}"})
+                    return
+                for key in ("name", "description", "triggers", "body"):
+                    if key in body and not isinstance(body[key], str):
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"{key} must be a string"})
+                        return
+                if "enabled" in body and not isinstance(body["enabled"], bool):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "enabled must be true or false"})
+                    return
+                try:
+                    updated = skills.update_skill(settings, slug, **body)
+                    self._json(HTTPStatus.OK, updated)
+                except skills.SkillNotFoundError as exc:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": str(exc)})
+                except ValueError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        except Exception:
+            logger.exception("PUT request failed")
+            self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"})
+
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         if not self._require_auth():
@@ -940,6 +1068,19 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         self._drain_body()
         parts = self._segments(parsed.path)
         try:
+            if len(parts) == 3 and parts[:2] == ["api", "skills"]:
+                settings = self._skills_settings()
+                if settings is None:
+                    return
+                slug = parts[2]
+                from personal_tools import skills
+                try:
+                    skills.delete_skill(settings, slug)
+                    self._json(HTTPStatus.OK, {"ok": True, "slug": slug})
+                except skills.SkillNotFoundError:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": f"skill '{slug}' not found"})
+                return
+
             if len(parts) == 3 and parts[:2] == ["api", "memory"]:
                 settings = self._memory_settings()
                 if settings is None:

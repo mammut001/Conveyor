@@ -72,6 +72,8 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
         return False
     if name.startswith("memory.") and not getattr(settings, "long_term_memory_enabled", False):
         return False
+    if name.startswith("skill.") and not getattr(settings, "skills_enabled", False):
+        return False
     if spec.danger not in (DangerLevel.READ, DangerLevel.WRITE_SAFE, DangerLevel.WRITE):
         return False
     if name in NETWORK_TOOLS and name not in _network_allowlist(settings):

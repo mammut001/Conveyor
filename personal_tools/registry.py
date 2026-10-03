@@ -28,6 +28,7 @@ from personal_tools import kb as kb_tools
 from personal_tools import queue_tools as queue_tools
 from personal_tools import routines as routines_tools
 from personal_tools import long_term_memory as memory_tools
+from personal_tools import skills as skills_tools
 
 if TYPE_CHECKING:
     pass
@@ -691,6 +692,29 @@ def register_personal_tools() -> None:
         DangerLevel.READ,
         memory_tools.memory_search,
         keywords=("搜索记忆",),
+    )
+
+    # Reusable skills library (flagged off in is_exposed / chat_tools).
+    _register(
+        "skill.list",
+        "列出可用技能 (slug 和描述)",
+        DangerLevel.READ,
+        skills_tools.skill_list,
+        keywords=("技能", "skill"),
+    )
+    _register(
+        "skill.load",
+        "加载技能操作说明 (<slug>)",
+        DangerLevel.READ,
+        skills_tools.skill_load,
+        keywords=("加载技能", "load skill"),
+    )
+    _register(
+        "skill.create",
+        "创建技能 (需确认) (<名称> | <描述> | <正文>)",
+        DangerLevel.WRITE,
+        skills_tools.skill_create,
+        keywords=("创建技能", "新建技能"),
     )
 
 

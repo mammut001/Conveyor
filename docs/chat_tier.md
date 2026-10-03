@@ -105,3 +105,5 @@ genuine updates appear, citing verified sources only.
 Smoke suites: `scripts/chat_tier_smoke.py`, `scripts/chat_memory_smoke.py`, `scripts/topic_watch_smoke.py`.
 
 Tool write actions requiring confirmation can be reviewed and edited in the Web Console; see `docs/approval_inbox.md`.
+
+Reusable operator procedures can be saved, indexed, and loaded as skills; see `docs/skills.md` (`CONVEYOR_SKILLS_ENABLED`, default off).
