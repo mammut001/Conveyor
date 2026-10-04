@@ -191,6 +191,8 @@ SERVICES=()
 for svc in "${ALL_CANDIDATE_SERVICES[@]}"; do
   if sudo -n systemctl is-active --quiet "${svc}" 2>/dev/null; then
     SERVICES+=("${svc}")
+  else
+    log "Skipping ${svc} (not active at capture)"
   fi
 done
 

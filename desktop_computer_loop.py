@@ -206,6 +206,7 @@ async def run_computer_loop(
     start = time.monotonic()
     pause_started: float | None = None
     steps_used = 0
+    false_done = 0
     observation: dict[str, Any] = {"initial": True}
     trajectory: list[dict] = []
     followup_observe = False
@@ -294,6 +295,25 @@ async def run_computer_loop(
             act = action.get("action")
 
             if act == "done":
+                # A planner summary is not a desktop change. Three failed
+                # clicks followed by "the file manager is already open"
+                # left the window where it was.
+                if _latest_mutation_failed(trajectory):
+                    false_done += 1
+                    trajectory.append({
+                        "action_type": "done",
+                        "result_ok": False,
+                        "error": "unverified_done",
+                    })
+                    if false_done >= 2:
+                        set_task_status(
+                            settings,
+                            task_id,
+                            "error",
+                            blocked_reason="unverified_done",
+                        )
+                        break
+                    continue
                 set_task_status(settings, task_id, "done", summary=action.get("summary") or "completed")
                 break
             if act == "stop":
@@ -422,6 +442,20 @@ async def run_computer_loop(
         "steps_used": steps_used,
         "trajectory_len": len(trajectory),
     }
+
+
+_MUTATING_ACTIONS = frozenset({"click", "type", "hotkey", "scroll"})
+
+
+def _latest_mutation_failed(trajectory: list[dict]) -> bool:
+    """True when the newest click/type/hotkey/scroll did not succeed."""
+    for entry in reversed(trajectory or []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("action_type") not in _MUTATING_ACTIONS:
+            continue
+        return not bool(entry.get("result_ok", True))
+    return False
 
 
 def _action_text(action: dict) -> str:

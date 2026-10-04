@@ -360,7 +360,10 @@ class LocalCuaTransport(CuaTransport):
             return {"ok": False, "error": f"driver_error:{type(exc).__name__}"}
         if proc.returncode != 0:
             err = (proc.stderr or "").strip().splitlines()
-            suffix = f":{err[0][:120]}" if err else ""
+            detail = err[0][:120] if err else ""
+            if not detail and proc.stdout and len(proc.stdout) <= 800:
+                detail = _driver_stdout_code(proc.stdout)
+            suffix = f":{detail}" if detail else ""
             return {"ok": False, "error": f"driver_exit_{proc.returncode}{suffix}"}
         try:
             out = json.loads(proc.stdout or "{}")
@@ -569,21 +572,69 @@ class LocalCuaTransport(CuaTransport):
             node_id=node_id,
         )
 
+    def _raise_desktop_center(self, action: dict, node_id: str) -> dict | None:
+        """Raise a window when the click is its desktop-coordinate center.
+
+        The planner computes that center from list_windows bounds (screen
+        pixels). cua-driver click treats x/y as window-local and, on X11,
+        refuses the point with screenshot_context_missing. A background
+        click would not change z-order anyway. bring_to_front leaves the
+        named window in front, which is what "open this app" asks for.
+        A point inside the window's own width/height stays a real click.
+        """
+        if any(action.get(key) is not None for key in ("element_index", "element_token")):
+            return None
+        ok_coord, x, y = _xy(action)
+        if not ok_coord:
+            return None
+        pid = action.get("pid")
+        wid = action.get("window_id")
+        if pid is None and wid is None:
+            return None
+        listed = self._call_tool("list_windows", {}, timeout=20)
+        data = listed.get("data") if listed.get("ok") else None
+        windows = data.get("windows") if isinstance(data, dict) else None
+        if not isinstance(windows, list):
+            return None
+        window = _match_listed_window(windows, pid, wid)
+        frame = _window_frame(window) if isinstance(window, dict) else None
+        if frame is None or not _point_is_desktop_center(x, y, frame):
+            return None
+        try:
+            target_pid = int(pid if pid is not None else window.get("pid"))
+        except (TypeError, ValueError):
+            return None
+        args: dict[str, Any] = {"pid": target_pid}
+        if wid is not None:
+            args["window_id"] = int(wid)
+        called = self._call_tool("bring_to_front", args, timeout=20)
+        return _result_from_call(called, "click", node_id)
+
     def _click(self, action: dict, node_id: str) -> dict:
         # Validate AX fields first
         ok, err = validate_ax_fields(action)
         if not ok:
             return {"result_ok": False, "error": f"validation_error:{err}", "action_type": "click", "node_id": node_id}
-            
-        has_ax = any(action.get(k) is not None for k in ("pid", "window_id", "element_index"))
+
+        has_element = any(action.get(k) is not None for k in ("element_index", "element_token"))
+        has_window = any(action.get(k) is not None for k in ("pid", "window_id"))
         has_xy = "x" in action and "y" in action
-        
-        if not has_ax and not has_xy and "element_token" not in action:
+        # Keep the old name for the AX branch: an element, or a window with no pixels.
+        has_ax = has_element or (has_window and not has_xy)
+
+        if not has_element and not has_window and not has_xy:
             return {"result_ok": False, "error": "click_target_required", "action_type": "click", "node_id": node_id}
-            
+
         result = None
         used_method = None
-        
+
+        if result is None and has_xy and not has_element:
+            raised = self._raise_desktop_center(action, node_id)
+            if raised is not None:
+                raised["click_method"] = "bring_to_front"
+                logger.info("Click method used: bring_to_front")
+                return raised
+
         if has_ax:
             # AX/action-based click
             ax_args: dict[str, Any] = {}
@@ -731,6 +782,90 @@ class LocalCuaTransport(CuaTransport):
         seconds = max(0, min(30, float(action.get("seconds", 0) or 0)))
         time.sleep(seconds)
         return {"result_ok": True, "action_type": "wait", "node_id": node_id}
+
+
+def _driver_stdout_code(stdout: str) -> str:
+    """Short machine code from a failed cua-driver call. Empty if none."""
+    try:
+        parsed = json.loads(stdout)
+    except Exception:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    code = parsed.get("code") or parsed.get("error")
+    if isinstance(code, str) and code.strip():
+        return code.strip()[:120]
+    return ""
+
+
+def _window_frame(window: dict) -> tuple[int, int, int, int] | None:
+    """Return x, y, width, height in desktop pixels, or None."""
+    bounds = window.get("bounds") if isinstance(window.get("bounds"), dict) else {}
+
+    def _num(*keys: str) -> int | None:
+        for key in keys:
+            raw = bounds.get(key) if isinstance(bounds, dict) and key in bounds else window.get(key)
+            if raw is None:
+                continue
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    x = _num("x")
+    y = _num("y")
+    width = _num("width", "w")
+    height = _num("height", "h")
+    if None in (x, y, width, height) or width <= 0 or height <= 0:
+        return None
+    return x, y, width, height
+
+
+def _point_is_desktop_center(x: float, y: float, frame: tuple[int, int, int, int]) -> bool:
+    """True when x/y is the screen center of a window, not a point inside it.
+
+    Window-local clicks use coordinates inside the window's width and height.
+    The planner's raise-window click uses x+w/2 and y+h/2 from list_windows,
+    which sits outside that local box whenever the window is not at the origin.
+    """
+    origin_x, origin_y, width, height = frame
+    if 0 <= x < width and 0 <= y < height:
+        return False
+    center_x = origin_x + width / 2.0
+    center_y = origin_y + height / 2.0
+    return abs(x - center_x) <= 2.0 and abs(y - center_y) <= 2.0
+
+
+def _match_listed_window(windows: list, pid: object, window_id: object) -> dict | None:
+    """Prefer the exact window id. Same-pid apps can own more than one window."""
+    if window_id is not None:
+        try:
+            wanted = int(window_id)
+        except (TypeError, ValueError):
+            wanted = None
+        if wanted is not None:
+            for window in windows:
+                if isinstance(window, dict):
+                    try:
+                        if int(window.get("window_id")) == wanted:
+                            return window
+                    except (TypeError, ValueError):
+                        continue
+    if pid is None:
+        return None
+    try:
+        wanted_pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    for window in windows:
+        if isinstance(window, dict):
+            try:
+                if int(window.get("pid")) == wanted_pid:
+                    return window
+            except (TypeError, ValueError):
+                continue
+    return None
 
 
 def _is_chrome_app(app_name: str) -> bool:
