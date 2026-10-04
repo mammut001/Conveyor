@@ -435,6 +435,10 @@ class TestChatToolsLoop(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(mock_complete.call_args_list[1][0][1][-1]["content"], "unknown tool")
 
         allowed = dataclasses.replace(self.settings, chat_tools_network_allow=("web.search",))
+        # Allowlisted but no search backend configured: still hidden.
+        names = {s["function"]["name"] for s in build_tool_schemas(allowed)}
+        self.assertNotIn("web__search", names)
+        allowed = dataclasses.replace(allowed, web_search_backend="searxng")
         names = {s["function"]["name"] for s in build_tool_schemas(allowed)}
         self.assertIn("web__search", names)
         self.assertNotIn("web__fetch", names)

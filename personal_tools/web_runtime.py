@@ -241,7 +241,7 @@ class WebRuntime:
         limit: int | None = None,
     ) -> tuple[list[SearchResult], str]:
         if self.search_provider is None:
-            return [], "Web 搜索能力未配置"
+            return [], "Web 搜索能力未配置（WEB_SEARCH_BACKEND=disabled；可选 searxng / brave / tavily / serper / tinyfish）"
         return self.search_provider.search(query, limit)
 
     def fetch(self, url: str) -> ToolResult:

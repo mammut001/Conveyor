@@ -35,6 +35,8 @@ _HYBRID_DEFAULT_TOOLS = ("load", "ps", "disk", "service_status")
 
 
 def _requires_confirmation(tool_name: str, settings: Settings | None = None) -> bool:
+    if tool_name == "agents.parallel":
+        return False
     if tool_name.startswith("mcp."):
         from mcp_client import get_mcp_tool_spec
         spec = get_mcp_tool_spec(settings, tool_name)
@@ -67,7 +69,24 @@ async def run_tool(
     operator_id: str = "",
     channel: str = "",
     chat_id: str = "",
+    port: Any = None,
+    msg: Any = None,
+    config: Any = None,
+    placeholder: str | None = None,
 ) -> str:
+    if tool_name == "agents.parallel":
+        from handlers.subagents import execute_parallel_subagents
+        return await execute_parallel_subagents(
+            settings,
+            arg,
+            operator_id=operator_id,
+            channel=channel,
+            chat_id=chat_id,
+            port=port,
+            msg=msg,
+            config=config,
+            placeholder=placeholder,
+        )
     if tool_name.startswith("mcp."):
         from mcp_client import run_mcp_tool
         return await run_mcp_tool(
@@ -119,6 +138,8 @@ async def run_tools_collected(
 
 
 def _danger_label(tool_name: str, settings: Settings | None = None) -> str:
+    if tool_name == "agents.parallel":
+        return "read"
     if tool_name.startswith("mcp."):
         from mcp_client import get_mcp_tool_spec
         spec = get_mcp_tool_spec(settings, tool_name)
