@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 from channel.types import InboundMessage
 from config import Settings
 from handlers.dispatch import dispatch
+from handlers.intent import route_intent
 
 _loop_mod = importlib.import_module("desktop_computer_loop")
 
@@ -118,6 +119,14 @@ class ComputerDispatchTest(unittest.IsolatedAsyncioTestCase):
         reply = "\n".join(port.replies)
         self.assertIn(_ARM, reply)
         self.assertIn("/computer_arm", reply)
+
+    def test_htop_snapshot_is_not_a_desktop_task(self) -> None:
+        htop = route_intent("帮我运行 htop 看看我的vps")
+        self.assertEqual(htop.tools, ("htop",))
+        desktop = route_intent(_SAFE)
+        self.assertEqual(desktop.tools, ("computer.task",))
+        still_desktop = route_intent("帮我运行文件管理器")
+        self.assertEqual(still_desktop.tools, ("computer.task",))
 
     async def test_blocked_keyword_does_not_start_loop(self) -> None:
         port, loop = await self._dispatch(_BLOCKED, always_direct=True)

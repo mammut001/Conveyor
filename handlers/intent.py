@@ -521,6 +521,10 @@ def route_intent(text: str) -> RouteResult:
             )
     for pat in _COMPUTER_TASK_PATTERNS:
         if pat.search(body):
+            # "帮我运行 htop" shares the 帮我+运行 verb with a desktop
+            # task. Host snapshots stay on the ops fast path below.
+            if detect_ops_intent(body) is not None:
+                break
             return RouteResult(kind="deterministic", tools=("computer.task",), arg=body)
     for pat in _COMPUTER_USE_PATTERNS:
         if pat.search(body):
