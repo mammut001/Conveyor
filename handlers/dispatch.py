@@ -17,12 +17,13 @@ from handlers.chat import (
     handle_chat_clear,
     handle_deep,
     is_time_sensitive,
-    needs_agent,
+    readonly_host_tool,
+    routes_to_agent,
     web_evidence,
 )
 from handlers.commands import parse_command, run_command
 from handlers.context import detect_context_intent, handle_context_job, memo_text_with_quote
-from handlers.intent import route_intent
+from handlers.intent import RouteResult, route_intent
 from handlers.jobs import handle_codex_job
 from handlers.memo import detect_memory_intent, handle_memo
 from handlers.tools.runner import handle_hybrid, handle_route, try_resolve_confirmation
@@ -139,13 +140,25 @@ async def dispatch(
         return
 
     prompt = route.question or msg.text
+    # Chat tools on: a read-only disk/service question that names the
+    # operator machine is answered by the existing tool. That phrase does
+    # not match the deterministic patterns above (no 看看/查/看), and it
+    # must not fall through to a Codex job. Edit imperatives return no
+    # tool and keep the Codex path below. Chat tools off: this is a no-op.
+    host_tool = readonly_host_tool(msg.text, settings)
+    if host_tool:
+        await handle_route(
+            msg, port, runner, settings,
+            RouteResult(kind="deterministic", tools=(host_tool,)),
+        )
+        return
     # When the same stable session has an active (or still-pending first)
     # refinement chain, short edit feedback gets a conservative execution
     # route even if it contains no ordinary action keyword. Explanation and
     # question-shaped follow-ups are explicitly excluded by the helper. The
     # executed prompt remains the operator's own text — no model output is
     # ever converted into a new instruction.
-    if chat_enabled(settings) and not needs_agent(msg.text):
+    if chat_enabled(settings) and not routes_to_agent(msg.text, settings):
         if should_route_refinement(settings, msg):
             await handle_codex_job(
                 msg, port, runner, mode=JobMode.FIX, prompt=prompt,

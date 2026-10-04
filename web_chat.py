@@ -191,8 +191,18 @@ async def run_web_chat(
     runner: Any,
     prompt: str,
 ) -> None:
-    from handlers.chat import ask_chat
+    from handlers.chat import ask_chat, readonly_host_tool
+    from handlers.intent import RouteResult
+    from handlers.tools.runner import handle_route
     try:
+        host_tool = readonly_host_tool(prompt, settings)
+        if host_tool:
+            await handle_route(
+                msg, port, runner, settings,
+                RouteResult(kind="deterministic", tools=(host_tool,)),
+            )
+            port.emit("done", {"outcome": "answered"})
+            return
         outcome, checked = await ask_chat(
             msg, port, settings, question=prompt, runner=runner,
         )

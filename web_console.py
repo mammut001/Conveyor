@@ -504,7 +504,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
 
         from handlers.commands import parse_command
         from handlers.memo import detect_memory_intent
-        from handlers.chat import chat_enabled, needs_agent
+        from handlers.chat import chat_enabled, readonly_host_tool, routes_to_agent
 
         parsed = parse_command(msg.text)
         is_cmd = parsed is not None
@@ -516,8 +516,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 msg, outbound, runner, mode=job_mode, prompt=job_prompt, wait=False,
             )
 
-        can_chat = chat_enabled(settings) and not needs_agent(msg.text)
-        if can_chat or is_cmd or detect_memory_intent(msg.text):
+        can_chat = chat_enabled(settings) and not routes_to_agent(msg.text, settings)
+        # A read-only host question is a direct tool call. It does not need
+        # the chat model, and it must not be submitted as a Codex task.
+        if readonly_host_tool(msg.text, settings) or can_chat or is_cmd or detect_memory_intent(msg.text):
             from handlers.dispatch import dispatch
             await dispatch(msg, outbound, settings, runner)
             job = outbound.last_job

@@ -304,9 +304,19 @@ async def handle_context_job(
                 "cite what you use):\n\n" + pack
             )
     mode = mode or JobMode.RUN
-    from handlers.chat import chat_enabled, chat_or_agent, needs_agent
+    from handlers.chat import chat_enabled, chat_or_agent, readonly_host_tool, routes_to_agent
+    from handlers.intent import RouteResult
+    from handlers.tools.runner import handle_route
 
-    if mode is JobMode.RUN and chat_enabled(settings) and not needs_agent(question):
+    host_tool = readonly_host_tool(question, settings)
+    if mode is JobMode.RUN and host_tool:
+        await handle_route(
+            msg, port, runner, settings,
+            RouteResult(kind="deterministic", tools=(host_tool,)),
+        )
+        return
+
+    if mode is JobMode.RUN and chat_enabled(settings) and not routes_to_agent(question, settings):
         # Intent mode: questions about a quote / image are answered by the
         # chat tier; `prompt` (the operator's words + context) is what Codex
         # runs if it escalates.
