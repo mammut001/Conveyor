@@ -114,16 +114,25 @@ _READONLY_SERVICE_RE = re.compile(
     re.IGNORECASE,
 )
 # Mutations stay on Codex even when they also mention disk or a service.
-# Bare "运行" is omitted so "服务在运行吗" stays a status question;
-# "跑一下" / "执行" still count as imperatives.
+# Bare "运行" is omitted so "服务在运行吗" stays a status question.
+# "运行一下", "排查", "生成", and run/debug/investigate still count,
+# so "生成磁盘报告脚本" / "run the disk cleanup" do not take the disk hop.
 _EDIT_IMPERATIVE_RE = re.compile(
     r"(改一下|修改|修复|修一下|帮我修|实现|重构|部署|回滚|跑一下|跑下|执行|提交|推送|合并"
-    r"|安装|卸载|重启|删除|删掉|新建|创建"
+    r"|安装|卸载|重启|删除|删掉|新建|创建|排查|运行一下|生成"
     r"|写.{0,4}(?:脚本|代码|程序|函数|测试)"
     r"|\b(?:fix|implement|refactor|deploy|rollback|execute|commit|push|merge|install"
-    r"|uninstall|restart|delete|remove|create)\b)",
+    r"|uninstall|restart|delete|remove|create|run|debug|investigate)\b)",
     re.IGNORECASE,
 )
+
+
+def host_edit_imperative(text: str) -> bool:
+    """True when the text asks to change, run, or investigate something.
+
+    Bare "运行" is not an imperative: "服务在运行吗" stays a status question.
+    """
+    return bool(_EDIT_IMPERATIVE_RE.search(text or ""))
 
 
 def readonly_host_tool(text: str, settings: "Settings | None") -> str | None:
@@ -137,7 +146,7 @@ def readonly_host_tool(text: str, settings: "Settings | None") -> str | None:
     if settings is None or not bool(getattr(settings, "chat_tools_enabled", False)):
         return None
     raw = text or ""
-    if _EDIT_IMPERATIVE_RE.search(raw):
+    if host_edit_imperative(raw):
         return None
     if _READONLY_DISK_RE.search(raw):
         return "disk"

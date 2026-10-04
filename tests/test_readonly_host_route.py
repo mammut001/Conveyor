@@ -134,3 +134,57 @@ class ReadonlyHostRouteTest(unittest.IsolatedAsyncioTestCase):
         text = "删掉我的服务器上的缓存，把磁盘腾出来"
         _port, codex = await self._dispatch(text, chat_tools=True)
         self.assertGreaterEqual(codex.await_count, 1)
+
+    async def test_tools_on_generate_disk_script_starts_codex(self) -> None:
+        text = "生成磁盘报告脚本"
+        port, codex = await self._dispatch(text, chat_tools=True)
+        self.assertGreaterEqual(codex.await_count, 1)
+        prompt = codex.await_args.kwargs.get("prompt") or codex.await_args.args[-1]
+        self.assertIn("生成磁盘报告脚本", prompt)
+        self.assertFalse(any("磁盘使用快照" in reply for reply in port.replies))
+
+    async def test_tools_on_run_disk_cleanup_starts_codex(self) -> None:
+        text = "run the disk cleanup"
+        port, codex = await self._dispatch(text, chat_tools=True)
+        self.assertGreaterEqual(codex.await_count, 1)
+        prompt = codex.await_args.kwargs.get("prompt") or codex.await_args.args[-1]
+        self.assertIn("run the disk cleanup", prompt)
+        self.assertFalse(any("磁盘使用快照" in reply for reply in port.replies))
+
+    async def test_tools_on_debug_disk_usage_starts_codex(self) -> None:
+        text = "debug the disk usage bug"
+        port, codex = await self._dispatch(text, chat_tools=True)
+        self.assertGreaterEqual(codex.await_count, 1)
+        prompt = codex.await_args.kwargs.get("prompt") or codex.await_args.args[-1]
+        self.assertIn("debug the disk usage bug", prompt)
+        self.assertFalse(any("磁盘使用快照" in reply for reply in port.replies))
+
+    async def test_tools_on_investigate_disk_starts_codex(self) -> None:
+        text = "investigate the disk usage"
+        port, codex = await self._dispatch(text, chat_tools=True)
+        self.assertGreaterEqual(codex.await_count, 1)
+        prompt = codex.await_args.kwargs.get("prompt") or codex.await_args.args[-1]
+        self.assertIn("investigate the disk usage", prompt)
+        self.assertFalse(any("磁盘使用快照" in reply for reply in port.replies))
+
+    async def test_tools_on_investigate_disk_chinese_starts_codex(self) -> None:
+        text = "排查磁盘占用"
+        port, codex = await self._dispatch(text, chat_tools=True)
+        self.assertGreaterEqual(codex.await_count, 1)
+        prompt = codex.await_args.kwargs.get("prompt") or codex.await_args.args[-1]
+        self.assertIn("排查磁盘占用", prompt)
+        self.assertFalse(any("磁盘使用快照" in reply for reply in port.replies))
+
+    async def test_tools_on_run_disk_cleanup_chinese_starts_codex(self) -> None:
+        text = "运行一下磁盘清理"
+        port, codex = await self._dispatch(text, chat_tools=True)
+        self.assertGreaterEqual(codex.await_count, 1)
+        prompt = codex.await_args.kwargs.get("prompt") or codex.await_args.args[-1]
+        self.assertIn("运行一下磁盘清理", prompt)
+        self.assertFalse(any("磁盘使用快照" in reply for reply in port.replies))
+
+    async def test_tools_on_service_running_question_stays_service_status(self) -> None:
+        port, codex = await self._dispatch("服务在运行吗", chat_tools=True)
+        self.assertEqual(codex.await_count, 0)
+        self.assertTrue(port.replies)
+        self.assertIn("服务状态", port.replies[-1])

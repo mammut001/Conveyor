@@ -43,7 +43,10 @@ HTTP error, empty answer) falls back to Codex.
    question is the exception: `readonly_host_tool` answers it with the
    existing `disk` or `service_status` tool in one hop, including when
    the wording names the operator's machine ("我的服务器磁盘还剩多少").
-   Edit, run, and deploy imperatives still go to Codex. With the flag
+   Edit, run, and deploy imperatives still go to Codex, including
+   "生成磁盘报告脚本", "运行一下", "排查", and run / debug / investigate.
+   "服务在运行吗" stays on `service_status` (bare "运行" is not an
+   imperative). With the flag
    off, those machine-naming questions stay on Codex. Phrases the
    deterministic router already catches ("看看磁盘") are unchanged.
 2. Knowledge questions (怎么 / 如何 / 为什么 / what is / how to …) → chat,
