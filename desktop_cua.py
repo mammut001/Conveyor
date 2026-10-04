@@ -481,10 +481,19 @@ class LocalCuaTransport(CuaTransport):
             if filtered:
                 candidates = filtered
 
-        # Prefer large on-screen windows (skip menu-bar strips).
+        def _z_index(window: dict) -> int:
+            try:
+                return int(window.get("z_index") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        # Prefer the front app window. Panels and the desktop wallpaper
+        # are large and high in the stack, but they are not the target.
         candidates = sorted(
             candidates,
             key=lambda w: (
+                0 if _is_chrome_app(str(w.get("app_name") or "")) else 1,
+                _z_index(w),
                 1 if w.get("is_on_screen") else 0,
                 1 if _area(w) >= 5000 else 0,
                 _area(w),
@@ -526,16 +535,19 @@ class LocalCuaTransport(CuaTransport):
             }
             if hints:
                 break
-        if not chosen:
+        summary = summarize_windows(windows)
+        if not chosen and not summary:
             return {}
-        out: dict[str, Any] = {
-            "pid": chosen["pid"],
-            "window_id": chosen["window_id"],
-        }
-        if chosen.get("ax_app"):
-            out["ax_app"] = chosen["ax_app"]
-        if chosen.get("element_hints"):
-            out["element_hints"] = chosen["element_hints"]
+        out: dict[str, Any] = {}
+        if chosen:
+            out["pid"] = chosen["pid"]
+            out["window_id"] = chosen["window_id"]
+            if chosen.get("ax_app"):
+                out["ax_app"] = chosen["ax_app"]
+            if chosen.get("element_hints"):
+                out["element_hints"] = chosen["element_hints"]
+        if summary:
+            out["windows"] = summary
         return out
 
     def _observe_desktop_state(self, node_id: str) -> dict:
@@ -719,6 +731,53 @@ class LocalCuaTransport(CuaTransport):
         seconds = max(0, min(30, float(action.get("seconds", 0) or 0)))
         time.sleep(seconds)
         return {"result_ok": True, "action_type": "wait", "node_id": node_id}
+
+
+def _is_chrome_app(app_name: str) -> bool:
+    """Panels and the desktop wallpaper are not the window a task should type into."""
+    name = (app_name or "").strip().lower()
+    return "panel" in name or name in {"xfdesktop", "desktop"}
+
+
+def summarize_windows(windows: list) -> list[dict[str, Any]]:
+    """Short window list for the planner. Highest non-panel window first.
+
+    Titles are capped at 32 characters, the same bound as AX button labels.
+    """
+    rows: list[dict[str, Any]] = []
+    for window in windows:
+        if not isinstance(window, dict):
+            continue
+        try:
+            pid = int(window.get("pid"))
+            wid = int(window.get("window_id"))
+            z = int(window.get("z_index") or 0)
+        except (TypeError, ValueError):
+            continue
+        bounds = window.get("bounds") if isinstance(window.get("bounds"), dict) else {}
+
+        def _coord(key: str) -> int:
+            raw = bounds.get(key) if key in bounds else window.get(key)
+            try:
+                return int(raw or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        app = str(window.get("app_name") or "").strip()[:64]
+        title = str(window.get("title") or "").strip()[:32]
+        rows.append({
+            "app": app,
+            "title": title,
+            "z": z,
+            "pid": pid,
+            "window_id": wid,
+            "x": _coord("x"),
+            "y": _coord("y"),
+            "w": _coord("width"),
+            "h": _coord("height"),
+        })
+    rows.sort(key=lambda row: (_is_chrome_app(str(row.get("app") or "")), -int(row.get("z") or 0)))
+    return rows[:12]
 
 
 def _observe_result_from_meta(meta: dict, node_id: str) -> dict:
@@ -993,7 +1052,7 @@ class CuaDriver:
             "obs_text_preview", "action_type", "action_redacted", "result_ok",
             "effect", "path", "verified", "error", "node_id", "created_at",
             "keys_len", "text_len", "click_method", "active_app",
-            "pid", "window_id", "ax_app", "element_hints",
+            "pid", "window_id", "ax_app", "element_hints", "windows",
         }
         return {k: v for k, v in result.items() if k in allowed}
 

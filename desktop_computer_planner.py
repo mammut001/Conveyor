@@ -341,7 +341,7 @@ def _obs_summary(observation: dict) -> str:
     # Surface AX / element / action hints so the planner can prefer them.
     for key in (
         "pid", "window_id", "element_index", "element_token",
-        "elements", "element_hints", "action_hints", "ax_hints",
+        "elements", "element_hints", "windows", "action_hints", "ax_hints",
         "click_method",
     ):
         val = observation.get(key)
@@ -353,7 +353,7 @@ def _obs_summary(observation: dict) -> str:
             except Exception:
                 snippet = str(val)
             # element_hints can be longer — keep more for digit matching.
-            limit = 900 if key == "element_hints" else 240
+            limit = 900 if key == "element_hints" else 2000 if key == "windows" else 240
             if len(snippet) > limit:
                 snippet = snippet[: limit - 1] + "…"
             parts.append(f"{key}={snippet}")
@@ -379,6 +379,9 @@ def _trajectory_summary(trajectory: list[dict]) -> str:
             red = entry.get("action_redacted") or {}
             if isinstance(red, dict) and red.get("element_index") is not None:
                 extra = f" element_index={red.get('element_index')}"
+        err = entry.get("error")
+        if isinstance(err, str) and err.strip():
+            extra += f" error={err.strip()[:64]}"
         lines.append(f"- {act} ({ok}){extra}")
     return "\n".join(lines) if lines else "(none)"
 
@@ -468,13 +471,19 @@ class CodexPlanner(Planner):
             "- 若观察里有 elements / element_hints / action_hints，先据此选择目标。\n"
             "- 如果目标明确提到某个 App，observe 时加入 target_app（使用 App 的正式名称）；"
             "不要凭空猜测未提到的 App。\n"
+            "- windows 列出当前窗口（app、title、z、pid、window_id、x、y、w、h）。"
+            "z 越大越靠前。名字里带 panel 的条和 desktop 壁纸不是目标。\n"
+            "- 目标应用已经有窗口时，点击该窗口中心把它放到最前，然后 done："
+            '{"action":"click","pid":…,"window_id":…,"x":x+w/2,"y":y+h/2}。\n'
+            "- type、hotkey、scroll 必须带上目标窗口的 pid 和 window_id。"
+            "不要往终端里打命令来打开应用。\n"
             f"{ax_rule}"
             f"{digit_rule}\n"
             "动作示例：\n"
             '{"action":"observe"}\n'
             '{"action":"click","pid":123,"window_id":0,"element_index":5}\n'
             '{"action":"click","x":123,"y":456}\n'
-            '{"action":"type","text":"要输入的文字"}\n'
+            '{"action":"type","text":"要输入的文字","pid":123,"window_id":0}\n'
             '{"action":"hotkey","keys":["cmd","l"]}\n'
             '{"action":"scroll","dx":0,"dy":-500}\n'
             '{"action":"wait","seconds":1}\n'

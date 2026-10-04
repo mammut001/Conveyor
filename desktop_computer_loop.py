@@ -50,6 +50,28 @@ from desktop_cua import CuaDriver, FakeCuaTransport
 from human_takeover import HumanTakeoverStore
 
 
+def _with_observed_target(action: dict, observation: dict) -> dict:
+    """Fill pid for type/hotkey/scroll from the window just observed.
+
+    The Linux driver rejects those actions when pid is missing. The
+    observation pid is the front window the planner was just shown.
+    """
+    if not isinstance(action, dict) or not isinstance(observation, dict):
+        return action
+    if action.get("action") not in {"type", "hotkey", "scroll"}:
+        return action
+    if action.get("pid") is not None:
+        return action
+    pid = observation.get("pid")
+    if pid is None:
+        return action
+    bound = dict(action)
+    bound["pid"] = pid
+    if bound.get("window_id") is None and observation.get("window_id") is not None:
+        bound["window_id"] = observation["window_id"]
+    return bound
+
+
 class ComputerBackendError(Exception):
     """Raised when a step cannot be executed / observed."""
 
@@ -89,7 +111,14 @@ class HttpComputerBackend:
                 if not isinstance(result, dict):
                     result = {}
                 return result
-            if status in ("failed", "expired", "cancelled"):
+            if status == "failed":
+                # A bad click or a type that missed its window is feedback
+                # for the planner, not the end of the task.
+                return {
+                    "result_ok": False,
+                    "error": str(step.get("error") or "step_failed")[:128],
+                }
+            if status in ("expired", "cancelled"):
                 if status == "cancelled" and (
                     step.get("error") == "human_takeover_active"
                     or takeover_store.current() is not None
@@ -261,6 +290,7 @@ async def run_computer_loop(
                 if target_app and action.get("action") == "observe" and not action.get("target_app"):
                     action["target_app"] = target_app
             action = normalize_action(action)
+            action = _with_observed_target(action, observation)
             act = action.get("action")
 
             if act == "done":

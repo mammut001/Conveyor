@@ -67,6 +67,8 @@ RESULT_ALLOWED_FIELDS = frozenset({
     "window_id",
     "ax_app",
     "element_hints",
+    # Short window list so the planner can focus an app it cannot see as pixels.
+    "windows",
 })
 
 RESULT_FORBIDDEN_FIELDS = frozenset({
@@ -964,6 +966,38 @@ _ELEMENT_HINT_ROLE_MAX = 48
 _ELEMENT_HINT_TOKEN_MAX = 64
 
 
+_WINDOW_LIST_MAX = 12
+_WINDOW_TITLE_MAX = 32
+_WINDOW_APP_MAX = 64
+
+
+def _clean_windows(value: object) -> list[dict[str, Any]] | None:
+    """Keep a bounded window list: app, short title, geometry, ids."""
+    if not isinstance(value, list):
+        return None
+    cleaned: list[dict[str, Any]] = []
+    for item in value[:_WINDOW_LIST_MAX]:
+        if not isinstance(item, dict):
+            continue
+        row: dict[str, Any] = {}
+        for key in ("z", "pid", "window_id", "x", "y", "w", "h"):
+            if item.get(key) is None:
+                continue
+            try:
+                row[key] = int(item[key])
+            except (TypeError, ValueError):
+                continue
+        app = item.get("app")
+        if isinstance(app, str) and app.strip():
+            row["app"] = _truncate_text(app.strip(), _WINDOW_APP_MAX)
+        title = item.get("title")
+        if isinstance(title, str) and title.strip():
+            row["title"] = _truncate_text(title.strip(), _WINDOW_TITLE_MAX)
+        if "pid" in row and "window_id" in row:
+            cleaned.append(row)
+    return cleaned or None
+
+
 def _clean_element_hints(value: object) -> list[dict[str, Any]] | None:
     """Sanitize AX element hints: short labels/roles only, bounded list."""
     if not isinstance(value, list):
@@ -1025,6 +1059,11 @@ def validate_computer_result(result: object) -> dict | None:
             hints = _clean_element_hints(value)
             if hints:
                 cleaned[field] = hints
+            continue
+        if field == "windows":
+            listed = _clean_windows(value)
+            if listed:
+                cleaned[field] = listed
             continue
         limit = _RESULT_SHORT_STRING_LIMITS.get(field)
         if limit is not None:

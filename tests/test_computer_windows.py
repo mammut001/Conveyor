@@ -1,0 +1,171 @@
+"""Window list for the desktop planner, and a failed step that continues."""
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from config import Settings
+from desktop_computer_loop import (
+    FakeComputerBackend,
+    HttpComputerBackend,
+    run_computer_loop,
+)
+from desktop_computer_planner import ScriptedPlanner
+from desktop_computer_requests import (
+    claim_computer_step,
+    create_computer_step,
+    create_computer_task,
+    fail_computer_step,
+    validate_computer_result,
+)
+from desktop_cua import LocalCuaTransport, summarize_windows
+
+
+def _settings(root: Path) -> Settings:
+    mem = root / "memory"
+    mem.mkdir(parents=True, exist_ok=True)
+    (root / "tasks").mkdir(parents=True, exist_ok=True)
+    (root / "ws").mkdir(parents=True, exist_ok=True)
+    return Settings(
+        telegram_bot_token="test-token",
+        telegram_allowed_user_id=12345,
+        codex_workspace_root=root / "ws",
+        codex_bin="codex",
+        codex_task_root=root / "tasks",
+        codex_model=None,
+        codex_timeout_seconds=30,
+        telegram_progress_seconds=3,
+        codex_retry_429_delays_seconds=(),
+        codex_memory_root=mem,
+        user_timezone="UTC",
+        chat_mode="off",
+        conveyor_computer_use_enabled=True,
+        conveyor_computer_direct_enabled=True,
+        conveyor_computer_always_direct=True,
+    )
+
+
+class WindowListTest(unittest.TestCase):
+    def test_front_app_window_ranks_above_panels(self) -> None:
+        rows = summarize_windows([
+            {"app_name": "Xfce4-panel", "title": "xfce4-panel", "z_index": 9,
+             "pid": 1, "window_id": 10, "bounds": {"x": 0, "y": 0, "width": 100, "height": 30}},
+            {"app_name": "Thunar", "title": "ubuntu", "z_index": 4,
+             "pid": 4, "window_id": 40, "bounds": {"x": 10, "y": 20, "width": 400, "height": 300}},
+            {"app_name": "Xfce4-terminal", "title": "Neutral Test Window", "z_index": 6,
+             "pid": 6, "window_id": 60, "bounds": {"x": 30, "y": 40, "width": 500, "height": 300}},
+            {"app_name": "Xfdesktop", "title": "Desktop", "z_index": 0,
+             "pid": 2, "window_id": 20, "bounds": {"x": 0, "y": 0, "width": 1728, "height": 1084}},
+        ])
+        self.assertEqual([row["app"] for row in rows[:2]], ["Xfce4-terminal", "Thunar"])
+        self.assertEqual(rows[0]["pid"], 6)
+        self.assertEqual(rows[0]["window_id"], 60)
+        self.assertLess(rows[-1]["z"], rows[0]["z"])
+
+    def test_validate_keeps_short_window_list(self) -> None:
+        cleaned = validate_computer_result({
+            "result_ok": True,
+            "action_type": "observe",
+            "windows": [{
+                "app": "Thunar",
+                "title": "ubuntu",
+                "z": 4,
+                "pid": 4,
+                "window_id": 40,
+                "x": 10,
+                "y": 20,
+                "w": 400,
+                "h": 300,
+                "secret": "nope",
+            }],
+        })
+        self.assertIsNotNone(cleaned)
+        assert cleaned is not None
+        window = cleaned["windows"][0]
+        self.assertEqual(window["app"], "Thunar")
+        self.assertEqual(window["pid"], 4)
+        self.assertNotIn("secret", window)
+
+    def test_collect_hints_prefers_front_window_and_lists_all(self) -> None:
+        settings = _settings(Path(tempfile.mkdtemp()))
+        transport = LocalCuaTransport("cua-driver call", settings=settings)
+
+        def fake_call(name, args=None, timeout=None):
+            if name == "list_windows":
+                return {"ok": True, "data": {"windows": [
+                    {"app_name": "Xfce4-panel", "title": "bar", "z_index": 9,
+                     "pid": 1, "window_id": 10, "is_on_screen": True,
+                     "bounds": {"x": 0, "y": 0, "width": 1728, "height": 30}},
+                    {"app_name": "Thunar", "title": "ubuntu", "z_index": 4,
+                     "pid": 4, "window_id": 40, "is_on_screen": True,
+                     "bounds": {"x": 0, "y": 40, "width": 600, "height": 400}},
+                    {"app_name": "Xfce4-terminal", "title": "shell", "z_index": 6,
+                     "pid": 6, "window_id": 60, "is_on_screen": True,
+                     "bounds": {"x": 0, "y": 40, "width": 700, "height": 500}},
+                ]}}
+            if name == "get_window_state":
+                return {"ok": True, "data": {"elements": [
+                    {"element_index": 1, "role": "AXButton", "label": "ok"},
+                ]}}
+            return {"ok": False}
+
+        transport._call_tool = fake_call  # type: ignore[method-assign]
+        hints = transport._collect_ax_hints({})
+        self.assertEqual(hints["pid"], 6)
+        self.assertEqual(hints["window_id"], 60)
+        self.assertEqual(hints["windows"][0]["app"], "Xfce4-terminal")
+        self.assertIn("Thunar", [row["app"] for row in hints["windows"]])
+
+
+class FailedStepContinuesTest(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_step_is_planner_feedback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            created = create_computer_task(
+                settings, "在电脑上打开文件管理器",
+                direct_mode=True, max_steps=4, max_seconds=30,
+            )
+            self.assertTrue(created.get("ok"))
+            step = create_computer_step(
+                settings, created["task_id"], {"action": "type", "text": "exo-open"},
+            )
+            self.assertTrue(claim_computer_step(settings, step["step_id"], "node").get("ok"))
+            self.assertTrue(fail_computer_step(
+                settings, step["step_id"], "node", "pid_required_for_type_text",
+            ).get("ok"))
+            result = await HttpComputerBackend(settings, poll_interval=0.01).execute_step(
+                settings, created["task_id"], step["step_id"], {"action": "type"},
+            )
+        self.assertFalse(result["result_ok"])
+        self.assertEqual(result["error"], "pid_required_for_type_text")
+
+    async def test_type_without_pid_uses_observed_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            backend = FakeComputerBackend(settings)
+            planner = ScriptedPlanner([
+                {"action": "observe", "_mock_pid": 6, "_mock_window_id": 60, "_mock_ax_app": "Xfce4-terminal"},
+                {"action": "type", "text": "x"},
+            ])
+            result = await run_computer_loop(
+                settings,
+                "在电脑上打开文件管理器",
+                planner=planner,
+                backend=backend,
+                max_steps=6,
+                max_seconds=30,
+                direct_mode=True,
+            )
+            typed = [
+                entry for entry in backend.driver.transport.log
+                if entry.get("action") == "type"
+            ]
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(len(typed), 1)
+        self.assertEqual(typed[0]["redacted"].get("pid"), 6)
+        self.assertEqual(typed[0]["redacted"].get("window_id"), 60)
+
+
+if __name__ == "__main__":
+    unittest.main()
