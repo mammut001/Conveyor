@@ -101,6 +101,62 @@ def needs_agent(text: str) -> bool:
     return bool(_ACTION_RE.search(text))
 
 
+# Read-only host facts the existing disk / service tools can answer in one
+# hop. Kept narrower than _OWN_RE so "我的仓库" still goes to Codex.
+_READONLY_DISK_RE = re.compile(
+    r"(磁盘|硬盘|剩余空间|磁盘空间|\bdisk\b|\bstorage\b|\bdf\b)",
+    re.IGNORECASE,
+)
+_READONLY_SERVICE_RE = re.compile(
+    r"(服务状态|服务是否|哪些服务"
+    r"|(?:服务|bot).{0,8}(?:在运行|是否正常|正常吗)"
+    r"|\bservice status\b|\bsystemctl\b)",
+    re.IGNORECASE,
+)
+# Mutations stay on Codex even when they also mention disk or a service.
+# Bare "运行" is omitted so "服务在运行吗" stays a status question;
+# "跑一下" / "执行" still count as imperatives.
+_EDIT_IMPERATIVE_RE = re.compile(
+    r"(改一下|修改|修复|修一下|帮我修|实现|重构|部署|回滚|跑一下|跑下|执行|提交|推送|合并"
+    r"|安装|卸载|重启|删除|删掉|新建|创建"
+    r"|写.{0,4}(?:脚本|代码|程序|函数|测试)"
+    r"|\b(?:fix|implement|refactor|deploy|rollback|execute|commit|push|merge|install"
+    r"|uninstall|restart|delete|remove|create)\b)",
+    re.IGNORECASE,
+)
+
+
+def readonly_host_tool(text: str, settings: "Settings | None") -> str | None:
+    """Disk or service tool for a one-hop answer, or None.
+
+    Chat tools off: always None, so a question that names the operator's
+    machine keeps today's Codex route. Chat tools on: a read-only disk or
+    service-status question is answered by the existing tool. An
+    edit/run/deploy imperative still returns None.
+    """
+    if settings is None or not bool(getattr(settings, "chat_tools_enabled", False)):
+        return None
+    raw = text or ""
+    if _EDIT_IMPERATIVE_RE.search(raw):
+        return None
+    if _READONLY_DISK_RE.search(raw):
+        return "disk"
+    if _READONLY_SERVICE_RE.search(raw):
+        return "service_status"
+    return None
+
+
+def routes_to_agent(text: str, settings: "Settings | None" = None) -> bool:
+    """Whether dispatch and the web task gate should start a Codex job.
+
+    Same decision ``needs_agent`` makes, except a read-only host question
+    stays on the one-hop tool when chat tools are enabled.
+    """
+    if readonly_host_tool(text, settings):
+        return False
+    return needs_agent(text)
+
+
 def is_time_sensitive(text: str) -> bool:
     return bool(_TIME_SENSITIVE_RE.search(text or ""))
 

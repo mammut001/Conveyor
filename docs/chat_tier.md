@@ -10,6 +10,7 @@ message
   ├─ command / confirmation / stop / memo ............ as before
   ├─ deterministic or hybrid tool route .............. as before
   ├─ clear execution, or about the operator's systems  → Codex job
+  ├─ chat tools on, read-only disk/service question .. → disk or service_status tool (one hop, no Codex)
   └─ everything else ................................. → chat model (streamed)
                                                             ├─ answer
                                                             └─ [[ESCALATE]] → Codex
@@ -38,6 +39,13 @@ HTTP error, empty answer) falls back to Codex.
 
 1. Mentions of the operator's own systems (我的项目 / 这台机器 / my repo …)
    → Codex: only tools can know those facts.
+   With `CONVEYOR_CHAT_TOOLS` on, a read-only disk or service-status
+   question is the exception: `readonly_host_tool` answers it with the
+   existing `disk` or `service_status` tool in one hop, including when
+   the wording names the operator's machine ("我的服务器磁盘还剩多少").
+   Edit, run, and deploy imperatives still go to Codex. With the flag
+   off, those machine-naming questions stay on Codex. Phrases the
+   deterministic router already catches ("看看磁盘") are unchanged.
 2. Knowledge questions (怎么 / 如何 / 为什么 / what is / how to …) → chat,
    even when they name an action ("如何删除 git 分支").
 3. Imperatives (修复 / 部署 / 跑一下 / 删除 / fix / deploy / run …) → Codex.
