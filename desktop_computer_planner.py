@@ -456,7 +456,8 @@ class CodexPlanner(Planner):
         else:
             digit_rule = (
                 "完成规则：目标一旦达成立即 done，不要多余 click。"
-                "不要为了“保险”重复同一操作。\n"
+                "不要为了“保险”重复同一操作。"
+                "上一步失败时不要 done。\n"
             )
         return (
             "你是桌面自动化规划器。目标：\n"
@@ -473,8 +474,10 @@ class CodexPlanner(Planner):
             "不要凭空猜测未提到的 App。\n"
             "- windows 列出当前窗口（app、title、z、pid、window_id、x、y、w、h）。"
             "z 越大越靠前。名字里带 panel 的条和 desktop 壁纸不是目标。\n"
-            "- 目标应用已经有窗口时，点击该窗口中心把它放到最前，然后 done："
-            '{"action":"click","pid":…,"window_id":…,"x":x+w/2,"y":y+h/2}。\n'
+            "- 目标应用已经有窗口时，点击该窗口的桌面中心把它放到最前："
+            '{"action":"click","pid":…,"window_id":…,"x":x+w/2,"y":y+h/2}。'
+            "x、y 用 windows 里的屏幕坐标，不要改成窗口内坐标，也不要往终端里打命令。\n"
+            "- 上一次 click 失败，或目标窗口还不是最前的非面板窗口时，禁止输出 done。\n"
             "- type、hotkey、scroll 必须带上目标窗口的 pid 和 window_id。"
             "不要往终端里打命令来打开应用。\n"
             f"{ax_rule}"

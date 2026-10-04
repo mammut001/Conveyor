@@ -4,6 +4,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from config import Settings
 from desktop_computer_loop import (
@@ -117,6 +118,81 @@ class WindowListTest(unittest.TestCase):
         self.assertEqual(hints["windows"][0]["app"], "Xfce4-terminal")
         self.assertIn("Thunar", [row["app"] for row in hints["windows"]])
 
+    def test_desktop_center_click_raises_the_window(self) -> None:
+        settings = _settings(Path(tempfile.mkdtemp()))
+        transport = LocalCuaTransport("cua-driver call", settings=settings)
+        calls: list[tuple[str, dict | None]] = []
+
+        def fake_call(name, args=None, timeout=None):
+            calls.append((name, args))
+            if name == "list_windows":
+                return {"ok": True, "data": {"windows": [{
+                    "app_name": "Thunar",
+                    "title": "ubuntu",
+                    "pid": 1532684,
+                    "window_id": 25167357,
+                    "bounds": {"x": 544, "y": 327, "width": 640, "height": 480},
+                }]}}
+            if name == "bring_to_front":
+                return {"ok": True, "data": {"window_id": 25167357}}
+            return {"ok": False, "error": "unexpected_tool"}
+
+        transport._call_tool = fake_call  # type: ignore[method-assign]
+        result = transport._click(
+            {"action": "click", "pid": 1532684, "window_id": 25167357, "x": 864, "y": 567},
+            "node",
+        )
+        self.assertTrue(result["result_ok"], result)
+        self.assertEqual(result["click_method"], "bring_to_front")
+        self.assertEqual(
+            [name for name, _args in calls],
+            ["list_windows", "bring_to_front"],
+        )
+        self.assertEqual(calls[1][1]["pid"], 1532684)
+        self.assertEqual(calls[1][1]["window_id"], 25167357)
+
+    def test_window_local_click_is_not_a_raise(self) -> None:
+        settings = _settings(Path(tempfile.mkdtemp()))
+        transport = LocalCuaTransport("cua-driver call", settings=settings)
+        calls: list[str] = []
+
+        def fake_call(name, args=None, timeout=None):
+            calls.append(name)
+            if name == "list_windows":
+                return {"ok": True, "data": {"windows": [{
+                    "app_name": "Thunar",
+                    "pid": 4,
+                    "window_id": 40,
+                    "bounds": {"x": 544, "y": 327, "width": 640, "height": 480},
+                }]}}
+            if name == "click":
+                return {"ok": True, "data": {}}
+            return {"ok": False, "error": "unexpected_tool"}
+
+        transport._call_tool = fake_call  # type: ignore[method-assign]
+        result = transport._click(
+            {"action": "click", "pid": 4, "window_id": 40, "x": 320, "y": 240},
+            "node",
+        )
+        self.assertTrue(result["result_ok"], result)
+        self.assertEqual(result["click_method"], "xy_click")
+        self.assertNotIn("bring_to_front", calls)
+        self.assertIn("click", calls)
+
+    def test_driver_exit_reports_stdout_code(self) -> None:
+        settings = _settings(Path(tempfile.mkdtemp()))
+        transport = LocalCuaTransport("cua-driver call", settings=settings)
+
+        class Proc:
+            returncode = 1
+            stdout = '{"code": "screenshot_context_missing", "pid": 1, "window_id": 2}'
+            stderr = ""
+
+        with patch("desktop_cua.subprocess.run", return_value=Proc()):
+            result = transport._call_tool("click", {"x": 1, "y": 2})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "driver_exit_1:screenshot_context_missing")
+
 
 class FailedStepContinuesTest(unittest.IsolatedAsyncioTestCase):
     async def test_failed_step_is_planner_feedback(self) -> None:
@@ -165,6 +241,37 @@ class FailedStepContinuesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(typed), 1)
         self.assertEqual(typed[0]["redacted"].get("pid"), 6)
         self.assertEqual(typed[0]["redacted"].get("window_id"), 60)
+
+    async def test_failed_click_cannot_be_marked_done(self) -> None:
+        class FailClick:
+            def __init__(self) -> None:
+                self.actions: list[str] = []
+
+            async def execute_step(self, settings, task_id, step_id, action):
+                self.actions.append(str(action.get("action")))
+                if action.get("action") == "click":
+                    return {"result_ok": False, "error": "driver_exit_1", "action_type": "click"}
+                return {"result_ok": True, "action_type": action.get("action")}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            backend = FailClick()
+            planner = ScriptedPlanner([
+                {"action": "click", "pid": 4, "window_id": 40, "x": 864, "y": 567},
+            ])
+            result = await run_computer_loop(
+                settings,
+                "在电脑上打开文件管理器",
+                planner=planner,
+                backend=backend,
+                max_steps=8,
+                max_seconds=30,
+                direct_mode=True,
+            )
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result.get("status"), "error")
+        self.assertEqual(result.get("blocked_reason"), "unverified_done")
+        self.assertIn("click", backend.actions)
 
 
 if __name__ == "__main__":
