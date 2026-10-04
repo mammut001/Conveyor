@@ -37,6 +37,12 @@ _HYBRID_DEFAULT_TOOLS = ("load", "ps", "disk", "service_status")
 def _requires_confirmation(tool_name: str, settings: Settings | None = None) -> bool:
     if tool_name == "agents.parallel":
         return False
+    # The desktop task tool has its own gate: blocked keywords refuse the
+    # goal, and direct mode (always-direct or /computer_arm) must be on
+    # before any click. A second confirmation would hide that reply and
+    # stop a natural-language request from reaching the desktop.
+    if tool_name == "computer.task":
+        return False
     if tool_name.startswith("mcp."):
         from mcp_client import get_mcp_tool_spec
         spec = get_mcp_tool_spec(settings, tool_name)
