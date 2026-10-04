@@ -17,6 +17,7 @@ from handlers.chat import (
     handle_chat_clear,
     handle_deep,
     is_time_sensitive,
+    host_edit_imperative,
     readonly_host_tool,
     routes_to_agent,
     web_evidence,
@@ -31,6 +32,20 @@ from refinement_store import should_route_refinement
 from runner import CodexRunner, JobMode
 
 logger = logging.getLogger(__name__)
+
+# Snapshot tools that must not swallow an edit/run/debug imperative.
+# "debug the disk usage bug" matches the disk-usage pattern and would
+# otherwise return df without starting Codex.
+_SNAPSHOT_TOOLS = frozenset({"disk", "service_status"})
+
+
+def _edit_overrides_snapshot(text: str, route: RouteResult) -> bool:
+    if route.kind != "deterministic":
+        return False
+    tools = frozenset(route.tools or ())
+    if not tools or not tools <= _SNAPSHOT_TOOLS:
+        return False
+    return host_edit_imperative(text)
 
 
 async def dispatch(
@@ -132,7 +147,7 @@ async def dispatch(
         await handle_context_job(msg, port, settings, runner)
         return
 
-    if route.kind == "deterministic":
+    if route.kind == "deterministic" and not _edit_overrides_snapshot(msg.text, route):
         await handle_route(msg, port, runner, settings, route)
         return
     if route.kind == "hybrid":
