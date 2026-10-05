@@ -773,7 +773,9 @@ def main() -> None:
     # wrapped in try/except so a failure in the error path
     # does not loop back into the error handler.
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        logger.exception("Unhandled exception in handler")
+        # Not inside an except block here, so pass the error explicitly;
+        # logger.exception alone logs "NoneType: None" and loses the traceback.
+        logger.error("Unhandled exception in handler", exc_info=context.error)
         try:
             if isinstance(update, Update) and update.effective_message:
                 await update.effective_message.reply_text(

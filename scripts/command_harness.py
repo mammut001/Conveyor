@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,16 +24,34 @@ from typing import Any, Awaitable, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Tests will load settings; isolate them from a real .env first.
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "fake-token")
-os.environ.setdefault("TELEGRAM_ALLOWED_USER_ID", "0")
-os.environ.setdefault("LARK_APP_ID", "cli_fake")
-os.environ.setdefault("LARK_APP_SECRET", "fake")
-os.environ.setdefault("CODEX_WORKSPACE_ROOT", "/tmp/codex-harness-ws")
-os.environ.setdefault("CODEX_TASK_ROOT", "/tmp/codex-harness-tasks")
-os.environ.setdefault("CODEX_MEMORY_ROOT", "/tmp/codex-harness-mem")
-os.environ.setdefault("CODEX_BIN", "codex")
-os.environ.setdefault("USER_TIMEZONE", "UTC")
+# Tests will load settings; isolate them from the real deployment first.
+# auto_maintain runs this harness under systemd with the production .env
+# already exported, so setdefault is not enough: a live chat tier or provider
+# key would reroute cases away from the fake runner (and hit the network).
+_DEPLOYMENT_ENV_PREFIXES = (
+    "CONVEYOR_", "CODEX_", "TELEGRAM_", "LARK_", "OPERATOR_", "USER_TIMEZONE",
+    "MINIMAX_", "DEEPSEEK_", "OPENAI_", "AZURE_OPENAI_", "ANTHROPIC_",
+    "GMAIL_", "GOOGLE_", "GITHUB_", "WEB_", "RESEARCH_", "FILE_SEARCH_", "KB_", "MCP_",
+)
+for _name in [name for name in os.environ if name.startswith(_DEPLOYMENT_ENV_PREFIXES)]:
+    del os.environ[_name]
+
+_HARNESS_ROOT = Path(tempfile.mkdtemp(prefix="codex-harness-"))
+atexit.register(shutil.rmtree, _HARNESS_ROOT, ignore_errors=True)
+_HARNESS_ENV_FILE = _HARNESS_ROOT / "harness.env"
+_HARNESS_ENV_FILE.write_text("", encoding="utf-8")
+
+# An existing CONVEYOR_ENV_FILE keeps load_settings from reading ./.env.
+os.environ["CONVEYOR_ENV_FILE"] = str(_HARNESS_ENV_FILE)
+os.environ["TELEGRAM_BOT_TOKEN"] = "fake-token"
+os.environ["TELEGRAM_ALLOWED_USER_ID"] = "0"
+os.environ["LARK_APP_ID"] = "cli_fake"
+os.environ["LARK_APP_SECRET"] = "fake"
+os.environ["CODEX_WORKSPACE_ROOT"] = str(_HARNESS_ROOT / "ws")
+os.environ["CODEX_TASK_ROOT"] = str(_HARNESS_ROOT / "tasks")
+os.environ["CODEX_MEMORY_ROOT"] = str(_HARNESS_ROOT / "mem")
+os.environ["CODEX_BIN"] = "codex"
+os.environ["USER_TIMEZONE"] = "UTC"
 
 from channel import InboundMessage
 from config import load_settings
@@ -240,7 +261,7 @@ def _install_module_fakes() -> list[Callable[[], None]]:
         _patch(hc, "run_edit_harness", fake_edit),
         _patch(hc, "check_systemd_active", lambda *_a, **_k: _ok_result("systemd")),
         _patch(hc, "check_workspace", lambda *_a, **_k: _ok_result("workspace")),
-        _patch(hc, "check_minimax_models", lambda *_a, **_k: _ok_result("minimax")),
+        _patch(hc, "check_provider_models", lambda *_a, **_k: _ok_result("provider")),
         _patch(hc, "check_disk", lambda *_a, **_k: _ok_result("disk")),
         _patch(hc, "check_runtime_dirs", lambda *_a, **_k: [_ok_result("runtime")]),
         _patch(hc, "check_latest_job", lambda *_a, **_k: [_ok_result("latest")]),

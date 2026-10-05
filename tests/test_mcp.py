@@ -798,7 +798,7 @@ class TestMCPWebConsoleApi(unittest.TestCase):
                     "args": [FIXTURE_SERVER, "--stdio"],
                     "allow_tools": ["echo", "add"],
                     "read_only_tools": ["echo"],
-                    "env": {"SECRET_NOT_LEAKED": "123"},
+                    "env": {"SECRET_NOT_LEAKED": "mcp-env-value-9f3c1a"},
                 }
             }
         }
@@ -851,7 +851,7 @@ class TestMCPWebConsoleApi(unittest.TestCase):
         # Secrets / env values MUST NOT be present in item
         item_str = json.dumps(item)
         self.assertNotIn("SECRET_NOT_LEAKED", item_str)
-        self.assertNotIn("123", item_str)
+        self.assertNotIn("mcp-env-value-9f3c1a", item_str)
 
     def test_refresh_and_toggle_endpoints(self) -> None:
         # 1. Refresh server (lists tools)

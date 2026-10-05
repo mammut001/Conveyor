@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "deploy_vps.sh"
+DB_HELPER = ROOT / "scripts" / "deploy_db.py"
 
 
 def require(text: str, needle: str, label: str) -> None:
@@ -18,8 +19,17 @@ def main() -> int:
     require(text, "git worktree add --detach", "detached candidate validation")
     require(text, "--untracked-files=no", "tracked-dirty production gate")
     require(text, "queued=${QUEUED_COUNT}, running=${RUNNING_COUNT}", "idle queue gate")
-    require(text, "src.backup(dst)", "SQLite online backup")
-    require(text, "PRAGMA integrity_check", "backup integrity check")
+    # The queue database belongs to the service user, so the gate and the
+    # backup must go through the helper run as that user, never ~ of the deployer.
+    helper = DB_HELPER.read_text(encoding="utf-8")
+    require(text, "systemctl show -p User --value", "service user resolution")
+    require(text, 'sudo -n -u "${SERVICE_USER}"', "queue database access as service user")
+    require(text, "deploy_db idle", "idle queue gate via helper")
+    require(text, "deploy_db backup", "SQLite backup via helper")
+    require(helper, "src.backup(dst)", "SQLite online backup")
+    require(helper, "PRAGMA integrity_check", "backup integrity check")
+    if "dotenv_values('.env')" in text:
+        raise SystemExit("deploy transaction smoke failed: deploy-user ~/.codex resolution still present")
     require(text, 'git reset --hard "${TARGET_COMMIT_FULL}"', "exact target cutover")
     require(text, 'git reset --hard "${OLD_COMMIT_FULL}"', "whole revision rollback")
     require(text, "git merge-base --is-ancestor", "validated SHA ancestry check")

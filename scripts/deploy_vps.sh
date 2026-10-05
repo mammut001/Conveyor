@@ -5,6 +5,11 @@
 # live checkout moves. Production cutover is guarded by an idle queue check,
 # an online SQLite backup, a clean tracked checkout, post-cutover smoke tests,
 # and whole-revision rollback if dependency sync, smoke, or service health fails.
+#
+# When the deploy user differs from the user the services run as, the queue
+# database (service user's ~/.codex, mode 700) is read through scripts/deploy_db.py
+# as that user, which needs one sudoers rule, e.g.:
+#   deploy ALL=(ubuntu) NOPASSWD: /opt/conveyor/.venv/bin/python /opt/conveyor/scripts/deploy_db.py *
 set -euo pipefail
 
 DEPLOY_PATH="${CONVEYOR_DEPLOY_PATH:-/opt/conveyor}"
@@ -91,34 +96,32 @@ TARGET_COMMIT="$(git rev-parse --short "${TARGET_COMMIT_FULL}")"
 log "Target commit:  ${TARGET_COMMIT}"
 
 # ---- locate shared control-plane database and require idle queue -----------
-DB_PATH="$(.venv/bin/python - <<'PY'
-from pathlib import Path
-from dotenv import dotenv_values
-values = dotenv_values('.env')
-root = Path(values.get('CODEX_MEMORY_ROOT') or '~/.codex').expanduser().resolve()
-print(root / 'state' / 'job_queue.sqlite3')
-PY
-)"
-read -r QUEUED_COUNT RUNNING_COUNT < <(.venv/bin/python - "${DB_PATH}" <<'PY'
-import sqlite3, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-if not path.exists():
-    print('0 0')
-    raise SystemExit
-conn = sqlite3.connect(str(path), timeout=10)
-try:
-    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='queued_jobs'").fetchone()
-    if not exists:
-        print('0 0')
-    else:
-        queued = conn.execute("SELECT COUNT(*) FROM queued_jobs WHERE state='queued'").fetchone()[0]
-        running = conn.execute("SELECT COUNT(*) FROM queued_jobs WHERE state='running'").fetchone()[0]
-        print(f'{queued} {running}')
-finally:
-    conn.close()
-PY
-)
+# The database belongs to the user the services run as, which is usually not
+# the deploy user: resolving ~/.codex here would inspect the wrong (stale)
+# file, so the helper runs as the service user.
+SERVICE_USER=""
+for unit in conveyor-telegram-bot.service conveyor-feishu-bot.service conveyor-web.service; do
+  SERVICE_USER="$(systemctl show -p User --value "${unit}" 2>/dev/null || true)"
+  [[ -n "${SERVICE_USER}" ]] && break
+done
+[[ -n "${SERVICE_USER}" ]] || SERVICE_USER="$(id -un)"
+
+deploy_db() {
+  local helper="${DEPLOY_PATH}/scripts/deploy_db.py"
+  if [[ "${SERVICE_USER}" == "$(id -un)" ]]; then
+    "${DEPLOY_PATH}/.venv/bin/python" "${helper}" "$@"
+  else
+    sudo -n -u "${SERVICE_USER}" "${DEPLOY_PATH}/.venv/bin/python" "${helper}" "$@"
+  fi
+}
+
+[[ -f "${DEPLOY_PATH}/scripts/deploy_db.py" ]] \
+  || die "scripts/deploy_db.py is missing from the live checkout; cannot verify the queue"
+if ! DB_PATH="$(deploy_db path)"; then
+  die "Cannot inspect the queue database as ${SERVICE_USER}. Add to sudoers: $(id -un) ALL=(${SERVICE_USER}) NOPASSWD: ${DEPLOY_PATH}/.venv/bin/python ${DEPLOY_PATH}/scripts/deploy_db.py *"
+fi
+read -r QUEUED_COUNT RUNNING_COUNT < <(deploy_db idle) \
+  || die "Could not read queue state from ${DB_PATH}"
 [[ "${QUEUED_COUNT}" == "0" && "${RUNNING_COUNT}" == "0" ]] \
   || die "Queue is not idle (queued=${QUEUED_COUNT}, running=${RUNNING_COUNT}); retry after jobs finish"
 log "Queue idle: queued=0 running=0"
@@ -134,20 +137,13 @@ chmod 600 "${BACKUP_PATH}/conveyor.env" 2>/dev/null || true
 [[ -f requirements.txt ]] && cp requirements.txt "${BACKUP_PATH}/requirements.txt"
 git status --porcelain=v1 > "${BACKUP_PATH}/git-status.txt"
 
-if [[ -f "${DB_PATH}" ]]; then
-  .venv/bin/python - "${DB_PATH}" "${BACKUP_PATH}/job_queue.sqlite3" <<'PY'
-import sqlite3, sys
-source, target = sys.argv[1:3]
-src = sqlite3.connect(source, timeout=10)
-dst = sqlite3.connect(target)
-try:
-    src.backup(dst)
-    result = dst.execute('PRAGMA integrity_check').fetchone()[0]
-    if result != 'ok':
-        raise SystemExit(f'backup integrity_check failed: {result}')
-finally:
-    dst.close(); src.close()
-PY
+deploy_db backup > "${BACKUP_PATH}/job_queue.sqlite3" \
+  || die "Queue database backup failed (${DB_PATH})"
+if [[ -s "${BACKUP_PATH}/job_queue.sqlite3" ]]; then
+  chmod 600 "${BACKUP_PATH}/job_queue.sqlite3" 2>/dev/null || true
+else
+  rm -f "${BACKUP_PATH}/job_queue.sqlite3"
+  log "No queue database at ${DB_PATH}; nothing to back up"
 fi
 log "Backup complete: ${BACKUP_PATH}"
 

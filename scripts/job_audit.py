@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -13,6 +14,8 @@ from config import load_settings
 from runner import CodexRunner
 from scripts.harness_common import CheckResult, print_results
 from scripts.job_metadata import job_sort_time
+
+_DAILY_WORKTREE_RE = re.compile(r"^day-\d{4}-\d{2}-\d{2}$")
 
 
 def _age_seconds(path: Path) -> int:
@@ -46,7 +49,11 @@ def run_job_audit(env_file: str, stale_minutes: int, sample_limit: int = 5) -> l
         for record in records
         if record.state == "running" and _age_seconds(record.log_dir) >= stale_seconds
     ]
-    orphan_worktrees = sorted(worktree_ids - log_ids)
+    # Daily worktrees (day-YYYY-MM-DD) are shared across jobs and never have a
+    # same-named log dir; reconcile_orphans skips them for the same reason.
+    orphan_worktrees = sorted(
+        name for name in worktree_ids - log_ids if not _DAILY_WORKTREE_RE.match(name)
+    )
     missing_worktrees = sorted(log_ids - worktree_ids)
     failed = [record for record in records if record.state == "failed"]
 

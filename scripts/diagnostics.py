@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import load_settings
 from redaction import truncate
 from scripts.doctor import check_disk, check_latest_job, check_runtime_dirs, check_workspace
-from scripts.harness_common import check_minimax_models, check_systemd_active
+from scripts.harness_common import check_provider_models, check_systemd_active
 from scripts.job_audit import run_job_audit
 from scripts.log_summary import summarize_log
 from scripts.metrics_report import metrics_report
@@ -33,7 +33,7 @@ def diagnostics_report(env_file: str, service_name: str, since: str, metrics_lim
     doctor_results = [
         check_systemd_active(service_name),
         check_workspace(settings),
-        check_minimax_models(settings),
+        check_provider_models(settings),
         check_disk(settings.codex_task_root),
     ]
     doctor_results.extend(check_runtime_dirs(settings))

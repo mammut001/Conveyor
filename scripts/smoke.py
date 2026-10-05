@@ -14,7 +14,7 @@ from runner import CodexRunner, JobMode, JobState
 from scripts.harness_common import (
     CheckResult,
     attempt_completed,
-    check_minimax_models,
+    check_provider_models,
     check_systemd_active,
     print_results,
 )
@@ -26,7 +26,7 @@ async def run_smoke(env_file: str, service_name: str, notify: bool) -> int:
     expected = f"SMOKE_OK_{uuid4().hex[:8]}"
     results: list[CheckResult] = [
         check_systemd_active(service_name),
-        check_minimax_models(settings),
+        check_provider_models(settings),
     ]
 
     if notify:

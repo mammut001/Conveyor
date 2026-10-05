@@ -712,10 +712,11 @@ def extract_card_action(msg: Any) -> tuple[dict[str, str], dict[str, Any]] | Non
     if not operator_id:
         return None
     context = _get(event_obj, "context")
-    chat_id = _get(context, "open_chat_id")
+    # lark_oapi.channel's CardActionEvent flattens the context onto the event.
+    chat_id = _get(context, "open_chat_id") or _get(event_obj, "chat_id")
     if not chat_id:
         return None
-    message_id = _get(context, "open_message_id")
+    message_id = _get(context, "open_message_id") or _get(event_obj, "message_id")
     action_obj = _get(event_obj, "action")
     value = _get(action_obj, "value")
     payload = parse_action(value)

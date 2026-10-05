@@ -223,7 +223,7 @@ async def _run_job(self, job: Job, on_progress: ProgressCallback) -> None:
             job.last_event = f"rate limited; retrying attempt {job.attempt + 1}/{job.max_attempts} in {delay}s"
             job.rate_limited = True
             self._write_job_metadata(job)
-            await on_progress(f"MiniMax 现在限流，我会在 {delay}s 后自动重试。")
+            await on_progress(f"模型服务现在限流，我会在 {delay}s 后自动重试。")
             try:
                 await asyncio.wait_for(self._wait_until_cancelled(job), timeout=delay)
                 job.error = "cancelled"

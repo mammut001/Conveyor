@@ -46,6 +46,8 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{16,}"),
     re.compile(r"(?i)(authorization:\s*)[^\s]+"),
     re.compile(r"(?i)\b(token|secret|password|api[_-]?key)\b\s*[:=]\s*['\"]?[^'\"\s]+"),
+    # Feishu long-connection URLs carry per-session credentials in the query.
+    re.compile(r"(?i)([?&](?:access_key|ticket)=)[^&\s\]]+"),
 ]
 
 # Env variables allowed to pass through to child processes exactly

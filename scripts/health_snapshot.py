@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import load_settings
 from scripts.doctor import check_disk, check_latest_job, check_runtime_dirs, check_workspace
-from scripts.harness_common import CheckResult, check_minimax_models, check_systemd_active, latest_final_file, latest_job_dir
+from scripts.harness_common import CheckResult, check_provider_models, check_systemd_active, latest_final_file, latest_job_dir
 from scripts.job_audit import run_job_audit
 from scripts.job_metadata import job_sort_time, load_job_metadata
 from scripts.metrics_report import _latest_attempt_or_legacy, _state_and_usage
@@ -146,7 +146,7 @@ def health_snapshot(
     doctor_results = [
         check_systemd_active(service_name),
         check_workspace(settings),
-        check_minimax_models(settings),
+        check_provider_models(settings),
         check_disk(settings.codex_task_root),
     ]
     doctor_results.extend(check_runtime_dirs(settings))
