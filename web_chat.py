@@ -192,7 +192,7 @@ async def run_web_chat(
     prompt: str,
 ) -> None:
     from handlers.chat import ask_chat, readonly_host_tool
-    from handlers.intent import RouteResult
+    from handlers.intent import RouteResult, computer_chat_route
     from handlers.tools.runner import handle_route
     try:
         host_tool = readonly_host_tool(prompt, settings)
@@ -201,6 +201,13 @@ async def run_web_chat(
                 msg, port, runner, settings,
                 RouteResult(kind="deterministic", tools=(host_tool,)),
             )
+            port.emit("done", {"outcome": "answered"})
+            return
+        # Same natural-language desktop route the phone bots already run.
+        # A chat answer must not swallow "打开计算器".
+        desktop = computer_chat_route(prompt)
+        if desktop is not None:
+            await handle_route(msg, port, runner, settings, desktop)
             port.emit("done", {"outcome": "answered"})
             return
         outcome, checked = await ask_chat(

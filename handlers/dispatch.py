@@ -24,7 +24,7 @@ from handlers.chat import (
 )
 from handlers.commands import parse_command, run_command
 from handlers.context import detect_context_intent, handle_context_job, memo_text_with_quote
-from handlers.intent import RouteResult, route_intent
+from handlers.intent import COMPUTER_STOP_TEXTS, RouteResult, route_intent
 from handlers.jobs import handle_codex_job
 from handlers.memo import detect_memory_intent, handle_memo
 from handlers.tools.runner import handle_hybrid, handle_route, try_resolve_confirmation
@@ -98,7 +98,7 @@ async def dispatch(
         return
 
     text_clean = msg.text.strip().lower()
-    if text_clean in ("停下", "别动", "停止操作", "stop computer", "cancel computer task"):
+    if text_clean in COMPUTER_STOP_TEXTS:
         from handlers.tools.runner import run_tool
         text = await run_tool(settings, "computer.stop", "")
         await port.reply(msg, text)

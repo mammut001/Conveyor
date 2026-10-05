@@ -829,6 +829,52 @@ def route_intent(text: str) -> RouteResult:
     return RouteResult(kind="llm")
 
 
+# Natural-language desktop controls. The web chat box used to send these to
+# the chat model; Telegram and Feishu already run them through dispatch.
+COMPUTER_CHAT_TOOLS = frozenset({
+    "computer.task",
+    "computer.retry",
+    "computer.stop",
+    "computer.status",
+})
+COMPUTER_STOP_TEXTS = frozenset({
+    "停下",
+    "别动",
+    "停止操作",
+    "stop computer",
+    "cancel computer task",
+})
+
+
+def computer_chat_route(text: str) -> RouteResult | None:
+    """Desktop route for a chat box, or None when the chat model should answer."""
+    body = (text or "").strip()
+    if not body:
+        return None
+    if body.lower() in COMPUTER_STOP_TEXTS:
+        return RouteResult(kind="deterministic", tools=("computer.stop",), arg="")
+    route = route_intent(body)
+    if route.kind != "deterministic":
+        return None
+    if not (set(route.tools or ()) & COMPUTER_CHAT_TOOLS):
+        return None
+    return route
+
+
+def computer_chat_budget_seconds(settings: object, text: str) -> float | None:
+    """How long a web chat stream may stay open for this desktop turn."""
+    if computer_chat_route(text) is None:
+        return None
+    raw = getattr(settings, "conveyor_computer_max_seconds", 600) or 600
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        seconds = 600.0
+    if seconds < 1:
+        seconds = 600.0
+    return seconds + 60.0
+
+
 def _extract_service_arg(body: str) -> str:
     """Return a concrete conveyor unit name from natural-language restart
     intent, or '' when the target is ambiguous.
