@@ -15,6 +15,8 @@ from config import Settings
 from handlers import chat
 from handlers.chat_tools import build_tool_schemas, run_tool_loop
 from handlers.dispatch import dispatch
+import importlib
+_dispatch_mod = importlib.import_module("handlers.dispatch")
 from handlers.tools.confirm import clear_all_pending, get_pending_for_context
 from personal_tools import long_term_memory as ltm
 from runner.chat_client import ChatConfig
@@ -279,7 +281,7 @@ class LongTermMemoryToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_explicit_phrase_confirms_instead_of_journal(self) -> None:
         msg = _msg("记住 我喜欢深色模式", chat_id="c-new", operator_id="op-1")
-        with patch("handlers.dispatch.handle_memo", new_callable=AsyncMock) as memo:
+        with patch.object(_dispatch_mod, "handle_memo", new_callable=AsyncMock) as memo:
             await dispatch(msg, self.port, self.settings, MagicMock())
         memo.assert_not_awaited()
         pending = get_pending_for_context("op-1", "c-new", "web")
@@ -291,7 +293,7 @@ class LongTermMemoryToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_journal_phrase_still_uses_memo(self) -> None:
         msg = _msg("记一下 买牛奶", chat_id="c-new", operator_id="op-1")
-        with patch("handlers.dispatch.handle_memo", new_callable=AsyncMock) as memo:
+        with patch.object(_dispatch_mod, "handle_memo", new_callable=AsyncMock) as memo:
             await dispatch(msg, self.port, self.settings, MagicMock())
         memo.assert_awaited()
         self.assertIsNone(get_pending_for_context("op-1", "c-new", "web"))
@@ -299,7 +301,7 @@ class LongTermMemoryToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_flag_off_remember_phrase_stays_on_memo(self) -> None:
         off = _settings(Path(self.tmp.name), long_term_memory_enabled=False)
         msg = _msg("记住 我喜欢深色模式", chat_id="c-new", operator_id="op-1")
-        with patch("handlers.dispatch.handle_memo", new_callable=AsyncMock) as memo:
+        with patch.object(_dispatch_mod, "handle_memo", new_callable=AsyncMock) as memo:
             await dispatch(msg, self.port, off, MagicMock())
         memo.assert_awaited()
         self.assertIsNone(get_pending_for_context("op-1", "c-new", "web"))
@@ -717,7 +719,7 @@ class GroupChatBoundaryTests(unittest.IsolatedAsyncioTestCase):
         for text in ("记住 我喜欢深色模式", "忘掉 #1"):
             for msg in self._groups(text):
                 self.port.reply.reset_mock()
-                with patch("handlers.dispatch.handle_memo", new_callable=AsyncMock) as memo:
+                with patch.object(_dispatch_mod, "handle_memo", new_callable=AsyncMock) as memo:
                     await dispatch(msg, self.port, self.settings, MagicMock())
                 memo.assert_not_awaited()
                 self.assertIn(ltm.GROUP_REFUSAL, self._replies())
