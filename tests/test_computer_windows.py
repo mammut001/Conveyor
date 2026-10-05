@@ -151,6 +151,43 @@ class WindowListTest(unittest.TestCase):
         self.assertEqual(calls[1][1]["pid"], 1532684)
         self.assertEqual(calls[1][1]["window_id"], 25167357)
 
+    def test_near_origin_center_click_raises_the_window(self) -> None:
+        # Neutral Test Window on the VPS: x=5, y=56, w=817, h=483.
+        # Screen center (413.5, 297.5) also lies inside the local box.
+        settings = _settings(Path(tempfile.mkdtemp()))
+        transport = LocalCuaTransport("cua-driver call", settings=settings)
+        calls: list[str] = []
+
+        def fake_call(name, args=None, timeout=None):
+            calls.append(name)
+            if name == "list_windows":
+                return {"ok": True, "data": {"windows": [{
+                    "app_name": "Xfce4-terminal",
+                    "title": "Neutral Test Window",
+                    "pid": 1723842,
+                    "window_id": 48234499,
+                    "bounds": {"x": 5, "y": 56, "width": 817, "height": 483},
+                }]}}
+            if name == "bring_to_front":
+                return {"ok": True, "data": {"window_id": 48234499}}
+            return {"ok": False, "error": "unexpected_tool"}
+
+        transport._call_tool = fake_call  # type: ignore[method-assign]
+        result = transport._click(
+            {
+                "action": "click",
+                "pid": 1723842,
+                "window_id": 48234499,
+                "x": 413.5,
+                "y": 297.5,
+            },
+            "node",
+        )
+        self.assertTrue(result["result_ok"], result)
+        self.assertEqual(result["click_method"], "bring_to_front")
+        self.assertEqual(calls, ["list_windows", "bring_to_front"])
+        self.assertNotIn("click", calls)
+
     def test_window_local_click_is_not_a_raise(self) -> None:
         settings = _settings(Path(tempfile.mkdtemp()))
         transport = LocalCuaTransport("cua-driver call", settings=settings)
