@@ -823,15 +823,14 @@ def _window_frame(window: dict) -> tuple[int, int, int, int] | None:
 
 
 def _point_is_desktop_center(x: float, y: float, frame: tuple[int, int, int, int]) -> bool:
-    """True when x/y is the screen center of a window, not a point inside it.
+    """True when x/y is within 2px of the window's screen center.
 
-    Window-local clicks use coordinates inside the window's width and height.
-    The planner's raise-window click uses x+w/2 and y+h/2 from list_windows,
-    which sits outside that local box whenever the window is not at the origin.
+    The planner sends ``x+w/2``, ``y+h/2`` from ``list_windows``. A window
+    near the origin has that screen center inside its own width and height,
+    so the match is the center itself. A window-local point such as
+    ``(320, 240)`` on a frame at ``(544, 327)`` is not that center.
     """
     origin_x, origin_y, width, height = frame
-    if 0 <= x < width and 0 <= y < height:
-        return False
     center_x = origin_x + width / 2.0
     center_y = origin_y + height / 2.0
     return abs(x - center_x) <= 2.0 and abs(y - center_y) <= 2.0
