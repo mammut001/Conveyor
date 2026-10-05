@@ -636,6 +636,11 @@ class LocalCuaTransport(CuaTransport):
         if not isinstance(windows, list):
             return None
         window = _match_listed_window(windows, pid, wid)
+        if isinstance(window, dict):
+            if pid is None and window.get("pid") is not None:
+                action["pid"] = window["pid"]
+            if wid is None and window.get("window_id") is not None:
+                action["window_id"] = window["window_id"]
         frame = _window_frame(window) if isinstance(window, dict) else None
         if frame is None or not _point_is_desktop_center(x, y, frame):
             return None
@@ -699,10 +704,23 @@ class LocalCuaTransport(CuaTransport):
         element's action is pressed. A point with no clickable frame falls
         back to the screenshot's ``capture_id``.
         """
+        pid = action.get("pid")
+        window_id = action.get("window_id")
+        if pid is None or window_id is None:
+            listed = self._call_tool("list_windows", {}, timeout=20)
+            data = listed.get("data") if listed.get("ok") else None
+            windows = data.get("windows") if isinstance(data, dict) else None
+            if isinstance(windows, list):
+                matched = _match_listed_window(windows, pid, window_id)
+                if isinstance(matched, dict):
+                    if pid is None and matched.get("pid") is not None:
+                        pid = matched["pid"]
+                    if window_id is None and matched.get("window_id") is not None:
+                        window_id = matched["window_id"]
         try:
-            pid = int(action["pid"])
-            window_id = int(action["window_id"])
-        except (TypeError, ValueError, KeyError):
+            target_pid = int(pid)
+            target_wid = int(window_id)
+        except (TypeError, ValueError):
             return {
                 "result_ok": False,
                 "error": "pixel_click_needs_window",
@@ -713,8 +731,8 @@ class LocalCuaTransport(CuaTransport):
         state = self._call_tool(
             "get_window_state",
             {
-                "pid": pid,
-                "window_id": window_id,
+                "pid": target_pid,
+                "window_id": target_wid,
                 "session": session,
                 "include_accessibility_tree": True,
             },
@@ -734,7 +752,7 @@ class LocalCuaTransport(CuaTransport):
             # contain the point, so press that element's action.
             called = self._call_tool(
                 "click",
-                {"pid": pid, "element_token": token, "session": session},
+                {"pid": target_pid, "element_token": token, "session": session},
             )
             result = _result_from_call(called, "click", node_id)
             result["pixel_hit"] = "element"
@@ -749,8 +767,8 @@ class LocalCuaTransport(CuaTransport):
         called = self._call_tool(
             "click",
             {
-                "pid": pid,
-                "window_id": window_id,
+                "pid": target_pid,
+                "window_id": target_wid,
                 "x": local_x,
                 "y": local_y,
                 "capture_id": capture_id,
@@ -843,8 +861,7 @@ class LocalCuaTransport(CuaTransport):
             # Without capture_id the driver refuses the point. A screen
             # point inside the window is converted to that screenshot.
             if (
-                action.get("pid") is not None
-                and action.get("window_id") is not None
+                (action.get("pid") is not None or action.get("window_id") is not None)
                 and action.get("scope") != "desktop"
             ):
                 result = self._click_window_pixels(action, node_id, x, y)

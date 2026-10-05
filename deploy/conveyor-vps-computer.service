@@ -1,0 +1,21 @@
+[Unit]
+Description=Conveyor computer-use clicker on the VPS desktop
+After=network-online.target conveyor-desktop-agent.service
+Wants=conveyor-desktop-agent.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/conveyor
+EnvironmentFile=-/etc/default/conveyor
+EnvironmentFile=/opt/conveyor/.env
+Environment=CONVEYOR_CONTROL_PLANE_URL=http://127.0.0.1:8766
+Environment=LD_LIBRARY_PATH=/home/ubuntu/.local/lib
+ExecStart=/opt/conveyor/scripts/run-vps-computer.sh
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

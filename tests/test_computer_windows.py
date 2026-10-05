@@ -327,6 +327,85 @@ class WindowListTest(unittest.TestCase):
         state_args = calls[1][1] or {}
         self.assertIs(state_args.get("include_accessibility_tree"), True)
 
+    def test_pixel_on_non_accessible_canvas_uses_capture_id_and_raw_pixels(self) -> None:
+        settings = _settings(Path(tempfile.mkdtemp()))
+        transport = LocalCuaTransport("cua-driver call", settings=settings)
+        calls: list[tuple[str, dict | None]] = []
+
+        def fake_call(name, args=None, timeout=None):
+            calls.append((name, args))
+            if name == "list_windows":
+                return {"ok": True, "data": {"windows": [{
+                    "app_name": "CanvasApp",
+                    "pid": 42,
+                    "window_id": 105,
+                    "bounds": {"x": 100, "y": 100, "width": 400, "height": 400},
+                }]}}
+            if name == "get_window_state":
+                return {"ok": True, "data": {
+                    "capture_id": "capture_canvas_123",
+                    "window_bounds": {"x": 100, "y": 100, "width": 400, "height": 400},
+                    "elements": [],
+                }}
+            if name == "click":
+                return {"ok": True, "data": {"summary": "Clicked at (150, 150)"}}
+            return {"ok": False, "error": "unexpected_tool"}
+
+        transport._call_tool = fake_call  # type: ignore[method-assign]
+        result = transport._click(
+            {"action": "click", "pid": 42, "window_id": 105, "x": 150, "y": 150},
+            "node",
+        )
+        self.assertTrue(result["result_ok"], result)
+        self.assertEqual(result["pixel_hit"], "capture")
+        self.assertEqual(result["click_method"], "xy_click")
+        self.assertEqual([name for name, _args in calls], ["list_windows", "get_window_state", "click"])
+        click_args = calls[-1][1] or {}
+        self.assertEqual(click_args["pid"], 42)
+        self.assertEqual(click_args["window_id"], 105)
+        self.assertEqual(click_args["x"], 150)
+        self.assertEqual(click_args["y"], 150)
+        self.assertEqual(click_args["capture_id"], "capture_canvas_123")
+        self.assertEqual(click_args["session"], (calls[1][1] or {})["session"])
+        self.assertNotIn("element_token", click_args)
+
+    def test_pixel_click_resolves_window_id_from_pid_when_missing(self) -> None:
+        settings = _settings(Path(tempfile.mkdtemp()))
+        transport = LocalCuaTransport("cua-driver call", settings=settings)
+        calls: list[tuple[str, dict | None]] = []
+
+        def fake_call(name, args=None, timeout=None):
+            calls.append((name, args))
+            if name == "list_windows":
+                return {"ok": True, "data": {"windows": [{
+                    "app_name": "CanvasApp",
+                    "pid": 55,
+                    "window_id": 999,
+                    "bounds": {"x": 50, "y": 50, "width": 300, "height": 300},
+                }]}}
+            if name == "get_window_state":
+                return {"ok": True, "data": {
+                    "capture_id": "capture_canvas_999",
+                    "window_bounds": {"x": 50, "y": 50, "width": 300, "height": 300},
+                    "elements": [],
+                }}
+            if name == "click":
+                return {"ok": True, "data": {"summary": "Clicked at (100, 100)"}}
+            return {"ok": False, "error": "unexpected_tool"}
+
+        transport._call_tool = fake_call  # type: ignore[method-assign]
+        result = transport._click(
+            {"action": "click", "pid": 55, "x": 100, "y": 100},
+            "node",
+        )
+        self.assertTrue(result["result_ok"], result)
+        self.assertEqual(result["pixel_hit"], "capture")
+        self.assertEqual([name for name, _args in calls], ["list_windows", "get_window_state", "click"])
+        click_args = calls[-1][1] or {}
+        self.assertEqual(click_args["pid"], 55)
+        self.assertEqual(click_args["window_id"], 999)
+        self.assertEqual(click_args["capture_id"], "capture_canvas_999")
+
     def test_smallest_clickable_frame_wins(self) -> None:
         elements = [
             {
