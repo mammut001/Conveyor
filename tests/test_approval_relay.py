@@ -384,6 +384,35 @@ class TestApprovalRelayQueuedNotifyIsolation(unittest.TestCase):
         self.assertEqual(fake.updated, [])
         self.assertGreaterEqual(real_send.call_count, 1)
 
+    def test_connect_waits_out_a_journal_mode_lock(self):
+        import sqlite3
+
+        path = self.tmpdir / "journal-lock.db"
+        # Hold a rollback-journal transaction so the WAL switch cannot
+        # take its exclusive lock on the first try.
+        holder = sqlite3.connect(path, check_same_thread=False)
+        try:
+            holder.execute("CREATE TABLE t (id INTEGER)")
+            holder.execute("BEGIN")
+            holder.execute("SELECT 1")
+
+            def _release() -> None:
+                time.sleep(0.2)
+                holder.rollback()
+
+            releaser = threading.Thread(target=_release)
+            releaser.start()
+            settings = SimpleNamespace(approval_relay_db=path)
+            started = time.monotonic()
+            try:
+                other = approval_relay._connect(settings)
+            finally:
+                releaser.join()
+            self.assertGreaterEqual(time.monotonic() - started, 0.15)
+            other.close()
+        finally:
+            holder.close()
+
 
 class TestApprovalRelayBotCallbacks(unittest.TestCase):
     def setUp(self):

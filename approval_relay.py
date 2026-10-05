@@ -98,8 +98,19 @@ def _connect(settings: Any) -> sqlite3.Connection:
 
     conn = sqlite3.connect(str(path), timeout=10.0)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=10000")
+    # journal_mode does not wait on the busy handler. Another connection
+    # (the fake-bot presser, or the other bot process) makes this fail
+    # immediately with "database is locked" unless we retry.
+    deadline = time.monotonic() + 10.0
+    while True:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            break
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
 
     key = str(path)
     if key in _schema_ready and not is_new:
