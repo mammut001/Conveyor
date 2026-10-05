@@ -73,7 +73,8 @@ class FakeOutbound:
 class FakeRunner:
     """Stub matching the surface handlers/commands.py touches."""
 
-    def __init__(self) -> None:
+    def __init__(self, settings: Any = None) -> None:
+        self.settings = settings
         self.MEMO_CATEGORIES: tuple[str, ...] = (
             "preference", "fact", "tool-quirk", "convention", "unfiled",
         )
@@ -283,7 +284,7 @@ async def _run_case(
 
 async def run_command_harness() -> int:
     settings = load_settings()
-    fake_runner = FakeRunner()
+    fake_runner = FakeRunner(settings)
     restorers = _install_module_fakes()
 
     try:
@@ -346,10 +347,14 @@ async def run_command_harness() -> int:
             )
 
         # Side-effect checks (still 1 runner shared across cases).
+        started_normalized = [
+            (mode, prompt.split("\n\n")[-1])
+            for mode, prompt in fake_runner.started
+        ]
         results.append(
             CheckResult(
                 "started jobs",
-                fake_runner.started
+                started_normalized
                 == [
                     (JobMode.RUN, "say hi"),
                     (JobMode.FIX, "change"),
