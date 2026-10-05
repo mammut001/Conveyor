@@ -692,11 +692,12 @@ class LocalCuaTransport(CuaTransport):
         return _result_from_call(called, "click", node_id)
 
     def _click_window_pixels(self, action: dict, node_id: str, x: float, y: float) -> dict:
-        """Click a window-local pixel bound to a fresh screenshot.
+        """Click a window pixel, preferring the button whose frame contains it.
 
-        The driver refuses x/y that are not tied to the PNG from
-        ``get_window_state`` (``screenshot_context_missing``). Take that
-        screenshot in this process, then click its ``capture_id``.
+        The driver's pointer hit-test misses GTK buttons. The accessibility
+        frame from the same snapshot still contains the point, so that
+        element's action is pressed. A point with no clickable frame falls
+        back to the screenshot's ``capture_id``.
         """
         try:
             pid = int(action["pid"])
@@ -715,15 +716,29 @@ class LocalCuaTransport(CuaTransport):
                 "pid": pid,
                 "window_id": window_id,
                 "session": session,
-                "include_accessibility_tree": False,
+                "include_accessibility_tree": True,
             },
-            timeout=30,
+            timeout=40,
         )
         if not state.get("ok"):
             failed = _result_from_call(state, "click", node_id)
             return failed
         data = state.get("data") if isinstance(state.get("data"), dict) else {}
         capture_id = data.get("capture_id") if isinstance(data, dict) else None
+        local_x, local_y = _window_local_point(x, y, data)
+        elements = data.get("elements") if isinstance(data.get("elements"), list) else []
+        token = _token_under_point(elements, local_x, local_y)
+        if token:
+            # The driver's own pointer hit-test misses GTK buttons and then
+            # refuses the pixel. The frame from this same snapshot does
+            # contain the point, so press that element's action.
+            called = self._call_tool(
+                "click",
+                {"pid": pid, "element_token": token, "session": session},
+            )
+            result = _result_from_call(called, "click", node_id)
+            result["pixel_hit"] = "element"
+            return result
         if not isinstance(capture_id, str) or not capture_id:
             return {
                 "result_ok": False,
@@ -731,7 +746,6 @@ class LocalCuaTransport(CuaTransport):
                 "action_type": "click",
                 "node_id": node_id,
             }
-        local_x, local_y = _window_local_point(x, y, data)
         called = self._call_tool(
             "click",
             {
@@ -743,7 +757,9 @@ class LocalCuaTransport(CuaTransport):
                 "session": session,
             },
         )
-        return _result_from_call(called, "click", node_id)
+        result = _result_from_call(called, "click", node_id)
+        result["pixel_hit"] = "capture"
+        return result
 
     def _click(self, action: dict, node_id: str) -> dict:
         # Validate AX fields first
@@ -1459,6 +1475,52 @@ def _window_local_point(x: float, y: float, state: dict) -> tuple[float, float]:
     if in_screen and not in_screenshot:
         return x - origin_x, y - origin_y
     return x, y
+
+
+def _frame_box(frame: dict) -> tuple[float, float, float, float] | None:
+    try:
+        x = float(frame.get("x"))
+        y = float(frame.get("y"))
+        width = frame.get("w") if frame.get("w") is not None else frame.get("width")
+        height = frame.get("h") if frame.get("h") is not None else frame.get("height")
+        w = float(width)
+        h = float(height)
+    except (TypeError, ValueError):
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return x, y, w, h
+
+
+def _token_under_point(elements: list, x: float, y: float) -> str | None:
+    """Token of the smallest clickable frame that contains this screenshot point."""
+    best_token = None
+    best_area = None
+    for element in elements:
+        if not isinstance(element, dict):
+            continue
+        token = element.get("element_token")
+        if not isinstance(token, str) or not _ELEMENT_TOKEN.match(token):
+            continue
+        role = str(element.get("role") or "").lower()
+        actions = element.get("actions")
+        clickable = "button" in role or (isinstance(actions, list) and "click" in actions)
+        if not clickable:
+            continue
+        frame = element.get("screenshot_frame")
+        if not isinstance(frame, dict):
+            continue
+        box = _frame_box(frame)
+        if box is None:
+            continue
+        fx, fy, fw, fh = box
+        if not (fx <= x < fx + fw and fy <= y < fy + fh):
+            continue
+        area = fw * fh
+        if best_area is None or area < best_area:
+            best_token = token
+            best_area = area
+    return best_token
 
 
 def _png_dimensions(png: bytes) -> tuple[int | None, int | None]:

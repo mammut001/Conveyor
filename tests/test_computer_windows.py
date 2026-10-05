@@ -20,7 +20,7 @@ from desktop_computer_requests import (
     fail_computer_step,
     validate_computer_result,
 )
-from desktop_cua import LocalCuaTransport, _window_local_point, summarize_windows
+from desktop_cua import LocalCuaTransport, _token_under_point, _window_local_point, summarize_windows
 
 
 def _settings(root: Path) -> Settings:
@@ -267,6 +267,88 @@ class WindowListTest(unittest.TestCase):
         self.assertEqual(click_args["y"], 73)
         self.assertEqual(click_args["capture_id"], "capture_screen_point")
         self.assertNotIn("coordinate_frame", click_args)
+
+    def test_pixel_on_a_button_presses_that_element(self) -> None:
+        settings = _settings(Path(tempfile.mkdtemp()))
+        transport = LocalCuaTransport("cua-driver call", settings=settings)
+        calls: list[tuple[str, dict | None]] = []
+
+        def fake_call(name, args=None, timeout=None):
+            calls.append((name, args))
+            if name == "list_windows":
+                return {"ok": True, "data": {"windows": [{
+                    "app_name": "Calculator",
+                    "pid": 4,
+                    "window_id": 40,
+                    "bounds": {"x": 658, "y": 301, "width": 412, "height": 526},
+                }]}}
+            if name == "get_window_state":
+                return {"ok": True, "data": {
+                    "capture_id": "capture_button",
+                    "window_bounds": {"x": 658, "y": 301, "width": 412, "height": 526},
+                    "elements": [
+                        {
+                            "role": "panel",
+                            "element_token": "s0000001b:1",
+                            "actions": ["click"],
+                            "screenshot_frame": {"x": 0, "y": 0, "w": 412, "h": 526},
+                        },
+                        {
+                            "role": "push button",
+                            "label": "1",
+                            "element_token": "s0000001b:23",
+                            "actions": ["click"],
+                            "screenshot_frame": {"x": 38, "y": 393, "w": 64, "h": 44},
+                        },
+                        {
+                            "role": "edit bar",
+                            "element_token": "s0000001b:34",
+                            "screenshot_frame": {"x": 26, "y": 174, "w": 360, "h": 41},
+                        },
+                    ],
+                }}
+            if name == "click":
+                return {"ok": True, "data": {}}
+            return {"ok": False, "error": "unexpected_tool"}
+
+        transport._call_tool = fake_call  # type: ignore[method-assign]
+        result = transport._click(
+            {"action": "click", "pid": 4, "window_id": 40, "x": 70, "y": 415},
+            "node",
+        )
+        self.assertTrue(result["result_ok"], result)
+        self.assertEqual(result["pixel_hit"], "element")
+        click_args = calls[-1][1] or {}
+        self.assertEqual(click_args["element_token"], "s0000001b:23")
+        self.assertEqual(click_args["session"], (calls[1][1] or {})["session"])
+        self.assertNotIn("x", click_args)
+        self.assertNotIn("element_index", click_args)
+        state_args = calls[1][1] or {}
+        self.assertIs(state_args.get("include_accessibility_tree"), True)
+
+    def test_smallest_clickable_frame_wins(self) -> None:
+        elements = [
+            {
+                "role": "panel",
+                "element_token": "s0000001b:1",
+                "actions": ["click"],
+                "screenshot_frame": {"x": 0, "y": 0, "w": 400, "h": 500},
+            },
+            {
+                "role": "push button",
+                "element_token": "s0000001b:23",
+                "screenshot_frame": {"x": 38, "y": 393, "w": 64, "h": 44},
+            },
+            {
+                "role": "label",
+                "element_token": "not-a-token",
+                "actions": ["click"],
+                "screenshot_frame": {"x": 38, "y": 393, "w": 10, "h": 10},
+            },
+        ]
+        self.assertEqual(_token_under_point(elements, 70, 415), "s0000001b:23")
+        self.assertEqual(_token_under_point(elements, 10, 10), "s0000001b:1")
+        self.assertIsNone(_token_under_point(elements, 500, 500))
 
     def test_window_local_point_keeps_screenshot_pixels(self) -> None:
         state = {"window_bounds": {"x": 10, "y": 40, "width": 400, "height": 300}}
