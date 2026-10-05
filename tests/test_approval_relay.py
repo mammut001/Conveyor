@@ -330,6 +330,61 @@ class TestApprovalRelayNotifiersAndRateLimit(unittest.TestCase):
         self.assertTrue(limiter.allow("feishu"))
 
 
+class TestApprovalRelayQueuedNotifyIsolation(unittest.TestCase):
+    """A notification queued before any test factory exists must not append
+    to a factory installed while that job is still waiting."""
+
+    def setUp(self):
+        clear_all_pending()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmpdir = Path(self.tmp.name)
+        (self.tmpdir / "memory").mkdir(parents=True, exist_ok=True)
+        approval_relay.reset_notifier_factory()
+        approval_relay._rate_limiter.reset()
+        self._prev_executor = approval_relay._notify_executor
+
+    def tearDown(self):
+        clear_all_pending()
+        approval_relay.reset_notifier_factory()
+        approval_relay._rate_limiter.reset()
+        approval_relay._notify_executor = self._prev_executor
+        self.tmp.cleanup()
+
+    def test_queued_real_notification_ignores_a_later_factory(self):
+        class _Hold:
+            def __init__(self) -> None:
+                self.jobs: list[tuple] = []
+
+            def submit(self, fn, *args, **kwargs):
+                from concurrent.futures import Future
+                self.jobs.append((fn, args, kwargs))
+                fut = Future()
+                fut.set_result(None)
+                return fut
+
+        hold = _Hold()
+        approval_relay._notify_executor = hold
+        settings = make_test_settings(self.tmpdir, enabled=True, channels=("telegram", "feishu"))
+        action = create_pending("notes.add", "queued", "op", "chat", "web")
+        self.assertTrue(
+            approval_relay.publish(settings, action, summary="q", danger="write", source="chat")
+        )
+        self.assertEqual(len(hold.jobs), 1)
+
+        fake = approval_relay.FakeNotifier("telegram")
+        approval_relay.set_notifier_factory(lambda ch, _s: fake)
+        with patch.object(
+            approval_relay.TelegramRelayNotifier, "send", return_value="ext-real",
+        ) as real_send, patch.object(
+            approval_relay.FeishuRelayNotifier, "send", return_value="ext-fs",
+        ):
+            fn, args, kwargs = hold.jobs[0]
+            fn(*args, **kwargs)
+        self.assertEqual(fake.sent, [])
+        self.assertEqual(fake.updated, [])
+        self.assertGreaterEqual(real_send.call_count, 1)
+
+
 class TestApprovalRelayBotCallbacks(unittest.TestCase):
     def setUp(self):
         clear_all_pending()

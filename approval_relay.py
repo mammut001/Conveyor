@@ -43,8 +43,12 @@ _schema_lock = threading.Lock()
 # Real notifiers do blocking HTTPS calls; run them on one background worker
 # thread so they never stall the bot / web console event loops. When a test
 # notifier factory is installed, notifications are dispatched synchronously.
+# A job already queued for the real path must keep using real notifiers even
+# if a test installs a factory while that job is waiting. Otherwise the
+# background send lands on the test double and count assertions flake.
 _notify_executor: Any = None
 _notify_executor_lock = threading.Lock()
+_real_notify = threading.local()
 
 
 def _dispatch_notification(fn: Callable[..., None], *args: Any, **kwargs: Any) -> None:
@@ -56,7 +60,15 @@ def _dispatch_notification(fn: Callable[..., None], *args: Any, **kwargs: Any) -
         if _notify_executor is None:
             from concurrent.futures import ThreadPoolExecutor
             _notify_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="approval-relay-notify")
-    _notify_executor.submit(fn, *args, **kwargs)
+
+    def _run() -> None:
+        _real_notify.active = True
+        try:
+            fn(*args, **kwargs)
+        finally:
+            _real_notify.active = False
+
+    _notify_executor.submit(_run)
 
 
 def is_relay_enabled(settings: Any) -> bool:
@@ -465,7 +477,9 @@ def reset_notifier_factory() -> None:
 
 
 def get_notifier(channel: str, settings: Any) -> ApprovalNotifier | None:
-    if _notifier_factory is not None:
+    # A queued real-path job sets this on the worker thread. Do not let a
+    # factory installed after submit redirect that job onto a test double.
+    if _notifier_factory is not None and not getattr(_real_notify, "active", False):
         return _notifier_factory(channel, settings)
     if channel == "telegram":
         return TelegramRelayNotifier(settings)
