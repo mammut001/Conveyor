@@ -29,6 +29,7 @@ from personal_tools import queue_tools as queue_tools
 from personal_tools import routines as routines_tools
 from personal_tools import long_term_memory as memory_tools
 from personal_tools import skills as skills_tools
+from personal_tools import sentry as sentry_tools
 
 if TYPE_CHECKING:
     pass
@@ -715,6 +716,42 @@ def register_personal_tools() -> None:
         DangerLevel.WRITE,
         skills_tools.skill_create,
         keywords=("创建技能", "新建技能"),
+    )
+    # --- Always-On Teammate & Sentry ---
+    _register(
+        "teammate",
+        "全天候智能体队友综合控制 (/teammate [check|pause|resume|mute])",
+        DangerLevel.WRITE_SAFE,
+        sentry_tools.teammate_run_tool,
+        keywords=("队友", "teammate", "哨兵", "sentry"),
+    )
+    _register(
+        "teammate.status",
+        "查看全天候智能体队友状态与配置",
+        DangerLevel.READ,
+        sentry_tools.teammate_status_tool,
+        keywords=("队友状态", "哨兵状态", "巡检状态"),
+    )
+    _register(
+        "teammate.check",
+        "立即执行全系统与项目健康巡检",
+        DangerLevel.READ,
+        sentry_tools.teammate_check_tool,
+        keywords=("系统巡检", "立刻巡检", "排查", "体检", "patrol"),
+    )
+    _register(
+        "teammate.pause",
+        "暂停全天候队友的主动预警推送",
+        DangerLevel.WRITE_SAFE,
+        sentry_tools.teammate_pause_tool,
+        keywords=("暂停巡检", "暂停预警", "暂停提醒"),
+    )
+    _register(
+        "teammate.resume",
+        "恢复全天候队友的主动巡检与预警推送",
+        DangerLevel.WRITE_SAFE,
+        sentry_tools.teammate_resume_tool,
+        keywords=("恢复巡检", "恢复预警", "恢复提醒"),
     )
 
 

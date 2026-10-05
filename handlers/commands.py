@@ -456,6 +456,12 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "desktop.upload.resend": ("/upload_resend",),
     "desktop.upload.cancel": ("/upload_cancel",),
     "desktop.upload.cleanup": ("/upload_cleanup",),
+    # Always-On Teammate & Sentry
+    "teammate": ("/teammate",),
+    "teammate.status": ("/teammate", "/sentry"),
+    "teammate.check": ("/teammate check", "/sentry check"),
+    "teammate.pause": ("/teammate pause",),
+    "teammate.resume": ("/teammate resume",),
 }
 
 _TOOL_EXAMPLES: dict[str, str] = {
@@ -552,6 +558,12 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "desktop.observe.request": "创建远程截图 observe 请求 (P5.4.3 支持 --preview 自动缩略图)",
     "desktop.observe.status": "observe 请求状态",
     "desktop.observe.cancel": "取消 observe 请求",
+    # Always-On Teammate & Sentry
+    "teammate": "队友状态",
+    "teammate.status": "队友状态",
+    "teammate.check": "系统巡检",
+    "teammate.pause": "暂停巡检",
+    "teammate.resume": "恢复巡检",
 }
 
 
@@ -1789,6 +1801,13 @@ async def _unwatch(msg, port, _runner, settings, arg):
     await port.reply(msg, res.text)
 
 
+async def _teammate(msg, port, _runner, settings, arg):
+    """Inspect or configure the Always-On Teammate sentry."""
+    from personal_tools.sentry import run_teammate_command
+    res = run_teammate_command(settings, arg or "")
+    await port.reply(msg, res)
+
+
 async def _help(msg, port, _runner, _settings, _arg):
     from handlers.chat import chat_enabled
 
@@ -2294,6 +2313,18 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("watch", "关注话题并定时推送更新", _watch, takes_arg=True),
         CommandSpec("watches", "查看所有关注的话题", _watches),
         CommandSpec("unwatch", "取消话题关注", _unwatch, takes_arg=True),
+        CommandSpec(
+            "teammate",
+            "查看或配置全天候智能体队友状态 (/teammate [check|pause|resume])",
+            _teammate,
+            takes_optional_arg=True,
+        ),
+        CommandSpec(
+            "sentry",
+            "全天候主机与项目哨兵状态",
+            _teammate,
+            takes_optional_arg=True,
+        ),
         CommandSpec("help", "帮助", _help),
         CommandSpec("nl_help", "自然语言示例", _nl_help),
     ]

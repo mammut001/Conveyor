@@ -168,6 +168,11 @@ def _build_catalog() -> dict[str, ToolCatalogEntry]:
         # --- Queue ---
         "queue.status": {"domain": "队列", "examples_zh": ["队列状态", "看看队列"], "examples_en": ["queue status"]},
         "scheduler_status": {"domain": "调度", "examples_zh": ["调度器状态", "提醒调度器状态"], "examples_en": ["scheduler status"], "nl_support": "example"},
+        # --- Always-On Teammate & Sentry ---
+        "teammate.status": {"domain": "队友", "examples_zh": ["队友状态", "哨兵状态", "巡检状态"], "examples_en": ["teammate status", "sentry status"]},
+        "teammate.check": {"domain": "队友", "examples_zh": ["系统巡检", "立刻巡检", "主机巡检"], "examples_en": ["check system", "sentry check", "run patrol"]},
+        "teammate.pause": {"domain": "队友", "examples_zh": ["暂停巡检", "暂停队友提醒"], "examples_en": ["pause sentry", "pause teammate"]},
+        "teammate.resume": {"domain": "队友", "examples_zh": ["恢复巡检", "恢复队友提醒"], "examples_en": ["resume sentry", "resume teammate"]},
     }
 
     # Build catalog entries

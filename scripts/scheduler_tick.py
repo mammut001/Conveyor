@@ -80,6 +80,17 @@ def run_tick(*, dry_run: bool = False) -> tuple[int, int]:
     except Exception as exc:
         logger.error("Topic watch check failed: %s", exc)
 
+    # Always-On Teammate & Proactive Sentry: run patrol if due
+    try:
+        from personal_tools.sentry import run_sentry_patrol, deliver_sentry_alerts
+        alerts, _ = run_sentry_patrol(settings, check_due=True, dry_run=dry_run)
+        if alerts:
+            sent = deliver_sentry_alerts(settings, alerts, dry_run=dry_run)
+            if sent > 0:
+                logger.info("Sent %d proactive sentry alert(s)", sent)
+    except Exception as exc:
+        logger.error("Sentry patrol failed: %s", exc)
+
     if not due:
         logger.debug("No due deliverable reminders.")
         return 0, 0

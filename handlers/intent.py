@@ -299,6 +299,26 @@ _WEB_FETCH_PATTERNS = (
     re.compile(r"(帮我|请).*(打开|看看|获取).*(http|www)", re.IGNORECASE),
 )
 
+# ---- Always-On Teammate & Sentry intent patterns ----
+_TEAMMATE_STATUS_PATTERNS = (
+    re.compile(r"(队友|哨兵|巡检).*(状态|怎么样|开启|运行|status)", re.IGNORECASE),
+    re.compile(r"(查看|看看).*(队友|哨兵)", re.IGNORECASE),
+    re.compile(r"^(队友|哨兵|智能体队友)$", re.IGNORECASE),
+)
+_TEAMMATE_CHECK_PATTERNS = (
+    re.compile(r"(立刻|马上|立即|现在|开始|执行|跑一次|运行).*(巡检|排查|体检|patrol|sentry)", re.IGNORECASE),
+    re.compile(r"(系统|主机|服务器).*(巡检|体检|全面检查)", re.IGNORECASE),
+    re.compile(r"^(巡检|系统巡检|主机巡检|立即巡检|立刻巡检)$", re.IGNORECASE),
+)
+_TEAMMATE_PAUSE_PATTERNS = (
+    re.compile(r"(暂停|停止|关闭|安静|别吵).*(巡检|队友|哨兵|主动提醒|预警)", re.IGNORECASE),
+    re.compile(r"^(暂停巡检|暂停预警|暂停提醒)$", re.IGNORECASE),
+)
+_TEAMMATE_RESUME_PATTERNS = (
+    re.compile(r"(恢复|开启|重启).*(巡检|队友|哨兵|主动提醒|预警)", re.IGNORECASE),
+    re.compile(r"^(恢复巡检|恢复预警|恢复提醒)$", re.IGNORECASE),
+)
+
 # ---- Execution nodes / Computer Use intent (P5.0 phase 0) ----------------
 #
 # These patterns detect desktop-target requests. They NEVER trigger
@@ -610,6 +630,20 @@ def route_intent(text: str) -> RouteResult:
     for pat in _GIT_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("git_status",))
+
+    # Always-On Teammate & Sentry intent
+    for pat in _TEAMMATE_CHECK_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("teammate.check",))
+    for pat in _TEAMMATE_PAUSE_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("teammate.pause",))
+    for pat in _TEAMMATE_RESUME_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("teammate.resume",))
+    for pat in _TEAMMATE_STATUS_PATTERNS:
+        if pat.search(body):
+            return RouteResult(kind="deterministic", tools=("teammate.status",))
 
     # Gmail / email intent (P3.3) — before hybrid so "邮件" doesn't hijack to ops
     for pat in _GMAIL_STATUS_PATTERNS:

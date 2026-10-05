@@ -226,6 +226,20 @@ class Settings:
     subagents_timeout_seconds: int = 90
     subagents_max_steps: int = 3
     subagents_max_output_chars: int = 2500
+    # Always-On Teammate & Proactive Sentry
+    teammate_enabled: bool = True
+    sentry_interval_seconds: int = 300
+    sentry_disk_threshold_pct: float = 90.0
+    sentry_disk_threshold_gb: float = 3.0
+    sentry_load_threshold_ratio: float = 2.0
+    sentry_cooldown_seconds: int = 7200
+    sentry_error_burst_threshold: int = 5
+    sentry_monitored_services: tuple[str, ...] = (
+        "conveyor-telegram-bot",
+        "conveyor-feishu-bot",
+        "conveyor-vps-computer",
+        "conveyor-scheduler",
+    )
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -645,6 +659,21 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "subagents_timeout_seconds": max(10, min(300, _int_env("CONVEYOR_SUBAGENTS_TIMEOUT_SECONDS", 90))),
         "subagents_max_steps": max(0, min(6, _int_env("CONVEYOR_SUBAGENTS_MAX_STEPS", 3))),
         "subagents_max_output_chars": max(500, min(8000, _int_env("CONVEYOR_SUBAGENTS_MAX_OUTPUT_CHARS", 2500))),
+        "teammate_enabled": os.getenv(
+            "CONVEYOR_TEAMMATE_ENABLED", "true"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "sentry_interval_seconds": max(30, min(86400, _int_env("CONVEYOR_SENTRY_INTERVAL_SECONDS", 300))),
+        "sentry_disk_threshold_pct": float(os.getenv("CONVEYOR_SENTRY_DISK_THRESHOLD_PCT", "90.0")),
+        "sentry_disk_threshold_gb": float(os.getenv("CONVEYOR_SENTRY_DISK_THRESHOLD_GB", "3.0")),
+        "sentry_load_threshold_ratio": float(os.getenv("CONVEYOR_SENTRY_LOAD_THRESHOLD_RATIO", "2.0")),
+        "sentry_cooldown_seconds": max(60, min(86400 * 7, _int_env("CONVEYOR_SENTRY_COOLDOWN_SECONDS", 7200))),
+        "sentry_error_burst_threshold": max(1, min(100, _int_env("CONVEYOR_SENTRY_ERROR_BURST_THRESHOLD", 5))),
+        "sentry_monitored_services": tuple(
+            s.strip() for s in os.getenv(
+                "CONVEYOR_SENTRY_MONITORED_SERVICES",
+                "conveyor-telegram-bot,conveyor-feishu-bot,conveyor-vps-computer,conveyor-scheduler"
+            ).split(",") if s.strip()
+        ),
     }
 
 
