@@ -16,6 +16,7 @@ the NEXT single action as a JSON object:
 Two implementations:
 - ``CodexPlanner``: the real path. Drives ``codex exec --json`` with a
   strict one-action instruction and parses the model's JSON reply.
+  Later steps of the same task resume that Codex thread.
 - ``ScriptedPlanner``: deterministic, network-free. Used by the smoke
   suite and as a fallback when Codex is unavailable.
 
@@ -455,6 +456,41 @@ class ScriptedPlanner(Planner):
         return {"action": "done", "summary": "scripted sequence complete"}
 
 
+_THREAD_ID = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _thread_id_from_jsonl(raw: bytes) -> str | None:
+    """Session id from a ``thread.started`` event. Anything else is ignored."""
+    for line in raw.decode("utf-8", "replace").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "thread.started":
+            continue
+        thread_id = event.get("thread_id")
+        if isinstance(thread_id, str) and _THREAD_ID.match(thread_id):
+            return thread_id
+    return None
+
+
+async def _read_all(stream) -> bytes:
+    if stream is None:
+        return b""
+    chunks: list[bytes] = []
+    while True:
+        block = await stream.read(65536)
+        if not block:
+            break
+        chunks.append(block)
+    return b"".join(chunks)
+
+
 class CodexPlanner(Planner):
     """Real planner: asks Codex for the next single action.
 
@@ -467,6 +503,7 @@ class CodexPlanner(Planner):
     def __init__(self, settings: Settings, *, sandbox: str = "danger-full-access") -> None:
         self.settings = settings
         self.sandbox = sandbox
+        self._thread_id: str | None = None
 
     def _build_prompt(
         self,
@@ -546,6 +583,24 @@ class CodexPlanner(Planner):
             "输出下一个动作（若目标已完成则输出 done）："
         )
 
+    def _build_followup(
+        self,
+        *,
+        goal: str,
+        observation: dict,
+        trajectory: list[dict],
+        steps_used: int,
+        max_steps: int,
+    ) -> str:
+        """Later step in the same Codex thread. The rules are already there."""
+        return (
+            "继续同一个桌面任务。只输出一个 JSON 对象，不要解释。\n"
+            f"目标：{goal}\n"
+            f"当前观察: {_obs_summary(observation)}\n"
+            f"已完成步骤 ({steps_used}/{max_steps}):\n{_trajectory_summary(trajectory)}\n"
+            "输出下一个动作（若目标已完成则输出 done）："
+        )
+
     async def next_action(
         self,
         *,
@@ -563,20 +618,40 @@ class CodexPlanner(Planner):
             max_steps=max_steps,
         )
         image = planner_screenshot_path(self.settings, observation)
-        if image is not None:
-            prompt += (
-                "\n一张当前桌面截图已附在这次调用上。"
-                "点按钮时用这张图里的屏幕像素作为 x、y，并带上该窗口的 pid 和 window_id。"
-                "不要只凭窗口名单猜测按钮位置。\n"
-            )
+        image_note = (
+            "\n一张当前桌面截图已附在这次调用上。"
+            "点按钮时用这张图里的屏幕像素作为 x、y，并带上该窗口的 pid 和 window_id。"
+            "不要只凭窗口名单猜测按钮位置。\n"
+            if image is not None
+            else ""
+        )
+        full = prompt + image_note
+        followup = self._build_followup(
+            goal=goal,
+            observation=observation,
+            trajectory=trajectory,
+            steps_used=steps_used,
+            max_steps=max_steps,
+        ) + image_note
         try:
-            raw = await self._run_codex(prompt, image=image)
+            if self._thread_id:
+                raw = await self._run_codex(followup, image=image)
+                if raw is None:
+                    raw = await self._run_codex(full, image=image, resume=False)
+            else:
+                raw = await self._run_codex(full, image=image)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("CodexPlanner codex run failed: %s", exc)
             return {"action": "stop", "reason": f"planner_error:{type(exc).__name__}"}
-        return self._parse_action(raw)
+        return self._parse_action(raw or "")
 
-    async def _run_codex(self, prompt: str, *, image: Path | None = None) -> str:
+    async def _run_codex(
+        self,
+        prompt: str,
+        *,
+        image: Path | None = None,
+        resume: bool = True,
+    ) -> str | None:
         settings = self.settings
         worktree = Path(settings.codex_workspace_root)
         add_dir = Path(settings.codex_task_root)
@@ -585,23 +660,37 @@ class CodexPlanner(Planner):
         ) as out_file:
             out_path = out_file.name
         proc = None
+        readers: list[asyncio.Task] = []
+        use_resume = bool(resume and self._thread_id)
         try:
-            command = [
-                settings.codex_bin,
-                "exec",
-                "--json",
-                "--sandbox", self.sandbox,
-                "--cd", str(worktree),
-                "--add-dir", str(add_dir),
-                "--output-last-message", out_path,
-                "-",
-            ]
-            if settings.codex_model:
-                command[2:2] = ["--model", settings.codex_model]
-            if image is not None:
-                # Same placement as the chat runner: one path, then a flag,
-                # so --image cannot swallow the trailing "-" stdin prompt.
-                command[2:2] = ["--image", str(image)]
+            if use_resume:
+                # Resume has no --sandbox/--cd; the first exec already set those.
+                # --image sits before the next flag so it cannot swallow "-".
+                command = [settings.codex_bin, "exec", "resume"]
+                if image is not None:
+                    command += ["--image", str(image)]
+                command += ["--json", "--output-last-message", out_path]
+                if settings.codex_model:
+                    command += ["--model", settings.codex_model]
+                command += [self._thread_id, "-"]
+                logger.info("desktop planner resume")
+            else:
+                command = [
+                    settings.codex_bin,
+                    "exec",
+                    "--json",
+                    "--sandbox", self.sandbox,
+                    "--cd", str(worktree),
+                    "--add-dir", str(add_dir),
+                    "--output-last-message", out_path,
+                    "-",
+                ]
+                if settings.codex_model:
+                    command[2:2] = ["--model", settings.codex_model]
+                if image is not None:
+                    # Same placement as the chat runner: one path, then a flag,
+                    # so --image cannot swallow the trailing "-" stdin prompt.
+                    command[2:2] = ["--image", str(image)]
             proc = await asyncio.create_subprocess_exec(
                 *command,
                 stdin=asyncio.subprocess.PIPE,
@@ -613,12 +702,33 @@ class CodexPlanner(Planner):
             proc.stdin.write(prompt.encode("utf-8"))
             await proc.stdin.drain()
             proc.stdin.close()
+            if getattr(proc, "stdout", None) is not None:
+                readers.append(asyncio.create_task(_read_all(proc.stdout)))
+            if getattr(proc, "stderr", None) is not None:
+                readers.append(asyncio.create_task(_read_all(proc.stderr)))
             await asyncio.wait_for(proc.wait(), timeout=settings.codex_timeout_seconds)
             try:
-                return Path(out_path).read_text(encoding="utf-8", errors="replace")
+                text = Path(out_path).read_text(encoding="utf-8", errors="replace")
             except Exception:
-                return ""
+                text = ""
+            raw_out = b""
+            if readers:
+                done = await asyncio.gather(*readers, return_exceptions=True)
+                readers.clear()
+                if done and isinstance(done[0], bytes):
+                    raw_out = done[0]
+            if use_resume and (proc.returncode not in (0, None) or not text.strip()):
+                logger.info("desktop planner resume failed, starting a new session")
+                self._thread_id = None
+                return None
+            found = _thread_id_from_jsonl(raw_out)
+            if found and proc.returncode in (0, None):
+                self._thread_id = found
+            return text
         finally:
+            for reader in readers:
+                if not reader.done():
+                    reader.cancel()
             # A task stop or planner timeout cancels this coroutine. The
             # cancellation must also reap the Codex child, otherwise a
             # detached model process can continue consuming time/API quota.

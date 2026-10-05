@@ -66,20 +66,33 @@ class _Stdin:
         return None
 
 
+class _Bytes:
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    async def read(self, _n: int) -> bytes:
+        data, self._data = self._data, b""
+        return data
+
+
 class _Proc:
     stdin_seen = b""
     payload = '{"action":"wait","seconds":1}'
+    plan: list[dict] = []
 
     def __init__(self, args: tuple) -> None:
+        spec = _Proc.plan.pop(0) if _Proc.plan else {}
         self.args = args
         self.stdin = _Stdin()
-        self.returncode = 0
+        self.returncode = spec.get("code", 0)
+        self.stdout = _Bytes(spec.get("stdout", b""))
+        self.stderr = _Bytes(b"")
         out = args[args.index("--output-last-message") + 1]
-        Path(out).write_text(self.payload, encoding="utf-8")
+        Path(out).write_text(spec.get("payload", self.payload), encoding="utf-8")
 
     async def wait(self) -> int:
         _Proc.stdin_seen += self.stdin.data
-        return 0
+        return self.returncode
 
     def terminate(self) -> None:
         self.returncode = -15
@@ -92,6 +105,7 @@ class PlannerImageTest(unittest.IsolatedAsyncioTestCase):
     async def test_model_call_receives_the_saved_screenshot(self) -> None:
         commands: list[tuple] = []
         _Proc.stdin_seen = b""
+        _Proc.plan = []
         _Proc.payload = '{"action":"wait","seconds":1}'
 
         async def fake_exec(*args, **kwargs):
@@ -174,6 +188,7 @@ class PlannerImageTest(unittest.IsolatedAsyncioTestCase):
                     }
                 return {"result_ok": True, "action_type": action.get("action")}
 
+        _Proc.plan = []
         _Proc.payload = '{"action":"done","summary":"ok"}'
         goal = "打开计算器并点 1"
         bare = maybe_simple_digit_action(
@@ -210,3 +225,111 @@ class PlannerImageTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--image", command)
         self.assertEqual(command[command.index("--image") + 1], str(png_path))
         self.assertNotIn("\x89PNG", " ".join(str(part) for part in command))
+
+    async def test_later_step_resumes_the_same_session(self) -> None:
+        commands: list[tuple] = []
+        thread_id = "11111111-1111-4111-8111-111111111111"
+        _Proc.plan = [
+            {
+                "stdout": (
+                    '{"type":"thread.started","thread_id":"%s"}\n' % thread_id
+                ).encode(),
+                "payload": '{"action":"observe"}',
+            },
+            {"payload": '{"action":"done","summary":"ok"}'},
+        ]
+        _Proc.stdin_seen = b""
+
+        async def fake_exec(*args, **kwargs):
+            commands.append(args)
+            return _Proc(args)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            shot_id = "20261005T000000Z-cua-abc12345"
+            shot_dir = resolve_screenshot_dir(settings)
+            shot_dir.mkdir(parents=True, exist_ok=True)
+            png_path = shot_dir / f"{shot_id}.png"
+            png_path.write_bytes(_tiny_png())
+            planner = CodexPlanner(settings)
+            observation = {"screenshot_id": shot_id, "width": 1, "height": 1}
+            with mock.patch(
+                "desktop_computer_planner.asyncio.create_subprocess_exec",
+                fake_exec,
+            ):
+                first = await planner.next_action(
+                    goal="打开计算器并点等号",
+                    observation={"initial": True},
+                    trajectory=[],
+                    steps_used=0,
+                    max_steps=8,
+                )
+                second = await planner.next_action(
+                    goal="打开计算器并点等号",
+                    observation=observation,
+                    trajectory=[{"action_type": "observe", "result_ok": True}],
+                    steps_used=1,
+                    max_steps=8,
+                )
+        self.assertEqual(first.get("action"), "observe")
+        self.assertEqual(second.get("action"), "done")
+        self.assertEqual(len(commands), 2)
+        self.assertEqual(commands[0][1], "exec")
+        self.assertNotIn("resume", commands[0])
+        resumed = commands[1]
+        self.assertEqual(resumed[:3], (settings.codex_bin, "exec", "resume"))
+        self.assertIn("--image", resumed)
+        image_at = resumed.index("--image")
+        self.assertEqual(resumed[image_at + 1], str(png_path))
+        self.assertLess(image_at, resumed.index("--json"))
+        self.assertNotIn("--last", resumed)
+        self.assertEqual(resumed[-2], thread_id)
+        self.assertEqual(resumed[-1], "-")
+        self.assertNotIn(b"\x89PNG", _Proc.stdin_seen)
+
+    async def test_failed_resume_starts_a_fresh_session(self) -> None:
+        commands: list[tuple] = []
+        thread_id = "22222222-2222-4222-8222-222222222222"
+        _Proc.plan = [
+            {
+                "stdout": (
+                    '{"type":"thread.started","thread_id":"%s"}\n' % thread_id
+                ).encode(),
+                "payload": '{"action":"observe"}',
+            },
+            {"code": 1, "payload": ""},
+            {"payload": '{"action":"wait","seconds":1}'},
+        ]
+
+        async def fake_exec(*args, **kwargs):
+            commands.append(args)
+            return _Proc(args)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            planner = CodexPlanner(settings)
+            with mock.patch(
+                "desktop_computer_planner.asyncio.create_subprocess_exec",
+                fake_exec,
+            ):
+                await planner.next_action(
+                    goal="打开计算器并点等号",
+                    observation={"initial": True},
+                    trajectory=[],
+                    steps_used=0,
+                    max_steps=8,
+                )
+                action = await planner.next_action(
+                    goal="打开计算器并点等号",
+                    observation={"initial": True},
+                    trajectory=[{"action_type": "observe", "result_ok": True}],
+                    steps_used=1,
+                    max_steps=8,
+                )
+        self.assertEqual(action.get("action"), "wait")
+        self.assertEqual(len(commands), 3)
+        self.assertEqual(commands[1][2], "resume")
+        self.assertEqual(commands[2][1], "exec")
+        self.assertNotIn("resume", commands[2])
+        self.assertNotIn("--last", commands[1])
+        self.assertNotIn("--last", commands[2])
