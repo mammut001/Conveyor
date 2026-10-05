@@ -216,6 +216,62 @@ class WindowListTest(unittest.TestCase):
         self.assertNotIn("bring_to_front", calls)
         self.assertIn("click", calls)
 
+    def test_screen_point_inside_a_window_uses_desktop_coordinates(self) -> None:
+        settings = _settings(Path(tempfile.mkdtemp()))
+        transport = LocalCuaTransport("cua-driver call", settings=settings)
+        clicks: list[dict] = []
+
+        def fake_call(name, args=None, timeout=None):
+            if name == "click":
+                clicks.append(dict(args or {}))
+            if name == "list_windows":
+                return {"ok": True, "data": {"windows": [{
+                    "app_name": "Calculator",
+                    "pid": 4,
+                    "window_id": 40,
+                    "bounds": {"x": 544, "y": 327, "width": 640, "height": 480},
+                }]}}
+            if name in {"click", "get_window_state"}:
+                return {"ok": True, "data": {}}
+            return {"ok": False, "error": "unexpected_tool"}
+
+        transport._call_tool = fake_call  # type: ignore[method-assign]
+        result = transport._click(
+            {"action": "click", "pid": 4, "window_id": 40, "x": 700, "y": 400},
+            "node",
+        )
+        self.assertTrue(result["result_ok"], result)
+        self.assertEqual(result["click_method"], "xy_click")
+        self.assertEqual(clicks[0].get("coordinate_frame"), "desktop")
+        self.assertEqual(clicks[0]["x"], 700)
+        self.assertEqual(clicks[0]["y"], 400)
+
+    def test_missing_app_is_launched_before_observe(self) -> None:
+        settings = _settings(Path(tempfile.mkdtemp()))
+        transport = LocalCuaTransport("cua-driver call", settings=settings)
+        calls: list[str] = []
+
+        def fake_call(name, args=None, timeout=None):
+            calls.append(name)
+            if name == "list_apps":
+                return {"ok": True, "data": {"apps": [{
+                    "name": "Calculator",
+                    "running": False,
+                    "launch_path": "/usr/bin/gnome-calculator",
+                }]}}
+            if name == "launch_app":
+                self.assertEqual(args.get("launch_path"), "/usr/bin/gnome-calculator")
+                return {"ok": True, "data": {"pid": 99}}
+            if name == "bring_to_front":
+                self.assertEqual(args.get("pid"), 99)
+                return {"ok": True, "data": {}}
+            return {"ok": False, "error": "unexpected_tool"}
+
+        transport._call_tool = fake_call  # type: ignore[method-assign]
+        error = transport._prepare_target_app({"action": "observe", "target_app": "Calculator"})
+        self.assertIsNone(error)
+        self.assertEqual(calls, ["list_apps", "launch_app", "bring_to_front"])
+
     def test_driver_exit_reports_stdout_code(self) -> None:
         settings = _settings(Path(tempfile.mkdtemp()))
         transport = LocalCuaTransport("cua-driver call", settings=settings)

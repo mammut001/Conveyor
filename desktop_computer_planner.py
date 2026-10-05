@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from config import Settings
+from desktop_screenshot import resolve_screenshot_dir
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,10 @@ def maybe_observe_only_action(
 
 def infer_target_app(goal: str) -> str | None:
     """Infer only an explicitly named common desktop app from a goal."""
-    text = (goal or "").lower()
+    raw = goal or ""
+    if "计算器" in raw:
+        return "Calculator"
+    text = raw.lower()
     apps = (
         "calculator", "safari", "chrome", "google chrome", "firefox",
         "finder", "notes", "textedit", "calendar", "mail", "slack",
@@ -257,6 +261,10 @@ def maybe_simple_digit_action(
     pid = obs.get("pid")
     window_id = obs.get("window_id")
     if not isinstance(hints, list) or not hints or pid is None or window_id is None:
+        # An observe already saved a screenshot and still has no button
+        # labels. Hand the image to the model instead of observing forever.
+        if _observation_has_screenshot(obs):
+            return None
         return {"action": "observe"}
 
     # A Calculator expression can expose "Clear" first; that clears only the
@@ -272,6 +280,8 @@ def maybe_simple_digit_action(
 
     digit_hint = _find_hint(obs, label=digit)
     if digit_hint is None:
+        if _observation_has_screenshot(obs):
+            return None
         return {
             "action": "stop",
             "reason": f"digit_{digit}_not_in_element_hints",
@@ -321,6 +331,45 @@ class Planner(ABC):
         max_steps: int,
     ) -> dict:
         """Return the next action dict (or done/stop)."""
+
+
+_SCREENSHOT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
+
+
+def _observation_has_screenshot(observation: dict) -> bool:
+    sid = observation.get("screenshot_id") if isinstance(observation, dict) else None
+    return isinstance(sid, str) and bool(sid.strip())
+
+
+def planner_screenshot_path(settings: Settings, observation: dict) -> Path | None:
+    """Local PNG for this observation, or None when the step has no image.
+
+    The clicker saves ``{screenshot_id}.png`` under the desktop screenshot
+    directory. Only a regular file inside that directory is attached, so a
+    path in the observation cannot point the model at an arbitrary file.
+    """
+    if not isinstance(observation, dict):
+        return None
+    root = resolve_screenshot_dir(settings)
+    sid = observation.get("screenshot_id")
+    if isinstance(sid, str) and _SCREENSHOT_ID.match(sid):
+        candidate = (root / f"{sid}.png").resolve()
+        if _file_inside(candidate, root):
+            return candidate
+    raw = observation.get("path")
+    if isinstance(raw, str) and raw.strip():
+        candidate = Path(raw).expanduser().resolve()
+        if candidate.suffix.lower() == ".png" and _file_inside(candidate, root):
+            return candidate
+    return None
+
+
+def _file_inside(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root.resolve())
+    except ValueError:
+        return False
+    return path.is_file()
 
 
 def _obs_summary(observation: dict) -> str:
@@ -513,14 +562,21 @@ class CodexPlanner(Planner):
             steps_used=steps_used,
             max_steps=max_steps,
         )
+        image = planner_screenshot_path(self.settings, observation)
+        if image is not None:
+            prompt += (
+                "\n一张当前桌面截图已附在这次调用上。"
+                "点按钮时用这张图里的屏幕像素作为 x、y，并带上该窗口的 pid 和 window_id。"
+                "不要只凭窗口名单猜测按钮位置。\n"
+            )
         try:
-            raw = await self._run_codex(prompt)
+            raw = await self._run_codex(prompt, image=image)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("CodexPlanner codex run failed: %s", exc)
             return {"action": "stop", "reason": f"planner_error:{type(exc).__name__}"}
         return self._parse_action(raw)
 
-    async def _run_codex(self, prompt: str) -> str:
+    async def _run_codex(self, prompt: str, *, image: Path | None = None) -> str:
         settings = self.settings
         worktree = Path(settings.codex_workspace_root)
         add_dir = Path(settings.codex_task_root)
@@ -542,6 +598,10 @@ class CodexPlanner(Planner):
             ]
             if settings.codex_model:
                 command[2:2] = ["--model", settings.codex_model]
+            if image is not None:
+                # Same placement as the chat runner: one path, then a flag,
+                # so --image cannot swallow the trailing "-" stdin prompt.
+                command[2:2] = ["--image", str(image)]
             proc = await asyncio.create_subprocess_exec(
                 *command,
                 stdin=asyncio.subprocess.PIPE,
