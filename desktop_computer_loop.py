@@ -29,6 +29,7 @@ from typing import Any, Awaitable, Callable
 from config import Settings
 from desktop_computer_planner import (
     infer_target_app,
+    maybe_followup_label_action,
     maybe_observe_only_action,
     maybe_simple_digit_action,
     resolve_clicked_label,
@@ -256,6 +257,14 @@ async def run_computer_loop(
                     # Simple single-digit goals bypass Codex to avoid multi-click
                     # thrash (e.g. display ending as 113 instead of 1).
                     action = maybe_simple_digit_action(
+                        goal=goal,
+                        observation=observation,
+                        trajectory=trajectory,
+                    )
+                if action is None:
+                    # "再点等号" presses that button. A missing label falls
+                    # through so Codex can use the screenshot.
+                    action = maybe_followup_label_action(
                         goal=goal,
                         observation=observation,
                         trajectory=trajectory,

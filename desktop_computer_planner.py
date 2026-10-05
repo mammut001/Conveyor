@@ -23,6 +23,9 @@ Two implementations:
 Simple single-digit Calculator goals (e.g. “点击数字 1”) are handled by
 ``maybe_simple_digit_action`` *before* Codex, so the product path does
 not thrash multiple AX buttons (which produced displays like ``113``).
+A short named follow-up such as “再点等号” is handled by
+``maybe_followup_label_action``: it presses that button and does not
+clear the calculator. A label that is not on screen still goes to Codex.
 """
 from __future__ import annotations
 
@@ -37,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from config import Settings
+from desktop_computer_requests import _HARD_BLOCKED_KEYWORDS
 from desktop_screenshot import resolve_screenshot_dir
 
 logger = logging.getLogger(__name__)
@@ -291,6 +295,131 @@ def maybe_simple_digit_action(
     if click is None:
         return {"action": "stop", "reason": f"digit_{digit}_ax_incomplete"}
     return click
+
+
+# "点击" must be tried before "点", or the label keeps the extra character.
+_FOLLOWUP_CLICK_LABEL = re.compile(
+    r"^(?:再|然后|接着|继续)?再?(?:点击|点|按)\s*(.+)$"
+)
+
+# Spoken calculator buttons. The on-screen label is the symbol, not the word.
+_SPOKEN_BUTTONS = {
+    "等号": ("=", "equals"),
+    "等于": ("=", "equals"),
+    "加号": ("+", "＋", "add", "plus"),
+    "减号": ("-", "−", "minus", "subtract"),
+    "乘号": ("×", "*", "multiply"),
+    "除号": ("÷", "/", "divide"),
+    "小数点": (".", "decimal", "point"),
+    "清除": ("Clear", "All Clear", "AC"),
+    "全清": ("All Clear", "AC", "Clear"),
+    "归零": ("All Clear", "AC"),
+}
+
+
+def _followup_spoken(goal: str) -> str | None:
+    """The button words in a short click follow-up, or None."""
+    body = (goal or "").strip()
+    if not body or len(body) > 32:
+        return None
+    match = _FOLLOWUP_CLICK_LABEL.match(body)
+    if match is None:
+        return None
+    label = match.group(1).strip().strip("。.!！?？，,")
+    if not label or len(label) > 16:
+        return None
+    # A single digit stays on the digit shortcut, which clears first.
+    if len(label) == 1 and label.isdigit():
+        return None
+    lowered = label.lower()
+    for keyword in _HARD_BLOCKED_KEYWORDS:
+        if keyword and keyword in lowered:
+            return None
+    return label
+
+
+def followup_click_labels(goal: str) -> tuple[str, ...] | None:
+    """Labels to press for a named follow-up click, or None to use Codex."""
+    spoken = _followup_spoken(goal)
+    if spoken is None:
+        return None
+    aliases = _SPOKEN_BUTTONS.get(spoken)
+    if aliases:
+        return (spoken, *aliases)
+    return (spoken,)
+
+
+def _calculator_window(observation: dict) -> dict | None:
+    """A calculator window from the observe list, if one is open."""
+    windows = observation.get("windows") if isinstance(observation, dict) else None
+    if not isinstance(windows, list):
+        return None
+    for row in windows:
+        if not isinstance(row, dict):
+            continue
+        app = str(row.get("app") or "")
+        title = str(row.get("title") or "")
+        blob = f"{app} {title}".lower()
+        if "calc" not in blob and "计算器" not in app and "计算器" not in title:
+            continue
+        try:
+            int(row.get("pid"))
+            int(row.get("window_id"))
+        except (TypeError, ValueError):
+            continue
+        return row
+    return None
+
+
+def maybe_followup_label_action(
+    *,
+    goal: str,
+    observation: dict,
+    trajectory: list[dict],
+) -> dict | None:
+    """Press a named button without Codex. Never clears unless asked.
+
+    ``再点等号`` looks for ``=``. The chat window is often in front after
+    发送, so a calculator word whose label is missing looks at the
+    calculator window next. Any other miss returns None and the model
+    sees the screenshot. This path does not press Clear on the way.
+    """
+    spoken = _followup_spoken(goal)
+    wanted = followup_click_labels(goal)
+    if spoken is None or wanted is None:
+        return None
+
+    done = {lab.lower() for lab in _trajectory_labels(trajectory)}
+    if any(label.lower() in done for label in wanted):
+        return {"action": "done", "summary": f"clicked {wanted[0]}"}
+
+    obs = observation if isinstance(observation, dict) else {}
+    hints = obs.get("element_hints")
+    pid = obs.get("pid")
+    window_id = obs.get("window_id")
+    if not isinstance(hints, list) or not hints or pid is None or window_id is None:
+        if _observation_has_screenshot(obs):
+            return None
+        return {"action": "observe"}
+
+    hint = _find_hint(obs, labels=wanted)
+    if hint is not None:
+        return _ax_click_from_hint(obs, hint)
+
+    if spoken in _SPOKEN_BUTTONS:
+        window = _calculator_window(obs)
+        if window is not None:
+            target_pid = int(window["pid"])
+            target_wid = int(window["window_id"])
+            if target_pid != int(pid):
+                # Do not set target_app. On Linux the app name is not
+                # "Calculator", and a name miss fails the step.
+                return {
+                    "action": "observe",
+                    "pid": target_pid,
+                    "window_id": target_wid,
+                }
+    return None
 
 
 def resolve_clicked_label(action: dict, observation: dict) -> str | None:
