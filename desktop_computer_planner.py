@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from config import Settings
-from desktop_computer_requests import _HARD_BLOCKED_KEYWORDS
+from desktop_computer_requests import _HARD_BLOCKED_KEYWORDS, _LOGIN_PASSWORD_KEYWORDS
 from desktop_screenshot import resolve_screenshot_dir
 
 logger = logging.getLogger(__name__)
@@ -332,7 +332,7 @@ def _followup_spoken(goal: str) -> str | None:
     if len(label) == 1 and label.isdigit():
         return None
     lowered = label.lower()
-    for keyword in _HARD_BLOCKED_KEYWORDS:
+    for keyword in (*_HARD_BLOCKED_KEYWORDS, *_LOGIN_PASSWORD_KEYWORDS):
         if keyword and keyword in lowered:
             return None
     return label

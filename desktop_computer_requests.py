@@ -175,13 +175,16 @@ def validate_ax_fields(action: dict) -> tuple[bool, str | None]:
 # Calculator AX click can run.
 _ALLOWLIST_EXEMPT_ACTIONS = frozenset({"observe", "wait", "done", "stop"})
 
-# These contexts remain blocked even if an operator customizes the optional
-# keyword list. Broad ordinary-app support must not turn into unrestricted
-# financial, credential, system-administration, or destructive automation.
+# Financial, payment, transfer, system administration, and destructive contexts
+# remain strictly blocked even if an operator customizes the optional keyword list.
 _HARD_BLOCKED_KEYWORDS = (
-    "password", "passcode", "bank", "payment", "crypto",
-    "keychain", "system settings", "delete account",
+    "bank", "payment", "crypto", "keychain", "system settings", "delete account",
+    "支付", "转账", "付款", "交易密码", "收银台", "银行",
 )
+
+_LOGIN_PASSWORD_KEYWORDS = frozenset({
+    "password", "passcode", "密码", "口令",
+})
 
 
 def action_enforces_app_allowlist(action: object) -> bool:
@@ -269,12 +272,17 @@ def redact_computer_action(action: dict) -> dict:
 
 
 def _blocked_keywords(settings: Settings) -> tuple[str, ...]:
+    allow_login = getattr(settings, "conveyor_computer_allow_login_passwords", False)
     kws = getattr(settings, "conveyor_computer_blocked_keywords", None)
     if isinstance(kws, (tuple, list)):
-        configured = (str(k).strip().lower() for k in kws if str(k).strip())
+        configured = [str(k).strip().lower() for k in kws if str(k).strip()]
     else:
-        configured = ()
-    return tuple(dict.fromkeys((*_HARD_BLOCKED_KEYWORDS, *configured)))
+        configured = []
+    combined = dict.fromkeys((*_HARD_BLOCKED_KEYWORDS, *configured))
+    if allow_login:
+        for kw in _LOGIN_PASSWORD_KEYWORDS:
+            combined.pop(kw, None)
+    return tuple(combined)
 
 
 def contains_blocked_keyword(settings: Settings, text: str) -> str | None:

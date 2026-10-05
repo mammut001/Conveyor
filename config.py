@@ -183,6 +183,7 @@ class Settings:
     conveyor_computer_use_enabled: bool = False
     conveyor_computer_direct_enabled: bool = False
     conveyor_computer_always_direct: bool = False
+    conveyor_computer_allow_login_passwords: bool = False
     conveyor_computer_max_steps: int = 20
     conveyor_computer_max_seconds: int = 600
     conveyor_cua_driver_cmd: str = "cua-driver mcp"
@@ -529,6 +530,9 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         ).strip().lower() in ("true", "1", "yes", "on"),
         "conveyor_computer_always_direct": os.getenv(
             "CONVEYOR_COMPUTER_ALWAYS_DIRECT", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "conveyor_computer_allow_login_passwords": os.getenv(
+            "CONVEYOR_COMPUTER_ALLOW_LOGIN_PASSWORDS", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
         "conveyor_computer_max_steps": _int_env("CONVEYOR_COMPUTER_MAX_STEPS", 20),
         "conveyor_computer_max_seconds": _int_env("CONVEYOR_COMPUTER_MAX_SECONDS", 600),

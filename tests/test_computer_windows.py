@@ -24,12 +24,12 @@ from desktop_computer_requests import (
 from desktop_cua import LocalCuaTransport, _token_under_point, _window_local_point, summarize_windows
 
 
-def _settings(root: Path) -> Settings:
+def _settings(root: Path, **over: Any) -> Settings:
     mem = root / "memory"
     mem.mkdir(parents=True, exist_ok=True)
     (root / "tasks").mkdir(parents=True, exist_ok=True)
     (root / "ws").mkdir(parents=True, exist_ok=True)
-    return Settings(
+    kwargs: dict[str, Any] = dict(
         telegram_bot_token="test-token",
         telegram_allowed_user_id=12345,
         codex_workspace_root=root / "ws",
@@ -46,6 +46,8 @@ def _settings(root: Path) -> Settings:
         conveyor_computer_direct_enabled=True,
         conveyor_computer_always_direct=True,
     )
+    kwargs.update(over)
+    return Settings(**kwargs)
 
 
 class WindowListTest(unittest.TestCase):
@@ -777,6 +779,46 @@ def _windows() -> list[dict]:
             "z": 1,
         },
     ]
+
+
+class BlockedKeywordsPolicyTest(unittest.TestCase):
+    def test_default_blocks_password_and_financial(self) -> None:
+        from desktop_computer_requests import contains_blocked_keyword
+        settings = _settings(Path(tempfile.mkdtemp()))
+        self.assertEqual(contains_blocked_keyword(settings, "enter password to login"), "password")
+        self.assertEqual(contains_blocked_keyword(settings, "open bank account"), "bank")
+        self.assertEqual(contains_blocked_keyword(settings, "process payment"), "payment")
+        self.assertEqual(contains_blocked_keyword(settings, "请输入支付密码"), "支付")
+        self.assertEqual(contains_blocked_keyword(settings, "向好友转账"), "转账")
+        self.assertEqual(contains_blocked_keyword(settings, "网银付款"), "付款")
+
+    def test_allow_login_passwords_unblocks_login_but_guards_payment(self) -> None:
+        from desktop_computer_requests import contains_blocked_keyword
+        temp = Path(tempfile.mkdtemp())
+        settings = _settings(temp, conveyor_computer_allow_login_passwords=True)
+        # Login passwords allowed
+        self.assertIsNone(contains_blocked_keyword(settings, "enter password to continue"))
+        self.assertIsNone(contains_blocked_keyword(settings, "use passcode 123456"))
+        self.assertIsNone(contains_blocked_keyword(settings, "输入登录密码 admin123"))
+        self.assertIsNone(contains_blocked_keyword(settings, "输入开机口令"))
+        # Financial / payment / transfer strictly blocked
+        self.assertEqual(contains_blocked_keyword(settings, "请输入支付密码"), "支付")
+        self.assertEqual(contains_blocked_keyword(settings, "进行银行转账"), "转账")
+        self.assertEqual(contains_blocked_keyword(settings, "enter payment password"), "payment")
+        self.assertEqual(contains_blocked_keyword(settings, "bank passcode"), "bank")
+        self.assertEqual(contains_blocked_keyword(settings, "delete account"), "delete account")
+
+    def test_custom_blocked_keywords_omitting_password_allows_login(self) -> None:
+        from desktop_computer_requests import contains_blocked_keyword
+        temp = Path(tempfile.mkdtemp())
+        settings = _settings(
+            temp,
+            conveyor_computer_allow_login_passwords=False,
+            conveyor_computer_blocked_keywords=("bank", "payment"),
+        )
+        self.assertIsNone(contains_blocked_keyword(settings, "enter password to continue"))
+        self.assertEqual(contains_blocked_keyword(settings, "open bank app"), "bank")
+        self.assertEqual(contains_blocked_keyword(settings, "向该账户转账"), "转账")
 
 
 if __name__ == "__main__":

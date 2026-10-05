@@ -80,6 +80,8 @@ def _mk_settings(**over) -> "Settings":
         conveyor_computer_use_enabled=True,
         conveyor_computer_direct_enabled=True,
         conveyor_computer_backend="fake",
+        conveyor_computer_always_direct=False,
+        conveyor_computer_allow_login_passwords=False,
         conveyor_computer_max_steps=20,
         conveyor_computer_max_seconds=600,
         conveyor_cua_driver_cmd="cua-driver mcp",
@@ -109,6 +111,7 @@ def _test_config_defaults_disabled() -> None:
         "conveyor_computer_use_enabled": False,
         "conveyor_computer_direct_enabled": False,
         "conveyor_computer_always_direct": False,
+        "conveyor_computer_allow_login_passwords": False,
         "conveyor_computer_max_steps": 20,
         "conveyor_computer_max_seconds": 600,
         "conveyor_cua_driver_cmd": "cua-driver mcp",
@@ -423,6 +426,9 @@ def _test_hard_blocked_keywords_cannot_be_removed() -> None:
         ("open the bank app", "bank"),
         ("change system settings", "system settings"),
         ("delete account", "delete account"),
+        ("请输入支付密码", "支付"),
+        ("向该账户转账", "转账"),
+        ("收银台结算", "收银台"),
     ):
         if contains_blocked_keyword(settings, phrase) != expected:
             _fail(
@@ -431,6 +437,39 @@ def _test_hard_blocked_keywords_cannot_be_removed() -> None:
             )
             return
     print("[pass] hard_blocked_keywords")
+
+
+def _test_login_passwords_can_be_allowed() -> None:
+    from desktop_computer_requests import contains_blocked_keyword
+
+    # Case 1: allow_login_passwords=True unblocks password/passcode/密码 but still protects payment
+    settings_allow = _mk_settings(conveyor_computer_allow_login_passwords=True)
+    if contains_blocked_keyword(settings_allow, "enter password to continue") is not None:
+        _fail("login_passwords_can_be_allowed", "password was not allowed when allow_login_passwords=True")
+        return
+    if contains_blocked_keyword(settings_allow, "输入登录密码") is not None:
+        _fail("login_passwords_can_be_allowed", "登录密码 was not allowed when allow_login_passwords=True")
+        return
+    if contains_blocked_keyword(settings_allow, "输入支付密码") != "支付":
+        _fail("login_passwords_can_be_allowed", "支付 was not blocked when allow_login_passwords=True")
+        return
+    if contains_blocked_keyword(settings_allow, "payment password") != "payment":
+        _fail("login_passwords_can_be_allowed", "payment was not blocked when allow_login_passwords=True")
+        return
+
+    # Case 2: password omitted from configured keywords (since password is no longer hard-blocked)
+    settings_custom = _mk_settings(
+        conveyor_computer_allow_login_passwords=False,
+        conveyor_computer_blocked_keywords=("bank", "payment"),
+    )
+    if contains_blocked_keyword(settings_custom, "enter password to continue") is not None:
+        _fail("login_passwords_can_be_allowed", "password was not allowed when omitted from keywords")
+        return
+    if contains_blocked_keyword(settings_custom, "open the bank app") != "bank":
+        _fail("login_passwords_can_be_allowed", "bank was not blocked under custom keywords")
+        return
+
+    print("[pass] login_passwords_can_be_allowed")
 
 
 def _test_max_steps_stops_task() -> None:
@@ -1963,6 +2002,7 @@ def main() -> int:
     _test_action_schema_allowlist()
     _test_blocked_keyword_stops_task()
     _test_hard_blocked_keywords_cannot_be_removed()
+    _test_login_passwords_can_be_allowed()
     _test_max_steps_stops_task()
     _test_stop_check_cancels()
     _test_fake_backend_run_and_redaction()
@@ -2005,7 +2045,7 @@ def main() -> int:
     _test_planner_cancellation_reaps_process()
     _test_trajectory_permissions_and_redaction()
 
-    total = 46
+    total = 47
     failed = len(FAILURES)
     passed = total - failed
     print(f"\n{'=' * 60}")
