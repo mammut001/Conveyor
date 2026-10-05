@@ -184,6 +184,7 @@ ALL_CANDIDATE_SERVICES=(
   conveyor-desktop-agent.service
   conveyor-web.service
   conveyor-vps-computer.service
+  conveyor-desktop-chat.service
   conveyor-handoff.service
   conveyor-maintain.timer
 )

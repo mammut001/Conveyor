@@ -649,22 +649,6 @@ class LocalCuaTransport(CuaTransport):
         called = self._call_tool("bring_to_front", args, timeout=20)
         return _result_from_call(called, "click", node_id)
 
-    def _point_inside_listed_window(self, pid: object, window_id: object, x: float, y: float) -> bool:
-        """True when x/y lies in the screen rectangle of the named window."""
-        if pid is None and window_id is None:
-            return False
-        listed = self._call_tool("list_windows", {}, timeout=20)
-        data = listed.get("data") if listed.get("ok") else None
-        windows = data.get("windows") if isinstance(data, dict) else None
-        if not isinstance(windows, list):
-            return False
-        window = _match_listed_window(windows, pid, window_id)
-        frame = _window_frame(window) if isinstance(window, dict) else None
-        if frame is None:
-            return False
-        origin_x, origin_y, width, height = frame
-        return origin_x <= x < origin_x + width and origin_y <= y < origin_y + height
-
     def _click_fresh_element(self, action: dict, node_id: str) -> dict:
         """Press a button using a token taken in this same driver session.
 
@@ -704,6 +688,60 @@ class LocalCuaTransport(CuaTransport):
         called = self._call_tool(
             "click",
             {"pid": pid, "element_token": token, "session": session},
+        )
+        return _result_from_call(called, "click", node_id)
+
+    def _click_window_pixels(self, action: dict, node_id: str, x: float, y: float) -> dict:
+        """Click a window-local pixel bound to a fresh screenshot.
+
+        The driver refuses x/y that are not tied to the PNG from
+        ``get_window_state`` (``screenshot_context_missing``). Take that
+        screenshot in this process, then click its ``capture_id``.
+        """
+        try:
+            pid = int(action["pid"])
+            window_id = int(action["window_id"])
+        except (TypeError, ValueError, KeyError):
+            return {
+                "result_ok": False,
+                "error": "pixel_click_needs_window",
+                "action_type": "click",
+                "node_id": node_id,
+            }
+        session = f"cv{uuid.uuid4().hex[:12]}"
+        state = self._call_tool(
+            "get_window_state",
+            {
+                "pid": pid,
+                "window_id": window_id,
+                "session": session,
+                "include_accessibility_tree": False,
+            },
+            timeout=30,
+        )
+        if not state.get("ok"):
+            failed = _result_from_call(state, "click", node_id)
+            return failed
+        data = state.get("data") if isinstance(state.get("data"), dict) else {}
+        capture_id = data.get("capture_id") if isinstance(data, dict) else None
+        if not isinstance(capture_id, str) or not capture_id:
+            return {
+                "result_ok": False,
+                "error": "capture_id_missing",
+                "action_type": "click",
+                "node_id": node_id,
+            }
+        local_x, local_y = _window_local_point(x, y, data)
+        called = self._call_tool(
+            "click",
+            {
+                "pid": pid,
+                "window_id": window_id,
+                "x": local_x,
+                "y": local_y,
+                "capture_id": capture_id,
+                "session": session,
+            },
         )
         return _result_from_call(called, "click", node_id)
 
@@ -782,51 +820,43 @@ class LocalCuaTransport(CuaTransport):
                     used_method = "ax_click"
                     
         if result is None and has_xy:
-            # Use x/y click as fallback
-            xy_args: dict[str, Any] = {}
-            _copy_optional(
-                action,
-                xy_args,
-                (
-                    "pid", "window_id",
-                    "delivery_mode", "scope", "button",
-                ),
-            )
-            # Ensure integer types if present. element_index is not a click
-            # argument on this driver and would refuse the whole call.
-            for k in ("pid", "window_id"):
-                if xy_args.get(k) is not None:
-                    xy_args[k] = int(xy_args[k])
-                    
             ok_coord, x, y = _xy(action)
             if not ok_coord:
                 return {"result_ok": False, "error": "bad_coords", "action_type": "click", "node_id": node_id}
-            xy_args["x"] = x
-            xy_args["y"] = y
-            # A point inside a listed window is a screen pixel from the
-            # desktop screenshot. Window-local clicks stay outside that
-            # rectangle. The center of the window was already raised above.
-            if "coordinate_frame" not in xy_args and xy_args.get("scope") != "desktop":
-                if self._point_inside_listed_window(
-                    xy_args.get("pid"), xy_args.get("window_id"), x, y,
-                ):
-                    xy_args["coordinate_frame"] = "desktop"
-                    if xy_args.get("pid") is not None and xy_args.get("window_id") is not None:
-                        self._call_tool(
-                            "get_window_state",
-                            {"pid": xy_args["pid"], "window_id": xy_args["window_id"]},
-                            timeout=30,
-                        )
-
-            if "pid" not in xy_args and "window_id" not in xy_args and "scope" not in xy_args:
-                xy_args["scope"] = "desktop"
-            if xy_args.get("scope") == "desktop":
-                self._call_tool("set_config", {"capture_scope": "desktop"}, timeout=15)
-                
-            called = self._call_tool("click", xy_args)
-            result = _result_from_call(called, "click", node_id)
-            used_method = "xy_click"
-            logger.info("xy_click executed, result_ok=%s", result.get("result_ok"))
+            # A named window's pixels belong to that window's screenshot.
+            # Without capture_id the driver refuses the point. A screen
+            # point inside the window is converted to that screenshot.
+            if (
+                action.get("pid") is not None
+                and action.get("window_id") is not None
+                and action.get("scope") != "desktop"
+            ):
+                result = self._click_window_pixels(action, node_id, x, y)
+                used_method = "xy_click"
+                logger.info("xy_click executed, result_ok=%s", result.get("result_ok"))
+            else:
+                xy_args: dict[str, Any] = {}
+                _copy_optional(
+                    action,
+                    xy_args,
+                    (
+                        "pid", "window_id",
+                        "delivery_mode", "scope", "button",
+                    ),
+                )
+                for k in ("pid", "window_id"):
+                    if xy_args.get(k) is not None:
+                        xy_args[k] = int(xy_args[k])
+                xy_args["x"] = x
+                xy_args["y"] = y
+                if "pid" not in xy_args and "window_id" not in xy_args and "scope" not in xy_args:
+                    xy_args["scope"] = "desktop"
+                if xy_args.get("scope") == "desktop":
+                    self._call_tool("set_config", {"capture_scope": "desktop"}, timeout=15)
+                called = self._call_tool("click", xy_args)
+                result = _result_from_call(called, "click", node_id)
+                used_method = "xy_click"
+                logger.info("xy_click executed, result_ok=%s", result.get("result_ok"))
             
         if result is None:
             # Fallback when neither executed or both failed
@@ -1406,6 +1436,29 @@ def _xy(action: dict) -> tuple[bool, float, float]:
         return True, float(action.get("x")), float(action.get("y"))
     except (TypeError, ValueError):
         return False, 0.0, 0.0
+
+
+def _window_local_point(x: float, y: float, state: dict) -> tuple[float, float]:
+    """Turn a screen point into the window screenshot's pixels.
+
+    A point already inside the screenshot box stays as-is. A point that
+    only fits the window's screen rectangle is shifted by the window origin.
+    """
+    bounds = state.get("window_bounds") if isinstance(state.get("window_bounds"), dict) else {}
+    try:
+        origin_x = float(bounds.get("x"))
+        origin_y = float(bounds.get("y"))
+        width = float(bounds.get("width") if bounds.get("width") is not None else state.get("screenshot_width"))
+        height = float(bounds.get("height") if bounds.get("height") is not None else state.get("screenshot_height"))
+    except (TypeError, ValueError):
+        return x, y
+    if width <= 0 or height <= 0:
+        return x, y
+    in_screenshot = 0 <= x < width and 0 <= y < height
+    in_screen = origin_x <= x < origin_x + width and origin_y <= y < origin_y + height
+    if in_screen and not in_screenshot:
+        return x - origin_x, y - origin_y
+    return x, y
 
 
 def _png_dimensions(png: bytes) -> tuple[int | None, int | None]:

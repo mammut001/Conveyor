@@ -20,7 +20,7 @@ from desktop_computer_requests import (
     fail_computer_step,
     validate_computer_result,
 )
-from desktop_cua import LocalCuaTransport, summarize_windows
+from desktop_cua import LocalCuaTransport, _window_local_point, summarize_windows
 
 
 def _settings(root: Path) -> Settings:
@@ -191,10 +191,10 @@ class WindowListTest(unittest.TestCase):
     def test_window_local_click_is_not_a_raise(self) -> None:
         settings = _settings(Path(tempfile.mkdtemp()))
         transport = LocalCuaTransport("cua-driver call", settings=settings)
-        calls: list[str] = []
+        calls: list[tuple[str, dict | None]] = []
 
         def fake_call(name, args=None, timeout=None):
-            calls.append(name)
+            calls.append((name, args))
             if name == "list_windows":
                 return {"ok": True, "data": {"windows": [{
                     "app_name": "Thunar",
@@ -202,6 +202,13 @@ class WindowListTest(unittest.TestCase):
                     "window_id": 40,
                     "bounds": {"x": 544, "y": 327, "width": 640, "height": 480},
                 }]}}
+            if name == "get_window_state":
+                return {"ok": True, "data": {
+                    "capture_id": "capture_window_local",
+                    "window_bounds": {"x": 544, "y": 327, "width": 640, "height": 480},
+                    "screenshot_width": 640,
+                    "screenshot_height": 480,
+                }}
             if name == "click":
                 return {"ok": True, "data": {}}
             return {"ok": False, "error": "unexpected_tool"}
@@ -213,17 +220,24 @@ class WindowListTest(unittest.TestCase):
         )
         self.assertTrue(result["result_ok"], result)
         self.assertEqual(result["click_method"], "xy_click")
-        self.assertNotIn("bring_to_front", calls)
-        self.assertIn("click", calls)
+        names = [name for name, _args in calls]
+        self.assertNotIn("bring_to_front", names)
+        self.assertEqual(names, ["list_windows", "get_window_state", "click"])
+        click_args = calls[2][1] or {}
+        self.assertEqual(click_args["x"], 320)
+        self.assertEqual(click_args["y"], 240)
+        self.assertEqual(click_args["capture_id"], "capture_window_local")
+        self.assertEqual(click_args["session"], (calls[1][1] or {})["session"])
+        self.assertNotIn("coordinate_frame", click_args)
+        self.assertNotIn("element_index", click_args)
 
-    def test_screen_point_inside_a_window_uses_desktop_coordinates(self) -> None:
+    def test_screen_point_inside_a_window_uses_the_screenshot(self) -> None:
         settings = _settings(Path(tempfile.mkdtemp()))
         transport = LocalCuaTransport("cua-driver call", settings=settings)
-        clicks: list[dict] = []
+        calls: list[tuple[str, dict | None]] = []
 
         def fake_call(name, args=None, timeout=None):
-            if name == "click":
-                clicks.append(dict(args or {}))
+            calls.append((name, args))
             if name == "list_windows":
                 return {"ok": True, "data": {"windows": [{
                     "app_name": "Calculator",
@@ -231,7 +245,12 @@ class WindowListTest(unittest.TestCase):
                     "window_id": 40,
                     "bounds": {"x": 544, "y": 327, "width": 640, "height": 480},
                 }]}}
-            if name in {"click", "get_window_state"}:
+            if name == "get_window_state":
+                return {"ok": True, "data": {
+                    "capture_id": "capture_screen_point",
+                    "window_bounds": {"x": 544, "y": 327, "width": 640, "height": 480},
+                }}
+            if name == "click":
                 return {"ok": True, "data": {}}
             return {"ok": False, "error": "unexpected_tool"}
 
@@ -242,9 +261,19 @@ class WindowListTest(unittest.TestCase):
         )
         self.assertTrue(result["result_ok"], result)
         self.assertEqual(result["click_method"], "xy_click")
-        self.assertEqual(clicks[0].get("coordinate_frame"), "desktop")
-        self.assertEqual(clicks[0]["x"], 700)
-        self.assertEqual(clicks[0]["y"], 400)
+        click_args = calls[-1][1] or {}
+        self.assertEqual(calls[-1][0], "click")
+        self.assertEqual(click_args["x"], 156)
+        self.assertEqual(click_args["y"], 73)
+        self.assertEqual(click_args["capture_id"], "capture_screen_point")
+        self.assertNotIn("coordinate_frame", click_args)
+
+    def test_window_local_point_keeps_screenshot_pixels(self) -> None:
+        state = {"window_bounds": {"x": 10, "y": 40, "width": 400, "height": 300}}
+        self.assertEqual(_window_local_point(50, 60, state), (50, 60))
+        self.assertEqual(_window_local_point(700, 400, {
+            "window_bounds": {"x": 544, "y": 327, "width": 640, "height": 480},
+        }), (156, 73))
 
     def test_missing_app_is_launched_before_observe(self) -> None:
         settings = _settings(Path(tempfile.mkdtemp()))
@@ -422,6 +451,29 @@ class FailedStepContinuesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.get("status"), "error")
         self.assertEqual(result.get("blocked_reason"), "unverified_done")
         self.assertIn("click", backend.actions)
+
+    async def test_max_steps_is_not_done(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            backend = FakeComputerBackend(settings)
+            planner = ScriptedPlanner([
+                {"action": "observe"},
+                {"action": "observe"},
+                {"action": "observe"},
+            ])
+            result = await run_computer_loop(
+                settings,
+                "在电脑上打开文件管理器",
+                planner=planner,
+                backend=backend,
+                max_steps=2,
+                max_seconds=30,
+                direct_mode=True,
+            )
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result.get("status"), "stopped")
+        self.assertEqual(result.get("blocked_reason"), "max_steps reached")
+        self.assertNotEqual(result.get("summary"), "max_steps reached")
 
 
 if __name__ == "__main__":

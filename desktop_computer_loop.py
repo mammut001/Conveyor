@@ -422,9 +422,15 @@ async def run_computer_loop(
                     set_task_status(settings, task_id, "stopped", blocked_reason=reason)
                     break
 
-            # Hard caps.
+            # Hard caps. Running out of steps is a stop, same as running
+            # out of time. A "done" row would look like the goal was met.
             if steps_used >= max_steps:
-                set_task_status(settings, task_id, "done", summary="max_steps reached")
+                set_task_status(
+                    settings,
+                    task_id,
+                    "stopped",
+                    blocked_reason="max_steps reached",
+                )
                 break
             if time.monotonic() - start > max_seconds:
                 set_task_status(settings, task_id, "stopped", blocked_reason="max_seconds reached")
