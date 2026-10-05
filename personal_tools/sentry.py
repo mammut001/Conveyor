@@ -630,10 +630,125 @@ def teammate_status_text(settings: Settings) -> str:
         "",
         "💡 **快捷操作：**",
         "• `/teammate check` — 立即对全系统执行一次巡检",
+        "• `/teammate pulse` — 生成今日晨会早报或晚间小结",
         "• `/teammate pause [小时]` — 暂停主动预警推送",
         "• `/teammate resume` — 恢复主动巡检",
         "• `/teammate mute <source>` — 静音指定告警源 (如 disk, cpu, logs)",
     ])
+    return "\n".join(lines)
+
+
+def teammate_daily_pulse(
+    settings: Settings,
+    mode: str = "auto",
+    operator_id: str = "",
+) -> str:
+    """Generate an autonomous morning standup or evening summary pulse."""
+    now = datetime.now(timezone.utc)
+    if mode in ("auto", ""):
+        user_tz = getattr(settings, "user_timezone", "America/Toronto")
+        try:
+            from zoneinfo import ZoneInfo
+            loc_hour = now.astimezone(ZoneInfo(user_tz)).hour
+        except Exception:
+            loc_hour = now.hour
+        mode = "morning" if loc_hour < 14 else "evening"
+
+    is_morning = mode == "morning"
+    icon = "🌅" if is_morning else "🌇"
+    title = "【智能体队友·今日早报与晨会】" if is_morning else "【智能体队友·今日晚报与总结】"
+
+    lines = [
+        f"{icon} **{title}**",
+        "──────────────────────",
+    ]
+
+    # 1. Host Health Snapshot
+    try:
+        load1, _, _ = os.getloadavg()
+        cpus = os.cpu_count() or 1
+        load_ratio = load1 / cpus
+    except Exception:
+        load1, load_ratio = 0.0, 0.0
+
+    disk_free_gb = 0.0
+    try:
+        usage = shutil.disk_usage(settings.codex_workspace_root)
+        disk_free_gb = usage.free / (1024 ** 3)
+    except Exception:
+        pass
+
+    state = SentryState.load(settings)
+    active_status = "🟢 巡检活跃" if not state.is_effective_paused() else "⏸️ 预警已暂停"
+    lines.append("🛡️ **系统与哨兵健康状态：**")
+    lines.append(f"• 哨兵状态: {active_status} · 累计处置告警: {state.total_alerts_count} 次")
+    lines.append(f"• 1分钟负载: {load1:.2f} ({load_ratio:.1f}x) · 工作区可用空间: {disk_free_gb:.1f} GB")
+
+    # 2. Workspace & Git Snapshot
+    ws = settings.codex_workspace_root
+    if ws.exists() and (ws / ".git").exists():
+        try:
+            branch_res = subprocess.run(
+                ["git", "-C", str(ws), "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, timeout=3,
+            )
+            branch = branch_res.stdout.strip() if branch_res.returncode == 0 else "main"
+            diff_res = subprocess.run(
+                ["git", "-C", str(ws), "status", "--porcelain"],
+                capture_output=True, text=True, timeout=3,
+            )
+            dirty_count = len([l for l in diff_res.stdout.splitlines() if l.strip()]) if diff_res.returncode == 0 else 0
+            lines.append(f"• Git 分支: `{branch}` · 未提交改动: {dirty_count} 项")
+        except Exception:
+            pass
+
+    # 3. Agenda / Tasks / Reminders
+    if is_morning:
+        lines.append("\n📋 **今日日程与重点提醒：**")
+        try:
+            from personal_tools.store import PersonalToolsStore
+            store = PersonalToolsStore(settings)
+            due = store.list_due_deliverable_reminders()
+            if due:
+                lines.append(f"• 待交付提醒: 共 {len(due)} 项")
+                for r in due[:3]:
+                    lines.append(f"  - ⏰ #{r.id}: {truncate(r.text, 40)}")
+            else:
+                lines.append("• 暂无待交付的紧急提醒")
+        except Exception:
+            pass
+
+        try:
+            from personal_tools.store import PersonalToolsStore
+            store = PersonalToolsStore(settings)
+            watches = store.list_topic_watches(operator_id=operator_id or "default")
+            if watches:
+                lines.append(f"• 关注中的外部话题: {len(watches)} 个")
+                for w in watches[:3]:
+                    lines.append(f"  - 🔍 {w['topic']}")
+        except Exception:
+            pass
+
+        lines.extend([
+            "\n💡 **今日开工建议：**",
+            "• 发送 `/plan_today` 获取智能体为您规划的今日优先事项",
+            "• 发送 `/teammate check` 可执行实时全系统巡检",
+        ])
+    else:
+        lines.append("\n📊 **今日工作与状态总结：**")
+        if state.recent_alerts:
+            lines.append(f"• 今日守护处置事件: {len(state.recent_alerts)} 条")
+            for a in state.recent_alerts[:2]:
+                lines.append(f"  - [{a.get('source')}] {a.get('title')}")
+        else:
+            lines.append("• 今日系统平稳运行，未发生严重报警")
+
+        lines.extend([
+            "\n🌙 **夜间值守就绪：**",
+            "• 全天候智能体队友已接管夜间监控，将持续监测系统负载、服务故障与 CI 构建状态。",
+            "• 祝您度过轻松愉快的夜晚！",
+        ])
+
     return "\n".join(lines)
 
 
@@ -646,6 +761,10 @@ def run_teammate_command(settings: Settings, arg: str) -> str:
 
     if subcmd in ("status", ""):
         return teammate_status_text(settings)
+
+    elif subcmd in ("pulse", "standup", "daily"):
+        mode = parts[1].lower() if len(parts) > 1 else "auto"
+        return teammate_daily_pulse(settings, mode=mode)
 
     elif subcmd in ("check", "run", "patrol"):
         alerts, suppressed = run_sentry_patrol(settings, force=True, dry_run=True)
@@ -698,7 +817,7 @@ def run_teammate_command(settings: Settings, arg: str) -> str:
         return f"⚠️ 告警源 `{source}` 不在静音列表中。"
 
     else:
-        return f"未知子命令 `{subcmd}`。支持：`/teammate status`、`/teammate check`、`/teammate pause`、`/teammate resume`、`/teammate mute`。"
+        return f"未知子命令 `{subcmd}`。支持：`/teammate status`、`/teammate check`、`/teammate pulse`、`/teammate pause`、`/teammate resume`、`/teammate mute`。"
 
 
 # -----------------------------------------------------------------------------
@@ -715,6 +834,12 @@ async def teammate_check_tool(settings: Settings, _arg: str, **_kwargs: Any) -> 
     return ToolResult(ok=True, text=run_teammate_command(settings, "check"))
 
 
+async def teammate_pulse_tool(settings: Settings, arg: str, **_kwargs: Any) -> ToolResult:
+    """Generate teammate daily morning/evening pulse."""
+    mode = arg.strip().lower() if arg.strip() else "auto"
+    return ToolResult(ok=True, text=teammate_daily_pulse(settings, mode=mode))
+
+
 async def teammate_pause_tool(settings: Settings, arg: str, **_kwargs: Any) -> ToolResult:
     """Pause sentry alerts for a given number of hours."""
     return ToolResult(ok=True, text=run_teammate_command(settings, f"pause {arg}".strip()))
@@ -728,4 +853,5 @@ async def teammate_resume_tool(settings: Settings, _arg: str, **_kwargs: Any) ->
 async def teammate_run_tool(settings: Settings, arg: str, **_kwargs: Any) -> ToolResult:
     """Execute generic teammate subcommand."""
     return ToolResult(ok=True, text=run_teammate_command(settings, arg))
+
 

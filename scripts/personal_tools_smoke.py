@@ -195,6 +195,7 @@ def _test_registry() -> CheckResult:
             "teammate.check",
             "teammate.pause",
             "teammate.resume",
+            "teammate.pulse",
         }
         ok_names = expected == set(PERSONAL_TOOL_REGISTRY)
         add_level = PERSONAL_TOOL_REGISTRY["notes.add"].danger

@@ -623,5 +623,74 @@ class WebControl:
                 "approval_relay": bool(getattr(self.settings, "approval_relay_enabled", False)),
                 "subagents": bool(getattr(self.settings, "subagents_enabled", False))
                 and bool(getattr(self.settings, "chat_tools_enabled", False)),
+                "teammate": bool(getattr(self.settings, "teammate_enabled", True)),
             },
         }
+
+    def teammate_status(self) -> dict[str, Any]:
+        """Return structured Always-On Teammate sentry telemetry."""
+        from personal_tools.sentry import SentryState, teammate_status_text
+        state = SentryState.load(self.settings)
+        return {
+            "enabled": bool(getattr(self.settings, "teammate_enabled", True)),
+            "is_paused": state.is_effective_paused(),
+            "paused_until": state.paused_until,
+            "muted_sources": state.muted_sources,
+            "interval_seconds": getattr(self.settings, "sentry_interval_seconds", 300),
+            "cooldown_seconds": getattr(self.settings, "sentry_cooldown_seconds", 7200),
+            "last_patrol_at": state.last_patrol_at,
+            "total_alerts_count": state.total_alerts_count,
+            "recent_alerts": state.recent_alerts,
+            "monitored_services": list(getattr(self.settings, "sentry_monitored_services", ())),
+            "thresholds": {
+                "disk_pct": getattr(self.settings, "sentry_disk_threshold_pct", 90.0),
+                "disk_gb": getattr(self.settings, "sentry_disk_threshold_gb", 3.0),
+                "load_ratio": getattr(self.settings, "sentry_load_threshold_ratio", 2.0),
+                "error_burst": getattr(self.settings, "sentry_error_burst_threshold", 5),
+            },
+            "status_text": teammate_status_text(self.settings),
+        }
+
+    def teammate_run_patrol(self, force: bool = True) -> dict[str, Any]:
+        """Trigger an immediate live sentry health inspection."""
+        from personal_tools.sentry import run_sentry_patrol
+        from dataclasses import asdict
+        to_deliver, suppressed = run_sentry_patrol(self.settings, force=force, dry_run=True)
+        return {
+            "ok": True,
+            "is_healthy": len(to_deliver) == 0,
+            "alerts": [asdict(a) for a in to_deliver],
+            "suppressed": [asdict(a) for a in suppressed],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def teammate_action(self, action: str, value: Any = None) -> dict[str, Any]:
+        """Execute a state mutation action on the sentry (pause, resume, mute, unmute)."""
+        from personal_tools.sentry import SentryState
+        state = SentryState.load(self.settings)
+        if action == "pause":
+            try:
+                hours = float(value) if value else 24.0
+            except (ValueError, TypeError):
+                hours = 24.0
+            until = state.pause(hours)
+            state.save(self.settings)
+            return {"ok": True, "action": "pause", "paused_until": until}
+        elif action == "resume":
+            state.resume()
+            state.save(self.settings)
+            return {"ok": True, "action": "resume"}
+        elif action == "mute":
+            source = str(value or "").strip().lower()
+            changed = state.mute(source)
+            if changed:
+                state.save(self.settings)
+            return {"ok": True, "action": "mute", "muted_sources": state.muted_sources}
+        elif action == "unmute":
+            source = str(value or "").strip().lower()
+            changed = state.unmute(source)
+            if changed:
+                state.save(self.settings)
+            return {"ok": True, "action": "unmute", "muted_sources": state.muted_sources}
+        return {"ok": False, "error": f"Unknown action '{action}'"}
+

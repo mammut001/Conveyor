@@ -462,6 +462,7 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "teammate.check": ("/teammate check", "/sentry check"),
     "teammate.pause": ("/teammate pause",),
     "teammate.resume": ("/teammate resume",),
+    "teammate.pulse": ("/pulse", "/teammate pulse"),
 }
 
 _TOOL_EXAMPLES: dict[str, str] = {
@@ -564,6 +565,7 @@ _TOOL_EXAMPLES: dict[str, str] = {
     "teammate.check": "系统巡检",
     "teammate.pause": "暂停巡检",
     "teammate.resume": "恢复巡检",
+    "teammate.pulse": "每日脉搏",
 }
 
 
@@ -1808,6 +1810,17 @@ async def _teammate(msg, port, _runner, settings, arg):
     await port.reply(msg, res)
 
 
+async def _pulse(msg, port, _runner, settings, arg):
+    """Generate teammate daily morning or evening pulse."""
+    from personal_tools.sentry import teammate_daily_pulse
+    res = teammate_daily_pulse(
+        settings,
+        mode=(arg or "auto").strip().lower(),
+        operator_id=msg.operator_id,
+    )
+    await port.reply(msg, res)
+
+
 async def _help(msg, port, _runner, _settings, _arg):
     from handlers.chat import chat_enabled
 
@@ -2323,6 +2336,12 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
             "sentry",
             "全天候主机与项目哨兵状态",
             _teammate,
+            takes_optional_arg=True,
+        ),
+        CommandSpec(
+            "pulse",
+            "智能体队友今日早报与晚报小结 (/pulse [morning|evening])",
+            _pulse,
             takes_optional_arg=True,
         ),
         CommandSpec("help", "帮助", _help),

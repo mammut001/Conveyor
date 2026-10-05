@@ -471,6 +471,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"nodes": self.server.control.nodes()})
             elif path == "/api/computer/status":
                 self._json(HTTPStatus.OK, self.server.control.computer_status())
+            elif path == "/api/teammate/status":
+                self._json(HTTPStatus.OK, self.server.control.teammate_status())
             elif len(parts) == 3 and parts[:2] == ["api", "artifacts"]:
                 self._artifact(parts[2])
             elif len(parts) == 3 and parts[:2] == ["api", "nodes"]:
@@ -1078,6 +1080,14 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/computer/stop":
                 result = self._await(self.server.control.emergency_stop())
                 self._json(HTTPStatus.OK, {"ok": True, "result": result})
+            elif parsed.path == "/api/teammate/patrol":
+                force = bool(body.get("force", True))
+                self._json(HTTPStatus.OK, self.server.control.teammate_run_patrol(force=force))
+            elif parsed.path == "/api/teammate/action":
+                action = str(body.get("action", "")).strip().lower()
+                val = body.get("value")
+                result = self.server.control.teammate_action(action, val)
+                self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         except KeyError:

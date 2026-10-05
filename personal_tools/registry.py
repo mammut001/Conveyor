@@ -753,6 +753,13 @@ def register_personal_tools() -> None:
         sentry_tools.teammate_resume_tool,
         keywords=("恢复巡检", "恢复预警", "恢复提醒"),
     )
+    _register(
+        "teammate.pulse",
+        "智能体队友晨会早报与晚间总结 (/teammate pulse [morning|evening])",
+        DangerLevel.READ,
+        sentry_tools.teammate_pulse_tool,
+        keywords=("今日早报", "今日晚报", "队友简报", "每日脉搏", "pulse"),
+    )
 
 
 def get_personal_tool(name: str) -> PersonalToolSpec | None:

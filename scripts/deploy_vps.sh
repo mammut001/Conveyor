@@ -187,6 +187,7 @@ ALL_CANDIDATE_SERVICES=(
   conveyor-desktop-chat.service
   conveyor-handoff.service
   conveyor-maintain.timer
+  conveyor-scheduler.timer
 )
 SERVICES=()
 for svc in "${ALL_CANDIDATE_SERVICES[@]}"; do

@@ -128,6 +128,12 @@ fi
 if systemctl list-unit-files conveyor-maintain.timer &>/dev/null; then
   SERVICES+=(conveyor-maintain.timer)
 fi
+if systemctl list-unit-files conveyor-scheduler.timer &>/dev/null; then
+  SERVICES+=(conveyor-scheduler.timer)
+fi
+if systemctl is-enabled --quiet conveyor-vps-computer.service 2>/dev/null; then
+  SERVICES+=(conveyor-vps-computer.service)
+fi
 
 declare -A SVC_STATUS
 ALL_ACTIVE=true

@@ -173,6 +173,7 @@ def _build_catalog() -> dict[str, ToolCatalogEntry]:
         "teammate.check": {"domain": "队友", "examples_zh": ["系统巡检", "立刻巡检", "主机巡检"], "examples_en": ["check system", "sentry check", "run patrol"]},
         "teammate.pause": {"domain": "队友", "examples_zh": ["暂停巡检", "暂停队友提醒"], "examples_en": ["pause sentry", "pause teammate"]},
         "teammate.resume": {"domain": "队友", "examples_zh": ["恢复巡检", "恢复队友提醒"], "examples_en": ["resume sentry", "resume teammate"]},
+        "teammate.pulse": {"domain": "队友", "examples_zh": ["今日早报", "今日晚报", "队友简报"], "examples_en": ["daily pulse", "morning standup"]},
     }
 
     # Build catalog entries

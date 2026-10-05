@@ -243,7 +243,24 @@ class TestSentryEngine(unittest.TestCase):
             res = await execute_personal_tool(self.settings, "teammate.status", "", operator_id="test")
             self.assertIn("全天候智能体队友", res)
 
-        asyncio.run(_exec())
+    def test_teammate_pulse(self):
+        morning = run_teammate_command(self.settings, "pulse morning")
+        self.assertIn("今日早报与晨会", morning)
+        self.assertIn("系统与哨兵健康状态", morning)
+
+        evening = run_teammate_command(self.settings, "pulse evening")
+        self.assertIn("今日晚报与总结", evening)
+        self.assertIn("夜间值守就绪", evening)
+
+        r_m = route_intent("今日早报")
+        self.assertEqual(r_m.kind, "deterministic")
+        self.assertIn("teammate.pulse", r_m.tools)
+        self.assertEqual(r_m.arg, "morning")
+
+        r_e = route_intent("今日晚报")
+        self.assertEqual(r_e.kind, "deterministic")
+        self.assertIn("teammate.pulse", r_e.tools)
+        self.assertEqual(r_e.arg, "evening")
 
 
 if __name__ == "__main__":

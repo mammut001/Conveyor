@@ -318,6 +318,11 @@ _TEAMMATE_RESUME_PATTERNS = (
     re.compile(r"(恢复|开启|重启).*(巡检|队友|哨兵|主动提醒|预警)", re.IGNORECASE),
     re.compile(r"^(恢复巡检|恢复预警|恢复提醒)$", re.IGNORECASE),
 )
+_TEAMMATE_PULSE_PATTERNS = (
+    re.compile(r"(今日|今天|每日).*(早报|晚报|脉搏|晨会|总结|pulse|standup)", re.IGNORECASE),
+    re.compile(r"(队友|智能体).*(早报|晚报|简报|汇报)", re.IGNORECASE),
+    re.compile(r"^(早报|晚报|晨会|每日脉搏)$", re.IGNORECASE),
+)
 
 # ---- Execution nodes / Computer Use intent (P5.0 phase 0) ----------------
 #
@@ -644,6 +649,10 @@ def route_intent(text: str) -> RouteResult:
     for pat in _TEAMMATE_STATUS_PATTERNS:
         if pat.search(body):
             return RouteResult(kind="deterministic", tools=("teammate.status",))
+    for pat in _TEAMMATE_PULSE_PATTERNS:
+        if pat.search(body):
+            arg = "morning" if any(w in body for w in ("早", "晨")) else ("evening" if any(w in body for w in ("晚", "总结")) else "auto")
+            return RouteResult(kind="deterministic", tools=("teammate.pulse",), arg=arg)
 
     # Gmail / email intent (P3.3) — before hybrid so "邮件" doesn't hijack to ops
     for pat in _GMAIL_STATUS_PATTERNS:

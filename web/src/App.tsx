@@ -6,6 +6,7 @@ import { MemoryPanel } from './components/MemoryPanel'
 import { SkillsPanel } from './components/SkillsPanel'
 import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
+import { TeammatePanel } from './components/TeammatePanel'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
@@ -64,6 +65,7 @@ type SystemStatus = {
     provider_key_scoping?: boolean
     mobile_ui?: boolean
     mcp?: boolean
+    teammate?: boolean
   }
 }
 type ComputerStatus = {
@@ -147,7 +149,7 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'skills' | 'connectors'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : window.location.hash === '#connectors' || window.location.pathname === '/connectors' ? 'connectors' : 'tasks'))
+  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'skills' | 'connectors' | 'teammate'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : window.location.hash === '#connectors' || window.location.pathname === '/connectors' ? 'connectors' : window.location.hash === '#teammate' || window.location.pathname === '/teammate' ? 'teammate' : 'tasks'))
   const [inboxUnread, setInboxUnread] = useState(0)
   const [approvalInboxCount, setApprovalInboxCount] = useState(0)
   const [chatDraft, setChatDraft] = useState('')
@@ -594,10 +596,10 @@ export default function App() {
         <div className="stream-header">
           <div>
             <p className="eyebrow">
-              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'connectors' ? 'MCP CONNECTORS' : 'TASKS · CODEX EXECUTION'}
+              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · CODEX EXECUTION'}
             </p>
             <h2>
-              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'skills' ? 'Skills' : view === 'connectors' ? 'Connectors' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
+              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'skills' ? 'Skills' : view === 'connectors' ? 'Connectors' : view === 'teammate' ? 'Teammate' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -620,6 +622,9 @@ export default function App() {
               )}
               {(Boolean(system?.features?.mcp) || view === 'connectors') && (
                 <button type="button" className={view === 'connectors' ? 'active' : ''} onClick={() => setView('connectors')}>Connectors</button>
+              )}
+              {(Boolean(system?.features?.teammate ?? true) || view === 'teammate') && (
+                <button type="button" className={view === 'teammate' ? 'active' : ''} onClick={() => setView('teammate')}>Teammate</button>
               )}
             </div>
             {view === 'tasks' && selectedJob && <StatusBadge state={selectedJob.state} />}
@@ -666,6 +671,14 @@ export default function App() {
             onSessionChange={refresh}
             initialInput={chatDraft}
             onInitialInputConsumed={() => setChatDraft('')}
+          />
+        ) : view === 'teammate' ? (
+          <TeammatePanel
+            token={token}
+            onSendToChat={(cmd) => {
+              setChatDraft(cmd)
+              setView('chat')
+            }}
           />
         ) : (
           <>
