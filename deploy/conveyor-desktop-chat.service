@@ -1,0 +1,19 @@
+[Unit]
+Description=Conveyor chat window on the VPS desktop
+After=network-online.target conveyor-web.service
+Wants=conveyor-web.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/conveyor
+EnvironmentFile=-/etc/default/conveyor
+EnvironmentFile=/opt/conveyor/.env
+ExecStart=/opt/conveyor/scripts/run-vps-desktop-chat.sh
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

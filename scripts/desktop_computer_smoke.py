@@ -455,8 +455,11 @@ def _test_max_steps_stops_task() -> None:
     if result.get("steps_used") != 2:
         _fail("max_steps_stops_task", f"steps_used={result.get('steps_used')}")
         return
-    if result.get("status") != "done":
-        _fail("max_steps_stops_task", f"status={result.get('status')}")
+    if result.get("status") != "stopped" or result.get("blocked_reason") != "max_steps reached":
+        _fail(
+            "max_steps_stops_task",
+            f"status={result.get('status')} reason={result.get('blocked_reason')}",
+        )
         return
     print("[pass] max_steps_stops_task")
 
