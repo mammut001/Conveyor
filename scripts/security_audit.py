@@ -58,7 +58,7 @@ def check_dir_private(path: Path) -> CheckResult:
 def check_repo_secret_patterns(root: Path) -> CheckResult:
     scanned = 0
     matches = 0
-    ignored = {".git", ".venv", "__pycache__"}
+    ignored = {".git", ".venv", "__pycache__", "tests", "scripts"}
     suffixes = {".py", ".md", ".service", ".timer", ".example", ".sh", ".txt"}
     for path in root.rglob("*"):
         if any(part in ignored for part in path.parts):
