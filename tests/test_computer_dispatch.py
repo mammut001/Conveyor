@@ -146,7 +146,9 @@ class ComputerDispatchTest(unittest.IsolatedAsyncioTestCase):
     def test_short_followup_needs_a_fresh_session(self) -> None:
         settings = _settings(self.root, always_direct=True)
         self.assertIsNone(computer_chat_route("再点等号", settings))
+        self.assertIsNone(computer_chat_route("然后再点等号", settings))
         self.assertEqual(route_intent("再点等号").kind, "llm")
+        self.assertEqual(route_intent("然后再点等号").kind, "llm")
         save_computer_session(
             settings,
             thread_id="11111111-1111-4111-8111-111111111111",
@@ -159,6 +161,15 @@ class ComputerDispatchTest(unittest.IsolatedAsyncioTestCase):
         assert routed is not None
         self.assertEqual(routed.tools, ("computer.task",))
         self.assertEqual(routed.arg, "再点等号")
+        again = computer_chat_route("然后再点等号", settings)
+        self.assertIsNotNone(again)
+        assert again is not None
+        self.assertEqual(again.tools, ("computer.task",))
+        self.assertEqual(again.arg, "然后再点等号")
+        typed = computer_chat_route("再输入abc", settings)
+        self.assertIsNotNone(typed)
+        assert typed is not None
+        self.assertEqual(typed.tools, ("computer.task",))
         self.assertIsNone(computer_chat_route("再点 password", settings))
         fresh = computer_chat_route("打开计算器", settings)
         assert fresh is not None

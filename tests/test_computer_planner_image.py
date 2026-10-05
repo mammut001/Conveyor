@@ -10,7 +10,12 @@ from unittest import mock
 
 from config import Settings
 from desktop_computer_loop import run_computer_loop
-from desktop_computer_planner import CodexPlanner, maybe_simple_digit_action
+from desktop_computer_planner import (
+    CodexPlanner,
+    followup_click_labels,
+    maybe_followup_label_action,
+    maybe_simple_digit_action,
+)
 from desktop_screenshot import resolve_screenshot_dir
 
 
@@ -333,3 +338,139 @@ class PlannerImageTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("resume", commands[2])
         self.assertNotIn("--last", commands[1])
         self.assertNotIn("--last", commands[2])
+
+    def test_named_followup_presses_the_button_without_clearing(self) -> None:
+        self.assertIsNone(followup_click_labels("再点1"))
+        self.assertIsNone(followup_click_labels("再输入abc"))
+        self.assertIsNone(followup_click_labels("打开计算器"))
+        self.assertIsNone(followup_click_labels("再点password"))
+        self.assertEqual(
+            followup_click_labels("然后再点等号"),
+            ("等号", "=", "equals"),
+        )
+        self.assertEqual(followup_click_labels("点击等号。")[0], "等号")
+
+        hints = {
+            "pid": 42,
+            "window_id": 7,
+            "element_hints": [
+                {"label": "Clear", "element_index": 1},
+                {"label": "=", "element_index": 4},
+            ],
+        }
+        click = maybe_followup_label_action(
+            goal="再点等号",
+            observation=hints,
+            trajectory=[],
+        )
+        self.assertIsNotNone(click)
+        assert click is not None
+        self.assertEqual(click["action"], "click")
+        self.assertEqual(click["element_index"], 4)
+        self.assertEqual(click["_target_label"], "=")
+
+        clear = maybe_followup_label_action(
+            goal="再点清除",
+            observation=hints,
+            trajectory=[],
+        )
+        self.assertIsNotNone(clear)
+        assert clear is not None
+        self.assertEqual(clear["element_index"], 1)
+
+        done = maybe_followup_label_action(
+            goal="再点等号",
+            observation=hints,
+            trajectory=[{
+                "action_type": "click",
+                "result_ok": True,
+                "clicked_label": "=",
+            }],
+        )
+        self.assertEqual(done["action"], "done")
+        self.assertIsNone(maybe_followup_label_action(
+            goal="再点等号",
+            observation={"screenshot_id": "shot-chat"},
+            trajectory=[],
+        ))
+        self.assertEqual(
+            maybe_followup_label_action(
+                goal="再点等号",
+                observation={"initial": True},
+                trajectory=[],
+            ),
+            {"action": "observe"},
+        )
+
+        chat = {
+            "pid": 9,
+            "window_id": 3,
+            "screenshot_id": "shot-chat",
+            "element_hints": [{"label": "发送", "element_index": 2}],
+            "windows": [
+                {
+                    "app": "Desktop_chat_window.py",
+                    "title": "Conveyor",
+                    "pid": 9,
+                    "window_id": 3,
+                },
+            ],
+        }
+        self.assertIsNone(maybe_followup_label_action(
+            goal="再点等号",
+            observation=chat,
+            trajectory=[],
+        ))
+        chat["windows"] = [
+            {
+                "app": "Desktop_chat_window.py",
+                "title": "Conveyor",
+                "pid": 9,
+                "window_id": 3,
+            },
+            {
+                "app": "gnome-calculator",
+                "title": "Calculator",
+                "pid": 42,
+                "window_id": 7,
+            },
+        ]
+        retarget = maybe_followup_label_action(
+            goal="再点等号",
+            observation=chat,
+            trajectory=[],
+        )
+        self.assertEqual(retarget, {"action": "observe", "pid": 42, "window_id": 7})
+        self.assertNotIn("target_app", retarget or {})
+
+        titled = dict(chat)
+        titled["windows"] = [{
+            "app": "org.gnome.Calculator",
+            "title": "计算器",
+            "pid": 42,
+            "window_id": 7,
+        }]
+        titled_action = maybe_followup_label_action(
+            goal="再点等于",
+            observation=titled,
+            trajectory=[],
+        )
+        self.assertEqual((titled_action or {}).get("pid"), 42)
+
+        already = {
+            "pid": 42,
+            "window_id": 7,
+            "screenshot_id": "shot-calc",
+            "element_hints": [{"label": "Clear", "element_index": 1}],
+            "windows": [{
+                "app": "gnome-calculator",
+                "title": "Calculator",
+                "pid": 42,
+                "window_id": 7,
+            }],
+        }
+        self.assertIsNone(maybe_followup_label_action(
+            goal="再点等号",
+            observation=already,
+            trajectory=[],
+        ))

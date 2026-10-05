@@ -613,5 +613,92 @@ class FailedStepContinuesTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("窗口内像素", follow)
 
 
+class NamedFollowupClickTest(unittest.IsolatedAsyncioTestCase):
+    async def test_equals_followup_skips_the_model_and_does_not_clear(self) -> None:
+        class FrontChat:
+            def __init__(self) -> None:
+                self.actions: list[dict] = []
+
+            async def execute_step(self, settings, task_id, step_id, action):
+                self.actions.append(dict(action))
+                if action.get("action") != "observe":
+                    return {"result_ok": True, "action_type": action.get("action")}
+                if action.get("pid") == 42:
+                    return {
+                        "result_ok": True,
+                        "action_type": "observe",
+                        "screenshot_id": "shot-calc",
+                        "pid": 42,
+                        "window_id": 7,
+                        "element_hints": [
+                            {"label": "Clear", "element_index": 1},
+                            {"label": "=", "element_index": 4},
+                        ],
+                        "windows": _windows(),
+                    }
+                return {
+                    "result_ok": True,
+                    "action_type": "observe",
+                    "screenshot_id": "shot-chat",
+                    "pid": 9,
+                    "window_id": 3,
+                    "element_hints": [{"label": "发送", "element_index": 2}],
+                    "windows": _windows(),
+                }
+
+        class Explode:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def next_action(self, **_kwargs: object) -> dict:
+                self.calls += 1
+                raise RuntimeError("planner should not run")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            backend = FrontChat()
+            planner = Explode()
+            result = await run_computer_loop(
+                settings,
+                "再点等号",
+                planner=planner,
+                backend=backend,
+                max_steps=8,
+                max_seconds=30,
+                direct_mode=True,
+            )
+        self.assertEqual(result.get("status"), "done", result)
+        self.assertIsNone(result.get("blocked_reason"))
+        self.assertEqual(planner.calls, 0)
+        kinds = [item.get("action") for item in backend.actions]
+        self.assertEqual(kinds, ["observe", "observe", "click", "observe"])
+        self.assertIsNone(backend.actions[0].get("pid"))
+        self.assertEqual(backend.actions[1].get("pid"), 42)
+        self.assertEqual(backend.actions[1].get("window_id"), 7)
+        self.assertNotIn("target_app", backend.actions[1])
+        click = backend.actions[2]
+        self.assertEqual(click.get("element_index"), 4)
+        self.assertEqual(click.get("_target_label"), "=")
+
+
+def _windows() -> list[dict]:
+    return [
+        {
+            "app": "Desktop_chat_window.py",
+            "title": "Conveyor",
+            "pid": 9,
+            "window_id": 3,
+            "z": 2,
+        },
+        {
+            "app": "gnome-calculator",
+            "title": "Calculator",
+            "pid": 42,
+            "window_id": 7,
+            "z": 1,
+        },
+    ]
+
+
 if __name__ == "__main__":
     unittest.main()

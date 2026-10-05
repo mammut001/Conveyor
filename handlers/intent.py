@@ -469,10 +469,11 @@ _COMPUTER_TASK_PATTERNS = (
     ),
 )
 # A short click after a desktop task. "再点等号" does not name an app,
-# so the task patterns above miss it. It is only a desktop command when
-# a recent session exists; desktop_followup_route checks that.
+# so the task patterns above miss it. "然后再点等号" is the same request.
+# It is only a desktop command when a recent session exists;
+# desktop_followup_route checks that.
 _DESKTOP_FOLLOWUP = re.compile(
-    r"^(?:再|然后|接着|继续)?(?:点|按|点击|敲|输入|键入).{0,24}$"
+    r"^(?:再|然后|接着|继续)?再?(?:点击|点|按|敲|输入|键入).{0,24}$"
 )
 
 
