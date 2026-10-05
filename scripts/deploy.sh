@@ -52,7 +52,7 @@ for sub in \
   transcript_store.py runtime_control.py refinement_store.py \
   desktop_agent.py desktop_agent_server.py desktop_cua.py \
   desktop_computer_loop.py desktop_computer_planner.py desktop_computer_requests.py \
-  desktop_screenshot.py requirements.txt systemd channel handlers nodes web tests Makefile; do
+  desktop_screenshot.py requirements.txt systemd channel handlers nodes web tests personal_tools Makefile; do
   if [[ -e "$LOCAL_DIR/$sub" ]]; then
     rsync -az "${EXCLUDES[@]}" \
       "$LOCAL_DIR/$sub" "$REMOTE:$REMOTE_DIR/"

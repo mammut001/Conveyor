@@ -266,9 +266,20 @@ def check_services(settings: Settings) -> list[SentryAlert]:
         return alerts
 
     for service in monitored:
+        unit = service
+        if not (unit.endswith(".service") or unit.endswith(".timer")):
+            check_timer = subprocess.run(
+                ["systemctl", "is-active", f"{service}.timer"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if check_timer.stdout.strip() == "active":
+                unit = f"{service}.timer"
+
         try:
             res = subprocess.run(
-                ["systemctl", "is-active", service],
+                ["systemctl", "is-active", unit],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -277,23 +288,23 @@ def check_services(settings: Settings) -> list[SentryAlert]:
             if state != "active":
                 # Check detailed substate / failure
                 fail_res = subprocess.run(
-                    ["systemctl", "show", service, "--property=ActiveState,SubState,Result"],
+                    ["systemctl", "show", unit, "--property=ActiveState,SubState,Result"],
                     capture_output=True,
                     text=True,
                     timeout=5,
                 )
                 details = fail_res.stdout.strip().replace("\n", ", ") if fail_res.returncode == 0 else state
-                alias = "telegram" if "telegram" in service else ("feishu" if "feishu" in service else service)
+                alias = "telegram" if "telegram" in unit else ("feishu" if "feishu" in unit else unit)
                 alerts.append(
                     SentryAlert(
                         source="host.service",
                         severity="critical",
-                        title=f"系统服务异常: {service}",
+                        title=f"系统服务异常: {unit}",
                         summary=f"服务状态为 `{state}` ({details})，未处于正常运行状态。",
-                        fingerprint=f"host.service.{service}",
+                        fingerprint=f"host.service.{unit}",
                         suggested_actions=[
                             {"label": f"尝试重启服务", "command": f"/restart {alias}"},
-                            {"label": f"查看最近服务日志", "command": f"/logs {service}"},
+                            {"label": f"查看最近服务日志", "command": f"/logs {unit}"},
                         ],
                     )
                 )
