@@ -272,6 +272,49 @@ class WindowListTest(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(calls, ["list_apps", "launch_app", "bring_to_front"])
 
+    def test_labeled_button_click_uses_a_fresh_token(self) -> None:
+        settings = _settings(Path(tempfile.mkdtemp()))
+        transport = LocalCuaTransport("cua-driver call", settings=settings)
+        calls: list[tuple[str, dict | None]] = []
+
+        def fake_call(name, args=None, timeout=None):
+            calls.append((name, args))
+            if name == "get_window_state":
+                return {"ok": True, "data": {"elements": [{
+                    "element_index": 23,
+                    "role": "push button",
+                    "label": "1",
+                    "element_token": "s0000001a:23",
+                }]}}
+            if name == "click":
+                return {"ok": True, "data": {"summary": "Clicked element [23]"}}
+            return {"ok": False, "error": "unexpected_tool"}
+
+        transport._call_tool = fake_call  # type: ignore[method-assign]
+        result = transport._click(
+            {
+                "action": "click",
+                "pid": 1837219,
+                "window_id": 54525960,
+                "element_index": 23,
+                "element_token": "s00000001:23",
+                "_target_label": "1",
+            },
+            "node",
+        )
+        self.assertTrue(result["result_ok"], result)
+        self.assertEqual(result["click_method"], "ax_click")
+        self.assertEqual([name for name, _args in calls], ["get_window_state", "click"])
+        state_args = calls[0][1] or {}
+        click_args = calls[1][1] or {}
+        self.assertEqual(state_args["pid"], 1837219)
+        self.assertEqual(state_args["window_id"], 54525960)
+        self.assertEqual(click_args["pid"], 1837219)
+        self.assertEqual(click_args["element_token"], "s0000001a:23")
+        self.assertEqual(click_args["session"], state_args["session"])
+        self.assertNotIn("element_index", click_args)
+        self.assertNotEqual(click_args["element_token"], "s00000001:23")
+
     def test_driver_exit_reports_stdout_code(self) -> None:
         settings = _settings(Path(tempfile.mkdtemp()))
         transport = LocalCuaTransport("cua-driver call", settings=settings)
@@ -285,6 +328,20 @@ class WindowListTest(unittest.TestCase):
             result = transport._call_tool("click", {"x": 1, "y": 2})
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "driver_exit_1:screenshot_context_missing")
+
+    def test_driver_exit_reports_nested_refusal_code(self) -> None:
+        settings = _settings(Path(tempfile.mkdtemp()))
+        transport = LocalCuaTransport("cua-driver call", settings=settings)
+
+        class Proc:
+            returncode = 1
+            stdout = '{"refusal": {"code": "invalid_arguments", "message": "click: unknown argument element_index"}, "status": "refused"}'
+            stderr = ""
+
+        with patch("desktop_cua.subprocess.run", return_value=Proc()):
+            result = transport._call_tool("click", {"element_index": 23})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "driver_exit_1:invalid_arguments")
 
 
 class FailedStepContinuesTest(unittest.IsolatedAsyncioTestCase):
