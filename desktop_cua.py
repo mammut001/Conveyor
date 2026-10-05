@@ -26,6 +26,7 @@ import json
 import logging
 import base64
 import hashlib
+import re
 import shutil
 import shlex
 import subprocess
@@ -399,8 +400,8 @@ class LocalCuaTransport(CuaTransport):
         if proc.returncode != 0:
             err = (proc.stderr or "").strip().splitlines()
             detail = err[0][:120] if err else ""
-            if not detail and proc.stdout and len(proc.stdout) <= 800:
-                detail = _driver_stdout_code(proc.stdout)
+            if not detail:
+                detail = _driver_stdout_code(proc.stdout or "")
             suffix = f":{detail}" if detail else ""
             return {"ok": False, "error": f"driver_exit_{proc.returncode}{suffix}"}
         try:
@@ -664,6 +665,48 @@ class LocalCuaTransport(CuaTransport):
         origin_x, origin_y, width, height = frame
         return origin_x <= x < origin_x + width and origin_y <= y < origin_y + height
 
+    def _click_fresh_element(self, action: dict, node_id: str) -> dict:
+        """Press a button using a token taken in this same driver session.
+
+        ``cua-driver call`` does not keep the accessibility cache across
+        processes. Passing the observe step's ``element_index`` is refused
+        as an unknown argument, and its ``element_token`` is already stale.
+        Read the window again under one session label, then click that
+        snapshot's token.
+        """
+        try:
+            pid = int(action["pid"])
+        except (TypeError, ValueError, KeyError):
+            return {
+                "result_ok": False,
+                "error": "element_click_needs_pid",
+                "action_type": "click",
+                "node_id": node_id,
+            }
+        session = f"cv{uuid.uuid4().hex[:12]}"
+        state_args: dict[str, Any] = {"pid": pid, "session": session}
+        if action.get("window_id") is not None:
+            state_args["window_id"] = int(action["window_id"])
+        state = self._call_tool("get_window_state", state_args, timeout=30)
+        if not state.get("ok"):
+            failed = _result_from_call(state, "click", node_id)
+            return failed
+        data = state.get("data") if isinstance(state.get("data"), dict) else {}
+        elements = data.get("elements") if isinstance(data, dict) else None
+        token = _fresh_element_token(elements, action) if isinstance(elements, list) else None
+        if not token:
+            return {
+                "result_ok": False,
+                "error": "element_token_unresolved",
+                "action_type": "click",
+                "node_id": node_id,
+            }
+        called = self._call_tool(
+            "click",
+            {"pid": pid, "element_token": token, "session": session},
+        )
+        return _result_from_call(called, "click", node_id)
+
     def _click(self, action: dict, node_id: str) -> dict:
         # Validate AX fields first
         ok, err = validate_ax_fields(action)
@@ -689,35 +732,41 @@ class LocalCuaTransport(CuaTransport):
                 logger.info("Click method used: bring_to_front")
                 return raised
 
-        if has_ax:
-            # AX/action-based click
+        if has_element and result is None:
+            # The Linux driver has no element_index argument. A token from
+            # the observe step is stale in the next process, so refresh and
+            # click inside one session. Keep x/y as a fallback only when the
+            # token click itself fails.
+            fresh = self._click_fresh_element(action, node_id)
+            if fresh.get("result_ok") or not has_xy:
+                result = fresh
+                used_method = "ax_click"
+                if fresh.get("result_ok"):
+                    logger.info("ax_click succeeded: %s", json.dumps(redact_computer_action(action)))
+                else:
+                    logger.info("ax_click failed, error=%s", fresh.get("error"))
+
+        if has_ax and result is None and not has_element:
+            # A window with no pixels and no element. Do not send
+            # element_index; this driver rejects that argument.
             ax_args: dict[str, Any] = {}
             _copy_optional(
                 action,
                 ax_args,
                 (
-                    "pid", "window_id", "element_index", "element_token",
+                    "pid", "window_id",
                     "delivery_mode", "scope", "button",
                 ),
             )
-            # Ensure integer types
-            for k in ("pid", "window_id", "element_index"):
+            for k in ("pid", "window_id"):
                 if ax_args.get(k) is not None:
                     ax_args[k] = int(ax_args[k])
-
-            # Populate Cua element cache before index-based click.
-            if ax_args.get("pid") is not None and ax_args.get("window_id") is not None:
-                self._call_tool(
-                    "get_window_state",
-                    {"pid": ax_args["pid"], "window_id": ax_args["window_id"]},
-                    timeout=30,
-                )
 
             if "pid" not in ax_args and "window_id" not in ax_args and "scope" not in ax_args:
                 ax_args["scope"] = "desktop"
             if ax_args.get("scope") == "desktop":
                 self._call_tool("set_config", {"capture_scope": "desktop"}, timeout=15)
-                
+
             called = self._call_tool("click", ax_args)
             res = _result_from_call(called, "click", node_id)
             if res.get("result_ok"):
@@ -739,12 +788,13 @@ class LocalCuaTransport(CuaTransport):
                 action,
                 xy_args,
                 (
-                    "pid", "window_id", "element_index", "element_token",
+                    "pid", "window_id",
                     "delivery_mode", "scope", "button",
                 ),
             )
-            # Ensure integer types if present
-            for k in ("pid", "window_id", "element_index"):
+            # Ensure integer types if present. element_index is not a click
+            # argument on this driver and would refuse the whole call.
+            for k in ("pid", "window_id"):
                 if xy_args.get(k) is not None:
                     xy_args[k] = int(xy_args[k])
                     
@@ -852,6 +902,9 @@ class LocalCuaTransport(CuaTransport):
         return {"result_ok": True, "action_type": "wait", "node_id": node_id}
 
 
+_ELEMENT_TOKEN = re.compile(r"^s[0-9a-f]{8}:[0-9]+$")
+
+
 def _driver_stdout_code(stdout: str) -> str:
     """Short machine code from a failed cua-driver call. Empty if none."""
     try:
@@ -860,10 +913,49 @@ def _driver_stdout_code(stdout: str) -> str:
         return ""
     if not isinstance(parsed, dict):
         return ""
+    refusal = parsed.get("refusal")
+    if isinstance(refusal, dict):
+        nested = refusal.get("code") or refusal.get("message")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()[:120]
     code = parsed.get("code") or parsed.get("error")
     if isinstance(code, str) and code.strip():
         return code.strip()[:120]
     return ""
+
+
+def _fresh_element_token(elements: list, action: dict) -> str | None:
+    """Token from this snapshot for the button the action named.
+
+    The driver rejects ``element_index`` and forgets a token that came from
+    another process. Match the label first, then the index, and return only
+    a token shaped like the driver's own handles.
+    """
+    wanted_index = None
+    if action.get("element_index") is not None:
+        try:
+            wanted_index = int(action["element_index"])
+        except (TypeError, ValueError):
+            wanted_index = None
+    label = action.get("_target_label") or action.get("label")
+    label_s = label.strip() if isinstance(label, str) else ""
+    by_index = None
+    for element in elements:
+        if not isinstance(element, dict):
+            continue
+        token = element.get("element_token")
+        if not isinstance(token, str) or not _ELEMENT_TOKEN.match(token):
+            continue
+        if label_s and str(element.get("label") or "").strip() == label_s:
+            return token
+        if wanted_index is None:
+            continue
+        try:
+            if int(element.get("element_index")) == wanted_index:
+                by_index = token
+        except (TypeError, ValueError):
+            continue
+    return by_index
 
 
 def _window_frame(window: dict) -> tuple[int, int, int, int] | None:
