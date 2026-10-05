@@ -205,7 +205,7 @@ async def run_web_chat(
             return
         # Same natural-language desktop route the phone bots already run.
         # A chat answer must not swallow "打开计算器".
-        desktop = computer_chat_route(prompt)
+        desktop = computer_chat_route(prompt, settings)
         if desktop is not None:
             await handle_route(msg, port, runner, settings, desktop)
             port.emit("done", {"outcome": "answered"})

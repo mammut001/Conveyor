@@ -1434,11 +1434,11 @@ def _test_observe_injects_ax_hints_for_planner() -> None:
         steps_used=1,
         max_steps=10,
     )
-    if "硬性规则" not in prompt or "element_hints" not in prompt:
-        _fail("observe_injects_ax_hints", "planner prompt missing hard AX rule")
+    if "element_hints" not in prompt or "窗口内像素" not in prompt:
+        _fail("observe_injects_ax_hints", "planner prompt missing the click rule")
         return
-    if "禁止只输出 x/y" not in prompt:
-        _fail("observe_injects_ax_hints", "planner prompt missing xy ban")
+    if "只会把窗口放到最前" not in prompt or "禁止只输出 x/y" in prompt:
+        _fail("observe_injects_ax_hints", "planner prompt still bans pixels or hides the raise")
         return
     print("[pass] observe_injects_ax_hints_for_planner")
 
@@ -1800,10 +1800,10 @@ def _test_planner_ax_first_prompt() -> None:
         max_steps=10,
     )
     needed = (
-        "AX-first",
+        "窗口内像素",
+        "只会把窗口放到最前",
         '"pid":123',
         "element_index",
-        "仅当观察中没有 AX",
         "element_hints",
         "active_app=Safari",
     )

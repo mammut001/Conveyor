@@ -8,11 +8,39 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
+
+_SHOT_ID = re.compile(
+    r"(?:截图:|Last Screenshot:)\s*([A-Za-z0-9][A-Za-z0-9_-]{0,127})"
+)
+
+
+def screenshot_id_from_reply(text: str) -> str | None:
+    """The screenshot stem named in a desktop reply. Never a path."""
+    match = _SHOT_ID.search(text or "")
+    if not match:
+        return None
+    return match.group(1)
+
+
+def local_screenshot_file(settings: Any, screenshot_id: str) -> Path | None:
+    """PNG for this id inside the screenshot directory, or None."""
+    from desktop_screenshot import resolve_screenshot_dir
+
+    found = screenshot_id_from_reply(f"截图: {screenshot_id}")
+    if not found or found != screenshot_id:
+        return None
+    root = resolve_screenshot_dir(settings).resolve()
+    path = (root / f"{found}.png").resolve()
+    if path.parent != root or not path.is_file():
+        return None
+    return path
 
 
 def enable_system_gtk() -> None:
@@ -101,7 +129,7 @@ def main() -> None:
     import gi
 
     gi.require_version("Gtk", "3.0")
-    from gi.repository import GLib, Gtk
+    from gi.repository import GdkPixbuf, GLib, Gtk
 
     from config import load_runtime_settings
     from dotenv import load_dotenv
@@ -139,6 +167,10 @@ def main() -> None:
     scroll.add(view)
     root.pack_start(scroll, True, True, 0)
 
+    shot = Gtk.Image()
+    shot.set_visible(False)
+    root.pack_start(shot, False, False, 0)
+
     row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     entry = Gtk.Entry()
     entry.set_placeholder_text("说一句，让这台电脑去做")
@@ -155,12 +187,30 @@ def main() -> None:
     if not str(getattr(settings, "conveyor_web_token", "") or ""):
         _append(buffer, "网页令牌没有配置，这句话发不出去。")
 
+    def show_screenshot(reply: str) -> None:
+        shot_id = screenshot_id_from_reply(reply)
+        path = local_screenshot_file(settings, shot_id) if shot_id else None
+        if path is None:
+            shot.clear()
+            shot.hide()
+            return
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 400, 240, True)
+        except Exception:
+            shot.clear()
+            shot.hide()
+            _append(buffer, "截图没有显示出来。")
+            return
+        shot.set_from_pixbuf(pixbuf)
+        shot.show()
+
     def finish(outcome: str, reply: str) -> bool:
         send.set_sensitive(True)
         entry.set_sensitive(True)
         status.set_text("")
         if reply:
             _append(buffer, reply)
+            show_screenshot(reply)
         elif outcome:
             _append(buffer, outcome)
         else:

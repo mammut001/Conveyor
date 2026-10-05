@@ -468,6 +468,39 @@ _COMPUTER_TASK_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+# A short click after a desktop task. "再点等号" does not name an app,
+# so the task patterns above miss it. It is only a desktop command when
+# a recent session exists; desktop_followup_route checks that.
+_DESKTOP_FOLLOWUP = re.compile(
+    r"^(?:再|然后|接着|继续)?(?:点|按|点击|敲|输入|键入).{0,24}$"
+)
+
+
+def is_desktop_followup(text: str) -> bool:
+    body = (text or "").strip()
+    if not body or len(body) > 32:
+        return False
+    return _DESKTOP_FOLLOWUP.match(body) is not None
+
+
+def desktop_followup_route(settings: object, text: str) -> RouteResult | None:
+    """Route a short follow-up click when the previous desktop thread is fresh."""
+    if not is_desktop_followup(text):
+        return None
+    if settings is None or not hasattr(settings, "codex_memory_root"):
+        return None
+    from desktop_computer_requests import contains_blocked_keyword, load_computer_session
+
+    body = (text or "").strip()
+    if detect_ops_intent(body) is not None:
+        return None
+    if contains_blocked_keyword(settings, body):  # type: ignore[arg-type]
+        return None
+    if load_computer_session(settings) is None:  # type: ignore[arg-type]
+        return None
+    return RouteResult(kind="deterministic", tools=("computer.task",), arg=body)
+
+
 _COMPUTER_RETRY_PATTERNS = (
     re.compile(r"(?:重试|恢复|继续)\s*(?:上次|这个|该)?\s*(?:电脑|computer\s*use).*?(?:任务)?$", re.IGNORECASE),
     re.compile(r"(?:retry|resume)\s+(?:the\s+)?(?:computer|desktop)(?:\s+use)?(?:\s+task)?", re.IGNORECASE),
@@ -846,7 +879,7 @@ COMPUTER_STOP_TEXTS = frozenset({
 })
 
 
-def computer_chat_route(text: str) -> RouteResult | None:
+def computer_chat_route(text: str, settings: object | None = None) -> RouteResult | None:
     """Desktop route for a chat box, or None when the chat model should answer."""
     body = (text or "").strip()
     if not body:
@@ -854,16 +887,16 @@ def computer_chat_route(text: str) -> RouteResult | None:
     if body.lower() in COMPUTER_STOP_TEXTS:
         return RouteResult(kind="deterministic", tools=("computer.stop",), arg="")
     route = route_intent(body)
-    if route.kind != "deterministic":
+    if route.kind == "deterministic" and (set(route.tools or ()) & COMPUTER_CHAT_TOOLS):
+        return route
+    if settings is None:
         return None
-    if not (set(route.tools or ()) & COMPUTER_CHAT_TOOLS):
-        return None
-    return route
+    return desktop_followup_route(settings, body)
 
 
 def computer_chat_budget_seconds(settings: object, text: str) -> float | None:
     """How long a web chat stream may stay open for this desktop turn."""
-    if computer_chat_route(text) is None:
+    if computer_chat_route(text, settings) is None:
         return None
     raw = getattr(settings, "conveyor_computer_max_seconds", 600) or 600
     try:

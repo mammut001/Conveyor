@@ -12,12 +12,13 @@ from desktop_computer_loop import (
     HttpComputerBackend,
     run_computer_loop,
 )
-from desktop_computer_planner import ScriptedPlanner
+from desktop_computer_planner import CodexPlanner, ScriptedPlanner
 from desktop_computer_requests import (
     claim_computer_step,
     create_computer_step,
     create_computer_task,
     fail_computer_step,
+    get_computer_task,
     validate_computer_result,
 )
 from desktop_cua import LocalCuaTransport, _token_under_point, _window_local_point, summarize_windows
@@ -556,6 +557,60 @@ class FailedStepContinuesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.get("status"), "stopped")
         self.assertEqual(result.get("blocked_reason"), "max_steps reached")
         self.assertNotEqual(result.get("summary"), "max_steps reached")
+
+    async def test_opening_observe_happens_before_the_model(self) -> None:
+        class Once:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def next_action(self, **_kwargs: object) -> dict:
+                self.calls += 1
+                return {"action": "done", "summary": "seen"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            planner = Once()
+            result = await run_computer_loop(
+                settings,
+                "在电脑上打开文件管理器",
+                planner=planner,
+                backend=FakeComputerBackend(settings),
+                max_steps=4,
+                max_seconds=30,
+                direct_mode=True,
+                open_with_observe=True,
+            )
+            task = get_computer_task(settings, result["task_id"]) or {}
+        types = [step.get("action_type") for step in task.get("trajectory") or []]
+        self.assertEqual(types[0], "observe")
+        self.assertEqual(planner.calls, 1)
+        self.assertEqual(result.get("status"), "done")
+
+    def test_planner_allows_window_pixels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            thread = "11111111-1111-4111-8111-111111111111"
+            planner = CodexPlanner(settings, resume_thread_id=thread)
+            self.assertEqual(planner.thread_id, thread)
+            self.assertIsNone(CodexPlanner(settings, resume_thread_id="not-a-thread").thread_id)
+            prompt = planner._build_prompt(
+                goal="再点等号",
+                observation={},
+                trajectory=[],
+                steps_used=0,
+                max_steps=20,
+            )
+            follow = planner._build_followup(
+                goal="再点等号",
+                observation={},
+                trajectory=[],
+                steps_used=1,
+                max_steps=20,
+            )
+        self.assertNotIn("禁止只输出", prompt)
+        self.assertIn("窗口内像素", prompt)
+        self.assertIn("只会把窗口放到最前", prompt)
+        self.assertIn("窗口内像素", follow)
 
 
 if __name__ == "__main__":

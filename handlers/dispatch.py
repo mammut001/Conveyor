@@ -24,7 +24,7 @@ from handlers.chat import (
 )
 from handlers.commands import parse_command, run_command
 from handlers.context import detect_context_intent, handle_context_job, memo_text_with_quote
-from handlers.intent import COMPUTER_STOP_TEXTS, RouteResult, route_intent
+from handlers.intent import COMPUTER_STOP_TEXTS, RouteResult, desktop_followup_route, route_intent
 from handlers.jobs import handle_codex_job
 from handlers.memo import detect_memory_intent, handle_memo
 from handlers.tools.runner import handle_hybrid, handle_route, try_resolve_confirmation
@@ -140,6 +140,10 @@ async def dispatch(
         return
 
     route = route_intent(msg.text)
+    if route.kind == "llm":
+        followed = desktop_followup_route(settings, msg.text)
+        if followed is not None:
+            route = followed
 
     if msg.reply_to is not None and (
         detect_context_intent(msg.text) != "ask" or route.kind == "llm"
