@@ -180,64 +180,68 @@ def _test_is_stub_environment_default() -> None:
 def _test_exec_nodes_status_text() -> None:
     """The /nodes tool output is text + contains vps-main."""
     import asyncio
+    import tempfile
 
     from config import Settings
     from handlers.tools.executors import exec_nodes_status
 
-    settings = Settings(
-        telegram_bot_token="t", telegram_allowed_user_id=1,
-        codex_workspace_root=Path("/tmp"),
-        codex_bin="codex",
-        codex_task_root=Path("/tmp/t"),
-        codex_model=None,
-        codex_timeout_seconds=3600,
-        telegram_progress_seconds=3,
-        codex_retry_429_delays_seconds=(),
-        codex_memory_root=Path("/tmp/m"),
-        user_timezone="UTC",
-    )
-    text = asyncio.run(exec_nodes_status(settings, ""))
-    if "vps-main" not in text:
-        _fail("exec_nodes_status_text", f"missing vps-main: {text[:200]!r}")
-        return
-    if "Conveyor VPS" not in text:
-        _fail("exec_nodes_status_text", f"missing display name: {text[:200]!r}")
-        return
-    if "codex.run" not in text:
-        _fail("exec_nodes_status_text", f"missing cap: {text[:200]!r}")
-        return
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        settings = Settings(
+            telegram_bot_token="t", telegram_allowed_user_id=1,
+            codex_workspace_root=Path(tmp_dir),
+            codex_bin="codex",
+            codex_task_root=Path(tmp_dir) / "t",
+            codex_model=None,
+            codex_timeout_seconds=3600,
+            telegram_progress_seconds=3,
+            codex_retry_429_delays_seconds=(),
+            codex_memory_root=Path(tmp_dir) / "m",
+            user_timezone="UTC",
+        )
+        text = asyncio.run(exec_nodes_status(settings, ""))
+        if "vps-main" not in text:
+            _fail("exec_nodes_status_text", f"missing vps-main: {text[:200]!r}")
+            return
+        if "Conveyor VPS" not in text:
+            _fail("exec_nodes_status_text", f"missing display name: {text[:200]!r}")
+            return
+        if "codex.run" not in text:
+            _fail("exec_nodes_status_text", f"missing cap: {text[:200]!r}")
+            return
     print("[pass] exec_nodes_status_text")
 
 
 def _test_exec_computer_status_stub() -> None:
     """The /computer_status tool reports P5.6 state honestly."""
     import asyncio
+    import tempfile
 
     from config import Settings
     from handlers.tools.executors import exec_computer_status
 
-    settings = Settings(
-        telegram_bot_token="t", telegram_allowed_user_id=1,
-        codex_workspace_root=Path("/tmp"),
-        codex_bin="codex",
-        codex_task_root=Path("/tmp/t"),
-        codex_model=None,
-        codex_timeout_seconds=3600,
-        codex_retry_429_delays_seconds=(),
-        telegram_progress_seconds=3,
-        codex_memory_root=Path("/tmp/m"),
-        user_timezone="UTC",
-    )
-    text = asyncio.run(exec_computer_status(settings, ""))
-    if "Computer Use" not in text:
-        _fail("exec_computer_status_stub", f"missing header: {text[:200]!r}")
-        return
-    if "启用" not in text:
-        _fail("exec_computer_status_stub", f"missing enabled flag: {text[:200]!r}")
-        return
-    if "Direct 模式" not in text:
-        _fail("exec_computer_status_stub", f"missing direct-mode line: {text[:200]!r}")
-        return
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        settings = Settings(
+            telegram_bot_token="t", telegram_allowed_user_id=1,
+            codex_workspace_root=Path(tmp_dir),
+            codex_bin="codex",
+            codex_task_root=Path(tmp_dir) / "t",
+            codex_model=None,
+            codex_timeout_seconds=3600,
+            codex_retry_429_delays_seconds=(),
+            telegram_progress_seconds=3,
+            codex_memory_root=Path(tmp_dir) / "m",
+            user_timezone="UTC",
+        )
+        text = asyncio.run(exec_computer_status(settings, ""))
+        if "Computer Use" not in text:
+            _fail("exec_computer_status_stub", f"missing header: {text[:200]!r}")
+            return
+        if "启用" not in text:
+            _fail("exec_computer_status_stub", f"missing enabled flag: {text[:200]!r}")
+            return
+        if "Direct 模式" not in text:
+            _fail("exec_computer_status_stub", f"missing direct-mode line: {text[:200]!r}")
+            return
     print("[pass] exec_computer_status_stub")
 
 
