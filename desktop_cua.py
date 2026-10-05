@@ -301,11 +301,10 @@ class LocalCuaTransport(CuaTransport):
         return res
 
     def _prepare_target_app(self, action: dict) -> str | None:
-        """Resolve ``target_app`` to a running pid and foreground it.
+        """Resolve ``target_app`` to a pid and foreground it.
 
-        This is deliberately local and metadata-only. It does not launch an
-        app or inspect window titles; an absent app is reported clearly so
-        the planner/operator can open it and retry.
+        A named app that is installed but not running is launched, then
+        brought to the front. An unknown name is still reported as missing.
         """
         if not isinstance(action, dict) or not action.get("target_app"):
             return None
@@ -332,7 +331,9 @@ class LocalCuaTransport(CuaTransport):
             return "target_app_not_found"
         app = next((item for item in matches if item.get("running")), matches[0])
         if not app.get("running") or not app.get("pid"):
-            return "target_app_not_running"
+            app = self._launch_listed_app(app)
+            if app is None:
+                return "target_app_not_running"
         try:
             pid = int(app["pid"])
         except (TypeError, ValueError):
@@ -341,6 +342,43 @@ class LocalCuaTransport(CuaTransport):
         if not activated.get("ok"):
             return "target_app_activate_failed"
         action["pid"] = pid
+        return None
+
+    def _launch_listed_app(self, app: dict) -> dict | None:
+        """Start an installed app and return the refreshed running record."""
+        args: dict[str, Any] = {}
+        launch_path = app.get("launch_path")
+        name = str(app.get("name") or app.get("app_name") or "").strip()
+        if isinstance(launch_path, str) and launch_path.strip():
+            args["launch_path"] = launch_path.strip()
+        elif name:
+            args["name"] = name
+        else:
+            return None
+        launched = self._call_tool("launch_app", args, timeout=30)
+        if not launched.get("ok"):
+            return None
+        data = launched.get("data") if isinstance(launched.get("data"), dict) else {}
+        try:
+            pid = int(data.get("pid"))
+        except (TypeError, ValueError):
+            pid = None
+        if pid:
+            return {"name": name, "pid": pid, "running": True}
+        listed = self._call_tool("list_apps", {}, timeout=20)
+        apps = (listed.get("data") or {}).get("apps") if listed.get("ok") else None
+        if not isinstance(apps, list):
+            return None
+        for item in apps:
+            if not isinstance(item, dict):
+                continue
+            item_name = str(item.get("name") or item.get("app_name") or "").strip()
+            if item_name.lower() != name.lower() or not item.get("running"):
+                continue
+            try:
+                return {"name": item_name, "pid": int(item.get("pid")), "running": True}
+            except (TypeError, ValueError):
+                return None
         return None
 
     def _call_tool(self, tool: str, args: dict | None = None, *, timeout: int | None = None) -> dict:
@@ -610,6 +648,22 @@ class LocalCuaTransport(CuaTransport):
         called = self._call_tool("bring_to_front", args, timeout=20)
         return _result_from_call(called, "click", node_id)
 
+    def _point_inside_listed_window(self, pid: object, window_id: object, x: float, y: float) -> bool:
+        """True when x/y lies in the screen rectangle of the named window."""
+        if pid is None and window_id is None:
+            return False
+        listed = self._call_tool("list_windows", {}, timeout=20)
+        data = listed.get("data") if listed.get("ok") else None
+        windows = data.get("windows") if isinstance(data, dict) else None
+        if not isinstance(windows, list):
+            return False
+        window = _match_listed_window(windows, pid, window_id)
+        frame = _window_frame(window) if isinstance(window, dict) else None
+        if frame is None:
+            return False
+        origin_x, origin_y, width, height = frame
+        return origin_x <= x < origin_x + width and origin_y <= y < origin_y + height
+
     def _click(self, action: dict, node_id: str) -> dict:
         # Validate AX fields first
         ok, err = validate_ax_fields(action)
@@ -699,7 +753,21 @@ class LocalCuaTransport(CuaTransport):
                 return {"result_ok": False, "error": "bad_coords", "action_type": "click", "node_id": node_id}
             xy_args["x"] = x
             xy_args["y"] = y
-            
+            # A point inside a listed window is a screen pixel from the
+            # desktop screenshot. Window-local clicks stay outside that
+            # rectangle. The center of the window was already raised above.
+            if "coordinate_frame" not in xy_args and xy_args.get("scope") != "desktop":
+                if self._point_inside_listed_window(
+                    xy_args.get("pid"), xy_args.get("window_id"), x, y,
+                ):
+                    xy_args["coordinate_frame"] = "desktop"
+                    if xy_args.get("pid") is not None and xy_args.get("window_id") is not None:
+                        self._call_tool(
+                            "get_window_state",
+                            {"pid": xy_args["pid"], "window_id": xy_args["window_id"]},
+                            timeout=30,
+                        )
+
             if "pid" not in xy_args and "window_id" not in xy_args and "scope" not in xy_args:
                 xy_args["scope"] = "desktop"
             if xy_args.get("scope") == "desktop":
