@@ -16,12 +16,12 @@ def advice_for_result(result: CheckResult) -> str | None:
         return "Check `sudo systemctl status conveyor-telegram-bot` and `sudo journalctl -u conveyor-telegram-bot -n 80 --no-pager`."
     if name == "workspace":
         return "Verify `CODEX_WORKSPACE_ROOT` points at the git repo root and the service user can read it."
-    if name == "minimax":
+    if name in {"provider", "minimax"}:
         if "429" in detail or "rate limit" in detail or "too many requests" in detail:
             return "Provider is rate limiting; wait for cooldown, then run `scripts/smoke.py` once."
         if "401" in detail or "api key" in detail:
-            return "Check `MINIMAX_API_KEY`, MiniMax base URL, and `~/.codex/config.toml` for the service user."
-        return "Run `scripts/doctor.py --json` on the VPS and inspect the MiniMax `/models` detail."
+            return "Check the provider API key in `.env`, its base URL, and `~/.codex/config.toml` for the service user."
+        return "Run `scripts/doctor.py --json` on the VPS and inspect the provider `/models` detail."
     if name in {"task root", "logs", "worktrees", "disk"}:
         return "Check filesystem permissions, disk space, and ownership for `CODEX_TASK_ROOT`."
     if name == "latest completed":

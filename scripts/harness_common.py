@@ -44,31 +44,47 @@ def check_systemd_active(service_name: str) -> CheckResult:
     return CheckResult("systemd", result.returncode == 0 and state == "active", f"{service_name} is {state or 'unknown'}")
 
 
-def check_minimax_models(settings: Settings) -> CheckResult:
+def _codex_provider_config() -> tuple[str, dict, str | None]:
+    """Return (provider_id, provider_table, model) from the Codex CLI config."""
+    # provider_config's parser instead of tomllib: the VPS runs Python 3.10.
+    from provider_config import _parse_simple_config
+
+    config_path = Path.home() / ".codex" / "config.toml"
+    try:
+        text = config_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "", {}, None
+    top, providers = _parse_simple_config(text)
+    provider_id = top.get("model_provider", "")
+    return provider_id, providers.get(provider_id, {}), top.get("model") or None
+
+
+def check_provider_models(settings: Settings) -> CheckResult:
+    """Probe the `/models` endpoint of whichever provider Codex is configured for."""
     import os
 
-    try:
-        import tomllib
-    except ModuleNotFoundError:
-        tomllib = None
+    provider_id, provider, config_model = _codex_provider_config()
+    if not provider_id:
+        if os.getenv("MINIMAX_API_KEY"):
+            # Legacy deployments export MINIMAX_* without a config.toml provider.
+            provider_id = "minimax"
+            provider = {"env_key": "MINIMAX_API_KEY", "base_url": "https://api.minimaxi.com/v1"}
+            config_model = config_model or "MiniMax-M3"
+        else:
+            return CheckResult("provider", True, "codex default provider (no API key probe)")
 
-    key = os.getenv("MINIMAX_API_KEY")
+    env_key = str(provider.get("env_key") or "OPENAI_API_KEY")
+    key = os.getenv(env_key)
     if not key:
-        return CheckResult("minimax", False, "MINIMAX_API_KEY is not set")
+        return CheckResult("provider", False, f"{env_key} is not set (provider={provider_id})")
 
-    base_url = os.getenv("MINIMAX_BASE_URL")
-    model = settings.codex_model
-    config_path = Path.home() / ".codex" / "config.toml"
-    if tomllib and config_path.exists():
-        config = tomllib.loads(config_path.read_text())
-        provider_id = config.get("model_provider")
-        provider = config.get("model_providers", {}).get(provider_id, {})
-        if provider_id == "minimax":
-            base_url = base_url or provider.get("base_url")
-            model = model or config.get("model")
-
-    base_url = (base_url or "https://api.minimaxi.com/v1").rstrip("/")
-    model = model or "MiniMax-M3"
+    base_url = provider.get("base_url") or ""
+    if provider_id == "minimax":
+        base_url = os.getenv("MINIMAX_BASE_URL") or base_url
+    base_url = str(base_url).rstrip("/")
+    if not base_url:
+        return CheckResult("provider", False, f"provider {provider_id} has no base_url in config.toml")
+    model = settings.codex_model or config_model
     request = urllib.request.Request(
         f"{base_url}/models",
         headers={"Authorization": f"Bearer {key}"},
@@ -78,15 +94,15 @@ def check_minimax_models(settings: Settings) -> CheckResult:
             data = json.load(response)
     except urllib.error.HTTPError as exc:
         body = exc.read(300).decode("utf-8", "replace")
-        return CheckResult("minimax", False, f"{base_url}/models HTTP {exc.code}: {body}")
+        return CheckResult("provider", False, f"{base_url}/models HTTP {exc.code}: {body}")
     except Exception as exc:
-        return CheckResult("minimax", False, f"{base_url}/models failed: {exc}")
+        return CheckResult("provider", False, f"{base_url}/models failed: {exc}")
 
     model_ids = {item.get("id") for item in data.get("data", []) if isinstance(item, dict)}
-    if model not in model_ids:
+    if model and model not in model_ids:
         preview = ", ".join(sorted(x for x in model_ids if x)[:12])
-        return CheckResult("minimax", False, f"{model} not listed at {base_url}; saw: {preview}")
-    return CheckResult("minimax", True, f"{base_url} lists {model}")
+        return CheckResult("provider", False, f"{model} not listed at {base_url}; saw: {preview}")
+    return CheckResult("provider", True, f"{provider_id}: {base_url} lists {model or 'models'}")
 
 
 def latest_job_dir(settings: Settings) -> Path | None:

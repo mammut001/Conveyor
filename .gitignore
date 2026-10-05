@@ -65,3 +65,6 @@ menubar-agent/build/
 /$HOME
 /.workbuddy
 web/node_modules/
+
+# Stray sqlite files from tests that pass a mock as a db path
+<MagicMock*

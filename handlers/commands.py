@@ -29,7 +29,7 @@ from scripts.doctor import (
     check_runtime_dirs,
     check_workspace,
 )
-from scripts.harness_common import check_minimax_models, check_systemd_active
+from scripts.harness_common import check_provider_models, check_systemd_active
 from scripts.job_audit import run_job_audit
 from scripts.log_summary import summarize_log
 from scripts.metadata_report import metadata_report
@@ -139,7 +139,7 @@ async def _doctor(msg, port, _runner, settings, _arg):
     results = [
         check_systemd_active("conveyor-telegram-bot"),
         check_workspace(settings),
-        check_minimax_models(settings),
+        check_provider_models(settings),
         check_disk(settings.codex_task_root),
     ]
     results.extend(check_runtime_dirs(settings))
@@ -280,7 +280,7 @@ async def _health(msg, port, _runner, _settings, arg):
 
 
 async def _smoke(msg, port, _runner, _settings, _arg):
-    await port.reply(msg, "开始 smoke。它会跑一条最小 MiniMax/Codex 端到端测试。")
+    await port.reply(msg, "开始 smoke。它会跑一条最小 Codex 端到端测试。")
     try:
         code = await run_smoke(".env", "conveyor-telegram-bot", notify=False)
     except Exception as exc:

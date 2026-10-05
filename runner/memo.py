@@ -311,9 +311,14 @@ async def classify_memo(self, content: str) -> str:
     # curator re-classifies those at 12pm. Never raise to the caller.
     api_key = os.getenv("MINIMAX_API_KEY", "").strip()
     base_url = os.getenv("MINIMAX_BASE_URL", "https://api.minimaxi.com/v1").rstrip("/")
-    if not api_key or not content.strip():
-        return "unfiled"
     model = os.getenv("MINIMAX_CLASSIFY_MODEL", "minimax-text-01")
+    if not api_key:
+        # No MiniMax key: reuse the chat tier's OpenAI-compatible endpoint.
+        api_key = os.getenv("CONVEYOR_CHAT_API_KEY", "").strip()
+        base_url = os.getenv("CONVEYOR_CHAT_BASE_URL", "").strip().rstrip("/")
+        model = os.getenv("CONVEYOR_CHAT_MODEL", "").strip()
+    if not api_key or not base_url or not model or not content.strip():
+        return "unfiled"
     prompt = (
         "Classify the following user note into exactly one of: "
  "preference, fact, tool-quirk, convention.\n"

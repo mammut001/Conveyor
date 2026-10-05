@@ -614,19 +614,26 @@ class TestSubagentsSuite(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import MagicMock
         from web_control import WebControl
 
+        def _queue() -> MagicMock:
+            # WebControl opens sqlite at queue._db_path(); a bare MagicMock would
+            # create a "<MagicMock ...>" database file in the working directory.
+            fake = MagicMock()
+            fake._db_path.return_value = self.tmp_path / "job_queue.sqlite3"
+            return fake
+
         # Flag ON (both subagents and chat_tools)
-        control = WebControl(self.settings, runner=MagicMock(), queue=MagicMock())
+        control = WebControl(self.settings, runner=MagicMock(), queue=_queue())
         status = control.system_status()
         self.assertTrue(status["features"]["subagents"])
 
         # Flag OFF: subagents_enabled = False
         s_off = _make_settings(self.tmp_path, subagents_enabled=False)
-        control_off = WebControl(s_off, runner=MagicMock(), queue=MagicMock())
+        control_off = WebControl(s_off, runner=MagicMock(), queue=_queue())
         self.assertFalse(control_off.system_status()["features"]["subagents"])
 
         # Flag OFF: chat_tools_enabled = False
         s_no_chat = _make_settings(self.tmp_path, subagents_enabled=True, chat_tools_enabled=False)
-        control_no_chat = WebControl(s_no_chat, runner=MagicMock(), queue=MagicMock())
+        control_no_chat = WebControl(s_no_chat, runner=MagicMock(), queue=_queue())
         self.assertFalse(control_no_chat.system_status()["features"]["subagents"])
 
     async def test_end_to_end_through_run_tool_loop(self) -> None:

@@ -10,6 +10,7 @@ from redaction import SecretRedactingFilter, redact_text
 
 DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 NOISY_LOGGERS = ("httpx", "httpcore", "urllib3", "googleapiclient", "google_auth_httplib2", "lark_oapi")
+SDK_LOGGERS = ("Lark",)
 
 _original_sys_excepthook = None
 _original_threading_excepthook = None
@@ -80,6 +81,12 @@ def configure_logging(
     for handler in root.handlers:
         if not any(isinstance(f, SecretRedactingFilter) for f in handler.filters):
             handler.addFilter(SecretRedactingFilter())
+
+    # SDK loggers with their own handlers bypass the root handler filters.
+    for name in SDK_LOGGERS:
+        sdk_logger = logging.getLogger(name)
+        if not any(isinstance(f, SecretRedactingFilter) for f in sdk_logger.filters):
+            sdk_logger.addFilter(SecretRedactingFilter())
 
     for name in NOISY_LOGGERS:
         noisy = logging.getLogger(name)

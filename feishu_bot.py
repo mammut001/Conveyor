@@ -50,6 +50,12 @@ get_job_queue().configure(settings, runner)
 
 
 
+def _mask_open_id(open_id: str | None) -> str:
+    if not open_id:
+        return ""
+    return f"{open_id[:3]}…{open_id[-4:]}" if len(open_id) > 8 else "…"
+
+
 def _extract_card_action_event(msg: Any) -> tuple[InboundMessage, dict] | None:
     """Thin wrapper around :func:`channel.feishu_cards.extract_card_action`
     that converts the identity dict into an ``InboundMessage`` so the
@@ -260,13 +266,15 @@ async def main() -> None:
     # `card.action.trigger`). The actual subscription also needs the
     # matching event enabled in the Feishu developer console — see
     # README "Feishu setup" → "Card callbacks".
-    channel.on("card.action.trigger", _handle_card_action)
+    # FeishuChannel only dispatches its own "cardAction" event name; the raw
+    # platform name is rejected as unknown and the handler never fires.
+    channel.on("cardAction", _handle_card_action)
 
     logger.info(
         "Feishu bot connecting (app_id=%s workspace=%s allowed_open_id=%s)",
         settings.lark_app_id,
         settings.codex_workspace_root,
-        settings.lark_allowed_open_id or "(bootstrap mode)",
+        _mask_open_id(settings.lark_allowed_open_id) or "(bootstrap mode)",
     )
     consumer = None
     if getattr(settings, "approval_relay_enabled", False):

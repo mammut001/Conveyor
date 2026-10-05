@@ -24,10 +24,12 @@ mkdir -p /etc/modules-load.d
 echo "uinput" > /etc/modules-load.d/uinput.conf
 
 echo "=== 3. Writing udev rules for uinput and CUA virtual devices ==="
+# 0660 + group input: the service user is added to that group below, so the
+# devices need not be writable by every local account.
 cat > /etc/udev/rules.d/99-uinput.rules <<'EOF'
-KERNEL=="uinput", MODE="0666", GROUP="input"
-SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="CUA*", MODE="0666", GROUP="input"
-SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="*uinput*", MODE="0666", GROUP="input"
+KERNEL=="uinput", MODE="0660", GROUP="input"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="CUA*", MODE="0660", GROUP="input"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="*uinput*", MODE="0660", GROUP="input"
 EOF
 
 echo "=== 4. Adding user '${TARGET_USER}' to 'input' group ==="

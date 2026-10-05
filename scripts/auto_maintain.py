@@ -15,7 +15,7 @@ from runner import CodexRunner
 from scripts.backfill_metadata import backfill_job_metadata
 from scripts.compress_day import compress_if_needed
 from scripts.doctor import check_disk, check_latest_job, check_runtime_dirs, check_workspace
-from scripts.harness_common import check_minimax_models, check_systemd_active
+from scripts.harness_common import check_provider_models, check_systemd_active
 from scripts.health_snapshot import health_snapshot, write_snapshot
 from scripts.offline_harnesses import run_offline_harnesses
 from scripts.security_audit import run_security_audit
@@ -39,7 +39,7 @@ async def run_maintenance(env_file: str, service_name: str, clean_threshold: int
     results = [
         check_systemd_active(service_name),
         check_workspace(settings),
-        check_minimax_models(settings),
+        check_provider_models(settings),
         check_disk(settings.codex_task_root),
     ]
     results.extend(check_runtime_dirs(settings))

@@ -13,7 +13,7 @@ from config import load_settings
 from scripts.harness_common import (
     CheckResult,
     attempt_completed,
-    check_minimax_models,
+    check_provider_models,
     check_systemd_active,
     latest_attempt_file,
     latest_final_file,
@@ -96,7 +96,7 @@ def main() -> None:
     results: list[CheckResult] = [
         check_systemd_active(args.service),
         check_workspace(settings),
-        check_minimax_models(settings),
+        check_provider_models(settings),
         check_disk(settings.codex_task_root),
     ]
     results.extend(check_runtime_dirs(settings))
