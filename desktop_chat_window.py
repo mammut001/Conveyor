@@ -8,10 +8,22 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import urllib.error
 import urllib.request
 from typing import Any
+
+
+def enable_system_gtk() -> None:
+    """Let the app venv import Ubuntu's PyGObject.
+
+    python3-gi lives in dist-packages, which a normal venv does not see.
+    Append that directory so packages already installed in the venv stay first.
+    """
+    extra = "/usr/lib/python3/dist-packages"
+    if os.path.isdir(extra) and extra not in sys.path:
+        sys.path.append(extra)
 
 
 def web_chat_url(settings: Any) -> str:
@@ -85,6 +97,7 @@ def _append(buffer: Any, line: str) -> None:
 
 
 def main() -> None:
+    enable_system_gtk()
     import gi
 
     gi.require_version("Gtk", "3.0")
