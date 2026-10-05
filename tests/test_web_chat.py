@@ -176,6 +176,21 @@ class WebChatTests(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertIn("chat tier is disabled", body.get("error", ""))
 
+    def test_desktop_sentence_runs_the_computer_route(self):
+        async def fake_handle(msg, port, runner, settings, route):
+            await port.reply(msg, f"tool:{route.tools[0]}")
+
+        ask = AsyncMock()
+        with patch("handlers.tools.runner.handle_route", side_effect=fake_handle), patch(
+            "handlers.chat.ask_chat", ask,
+        ):
+            status, events = self.request_sse("/api/chat", {"message": "打开计算器并点 1"})
+        self.assertEqual(status, 200)
+        ask.assert_not_called()
+        messages = [data.get("text", "") for name, data in events if name == "message"]
+        self.assertTrue(any("tool:computer.task" in text for text in messages))
+        self.assertTrue(any(name == "done" and data.get("outcome") == "answered" for name, data in events))
+
     def test_plain_chat_sse_and_history(self):
         self.settings.chat_tools_enabled = False
 

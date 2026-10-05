@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, patch
 from channel.types import InboundMessage
 from config import Settings
 from handlers.dispatch import dispatch
-from handlers.intent import route_intent
+from handlers.intent import computer_chat_budget_seconds, computer_chat_route, route_intent
 
 _loop_mod = importlib.import_module("desktop_computer_loop")
 
@@ -127,6 +127,20 @@ class ComputerDispatchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(desktop.tools, ("computer.task",))
         still_desktop = route_intent("帮我运行文件管理器")
         self.assertEqual(still_desktop.tools, ("computer.task",))
+
+    def test_web_chat_routes_a_desktop_sentence(self) -> None:
+        desktop = computer_chat_route("打开计算器并点 1")
+        self.assertIsNotNone(desktop)
+        assert desktop is not None
+        self.assertEqual(desktop.tools, ("computer.task",))
+        self.assertIsNone(computer_chat_route("帮我运行 htop 看看我的vps"))
+        self.assertIsNone(computer_chat_route("Hi there"))
+        stopped = computer_chat_route("停下")
+        self.assertIsNotNone(stopped)
+        assert stopped is not None
+        self.assertEqual(stopped.tools, ("computer.stop",))
+        self.assertEqual(computer_chat_budget_seconds(object(), "打开计算器"), 660.0)
+        self.assertIsNone(computer_chat_budget_seconds(object(), "Hi there"))
 
     async def test_blocked_keyword_does_not_start_loop(self) -> None:
         port, loop = await self._dispatch(_BLOCKED, always_direct=True)

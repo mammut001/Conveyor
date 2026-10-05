@@ -1290,7 +1290,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self.server.loop,
         )
 
-        deadline = time.monotonic() + 180.0
+        from handlers.intent import computer_chat_budget_seconds
+        budget = computer_chat_budget_seconds(settings, prompt)
+        deadline = time.monotonic() + (budget if budget is not None else 180.0)
         done = False
         try:
             while not done:
