@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import re
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -614,6 +615,87 @@ def get_computer_task(settings: Settings, task_id: str) -> dict | None:
             store = _load_unlocked(settings)
             record = store.get("tasks", {}).get(task_id)
             return dict(record) if isinstance(record, dict) else None
+
+
+_SESSION_THREAD = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_SCREENSHOT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+COMPUTER_SESSION_MAX_AGE_SECONDS = 30 * 60
+
+
+def computer_session_path(settings: Settings) -> Path:
+    return settings.codex_memory_root / "state" / "computer_session.json"
+
+
+def safe_screenshot_id(value: object) -> str:
+    """Screenshot file stem. Rejects paths and anything that is not a stem."""
+    if not isinstance(value, str) or not _SCREENSHOT_ID.fullmatch(value):
+        return ""
+    return value
+
+
+def save_computer_session(
+    settings: Settings,
+    *,
+    thread_id: str,
+    task_id: str,
+    goal: str,
+    status: str,
+    screenshot_id: str = "",
+) -> None:
+    """Remember the Codex thread so the next short click can continue it."""
+    if status == "blocked":
+        clear_computer_session(settings)
+        return
+    if status not in {"done", "stopped", "error"}:
+        return
+    if not isinstance(thread_id, str) or not _SESSION_THREAD.fullmatch(thread_id):
+        return
+    payload = {
+        "thread_id": thread_id,
+        "task_id": str(task_id or "")[:80],
+        "goal": _truncate_text(goal, 500),
+        "status": status,
+        "screenshot_id": safe_screenshot_id(screenshot_id),
+        "updated_at": _iso_z(_utc_now()),
+    }
+    path = computer_session_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
+
+
+def clear_computer_session(settings: Settings) -> None:
+    path = computer_session_path(settings)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def load_computer_session(settings: Settings, *, now: datetime | None = None) -> dict | None:
+    """Return a recent desktop thread, or None when it is missing or stale."""
+    path = computer_session_path(settings)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    thread_id = raw.get("thread_id")
+    if not isinstance(thread_id, str) or not _SESSION_THREAD.fullmatch(thread_id):
+        return None
+    if raw.get("status") not in {"done", "stopped", "error"}:
+        return None
+    updated = _parse_iso(raw.get("updated_at"))
+    if updated is None:
+        return None
+    age = (_utc_now(now) - updated).total_seconds()
+    if age < 0 or age > COMPUTER_SESSION_MAX_AGE_SECONDS:
+        return None
+    return dict(raw)
 
 
 def get_active_task(settings: Settings) -> dict | None:

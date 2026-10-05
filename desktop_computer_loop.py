@@ -165,6 +165,7 @@ async def run_computer_loop(
     direct_mode: bool,
     stop_check: Callable[[], bool] | None = None,
     task_id: str | None = None,
+    open_with_observe: bool = False,
 ) -> dict:
     """Run the action loop. Returns a summary dict.
 
@@ -259,6 +260,15 @@ async def run_computer_loop(
                         observation=observation,
                         trajectory=trajectory,
                     )
+                if (
+                    action is None
+                    and open_with_observe
+                    and not trajectory
+                    and not observation.get("screenshot_id")
+                ):
+                    # The model cannot see the screen until a screenshot
+                    # exists. Looking first saves one Codex round trip.
+                    action = {"action": "observe"}
                 if action is None:
                     try:
                         remaining = max_seconds - (time.monotonic() - start)
@@ -439,6 +449,11 @@ async def run_computer_loop(
         pass
 
     final = get_computer_task(settings, task_id) or {}
+    screenshot_id = ""
+    for step in reversed(trajectory):
+        if isinstance(step, dict) and isinstance(step.get("screenshot_id"), str):
+            screenshot_id = step["screenshot_id"]
+            break
     return {
         "ok": True,
         "task_id": task_id,
@@ -447,6 +462,7 @@ async def run_computer_loop(
         "blocked_reason": final.get("blocked_reason"),
         "steps_used": steps_used,
         "trajectory_len": len(trajectory),
+        "screenshot_id": screenshot_id,
     }
 
 

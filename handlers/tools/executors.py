@@ -404,6 +404,11 @@ def _format_loop_result(settings: Settings, result: dict) -> str:
         lines.append(f"摘要: {summary}")
     if result.get("blocked_reason"):
         lines.append(f"停止原因: {result.get('blocked_reason')}")
+    from desktop_computer_requests import safe_screenshot_id
+
+    shot = safe_screenshot_id(result.get("screenshot_id"))
+    if shot:
+        lines.append(f"截图: {shot}")
     return _safe_truncate("\n".join(lines))
 
 
@@ -735,7 +740,8 @@ async def exec_computer_task(settings: Settings, arg: str, *, task_id: str | Non
     """Run the Codex action loop to complete a desktop goal (hands-free)."""
     from desktop_computer_planner import CodexPlanner
     from desktop_computer_loop import build_backend, run_computer_loop
-    from desktop_computer_requests import set_task_status
+    from desktop_computer_requests import load_computer_session, set_task_status
+    from handlers.intent import is_desktop_followup
 
     goal, error = _computer_task_preflight(settings, arg)
     if error:
@@ -750,7 +756,9 @@ async def exec_computer_task(settings: Settings, arg: str, *, task_id: str | Non
         if not prepared.get("ok"):
             return str(prepared.get("message") or prepared.get("error") or "任务创建失败")
         task_id = prepared.get("task_id")
-    planner = CodexPlanner(settings)
+    previous = load_computer_session(settings) if is_desktop_followup(goal or "") else None
+    resume_id = str(previous.get("thread_id") or "") if previous else None
+    planner = CodexPlanner(settings, resume_thread_id=resume_id or None)
     backend = build_backend(settings)
     result = await run_computer_loop(
         settings, goal, planner=planner, backend=backend,
@@ -758,8 +766,40 @@ async def exec_computer_task(settings: Settings, arg: str, *, task_id: str | Non
         max_seconds=settings.conveyor_computer_max_seconds,
         direct_mode=True,
         task_id=task_id,
+        open_with_observe=True,
     )
+    _remember_desktop_session(settings, planner, goal or "", result, previous)
     return _format_loop_result(settings, result)
+
+
+def _remember_desktop_session(
+    settings: Settings,
+    planner: object,
+    goal: str,
+    result: dict,
+    previous: dict | None,
+) -> None:
+    """Keep the Codex thread for the next short click. A blocked task drops it."""
+    from desktop_computer_requests import clear_computer_session, save_computer_session
+    from handlers.intent import is_desktop_followup
+
+    status = str(result.get("status") or "")
+    if status == "blocked":
+        clear_computer_session(settings)
+        return
+    thread_id = getattr(planner, "thread_id", None)
+    if not thread_id and previous and is_desktop_followup(goal):
+        thread_id = previous.get("thread_id")
+    if not thread_id or status not in {"done", "stopped", "error"}:
+        return
+    save_computer_session(
+        settings,
+        thread_id=str(thread_id),
+        task_id=str(result.get("task_id") or ""),
+        goal=goal,
+        status=status,
+        screenshot_id=str(result.get("screenshot_id") or ""),
+    )
 
 
 async def exec_computer_retry(settings: Settings, arg: str) -> str:

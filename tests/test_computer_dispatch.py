@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 from channel.types import InboundMessage
 from config import Settings
 from handlers.dispatch import dispatch
+from desktop_computer_requests import save_computer_session
 from handlers.intent import computer_chat_budget_seconds, computer_chat_route, route_intent
 
 _loop_mod = importlib.import_module("desktop_computer_loop")
@@ -141,6 +142,42 @@ class ComputerDispatchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stopped.tools, ("computer.stop",))
         self.assertEqual(computer_chat_budget_seconds(object(), "打开计算器"), 660.0)
         self.assertIsNone(computer_chat_budget_seconds(object(), "Hi there"))
+
+    def test_short_followup_needs_a_fresh_session(self) -> None:
+        settings = _settings(self.root, always_direct=True)
+        self.assertIsNone(computer_chat_route("再点等号", settings))
+        self.assertEqual(route_intent("再点等号").kind, "llm")
+        save_computer_session(
+            settings,
+            thread_id="11111111-1111-4111-8111-111111111111",
+            task_id="ctsk_old",
+            goal="打开计算器",
+            status="done",
+        )
+        routed = computer_chat_route("再点等号", settings)
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed.tools, ("computer.task",))
+        self.assertEqual(routed.arg, "再点等号")
+        self.assertIsNone(computer_chat_route("再点 password", settings))
+        fresh = computer_chat_route("打开计算器", settings)
+        assert fresh is not None
+        self.assertEqual(fresh.tools, ("computer.task",))
+        self.assertEqual(computer_chat_budget_seconds(settings, "再点等号"), 660.0)
+
+    async def test_phone_followup_starts_the_desktop_loop(self) -> None:
+        settings = _settings(self.root, always_direct=True)
+        save_computer_session(
+            settings,
+            thread_id="11111111-1111-4111-8111-111111111111",
+            task_id="ctsk_old",
+            goal="打开计算器",
+            status="done",
+        )
+        port, loop = await self._dispatch("再点等号", always_direct=True)
+        self.assertGreaterEqual(loop.await_count, 1)
+        reply = "\n".join(port.replies)
+        self.assertIn("probe", reply)
 
     async def test_blocked_keyword_does_not_start_loop(self) -> None:
         port, loop = await self._dispatch(_BLOCKED, always_direct=True)

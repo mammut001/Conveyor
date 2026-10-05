@@ -456,6 +456,16 @@ class ScriptedPlanner(Planner):
         return {"action": "done", "summary": "scripted sequence complete"}
 
 
+_CLICK_RULE = (
+    "点击规则：\n"
+    "- element_hints 里有目标的 label 时，用 element_index 点那个按钮。\n"
+    "- 没有对应 label 时，用截图的窗口内像素作为 x、y，并带上 pid 和 window_id。"
+    "落在按钮框里的点会按下那个按钮。\n"
+    "- 点窗口的屏幕中心只会把窗口放到最前，不会按下按钮。"
+    "只有该窗口还不是最前的非面板窗口时，才点它的屏幕中心。\n"
+)
+
+
 _THREAD_ID = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
@@ -500,10 +510,22 @@ class CodexPlanner(Planner):
     to output ONLY the JSON object — no prose.
     """
 
-    def __init__(self, settings: Settings, *, sandbox: str = "danger-full-access") -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        sandbox: str = "danger-full-access",
+        resume_thread_id: str | None = None,
+    ) -> None:
         self.settings = settings
         self.sandbox = sandbox
         self._thread_id: str | None = None
+        if isinstance(resume_thread_id, str) and _THREAD_ID.fullmatch(resume_thread_id):
+            self._thread_id = resume_thread_id
+
+    @property
+    def thread_id(self) -> str | None:
+        return self._thread_id
 
     def _build_prompt(
         self,
@@ -515,21 +537,6 @@ class CodexPlanner(Planner):
         max_steps: int,
     ) -> str:
         allowed = ", ".join(_ALLOWED)
-        has_ax = any(
-            observation.get(k) is not None
-            for k in ("pid", "window_id", "element_hints", "elements")
-        ) if isinstance(observation, dict) else False
-        ax_rule = (
-            "硬性规则：当前观察已提供 AX 信息（pid/window_id/element_hints）。"
-            "下一次 click 必须使用 "
-            '{"action":"click","pid":…,"window_id":…,"element_index":…}；'
-            "禁止只输出 x/y 坐标 click。\n"
-            "从 element_hints 里按 label 匹配目标（例如数字 1 → label 为 \"1\" 的 AXButton）。\n"
-            if has_ax
-            else
-            "若尚无 AX 信息：先 observe；拿到 element_hints 后再 AX click。"
-            "仅当多次观察仍无 pid/element_hints 时，才允许 x/y click。\n"
-        )
         digit = extract_single_digit_click_goal(goal)
         digit_rule = ""
         if digit is not None:
@@ -551,22 +558,16 @@ class CodexPlanner(Planner):
             "只输出一个 JSON 对象（不要任何解释、不要 markdown 代码块），"
             "描述下一步要执行的单个桌面动作。可选 action：\n"
             f"{allowed}\n\n"
-            "点击策略（AX-first）：\n"
-            "- 当观察结果提供 pid/window_id/element_index（或 element_token）时，"
-            "优先输出 AX click，不要只用 x/y。\n"
-            "- 仅当观察中没有 AX 字段时，才使用坐标 click。\n"
+            "点击策略：\n"
+            f"{_CLICK_RULE}"
             "- 若观察里有 elements / element_hints / action_hints，先据此选择目标。\n"
             "- 如果目标明确提到某个 App，observe 时加入 target_app（使用 App 的正式名称）；"
             "不要凭空猜测未提到的 App。\n"
             "- windows 列出当前窗口（app、title、z、pid、window_id、x、y、w、h）。"
             "z 越大越靠前。名字里带 panel 的条和 desktop 壁纸不是目标。\n"
-            "- 目标应用已经有窗口时，点击该窗口的桌面中心把它放到最前："
-            '{"action":"click","pid":…,"window_id":…,"x":x+w/2,"y":y+h/2}。'
-            "x、y 用 windows 里的屏幕坐标，不要改成窗口内坐标，也不要往终端里打命令。\n"
             "- 上一次 click 失败，或目标窗口还不是最前的非面板窗口时，禁止输出 done。\n"
             "- type、hotkey、scroll 必须带上目标窗口的 pid 和 window_id。"
             "不要往终端里打命令来打开应用。\n"
-            f"{ax_rule}"
             f"{digit_rule}\n"
             "动作示例：\n"
             '{"action":"observe"}\n'
@@ -594,7 +595,8 @@ class CodexPlanner(Planner):
     ) -> str:
         """Later step in the same Codex thread. The rules are already there."""
         return (
-            "继续同一个桌面任务。只输出一个 JSON 对象，不要解释。\n"
+            "按当前要求继续操作这台桌面。只输出一个 JSON 对象，不要解释。\n"
+            f"{_CLICK_RULE}"
             f"目标：{goal}\n"
             f"当前观察: {_obs_summary(observation)}\n"
             f"已完成步骤 ({steps_used}/{max_steps}):\n{_trajectory_summary(trajectory)}\n"
@@ -619,9 +621,7 @@ class CodexPlanner(Planner):
         )
         image = planner_screenshot_path(self.settings, observation)
         image_note = (
-            "\n一张当前桌面截图已附在这次调用上。"
-            "点按钮时用这张图里的屏幕像素作为 x、y，并带上该窗口的 pid 和 window_id。"
-            "不要只凭窗口名单猜测按钮位置。\n"
+            "\n一张当前窗口截图已附在这次调用上。用图里的窗口内像素。\n"
             if image is not None
             else ""
         )
