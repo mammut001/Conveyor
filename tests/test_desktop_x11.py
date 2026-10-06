@@ -67,6 +67,7 @@ class _Display:
         self.xdotool: list[list[str]] = []
         self.envs: list[dict] = []
         self.windows = "12345\n"
+        self.searches: list[list[str]] = []
 
     def run(self, command, env=None, **_kwargs):
         self.envs.append(dict(env or {}))
@@ -80,6 +81,7 @@ class _Display:
         elif args[:2] == ["getactivewindow", "getwindowclassname"]:
             out = "firefox\n"
         elif args[:1] == ["search"]:
+            self.searches.append(args)
             out = self.windows
         else:
             self.xdotool.append(args)
@@ -331,6 +333,11 @@ class LoopTests(Case):
 
         asyncio.run(scenario())
         self.assertTrue((agents.desktop_dir(self.settings, self.agent["id"]) / "want_browser").exists())
+        # It looks for a browser window specifically: the window manager's own
+        # helper windows would make "any window" true on an empty desktop.
+        self.assertTrue(self.x.searches)
+        for search in self.x.searches:
+            self.assertEqual(search[search.index("--class") + 1], desktop_x11.BROWSER_CLASSES)
 
 
 class PlannerPromptTests(unittest.TestCase):
