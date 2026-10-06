@@ -286,6 +286,7 @@ Conveyor runs with `danger-full-access` within isolated git worktrees so Codex c
 
 - 📖 [System Architecture & Design](docs/architecture.en.md)
 - 🌐 [Web Console & Mobile PWA Guide](docs/web_console.md)
+- 🖥️ [Live Screen & One-Click Takeover](docs/live_screen.md)
 - 🛡️ [Desktop Security & Computer Use Contract](docs/desktop_security.md)
 - 🔒 [Apply Safety & Isolation Policy](docs/apply_safety.md)
 - 🔌 [Model Context Protocol (MCP) Connectors](docs/mcp.md)

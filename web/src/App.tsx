@@ -7,6 +7,7 @@ import { SkillsPanel } from './components/SkillsPanel'
 import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
 import { TeammatePanel } from './components/TeammatePanel'
+import { LiveScreenPanel } from './components/LiveScreenPanel'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
@@ -836,6 +837,7 @@ export default function App() {
         <ContextSection title="Computer">
           <KeyValue label="CUA" value={computer?.armed ? `Armed · ${computer.arm_remaining_seconds}s` : 'Disarmed'} />
           {computer?.active_task && <KeyValue label="Task" value={String(computer.active_task.status || computer.active_task.task_id || 'active')} />}
+          <LiveScreenPanel token={token} />
           <div className="host-screen-card">
             <div className="host-screen-heading">
               <div><strong>Host screen</strong><small>Read-only · one-shot capture</small></div>

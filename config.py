@@ -204,6 +204,14 @@ class Settings:
         "Keychain Access", "System Settings", "Terminal"
     )
     conveyor_takeover_enabled: bool = False
+    # Embedded live view + one-click takeover of the host desktop in the Web
+    # Console (live_screen.py). Off by default: it shows the screen to, and
+    # accepts input from, anyone holding the web token.
+    live_screen_enabled: bool = False
+    live_screen_control_enabled: bool = True
+    live_screen_fps: float = 4.0
+    live_screen_quality: int = 60
+    live_screen_display: str = ""
     routines_enabled: bool = False
     webhooks_enabled: bool = False
     routines_feishu_chat_id: str | None = None
@@ -588,6 +596,15 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_takeover_enabled": os.getenv(
             "CONVEYOR_TAKEOVER_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
+        "live_screen_enabled": os.getenv(
+            "CONVEYOR_LIVE_SCREEN_ENABLED", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "live_screen_control_enabled": os.getenv(
+            "CONVEYOR_LIVE_SCREEN_CONTROL", "true"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "live_screen_fps": max(0.5, min(10.0, float(os.getenv("CONVEYOR_LIVE_SCREEN_FPS", "4") or 4))),
+        "live_screen_quality": max(20, min(90, _int_env("CONVEYOR_LIVE_SCREEN_QUALITY", 60))),
+        "live_screen_display": os.getenv("CONVEYOR_LIVE_SCREEN_DISPLAY", "").strip(),
         "routines_enabled": os.getenv(
             "CONVEYOR_ROUTINES_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
