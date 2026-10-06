@@ -176,5 +176,36 @@ class RecordTests(Case):
         self.assertEqual(self.runner._last_job_id(), "20260101-000001-aaaaaaaa")
 
 
+class FileLockGateTests(unittest.IsolatedAsyncioTestCase):
+    """Two lanes starting at once must not deadlock on the shared file lock."""
+
+    async def test_two_coroutines_can_use_a_file_lock_held_across_an_await(self) -> None:
+        from runner.file_lock import async_gate, file_lock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = Path(tmp) / "locks" / "run.lock"
+            order: list[str] = []
+
+            async def start(name: str) -> None:
+                async with async_gate("run"):
+                    with file_lock(lock_path):
+                        order.append(f"{name}:in")
+                        await asyncio.sleep(0.05)      # e.g. `git worktree add`
+                        order.append(f"{name}:out")
+
+            # Without the gate the second flock() blocks the event loop while
+            # the first coroutine is suspended holding it: this never returns.
+            await asyncio.wait_for(asyncio.gather(start("a"), start("b")), timeout=5)
+            self.assertEqual(order, ["a:in", "a:out", "b:in", "b:out"])
+
+    async def test_job_start_and_apply_take_the_gate(self) -> None:
+        import inspect
+
+        from runner.operators import jobs, run
+
+        self.assertIn('async with async_gate("run"):', inspect.getsource(run._run_job))
+        self.assertIn('async with async_gate("apply"):', inspect.getsource(jobs.apply_job))
+
+
 if __name__ == "__main__":
     unittest.main()

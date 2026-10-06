@@ -25,7 +25,7 @@ from uuid import uuid4
 # Project root for codex --add-dir and CODEX_RUNNER_HOME env.
 from runner._paths import RUNNER_HOME
 from runner.attachments import prompt_images
-from runner.file_lock import file_lock
+from runner.file_lock import file_lock, async_gate
 from runner.types import Job, JobMode, JobState, ProgressCallback
 from redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
@@ -183,9 +183,11 @@ async def _run_job(self, job: Job, on_progress: ProgressCallback) -> None:
         await self.validate()
         
         lock_path = self.settings.codex_task_root / "locks" / "run.lock"
-        with file_lock(lock_path):
-            job.worktree_path = await self._create_worktree(job)
-            self._write_job_metadata(job)
+        # The gate first: the file lock is held across an await (see async_gate).
+        async with async_gate("run"):
+            with file_lock(lock_path):
+                job.worktree_path = await self._create_worktree(job)
+                self._write_job_metadata(job)
         if job.cancel_requested:
             job.error = "cancelled"
             job.state = JobState.CANCELLED

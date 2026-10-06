@@ -73,3 +73,26 @@ def file_lock(path: Path, *, timeout_seconds: float | None = None):
                     fallback_path.unlink()
                 except OSError:
                     pass
+
+
+_gates: dict[tuple[int, str], "asyncio.Lock"] = {}
+
+
+def async_gate(name: str) -> "asyncio.Lock":
+    """An in-process lock to take *before* a file lock that is held across an await.
+
+    ``flock`` blocks the calling thread. If one coroutine holds the file lock
+    while awaiting and a second coroutine on the same event loop asks for it,
+    the loop itself blocks and the first can never release: a deadlock. With
+    several job lanes that is exactly what two simultaneous starts or applies
+    would do. Waiting on this gate is asynchronous, so the loop keeps running
+    and only one coroutine per process is ever inside the file lock.
+    """
+    import asyncio
+
+    key = (id(asyncio.get_running_loop()), name)
+    gate = _gates.get(key)
+    if gate is None:
+        gate = _gates[key] = asyncio.Lock()
+    return gate
+
