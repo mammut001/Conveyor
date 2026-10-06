@@ -100,3 +100,29 @@ Two browser scripts under `scripts/ui_regress/` exercise the things unit tests c
 - `x11_regress.py <url> <token_file> [outdir]` — headful Chrome on `$DISPLAY` (~500px window) driven by real X11 mouse/keyboard events via `xdotool`.
 
 Both read the Web token from a file and never print it.
+
+## Reaching the console from a phone over a VPN
+
+The console binds to loopback by default, which means an SSH tunnel from a
+laptop. To open it from a phone, let it also listen on the host's private VPN
+address and connect the phone to that VPN:
+
+```dotenv
+CONVEYOR_WEB_EXTRA_HOSTS=10.10.0.1   # the host's WireGuard / Tailscale address
+```
+
+Then open `http://10.10.0.1:<CONVEYOR_WEB_PORT>` on the phone.
+
+- The extra listeners are the same server: same bearer token, same sessions,
+  same live screen. Loopback keeps working for local tools and SSH tunnels.
+- They speak plain HTTP, so only private addresses are accepted. `0.0.0.0`,
+  `::` and public addresses fail `web_console.py --check` and refuse to start.
+  The VPN is what encrypts the connection.
+- Allow the port on the VPN interface only, e.g.
+  `ufw allow in on wg0 to 10.10.0.1 port 18787 proto tcp`. Never open it on
+  the public interface.
+- If the VPN interface comes up after the service, the console keeps retrying
+  the bind every five seconds.
+- On a cloud host a "private" address on the public NIC (for example the
+  instance's VPC address behind a 1:1 NAT) is reachable from the internet.
+  Use the VPN interface's address, not that one.

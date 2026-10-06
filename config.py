@@ -82,6 +82,9 @@ class Settings:
     # control/data endpoints require a high-entropy bearer token.
     conveyor_web_enabled: bool = False
     conveyor_web_host: str = "127.0.0.1"
+    # Extra private addresses to listen on as well (e.g. a WireGuard or
+    # Tailscale interface) so a phone on the VPN can reach the console.
+    conveyor_web_extra_hosts: tuple[str, ...] = ()
     conveyor_web_port: int = 8787
     conveyor_web_token: str | None = None  # SENSITIVE
     conveyor_event_retention_per_job: int = 2000
@@ -443,6 +446,9 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "conveyor_max_jobs_per_hour": _int_env("CONVEYOR_MAX_JOBS_PER_HOUR", 60),
         "conveyor_web_enabled": os.getenv("CONVEYOR_WEB_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on"),
         "conveyor_web_host": os.getenv("CONVEYOR_WEB_HOST", "127.0.0.1").strip() or "127.0.0.1",
+        "conveyor_web_extra_hosts": tuple(
+            h.strip() for h in os.getenv("CONVEYOR_WEB_EXTRA_HOSTS", "").split(",") if h.strip()
+        ),
         "conveyor_web_port": _int_env("CONVEYOR_WEB_PORT", 8787),
         "conveyor_web_token": os.getenv("CONVEYOR_WEB_TOKEN") or None,
         "conveyor_event_retention_per_job": _int_env("CONVEYOR_EVENT_RETENTION_PER_JOB", 2000),
