@@ -74,6 +74,29 @@ MODIFIERS = {"ctrl": "ctrl", "alt": "alt", "shift": "shift", "meta": "super"}
 SCROLL_BUTTONS = {"up": "4", "down": "5", "left": "6", "right": "7"}
 
 
+def _jpeg_size(data: bytes) -> tuple[int, int]:
+    """Width and height from a JPEG's frame header, or (0, 0).
+
+    The frame itself is the only size that cannot go stale: the desktop can
+    be resized (an RDP reconnect, xrandr) while a viewer is watching.
+    """
+    index, end = 2, len(data)
+    while index + 9 < end:
+        if data[index] != 0xFF:
+            return (0, 0)
+        marker = data[index + 1]
+        if marker == 0xFF:  # fill byte
+            index += 1
+            continue
+        # SOF0..SOF15 carry the dimensions; C4, C8 and CC are other tables.
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            height = int.from_bytes(data[index + 5:index + 7], "big")
+            width = int.from_bytes(data[index + 7:index + 9], "big")
+            return (width, height)
+        index += 2 + int.from_bytes(data[index + 2:index + 4], "big")
+    return (0, 0)
+
+
 class LiveScreenError(RuntimeError):
     """Operator-facing failure; the message is safe to return over the API."""
 
@@ -272,7 +295,9 @@ class LiveScreen:
                     self._wake_display()
                 try:
                     data = self._capture_once()
-                    size = self._size if self._size != (0, 0) else self._geometry()
+                    size = _jpeg_size(data)
+                    if size == (0, 0):
+                        size = self._geometry()
                     digest = hashlib.blake2b(data, digest_size=12).hexdigest()
                     with self._frame_ready:
                         self._capture_error = ""
@@ -302,6 +327,10 @@ class LiveScreen:
             raise LiveScreenError(reason)
         now = time.monotonic()
         with self._lock:
+            if now - self._last_viewer_at > VIEWER_IDLE_SECONDS:
+                # Nobody was watching, so capture had stopped: the frame in
+                # memory may be hours old. Wait for a fresh one instead.
+                self._frame, self._frame_digest = b"", ""
             self._last_viewer_at = now
             if self._control_id is not None:
                 self._control_seen_at = now
@@ -436,7 +465,9 @@ class LiveScreen:
         env = self._display_env()
         if env is None:
             raise LiveScreenError("No graphical session found on the host")
-        width, height = self._size if self._size != (0, 0) else self._geometry()
+        # Ask the display, not the last frame: a click must be checked
+        # against the screen as it is now.
+        width, height = self._geometry()
 
         commands = self._translate(events, width, height)
         now = time.monotonic()
