@@ -164,6 +164,8 @@ class LogRedactionTests(unittest.TestCase):
         self.assertNotIn("c353f06271cc", out)
         self.assertNotIn("63145737-95ce", out)
         self.assertIn("service_id=3", out)
+        # Records pass through more than one redacting filter.
+        self.assertEqual(redact_text(out), out)
 
 
 class DeployDbTests(unittest.TestCase):
