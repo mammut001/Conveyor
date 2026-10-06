@@ -182,6 +182,7 @@ ALL_CANDIDATE_SERVICES=(
   conveyor-vps-computer.service
   conveyor-desktop-chat.service
   conveyor-handoff.service
+  conveyor-agent-desktops.service
   conveyor-maintain.timer
   conveyor-scheduler.timer
 )

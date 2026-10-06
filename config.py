@@ -212,6 +212,9 @@ class Settings:
     # accepts input from, anyone holding the web token.
     # Named agents, one conversation each (agents.py). Off by default.
     agents_enabled: bool = False
+    # Each agent gets its own always-on virtual desktop (agent_desktops.py).
+    agent_desktops_enabled: bool = False
+    agent_desktop_size: str = "1440x900"
     live_screen_enabled: bool = False
     live_screen_control_enabled: bool = True
     live_screen_fps: float = 4.0
@@ -607,6 +610,10 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "agents_enabled": os.getenv(
             "CONVEYOR_AGENTS_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
+        "agent_desktops_enabled": os.getenv(
+            "CONVEYOR_AGENT_DESKTOPS_ENABLED", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "agent_desktop_size": os.getenv("CONVEYOR_AGENT_DESKTOP_SIZE", "1440x900").strip() or "1440x900",
         "live_screen_enabled": os.getenv(
             "CONVEYOR_LIVE_SCREEN_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),

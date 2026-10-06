@@ -156,9 +156,41 @@ class WebConsoleServer(ThreadingHTTPServer):
         self.token = token
         # Controls without settings (tests, minimal embeds) get a disabled screen.
         self.live_screen = LiveScreen(getattr(control, "settings", None))
+        # Screens of agents that have their own desktop, created on first use.
+        self._agent_screens: dict[str, LiveScreen] = {}
+        self._agent_screens_lock = threading.Lock()
         self._active_routine_runs: set[int] = set()
         self._hook_last_accepted: dict[str, float] = {}
         self._rate_limit_lock = threading.Lock()
+
+    def screen_for(self, agent_id: str) -> LiveScreen | None:
+        """The screen an agent's Computer tab shows; None for an unknown agent.
+
+        An agent with its own desktop gets that display and its own takeover
+        scope. Every other agent, and no agent at all, is the host's desktop.
+        """
+        import agents
+
+        settings = getattr(self.control, "settings", None)
+        if not agent_id or not agents.enabled(settings):
+            return self.live_screen
+        agent = agents.AgentStore(settings).get(agent_id)
+        if agent is None or agent["archived"]:
+            return None
+        display = agent["display"]
+        if display is None or not agents.desktops_enabled(settings):
+            return self.live_screen
+        key = f"{agent_id}:{display}"
+        with self._agent_screens_lock:
+            screen = self._agent_screens.get(key)
+            if screen is None:
+                screen = LiveScreen(
+                    settings, display=f":{display}",
+                    xauthority=str(agents.xauthority_path(settings, agent_id)),
+                    scope=agents.takeover_scope(agent_id),
+                )
+                self._agent_screens[key] = screen
+            return screen
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         error = sys.exc_info()[1]
@@ -496,7 +528,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif path == "/api/agents":
                 self._json(HTTPStatus.OK, self.server.control.list_agents())
             elif path == "/api/screen/status":
-                self._json(HTTPStatus.OK, self.server.live_screen.status())
+                screen = self._screen(str((query.get("agent") or [""])[0]))
+                if screen is not None:
+                    self._json(HTTPStatus.OK, screen.status())
             elif path == "/api/screen/frame":
                 self._screen_frame(query)
             elif len(parts) == 3 and parts[:2] == ["api", "artifacts"]:
@@ -1118,16 +1152,34 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if action not in ("take", "release"):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "action must be take or release"})
                     return
-                screen = self.server.live_screen
+                screen = self._screen(str(body.get("agent") or ""))
+                if screen is None:
+                    return
                 try:
                     result = screen.take_control() if action == "take" else screen.release_control()
                 except LiveScreenError as exc:
                     self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
                     return
                 self._json(HTTPStatus.OK, result)
+            elif parsed.path == "/api/screen/launch":
+                # Ask the desktop supervisor to open the agent's browser. The
+                # console itself never starts desktop programs.
+                import agents
+                from agent_desktops import request_browser
+                agent_id = str(body.get("agent") or "")
+                settings = getattr(self.server.control, "settings", None)
+                agent = agents.AgentStore(settings).get(agent_id) if agents.desktops_enabled(settings) else None
+                if agent is None or agent["archived"] or agent["display"] is None:
+                    self._json(HTTPStatus.CONFLICT, {"error": "this agent has no desktop of its own"})
+                    return
+                request_browser(settings, agent_id)
+                self._json(HTTPStatus.ACCEPTED, {"ok": True})
             elif parsed.path == "/api/screen/input":
+                screen = self._screen(str(body.get("agent") or ""))
+                if screen is None:
+                    return
                 try:
-                    result = self.server.live_screen.send_input(body.get("events"))
+                    result = screen.send_input(body.get("events"))
                 except LiveScreenError as exc:
                     self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
                     return
@@ -1438,11 +1490,21 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         self._headers(HTTPStatus.OK, f"{content_type}; charset=utf-8" if content_type.startswith("text/") else content_type, len(data))
         self.wfile.write(data)
 
+    def _screen(self, agent_id: str) -> LiveScreen | None:
+        """Resolve the screen for a request; answers 404 itself when unknown."""
+        screen = self.server.screen_for(agent_id)
+        if screen is None:
+            self._json(HTTPStatus.NOT_FOUND, {"error": "agent not found"})
+        return screen
+
     def _screen_frame(self, query: dict[str, list[str]]) -> None:
         """Long-poll for the next live screen frame; 204 when nothing changed."""
         since = int((query.get("since") or ["0"])[0])
+        screen = self._screen(str((query.get("agent") or [""])[0]))
+        if screen is None:
+            return
         try:
-            frame = self.server.live_screen.frame(since=since)
+            frame = screen.frame(since=since)
         except LiveScreenError as exc:
             self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
             return

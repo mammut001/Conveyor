@@ -29,6 +29,9 @@ MAX_NAME_CHARS = 60
 MAX_INSTRUCTIONS_CHARS = 4000
 MAX_PATH_CHARS = 512
 MAX_AGENTS = 50
+# X display numbers for agent desktops start above anything a login session uses.
+DISPLAY_BASE = 100
+MAX_DISPLAY = 999
 COLORS = ("#2f7df6", "#f59e0b", "#f97316", "#8b5cf6", "#10b981", "#ec4899", "#a16207", "#64748b")
 _ID_RE = re.compile(r"^[a-z0-9]{1,32}$")
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -41,6 +44,24 @@ class AgentError(ValueError):
 def enabled(settings: Any) -> bool:
     # `is True`: a mocked or partial settings object must not switch this on.
     return getattr(settings, "agents_enabled", False) is True
+
+
+def desktops_enabled(settings: Any) -> bool:
+    return enabled(settings) and getattr(settings, "agent_desktops_enabled", False) is True
+
+
+def desktop_dir(settings: Any, agent_id: str) -> Path:
+    """Private state of one agent's desktop (X authority, pids, requests)."""
+    return Path(settings.codex_memory_root) / "state" / "agent_desktops" / agent_id
+
+
+def xauthority_path(settings: Any, agent_id: str) -> Path:
+    return desktop_dir(settings, agent_id) / "Xauthority"
+
+
+def takeover_scope(agent_id: str) -> str:
+    """Takeover lease scope of an agent's own desktop."""
+    return f"agent:{agent_id}"
 
 
 def chat_id_for(agent_id: str) -> str:
@@ -187,6 +208,40 @@ class AgentStore:
                 conn.close()
         return self.get(agent_id)
 
+    def ensure_display(self, agent_id: str) -> int | None:
+        """Give an agent an X display number if it has none; return it.
+
+        The default agent keeps using the host's own desktop and never gets one.
+        """
+        if agent_id == DEFAULT_AGENT_ID:
+            return None
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT display, archived FROM agents WHERE id = ?", (agent_id,)).fetchone()
+            if row is None or row["archived"]:
+                conn.rollback()
+                return None
+            if row["display"] is not None:
+                conn.rollback()
+                return int(row["display"])
+            taken = {int(r[0]) for r in conn.execute(
+                "SELECT display FROM agents WHERE display IS NOT NULL AND archived = 0"
+            )}
+            display = next((n for n in range(DISPLAY_BASE + 1, MAX_DISPLAY + 1) if n not in taken), None)
+            if display is None:
+                conn.rollback()
+                return None
+            conn.execute("UPDATE agents SET display = ? WHERE id = ?", (display, agent_id))
+            conn.commit()
+            return display
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def archive(self, agent_id: str) -> bool:
         """Hide an agent. Its conversation and files are kept."""
         if agent_id == DEFAULT_AGENT_ID:
@@ -197,7 +252,8 @@ class AgentStore:
         try:
             with conn:
                 conn.execute(
-                    "UPDATE agents SET archived = 1, updated_at = ? WHERE id = ?", (time.time(), agent_id),
+                    "UPDATE agents SET archived = 1, display = NULL, updated_at = ? WHERE id = ?",
+                    (time.time(), agent_id),
                 )
         finally:
             conn.close()

@@ -1558,3 +1558,5 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .agent-colors button.selected { box-shadow: 0 0 0 2px #172033; }
 .agent-dialog-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
 .agent-dialog-actions span { flex: 1; }
+.live-screen-secondary { padding: 8px 13px; border: 1px solid #384252; border-radius: 9px; background: #1a2029; color: #d9e0ea; font-size: 13px; cursor: pointer; }
+.live-screen-secondary:hover { background: #222a35; }

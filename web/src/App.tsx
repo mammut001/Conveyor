@@ -925,7 +925,7 @@ export default function App() {
         <ContextSection title="Computer">
           <KeyValue label="CUA" value={computer?.armed ? `Armed · ${computer.arm_remaining_seconds}s` : 'Disarmed'} />
           {computer?.active_task && <KeyValue label="Task" value={String(computer.active_task.status || computer.active_task.task_id || 'active')} />}
-          <LiveScreenPanel token={token} />
+          <LiveScreenPanel key={selectedAgent?.id || 'host'} token={token} agentId={selectedAgent?.id} agentName={selectedAgent?.name} />
           <div className="host-screen-card">
             <div className="host-screen-heading">
               <div><strong>Host screen</strong><small>Read-only · one-shot capture</small></div>

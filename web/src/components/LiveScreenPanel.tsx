@@ -8,6 +8,7 @@ type ScreenStatus = {
   controlling: boolean
   agent_paused: boolean
   blocked_by: string | null
+  dedicated?: boolean
   width: number
   height: number
 }
@@ -33,7 +34,7 @@ const POINTER_SHAPE: [number, number][] = [[0, 0], [0, 17], [4.5, 13], [7.5, 20]
  * screen never becomes a URL the browser could cache or leak. Input is only
  * sent while the operator holds the control lease (the Agent is paused).
  */
-export function LiveScreenPanel({ token }: { token: string }) {
+export function LiveScreenPanel({ token, agentId = '', agentName = '' }: { token: string; agentId?: string; agentName?: string }) {
   const [status, setStatus] = useState<ScreenStatus | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [hasFrame, setHasFrame] = useState(false)
@@ -57,16 +58,19 @@ export function LiveScreenPanel({ token }: { token: string }) {
   expandedRef.current = expanded
   controllingRef.current = controlling
 
-  const request = useCallback(async <T,>(path: string, body?: unknown): Promise<T> => {
-    const response = await fetch(path, {
+  // Every call names the agent, so each agent's panel talks to its own desktop.
+  const agentQuery = agentId ? `agent=${encodeURIComponent(agentId)}` : ''
+  const request = useCallback(async <T,>(path: string, body?: Record<string, unknown>): Promise<T> => {
+    const url = body === undefined && agentQuery ? `${path}?${agentQuery}` : path
+    const response = await fetch(url, {
       method: body === undefined ? 'GET' : 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(agentId ? { ...body, agent: agentId } : body),
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : `Request failed (${response.status})`)
     return data as T
-  }, [token])
+  }, [token, agentId, agentQuery])
 
   const paint = useCallback(() => {
     const bitmap = bitmapRef.current
@@ -127,7 +131,7 @@ export function LiveScreenPanel({ token }: { token: string }) {
       while (active) {
         if (document.hidden) { await sleep(1000); continue }
         try {
-          const response = await fetch(`/api/screen/frame?since=${seq}`, {
+          const response = await fetch(`/api/screen/frame?since=${seq}${agentQuery ? `&${agentQuery}` : ''}`, {
             headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
           })
           if (response.status === 200) {
@@ -161,7 +165,7 @@ export function LiveScreenPanel({ token }: { token: string }) {
     }
     void loop()
     return () => { active = false; controller.abort() }
-  }, [available, token, paint])
+  }, [available, token, paint, agentQuery])
 
   // A freshly mounted viewer canvas needs the current frame immediately.
   useEffect(() => { if (expanded) paint() }, [expanded, paint])
@@ -222,12 +226,18 @@ export function LiveScreenPanel({ token }: { token: string }) {
       void fetch('/api/screen/control', {
         method: 'POST', keepalive: true,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'release' }),
+        body: JSON.stringify(agentId ? { action: 'release', agent: agentId } : { action: 'release' }),
       })
     }
     window.addEventListener('pagehide', release)
     return () => { window.removeEventListener('pagehide', release); release() }
-  }, [token])
+  }, [token, agentId])
+
+  // An agent's own desktop starts empty: bring its browser up the first time
+  // the screen is opened. Asking again while one is running does nothing.
+  const openBrowser = useCallback(() => { request('/api/screen/launch', {}).catch(() => {}) }, [request])
+  const dedicated = Boolean(status?.dedicated)
+  useEffect(() => { if (expanded && dedicated) openBrowser() }, [expanded, dedicated, openBrowser])
 
   useEffect(() => {
     if (!expanded || controlling) return
@@ -270,7 +280,7 @@ export function LiveScreenPanel({ token }: { token: string }) {
   return (
     <div className="live-screen-card">
       <div className="host-screen-heading">
-        <div><strong>Live screen</strong><small>{subtitle}</small></div>
+        <div><strong>{dedicated && agentName ? `${agentName}'s screen` : 'Live screen'}</strong><small>{subtitle}</small></div>
         {controlling && <span className="live-screen-pill">In control</span>}
       </div>
       {status.available
@@ -286,11 +296,12 @@ export function LiveScreenPanel({ token }: { token: string }) {
         <section className={`screen-viewer live-screen-viewer${controlling ? ' controlling' : ''}`} role="dialog" aria-modal="true" aria-labelledby="live-screen-title">
           <header className="screen-viewer-header">
             <div>
-              <p className="eyebrow">{controlling ? 'YOU ARE IN CONTROL · AGENT PAUSED' : 'HOST · LIVE VIEW'}</p>
-              <h2 id="live-screen-title">Host screen</h2>
+              <p className="eyebrow">{controlling ? 'YOU ARE IN CONTROL · AGENT PAUSED' : dedicated ? 'AGENT DESKTOP · LIVE VIEW' : 'HOST · LIVE VIEW'}</p>
+              <h2 id="live-screen-title">{dedicated && agentName ? `${agentName}'s screen` : 'Host screen'}</h2>
               <p>{sizeRef.current.width ? `${sizeRef.current.width} × ${sizeRef.current.height}` : 'Connecting…'}{status.blocked_by ? ` · paused by ${status.blocked_by}` : ''}</p>
             </div>
             <div className="live-screen-actions">
+              {dedicated && <button type="button" className="live-screen-secondary" onClick={openBrowser}>Open browser</button>}
               {status.control_enabled && (controlling
                 ? <button type="button" className="live-screen-release" disabled={busy} onClick={() => void setControl('release')}>Release to Agent</button>
                 : <button type="button" className="live-screen-take" disabled={busy || Boolean(status.blocked_by)} onClick={() => void setControl('take')}>{busy ? 'Taking over…' : 'Take control'}</button>)}
