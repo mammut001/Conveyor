@@ -118,12 +118,17 @@ async def start(
     mode: JobMode,
     prompt: str,
     on_progress: ProgressCallback,
+    *,
+    workspace_root: Path | None = None,
 ) -> Job:
     prompt = prompt.strip()
     if not prompt:
         raise ValueError("Prompt is empty.")
     if len(prompt) > 8000:
         raise ValueError("Prompt is too long; keep it under 8000 characters.")
+    if workspace_root is not None:
+        from runner.worktree import _validated_workspace
+        workspace_root = await _validated_workspace(self, workspace_root)
 
     async with self._lock:
         if self.current_job and self.current_job.state == JobState.RUNNING:
@@ -138,6 +143,7 @@ async def start(
 
             sandbox = mode.sandbox
             job = Job(id=self._new_job_id(), mode=mode, prompt=prompt, sandbox=sandbox)
+            job.workspace_root = workspace_root
             job.max_attempts = 1 + len(self.settings.codex_retry_429_delays_seconds)
             
             # Write initial metadata synchronously so other processes see it immediately

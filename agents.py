@@ -94,6 +94,35 @@ def computer_target_for_chat(settings: Any, channel: str, chat_id: str) -> dict[
     return {"scope": takeover_scope(agent["id"]), "agent_id": agent["id"], "display": int(agent["display"])}
 
 
+def workspace_for_chat(settings: Any, channel: str, chat_id: str) -> Path | None:
+    """The git repository an agent's jobs run in, or None for the default one."""
+    try:
+        agent = agent_for_chat(settings, channel, chat_id)
+    except (OSError, sqlite3.Error):
+        return None
+    if not agent or not agent.get("workspace_path"):
+        return None
+    return Path(agent["workspace_path"])
+
+
+def workspace_roots(settings: Any) -> set[Path]:
+    """Every agent's project folder (resolved). The runner only ever applies
+    changes into the configured workspace or one of these."""
+    if not enabled(settings):
+        return set()
+    roots: set[Path] = set()
+    try:
+        for agent in AgentStore(settings).list():
+            if agent.get("workspace_path"):
+                try:
+                    roots.add(Path(agent["workspace_path"]).resolve())
+                except OSError:
+                    continue
+    except (OSError, sqlite3.Error):
+        return set()
+    return roots
+
+
 def chat_id_for(agent_id: str) -> str:
     return f"{AGENT_CHAT_PREFIX}{agent_id}"
 

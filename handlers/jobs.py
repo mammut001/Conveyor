@@ -315,8 +315,13 @@ async def _execute_codex_job(
     # Prepend session context if available.
     effective_body = (ctx_prompt + body) if ctx_prompt else body
 
+    # An agent with its own project folder works there. Passed only when set,
+    # so callers and fakes that predate agents see the same call as before.
+    from agents import workspace_for_chat
+    agent_workspace = workspace_for_chat(runner.settings, msg.channel, msg.chat_id)
+    start_options = {"workspace_root": agent_workspace} if agent_workspace is not None else {}
     try:
-        job = await runner.start(mode, effective_body, progress)
+        job = await runner.start(mode, effective_body, progress, **start_options)
     except Exception as exc:
         # Failure to even start the job (e.g. invalid args, Codex
         # missing). Mark running queue row as failed.

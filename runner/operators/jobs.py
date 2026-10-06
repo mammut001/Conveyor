@@ -167,6 +167,10 @@ async def apply_job(self, job_id: str | None, worktree_path: Path | None) -> str
 
     if not worktree_path or not worktree_path.exists():
         return "No job worktree to apply."
+    # The repository the worktree belongs to: the configured workspace, or
+    # the project folder of the agent whose job this is.
+    from runner.worktree import _repo_root_for
+    apply_root = await _repo_root_for(self, worktree_path)
 
     try:
         store, active = _active_refinement(self, worktree_path)
@@ -184,7 +188,7 @@ async def apply_job(self, job_id: str | None, worktree_path: Path | None) -> str
 
         try:
             root_status = await self._git(
-                ["status", "--short"], cwd=self.settings.codex_workspace_root, check=False
+                ["status", "--short"], cwd=apply_root, check=False
             )
             if root_status.strip():
                 return "Main workspace has uncommitted changes. I will not apply over a dirty repo."
@@ -203,7 +207,7 @@ async def apply_job(self, job_id: str | None, worktree_path: Path | None) -> str
                 val_tracked = validate_apply_paths(
                     tracked_files,
                     kind="tracked",
-                    settings=self.settings,
+                    settings=self.settings, workspace_root=apply_root,
                     worktree_path=worktree_path,
                 )
                 if not val_tracked.allowed:
@@ -216,7 +220,7 @@ async def apply_job(self, job_id: str | None, worktree_path: Path | None) -> str
                 val_untracked = validate_apply_paths(
                     untracked_files,
                     kind="untracked",
-                    settings=self.settings,
+                    settings=self.settings, workspace_root=apply_root,
                     worktree_path=worktree_path,
                 )
                 if not val_untracked.allowed:
@@ -242,7 +246,7 @@ async def apply_job(self, job_id: str | None, worktree_path: Path | None) -> str
             )
             if patch.strip():
                 root_status_pre = await self._git(
-                    ["status", "--short"], cwd=self.settings.codex_workspace_root, check=False
+                    ["status", "--short"], cwd=apply_root, check=False
                 )
                 if root_status_pre.strip():
                     return "Main workspace has uncommitted changes. I will not apply over a dirty repo."
@@ -252,7 +256,7 @@ async def apply_job(self, job_id: str | None, worktree_path: Path | None) -> str
                     "apply",
                     "--binary",
                     "-",
-                    cwd=self.settings.codex_workspace_root,
+                    cwd=apply_root,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -276,7 +280,7 @@ async def apply_job(self, job_id: str | None, worktree_path: Path | None) -> str
                 worktree_path, list(validated_untracked)
             )
             status_summary = await self._git(
-                ["status", "--short"], cwd=self.settings.codex_workspace_root, check=False
+                ["status", "--short"], cwd=apply_root, check=False
             )
             safe_summary = redact_text(status_summary.strip())
 

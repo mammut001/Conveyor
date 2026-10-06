@@ -44,6 +44,48 @@ def _resolve_git_dir(repo_root: Path, value: str) -> Path:
     return path.resolve()
 
 
+def _known_workspace_roots(self) -> set[Path]:
+    """Repositories this installation works in: the configured workspace and
+    each agent's project folder."""
+    import agents
+
+    return {self.settings.codex_workspace_root.resolve()} | agents.workspace_roots(self.settings)
+
+
+async def _validated_workspace(self, workspace: Path) -> Path:
+    """An agent's project folder, checked to be the root of a git repository."""
+    root = Path(workspace).expanduser()
+    if not root.is_dir():
+        raise RuntimeError(f"Agent project folder does not exist: {root}")
+    root = root.resolve()
+    if root not in _known_workspace_roots(self):
+        raise RuntimeError(f"Agent project folder is not registered: {root}")
+    top = (await self._git(["rev-parse", "--show-toplevel"], cwd=root)).strip()
+    if Path(top).resolve() != root:
+        raise RuntimeError(f"Agent project folder must be the root of a git repository: {root}")
+    return root
+
+
+async def _repo_root_for(self, worktree_path: Path | None) -> Path:
+    """Main repository of a worktree.
+
+    Only a known repository is ever returned; anything else falls back to the
+    configured workspace, so a stray worktree cannot redirect an Apply.
+    """
+    default = self.settings.codex_workspace_root
+    if worktree_path is None or not Path(worktree_path).is_dir():
+        return default
+    try:
+        common = await self._git(["rev-parse", "--git-common-dir"], cwd=Path(worktree_path))
+    except Exception:
+        return default
+    git_dir = _resolve_git_dir(Path(worktree_path), common)
+    if git_dir.name != ".git":
+        return default
+    root = git_dir.parent
+    return root if root in _known_workspace_roots(self) else default
+
+
 async def _validate_reuse_worktree(self, requested: Path) -> Path:
     """Fail closed unless requested is one of this repository's worktrees."""
     raw = Path(requested).expanduser()
@@ -67,7 +109,10 @@ async def _validate_reuse_worktree(self, requested: Path) -> Path:
     if top != target:
         raise RuntimeError("Refinement target is not the root of its git worktree.")
 
-    configured_root = self.settings.codex_workspace_root.resolve()
+    # The repository this worktree may belong to: the configured workspace or
+    # an agent's project folder. An unknown one resolves to the configured
+    # workspace and then fails the comparison below.
+    configured_root = (await _repo_root_for(self, target)).resolve()
     configured_common = _resolve_git_dir(
         configured_root,
         await self._git(["rev-parse", "--git-common-dir"], cwd=configured_root),
@@ -181,7 +226,7 @@ async def _create_worktree(self, job: Job) -> Path:
             f"exceeds limit ({max_bytes} bytes)"
         )
 
-    root = self.settings.codex_workspace_root
+    root = getattr(job, "workspace_root", None) or self.settings.codex_workspace_root
     worktree = self._job_worktree_path(job)
     created_here = False
     if not worktree.exists():
@@ -271,7 +316,7 @@ async def _ensure_today_worktree(self) -> Path:
 async def _remove_worktree(self, worktree_path: Path) -> None:
     await self._git(
         ["worktree", "remove", "--force", str(worktree_path)],
-        cwd=self.settings.codex_workspace_root,
+        cwd=await _repo_root_for(self, worktree_path),
         check=False,
     )
     if worktree_path.exists():
@@ -284,9 +329,9 @@ async def _copy_validated_untracked_files(
     """Copy only explicitly validated untracked files during Apply."""
     from runner.apply_policy import ApplyPolicy
 
-    policy = ApplyPolicy(self.settings)
+    root = await _repo_root_for(self, worktree_path)
+    policy = ApplyPolicy(self.settings, workspace_root=root)
     max_untracked_bytes = policy.max_untracked_bytes
-    root = self.settings.codex_workspace_root
     copied = 0
     for relative in relative_paths:
         if relative == MEMORY_FILENAME or relative.startswith(MEMORY_FILENAME + "/"):
@@ -373,7 +418,9 @@ async def reconcile_orphans(
 
     if not dry_run:
         try:
-            await self._git(["worktree", "prune"], cwd=self.settings.codex_workspace_root, check=False)
+            for root in sorted(_known_workspace_roots(self)):
+                if root.is_dir():
+                    await self._git(["worktree", "prune"], cwd=root, check=False)
         except Exception as exc:
             logger.warning("git worktree prune failed: %s", exc)
 

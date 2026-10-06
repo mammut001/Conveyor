@@ -864,6 +864,9 @@ export default function App() {
         {selectedAgent && agentTab === 'details' && <ContextSection title="Agent">
           <p className="agent-instructions">{selectedAgent.instructions || 'No standing instructions yet.'}</p>
           {selectedAgent.workspace_path && <KeyValue label="Project" value={selectedAgent.workspace_path} mono />}
+          {selectedAgent.workspace_status === 'missing' && <p className="screen-request-status failed" role="alert">This folder does not exist on the host. Tasks for this agent will fail until it does.</p>}
+          {selectedAgent.workspace_status === 'not_git' && <p className="screen-request-status failed" role="alert">This folder is not the root of a git repository. Tasks for this agent will fail until it is.</p>}
+          {!selectedAgent.workspace_path && !selectedAgent.is_default && <p className="screen-privacy-note">No project folder: tasks run in the shared workspace.</p>}
           <div className="action-row"><button type="button" onClick={() => setAgentDialog({ agent: selectedAgent })}>Edit agent</button></div>
         </ContextSection>}
         {selectedAgent && agentTab === 'library' && <ContextSection title="Library">
