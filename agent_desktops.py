@@ -111,6 +111,7 @@ class Supervisor:
         self.settings = settings
         self._spawn, self._alive, self._terminate = spawn, alive, terminate
         self.size = parse_size(getattr(settings, "agent_desktop_size", "1440x900"))
+        self._cookies_merged: set[str] = set()
 
     # ---- per-agent state ---------------------------------------------------
 
@@ -137,7 +138,7 @@ class Supervisor:
         env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL")}
         env.setdefault("HOME", str(Path.home()))
         env["DISPLAY"] = f":{display}"
-        env["XAUTHORITY"] = str(agents.xauthority_path(self.settings, agent_id))
+        env["XAUTHORITY"] = str(agents.client_xauthority_path())
         # A user-session bus lets desktop apps (and snap packages) start.
         runtime = Path(f"/run/user/{os.getuid()}")
         if (runtime / "bus").exists():
@@ -158,19 +159,27 @@ class Supervisor:
 
     # ---- desktop -----------------------------------------------------------
 
+    def _xauth(self, path: Path, *command: str) -> bool:
+        return subprocess.run(
+            ["xauth", "-f", str(path), *command],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False,
+        ).returncode == 0
+
     def _write_xauthority(self, agent_id: str, display: int) -> bool:
-        """A fresh cookie: only holders of this file can see or drive the screen."""
-        path = agents.xauthority_path(self.settings, agent_id)
-        path.unlink(missing_ok=True)
-        path.touch(mode=0o600)
+        """A fresh cookie: only this user's programs can see or drive the screen.
+
+        The server gets its own file; clients get an entry for this display in
+        the user's ~/.Xauthority (see agents.client_xauthority_path).
+        """
+        server_file = agents.xauthority_path(self.settings, agent_id)
+        server_file.unlink(missing_ok=True)
+        server_file.touch(mode=0o600)
         if not shutil.which("xauth"):
             logger.error("xauth is not installed; refusing to start an unauthenticated display")
             return False
-        result = subprocess.run(
-            ["xauth", "-f", str(path), "add", f":{display}", "MIT-MAGIC-COOKIE-1", secrets.token_hex(16)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False,
-        )
-        return result.returncode == 0
+        cookie = secrets.token_hex(16)
+        entry = ("add", f":{display}", "MIT-MAGIC-COOKIE-1", cookie)
+        return self._xauth(server_file, *entry) and self._xauth(agents.client_xauthority_path(), *entry)
 
     def _display_ready(self, env: dict[str, str]) -> bool:
         if not shutil.which("xdpyinfo"):
@@ -195,7 +204,7 @@ class Supervisor:
             width, height = self.size
             xvfb = self._spawn(
                 ["Xvfb", f":{display}", "-screen", "0", f"{width}x{height}x24",
-                 "-nolisten", "tcp", "-auth", env["XAUTHORITY"], "-noreset"],
+                 "-nolisten", "tcp", "-auth", str(agents.xauthority_path(self.settings, agent_id)), "-noreset"],
                 env, directory / "xvfb.log",
             )
             state = {"display": display, "xvfb": xvfb, "started_at": time.time()}
@@ -211,6 +220,12 @@ class Supervisor:
                 subprocess.run(["xsetroot", "-solid", BACKGROUND], env=env, timeout=5, check=False,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             logger.info("agent %s: desktop up on :%d (%dx%d)", agent_id, display, width, height)
+
+        elif agent_id not in self._cookies_merged and shutil.which("xauth"):
+            # Adopted desktop: make sure its cookie is (still) where programs
+            # look, e.g. after ~/.Xauthority was recreated. Once per run.
+            self._xauth(agents.client_xauthority_path(), "merge", str(agents.xauthority_path(self.settings, agent_id)))
+        self._cookies_merged.add(agent_id)
 
         if not self._alive(int(state.get("wm") or 0), "xfwm4") and shutil.which("xfwm4"):
             state["wm"] = self._spawn(["xfwm4", "--compositor=off"], env, directory / "wm.log")
@@ -256,6 +271,8 @@ class Supervisor:
     def stop(self, agent_id: str) -> None:
         state = self._load(agent_id)
         self._stop_tracked(state)
+        if state.get("display") is not None and shutil.which("xauth"):
+            self._xauth(agents.client_xauthority_path(), "remove", f":{state['display']}")
         directory = agents.desktop_dir(self.settings, agent_id)
         for name in (PIDS_FILE, "Xauthority", BROWSER_REQUEST_FILE):
             (directory / name).unlink(missing_ok=True)

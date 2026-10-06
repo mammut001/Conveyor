@@ -56,7 +56,19 @@ def desktop_dir(settings: Any, agent_id: str) -> Path:
 
 
 def xauthority_path(settings: Any, agent_id: str) -> Path:
+    """The cookie file the agent's X server checks clients against."""
     return desktop_dir(settings, agent_id) / "Xauthority"
+
+
+def client_xauthority_path() -> Path:
+    """Where programs find the cookies of every agent display.
+
+    The user's standard ~/.Xauthority, one entry per display number. It has to
+    be that file: sandboxed (snap) browsers may read it but nothing under a
+    hidden directory, so a per-agent file in the state directory is invisible
+    to them.
+    """
+    return Path.home() / ".Xauthority"
 
 
 def takeover_scope(agent_id: str) -> str:
