@@ -1,0 +1,23 @@
+[Unit]
+Description=Conveyor: host desktop (X server + session, always on)
+After=network-online.target systemd-user-sessions.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu
+Environment=CONVEYOR_HOST_DISPLAY=9
+Environment=CONVEYOR_HOST_DESKTOP_SIZE=1600x900
+EnvironmentFile=-/etc/default/conveyor-host-desktop
+ExecStart=/opt/conveyor/scripts/run-host-desktop.sh
+Restart=always
+RestartSec=5
+# Everything on the desktop runs inside this unit, including browsers that
+# start through a setuid helper and write to the home directory, so the usual
+# sandboxing (NoNewPrivileges, ProtectHome) cannot be applied here.
+# Deploys do not restart this unit: restarting it closes every window.
+
+[Install]
+WantedBy=multi-user.target
