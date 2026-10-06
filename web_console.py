@@ -546,6 +546,17 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, self.server.control.teammate_status())
             elif path == "/api/agents":
                 self._json(HTTPStatus.OK, self.server.control.list_agents())
+            elif len(parts) == 4 and parts[:2] == ["api", "agents"] and parts[3] == "library":
+                library = self.server.control.agent_library(parts[2])
+                self._json(HTTPStatus.OK if library else HTTPStatus.NOT_FOUND, library or {"error": "not found"})
+            elif len(parts) == 5 and parts[:2] == ["api", "agents"] and parts[3] == "screenshots":
+                png = self.server.control.agent_screenshot_path(parts[2], parts[4])
+                if png is None:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                else:
+                    data = png.read_bytes()
+                    self._headers(HTTPStatus.OK, "image/png", len(data), extra_headers=[("Cache-Control", "no-store")])
+                    self.wfile.write(data)
             elif path == "/api/screen/status":
                 screen = self._screen(str((query.get("agent") or [""])[0]))
                 if screen is not None:
@@ -877,6 +888,17 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     deliver = body.get("deliver")
                     enabled = body.get("enabled", True)
                     try:
+                        # Created for an agent: the check is that agent's and
+                        # reports into its conversation.
+                        import agents
+                        owner = str(body.get("agent") or "")
+                        origin_chat_id = ""
+                        if owner and owner != agents.DEFAULT_AGENT_ID and agents.enabled(settings):
+                            agent = agents.AgentStore(settings).get(owner)
+                            if agent is None or agent["archived"]:
+                                self._json(HTTPStatus.NOT_FOUND, {"error": "agent not found"})
+                                return
+                            origin_chat_id = agents.chat_id_for(owner)
                         routine = routines.create_routine(
                             settings,
                             name=str(name or ""),
@@ -884,6 +906,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                             prompt=str(prompt or ""),
                             deliver=deliver,
                             enabled=bool(enabled),
+                            origin_chat_id=origin_chat_id,
                         )
                         self._json(HTTPStatus.CREATED, routine)
                     except ValueError as exc:

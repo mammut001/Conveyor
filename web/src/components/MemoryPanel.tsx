@@ -17,9 +17,10 @@ type MemoryList = {
   profile_cap: number;
 };
 
-export type MemoryPanelProps = { token: string };
+/** With `agentId` the panel shows that agent's own memory; without, the operator's. */
+export type MemoryPanelProps = { token: string; agentId?: string; agentName?: string };
 
-export function MemoryPanel({ token }: MemoryPanelProps) {
+export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanelProps) {
   const [disabled, setDisabled] = useState(false);
   const disabledRef = useRef(false);
   const [data, setData] = useState<MemoryList | null>(null);
@@ -41,6 +42,7 @@ export function MemoryPanel({ token }: MemoryPanelProps) {
       const params = new URLSearchParams({ limit: '200' });
       if (kind !== 'all') params.set('kind', kind);
       if (activeQuery.trim()) params.set('q', activeQuery.trim());
+      if (agentId) params.set('agent', agentId);
       const res = await fetch(`/api/memory?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -61,7 +63,7 @@ export function MemoryPanel({ token }: MemoryPanelProps) {
       if (gen !== fetchGen.current) return;
       setError(err instanceof Error ? err.message : 'Failed to load memory');
     }
-  }, [token, kind, activeQuery]);
+  }, [token, kind, activeQuery, agentId]);
 
   useEffect(() => {
     void load();
@@ -77,7 +79,7 @@ export function MemoryPanel({ token }: MemoryPanelProps) {
       const res = await fetch('/api/memory', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify(agentId ? { text, agent: agentId } : { text }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -100,7 +102,7 @@ export function MemoryPanel({ token }: MemoryPanelProps) {
   const handleDelete = async (id: number) => {
     setDeleting(true);
     try {
-      const res = await fetch(`/api/memory/${id}`, {
+      const res = await fetch(`/api/memory/${id}${agentId ? `?agent=${encodeURIComponent(agentId)}` : ''}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -141,7 +143,7 @@ export function MemoryPanel({ token }: MemoryPanelProps) {
       <section className="memory-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600 }}>
-            Long-term memory · profile {data?.counts.profile ?? 0}/{data?.profile_cap ?? 8} · log {data?.counts.log ?? 0}
+            {agentId && agentName ? `${agentName}'s memory` : 'Long-term memory'} · profile {data?.counts.profile ?? 0}/{data?.profile_cap ?? 8} · log {data?.counts.log ?? 0}
           </h3>
           <span className="memory-secondary" style={{ fontSize: '0.75rem' }}>
             {data ? (data.shared ? 'Shared across Web, Telegram and Feishu' : 'Web Console memory only') : ''}

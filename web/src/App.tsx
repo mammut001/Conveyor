@@ -8,6 +8,7 @@ import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
 import { TeammatePanel } from './components/TeammatePanel'
 import { LiveScreenPanel } from './components/LiveScreenPanel'
+import { AgentLibrary } from './components/AgentLibrary'
 import { AgentAvatar, AgentDialog, AgentList, agentTag, type Agent, type AgentDraft } from './components/AgentList'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
@@ -713,9 +714,11 @@ export default function App() {
         ) : view === 'connectors' ? (
           <ConnectorsPanel token={token} />
         ) : view === 'memory' ? (
-          <MemoryPanel token={token} />
+          <MemoryPanel key={selectedAgent?.id || 'operator'} token={token} agentId={selectedAgent && !selectedAgent.is_default ? selectedAgent.id : undefined} agentName={selectedAgent?.name} />
         ) : view === 'inbox' ? (
           <InboxPanel
+            agentId={selectedAgent && !selectedAgent.is_default ? selectedAgent.id : undefined}
+            agentName={selectedAgent?.name}
             token={token}
             webhooksEnabled={Boolean(system?.features?.webhooks)}
             onUnreadChange={setInboxUnread}
@@ -870,7 +873,7 @@ export default function App() {
           <div className="action-row"><button type="button" onClick={() => setAgentDialog({ agent: selectedAgent })}>Edit agent</button></div>
         </ContextSection>}
         {selectedAgent && agentTab === 'library' && <ContextSection title="Library">
-          <Empty text="Files, screenshots and skills this agent produces will be collected here." />
+          <AgentLibrary key={selectedAgent.id} agentId={selectedAgent.id} token={token} />
         </ContextSection>}
         {(!selectedAgent || agentTab === 'details') && <>
         <ContextSection title="Job">

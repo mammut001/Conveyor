@@ -50,6 +50,9 @@ export type InboxPanelProps = {
   onUnreadChange?: (count: number) => void;
   onApprovalDecided?: () => void;
   webhooksEnabled?: boolean;
+  /** New routines are created for this agent and report into its conversation. */
+  agentId?: string;
+  agentName?: string;
 };
 
 type CreatedHookInfo = {
@@ -78,7 +81,7 @@ function formatLocalTime(val?: string | null) {
       });
 }
 
-export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksEnabled }: InboxPanelProps) {
+export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksEnabled, agentId, agentName }: InboxPanelProps) {
   const [disabled, setDisabled] = useState(false);
   const disabledRef = useRef(false);
   const [items, setItems] = useState<InboxItem[]>([]);
@@ -363,6 +366,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
+          ...(agentId ? { agent: agentId } : {}),
           name: name.trim(),
           schedule: schedule.trim(),
           prompt: prompt.trim(),
@@ -411,7 +415,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
       <section style={{ marginBottom: 24, padding: 14, background: 'var(--panel, #fff)', borderRadius: 8, border: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)' }}>
-            Scheduled Routines ({routinesList.length})
+            Scheduled Routines ({routinesList.length}){agentId && agentName ? ` · new ones belong to ${agentName}` : ''}
           </h3>
           <button
             type="button"

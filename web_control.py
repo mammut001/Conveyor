@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 import shutil
 import sqlite3
@@ -701,6 +702,101 @@ class WebControl:
         import agents
 
         return agents.AgentStore(self.settings).archive(agent_id)
+
+    def _agent_screenshot_node(self, agent: dict[str, Any]) -> str:
+        """Node name recorded on screenshots taken on this agent's desktop."""
+        import agents
+        from desktop_computer_requests import x11_node_id
+
+        if agent.get("display") is not None and agents.desktops_enabled(self.settings):
+            return x11_node_id(agents.takeover_scope(agent["id"]))
+        return str(getattr(self.settings, "conveyor_desktop_node_id", "") or "")
+
+    def _agent_screenshots(self, agent: dict[str, Any], limit: int = 12) -> list[dict[str, Any]]:
+        from desktop_screenshot import resolve_screenshot_dir
+
+        node = self._agent_screenshot_node(agent)
+        root = resolve_screenshot_dir(self.settings)
+        if not node or not root.is_dir():
+            return []
+        found: list[dict[str, Any]] = []
+        metas = sorted(root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:400]
+        for meta in metas:
+            try:
+                data = json.loads(meta.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict) or data.get("node_id") != node or not meta.with_suffix(".png").is_file():
+                continue
+            found.append({
+                "id": meta.stem, "created_at": data.get("created_at"),
+                "width": data.get("width"), "height": data.get("height"),
+            })
+            if len(found) >= limit:
+                break
+        return found
+
+    def agent_screenshot_path(self, agent_id: str, screenshot_id: str) -> Path | None:
+        """PNG of one screenshot, only if it was taken on that agent's desktop."""
+        import agents
+        from desktop_screenshot import resolve_screenshot_dir
+
+        if not agents.enabled(self.settings) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}", screenshot_id or ""):
+            return None
+        agent = agents.AgentStore(self.settings).get(agent_id)
+        if agent is None or agent["archived"]:
+            return None
+        root = resolve_screenshot_dir(self.settings).resolve()
+        png = (root / f"{screenshot_id}.png").resolve()
+        meta = png.with_suffix(".json")
+        if root not in png.parents or not png.is_file() or not meta.is_file():
+            return None
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        node = self._agent_screenshot_node(agent)
+        return png if node and isinstance(data, dict) and data.get("node_id") == node else None
+
+    def agent_library(self, agent_id: str) -> dict[str, Any] | None:
+        """What an agent has accumulated: files it changed, its checks, memory, screenshots."""
+        import agents
+
+        if not agents.enabled(self.settings):
+            return None
+        agent = agents.AgentStore(self.settings).get(agent_id)
+        if agent is None or agent["archived"]:
+            return None
+        session = self.get_session(agent["session_id"]) or {}
+        jobs = [
+            {
+                "id": job.get("id"), "state": job.get("state"),
+                "prompt_preview": job.get("prompt_preview"), "updated_at": job.get("updated_at"),
+                "changed_files": job.get("changed_files"),
+            }
+            for job in (session.get("jobs") or [])[:30] if job.get("changed_files")
+        ]
+        routine_items: list[dict[str, Any]] = []
+        if getattr(self.settings, "routines_enabled", False):
+            import routines
+            routine_items = [
+                {key: item.get(key) for key in ("id", "name", "schedule", "enabled", "next_run_at", "last_run_at")}
+                for item in routines.list_routines(self.settings)
+                if item.get("agent_id") == agent_id
+            ]
+        memory = None
+        if getattr(self.settings, "long_term_memory_enabled", False):
+            from personal_tools import long_term_memory as ltm
+            owner = ltm.WEB_OPERATOR if agent["is_default"] else ltm.agent_owner(agent_id)
+            rows = ltm.list_facts(self.settings, owner)
+            memory = {
+                "profile": sum(1 for row in rows if row["kind"] == "profile"),
+                "log": sum(1 for row in rows if row["kind"] == "log"),
+            }
+        return {
+            "agent_id": agent_id, "jobs": jobs, "routines": routine_items, "memory": memory,
+            "screenshots": self._agent_screenshots(agent),
+        }
 
     def teammate_status(self) -> dict[str, Any]:
         """Return structured Always-On Teammate sentry telemetry."""

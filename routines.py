@@ -351,6 +351,9 @@ def _row_to_routine(row: sqlite3.Row | dict) -> dict[str, Any]:
     except Exception:
         item["deliver"] = ["web"]
     item["schedule"] = item.get("schedule_cron", "")
+    # Routines created in an agent's conversation carry that agent's id.
+    origin = str(item.get("origin_chat_id") or "")
+    item["agent_id"] = origin[len("agent-"):] if item.get("origin_channel") == "web" and origin.startswith("agent-") else None
     item["enabled"] = bool(item.get("enabled", 1))
     if item.get("hook_id"):
         item["hook"] = {
@@ -1123,6 +1126,47 @@ class RoutinePort(OutboundPort):
         return None
 
 
+def _owning_agent(settings: Any, origin_channel: str, origin_chat_id: str) -> dict[str, Any] | None:
+    """The agent whose conversation a routine was created in, if any.
+
+    The default agent does not count: its routines stay ordinary inbox items.
+    """
+    if origin_channel != "web" or not origin_chat_id:
+        return None
+    try:
+        import agents
+
+        if not origin_chat_id.startswith(agents.AGENT_CHAT_PREFIX):
+            return None
+        agent = agents.agent_for_chat(settings, "web", origin_chat_id)
+    except Exception:
+        return None
+    return agent if agent and not agent.get("is_default") else None
+
+
+def _post_to_agent_conversation(settings: Any, agent: dict[str, Any], name: str, status: str, output: str) -> str:
+    """Add a routine's result to its agent's conversation as a message from the agent."""
+    try:
+        import agents
+        from transcript_store import get_transcript_store
+
+        if status == "approval_pending":
+            text = f"⏰ {name} — needs your approval\n\n{output}"
+        elif status == "ok":
+            text = f"⏰ {name}\n\n{output}"
+        else:
+            text = f"⏰ {name} ({status})\n\n{output}"
+        get_transcript_store(settings).append(
+            agent["session_id"], "assistant", text, kind="routine",
+            channel=agents.WEB_CHANNEL, operator_id=agents.WEB_OPERATOR,
+            source_chat_id=agents.chat_id_for(agent["id"]),
+        )
+        return "ok"
+    except Exception as exc:
+        logger.warning("Routine could not post to agent conversation: %s", exc)
+        return f"error: {type(exc).__name__}"
+
+
 async def run_single_routine(
     settings: Any,
     runner: Any,
@@ -1168,10 +1212,15 @@ async def run_single_routine(
             f"{prompt}"
         )
 
+    # A routine created in an agent's conversation is that agent's own check:
+    # it runs as the agent (its instructions, its memory, its conversation
+    # so far) and reports back into that conversation.
+    agent = _owning_agent(settings, origin_channel, origin_chat_id)
+
     msg = InboundMessage(
         channel="web",
         operator_id="web-console",
-        chat_id=f"routine-{routine_id}",
+        chat_id=origin_chat_id if agent else f"routine-{routine_id}",
         message_id=f"routine-run-{uuid.uuid4().hex[:12]}",
         text=prompt,
         # Webhook payloads are outside data: such runs get no long-term memory
@@ -1226,6 +1275,8 @@ async def run_single_routine(
 
     # Deliver output (best-effort, never raises)
     delivery_record: dict[str, str] = {"web": "ok"}
+    if agent:
+        delivery_record["agent"] = _post_to_agent_conversation(settings, agent, name, status, safe_output)
     try:
         from agent_events import emit_event
         emit_event(settings, "routine.run", str(routine_id), {

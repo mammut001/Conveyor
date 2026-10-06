@@ -46,7 +46,7 @@ sessions and the queue.
   amber ("Waiting for you") while one of its approvals is pending.
 - **＋** creates an agent; **⋯** on a row, or **Edit agent** in Details, edits it.
 - **Right panel**: Details (instructions, project, the selected job and its
-  changes), Library (empty until phase 4), Computer (the live screen).
+  changes), Library (what the agent has accumulated), Computer (its screen).
 
 ## API
 
@@ -165,10 +165,29 @@ the host; the Details tab says so if it is missing or not one.
 - Host read-only tools (`/git_status`, file search) still look at the
   configured workspace.
 
+## Memory, scheduled checks and the Library (phase 4)
+
+- **Memory.** Every agent you create keeps its own long-term memory: facts
+  remembered in its conversation are in its prompts and visible to its
+  `memory.*` tools only. The default agent — and so Telegram and Feishu —
+  keeps using the operator's store. With an agent selected, the Memory view
+  shows and edits that agent's facts (`/api/memory?agent=<id>`).
+- **Scheduled checks.** A routine created while an agent is selected (or by
+  that agent in its conversation) belongs to it. It runs as the agent — its
+  instructions, its memory, its conversation so far — and the result is
+  posted into the conversation as a message from the agent, so the list
+  preview shows it. It still appears in the inbox and can still be delivered
+  to Telegram or Feishu. Routines of the default agent are unchanged.
+  Webhook-triggered runs get no long-term memory, as before.
+- **Library tab.** What the agent has accumulated: its memory counts, its
+  scheduled checks, files changed by its tasks, and screenshots taken on its
+  desktop (`GET /api/agents/<id>/library`). A screenshot is served only to
+  the agent whose desktop it was taken on.
+
 ## Safety notes
 
 - Instructions are operator-authored and shape the role, but the chat tier's
   numbered rules (no invented facts, write tools need confirmation, untrusted
   tool output) come after them in the prompt and still apply.
 - List previews are redacted like any other text leaving the console.
-- All agents still share one memory and run one job at a time.
+- Codex jobs still run one at a time across all agents.
