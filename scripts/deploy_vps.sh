@@ -271,6 +271,20 @@ NEW_COMMIT_FULL="$(git rev-parse HEAD)"
 NEW_COMMIT="$(git rev-parse --short HEAD)"
 [[ "${NEW_COMMIT_FULL}" == "${TARGET_COMMIT_FULL}" ]] || rollback_release "post-cutover SHA mismatch"
 
+# ---- report systemd unit drift ----------------------------------------------
+# Deploys never install unit files (that needs root), so an edited unit in the
+# repo silently stays unapplied. Say so instead of letting it rot.
+UNIT_DRIFT=()
+for unit in systemd/*.service systemd/*.timer; do
+  installed="/etc/systemd/system/$(basename "${unit}")"
+  [[ -f "${installed}" ]] || continue
+  cmp -s "${unit}" "${installed}" || UNIT_DRIFT+=("$(basename "${unit}")")
+done
+if (( ${#UNIT_DRIFT[@]} )); then
+  log "WARNING: installed systemd units differ from the repo: ${UNIT_DRIFT[*]}"
+  log "         apply with: sudo install -m 0644 ${DEPLOY_PATH}/systemd/<unit> /etc/systemd/system/ && sudo systemctl daemon-reload"
+fi
+
 # ---- write deployment status ---------------------------------------------
 TG_STATE="${SVC_STATUS[conveyor-telegram-bot.service]:-inactive-before-deploy}"
 FS_STATE="${SVC_STATUS[conveyor-feishu-bot.service]:-inactive-before-deploy}"

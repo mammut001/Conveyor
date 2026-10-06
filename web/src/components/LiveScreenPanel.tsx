@@ -23,6 +23,8 @@ const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'AltGraph', 'F
 const MAX_TEXT_CHARS = 500
 const THUMBNAIL_PAUSE_MS = 900
 const MOVE_INTERVAL_MS = 45
+// A classic arrow, tip at the origin, in 1/1000-of-screen-width units.
+const POINTER_SHAPE: [number, number][] = [[0, 0], [0, 17], [4.5, 13], [7.5, 20], [10.5, 18.7], [7.5, 12], [13, 12]]
 
 /**
  * Live view of the host desktop with one-click takeover.
@@ -43,6 +45,7 @@ export function LiveScreenPanel({ token }: { token: string }) {
   const viewRef = useRef<HTMLCanvasElement>(null)
   const bitmapRef = useRef<ImageBitmap | null>(null)
   const sizeRef = useRef({ width: 0, height: 0 })
+  const pointerRef = useRef({ x: -1, y: -1 })
   const expandedRef = useRef(false)
   const controllingRef = useRef(false)
   const queueRef = useRef<InputEvent[]>([])
@@ -74,7 +77,28 @@ export function LiveScreenPanel({ token }: { token: string }) {
         canvas.width = bitmap.width
         canvas.height = bitmap.height
       }
-      canvas.getContext('2d')?.drawImage(bitmap, 0, 0)
+      const context = canvas.getContext('2d')
+      if (!context) continue
+      context.drawImage(bitmap, 0, 0)
+      // Captures carry no cursor. While watching, draw where the host pointer
+      // is; while in control the operator's own cursor already shows it.
+      const { x, y } = pointerRef.current
+      const { width, height } = sizeRef.current
+      if (controllingRef.current || x < 0 || y < 0 || !width || !height) continue
+      const unit = Math.max(1, bitmap.width / 1000)
+      context.save()
+      context.translate((x / width) * bitmap.width, (y / height) * bitmap.height)
+      context.scale(unit, unit)
+      context.beginPath()
+      for (const [px, py] of POINTER_SHAPE) context.lineTo(px, py)
+      context.closePath()
+      context.fillStyle = '#fff'
+      context.strokeStyle = '#000'
+      context.lineWidth = 1.5
+      context.lineJoin = 'round'
+      context.fill()
+      context.stroke()
+      context.restore()
     }
   }, [])
 
@@ -116,6 +140,10 @@ export function LiveScreenPanel({ token }: { token: string }) {
               width: Number(response.headers.get('X-Screen-Width')) || bitmap.width,
               height: Number(response.headers.get('X-Screen-Height')) || bitmap.height,
             }
+            pointerRef.current = {
+              x: Number(response.headers.get('X-Pointer-X') ?? -1),
+              y: Number(response.headers.get('X-Pointer-Y') ?? -1),
+            }
             paint()
             setHasFrame(true)
             setError('')
@@ -137,6 +165,7 @@ export function LiveScreenPanel({ token }: { token: string }) {
 
   // A freshly mounted viewer canvas needs the current frame immediately.
   useEffect(() => { if (expanded) paint() }, [expanded, paint])
+  useEffect(() => { paint() }, [controlling, paint])
 
   const flush = useCallback(async () => {
     if (sendingRef.current) return

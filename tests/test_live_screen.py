@@ -65,6 +65,7 @@ class _Host:
         self.xdotool: list[list[str]] = []
         self.other: list[list[str]] = []
         self.width, self.height = 1024, 768
+        self.pointer = (400, 300)
 
     def run(self, args, **_kwargs):
         if args[0] == "import":
@@ -73,6 +74,9 @@ class _Host:
         if args[0] != "xdotool":
             self.other.append(list(args))
             return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+        if args[:2] == ["xdotool", "getmouselocation"]:
+            x, y = self.pointer
+            return subprocess.CompletedProcess(args, 0, stdout=f"X={x}\nY={y}\nSCREEN=0\nWINDOW=1\n", stderr="")
         if args[:2] == ["xdotool", "getdisplaygeometry"]:
             return subprocess.CompletedProcess(args, 0, stdout=f"{self.width} {self.height}\n", stderr="")
         self.xdotool.append(list(args[1:]))
@@ -117,8 +121,8 @@ class DisabledTests(unittest.TestCase):
 
 class FrameTests(LiveScreenCase):
     def test_frame_then_no_content_until_the_screen_changes(self) -> None:
-        seq, data, size = self.screen.frame(since=0, wait=3)
-        self.assertEqual((data, size), (JPEG_A, (1024, 768)))
+        seq, data, size, pointer = self.screen.frame(since=0, wait=3)
+        self.assertEqual((data, size, pointer), (JPEG_A, (1024, 768), (400, 300)))
         self.assertIsNone(self.screen.frame(since=seq, wait=0.4))
         self.host.frames = [JPEG_B]
         newer = self.screen.frame(since=seq, wait=3)
@@ -127,20 +131,42 @@ class FrameTests(LiveScreenCase):
         self.assertEqual(newer[1], JPEG_B)
 
     def test_returning_viewer_never_gets_a_stale_frame(self) -> None:
-        seq, data, _ = self.screen.frame(since=0, wait=3)
+        seq, data, _, _ = self.screen.frame(since=0, wait=3)
         self.assertEqual(data, JPEG_A)
         # The viewer leaves; the screen changes while nobody is watching.
         self.screen._last_viewer_at = time.monotonic() - live_screen.VIEWER_IDLE_SECONDS - 1
         self.host.frames = [JPEG_B]
-        _, data, _ = self.screen.frame(since=0, wait=3)
+        _, data, _, _ = self.screen.frame(since=0, wait=3)
         self.assertEqual(data, JPEG_B)
 
+    def test_pointer_move_alone_is_a_new_frame(self) -> None:
+        seq, _, _, pointer = self.screen.frame(since=0, wait=3)
+        self.assertEqual(pointer, (400, 300))
+        self.assertIsNone(self.screen.frame(since=seq, wait=0.4))
+        self.host.pointer = (640, 480)  # the Agent moves; the picture does not change
+        newer = self.screen.frame(since=seq, wait=3)
+        self.assertIsNotNone(newer)
+        self.assertEqual((newer[1], newer[3]), (JPEG_A, (640, 480)))
+
+    def test_first_frame_waits_for_the_screen_to_settle(self) -> None:
+        # Dismissing a screensaver: black for a few captures, then the desktop.
+        black = _jpeg(1024, 768, b"black")
+        self.host.frames = [black, _jpeg(1024, 768, b"fading"), JPEG_B, JPEG_B, JPEG_B]
+        _, data, _, _ = self.screen.frame(since=0, wait=3)
+        self.assertEqual(data, JPEG_B)
+
+    def test_a_screen_that_never_settles_is_still_shown(self) -> None:
+        self.host.frames = [_jpeg(1024, 768, b"v%d" % i) for i in range(400)]
+        started = time.monotonic()
+        self.assertIsNotNone(self.screen.frame(since=0, wait=4))
+        self.assertLess(time.monotonic() - started, live_screen.SETTLE_MAX_SECONDS + 1.0)
+
     def test_size_follows_a_desktop_resize(self) -> None:
-        seq, _, size = self.screen.frame(since=0, wait=3)
+        seq, _, size, _ = self.screen.frame(since=0, wait=3)
         self.assertEqual(size, (1024, 768))
         self.host.frames = [_jpeg(1600, 900, b"resized")]
         self.host.width, self.host.height = 1600, 900
-        _, _, size = self.screen.frame(since=seq, wait=3)
+        _, _, size, _ = self.screen.frame(since=seq, wait=3)
         self.assertEqual(size, (1600, 900))
         self.assertEqual(self.screen.status()["width"], 1600)
         # A click in the newly visible area is accepted and lands where asked.
@@ -196,7 +222,7 @@ class ControlTests(LiveScreenCase):
 
     def test_input_triggers_an_immediate_refresh(self) -> None:
         self.screen.take_control()
-        seq, _, _ = self.screen.frame(since=0, wait=3)
+        seq, _, _, _ = self.screen.frame(since=0, wait=3)
         self.host.frames = [JPEG_B]
         started = time.monotonic()
         self.screen.send_input([{"t": "click", "x": 10, "y": 20, "b": 1}])
