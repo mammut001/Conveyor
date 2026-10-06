@@ -211,8 +211,13 @@ export function LiveScreenPanel({ token }: { token: string }) {
     if (!canvas || !width || !height) return null
     const rect = canvas.getBoundingClientRect()
     if (!rect.width || !rect.height) return null
-    const x = Math.round(((event.clientX - rect.left) / rect.width) * width)
-    const y = Math.round(((event.clientY - rect.top) / rect.height) * height)
+    // The canvas fills its frame with object-fit: contain, so the picture is
+    // letterboxed inside the element; map through the drawn area, not the box.
+    const scale = Math.min(rect.width / width, rect.height / height)
+    const left = rect.left + (rect.width - width * scale) / 2
+    const top = rect.top + (rect.height - height * scale) / 2
+    const x = Math.round((event.clientX - left) / scale)
+    const y = Math.round((event.clientY - top) / scale)
     return { x: Math.min(width - 1, Math.max(0, x)), y: Math.min(height - 1, Math.max(0, y)) }
   }
 
