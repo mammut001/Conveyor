@@ -34,6 +34,8 @@ logger = logging.getLogger("conveyor.desktop_x11")
 MAX_WAIT_SECONDS = 10.0
 BROWSER_WAIT_SECONDS = 40.0
 TYPE_CHUNK = 400
+# X window classes of the browsers an agent desktop may run (regex).
+BROWSER_CLASSES = "firefox|Navigator|chromium|chrome"
 # A planner used to macOS says "cmd"; on this desktop the shortcut key is ctrl.
 MODIFIERS = {
     "ctrl": "ctrl", "control": "ctrl", "cmd": "ctrl", "command": "ctrl", "meta": "ctrl",
@@ -129,11 +131,17 @@ class X11Desktop:
             return None
         return name[:64] or None
 
-    def has_window(self) -> bool:
+    def has_browser_window(self) -> bool:
+        """True once a browser window is mapped.
+
+        Matching any window would always succeed: the window manager owns
+        several invisible-to-the-eye helper windows of its own.
+        """
         try:
-            return bool(self._run("xdotool", "search", "--onlyvisible", "--class", ".", timeout=5).stdout.strip())
+            found = self._run("xdotool", "search", "--onlyvisible", "--class", BROWSER_CLASSES, timeout=5)
         except (OSError, subprocess.SubprocessError):
             return False
+        return bool(found.stdout.strip())
 
     # ---- actions ------------------------------------------------------------
 
@@ -242,7 +250,7 @@ class X11ComputerBackend:
         if self._prepared:
             return
         self._prepared = True
-        if await asyncio.to_thread(self.desktop.has_window):
+        if await asyncio.to_thread(self.desktop.has_browser_window):
             return
         from agent_desktops import request_browser
 
@@ -250,7 +258,7 @@ class X11ComputerBackend:
         deadline = time.monotonic() + BROWSER_WAIT_SECONDS
         while time.monotonic() < deadline:
             await asyncio.sleep(1.0)
-            if await asyncio.to_thread(self.desktop.has_window):
+            if await asyncio.to_thread(self.desktop.has_browser_window):
                 # Let the first page paint before the first screenshot.
                 await asyncio.sleep(3.0)
                 return
