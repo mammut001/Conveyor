@@ -84,7 +84,12 @@ def glob_to_regex(pattern: str) -> re.Pattern:
     i = 0
     n = len(pattern)
     while i < n:
-        if pattern[i:i+2] == "**":
+        if pattern[i:i+3] == "**/":
+            # Zero or more directories, so "**/node_modules/**" also covers a
+            # node_modules at the top of the repository.
+            regex_parts.append("(?:.*/)?")
+            i += 3
+        elif pattern[i:i+2] == "**":
             regex_parts.append(".*")
             i += 2
         elif pattern[i] == "*":
@@ -141,8 +146,21 @@ class CollectResult:
         return CollectResult(ok=False, paths=[], error=error)
 
 class ApplyPolicy:
-    def __init__(self, settings: Any) -> None:
+    def __init__(self, settings: Any, *, workspace_root: Path | None = None) -> None:
         self.settings = settings
+        # The repository the change is applied into (an agent's project
+        # folder, or the configured workspace).
+        self.workspace_root = workspace_root or settings.codex_workspace_root
+        # The allowlist below describes Conveyor's own source tree. It guards
+        # the configured workspace; an agent's project folder has a different
+        # layout, so there every path is judged by the deny, high-risk and
+        # untracked-file rules alone (and still reviewed with /diff).
+        try:
+            self.enforce_allowlist = (
+                Path(self.workspace_root).resolve() == Path(settings.codex_workspace_root).resolve()
+            )
+        except (OSError, TypeError, AttributeError):
+            self.enforce_allowlist = True
         self.allow_high_risk = getattr(settings, "conveyor_apply_allow_high_risk", False)
         self.max_untracked_bytes = getattr(settings, "conveyor_apply_max_untracked_bytes", 1048576)
 
@@ -173,7 +191,7 @@ class ApplyPolicy:
 
         # Check if settings.codex_memory_root or settings.codex_task_root are under the repo
         try:
-            rel_mem = os.path.relpath(self.settings.codex_memory_root, self.settings.codex_workspace_root)
+            rel_mem = os.path.relpath(self.settings.codex_memory_root, self.workspace_root)
             if not rel_mem.startswith("..") and not os.path.isabs(rel_mem):
                 rel_mem_norm = os.path.normpath(rel_mem).replace("\\", "/")
                 if norm_path == rel_mem_norm or norm_path.startswith(rel_mem_norm + "/"):
@@ -182,7 +200,7 @@ class ApplyPolicy:
             pass
 
         try:
-            rel_task = os.path.relpath(self.settings.codex_task_root, self.settings.codex_workspace_root)
+            rel_task = os.path.relpath(self.settings.codex_task_root, self.workspace_root)
             if not rel_task.startswith("..") and not os.path.isabs(rel_task):
                 rel_task_norm = os.path.normpath(rel_task).replace("\\", "/")
                 if norm_path == rel_task_norm or norm_path.startswith(rel_task_norm + "/"):
@@ -239,6 +257,9 @@ class ApplyPolicy:
         if is_high_risk:
             if not self.allow_high_risk:
                 return f"high-risk file rejected: {norm_path}"
+            return None
+
+        if not self.enforce_allowlist:
             return None
 
         # Check Allowlist
@@ -302,9 +323,12 @@ def collect_untracked_files(worktree_path: Path) -> CollectResult:
     paths = [p for p in res.stdout.split("\0") if p.strip()]
     return CollectResult.success(paths)
 
-def validate_apply_paths(paths: list[str], *, kind: str, settings: Any, worktree_path: Path | None = None) -> ApplyValidationResult:
+def validate_apply_paths(
+    paths: list[str], *, kind: str, settings: Any, worktree_path: Path | None = None,
+    workspace_root: Path | None = None,
+) -> ApplyValidationResult:
     """Validate a batch of paths of the same kind."""
-    policy = ApplyPolicy(settings)
+    policy = ApplyPolicy(settings, workspace_root=workspace_root)
     
     # Check total size limit of untracked files
     if kind == "untracked" and worktree_path is not None:

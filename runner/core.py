@@ -67,6 +67,7 @@ from runner.streaming import (
     _capture_usage,
     _event_summary,
 )
+from runner.worktree import _known_workspace_roots, _validated_workspace, _repo_root_for
 from runner.worktree import _job_worktree_path, _create_worktree, _user_today, _today_worktree_path, _memory_path, _memory_context_text, _ensure_today_worktree, _remove_worktree, _copy_untracked_files, _copy_validated_untracked_files, _git, cleanup_job_worktree, reconcile_orphans
 
 for _name, _func in [
@@ -141,6 +142,9 @@ for _name, _func in [
     ("_memory_context_text", _memory_context_text),
     ("_ensure_today_worktree", _ensure_today_worktree),
     ("_remove_worktree", _remove_worktree),
+    ("_known_workspace_roots", _known_workspace_roots),
+    ("_validated_workspace", _validated_workspace),
+    ("_repo_root_for", _repo_root_for),
     ("_copy_untracked_files", _copy_untracked_files),
     ("_copy_validated_untracked_files", _copy_validated_untracked_files),
     ("_git", _git),

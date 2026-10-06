@@ -23,7 +23,7 @@ Off by default. Turning it on changes nothing by itself: the built-in
 |---|---|
 | Name, color | How it appears in the list |
 | Instructions | Its role. Added to the chat tier's system prompt and, as an `<agent-profile>` block, to every Codex job started from its conversation |
-| Project folder | An absolute path on the host. Shown as a tag today; becomes the agent's own workspace in phase 3 |
+| Project folder | An absolute path to a git repository on the host. The agent's jobs run there; shown as a tag in the list |
 
 Agents live in the `agents` table of `state/job_queue.sqlite3`, next to
 sessions and the queue.
@@ -141,10 +141,34 @@ conversation ─▶ task {takeover_scope: agent:<id>} ─▶ X11ComputerBackend 
 **Isolation is by display and browser profile only.** All agents run as the
 same Linux user and share one filesystem.
 
+## Agent workspaces (phase 3)
+
+An agent with a **project folder** runs its Codex jobs there instead of in
+`CODEX_WORKSPACE_ROOT`. The folder must be the root of a git repository on
+the host; the Details tab says so if it is missing or not one.
+
+- **Worktrees** for its jobs are cut from that repository (still under
+  `<task_root>/worktrees/`), and `/diff`, `/apply`, `/discard` act on it.
+  The repository is resolved from the worktree itself and accepted only if
+  it is the configured workspace or a registered agent folder, so a stray
+  worktree can never redirect an Apply.
+- **Apply checks the right repository**: "main workspace has uncommitted
+  changes" refers to the agent's folder, and the patch lands only there.
+- **Apply rules.** The path allowlist in `runner/apply_policy.py` describes
+  Conveyor's own source tree and guards the configured workspace. In an
+  agent's folder it does not apply — any layout is fine — but the deny list
+  (secrets, `.git`, `node_modules`, virtualenvs…), the high-risk gate
+  (workflows, deploy and auth files; `CONVEYOR_APPLY_ALLOW_HIGH_RISK`) and the
+  untracked-file checks (no symlinks, binaries or oversized files) all do.
+- An agent without a project folder, and everything from Telegram and
+  Feishu, keeps using the configured workspace.
+- Host read-only tools (`/git_status`, file search) still look at the
+  configured workspace.
+
 ## Safety notes
 
 - Instructions are operator-authored and shape the role, but the chat tier's
   numbered rules (no invented facts, write tools need confirmation, untrusted
   tool output) come after them in the prompt and still apply.
 - List previews are redacted like any other text leaving the console.
-- All agents still share one workspace, one memory and one job at a time.
+- All agents still share one memory and run one job at a time.

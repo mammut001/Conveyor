@@ -6,6 +6,7 @@ export type Agent = {
   color: string
   instructions: string
   workspace_path: string
+  workspace_status?: '' | 'ok' | 'missing' | 'not_git'
   session_id: string
   is_default: boolean
   status: 'idle' | 'working' | 'waiting'

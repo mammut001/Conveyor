@@ -662,8 +662,14 @@ class WebControl:
         else:
             status = "idle"
         preview = " ".join(redact_text(str((last or {}).get("content") or "")).split())[:160]
+        # Jobs only run in a project folder that is the root of a git repository.
+        workspace_status = ""
+        if agent.get("workspace_path"):
+            folder = Path(agent["workspace_path"])
+            workspace_status = "ok" if (folder / ".git").exists() else ("not_git" if folder.is_dir() else "missing")
         return {
             **agent,
+            "workspace_status": workspace_status,
             "status": status,
             "last_message": preview,
             "last_message_role": (last or {}).get("role"),

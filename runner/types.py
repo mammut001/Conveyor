@@ -71,6 +71,9 @@ class Job:
     finished_at: datetime | None = None
     return_code: int | None = None
     worktree_path: Path | None = None
+    # Repository this job works in when it is not the configured workspace
+    # (an agent's own project folder).
+    workspace_root: Path | None = None
     log_path: Path | None = None
     final_message_path: Path | None = None
     metadata_path: Path | None = None
