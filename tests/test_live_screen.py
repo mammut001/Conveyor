@@ -24,8 +24,17 @@ from human_takeover import HumanTakeoverStore, takeover_blocks_automation
 from live_screen import LiveScreen, LiveScreenError
 
 TOKEN = "t" * 40
-JPEG_A = b"\xff\xd8frame-a\xff\xd9"
-JPEG_B = b"\xff\xd8frame-b\xff\xd9"
+
+
+def _jpeg(width: int, height: int, tag: bytes) -> bytes:
+    """Smallest byte string with a real JPEG frame header of that size."""
+    app0 = b"\xff\xe0" + (2 + len(tag)).to_bytes(2, "big") + tag
+    sof0 = b"\xff\xc0\x00\x0b\x08" + height.to_bytes(2, "big") + width.to_bytes(2, "big") + b"\x01\x01\x11\x00"
+    return b"\xff\xd8" + app0 + sof0 + b"\xff\xd9"
+
+
+JPEG_A = _jpeg(1024, 768, b"frame-a")
+JPEG_B = _jpeg(1024, 768, b"frame-b")
 
 
 def _settings(root: Path, **overrides):
@@ -55,6 +64,7 @@ class _Host:
         self.frames = [JPEG_A]
         self.xdotool: list[list[str]] = []
         self.other: list[list[str]] = []
+        self.width, self.height = 1024, 768
 
     def run(self, args, **_kwargs):
         if args[0] == "import":
@@ -64,7 +74,7 @@ class _Host:
             self.other.append(list(args))
             return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
         if args[:2] == ["xdotool", "getdisplaygeometry"]:
-            return subprocess.CompletedProcess(args, 0, stdout="1024 768\n", stderr="")
+            return subprocess.CompletedProcess(args, 0, stdout=f"{self.width} {self.height}\n", stderr="")
         self.xdotool.append(list(args[1:]))
         return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
 
@@ -115,6 +125,33 @@ class FrameTests(LiveScreenCase):
         self.assertIsNotNone(newer)
         self.assertGreater(newer[0], seq)
         self.assertEqual(newer[1], JPEG_B)
+
+    def test_returning_viewer_never_gets_a_stale_frame(self) -> None:
+        seq, data, _ = self.screen.frame(since=0, wait=3)
+        self.assertEqual(data, JPEG_A)
+        # The viewer leaves; the screen changes while nobody is watching.
+        self.screen._last_viewer_at = time.monotonic() - live_screen.VIEWER_IDLE_SECONDS - 1
+        self.host.frames = [JPEG_B]
+        _, data, _ = self.screen.frame(since=0, wait=3)
+        self.assertEqual(data, JPEG_B)
+
+    def test_size_follows_a_desktop_resize(self) -> None:
+        seq, _, size = self.screen.frame(since=0, wait=3)
+        self.assertEqual(size, (1024, 768))
+        self.host.frames = [_jpeg(1600, 900, b"resized")]
+        self.host.width, self.host.height = 1600, 900
+        _, _, size = self.screen.frame(since=seq, wait=3)
+        self.assertEqual(size, (1600, 900))
+        self.assertEqual(self.screen.status()["width"], 1600)
+        # A click in the newly visible area is accepted and lands where asked.
+        self.screen.take_control()
+        self.screen.send_input([{"t": "click", "x": 1500, "y": 850, "b": 1}])
+        self.assertEqual(self.host.xdotool[-1][:3], ["mousemove", "1500", "850"])
+
+    def test_jpeg_size_reads_real_and_rejects_garbage(self) -> None:
+        self.assertEqual(live_screen._jpeg_size(_jpeg(1600, 900, b"x")), (1600, 900))
+        self.assertEqual(live_screen._jpeg_size(b""), (0, 0))
+        self.assertEqual(live_screen._jpeg_size(b"\xff\xd8not a jpeg at all"), (0, 0))
 
     def test_watching_wakes_the_screensaver(self) -> None:
         self.screen.frame(since=0, wait=3)
