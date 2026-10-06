@@ -28,6 +28,7 @@ from handlers.jobs import submit_codex_job
 from logging_setup import configure_logging
 from redaction import redact_text
 from runner import CodexRunner, JobMode
+from live_screen import LiveScreen, LiveScreenError
 from web_control import WebControl
 from transcript_store import session_identity
 
@@ -150,6 +151,8 @@ class WebConsoleServer(ThreadingHTTPServer):
         self.control = control
         self.loop = loop
         self.token = token
+        # Controls without settings (tests, minimal embeds) get a disabled screen.
+        self.live_screen = LiveScreen(getattr(control, "settings", None))
         self._active_routine_runs: set[int] = set()
         self._hook_last_accepted: dict[str, float] = {}
         self._rate_limit_lock = threading.Lock()
@@ -169,6 +172,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
+        # A live screen viewer polls several times a second; keep the journal usable.
+        if getattr(self, "path", "").startswith(("/api/screen/frame", "/api/screen/input")):
+            return
         logger.info("%s %s", self.client_address[0], fmt % args)
 
     def _headers(self, status: int, content_type: str, length: int | None = None,
@@ -186,7 +192,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             cache_control = "no-cache"
         else:
             cache_control = "public, max-age=31536000, immutable"
-        self.send_header("Cache-Control", cache_control)
+        if any(k.lower() == "cache-control" for k, _ in extra_headers or []):
+            cache_control = ""
+        if cache_control:
+            self.send_header("Cache-Control", cache_control)
         self.send_header("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'")
         if length is not None:
             self.send_header("Content-Length", str(length))
@@ -473,6 +482,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, self.server.control.computer_status())
             elif path == "/api/teammate/status":
                 self._json(HTTPStatus.OK, self.server.control.teammate_status())
+            elif path == "/api/screen/status":
+                self._json(HTTPStatus.OK, self.server.live_screen.status())
+            elif path == "/api/screen/frame":
+                self._screen_frame(query)
             elif len(parts) == 3 and parts[:2] == ["api", "artifacts"]:
                 self._artifact(parts[2])
             elif len(parts) == 3 and parts[:2] == ["api", "nodes"]:
@@ -1080,6 +1093,25 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/computer/stop":
                 result = self._await(self.server.control.emergency_stop())
                 self._json(HTTPStatus.OK, {"ok": True, "result": result})
+            elif parsed.path == "/api/screen/control":
+                action = str(body.get("action", "")).strip().lower()
+                if action not in ("take", "release"):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "action must be take or release"})
+                    return
+                screen = self.server.live_screen
+                try:
+                    result = screen.take_control() if action == "take" else screen.release_control()
+                except LiveScreenError as exc:
+                    self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                    return
+                self._json(HTTPStatus.OK, result)
+            elif parsed.path == "/api/screen/input":
+                try:
+                    result = self.server.live_screen.send_input(body.get("events"))
+                except LiveScreenError as exc:
+                    self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                    return
+                self._json(HTTPStatus.OK, result)
             elif parsed.path == "/api/teammate/patrol":
                 force = bool(body.get("force", True))
                 self._json(HTTPStatus.OK, self.server.control.teammate_run_patrol(force=force))
@@ -1364,6 +1396,25 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         data = candidate.read_bytes()
         content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
         self._headers(HTTPStatus.OK, f"{content_type}; charset=utf-8" if content_type.startswith("text/") else content_type, len(data))
+        self.wfile.write(data)
+
+    def _screen_frame(self, query: dict[str, list[str]]) -> None:
+        """Long-poll for the next live screen frame; 204 when nothing changed."""
+        since = int((query.get("since") or ["0"])[0])
+        try:
+            frame = self.server.live_screen.frame(since=since)
+        except LiveScreenError as exc:
+            self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
+            return
+        no_store = ("Cache-Control", "no-store")
+        if frame is None:
+            self._headers(HTTPStatus.NO_CONTENT, "image/jpeg", 0, extra_headers=[no_store])
+            return
+        seq, data, (width, height) = frame
+        self._headers(HTTPStatus.OK, "image/jpeg", len(data), extra_headers=[
+            no_store, ("X-Frame-Seq", str(seq)),
+            ("X-Screen-Width", str(width)), ("X-Screen-Height", str(height)),
+        ])
         self.wfile.write(data)
 
     def _artifact(self, artifact_id: str) -> None:

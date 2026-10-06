@@ -624,6 +624,7 @@ class WebControl:
                 "subagents": bool(getattr(self.settings, "subagents_enabled", False))
                 and bool(getattr(self.settings, "chat_tools_enabled", False)),
                 "teammate": bool(getattr(self.settings, "teammate_enabled", True)),
+                "live_screen": bool(getattr(self.settings, "live_screen_enabled", False)),
             },
         }
 

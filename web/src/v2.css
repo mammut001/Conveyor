@@ -1478,3 +1478,31 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   background: #f1f5f9;
 }
 
+/* Live screen: embedded host desktop view with one-click takeover. */
+.live-screen-card { display: grid; gap: 9px; margin-bottom: 12px; }
+.live-screen-pill { align-self: center; padding: 3px 8px; border-radius: 999px; background: #e7f6ec; color: #17693a; font-size: 10px; font-weight: 650; white-space: nowrap; }
+.live-screen-thumb { position: relative; display: block; width: 100%; padding: 0; overflow: hidden; border: 1px solid #dfe4ec; border-radius: 12px; background: #0b0d11; cursor: pointer; aspect-ratio: 4 / 3; }
+.live-screen-thumb canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
+.live-screen-waiting { position: absolute; inset: 0; display: grid; place-items: center; color: #9aa4b2; font-size: 12px; }
+.live-screen-open { position: absolute; top: 50%; left: 50%; display: inline-flex; align-items: center; gap: 7px; padding: 8px 15px; border-radius: 999px; background: rgba(22, 24, 29, .86); color: #fff; font-size: 13px; font-weight: 600; opacity: 0; transform: translate(-50%, -50%); transition: opacity .15s ease; }
+.live-screen-thumb:hover .live-screen-open, .live-screen-thumb:focus-visible .live-screen-open { opacity: 1; }
+.live-screen-viewer { width: min(1280px, 100%); }
+.live-screen-viewer.controlling { border-color: #2f9e5b; box-shadow: 0 0 0 1px #2f9e5b, 0 24px 80px rgba(0, 0, 0, .55); }
+.live-screen-actions { display: flex; align-items: center; gap: 10px; }
+.live-screen-take, .live-screen-release { padding: 8px 15px; border: 1px solid transparent; border-radius: 9px; font-size: 13px; font-weight: 650; cursor: pointer; }
+.live-screen-take { background: #f5f7fa; color: #11151b; }
+.live-screen-take:hover:not(:disabled) { background: #fff; }
+.live-screen-release { border-color: #2f9e5b; background: #173d27; color: #d8f5e3; }
+.live-screen-take:disabled, .live-screen-release:disabled { cursor: not-allowed; opacity: .5; }
+.live-screen-canvas { display: block; max-width: 100%; max-height: 100%; outline: none; background: #000; }
+.live-screen-viewer.controlling .live-screen-canvas { cursor: default; touch-action: none; }
+.live-screen-footer { align-items: center; }
+.live-screen-footer form { display: flex; flex: 1; gap: 8px; min-width: 0; }
+.live-screen-footer input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid #384252; border-radius: 8px; background: #11151b; color: #e8edf3; font-size: 12px; }
+.live-screen-footer form button { padding: 7px 12px; border: 1px solid #384252; border-radius: 8px; background: #1a2029; color: #d9e0ea; font-size: 12px; cursor: pointer; }
+.live-screen-error { color: #ff9c9c; }
+@media (hover: none) { .live-screen-open { opacity: 1; } }
+@media (max-width: 760px) {
+  .live-screen-footer { flex-direction: column; align-items: stretch; gap: 8px; }
+  .live-screen-actions { gap: 6px; }
+}

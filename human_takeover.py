@@ -169,6 +169,40 @@ class HumanTakeoverStore:
     def activate(self, session_id: str) -> dict[str, Any] | None:
         return self._transition(session_id, from_states=("waiting_for_human",), to_state="human_active")
 
+    def extend(self, session_id: str, ttl_seconds: int) -> dict[str, Any] | None:
+        """Push an open lease's expiry out to `ttl_seconds` from now.
+
+        Lets a holder that proves it is still present keep a short TTL, so an
+        abandoned lease still frees the desktop quickly. Returns None when the
+        lease is no longer open.
+        """
+        session_id = _safe_text(session_id, 64)
+        ttl_seconds = int(ttl_seconds)
+        if not session_id or ttl_seconds < 30 or ttl_seconds > 1800:
+            return None
+        now = time.time()
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._expire_locked(conn, now)
+            updated = conn.execute(
+                """UPDATE human_takeovers SET expires_at = ?, updated_at = ?
+                   WHERE id = ? AND state IN ('waiting_for_human','human_active')""",
+                (now + ttl_seconds, now, session_id),
+            ).rowcount
+            conn.commit()
+            if not updated:
+                return None
+            return self._row(conn.execute(
+                "SELECT * FROM human_takeovers WHERE id = ?", (session_id,)
+            ).fetchone())
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def complete(self, session_id: str) -> dict[str, Any] | None:
         return self._transition(
             session_id,
