@@ -35,6 +35,7 @@ from desktop_computer_planner import (
     resolve_clicked_label,
 )
 from desktop_computer_requests import (
+    HOST_SCOPE,
     append_trajectory,
     cancel_computer_task,
     cancel_pending_computer_step,
@@ -46,6 +47,7 @@ from desktop_computer_requests import (
     normalize_action,
     redact_computer_action,
     set_task_status,
+    task_scope,
 )
 from desktop_cua import CuaDriver, FakeCuaTransport
 from human_takeover import HumanTakeoverStore
@@ -146,9 +148,24 @@ class FakeComputerBackend:
         return result
 
 
-def build_backend(settings: Settings) -> Any:
+def build_backend(settings: Settings, task_id: str | None = None) -> Any:
+    """Executor for a task's steps.
+
+    A task that belongs to an agent with its own desktop runs right here on
+    that display. Everything else goes to the host's desktop node as before.
+    """
     if settings.conveyor_computer_backend == "fake":
         return FakeComputerBackend(settings)
+    task = get_computer_task(settings, task_id) if task_id else None
+    scope = task_scope(task)
+    if scope != HOST_SCOPE and isinstance(task, dict) and task.get("agent_id"):
+        import agents
+        from desktop_x11 import X11ComputerBackend
+
+        agent = agents.AgentStore(settings).get(str(task["agent_id"]))
+        if agent and agent.get("display") is not None and not agent["archived"]:
+            return X11ComputerBackend(settings, agent_id=agent["id"], display=int(agent["display"]), scope=scope)
+        raise ComputerBackendError("agent_desktop_missing")
     return HttpComputerBackend(settings)
 
 
@@ -213,6 +230,8 @@ async def run_computer_loop(
     trajectory: list[dict] = []
     followup_observe = False
     takeover_store = HumanTakeoverStore(settings)
+    # The lease that pauses this task is the one for the desktop it acts on.
+    scope = task_scope(get_computer_task(settings, task_id))
 
     try:
         while steps_used < max_steps:
@@ -230,7 +249,7 @@ async def run_computer_loop(
             # the desktop while a human may be typing secrets/payment data.
             # The store has its own TTL, so a lost browser session cannot
             # pause automation forever.
-            takeover = takeover_store.current()
+            takeover = takeover_store.current(scope)
             if takeover is not None:
                 if pause_started is None:
                     pause_started = time.monotonic()
@@ -350,7 +369,7 @@ async def run_computer_loop(
 
             # Re-check the exclusive lease immediately before creating a
             # mutating/observe step, closing the planner-to-executor race.
-            if takeover_store.current() is not None:
+            if takeover_store.current(scope) is not None:
                 if pause_started is None:
                     pause_started = time.monotonic()
                 continue

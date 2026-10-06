@@ -107,9 +107,36 @@ desktop and about 530 MB more with Firefox open. Memory allows roughly ten
 agents with browsers on a 12 GB host; CPU is the real limit — more than two
 or three agents actively driving their screens will feel slow.
 
-**Not yet:** the Agent's own computer use still runs on the host desktop.
-Routing it to the agent's desktop is the next step; until then an agent
-desktop is for the operator to watch and drive.
+### The agent works on its own desktop
+
+A desktop task started from an agent's conversation (`/computer_task …`, or a
+plain request the router recognises as one) runs on that agent's display:
+
+```text
+conversation ─▶ task {takeover_scope: agent:<id>} ─▶ X11ComputerBackend ─▶ xdotool / import on :10N
+```
+
+- The host desktop is driven through kernel input devices, which every X
+  server on the machine would receive. An agent's desktop is driven with
+  XTEST (`xdotool`) and captured with `import`, both addressed by `DISPLAY`,
+  so input can only land on that agent's screen (`desktop_x11.py`).
+- The planner gets a simpler contract there: one full-screen screenshot per
+  observation, click coordinates in its pixels, and type / hotkey / scroll go
+  to whatever has focus. `cmd` in a shortcut is treated as `ctrl`.
+- The browser is brought up before the first step if the desktop is empty.
+- Steps go through the same request store as every other task, so the
+  allow-list, blocked keywords, redacted trail and stop command all apply.
+  The host's desktop node cannot see or claim them (`wrong_node`), and the
+  agent's executor cannot claim the host's.
+- **One task at a time per desktop.** A task on one agent's desktop does not
+  block one on another's or on the host's.
+- **Takeover is per desktop.** While you hold an agent's screen its task
+  waits and re-observes when you release; nothing else is paused.
+- Tasks from Telegram, Feishu, the default agent and the one-shot
+  `/computer_observe` / `/computer_action` commands still use the host
+  desktop.
+- An app allow-list (`CONVEYOR_COMPUTER_ALLOWED_APPS`), if you set one, is
+  checked against the X window class on agent desktops (e.g. `firefox`).
 
 **Isolation is by display and browser profile only.** All agents run as the
 same Linux user and share one filesystem.

@@ -595,6 +595,25 @@ _CLICK_RULE = (
 )
 
 
+_SCREEN_CLICK_RULE = (
+    "点击规则（这台桌面只有一张全屏截图）：\n"
+    "- x、y 是截图里的屏幕像素，直接点你看到的位置；不需要 pid、window_id、element_index。\n"
+    "- type、hotkey、scroll 作用在当前有焦点的地方：先 click 输入框，再 type。\n"
+    "- 打开网址：hotkey [\"ctrl\",\"l\"] 聚焦地址栏，type 网址，再 hotkey [\"enter\"]。\n"
+    "- 桌面上只有浏览器，不要尝试打开别的应用。\n"
+)
+_SCREEN_EXAMPLES = (
+    '{"action":"observe"}\n'
+    '{"action":"click","x":640,"y":360}\n'
+    '{"action":"type","text":"要输入的文字"}\n'
+    '{"action":"hotkey","keys":["ctrl","l"]}\n'
+    '{"action":"scroll","dx":0,"dy":500}\n'
+    '{"action":"wait","seconds":1}\n'
+    '{"action":"done","summary":"完成说明"}\n'
+    '{"action":"stop","reason":"无法继续的原因"}\n\n'
+)
+
+
 _THREAD_ID = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
@@ -645,9 +664,13 @@ class CodexPlanner(Planner):
         *,
         sandbox: str = "danger-full-access",
         resume_thread_id: str | None = None,
+        screen_coordinates: bool = False,
     ) -> None:
         self.settings = settings
         self.sandbox = sandbox
+        # True on an agent's own desktop: one full-screen screenshot per
+        # observation and clicks in its pixels (see desktop_x11.py).
+        self.screen_coordinates = screen_coordinates
         self._thread_id: str | None = None
         if isinstance(resume_thread_id, str) and _THREAD_ID.fullmatch(resume_thread_id):
             self._thread_id = resume_thread_id
@@ -680,6 +703,22 @@ class CodexPlanner(Planner):
                 "完成规则：目标一旦达成立即 done，不要多余 click。"
                 "不要为了“保险”重复同一操作。"
                 "上一步失败时不要 done。\n"
+            )
+        if self.screen_coordinates:
+            return (
+                "你是桌面自动化规划器。目标：\n"
+                f"{goal}\n\n"
+                "只输出一个 JSON 对象（不要任何解释、不要 markdown 代码块），"
+                "描述下一步要执行的单个桌面动作。可选 action：\n"
+                f"{allowed}\n\n"
+                f"{_SCREEN_CLICK_RULE}"
+                "- 上一次动作失败时不要输出 done。\n"
+                f"{digit_rule}\n"
+                "动作示例：\n"
+                f"{_SCREEN_EXAMPLES}"
+                f"当前观察: {_obs_summary(observation)}\n"
+                f"已完成步骤 ({steps_used}/{max_steps}):\n{_trajectory_summary(trajectory)}\n\n"
+                "输出下一个动作（若目标已完成则输出 done）："
             )
         return (
             "你是桌面自动化规划器。目标：\n"
@@ -725,7 +764,7 @@ class CodexPlanner(Planner):
         """Later step in the same Codex thread. The rules are already there."""
         return (
             "按当前要求继续操作这台桌面。只输出一个 JSON 对象，不要解释。\n"
-            f"{_CLICK_RULE}"
+            f"{_SCREEN_CLICK_RULE if self.screen_coordinates else _CLICK_RULE}"
             f"目标：{goal}\n"
             f"当前观察: {_obs_summary(observation)}\n"
             f"已完成步骤 ({steps_used}/{max_steps}):\n{_trajectory_summary(trajectory)}\n"

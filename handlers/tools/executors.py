@@ -736,6 +736,16 @@ def prepare_computer_retry(
     return result
 
 
+async def exec_computer_task_for_chat(
+    settings: Settings, arg: str, *, operator_id: str, chat_id: str, channel: str,
+) -> str:
+    """Run a desktop task on behalf of one conversation."""
+    prepared = prepare_computer_task(settings, arg, operator_id=operator_id, chat_id=chat_id, channel=channel)
+    if not prepared.get("ok"):
+        return str(prepared.get("message") or prepared.get("error") or "任务创建失败")
+    return await exec_computer_task(settings, arg, task_id=str(prepared.get("task_id") or ""))
+
+
 async def exec_computer_task(settings: Settings, arg: str, *, task_id: str | None = None) -> str:
     """Run the Codex action loop to complete a desktop goal (hands-free)."""
     from desktop_computer_planner import CodexPlanner
@@ -756,10 +766,19 @@ async def exec_computer_task(settings: Settings, arg: str, *, task_id: str | Non
         if not prepared.get("ok"):
             return str(prepared.get("message") or prepared.get("error") or "任务创建失败")
         task_id = prepared.get("task_id")
-    previous = load_computer_session(settings) if is_desktop_followup(goal or "") else None
+    from desktop_computer_loop import ComputerBackendError
+    from desktop_x11 import X11ComputerBackend
+    try:
+        backend = build_backend(settings, task_id)
+    except ComputerBackendError as exc:
+        set_task_status(settings, task_id, "error", blocked_reason=str(exc))
+        return "⚠️ 这个 Agent 的桌面还没有就绪，请稍后再试。"
+    # An agent's own desktop is a different screen with different rules; the
+    # remembered planner thread belongs to the host desktop.
+    own_desktop = isinstance(backend, X11ComputerBackend)
+    previous = load_computer_session(settings) if (is_desktop_followup(goal or "") and not own_desktop) else None
     resume_id = str(previous.get("thread_id") or "") if previous else None
-    planner = CodexPlanner(settings, resume_thread_id=resume_id or None)
-    backend = build_backend(settings)
+    planner = CodexPlanner(settings, resume_thread_id=resume_id or None, screen_coordinates=own_desktop)
     result = await run_computer_loop(
         settings, goal, planner=planner, backend=backend,
         max_steps=settings.conveyor_computer_max_steps,
@@ -768,7 +787,8 @@ async def exec_computer_task(settings: Settings, arg: str, *, task_id: str | Non
         task_id=task_id,
         open_with_observe=True,
     )
-    _remember_desktop_session(settings, planner, goal or "", result, previous)
+    if not own_desktop:
+        _remember_desktop_session(settings, planner, goal or "", result, previous)
     return _format_loop_result(settings, result)
 
 

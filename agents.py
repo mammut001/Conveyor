@@ -76,6 +76,24 @@ def takeover_scope(agent_id: str) -> str:
     return f"agent:{agent_id}"
 
 
+def computer_target_for_chat(settings: Any, channel: str, chat_id: str) -> dict[str, Any]:
+    """Which desktop a conversation's computer use acts on.
+
+    ``{"scope": "default"}`` is the shared host desktop. An agent with its own
+    desktop gets ``{"scope": "agent:<id>", "agent_id": ..., "display": N}``.
+    """
+    host = {"scope": "default"}
+    if not desktops_enabled(settings):
+        return host
+    try:
+        agent = agent_for_chat(settings, channel, chat_id)
+    except (OSError, sqlite3.Error):
+        return host
+    if not agent or agent.get("display") is None:
+        return host
+    return {"scope": takeover_scope(agent["id"]), "agent_id": agent["id"], "display": int(agent["display"])}
+
+
 def chat_id_for(agent_id: str) -> str:
     return f"{AGENT_CHAT_PREFIX}{agent_id}"
 

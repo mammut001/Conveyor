@@ -488,6 +488,24 @@ def arm_remaining_seconds(settings: Settings, now: datetime | None = None) -> in
 
 # ---- task lifecycle ---------------------------------------------------------
 
+HOST_SCOPE = "default"
+
+
+def task_scope(task: object) -> str:
+    """Desktop a task acts on: the host's, or ``agent:<id>`` for an agent's own.
+
+    It is also the takeover-lease scope, so a human on one desktop pauses
+    only the work aimed at that desktop.
+    """
+    scope = task.get("takeover_scope") if isinstance(task, dict) else None
+    return scope if isinstance(scope, str) and scope else HOST_SCOPE
+
+
+def x11_node_id(scope: str) -> str:
+    """Node name of the in-process executor for an agent desktop."""
+    return f"x11:{scope}"
+
+
 def create_computer_task(
     settings: Settings,
     goal: str,
@@ -537,6 +555,13 @@ def create_computer_task(
         "root_task_id": task_id,
         "attempt": 1,
     }
+    # The conversation decides the desktop: an agent with its own display
+    # works there, everything else on the shared host desktop.
+    import agents
+    target = agents.computer_target_for_chat(settings, channel, chat_id)
+    record["takeover_scope"] = target["scope"]
+    if target.get("agent_id"):
+        record["agent_id"] = target["agent_id"]
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
             store = _load_unlocked(settings)
@@ -555,7 +580,12 @@ def create_computer_task(
                         }
             if single_active:
                 for existing_id, existing in tasks.items():
-                    if isinstance(existing, dict) and existing.get("status") == "running":
+                    # One task at a time per desktop, not per installation.
+                    if (
+                        isinstance(existing, dict)
+                        and existing.get("status") == "running"
+                        and task_scope(existing) == record["takeover_scope"]
+                    ):
                         return {
                             "ok": False,
                             "error": "computer_task_active",
@@ -859,15 +889,15 @@ def create_computer_step(settings: Settings, task_id: str, action: dict) -> dict
     now = _utc_now()
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
-            # This is the final control-plane gate before an action is queued.
-            # claim_computer_step repeats the check at the desktop-node edge.
-            from human_takeover import takeover_blocks_automation
-            if takeover_blocks_automation(settings):
-                return {"ok": False, "error": "human_takeover_active"}
             store = _load_unlocked(settings)
             record = store.get("tasks", {}).get(task_id)
             if not isinstance(record, dict):
                 return {"ok": False, "error": "task_not_found"}
+            # This is the final control-plane gate before an action is queued.
+            # claim_computer_step repeats the check at the desktop-node edge.
+            from human_takeover import takeover_blocks_automation
+            if takeover_blocks_automation(settings, task_scope(record)):
+                return {"ok": False, "error": "human_takeover_active"}
             if record.get("status") != "running":
                 return {"ok": False, "error": "task_not_running", "status": record.get("status")}
             seq = int(record.get("step_seq", 0)) + 1
@@ -895,8 +925,12 @@ def create_computer_step(settings: Settings, task_id: str, action: dict) -> dict
     return {"ok": True, "step_id": step_id, "step": dict(step)}
 
 
-def cancel_pending_computer_steps(settings: Settings, reason: str = "human_takeover_active") -> int:
-    """Cancel queued actions when a human takes ownership of the desktop.
+def cancel_pending_computer_steps(
+    settings: Settings, reason: str = "human_takeover_active", *, scope: str = HOST_SCOPE,
+) -> int:
+    """Cancel queued actions when a human takes ownership of a desktop.
+
+    Only steps aimed at that desktop (``scope``) are touched.
 
     A pending action was planned against the pre-takeover screen. Replaying it
     after the operator finishes could click/type into a different page, so it
@@ -909,7 +943,7 @@ def cancel_pending_computer_steps(settings: Settings, reason: str = "human_takeo
             store = _load_unlocked(settings)
             now = _iso_z(_utc_now())
             for record in store.get("tasks", {}).values():
-                if not isinstance(record, dict):
+                if not isinstance(record, dict) or task_scope(record) != scope:
                     continue
                 for step in (record.get("steps") or {}).values():
                     if not isinstance(step, dict) or step.get("status") != "pending":
@@ -944,8 +978,8 @@ def cancel_pending_computer_step(
             return True
 
 
-def has_claimed_computer_steps(settings: Settings) -> bool:
-    """Return whether any desktop action is already in flight."""
+def has_claimed_computer_steps(settings: Settings, *, scope: str = HOST_SCOPE) -> bool:
+    """Return whether an action on that desktop is already in flight."""
     expire_old_computer(settings)
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
@@ -953,7 +987,7 @@ def has_claimed_computer_steps(settings: Settings) -> bool:
             return any(
                 isinstance(step, dict) and step.get("status") == "claimed"
                 for record in store.get("tasks", {}).values()
-                if isinstance(record, dict)
+                if isinstance(record, dict) and task_scope(record) == scope
                 for step in (record.get("steps") or {}).values()
             )
 
@@ -962,15 +996,22 @@ def claim_computer_step(settings: Settings, step_id: str, node_id: str) -> dict:
     node_id = (node_id or "").strip()
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
-            # The loop's lease check alone is not enough: a pending step may
-            # be claimed by the desktop node after takeover begins.
-            from human_takeover import takeover_blocks_automation
-            if takeover_blocks_automation(settings):
-                return {"ok": False, "error": "human_takeover_active"}
             store = _load_unlocked(settings)
             step, task_id = _find_step_unlocked(store, step_id)
             if step is None:
                 return {"ok": False, "error": "step_not_found"}
+            scope = task_scope(store.get("tasks", {}).get(task_id))
+            # A step for an agent's desktop is executed in-process on that
+            # display. The host's desktop node must never run it, and nothing
+            # else may run the host's.
+            is_x11_node = node_id.startswith("x11:")
+            if (is_x11_node and scope == HOST_SCOPE) or (scope != HOST_SCOPE and node_id != x11_node_id(scope)):
+                return {"ok": False, "error": "wrong_node"}
+            # The loop's lease check alone is not enough: a pending step may
+            # be claimed by the desktop node after takeover begins.
+            from human_takeover import takeover_blocks_automation
+            if takeover_blocks_automation(settings, scope):
+                return {"ok": False, "error": "human_takeover_active"}
             if step.get("status") != "pending":
                 return {"ok": False, "error": "invalid_status", "status": step.get("status")}
             # Capture the real action for delivery to the Mac, then
@@ -1182,7 +1223,9 @@ def list_pending_computer_steps(settings: Settings, *, limit: int = 1) -> list[d
             store = _load_unlocked(settings)
             pending: list[tuple[datetime, str, dict, str]] = []
             for task_id, record in store.get("tasks", {}).items():
-                if not isinstance(record, dict):
+                # This list is what the host's desktop node polls; steps for
+                # an agent's own desktop are not its to run.
+                if not isinstance(record, dict) or task_scope(record) != HOST_SCOPE:
                     continue
                 for step_id, step in record.get("steps", {}).items():
                     if not isinstance(step, dict):

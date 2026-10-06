@@ -493,17 +493,21 @@ class LiveScreen:
         from desktop_computer_requests import cancel_pending_computer_steps, has_claimed_computer_steps
         from desktop_observe_requests import cancel_pending_observe_requests, has_claimed_observe_requests
 
-        # Queued computer-use work targets the shared host desktop. Taking over
-        # an agent's own desktop must not cancel it.
-        if self._scope == DEFAULT_SCOPE:
-            cancel_pending_computer_steps(self.settings)
+        # Only work aimed at this desktop is cancelled and waited for; taking
+        # over one agent's desktop leaves the host and the other agents alone.
+        # Observe requests exist for the host desktop only.
+        host = self._scope == DEFAULT_SCOPE
+        cancel_pending_computer_steps(self.settings, scope=self._scope)
+        if host:
             cancel_pending_observe_requests(self.settings)
-            deadline = time.monotonic() + IN_FLIGHT_WAIT_SECONDS
-            while has_claimed_computer_steps(self.settings) or has_claimed_observe_requests(self.settings):
-                if time.monotonic() >= deadline:
-                    store.cancel(lease_id)
-                    raise LiveScreenError("The Agent is still finishing an action; try again in a moment")
-                time.sleep(0.1)
+        deadline = time.monotonic() + IN_FLIGHT_WAIT_SECONDS
+        while has_claimed_computer_steps(self.settings, scope=self._scope) or (
+            host and has_claimed_observe_requests(self.settings)
+        ):
+            if time.monotonic() >= deadline:
+                store.cancel(lease_id)
+                raise LiveScreenError("The Agent is still finishing an action; try again in a moment")
+            time.sleep(0.1)
         store.activate(lease_id)
 
         now = time.monotonic()

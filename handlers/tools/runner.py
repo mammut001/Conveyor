@@ -118,6 +118,13 @@ async def run_tool(
     if spec is None:
         return f"未知工具: {tool_name}"
     try:
+        if tool_name == "computer.task" and channel and chat_id:
+            # The conversation decides which desktop the task runs on (an
+            # agent's own, or the host's), so the task must know it.
+            from handlers.tools.executors import exec_computer_task_for_chat
+            return await exec_computer_task_for_chat(
+                settings, arg, operator_id=operator_id, chat_id=chat_id, channel=channel,
+            )
         return await spec.executor(settings, arg)
     except Exception as exc:
         logger.exception("Tool %s failed", tool_name)
