@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hmac
+import ipaddress
 import json
 import logging
 import mimetypes
 import os
 import re
 import shutil
+import socket
 import sys
 import threading
 import time
@@ -1435,6 +1437,72 @@ def validate_web_config(settings: Any) -> None:
         raise RuntimeError("CONVEYOR_WEB_TOKEN must contain at least 32 characters")
     if not (1 <= int(settings.conveyor_web_port) <= 65535):
         raise RuntimeError("CONVEYOR_WEB_PORT is invalid")
+    for host in getattr(settings, "conveyor_web_extra_hosts", ()) or ():
+        _validate_extra_host(host)
+
+
+def _validate_extra_host(host: str) -> None:
+    """Extra listeners serve plain HTTP, so they may only sit on a private address.
+
+    A VPN interface (WireGuard, Tailscale) encrypts the hop; a wildcard or a
+    public address would put the bearer token on the open internet.
+    """
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        raise RuntimeError(f"CONVEYOR_WEB_EXTRA_HOSTS entry is not an IP address: {host}") from None
+    if address.is_unspecified or address.is_global or address.is_multicast:
+        raise RuntimeError(f"CONVEYOR_WEB_EXTRA_HOSTS must be private addresses, not {host}")
+
+
+def start_extra_listeners(server: "WebConsoleServer", settings: Any) -> list[threading.Thread]:
+    """Accept on each extra address and hand connections to the same server.
+
+    One server object keeps one LiveScreen, one rate limiter and one set of
+    routine runs no matter which address a request arrived on.
+    """
+    port = int(settings.conveyor_web_port)
+    threads = []
+    for host in getattr(settings, "conveyor_web_extra_hosts", ()) or ():
+        if host == settings.conveyor_web_host:
+            continue
+        thread = threading.Thread(
+            target=_serve_extra_address, args=(server, host, port),
+            name=f"conveyor-web-http-{host}", daemon=True,
+        )
+        thread.start()
+        threads.append(thread)
+    return threads
+
+
+def _serve_extra_address(server: "WebConsoleServer", host: str, port: int) -> None:
+    listener = None
+    announced = False
+    while listener is None:
+        try:
+            listener = socket.create_server((host, port), family=socket.AF_INET6 if ":" in host else socket.AF_INET)
+        except OSError as exc:
+            # The VPN interface may come up after this service; keep trying.
+            if not announced:
+                logger.warning("Web Console cannot bind %s:%d yet (%s); retrying", host, port, exc)
+                announced = True
+            time.sleep(5)
+    logger.info("Conveyor Web Console also listening on http://%s:%d", host, port)
+    with listener:
+        while True:
+            try:
+                request, client_address = listener.accept()
+            except OSError:
+                return
+            # Same steps as BaseServer._handle_request_noblock.
+            try:
+                if server.verify_request(request, client_address):
+                    server.process_request(request, client_address)
+                else:
+                    server.shutdown_request(request)
+            except Exception:
+                server.handle_error(request, client_address)
+                server.shutdown_request(request)
 
 
 def validate_codex_bin(settings: Any) -> None:
@@ -1489,6 +1557,7 @@ def main() -> None:
     thread = threading.Thread(target=server.serve_forever, name="conveyor-web-http", daemon=True)
     thread.start()
     logger.info("Conveyor Web Console listening on http://%s:%d", settings.conveyor_web_host, settings.conveyor_web_port)
+    start_extra_listeners(server, settings)
 
     import routines
     routines.start_routines_worker(loop, settings, runner)

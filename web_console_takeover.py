@@ -24,6 +24,7 @@ from runner import CodexRunner
 from web_console import (
     WebConsoleHandler,
     WebConsoleServer,
+    start_extra_listeners,
     validate_codex_bin,
     validate_web_config,
 )
@@ -182,6 +183,7 @@ def main() -> None:
         settings.conveyor_web_host,
         settings.conveyor_web_port,
     )
+    start_extra_listeners(server, settings)
     try:
         loop.run_forever()
     except KeyboardInterrupt:

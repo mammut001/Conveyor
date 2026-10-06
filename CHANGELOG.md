@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Web Console on a private VPN address** (`CONVEYOR_WEB_EXTRA_HOSTS`): the console can also listen on the host's WireGuard/Tailscale address so a phone on the VPN opens it directly, without an SSH tunnel. Same server object and bearer token as loopback; wildcard and public addresses are refused because the extra listeners are plain HTTP. See `docs/mobile_web.md`.
 - **Remember the console token on this device** (opt-in checkbox on the unlock screen): keeps the token in `localStorage` so a new tab does not ask again; the new **Lock** button, or a rejected token, forgets it. Unchecked, the token still lives in the tab only.
 - **Live screen: click the screen to take control**, and the view refreshes at 10 fps for a moment after each input (and immediately after it) instead of waiting for the next idle frame.
 - **Live screen** (`CONVEYOR_LIVE_SCREEN_ENABLED`, default off): the Web Console's Computer section shows a live thumbnail of the host desktop; clicking it opens the screen full size, and **Take control** forwards mouse, keyboard and pasted text while holding the same exclusive lease as Secure Human Takeover, so the Agent pauses until release. No VNC port, second password or sidecar: frames (`/api/screen/frame`) and input (`/api/screen/input`) go through the console's authenticated API, are never stored or logged, and an abandoned viewer loses control within 45 seconds. See `docs/live_screen.md`.
