@@ -158,6 +158,15 @@ async def apply_last_job(self) -> str:
 
 
 async def apply_job(self, job_id: str | None, worktree_path: Path | None) -> str:
+    # apply.lock is a file lock held across awaits; the gate keeps a second
+    # Apply in this process from blocking the event loop on it (async_gate).
+    from runner.file_lock import async_gate
+
+    async with async_gate("apply"):
+        return await _apply_job_locked(self, job_id, worktree_path)
+
+
+async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None) -> str:
     from runner.file_lock import file_lock
     from runner.apply_policy import (
         validate_apply_paths,
