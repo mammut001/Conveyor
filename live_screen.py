@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from human_takeover import HumanTakeoverStore
+from human_takeover import DEFAULT_SCOPE, HumanTakeoverStore
 
 logger = logging.getLogger("conveyor.live_screen")
 
@@ -122,8 +122,16 @@ def _keysym(key: str) -> str | None:
 
 
 class LiveScreen:
-    def __init__(self, settings: Any) -> None:
+    def __init__(
+        self, settings: Any, *, display: str = "", xauthority: str = "", scope: str = DEFAULT_SCOPE,
+    ) -> None:
+        """One screen. With `display` it is a fixed X display (an agent's own
+        desktop) whose takeover lease lives in `scope`; without, the host's
+        desktop session is discovered and the default scope is used."""
         self.settings = settings
+        self._fixed_display = display
+        self._fixed_xauthority = xauthority
+        self._scope = scope
         self._lock = threading.Lock()
         self._frame_ready = threading.Condition(self._lock)
         self._frame: bytes = b""
@@ -181,7 +189,11 @@ class LiveScreen:
         self._env_checked_at = now
         found: dict[str, str] = {}
         configured = str(getattr(self.settings, "live_screen_display", "") or "").strip()
-        if configured:
+        if self._fixed_display:
+            found["DISPLAY"] = self._fixed_display
+            if self._fixed_xauthority:
+                found["XAUTHORITY"] = self._fixed_xauthority
+        elif configured:
             found["DISPLAY"] = configured
         elif os.getenv("DISPLAY"):
             found = {k: os.environ[k] for k in SESSION_ENV_KEYS if os.getenv(k)}
@@ -256,7 +268,9 @@ class LiveScreen:
         True when a screensaver was showing and had to be dismissed.
         """
         env = self._display_env()
-        if env is None:
+        if env is None or self._fixed_display:
+            # A bare agent desktop runs no screensaver, and its environment has
+            # no session bus to ask one.
             return False
 
         def run(*command: str) -> str:
@@ -422,7 +436,7 @@ class LiveScreen:
             control_id = self._control_id
         if control_id is None:
             return None
-        current = self._takeover_store().current()
+        current = self._takeover_store().current(self._scope)
         if current and current.get("id") == control_id:
             return current
         with self._lock:
@@ -461,7 +475,7 @@ class LiveScreen:
             return self.status()
 
         store = self._takeover_store()
-        existing = store.current()
+        existing = store.current(self._scope)
         if existing is not None:
             if existing.get("requested_by") != LEASE_OWNER:
                 raise LiveScreenError("Another human takeover is already open")
@@ -470,6 +484,7 @@ class LiveScreen:
         else:
             lease = store.start(
                 reason="operator_requested", requested_by=LEASE_OWNER, ttl_seconds=LEASE_TTL_SECONDS,
+                scope=self._scope,
             )
         lease_id = str(lease["id"])
 
@@ -478,14 +493,17 @@ class LiveScreen:
         from desktop_computer_requests import cancel_pending_computer_steps, has_claimed_computer_steps
         from desktop_observe_requests import cancel_pending_observe_requests, has_claimed_observe_requests
 
-        cancel_pending_computer_steps(self.settings)
-        cancel_pending_observe_requests(self.settings)
-        deadline = time.monotonic() + IN_FLIGHT_WAIT_SECONDS
-        while has_claimed_computer_steps(self.settings) or has_claimed_observe_requests(self.settings):
-            if time.monotonic() >= deadline:
-                store.cancel(lease_id)
-                raise LiveScreenError("The Agent is still finishing an action; try again in a moment")
-            time.sleep(0.1)
+        # Queued computer-use work targets the shared host desktop. Taking over
+        # an agent's own desktop must not cancel it.
+        if self._scope == DEFAULT_SCOPE:
+            cancel_pending_computer_steps(self.settings)
+            cancel_pending_observe_requests(self.settings)
+            deadline = time.monotonic() + IN_FLIGHT_WAIT_SECONDS
+            while has_claimed_computer_steps(self.settings) or has_claimed_observe_requests(self.settings):
+                if time.monotonic() >= deadline:
+                    store.cancel(lease_id)
+                    raise LiveScreenError("The Agent is still finishing an action; try again in a moment")
+                time.sleep(0.1)
         store.activate(lease_id)
 
         now = time.monotonic()
@@ -623,7 +641,7 @@ class LiveScreen:
         lease = self._current_control() if self.enabled else None
         other = None
         if self.enabled and lease is None:
-            current = self._takeover_store().current()
+            current = self._takeover_store().current(self._scope)
             if current is not None:
                 other = str(current.get("requested_by") or "human-takeover")
         with self._lock:
@@ -636,6 +654,8 @@ class LiveScreen:
             "controlling": lease is not None,
             "agent_paused": lease is not None or other is not None,
             "blocked_by": other,
+            # True for an agent's own desktop, False for the shared host one.
+            "dedicated": bool(self._fixed_display),
             "width": width,
             "height": height,
         }

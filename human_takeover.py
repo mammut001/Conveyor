@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 OPEN_STATES = ("waiting_for_human", "human_active")
+DEFAULT_SCOPE = "default"
 TERMINAL_STATES = ("completed", "cancelled", "expired")
 ALLOWED_REASONS = (
     "sensitive_input",
@@ -77,6 +78,11 @@ class HumanTakeoverStore:
                         ON human_takeovers(state, expires_at);
                     """
                 )
+                # One lease per desktop: "default" is the shared host desktop,
+                # "agent:<id>" an agent's own. Older databases get the column.
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(human_takeovers)")}
+                if "scope" not in columns:
+                    conn.execute(f"ALTER TABLE human_takeovers ADD COLUMN scope TEXT NOT NULL DEFAULT '{DEFAULT_SCOPE}'")
         finally:
             conn.close()
 
@@ -101,6 +107,7 @@ class HumanTakeoverStore:
         task_id: str | None = None,
         requested_by: str | None = None,
         ttl_seconds: int = 300,
+        scope: str = DEFAULT_SCOPE,
     ) -> dict[str, Any]:
         reason = _safe_text(reason, 64).lower()
         if reason not in ALLOWED_REASONS:
@@ -110,6 +117,7 @@ class HumanTakeoverStore:
             raise ValueError("takeover ttl must be between 30 and 1800 seconds")
         task_id = _safe_text(task_id, 128) or None
         requested_by = _safe_text(requested_by, 128) or None
+        scope = _safe_text(scope, 64) or DEFAULT_SCOPE
         now = time.time()
         session_id = uuid.uuid4().hex
         conn = self._connect()
@@ -117,16 +125,19 @@ class HumanTakeoverStore:
             conn.execute("BEGIN IMMEDIATE")
             self._expire_locked(conn, now)
             existing = conn.execute(
-                "SELECT * FROM human_takeovers WHERE state IN ('waiting_for_human','human_active') ORDER BY created_at DESC LIMIT 1"
+                """SELECT * FROM human_takeovers
+                   WHERE state IN ('waiting_for_human','human_active') AND scope = ?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (scope,),
             ).fetchone()
             if existing is not None:
                 conn.rollback()
                 raise RuntimeError("a human takeover session is already open")
             conn.execute(
                 """INSERT INTO human_takeovers
-                   (id, state, reason, task_id, requested_by, created_at, updated_at, expires_at)
-                   VALUES (?, 'waiting_for_human', ?, ?, ?, ?, ?, ?)""",
-                (session_id, reason, task_id, requested_by, now, now, now + ttl_seconds),
+                   (id, state, reason, task_id, requested_by, created_at, updated_at, expires_at, scope)
+                   VALUES (?, 'waiting_for_human', ?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, reason, task_id, requested_by, now, now, now + ttl_seconds, scope),
             )
             conn.commit()
             return self.get(session_id) or {}
@@ -152,7 +163,7 @@ class HumanTakeoverStore:
         finally:
             conn.close()
 
-    def current(self) -> dict[str, Any] | None:
+    def current(self, scope: str = DEFAULT_SCOPE) -> dict[str, Any] | None:
         now = time.time()
         conn = self._connect()
         try:
@@ -160,8 +171,9 @@ class HumanTakeoverStore:
                 self._expire_locked(conn, now)
             return self._row(conn.execute(
                 """SELECT * FROM human_takeovers
-                   WHERE state IN ('waiting_for_human','human_active')
-                   ORDER BY created_at DESC LIMIT 1"""
+                   WHERE state IN ('waiting_for_human','human_active') AND scope = ?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (_safe_text(scope, 64) or DEFAULT_SCOPE,),
             ).fetchone())
         finally:
             conn.close()
@@ -276,10 +288,10 @@ class HumanTakeoverStore:
         }
 
 
-def takeover_blocks_automation(settings: Any) -> bool:
+def takeover_blocks_automation(settings: Any, scope: str = DEFAULT_SCOPE) -> bool:
     """Fail-safe predicate for computer-use callers.
 
     Future Web/desktop integrations should check this before every mutating
     computer action. An open handoff means the human owns the GUI.
     """
-    return HumanTakeoverStore(settings).current() is not None
+    return HumanTakeoverStore(settings).current(scope) is not None
