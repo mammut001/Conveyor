@@ -184,10 +184,31 @@ the host; the Details tab says so if it is missing or not one.
   desktop (`GET /api/agents/<id>/library`). A screenshot is served only to
   the agent whose desktop it was taken on.
 
+## Parallel jobs (phase 5)
+
+```dotenv
+CONVEYOR_AGENT_PARALLEL_JOBS=2     # 1 (default) = one Codex job at a time
+```
+
+Above 1, every agent **with its own project folder** gets a lane
+(`job_lanes.py`). Jobs in one lane never overlap; jobs in different lanes
+may, up to the limit. Everything else — the default agent, Telegram, Feishu,
+agents without a folder — shares the `default` lane, because those jobs all
+work in the configured workspace.
+
+- The queue starts the oldest queued job whose lane is free
+  (`queued_jobs.lane`). With the limit at 1 this is exactly the old rule:
+  the oldest job, if nothing is running.
+- Each lane has its own runner, so `/status`, `/cancel`, `/diff`, `/apply`
+  and "the last job" in an agent's conversation mean that agent's jobs.
+  Job records carry their lane; cleanup and audits still see all of them.
+- Cancelling from the Web Console finds the job on whichever lane runs it.
+- The limit is capped at 4. Two is a sensible ceiling on a 2-core host.
+- Desktop tasks were already independent: one per desktop.
+
 ## Safety notes
 
 - Instructions are operator-authored and shape the role, but the chat tier's
   numbered rules (no invented facts, write tools need confirmation, untrusted
   tool output) come after them in the prompt and still apply.
 - List previews are redacted like any other text leaving the console.
-- Codex jobs still run one at a time across all agents.

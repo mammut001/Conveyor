@@ -74,6 +74,8 @@ class Job:
     # Repository this job works in when it is not the configured workspace
     # (an agent's own project folder).
     workspace_root: Path | None = None
+    # Lane the job runs in (job_lanes.py); jobs in one lane never overlap.
+    lane: str = "default"
     log_path: Path | None = None
     final_message_path: Path | None = None
     metadata_path: Path | None = None
@@ -101,3 +103,4 @@ class JobRecord:
     log_dir: Path
     worktree_path: Path | None
     updated_at: datetime
+    lane: str = "default"

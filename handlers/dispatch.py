@@ -61,6 +61,11 @@ async def dispatch(
         await port.reply(msg, "Unauthorized.")
         return
 
+    # Commands in a conversation act on that conversation's lane: /status,
+    # /cancel, /diff and /apply in an agent's chat mean that agent's jobs.
+    from job_lanes import runner_for_chat
+    runner = runner_for_chat(runner, settings, msg.channel, msg.chat_id)
+
     if await try_resolve_confirmation(msg, port, settings):
         return
 

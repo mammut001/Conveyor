@@ -285,8 +285,8 @@ class RuntimeControl:
 _controls: dict[str, RuntimeControl] = {}
 _live_runner: Any | None = None
 _live_owner_id: str | None = None
-_live_command_task: asyncio.Task[None] | None = None
-_live_job_id: str | None = None
+# One watcher per live job: with lanes, several jobs can be live at once.
+_live_command_tasks: dict[str, asyncio.Task[None]] = {}
 
 
 def get_runtime_control(settings: Any) -> RuntimeControl:
@@ -308,13 +308,14 @@ def register_runtime_runner(runner: Any, *, role: str | None = None) -> str:
 
 
 def bind_live_job(settings: Any, job_id: str) -> str | None:
-    global _live_command_task, _live_job_id
-    runner = _live_runner
+    base = _live_runner
     owner_id = _live_owner_id
-    if runner is None or owner_id is None or not job_id:
+    if base is None or owner_id is None or not job_id:
         return None
-    current = getattr(runner, "current_job", None)
-    if current is None or str(getattr(current, "external_id", "")) != job_id:
+    # The job runs on the runner of its lane, not necessarily the registered one.
+    from job_lanes import runner_of_job
+    runner = runner_of_job(base, job_id)
+    if runner is None:
         return None
     control = get_runtime_control(settings)
     control.bind_job_owner(job_id, owner_id)
@@ -322,12 +323,12 @@ def bind_live_job(settings: Any, job_id: str) -> str | None:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return owner_id
-    if _live_job_id == job_id and _live_command_task is not None and not _live_command_task.done():
+    for finished in [key for key, task in _live_command_tasks.items() if task.done()]:
+        _live_command_tasks.pop(finished, None)
+    existing = _live_command_tasks.get(job_id)
+    if existing is not None and not existing.done():
         return owner_id
-    if _live_command_task is not None and not _live_command_task.done():
-        _live_command_task.cancel()
-    _live_job_id = job_id
-    _live_command_task = loop.create_task(
+    _live_command_tasks[job_id] = loop.create_task(
         watch_runtime_commands(settings, runner, job_id=job_id, owner_id=owner_id),
         name=f"conveyor-runtime-{job_id}",
     )

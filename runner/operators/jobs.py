@@ -54,7 +54,7 @@ async def diff_job(self, job_id: str | None, worktree_path: Path | None) -> str:
 
 
 def jobs_text(self, limit: int = 8) -> str:
-    records = self.job_records(limit)
+    records = self.job_records(limit, lane=getattr(self, "lane", "default"))
     if not records:
         return "No jobs yet."
     lines = ["Recent jobs:"]
@@ -65,7 +65,7 @@ def jobs_text(self, limit: int = 8) -> str:
 
 
 def last_text(self) -> str:
-    record = self.job_records(1)
+    record = self.job_records(1, lane=getattr(self, "lane", "default"))
     if not record:
         return "No jobs yet."
     item = record[0]

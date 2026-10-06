@@ -41,6 +41,7 @@ def _write_job_metadata(self, job: Job) -> None:
         "usage": job.usage,
         "cancel_requested": job.cancel_requested,
         "worktree_path": str(job.worktree_path) if job.worktree_path else None,
+        "lane": getattr(job, "lane", "default") or "default",
         "log_path": str(job.log_path) if job.log_path else None,
         "final_message_path": str(job.final_message_path) if job.final_message_path else None,
         "last_event": redact_text(truncate(job.last_event, 1200)),
@@ -63,7 +64,9 @@ def _write_job_metadata(self, job: Job) -> None:
     tmp_path.replace(job.metadata_path)
 
 
-def job_records(self, limit: int = 20) -> list[JobRecord]:
+def job_records(self, limit: int = 20, *, lane: str | None = None) -> list[JobRecord]:
+    """Recorded jobs, newest first. With `lane`, only that lane's jobs
+    (records written before lanes existed count as the default lane)."""
     logs_root = self.settings.codex_task_root / "logs"
     if not logs_root.exists():
         return []
@@ -119,22 +122,25 @@ def job_records(self, limit: int = 20) -> list[JobRecord]:
                 log_dir=log_dir,
                 worktree_path=worktree_path,
                 updated_at=updated_at,
+                lane=(metadata_text(metadata, "lane") if metadata else "") or "default",
             )
         )
+    if lane is not None:
+        records = [record for record in records if record.lane == lane]
     return sorted(records, key=lambda record: record.updated_at, reverse=True)[:limit]
 
 
 def _last_job_id(self) -> str:
     if self.last_job:
         return self.last_job.id
-    records = self.job_records(1)
+    records = self.job_records(1, lane=getattr(self, "lane", "default"))
     return records[0].id if records else "(none)"
 
 
 def _last_worktree_path(self) -> Path | None:
     if self.last_job and self.last_job.worktree_path:
         return self.last_job.worktree_path
-    records = self.job_records(1)
+    records = self.job_records(1, lane=getattr(self, "lane", "default"))
     if not records:
         return None
     return records[0].worktree_path
