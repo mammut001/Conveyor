@@ -157,6 +157,17 @@ class ControlTests(LiveScreenCase):
             self.screen.send_input([{"t": "move", "x": 1, "y": 1}])
         self.assertEqual(len(self.host.xdotool), sent)
 
+    def test_input_triggers_an_immediate_refresh(self) -> None:
+        self.screen.take_control()
+        seq, _, _ = self.screen.frame(since=0, wait=3)
+        self.host.frames = [JPEG_B]
+        started = time.monotonic()
+        self.screen.send_input([{"t": "click", "x": 10, "y": 20, "b": 1}])
+        newer = self.screen.frame(since=seq, wait=3)
+        self.assertIsNotNone(newer)
+        # Well inside one idle capture interval (0.25s at the default 4 fps).
+        self.assertLess(time.monotonic() - started, 0.2)
+
     def test_take_is_refused_while_another_takeover_is_open(self) -> None:
         HumanTakeoverStore(self.settings).start(reason="payment", requested_by="web-console")
         with self.assertRaises(LiveScreenError):

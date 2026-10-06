@@ -38,6 +38,10 @@ LEASE_RENEW_EVERY_SECONDS = 20
 VIEWER_IDLE_SECONDS = 10
 CONTROL_IDLE_SECONDS = 45
 WAKE_EVERY_SECONDS = 50
+# Right after the operator acts, the screen is what they are waiting for:
+# capture at this pace for a moment instead of the idle viewing rate.
+ACTIVE_INTERVAL_SECONDS = 0.1
+ACTIVE_WINDOW_SECONDS = 1.5
 # time.monotonic() may start near zero, so "never happened" cannot be 0.0.
 NEVER = float("-inf")
 # Best effort, in order: reset the X idle timer, then dismiss whichever
@@ -100,6 +104,8 @@ class LiveScreen:
         self._env: dict[str, str] | None = None
         self._env_checked_at = NEVER
         self._woke_at = NEVER
+        self._last_input_at = NEVER
+        self._kick = threading.Event()
         self._control_id: str | None = None
         self._control_seen_at = NEVER
         self._control_renewed_at = NEVER
@@ -281,7 +287,11 @@ class LiveScreen:
                         self._size = (0, 0)
                         self._frame_ready.notify_all()
                     time.sleep(1.0)
-                time.sleep(max(0.02, self._interval - (time.monotonic() - started)))
+                active = time.monotonic() - self._last_input_at < ACTIVE_WINDOW_SECONDS
+                interval = min(self._interval, ACTIVE_INTERVAL_SECONDS) if active else self._interval
+                # Input cuts the wait short so its effect shows up at once.
+                self._kick.wait(max(0.02, interval - (time.monotonic() - started)))
+                self._kick.clear()
             else:
                 time.sleep(1.0)
 
@@ -441,6 +451,8 @@ class LiveScreen:
                 )
             except (OSError, subprocess.SubprocessError):
                 raise LiveScreenError("Input injection failed") from None
+        self._last_input_at = time.monotonic()
+        self._kick.set()
         return {"ok": True, "applied": len(events)}
 
     @staticmethod

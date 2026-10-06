@@ -1507,3 +1507,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   .live-screen-footer { flex-direction: column; align-items: stretch; gap: 8px; }
   .live-screen-actions { gap: 6px; }
 }
+
+.unlock-card label.remember-token { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 14px; cursor: pointer; }
+.unlock-card label.remember-token input { width: auto; margin: 2px 0 0; padding: 0; }
+.unlock-card label.remember-token span { display: grid; gap: 3px; font-size: 12px; }
+.unlock-card label.remember-token small { color: #667085; font-size: 11px; line-height: 1.45; }
+.live-screen-hint { position: absolute; left: 50%; bottom: 18px; padding: 8px 14px; border-radius: 999px; background: rgba(22, 24, 29, .86); color: #fff; font-size: 12px; font-weight: 600; pointer-events: none; transform: translateX(-50%); }
+.live-screen-viewer .screen-viewer-image-frame { position: relative; }
+.live-screen-viewer:not(.controlling) .live-screen-canvas.takeable { cursor: pointer; }

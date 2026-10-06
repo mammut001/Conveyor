@@ -54,6 +54,10 @@ web_console.py ── live_screen.py ──▶ import -window root   (capture)
   finish, and from then on the computer-use loop and Agent screenshots are
   blocked. If the Agent does not go idle within 20 seconds the takeover is
   refused instead of letting two parties drive the pointer.
+- Clicking the picture also takes control; that click is not forwarded.
+  After each input the screen is captured immediately and at 10 fps for the
+  next second and a half, so the result of a click shows up without waiting
+  for the idle frame rate.
 - **Release** lifts any held mouse button or modifier, then completes the
   lease. The Agent takes a fresh observation before continuing.
 
