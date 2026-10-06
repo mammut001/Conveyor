@@ -227,6 +227,19 @@ class TranscriptStore:
         finally:
             conn.close()
 
+    def last_message(self, session_id: str) -> dict[str, Any] | None:
+        """Newest message of a session (role, content, created_at), or None."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """SELECT role, content, created_at FROM session_messages
+                   WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+                (session_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         conn = self._connect()
         try:

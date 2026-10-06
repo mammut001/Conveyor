@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Agents, phase 1** (`CONVEYOR_AGENTS_ENABLED`, default off): the Web Console's sidebar becomes a list of named agents, one conversation each, with avatar, project tag, last-message preview and a working / waiting-for-you status. Each agent has standing instructions that are added to the chat tier's system prompt and, as an `<agent-profile>` block, to Codex jobs started from its conversation. The right panel gains Details / Library / Computer tabs. Telegram, Feishu and older web sessions belong to a built-in `default` agent that has no instructions, so turning the flag on changes nothing until an agent is created. `GET/POST /api/agents`, `PUT/DELETE /api/agents/<id>`. See `docs/agents.md`.
 - **Live screen shows the host pointer** while you are only watching, so you can see where the Agent is pointing (captures carry no cursor image); a pointer move alone now produces a new frame.
 - **Deploy reports systemd unit drift**: `deploy_vps.sh` warns when an installed `conveyor-*` unit differs from the repo copy, since deploys cannot install unit files.
 - **Web Console on a private VPN address** (`CONVEYOR_WEB_EXTRA_HOSTS`): the console can also listen on the host's WireGuard/Tailscale address so a phone on the VPN opens it directly, without an SSH tunnel. Same server object and bearer token as loopback; wildcard and public addresses are refused because the extra listeners are plain HTTP. See `docs/mobile_web.md`.

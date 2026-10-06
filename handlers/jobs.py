@@ -211,7 +211,11 @@ async def _execute_codex_job(
     # jobs (handle_codex_job is only called for /run, /fix, and free
     # text fallback — never for deterministic commands).
     from handlers.session import build_context_prompt, append_turn
-    ctx_prompt = build_context_prompt(runner.settings, msg)
+    from agents import instructions_for_chat, profile_block
+    ctx_prompt = (
+        profile_block(*instructions_for_chat(runner.settings, msg.channel, msg.chat_id))
+        + build_context_prompt(runner.settings, msg)
+    )
     user_text_for_session = body  # remember for session recording
 
     progress_mode = _normalize_mode(getattr(runner.settings, "conveyor_progress_mode", "compact"))

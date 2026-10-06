@@ -210,6 +210,8 @@ class Settings:
     # Embedded live view + one-click takeover of the host desktop in the Web
     # Console (live_screen.py). Off by default: it shows the screen to, and
     # accepts input from, anyone holding the web token.
+    # Named agents, one conversation each (agents.py). Off by default.
+    agents_enabled: bool = False
     live_screen_enabled: bool = False
     live_screen_control_enabled: bool = True
     live_screen_fps: float = 4.0
@@ -601,6 +603,9 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         ),
         "conveyor_takeover_enabled": os.getenv(
             "CONVEYOR_TAKEOVER_ENABLED", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "agents_enabled": os.getenv(
+            "CONVEYOR_AGENTS_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
         "live_screen_enabled": os.getenv(
             "CONVEYOR_LIVE_SCREEN_ENABLED", "false"

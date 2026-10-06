@@ -291,6 +291,7 @@ Conveyor 允许 Codex 在隔离的 Git Worktree 内以 `danger-full-access` 权�
 - 📖 [系统整体架构与设计文档](docs/architecture.md)
 - 🌐 [Web 控制台与手机 PWA 配置指南](docs/web_console.md)
 - 🖥️ [实时屏幕与一键接管](docs/live_screen.md)
+- 🤖 [Agent：一个对话一个 Agent](docs/agents.md)
 - 🛡️ [桌面安全契约与 Computer Use 规范](docs/desktop_security.md)
 - 🔒 [Apply 安全策略与工作区隔离规范](docs/apply_safety.md)
 - 🔌 [Model Context Protocol (MCP) 连接器扩展](docs/mcp.md)

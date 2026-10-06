@@ -42,6 +42,10 @@ export type ChatPanelProps = {
   onSessionChange?: (sessionId: string) => void;
   initialInput?: string;
   onInitialInputConsumed?: () => void;
+  /** When set, this panel is one agent's conversation: the session is fixed
+   *  and never read from or written to this browser's "last chat" slot. */
+  agentSessionId?: string;
+  agentName?: string;
 };
 
 function SubagentCardGroup({ tasks, live }: { tasks: SubagentProgress[]; live?: boolean }) {
@@ -117,8 +121,8 @@ function SubagentCardGroup({ tasks, live }: { tasks: SubagentProgress[]; live?: 
   );
 }
 
-export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed }: ChatPanelProps) {
-  const [sessionId, setSessionId] = useState<string>(() => localStorage.getItem('conveyor-chat-session') || '');
+export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName }: ChatPanelProps) {
+  const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -338,7 +342,7 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
             if (eventName === 'session') {
               if (payload.session_id) {
                 setSessionId(payload.session_id);
-                localStorage.setItem('conveyor-chat-session', payload.session_id);
+                if (!agentSessionId) localStorage.setItem('conveyor-chat-session', payload.session_id);
                 if (onSessionChange) onSessionChange(payload.session_id);
               }
             } else if (eventName === 'delta') {
@@ -419,8 +423,10 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
         {messages.length === 0 && !streamingDelta && (
           <div className="welcome-state">
             <div className="brand-mark">C</div>
-            <h2>Conveyor Direct Chat</h2>
-            <p>Direct chat tier answering in seconds without Codex. READ tools run automatically; WRITE tools require approval.</p>
+            <h2>{agentName || 'Conveyor Direct Chat'}</h2>
+            <p>{agentName
+              ? 'This is the one conversation with this agent. Ask it something, or give it a task.'
+              : 'Direct chat tier answering in seconds without Codex. READ tools run automatically; WRITE tools require approval.'}</p>
           </div>
         )}
 
@@ -566,7 +572,7 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
       )}
 
       <form className="composer" onSubmit={handleSend}>
-        <button
+        {!agentSessionId && <button
           type="button"
           className="mode-switch"
           style={{ padding: '6px 10px', alignSelf: 'center', cursor: 'pointer', border: 0 }}
@@ -575,11 +581,12 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
           disabled={busy}
         >
           ＋ New
-        </button>
+        </button>}
+        {agentSessionId && <span aria-hidden="true" />}
         <textarea
           value={input}
           onChange={e => setInput(e.target.value)}
-          placeholder="Ask Conveyor on the chat tier…"
+          placeholder={agentName ? `Message ${agentName}…` : 'Ask Conveyor on the chat tier…'}
           rows={2}
           maxLength={8000}
           disabled={busy}

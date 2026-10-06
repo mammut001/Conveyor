@@ -30,6 +30,7 @@ from handlers.jobs import submit_codex_job
 from logging_setup import configure_logging
 from redaction import redact_text
 from runner import CodexRunner, JobMode
+from agents import AgentError
 from live_screen import LiveScreen, LiveScreenError
 from web_control import WebControl
 from transcript_store import session_identity
@@ -289,6 +290,14 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
     def _segments(path: str) -> list[str]:
         return [unquote(part) for part in path.strip("/").split("/") if part]
 
+    def _agents_on(self) -> bool:
+        """True when agents are enabled; otherwise answer 409."""
+        import agents
+        if agents.enabled(getattr(self.server.control, "settings", None)):
+            return True
+        self._json(HTTPStatus.CONFLICT, {"error": "agents are disabled (set CONVEYOR_AGENTS_ENABLED=true)"})
+        return False
+
     def _memory_settings(self) -> Any:
         """Settings when long-term memory is on; otherwise answer 409 and return None."""
         settings = getattr(self.server.control, "settings", None)
@@ -484,6 +493,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, self.server.control.computer_status())
             elif path == "/api/teammate/status":
                 self._json(HTTPStatus.OK, self.server.control.teammate_status())
+            elif path == "/api/agents":
+                self._json(HTTPStatus.OK, self.server.control.list_agents())
             elif path == "/api/screen/status":
                 self._json(HTTPStatus.OK, self.server.live_screen.status())
             elif path == "/api/screen/frame":
@@ -1095,6 +1106,13 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/computer/stop":
                 result = self._await(self.server.control.emergency_stop())
                 self._json(HTTPStatus.OK, {"ok": True, "result": result})
+            elif parsed.path == "/api/agents":
+                if not self._agents_on():
+                    return
+                try:
+                    self._json(HTTPStatus.CREATED, self.server.control.save_agent(None, body))
+                except AgentError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             elif parsed.path == "/api/screen/control":
                 action = str(body.get("action", "")).strip().lower()
                 if action not in ("take", "release"):
@@ -1145,6 +1163,16 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         parts = self._segments(parsed.path)
         try:
+            if len(parts) == 3 and parts[:2] == ["api", "agents"]:
+                if not self._agents_on():
+                    return
+                try:
+                    agent = self.server.control.save_agent(parts[2], body)
+                except AgentError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+                self._json(HTTPStatus.OK if agent else HTTPStatus.NOT_FOUND, agent or {"error": "not found"})
+                return
             if len(parts) == 3 and parts[:2] == ["api", "skills"]:
                 settings = self._skills_settings()
                 if settings is None:
@@ -1199,6 +1227,16 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         self._drain_body()
         parts = self._segments(parsed.path)
         try:
+            if len(parts) == 3 and parts[:2] == ["api", "agents"]:
+                if not self._agents_on():
+                    return
+                try:
+                    removed = self.server.control.archive_agent(parts[2])
+                except AgentError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+                self._json(HTTPStatus.OK if removed else HTTPStatus.NOT_FOUND, {"ok": removed} if removed else {"error": "not found"})
+                return
             if len(parts) == 3 and parts[:2] == ["api", "skills"]:
                 settings = self._skills_settings()
                 if settings is None:

@@ -8,6 +8,7 @@ import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
 import { TeammatePanel } from './components/TeammatePanel'
 import { LiveScreenPanel } from './components/LiveScreenPanel'
+import { AgentAvatar, AgentDialog, AgentList, agentTag, type Agent, type AgentDraft } from './components/AgentList'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
@@ -67,6 +68,7 @@ type SystemStatus = {
     mobile_ui?: boolean
     mcp?: boolean
     teammate?: boolean
+    agents?: boolean
   }
 }
 type ComputerStatus = {
@@ -135,6 +137,16 @@ function isEscapeKey(e: Pick<KeyboardEvent, 'key' | 'code' | 'keyCode'>): boolea
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem('conveyor-token') || storedToken())
   const [rememberToken, setRememberToken] = useState(() => Boolean(storedToken()))
+  const [agentState, setAgentState] = useState<{ enabled: boolean; agents: Agent[] }>({ enabled: false, agents: [] })
+  const [selectedAgentId, setSelectedAgentId] = useState(() => localStorage.getItem('conveyor-agent') || '')
+  const [agentDialog, setAgentDialog] = useState<null | { agent?: Agent }>(null)
+  const [agentTab, setAgentTab] = useState<'details' | 'library' | 'computer'>('details')
+  // With agents on, the selected agent's one conversation is the session.
+  const selectedAgent = agentState.enabled ? (agentState.agents.find(agent => agent.id === selectedAgentId) || agentState.agents[0]) : undefined
+  const agentSessionRef = useRef('')
+  agentSessionRef.current = selectedAgent?.session_id || ''
+  // Agents are conversations first: land on Chat the moment they are on.
+  useEffect(() => { if (agentState.enabled) setView(current => current === 'tasks' ? 'chat' : current) }, [agentState.enabled])
   const [tokenDraft, setTokenDraft] = useState('')
   const [authenticated, setAuthenticated] = useState(false)
   const [sessions, setSessions] = useState<Session[]>([])
@@ -321,10 +333,11 @@ export default function App() {
     if (!token) return
     const gen = ++refreshGen.current
     try {
-      const [sessionData, jobData, approvalData, nodeData, systemData, computerData] = await Promise.all([
+      const [sessionData, jobData, approvalData, nodeData, systemData, computerData, agentData] = await Promise.all([
         api<{ sessions: Session[] }>('/api/sessions'), api<{ jobs: Job[] }>('/api/jobs'),
         api<{ approvals: Approval[] }>('/api/approvals'), api<{ nodes: NodeInfo[] }>('/api/nodes'),
         api<SystemStatus>('/api/system/status'), api<ComputerStatus>('/api/computer/status'),
+        api<{ enabled: boolean; agents: Agent[] }>('/api/agents').catch(() => ({ enabled: false, agents: [] as Agent[] })),
       ])
       // A newer refresh (or a decision that bumped the generation) started
       // while this one was in flight. Drop it so a late poll cannot restore
@@ -333,7 +346,18 @@ export default function App() {
       const taskSessions = taskSessionsOnly(sessionData.sessions)
       setSessions(taskSessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setError('')
-      if (!creatingSession) {
+      setAgentState(agentData)
+      const pinned = agentData.enabled
+        ? (agentData.agents.find(agent => agent.id === (localStorage.getItem('conveyor-agent') || '')) || agentData.agents[0])?.session_id
+        : ''
+      if (pinned) {
+        // An agent's conversation is the session, whether or not it has messages yet.
+        if (selectedSessionId !== pinned) { setSelectedSessionId(pinned); setSelectedJobId('') }
+        else if (!selectedJobId) {
+          const latest = taskSessions.find(item => item.id === pinned)?.latest_job
+          if (latest) setSelectedJobId(latest.id)
+        }
+      } else if (!creatingSession) {
         const savedSessionId = sessionStorage.getItem('conveyor-selected-session')
         const currentTargetId = selectedSessionId || savedSessionId
         const matched = taskSessions.find(item => item.id === currentTargetId)
@@ -461,6 +485,7 @@ export default function App() {
       && session.operator_id === selectedJob.operator_id
       && session.source_chat_id === selectedJob.chat_id)
     const target = matching?.id || selectedJob.chat_id
+    if (agentSessionRef.current) return
     if (target && target !== selectedSessionId) setSelectedSessionId(target)
   }, [creatingSession, selectedJob, selectedSessionId, sessions])
   const pendingForJob = approvals.filter(item => (!item.kind || item.kind === 'job') && Boolean(item.job_id && item.job_id === selectedJobId))
@@ -548,6 +573,25 @@ export default function App() {
     try { if (rememberToken) localStorage.setItem('conveyor-token', value); else localStorage.removeItem('conveyor-token') } catch { /* storage unavailable */ }
     setToken(value); setTokenDraft('')
   }
+  const selectAgent = (agent: Agent) => {
+    setSelectedAgentId(agent.id)
+    localStorage.setItem('conveyor-agent', agent.id)
+    selectSession(agent.session_id)
+    setView('chat')
+    setSessionsDrawerOpen(false)
+  }
+  const saveAgent = async (draft: AgentDraft, agent?: Agent) => {
+    const saved = await api<Agent>(agent ? `/api/agents/${encodeURIComponent(agent.id)}` : '/api/agents', {
+      method: agent ? 'PUT' : 'POST', body: JSON.stringify(draft),
+    })
+    if (!agent) { setSelectedAgentId(saved.id); localStorage.setItem('conveyor-agent', saved.id); selectSession(saved.session_id); setView('chat') }
+    await refresh()
+  }
+  const archiveAgent = async (agent: Agent) => {
+    await api(`/api/agents/${encodeURIComponent(agent.id)}`, { method: 'DELETE' })
+    if (selectedAgentId === agent.id) { setSelectedAgentId(''); localStorage.removeItem('conveyor-agent') }
+    await refresh()
+  }
   function lock() {
     forgetToken(); sessionStorage.removeItem('conveyor-token')
     setToken(''); setAuthenticated(false); setRememberToken(false)
@@ -575,6 +619,9 @@ export default function App() {
           <strong>Sessions</strong>
           <button type="button" className="drawer-close-btn" aria-label="Close sessions" onClick={() => setSessionsDrawerOpen(false)}>×</button>
         </div>
+        {agentState.enabled
+          ? <AgentList agents={agentState.agents} selectedId={selectedAgent?.id || ''} onSelect={selectAgent} onNew={() => setAgentDialog({})} onEdit={agent => setAgentDialog({ agent })} />
+          : <>
         <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { selectSession('', ''); setCreatingSession(true); setPrompt(''); setSessionsDrawerOpen(false); }} aria-label="New session">＋</button></div>
         <div className="session-list">
           {sessions.map(session => (
@@ -604,6 +651,7 @@ export default function App() {
           ))}
           {!sessions.length && <Empty text="No sessions yet" />}
         </div>
+          </>}
         <div className="queue-summary"><p className="eyebrow">ACTIVE QUEUE</p>{(['running', 'queued'] as const).map(state => <div key={state}><span>{state}</span><strong>{system?.queue.states[state] || 0}</strong></div>)}<p className="history-note">History · {(['interrupted', 'failed', 'cancelled', 'completed'] as const).reduce((total, state) => total + (system?.queue.states[state] || 0), 0)} terminal tasks</p></div>
       </aside>
 
@@ -611,10 +659,10 @@ export default function App() {
         <div className="stream-header">
           <div>
             <p className="eyebrow">
-              {view === 'chat' ? 'DIRECT CHAT TIER' : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · CODEX EXECUTION'}
+              {view === 'chat' ? (selectedAgent ? 'AGENT' : 'DIRECT CHAT TIER') : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · CODEX EXECUTION'}
             </p>
             <h2>
-              {view === 'chat' ? 'Chat' : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'skills' ? 'Skills' : view === 'connectors' ? 'Connectors' : view === 'teammate' ? 'Teammate' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
+              {view === 'chat' ? (selectedAgent?.name || 'Chat') : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'skills' ? 'Skills' : view === 'connectors' ? 'Connectors' : view === 'teammate' ? 'Teammate' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -678,6 +726,9 @@ export default function App() {
           />
         ) : view === 'chat' ? (
           <ChatPanel
+            key={selectedAgent?.id || 'free-chat'}
+            agentSessionId={selectedAgent?.session_id}
+            agentName={selectedAgent?.name}
             token={token}
             onApprovalDecided={() => {
               void refresh()
@@ -798,6 +849,27 @@ export default function App() {
           <strong>Context & Changes</strong>
           <button type="button" className="drawer-close-btn" aria-label="Close context" onClick={() => setContextDrawerOpen(false)}>×</button>
         </div>
+        {selectedAgent && <div className="agent-card">
+          <AgentAvatar agent={selectedAgent} size={84} />
+          <h2>{selectedAgent.name}</h2>
+          {agentTag(selectedAgent) && <p className="agent-card-tag">{agentTag(selectedAgent)}</p>}
+          <div className="agent-tabs" role="tablist">
+            {(['details', 'library', 'computer'] as const).map(tab => (
+              <button key={tab} type="button" role="tab" aria-selected={agentTab === tab} className={agentTab === tab ? 'active' : ''} onClick={() => setAgentTab(tab)}>
+                {tab === 'details' ? 'Details' : tab === 'library' ? 'Library' : 'Computer'}
+              </button>
+            ))}
+          </div>
+        </div>}
+        {selectedAgent && agentTab === 'details' && <ContextSection title="Agent">
+          <p className="agent-instructions">{selectedAgent.instructions || 'No standing instructions yet.'}</p>
+          {selectedAgent.workspace_path && <KeyValue label="Project" value={selectedAgent.workspace_path} mono />}
+          <div className="action-row"><button type="button" onClick={() => setAgentDialog({ agent: selectedAgent })}>Edit agent</button></div>
+        </ContextSection>}
+        {selectedAgent && agentTab === 'library' && <ContextSection title="Library">
+          <Empty text="Files, screenshots and skills this agent produces will be collected here." />
+        </ContextSection>}
+        {(!selectedAgent || agentTab === 'details') && <>
         <ContextSection title="Job">
           {selectedJob ? <>
             <KeyValue label="ID" value={selectedJob.id} mono /><KeyValue label="State" value={selectedJob.state} />
@@ -848,6 +920,8 @@ export default function App() {
           <div className="file-list">{selectedJob?.changed_files?.map(file => <div key={file.path}><span className="file-status">{file.status || 'M'}</span><code>{file.path}</code></div>)}{selectedJob && !selectedJob.changed_files?.length && <Empty text="No changed files" />}</div>
           {selectedJob && <><details className="diff-view"><summary>Unified diff</summary><pre>{diff || 'No diff available.'}</pre></details><div className="action-row"><button className="danger" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/discard`)}>{activeRefinement ? 'Discard active changes…' : 'Discard…'}</button><button className="primary" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/apply`)}>{activeRefinement ? 'Apply active changes…' : 'Apply…'}</button></div></>}
         </ContextSection>
+        </>}
+        {(!selectedAgent || agentTab === 'computer') && <>
         <ContextSection title="Computer">
           <KeyValue label="CUA" value={computer?.armed ? `Armed · ${computer.arm_remaining_seconds}s` : 'Disarmed'} />
           {computer?.active_task && <KeyValue label="Task" value={String(computer.active_task.status || computer.active_task.task_id || 'active')} />}
@@ -870,11 +944,14 @@ export default function App() {
           {!nodes.length && <Empty text="No execution nodes" />}
           <button className="emergency" onClick={() => action('/api/computer/stop')}>■ Emergency stop</button>
         </ContextSection>
+        </>}
+        {(!selectedAgent || agentTab === 'details') && <>
         <ContextSection title="System">
           <KeyValue label="Load" value={system?.load_average.slice(0, 2).map(n => n.toFixed(2)).join(' / ') || '—'} />
           <KeyValue label="Memory free" value={bytes(system?.memory.available ?? null)} /><KeyValue label="Disk free" value={bytes(system?.disk.free ?? null)} />
           <KeyValue label="Telegram" value={system?.channels.telegram.configured ? 'Configured' : 'Off'} /><KeyValue label="Feishu" value={system?.channels.feishu.configured ? 'Configured' : 'Off'} />
         </ContextSection>
+        </>}
       </aside>
     </section>
     {Boolean(system?.features?.mobile_ui) && sessionsDrawerOpen && (
@@ -1000,6 +1077,12 @@ export default function App() {
         </button>
       </nav>
     )}
+    {agentDialog && <AgentDialog
+      agent={agentDialog.agent}
+      onClose={() => setAgentDialog(null)}
+      onSave={draft => saveAgent(draft, agentDialog.agent)}
+      onArchive={agentDialog.agent ? () => archiveAgent(agentDialog.agent as Agent) : undefined}
+    />}
     {settingsOpen && <ProviderSettings config={providerConfig} busy={busy} onClose={() => setSettingsOpen(false)} onSave={async payload => {
       setBusy(true); setError('')
       try {
