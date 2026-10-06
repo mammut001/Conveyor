@@ -153,6 +153,19 @@ class AgentWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         listed = subprocess.run(["git", "worktree", "list"], cwd=self.agent_repo, capture_output=True, text=True).stdout
         self.assertNotIn("job-agent", listed)
 
+    async def test_agent_process_only_knows_its_worktree_as_the_workspace(self) -> None:
+        from runner.operators.run import job_child_env
+
+        for workspace in (self.agent_repo, None):
+            job = self.job(f"job-env-{'agent' if workspace else 'host'}", workspace)
+            job.worktree_path = await self.runner._create_worktree(job)
+            with patch.dict(os.environ, {"CODEX_WORKSPACE_ROOT": str(self.host_repo)}):
+                env = job_child_env(self.runner, job)
+            # `cd "$CODEX_WORKSPACE_ROOT"` must land in the job's worktree,
+            # never in a main checkout.
+            self.assertEqual(env["CODEX_WORKSPACE_ROOT"], str(job.worktree_path))
+            self.assertNotIn(str(self.host_repo), env.values())
+
     # ---- the handler passes the workspace only when there is one ----
 
     async def test_handler_start_call_is_unchanged_without_a_project_folder(self) -> None:
