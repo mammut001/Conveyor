@@ -678,6 +678,8 @@ async def ask_chat(
 
     from agents import instructions_for_chat
     agent_name, agent_instructions = instructions_for_chat(settings, msg.channel, msg.chat_id)
+    from personal_tools.long_term_memory import owner_for_chat as _owner_for_chat
+    _memory_owner = _owner_for_chat(settings, msg.operator_id, msg.channel, msg.chat_id)
 
     def _messages(content, *, has_evidence: bool, may_search: bool) -> list[dict]:
         return (
@@ -687,7 +689,7 @@ async def ask_chat(
                 can_search=may_search,
                 worktree_info=worktree_info,
                 tools_enabled=use_tools,
-                operator_id=msg.operator_id,
+                operator_id=_memory_owner,
                 memory_query=question,
                 memory_allowed=memory_allowed,
                 active_skill=active_skill_block,
