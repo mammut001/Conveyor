@@ -1,36 +1,11 @@
 #!/bin/bash
 # Claim Conveyor computer-use steps and run them on this VPS desktop.
-# Display variables come from the live XFCE session, so an xrdp reconnect
-# is picked up on the next start.
+# Display variables come from the live desktop session, so a restarted
+# desktop is picked up on the next start.
 set -euo pipefail
 
-eval "$(python3 - << 'PY'
-import shlex
-import subprocess
-from pathlib import Path
-
-wanted = ("DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "XAUTHORITY")
-pid = None
-for line in subprocess.check_output(["ps", "-eo", "pid,cmd"], text=True).splitlines():
-    if "xfce4-session" in line and "awk" not in line:
-        pid = line.split(None, 1)[0]
-        break
-if not pid:
-    raise SystemExit("no xfce session")
-found = {}
-raw = Path("/proc/" + pid + "/environ").read_bytes().split(b"\0")
-for item in raw:
-    if b"=" not in item:
-        continue
-    key, val = item.split(b"=", 1)
-    name = key.decode()
-    if name in wanted:
-        found[name] = val.decode("utf-8", "replace")
-found.setdefault("XAUTHORITY", str(Path.home() / ".Xauthority"))
-for name, val in found.items():
-    print("export " + name + "=" + shlex.quote(val))
-PY
-)"
+session_env="$(python3 "$(dirname "$(readlink -f "$0")")/desktop_session_env.py")"
+eval "$session_env"
 
 export PATH="$HOME/.local/bin:${PATH}"
 export LD_LIBRARY_PATH="$HOME/.local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
