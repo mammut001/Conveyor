@@ -145,7 +145,7 @@ class WebControl:
             return transcript
         jobs = self.list_jobs(200, session_id=session_id)
         if not jobs:
-            return None
+            return self._empty_agent_session(session_id)
         return {
             "id": session_id,
             "channel": jobs[0].get("channel"),
@@ -155,6 +155,22 @@ class WebControl:
             "messages": [],
             "job_count": len(jobs),
         }
+
+    def _empty_agent_session(self, session_id: str) -> dict[str, Any] | None:
+        """An agent's conversation exists from the moment the agent does."""
+        import agents
+
+        if not agents.enabled(self.settings):
+            return None
+        for agent in agents.AgentStore(self.settings).list():
+            if agent["session_id"] == session_id:
+                return {
+                    "id": session_id, "channel": agents.WEB_CHANNEL, "operator_id": agents.WEB_OPERATOR,
+                    "source_chat_id": agents.chat_id_for(agent["id"]), "title": agent["name"],
+                    "created_at": None, "last_activity": None,
+                    "jobs": [], "messages": [], "job_count": 0, "message_count": 0,
+                }
+        return None
 
     def resolve_session_identity(self, session_id: str) -> tuple[str, str, str] | None:
         transcript = get_transcript_store(self.settings).get_session(session_id)
@@ -625,8 +641,60 @@ class WebControl:
                 and bool(getattr(self.settings, "chat_tools_enabled", False)),
                 "teammate": bool(getattr(self.settings, "teammate_enabled", True)),
                 "live_screen": bool(getattr(self.settings, "live_screen_enabled", False)),
+                "agents": getattr(self.settings, "agents_enabled", False) is True,
             },
         }
+
+    # ---- agents -----------------------------------------------------------
+
+    def _agent_view(self, agent: dict[str, Any], sessions: dict[str, dict[str, Any]], waiting: set[str]) -> dict[str, Any]:
+        """An agent plus what its row in the list shows: preview and status."""
+        from redaction import redact_text
+
+        session_id = agent["session_id"]
+        session = sessions.get(session_id) or {}
+        last = get_transcript_store(self.settings).last_message(session_id)
+        latest_job = session.get("latest_job") or {}
+        if session_id in waiting:
+            status = "waiting"
+        elif latest_job.get("state") in ("running", "queued"):
+            status = "working"
+        else:
+            status = "idle"
+        preview = " ".join(redact_text(str((last or {}).get("content") or "")).split())[:160]
+        return {
+            **agent,
+            "status": status,
+            "last_message": preview,
+            "last_message_role": (last or {}).get("role"),
+            "last_activity": (last or {}).get("created_at") or session.get("last_activity"),
+            "message_count": session.get("message_count") or 0,
+        }
+
+    def list_agents(self) -> dict[str, Any]:
+        import agents
+
+        if not agents.enabled(self.settings):
+            return {"enabled": False, "agents": []}
+        sessions = {str(item.get("id")): item for item in self.list_sessions(200)}
+        waiting = {str(item.get("session_id") or "") for item in self.list_approvals()}
+        return {
+            "enabled": True,
+            "agents": [self._agent_view(agent, sessions, waiting) for agent in agents.AgentStore(self.settings).list()],
+        }
+
+    def save_agent(self, agent_id: str | None, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Create (agent_id None) or update an agent; None when it does not exist."""
+        import agents
+
+        store = agents.AgentStore(self.settings)
+        agent = store.create(payload) if agent_id is None else store.update(agent_id, payload)
+        return self._agent_view(agent, {}, set()) if agent else None
+
+    def archive_agent(self, agent_id: str) -> bool:
+        import agents
+
+        return agents.AgentStore(self.settings).archive(agent_id)
 
     def teammate_status(self) -> dict[str, Any]:
         """Return structured Always-On Teammate sentry telemetry."""

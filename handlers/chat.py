@@ -314,6 +314,7 @@ def reset(
 def system_prompt(
     settings: "Settings", *, has_evidence: bool, can_search: bool = False, worktree_info: str = "", tools_enabled: bool = False,
     operator_id: str = "", memory_query: str = "", memory_allowed: bool = True, active_skill: str = "",
+    agent_name: str = "", agent_instructions: str = "",
 ) -> str:
     from config import load_operator_profile
 
@@ -399,9 +400,18 @@ def system_prompt(
     active_skill_section = ""
     if active_skill:
         active_skill_section = f"{active_skill}\n"
+    agent_section = ""
+    if agent_instructions:
+        # Operator-authored, so it may shape the role; the numbered rules
+        # below still win where the two disagree.
+        agent_section = (
+            f'In this conversation you are the agent "{agent_name}". The operator gave it these '
+            f"standing instructions:\n{agent_instructions}\n"
+        )
     return (
         f"You are Conveyor's chat layer for {name}, its single operator. Today is {today}.\n"
         f"Reply in the operator's language ({language}), style: {style}. Keep answers chat-sized.\n"
+        f"{agent_section}"
         f"{grounding}"
         f"{tool_section}"
         f"{memory_section}"
@@ -666,6 +676,9 @@ async def ask_chat(
     from personal_tools.long_term_memory import allowed_for as _memory_allowed_for
     memory_allowed = _memory_allowed_for(settings, msg)
 
+    from agents import instructions_for_chat
+    agent_name, agent_instructions = instructions_for_chat(settings, msg.channel, msg.chat_id)
+
     def _messages(content, *, has_evidence: bool, may_search: bool) -> list[dict]:
         return (
             [{"role": "system", "content": system_prompt(
@@ -678,6 +691,8 @@ async def ask_chat(
                 memory_query=question,
                 memory_allowed=memory_allowed,
                 active_skill=active_skill_block,
+                agent_name=agent_name,
+                agent_instructions=agent_instructions,
             )}]
             + past
             + [{"role": "user", "content": content}]

@@ -1515,3 +1515,46 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .live-screen-hint { position: absolute; left: 50%; bottom: 18px; padding: 8px 14px; border-radius: 999px; background: rgba(22, 24, 29, .86); color: #fff; font-size: 12px; font-weight: 600; pointer-events: none; transform: translateX(-50%); }
 .live-screen-viewer .screen-viewer-image-frame { position: relative; }
 .live-screen-viewer:not(.controlling) .live-screen-canvas.takeable { cursor: pointer; }
+
+/* Agents: one named agent per conversation. */
+.agent-avatar { display: inline-grid; flex: none; place-items: center; border-radius: 50%; color: #fff; font-weight: 650; line-height: 1; user-select: none; }
+.agent-list { padding: 8px; }
+.agent-row { position: relative; }
+.agent-item { display: flex; align-items: center; gap: 12px; width: 100%; margin-bottom: 2px; padding: 10px 34px 10px 10px; border: 0; border-radius: 14px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.agent-item:hover { background: #f0f0f1; }
+.agent-item.active { background: #e9e9eb; }
+.agent-item-text { display: grid; flex: 1; gap: 3px; min-width: 0; }
+.agent-item-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.agent-item-title strong { overflow: hidden; color: #25272c; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.agent-tag { flex: none; max-width: 45%; overflow: hidden; padding: 1px 7px; border-radius: 6px; background: #e4e5e8; color: #6b7078; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-item small { overflow: hidden; color: #858991; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-item small.waiting { color: #b4540a; font-weight: 550; }
+.agent-status-dot { position: absolute; top: 50%; right: 34px; width: 9px; height: 9px; border-radius: 50%; transform: translateY(-50%); }
+.agent-status-dot.waiting { background: #f59e0b; }
+.agent-status-dot.working { background: var(--green); animation: agent-pulse 1.4s ease-in-out infinite; }
+@keyframes agent-pulse { 50% { opacity: .35; } }
+.agent-edit-btn { position: absolute; top: 50%; right: 6px; width: 24px; height: 24px; border: 0; border-radius: 7px; background: transparent; color: #8a8e96; font-size: 15px; line-height: 1; opacity: 0; transform: translateY(-50%); cursor: pointer; }
+.agent-row:hover .agent-edit-btn, .agent-edit-btn:focus-visible { opacity: 1; }
+.agent-edit-btn:hover { background: #dfe0e3; color: #33363c; }
+.agent-card { display: grid; justify-items: center; gap: 6px; padding: 22px 16px 12px; text-align: center; }
+.agent-card h2 { margin: 8px 0 0; color: #1d1f23; font-size: 19px; font-weight: 620; }
+.agent-card-tag { margin: 0; color: #8a8e96; font-size: 13px; }
+.agent-tabs { display: inline-flex; gap: 2px; margin-top: 12px; }
+.agent-tabs button { padding: 6px 12px; border: 0; border-radius: 9px; background: transparent; color: #8a8e96; font-size: 13px; cursor: pointer; }
+.agent-tabs button:hover { color: #33363c; }
+.agent-tabs button.active { background: #ececee; color: #1d1f23; font-weight: 560; }
+.agent-instructions { margin: 0 0 10px; color: #4a4e56; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-dialog { width: min(520px, 100%); }
+.agent-dialog-header { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+.agent-dialog-header > div { flex: 1; min-width: 0; }
+.agent-dialog-header h2 { margin: 3px 0 0; overflow: hidden; font-size: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-dialog form { display: grid; gap: 14px; }
+.agent-dialog label { display: grid; gap: 6px; color: #344054; font-size: 12px; font-weight: 550; }
+.agent-dialog label small { color: #98a2b3; font-weight: 400; }
+.agent-dialog input, .agent-dialog textarea { width: 100%; padding: 9px 11px; border: 1px solid #d5d9e0; border-radius: 9px; background: #fff; color: #172033; font: inherit; font-size: 13px; }
+.agent-dialog textarea { resize: vertical; line-height: 1.5; }
+.agent-colors { display: flex; gap: 9px; }
+.agent-colors button { width: 24px; height: 24px; padding: 0; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px #d5d9e0; cursor: pointer; }
+.agent-colors button.selected { box-shadow: 0 0 0 2px #172033; }
+.agent-dialog-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.agent-dialog-actions span { flex: 1; }
