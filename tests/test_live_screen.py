@@ -66,14 +66,25 @@ class _Host:
         self.other: list[list[str]] = []
         self.width, self.height = 1024, 768
         self.pointer = (400, 300)
+        self.screensaver = False
+        self.dismissed_at = 0.0
+        self.captured_at: list[float] = []
 
     def run(self, args, **_kwargs):
         if args[0] == "import":
+            self.captured_at.append(time.monotonic())
             data = self.frames[0] if len(self.frames) == 1 else self.frames.pop(0)
             return subprocess.CompletedProcess(args, 0, stdout=data, stderr=b"")
         if args[0] != "xdotool":
             self.other.append(list(args))
-            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+            out = ""
+            if args[0] == "xfce4-screensaver-command":
+                if "--query" in args:
+                    out = f"The screensaver is {'active' if self.screensaver else 'inactive'}\n"
+                elif "--deactivate" in args:
+                    self.screensaver = False
+                    self.dismissed_at = time.monotonic()
+            return subprocess.CompletedProcess(args, 0, stdout=out, stderr="")
         if args[:2] == ["xdotool", "getmouselocation"]:
             x, y = self.pointer
             return subprocess.CompletedProcess(args, 0, stdout=f"X={x}\nY={y}\nSCREEN=0\nWINDOW=1\n", stderr="")
@@ -81,6 +92,19 @@ class _Host:
             return subprocess.CompletedProcess(args, 0, stdout=f"{self.width} {self.height}\n", stderr="")
         self.xdotool.append(list(args[1:]))
         return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+
+def _stop_worker(screen: LiveScreen) -> None:
+    """Let the capture thread finish before the next test swaps the fake host.
+
+    A leftover thread would keep calling the patched subprocess.run and its
+    captures would land in the following test's recorder.
+    """
+    screen._last_viewer_at = live_screen.NEVER
+    screen._kick.set()
+    worker = screen._worker
+    if worker is not None:
+        worker.join(timeout=5)
 
 
 class LiveScreenCase(unittest.TestCase):
@@ -98,6 +122,7 @@ class LiveScreenCase(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.screen = LiveScreen(self.settings)
+        self.addCleanup(_stop_worker, self.screen)
         self.addCleanup(self.screen.release_control)
 
 
@@ -179,9 +204,29 @@ class FrameTests(LiveScreenCase):
         self.assertEqual(live_screen._jpeg_size(b""), (0, 0))
         self.assertEqual(live_screen._jpeg_size(b"\xff\xd8not a jpeg at all"), (0, 0))
 
-    def test_watching_wakes_the_screensaver(self) -> None:
-        self.screen.frame(since=0, wait=3)
+    def test_active_screensaver_is_dismissed_and_given_time_to_leave(self) -> None:
+        self.host.screensaver = True
+        self.screen.frame(since=0, wait=4)
         self.assertIn(["xset", "s", "reset"], self.host.other)
+        self.assertIn(["xfce4-screensaver-command", "--deactivate"], self.host.other)
+        # No capture until the screensaver has had time to get off the screen:
+        # its black picture is stable, so it would otherwise be the first frame.
+        self.assertGreaterEqual(
+            self.host.captured_at[0] - self.host.dismissed_at, live_screen.DISMISS_SETTLE_SECONDS - 0.05,
+        )
+
+    def test_inactive_screensaver_is_left_alone_and_costs_no_delay(self) -> None:
+        started = time.monotonic()
+        self.screen.frame(since=0, wait=3)
+        self.assertIn(["xfce4-screensaver-command", "--query"], self.host.other)
+        self.assertNotIn(["xfce4-screensaver-command", "--deactivate"], self.host.other)
+        self.assertLess(time.monotonic() - started, live_screen.DISMISS_SETTLE_SECONDS)
+
+    def test_returning_viewer_checks_the_screensaver_again(self) -> None:
+        self.screen.frame(since=0, wait=3)
+        self.screen._last_viewer_at = time.monotonic() - live_screen.VIEWER_IDLE_SECONDS - 1
+        self.host.screensaver = True  # it came on while nobody was watching
+        self.screen.frame(since=0, wait=4)
         self.assertIn(["xfce4-screensaver-command", "--deactivate"], self.host.other)
 
     def test_frames_are_not_written_to_disk(self) -> None:
@@ -339,6 +384,7 @@ class HttpTests(LiveScreenCase):
             ("127.0.0.1", 0), WebConsoleHandler,
             control=SimpleNamespace(settings=self.settings), loop=self.loop, token=TOKEN,
         )
+        self.addCleanup(_stop_worker, self.server.live_screen)
         self.addCleanup(self.server.live_screen.release_control)
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()

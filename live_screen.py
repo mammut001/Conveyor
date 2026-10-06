@@ -50,14 +50,17 @@ SETTLE_MAX_SECONDS = 1.5
 NO_POINTER = (-1, -1)
 # time.monotonic() may start near zero, so "never happened" cannot be 0.0.
 NEVER = float("-inf")
-# Best effort, in order: reset the X idle timer, then dismiss whichever
-# screensaver daemon is covering the desktop. Missing tools are skipped.
-WAKE_COMMANDS = (
-    ("xset", "s", "reset"),
-    ("xfce4-screensaver-command", "--deactivate"),
-    ("gnome-screensaver-command", "--deactivate"),
-    ("xscreensaver-command", "-deactivate"),
+# Screensaver daemons that may be covering the desktop: (binary, query
+# arguments, dismiss arguments). Missing tools are skipped.
+SCREENSAVERS = (
+    ("xfce4-screensaver-command", ("--query",), ("--deactivate",)),
+    ("gnome-screensaver-command", ("--query",), ("--deactivate",)),
+    ("mate-screensaver-command", ("--query",), ("--deactivate",)),
 )
+# How long a dismissed screensaver takes to actually leave the screen. The
+# black picture is stable for most of that time, so "two equal captures"
+# cannot detect it; measured at about half a second on XFCE.
+DISMISS_SETTLE_SECONDS = 0.8
 IN_FLIGHT_WAIT_SECONDS = 20
 MAX_EVENTS_PER_REQUEST = 64
 MAX_TEXT_CHARS = 500
@@ -245,25 +248,40 @@ class LiveScreen:
             raise LiveScreenError("Screen capture failed")
         return result.stdout
 
-    def _wake_display(self) -> None:
+    def _wake_display(self) -> bool:
         """Keep a screensaver from covering the desktop while someone watches.
 
         An idle headless desktop blanks itself, and a viewer would only ever
-        see black. A locked session still shows its unlock prompt.
+        see black. A locked session still shows its unlock prompt. Returns
+        True when a screensaver was showing and had to be dismissed.
         """
         env = self._display_env()
         if env is None:
-            return
-        for command in WAKE_COMMANDS:
-            if not shutil.which(command[0]):
-                continue
+            return False
+
+        def run(*command: str) -> str:
             try:
-                subprocess.run(
-                    list(command), env=env, timeout=5, check=False,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
+                return subprocess.run(
+                    list(command), env=env, timeout=5, check=False, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                ).stdout or ""
             except (OSError, subprocess.SubprocessError):
+                return ""
+
+        if shutil.which("xset"):
+            run("xset", "s", "reset")  # restart the X idle timer
+        dismissed = False
+        for binary, query, dismiss in SCREENSAVERS:
+            if not shutil.which(binary):
                 continue
+            state = run(binary, *query).lower()
+            if "inactive" in state:
+                continue
+            # An unreadable answer still gets a dismiss (harmless), but only a
+            # screensaver that said it was showing is worth waiting for.
+            run(binary, *dismiss)
+            dismissed = dismissed or "active" in state
+        return dismissed
 
     def _pointer(self) -> tuple[int, int]:
         """Where the host pointer is, so a viewer can see what the Agent points at.
@@ -319,7 +337,8 @@ class LiveScreen:
                 started = time.monotonic()
                 if started - self._woke_at >= WAKE_EVERY_SECONDS:
                     self._woke_at = started
-                    self._wake_display()
+                    if self._wake_display():
+                        time.sleep(DISMISS_SETTLE_SECONDS)
                 try:
                     data = self._capture_once()
                     size = _jpeg_size(data)
@@ -378,6 +397,8 @@ class LiveScreen:
                 # memory may be hours old. Wait for a fresh one instead.
                 self._frame, self._frame_digest = b"", ""
                 self._settle_started, self._settle_digest = NEVER, ""
+                # Check for a screensaver again before the first new frame.
+                self._woke_at = NEVER
             self._last_viewer_at = now
             if self._control_id is not None:
                 self._control_seen_at = now
