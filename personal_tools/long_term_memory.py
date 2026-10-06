@@ -178,10 +178,39 @@ def allowed_for(settings: Any, msg: Any) -> bool:
     )
 
 
+AGENT_OWNER_PREFIX = "agent:"
+
+
+def agent_owner(agent_id: str) -> str:
+    """Memory owner key of one agent."""
+    return f"{AGENT_OWNER_PREFIX}{agent_id}"
+
+
+def owner_for_chat(settings: Any, operator_id: str, channel: str, chat_id: str) -> str:
+    """Whose memory a conversation reads and writes.
+
+    An agent the operator created keeps its own facts, separate from every
+    other agent's. The default agent (Telegram, Feishu, older web sessions)
+    uses the operator's store exactly as before.
+    """
+    try:
+        import agents
+
+        agent = agents.agent_for_chat(settings, channel, chat_id)
+    except Exception:
+        agent = None
+    if agent and not agent.get("is_default"):
+        return agent_owner(agent["id"])
+    return operator_id
+
+
 def _operator(operator_id: str, settings: Any = None) -> str:
+    operator_id = (operator_id or "").strip()[:200]
+    if operator_id.startswith(AGENT_OWNER_PREFIX):
+        return operator_id  # an agent's memory is its own even in shared mode
     if settings is not None and shared(settings):
         return SHARED_OWNER
-    return (operator_id or "").strip()[:200]
+    return operator_id
 
 
 def normalize_fact(text: str) -> str:
@@ -578,6 +607,7 @@ async def memory_remember(
 ) -> ToolResult:
     if not enabled(settings):
         return _disabled()
+    operator_id = owner_for_chat(settings, operator_id, channel, chat_id)
     try:
         row = remember_fact(settings, operator_id, arg, source_channel=channel)
     except ValueError as exc:
@@ -596,6 +626,7 @@ async def memory_forget(
 ) -> ToolResult:
     if not enabled(settings):
         return _disabled()
+    operator_id = owner_for_chat(settings, operator_id, channel, chat_id)
     try:
         rows, status = forget_fact(settings, operator_id, arg)
     except ValueError as exc:
@@ -622,6 +653,7 @@ async def memory_list(
 ) -> ToolResult:
     if not enabled(settings):
         return _disabled()
+    operator_id = owner_for_chat(settings, operator_id, channel, chat_id)
     profiles = list_facts(settings, operator_id, kind="profile")
     logs = list_facts(settings, operator_id, kind="log")
     if not profiles and not logs:
@@ -647,6 +679,7 @@ async def memory_search(
 ) -> ToolResult:
     if not enabled(settings):
         return _disabled()
+    operator_id = owner_for_chat(settings, operator_id, channel, chat_id)
     query = " ".join((arg or "").split())
     if not query:
         return ToolResult(False, "用法: memory.search <关键词>")
@@ -676,15 +709,17 @@ def api_item(settings: Any, row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def api_list(settings: Any, *, q: str = "", kind: str | None = None, limit: int = 200) -> dict[str, Any]:
-    """Memory visible to the web console (the shared store, or web-console's own)."""
-    rows = list_facts(settings, WEB_OPERATOR)
+def api_list(
+    settings: Any, *, q: str = "", kind: str | None = None, limit: int = 200, owner: str = WEB_OPERATOR,
+) -> dict[str, Any]:
+    """Memory visible to the web console: the operator's store, or one agent's."""
+    rows = list_facts(settings, owner)
     counts = {
         "profile": sum(1 for r in rows if r["kind"] == "profile"),
         "log": sum(1 for r in rows if r["kind"] == "log"),
     }
     if q:
-        items = search_facts(settings, WEB_OPERATOR, q, limit=limit, kind=kind)
+        items = search_facts(settings, owner, q, limit=limit, kind=kind)
     else:
         items = [r for r in rows if kind is None or r["kind"] == kind]
         items.sort(key=lambda r: (r["created_at"], r["id"]), reverse=True)

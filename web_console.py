@@ -322,6 +322,22 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
     def _segments(path: str) -> list[str]:
         return [unquote(part) for part in path.strip("/").split("/") if part]
 
+    def _memory_owner(self, settings: Any, agent_id: str) -> str | None:
+        """Whose memory a console request is about; answers 404 for an unknown agent.
+
+        No agent, or the default one, is the operator's own store.
+        """
+        import agents
+        from personal_tools import long_term_memory as ltm
+
+        if not agent_id or agent_id == agents.DEFAULT_AGENT_ID or not agents.enabled(settings):
+            return ltm.WEB_OPERATOR
+        agent = agents.AgentStore(settings).get(agent_id)
+        if agent is None or agent["archived"]:
+            self._json(HTTPStatus.NOT_FOUND, {"error": "agent not found"})
+            return None
+        return ltm.agent_owner(agent_id)
+
     def _agents_on(self) -> bool:
         """True when agents are enabled; otherwise answer 409."""
         import agents
@@ -435,7 +451,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     limit = max(1, min(500, int((query.get("limit") or ["200"])[0])))
                 except ValueError:
                     limit = 200
-                self._json(HTTPStatus.OK, ltm.api_list(settings, q=q, kind=kind, limit=limit))
+                owner = self._memory_owner(settings, str((query.get("agent") or [""])[0]))
+                if owner is None:
+                    return
+                self._json(HTTPStatus.OK, ltm.api_list(settings, q=q, kind=kind, limit=limit, owner=owner))
             elif len(parts) == 4 and parts[:2] == ["api", "skills"] and parts[3] == "export":
                 settings = self._skills_settings()
                 if settings is None:
@@ -776,7 +795,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     return
                 try:
                     # Same filter as chat writes: one sentence, length cap, secrets refused.
-                    row = ltm.remember_fact(settings, ltm.WEB_OPERATOR, raw_text, source_channel="web")
+                    owner = self._memory_owner(settings, str(body.get("agent") or ""))
+                    if owner is None:
+                        return
+                    row = ltm.remember_fact(settings, owner, raw_text, source_channel="web")
                 except ValueError as exc:
                     self._json(HTTPStatus.OK, {"ok": False, "refused": True, "error": str(exc)})
                     return
@@ -1310,7 +1332,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid memory id"})
                     return
                 from personal_tools import long_term_memory as ltm
-                gone, status = ltm.forget_fact(settings, ltm.WEB_OPERATOR, f"#{parts[2]}")
+                owner = self._memory_owner(settings, str((parse_qs(parsed.query).get("agent") or [""])[0]))
+                if owner is None:
+                    return
+                gone, status = ltm.forget_fact(settings, owner, f"#{parts[2]}")
                 if status != "deleted":
                     self._json(HTTPStatus.NOT_FOUND, {"error": "memory not found"})
                     return
