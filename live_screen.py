@@ -37,6 +37,17 @@ LEASE_TTL_SECONDS = 120
 LEASE_RENEW_EVERY_SECONDS = 20
 VIEWER_IDLE_SECONDS = 10
 CONTROL_IDLE_SECONDS = 45
+WAKE_EVERY_SECONDS = 50
+# time.monotonic() may start near zero, so "never happened" cannot be 0.0.
+NEVER = float("-inf")
+# Best effort, in order: reset the X idle timer, then dismiss whichever
+# screensaver daemon is covering the desktop. Missing tools are skipped.
+WAKE_COMMANDS = (
+    ("xset", "s", "reset"),
+    ("xfce4-screensaver-command", "--deactivate"),
+    ("gnome-screensaver-command", "--deactivate"),
+    ("xscreensaver-command", "-deactivate"),
+)
 IN_FLIGHT_WAIT_SECONDS = 20
 MAX_EVENTS_PER_REQUEST = 64
 MAX_TEXT_CHARS = 500
@@ -84,13 +95,14 @@ class LiveScreen:
         self._seq = 0
         self._size: tuple[int, int] = (0, 0)
         self._capture_error = ""
-        self._last_viewer_at = 0.0
+        self._last_viewer_at = NEVER
         self._worker: threading.Thread | None = None
         self._env: dict[str, str] | None = None
-        self._env_checked_at = 0.0
+        self._env_checked_at = NEVER
+        self._woke_at = NEVER
         self._control_id: str | None = None
-        self._control_seen_at = 0.0
-        self._control_renewed_at = 0.0
+        self._control_seen_at = NEVER
+        self._control_renewed_at = NEVER
         self._store: HumanTakeoverStore | None = None
 
     # ---- configuration ----------------------------------------------------
@@ -195,6 +207,26 @@ class LiveScreen:
             raise LiveScreenError("Screen capture failed")
         return result.stdout
 
+    def _wake_display(self) -> None:
+        """Keep a screensaver from covering the desktop while someone watches.
+
+        An idle headless desktop blanks itself, and a viewer would only ever
+        see black. A locked session still shows its unlock prompt.
+        """
+        env = self._display_env()
+        if env is None:
+            return
+        for command in WAKE_COMMANDS:
+            if not shutil.which(command[0]):
+                continue
+            try:
+                subprocess.run(
+                    list(command), env=env, timeout=5, check=False,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+
     def _geometry(self) -> tuple[int, int]:
         env = self._display_env()
         if env is None or not shutil.which("xdotool"):
@@ -229,6 +261,9 @@ class LiveScreen:
                 self._tend_control(now)
             if watching:
                 started = time.monotonic()
+                if started - self._woke_at >= WAKE_EVERY_SECONDS:
+                    self._woke_at = started
+                    self._wake_display()
                 try:
                     data = self._capture_once()
                     size = self._size if self._size != (0, 0) else self._geometry()

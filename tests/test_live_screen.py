@@ -54,11 +54,15 @@ class _Host:
     def __init__(self) -> None:
         self.frames = [JPEG_A]
         self.xdotool: list[list[str]] = []
+        self.other: list[list[str]] = []
 
     def run(self, args, **_kwargs):
         if args[0] == "import":
             data = self.frames[0] if len(self.frames) == 1 else self.frames.pop(0)
             return subprocess.CompletedProcess(args, 0, stdout=data, stderr=b"")
+        if args[0] != "xdotool":
+            self.other.append(list(args))
+            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
         if args[:2] == ["xdotool", "getdisplaygeometry"]:
             return subprocess.CompletedProcess(args, 0, stdout="1024 768\n", stderr="")
         self.xdotool.append(list(args[1:]))
@@ -111,6 +115,11 @@ class FrameTests(LiveScreenCase):
         self.assertIsNotNone(newer)
         self.assertGreater(newer[0], seq)
         self.assertEqual(newer[1], JPEG_B)
+
+    def test_watching_wakes_the_screensaver(self) -> None:
+        self.screen.frame(since=0, wait=3)
+        self.assertIn(["xset", "s", "reset"], self.host.other)
+        self.assertIn(["xfce4-screensaver-command", "--deactivate"], self.host.other)
 
     def test_frames_are_not_written_to_disk(self) -> None:
         self.screen.frame(since=0, wait=3)
