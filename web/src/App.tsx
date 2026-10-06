@@ -102,6 +102,12 @@ function stateLabel(state?: string) {
 function sessionLabel(session: Session | undefined) {
   return session?.title || session?.latest_job?.prompt_preview || 'New session'
 }
+function storedToken() {
+  try { return localStorage.getItem('conveyor-token') || '' } catch { return '' }
+}
+function forgetToken() {
+  try { localStorage.removeItem('conveyor-token') } catch { /* storage unavailable */ }
+}
 function hostScreenRequestLabel(request: ComputerStatus['screen_request']) {
   if (!request) return ''
   if (request.status === 'pending') return 'Waiting for the Mac agent…'
@@ -127,7 +133,8 @@ function isEscapeKey(e: Pick<KeyboardEvent, 'key' | 'code' | 'keyCode'>): boolea
 }
 
 export default function App() {
-  const [token, setToken] = useState(() => sessionStorage.getItem('conveyor-token') || '')
+  const [token, setToken] = useState(() => sessionStorage.getItem('conveyor-token') || storedToken())
+  const [rememberToken, setRememberToken] = useState(() => Boolean(storedToken()))
   const [tokenDraft, setTokenDraft] = useState('')
   const [authenticated, setAuthenticated] = useState(false)
   const [sessions, setSessions] = useState<Session[]>([])
@@ -283,7 +290,7 @@ export default function App() {
       ...init,
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(init?.headers || {}) },
     })
-    if (response.status === 401) { setAuthenticated(false); throw new Error('Token rejected') }
+    if (response.status === 401) { forgetToken(); setAuthenticated(false); throw new Error('Token rejected') }
     const body = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(body.error || body.message || `Request failed (${response.status})`)
     return body as T
@@ -537,14 +544,21 @@ export default function App() {
   }
   function unlock(event: FormEvent) {
     event.preventDefault(); const value = tokenDraft.trim(); if (!value) return
-    sessionStorage.setItem('conveyor-token', value); setToken(value); setTokenDraft('')
+    sessionStorage.setItem('conveyor-token', value)
+    try { if (rememberToken) localStorage.setItem('conveyor-token', value); else localStorage.removeItem('conveyor-token') } catch { /* storage unavailable */ }
+    setToken(value); setTokenDraft('')
+  }
+  function lock() {
+    forgetToken(); sessionStorage.removeItem('conveyor-token')
+    setToken(''); setAuthenticated(false); setRememberToken(false)
   }
 
   if (!authenticated) return <main className="unlock-shell">
     <form className="unlock-card" onSubmit={unlock}>
       <div className="brand-mark">C</div><p className="eyebrow">SECURE CONTROL PLANE</p>
-      <h1>Open Conveyor</h1><p>Enter the bearer token configured on your VPS. It stays in this browser tab only.</p>
+      <h1>Open Conveyor</h1><p>Enter the bearer token configured on your VPS. It stays in this browser tab unless you choose to remember it.</p>
       <label>Console token<input type="password" autoFocus value={tokenDraft} onChange={event => setTokenDraft(event.target.value)} placeholder="32+ character token" /></label>
+      <label className="remember-token"><input type="checkbox" checked={rememberToken} onChange={event => setRememberToken(event.target.checked)} /><span>Remember on this device<small>Stores the token in this browser until you lock the console. Only for a device you own.</small></span></label>
       {error && <div className="error-banner">{error}</div>}<button className="primary" type="submit">Unlock console</button>
     </form>
   </main>
@@ -552,7 +566,7 @@ export default function App() {
   return <main className={`app-shell ${system?.features?.mobile_ui ? 'mobile-ui' : ''}`}>
     <header className="topbar">
       <div className="brand"><span className="brand-mark small">C</span><div><strong>Conveyor</strong><small>CONTROL CONSOLE</small></div></div>
-      <div className="top-actions"><button className="settings-button" onClick={() => void openSettings()}>⚙ Settings</button><div className="top-status"><span className="live-dot" /> Online <span className="separator" /> Queue {system?.queue.depth ?? 0}</div></div>
+      <div className="top-actions"><button className="settings-button" onClick={() => void openSettings()}>⚙ Settings</button><button className="settings-button" onClick={lock} title="Forget the token on this device and lock the console">Lock</button><div className="top-status"><span className="live-dot" /> Online <span className="separator" /> Queue {system?.queue.depth ?? 0}</div></div>
     </header>
     {error && <div className="error-banner global">{error}<button onClick={() => setError('')}>×</button></div>}
     <section className="workspace">

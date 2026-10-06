@@ -17,8 +17,11 @@ help:
 
 ENV_TEST ?= $(if $(wildcard .env.test),.env.test,.env.test.example)
 
+# Smokes create many temp dirs and not all of them clean up; give the run its
+# own TMPDIR and remove it, so a deploy does not grow /tmp on the host.
 smoke:
-	@set -e; for s in $(SMOKE_FREE); do echo '>>>' $$s; CONVEYOR_ENV_FILE=$(ENV_TEST) $(PY) $$s; done
+	@set -e; tmp=$$(mktemp -d "$${TMPDIR:-/tmp}/conveyor-smoke.XXXXXX"); trap 'rm -rf "$$tmp"' EXIT; \
+	for s in $(SMOKE_FREE); do echo '>>>' $$s; TMPDIR="$$tmp" CONVEYOR_ENV_FILE=$(ENV_TEST) $(PY) $$s; done
 
 smoke-all: smoke
 	@echo '>>> scripts/memo_smoke.py (requires .env)'

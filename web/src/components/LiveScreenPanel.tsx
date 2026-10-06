@@ -48,6 +48,7 @@ export function LiveScreenPanel({ token }: { token: string }) {
   const queueRef = useRef<InputEvent[]>([])
   const sendingRef = useRef(false)
   const lastMoveRef = useRef(0)
+  const armedRef = useRef(false)
 
   const controlling = Boolean(status?.controlling)
   expandedRef.current = expanded
@@ -169,6 +170,7 @@ export function LiveScreenPanel({ token }: { token: string }) {
     setBusy(true)
     try {
       queueRef.current = []
+      armedRef.current = false
       setStatus(await request<ScreenStatus>('/api/screen/control', { action }))
       setError('')
       if (action === 'take') window.setTimeout(() => viewRef.current?.focus(), 0)
@@ -229,6 +231,8 @@ export function LiveScreenPanel({ token }: { token: string }) {
 
   if (!status?.enabled) return null
 
+  const canTake = status.available && status.control_enabled && !controlling && !status.blocked_by
+
   const subtitle = !status.available ? status.reason
     : controlling ? 'You are in control · Agent paused'
     : status.blocked_by ? `Agent paused by ${status.blocked_by}`
@@ -267,12 +271,14 @@ export function LiveScreenPanel({ token }: { token: string }) {
           <div className="screen-viewer-image-frame">
             <canvas
               ref={viewRef}
-              className="live-screen-canvas"
+              className={`live-screen-canvas${canTake ? ' takeable' : ''}`}
+              onClick={() => { if (canTake && !busy) void setControl('take') }}
               tabIndex={controlling ? 0 : -1}
               aria-label="Live host screen"
               onContextMenu={event => event.preventDefault()}
               onPointerDown={event => {
                 if (!controlling) return
+                armedRef.current = true
                 event.preventDefault()
                 event.currentTarget.focus()
                 event.currentTarget.setPointerCapture(event.pointerId)
@@ -280,7 +286,8 @@ export function LiveScreenPanel({ token }: { token: string }) {
                 if (at) send({ t: 'down', ...at, b: event.button === 2 ? 3 : event.button === 1 ? 2 : 1 })
               }}
               onPointerUp={event => {
-                if (!controlling) return
+                // `armedRef`: the click that takes control must not also land on the host.
+                if (!controlling || !armedRef.current) return
                 event.preventDefault()
                 const at = point(event)
                 if (at) send({ t: 'up', ...at, b: event.button === 2 ? 3 : event.button === 1 ? 2 : 1 })
@@ -317,6 +324,7 @@ export function LiveScreenPanel({ token }: { token: string }) {
                 sendText(event.clipboardData.getData('text'))
               }}
             />
+            {canTake && hasFrame && <span className="live-screen-hint">{busy ? 'Taking over…' : 'Click the screen to take control'}</span>}
           </div>
           <footer className="screen-viewer-footer live-screen-footer">
             {controlling
