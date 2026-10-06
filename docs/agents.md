@@ -87,9 +87,12 @@ conveyor-agent-desktops.service  (agent_desktops.py, one supervisor)
 - **Its own screen and takeover.** The Computer tab shows that agent's
   display. Taking control holds a lease scoped to that desktop
   (`agent:<id>`), so it pauses nothing on the host desktop or on other agents.
-- **Private.** Each display has its own X authority cookie (mode 0600) and
-  does not listen on TCP; desktop programs get a minimal environment with
-  none of the deployment's secrets.
+- **Private.** Each display has its own X authority cookie and does not
+  listen on TCP, so only this Linux user's programs can see or drive it;
+  desktop programs get a minimal environment with none of the deployment's
+  secrets. The cookie is stored as an entry for that display number in the
+  user's `~/.Xauthority`, because sandboxed (snap) browsers cannot read files
+  under a hidden directory.
 - The `default` agent keeps using the host's own desktop session.
 - Removing an agent stops its desktop and frees its display number. Its
   browser profile is left on disk.

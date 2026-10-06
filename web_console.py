@@ -186,7 +186,7 @@ class WebConsoleServer(ThreadingHTTPServer):
             if screen is None:
                 screen = LiveScreen(
                     settings, display=f":{display}",
-                    xauthority=str(agents.xauthority_path(settings, agent_id)),
+                    xauthority=str(agents.client_xauthority_path()),
                     scope=agents.takeover_scope(agent_id),
                 )
                 self._agent_screens[key] = screen

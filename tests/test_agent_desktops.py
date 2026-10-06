@@ -77,9 +77,16 @@ class Case(unittest.TestCase):
         self.store = AgentStore(self.settings)
         self.procs = _Processes()
         ok = subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
+        self.xauth_calls: list[list[str]] = []
+
+        def run(command, **_kwargs):
+            if command[0] == "xauth":
+                self.xauth_calls.append(list(command))
+            return ok
+
         for patcher in (
             mock.patch.object(agent_desktops.shutil, "which", lambda name: f"/usr/bin/{name}"),
-            mock.patch.object(agent_desktops.subprocess, "run", lambda *a, **k: ok),
+            mock.patch.object(agent_desktops.subprocess, "run", run),
             mock.patch.object(agent_desktops, "SNAP_FIREFOX", Path("/nonexistent/snap/firefox")),
         ):
             patcher.start()
@@ -122,7 +129,13 @@ class SupervisorTests(Case):
         auth = xvfb[xvfb.index("-auth") + 1]
         self.assertEqual(auth, str(agents.xauthority_path(self.settings, agent["id"])))
         self.assertEqual(os.stat(auth).st_mode & 0o777, 0o600)
-        self.assertEqual((env["DISPLAY"], env["XAUTHORITY"]), (":101", auth))
+        # Programs look the cookie up in the user's own ~/.Xauthority: a
+        # sandboxed browser cannot read a file under the hidden state directory.
+        self.assertEqual((env["DISPLAY"], env["XAUTHORITY"]), (":101", str(Path.home() / ".Xauthority")))
+        adds = [call for call in self.xauth_calls if "add" in call]
+        self.assertEqual({call[call.index("-f") + 1] for call in adds}, {auth, str(Path.home() / ".Xauthority")})
+        self.assertEqual(len({call[-1] for call in adds}), 1)        # one cookie, both places
+        self.assertEqual({call[call.index("add") + 1] for call in adds}, {":101"})
 
     def test_children_never_inherit_deployment_secrets(self) -> None:
         self.store.create({"name": "A"})
@@ -139,6 +152,10 @@ class SupervisorTests(Case):
         fresh.reconcile()
         self.assertEqual(self.procs.commands(), ["Xvfb", "xfwm4"])
         self.assertEqual(self.procs.terminated, [])
+        # The adopting supervisor re-publishes the cookie once, without a new one.
+        merges = [call for call in self.xauth_calls if "merge" in call]
+        self.assertEqual(len(merges), 1)
+        self.assertEqual(len([call for call in self.xauth_calls if "add" in call]), 2)
 
     def test_crashed_display_comes_back(self) -> None:
         self.store.create({"name": "A"})
@@ -194,6 +211,7 @@ class SupervisorTests(Case):
         self.assertEqual(set(self.procs.terminated), tracked)
         self.assertFalse((agents.desktop_dir(self.settings, agent["id"]) / "pids.json").exists())
         self.assertFalse(agents.xauthority_path(self.settings, agent["id"]).exists())
+        self.assertIn(["xauth", "-f", str(Path.home() / ".Xauthority"), "remove", ":101"], self.xauth_calls)
 
     def test_recycled_pids_are_never_killed(self) -> None:
         agent = self.store.create({"name": "A"})
