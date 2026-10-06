@@ -45,6 +45,10 @@ web_console.py ── live_screen.py ──▶ import -window root   (capture)
 
 - **Viewing** starts a capture loop only while a viewer is polling, and stops
   about ten seconds after the last request. Unchanged frames are not resent.
+- While someone is watching, the X idle timer is reset and a running
+  screensaver is dismissed (`xset s reset`, `xfce4-screensaver-command
+  --deactivate`, …), because an idle headless desktop otherwise shows only
+  black. A locked session still shows its unlock prompt.
 - **Take control** opens the same exclusive lease as Secure Human Takeover:
   queued computer-use steps are cancelled, an in-flight action is allowed to
   finish, and from then on the computer-use loop and Agent screenshots are
