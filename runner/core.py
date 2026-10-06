@@ -27,6 +27,10 @@ class CodexRunner:
         "preference", "fact", "tool-quirk", "convention", "unfiled",
     )
     MEMORY_FILENAME = "MEMORY.md"
+    # Lane this runner serves (job_lanes.py). The runner a process starts
+    # with is the default lane; per-agent lanes are clones made on demand.
+    lane = "default"
+    _lane_base = None
     DAILY_WORKTREE_PREFIX = "day-"
     DAILY_WORKTREE_FORMAT = "%Y-%m-%d"
 

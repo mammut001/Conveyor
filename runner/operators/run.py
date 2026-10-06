@@ -137,13 +137,16 @@ async def start(
         lock_path = self.settings.codex_task_root / "locks" / "run.lock"
         with file_lock(lock_path):
             # Check other running jobs across processes
-            for record in self.job_records(100):
+            # Another process may be running a job in this lane; other lanes
+            # work in other repositories and do not block this one.
+            for record in self.job_records(100, lane=getattr(self, "lane", "default")):
                 if record.state == "running":
                     raise RuntimeError(f"Job {record.id} is already running.")
 
             sandbox = mode.sandbox
             job = Job(id=self._new_job_id(), mode=mode, prompt=prompt, sandbox=sandbox)
             job.workspace_root = workspace_root
+            job.lane = getattr(self, "lane", "default")
             job.max_attempts = 1 + len(self.settings.codex_retry_429_delays_seconds)
             
             # Write initial metadata synchronously so other processes see it immediately

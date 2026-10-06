@@ -105,6 +105,37 @@ class JobQueue:
         finally:
             conn.close()
 
+    def _parallel_limit(self) -> int:
+        from job_lanes import parallel_limit
+        return parallel_limit(self._settings) if self._settings is not None else 1
+
+    @staticmethod
+    def _startable_row(conn: sqlite3.Connection, limit: int) -> sqlite3.Row | None:
+        """Oldest queued job that may start now: its lane is free and the
+        number of running jobs is below the limit. With a limit of 1 this is
+        "the oldest queued job, if nothing is running"."""
+        running = [str(row[0] or "default") for row in conn.execute(
+            "SELECT lane FROM queued_jobs WHERE state = 'running'"
+        )]
+        if len(running) >= limit:
+            return None
+        busy = set(running)
+        for row in conn.execute(
+            "SELECT * FROM queued_jobs WHERE state = 'queued' ORDER BY position ASC, created_at ASC"
+        ):
+            if str(row["lane"] or "default") not in busy:
+                return row
+        return None
+
+    def can_start(self, queue_job_id: str) -> bool:
+        """Whether this queued job is the one that would start right now."""
+        conn = self._get_conn()
+        try:
+            row = self._startable_row(conn, self._parallel_limit())
+            return row is not None and str(row["id"]) == str(queue_job_id)
+        finally:
+            conn.close()
+
     @property
     def has_running_job(self) -> bool:
         conn = self._get_conn()
@@ -236,6 +267,9 @@ class JobQueue:
                 conn.execute(
                     "ALTER TABLE queued_jobs ADD COLUMN refinement_intent INTEGER NOT NULL DEFAULT 0"
                 )
+            if "lane" not in columns:
+                # Jobs in one lane never overlap; different lanes may (job_lanes.py).
+                conn.execute("ALTER TABLE queued_jobs ADD COLUMN lane TEXT NOT NULL DEFAULT 'default'")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_queued_jobs_session_state "
                 "ON queued_jobs(session_id, state, created_at)"
@@ -311,6 +345,17 @@ class JobQueue:
             _runner=runner,
         )
 
+    def _lane_for(self, msg: Any, runner: Any) -> str:
+        """Lane of a new job. A conversation only gets its own lane when a
+        separate runner can actually be created for it."""
+        from job_lanes import DEFAULT_LANE, lane_for_chat, runner_for_lane
+
+        settings = getattr(runner, "settings", None) or self._settings
+        lane = lane_for_chat(settings, msg.channel, msg.chat_id)
+        if lane != DEFAULT_LANE and getattr(runner_for_lane(runner, lane), "lane", DEFAULT_LANE) != lane:
+            return DEFAULT_LANE
+        return lane
+
     async def enqueue(
         self,
         mode: str,
@@ -322,6 +367,9 @@ class JobQueue:
     ) -> tuple[bool, str, QueuedJob | None]:
         """Add a queue job and persist whether it expects chain continuation."""
         session_id = stable_session_id(msg.channel, msg.chat_id, msg.operator_id)
+        # Resolved before the write transaction below: looking up the agent
+        # opens the same database and would wait on our own lock.
+        lane = self._lane_for(msg, runner)
 
         async with self._lock:
             conn = self._get_conn()
@@ -355,12 +403,12 @@ class JobQueue:
                     """INSERT INTO queued_jobs (
                            id, operator_id, channel, chat_id, mode, prompt, state,
                            created_at, updated_at, position, metadata_json,
-                           session_id, refinement_intent
-                       ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)""",
+                           session_id, refinement_intent, lane
+                       ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         job_id, msg.operator_id, msg.channel, msg.chat_id, mode, prompt,
                         now_str, now_str, count + 1, metadata_json,
-                        session_id, 1 if refinement_intent else 0,
+                        session_id, 1 if refinement_intent else 0, lane,
                     ),
                 )
                 self._recalculate_positions(conn)
@@ -410,15 +458,13 @@ class JobQueue:
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
-                    if require_idle and conn.execute(
-                        "SELECT 1 FROM queued_jobs WHERE state = 'running' LIMIT 1"
-                    ).fetchone():
-                        conn.rollback()
-                        return None
-                    row = conn.execute(
-                        "SELECT * FROM queued_jobs WHERE state = 'queued' "
-                        "ORDER BY position ASC, created_at ASC LIMIT 1"
-                    ).fetchone()
+                    if require_idle:
+                        row = self._startable_row(conn, self._parallel_limit())
+                    else:
+                        row = conn.execute(
+                            "SELECT * FROM queued_jobs WHERE state = 'queued' "
+                            "ORDER BY position ASC, created_at ASC LIMIT 1"
+                        ).fetchone()
                     if row is None:
                         conn.rollback()
                         return None
@@ -701,7 +747,7 @@ class JobQueue:
                 runner=refs.get("runner") or self._runner,
             )
 
-    async def mark_running_failed(self, error_message: str) -> None:
+    async def mark_running_failed(self, error_message: str, queue_job_id: str | None = None) -> None:
         conn = self._get_conn()
         now_str = datetime.now(timezone.utc).isoformat()
         redacted_err = redact_text(error_message)
@@ -709,9 +755,15 @@ class JobQueue:
         try:
             async with self._lock:
                 with conn:
-                    row = conn.execute(
-                        "SELECT id FROM queued_jobs WHERE state = 'running' LIMIT 1"
-                    ).fetchone()
+                    if queue_job_id:
+                        # With several lanes "the running job" is ambiguous.
+                        row = conn.execute(
+                            "SELECT id FROM queued_jobs WHERE id = ? AND state = 'running'", (queue_job_id,),
+                        ).fetchone()
+                    else:
+                        row = conn.execute(
+                            "SELECT id FROM queued_jobs WHERE state = 'running' LIMIT 1"
+                        ).fetchone()
                     if row:
                         running_id = str(row[0])
                         conn.execute(
@@ -742,6 +794,12 @@ class JobQueue:
             QueueJobState.CANCELLED if final_state == "cancelled" else QueueJobState.COMPLETED
         )
         current_job = getattr(self._runner, "current_job", None) if self._runner else None
+        if queue_job_id and self._runner is not None:
+            # The job may have run on another lane's runner.
+            from job_lanes import runner_of_job
+            lane_runner = runner_of_job(self._runner, queue_job_id)
+            if lane_runner is not None:
+                current_job = lane_runner.current_job
         if current_job and (job_id is None or str(getattr(current_job, "id", "")) == job_id):
             current_state = getattr(getattr(current_job, "state", None), "value", "")
             if getattr(current_job, "error", ""):
@@ -791,24 +849,26 @@ class JobQueue:
         if self._start_callback is None:
             logger.debug("No start callback set; leaving queued jobs unclaimed")
             return
-        next_job = await self.dequeue(require_idle=True)
-        if next_job is None:
-            return
-        logger.info("Starting queued job %s", next_job.id)
-        try:
-            await self._start_callback(next_job)
-        except Exception as exc:
-            logger.exception("Failed to start queued job %s", next_job.id)
-            conn = self._get_conn()
+        # One job when the limit is 1; otherwise every lane that just became free.
+        for _ in range(self._parallel_limit()):
+            next_job = await self.dequeue(require_idle=True)
+            if next_job is None:
+                return
+            logger.info("Starting queued job %s", next_job.id)
             try:
-                with conn:
-                    conn.execute(
-                        "UPDATE queued_jobs SET state = 'failed', finished_at = ?, updated_at = ?, error = ? "
-                        "WHERE id = ?",
-                        (now_str, now_str, redact_text(str(exc)), next_job.id),
-                    )
-            finally:
-                conn.close()
+                await self._start_callback(next_job)
+            except Exception as exc:
+                logger.exception("Failed to start queued job %s", next_job.id)
+                conn = self._get_conn()
+                try:
+                    with conn:
+                        conn.execute(
+                            "UPDATE queued_jobs SET state = 'failed', finished_at = ?, updated_at = ?, error = ? "
+                            "WHERE id = ?",
+                            (now_str, now_str, redact_text(str(exc)), next_job.id),
+                        )
+                finally:
+                    conn.close()
 
 
 _job_queue: JobQueue | None = None

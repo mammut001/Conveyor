@@ -173,8 +173,8 @@ async def submit_codex_job(
 
     # SQLite is authoritative because Telegram, Feishu and Web can be
     # separate processes sharing one queue.
-    if queue.has_running_job:
-        # Job is running, so this one remains queued
+    if queue.has_running_job and not queue.can_start(queued_job.id):
+        # Its lane is busy (or the parallel limit is reached): it stays queued.
         await port.reply(msg, queue_msg)
         return True, queue_msg, queued_job
 
@@ -206,6 +206,10 @@ async def _execute_codex_job(
     queue_job_id: str | None = None,
 ) -> None:
     """Execute a Codex job directly (not through queue)."""
+    # Each lane has its own runner, so jobs of different agents can overlap
+    # and "the current job" means this conversation's.
+    from job_lanes import runner_for_chat
+    runner = runner_for_chat(runner, getattr(runner, "settings", None), msg.channel, msg.chat_id)
     # Session context injection: prepend recent turns so the LLM has
     # continuity when the user says "继续" / "continue". Only for LLM
     # jobs (handle_codex_job is only called for /run, /fix, and free
@@ -326,7 +330,7 @@ async def _execute_codex_job(
         # Failure to even start the job (e.g. invalid args, Codex
         # missing). Mark running queue row as failed.
         from handlers.job_queue import get_job_queue
-        await get_job_queue().mark_running_failed(str(exc))
+        await get_job_queue().mark_running_failed(str(exc), queue_job_id)
 
         # On Feishu, surface this as a card; Telegram keeps
         # the existing text path.

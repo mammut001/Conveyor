@@ -214,6 +214,9 @@ class Settings:
     agents_enabled: bool = False
     # Each agent gets its own always-on virtual desktop (agent_desktops.py).
     agent_desktops_enabled: bool = False
+    # How many Codex jobs may run at once. Above 1, each agent with its own
+    # project folder gets its own lane (job_lanes.py); 1 is one job at a time.
+    agent_parallel_jobs: int = 1
     agent_desktop_size: str = "1440x900"
     live_screen_enabled: bool = False
     live_screen_control_enabled: bool = True
@@ -610,6 +613,7 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "agents_enabled": os.getenv(
             "CONVEYOR_AGENTS_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
+        "agent_parallel_jobs": max(1, min(4, _int_env("CONVEYOR_AGENT_PARALLEL_JOBS", 1))),
         "agent_desktops_enabled": os.getenv(
             "CONVEYOR_AGENT_DESKTOPS_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),

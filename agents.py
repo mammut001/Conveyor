@@ -136,13 +136,22 @@ def _clean(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+# Databases whose agents table this process has already created. Stores are
+# constructed on every lookup; taking a write lock each time would make them
+# wait on (or stall) the job queue's transactions in the same file.
+_initialised: set[str] = set()
+
+
 class AgentStore:
     def __init__(self, settings: Any) -> None:
         root = Path(settings.codex_memory_root) / "state"
         root.mkdir(parents=True, exist_ok=True)
         # Same database as sessions and the job queue: one file to back up.
         self.path = root / "job_queue.sqlite3"
-        self._init_db()
+        key = str(self.path)
+        if key not in _initialised or not self.path.exists():
+            self._init_db()
+            _initialised.add(key)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.path), timeout=10.0)

@@ -405,9 +405,11 @@ class WebControl:
             return False, "Job not found."
         if job.get("state") == "queued":
             return await self.queue.cancel(job_id)
-        current = self.runner.current_job
-        if current and getattr(current, "external_id", None) == job_id:
-            result = await self.runner.cancel()
+        # The job may be running on another lane's runner in this process.
+        from job_lanes import runner_of_job
+        lane_runner = runner_of_job(self.runner, job_id)
+        if lane_runner is not None:
+            result = await lane_runner.cancel()
             return True, result
         if job.get("state") != "running":
             return False, f"Job is {job.get('state') or 'not running'}."
