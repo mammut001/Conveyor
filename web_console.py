@@ -198,7 +198,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             cache_control = ""
         if cache_control:
             self.send_header("Cache-Control", cache_control)
-        self.send_header("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'")
         if length is not None:
             self.send_header("Content-Length", str(length))
         if extra_headers:
@@ -1412,10 +1412,11 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if frame is None:
             self._headers(HTTPStatus.NO_CONTENT, "image/jpeg", 0, extra_headers=[no_store])
             return
-        seq, data, (width, height) = frame
+        seq, data, (width, height), (pointer_x, pointer_y) = frame
         self._headers(HTTPStatus.OK, "image/jpeg", len(data), extra_headers=[
             no_store, ("X-Frame-Seq", str(seq)),
             ("X-Screen-Width", str(width)), ("X-Screen-Height", str(height)),
+            ("X-Pointer-X", str(pointer_x)), ("X-Pointer-Y", str(pointer_y)),
         ])
         self.wfile.write(data)
 

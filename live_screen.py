@@ -42,6 +42,12 @@ WAKE_EVERY_SECONDS = 50
 # capture at this pace for a moment instead of the idle viewing rate.
 ACTIVE_INTERVAL_SECONDS = 0.1
 ACTIVE_WINDOW_SECONDS = 1.5
+# A viewer's first frame must be a settled one: right after the screensaver
+# is dismissed the desktop is still black for about half a second. Publish
+# only once two captures in a row agree, or after this long regardless.
+SETTLE_INTERVAL_SECONDS = 0.15
+SETTLE_MAX_SECONDS = 1.5
+NO_POINTER = (-1, -1)
 # time.monotonic() may start near zero, so "never happened" cannot be 0.0.
 NEVER = float("-inf")
 # Best effort, in order: reset the X idle timer, then dismiss whichever
@@ -128,6 +134,9 @@ class LiveScreen:
         self._env_checked_at = NEVER
         self._woke_at = NEVER
         self._last_input_at = NEVER
+        self._pointer_at: tuple[int, int] = NO_POINTER
+        self._settle_started = NEVER
+        self._settle_digest = ""
         self._kick = threading.Event()
         self._control_id: str | None = None
         self._control_seen_at = NEVER
@@ -256,6 +265,24 @@ class LiveScreen:
             except (OSError, subprocess.SubprocessError):
                 continue
 
+    def _pointer(self) -> tuple[int, int]:
+        """Where the host pointer is, so a viewer can see what the Agent points at.
+
+        Screen captures do not include the cursor image.
+        """
+        env = self._display_env()
+        if env is None or not shutil.which("xdotool"):
+            return NO_POINTER
+        try:
+            out = subprocess.run(
+                ["xdotool", "getmouselocation", "--shell"], env=env, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5, check=False,
+            ).stdout
+            values = dict(line.split("=", 1) for line in out.split() if "=" in line)
+            return (int(values["X"]), int(values["Y"]))
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+            return NO_POINTER
+
     def _geometry(self) -> tuple[int, int]:
         env = self._display_env()
         if env is None or not shutil.which("xdotool"):
@@ -298,14 +325,31 @@ class LiveScreen:
                     size = _jpeg_size(data)
                     if size == (0, 0):
                         size = self._geometry()
-                    digest = hashlib.blake2b(data, digest_size=12).hexdigest()
+                    pointer = self._pointer()
+                    # The pointer is part of what a viewer sees, so a move
+                    # with an unchanged picture still counts as a new frame.
+                    digest = hashlib.blake2b(data + repr(pointer).encode(), digest_size=12).hexdigest()
+                    settling = False
                     with self._frame_ready:
                         self._capture_error = ""
-                        self._size = size
-                        if digest != self._frame_digest:
-                            self._frame, self._frame_digest = data, digest
-                            self._seq += 1
-                            self._frame_ready.notify_all()
+                        if not self._frame:
+                            if self._settle_started == NEVER:
+                                self._settle_started = started
+                            settling = (
+                                digest != self._settle_digest
+                                and started - self._settle_started < SETTLE_MAX_SECONDS
+                            )
+                            self._settle_digest = digest
+                        if not settling:
+                            self._size = size
+                            self._pointer_at = pointer
+                            if digest != self._frame_digest:
+                                self._frame, self._frame_digest = data, digest
+                                self._seq += 1
+                                self._frame_ready.notify_all()
+                    if settling:
+                        time.sleep(SETTLE_INTERVAL_SECONDS)
+                        continue
                 except (LiveScreenError, OSError, subprocess.SubprocessError) as exc:
                     with self._frame_ready:
                         self._capture_error = str(exc) if isinstance(exc, LiveScreenError) else "Screen capture failed"
@@ -320,7 +364,9 @@ class LiveScreen:
             else:
                 time.sleep(1.0)
 
-    def frame(self, since: int = 0, wait: float = 1.5) -> tuple[int, bytes, tuple[int, int]] | None:
+    def frame(
+        self, since: int = 0, wait: float = 1.5,
+    ) -> tuple[int, bytes, tuple[int, int], tuple[int, int]] | None:
         """Return the newest frame if it is newer than `since`, waiting briefly."""
         reason = self._unavailable_reason()
         if reason:
@@ -331,6 +377,7 @@ class LiveScreen:
                 # Nobody was watching, so capture had stopped: the frame in
                 # memory may be hours old. Wait for a fresh one instead.
                 self._frame, self._frame_digest = b"", ""
+                self._settle_started, self._settle_digest = NEVER, ""
             self._last_viewer_at = now
             if self._control_id is not None:
                 self._control_seen_at = now
@@ -344,7 +391,7 @@ class LiveScreen:
                 if remaining <= 0:
                     return None
                 self._frame_ready.wait(remaining)
-            return self._seq, self._frame, self._size
+            return self._seq, self._frame, self._size, self._pointer_at
 
     # ---- control lease -----------------------------------------------------
 

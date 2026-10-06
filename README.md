@@ -309,10 +309,12 @@ Conveyor runs with `danger-full-access` within isolated git worktrees so Codex c
 - [x] **Hardware-Level Computer Use** — Linux `/dev/uinput` physical virtual mouse + Multi-Pointer X (MPX) & macOS Cua desktop agent.
 - [x] **Configurable Password & Financial Policies** — Flexible login automation while maintaining a hard-blocked security floor for payments/transfers/crypto.
 - [x] **Real-Time Web Console** — Low-latency SSE streaming, scoped Apply/Discard approvals, node status, and session archive/management.
+- [x] **Live Screen & One-Click Takeover** — The Web Console embeds a live view of the host desktop; one click hands you the mouse and keyboard while the Agent pauses (`docs/live_screen.md`).
+- [x] **Always-On Teammate Sentry** — Scheduled patrols of host load, disk, services, error logs and CI with de-duplicated alerts on every channel.
 - [x] **Transactional Deployment & CI Gates** — Pre-deploy verification, atomic rollback on health failure, and 120+ unit and smoke tests.
 
 ### Upcoming Milestones
-- [ ] **Proactive System & Topic Watchers** — Autonomous background checks for error log spikes, GitHub PR reviews, and scheduled dependency audits.
+- [ ] **More Proactive Watchers** — Host, service, log and CI patrols and the `/teammate pulse` standup have shipped; still to do: scheduled GitHub PR review reminders and dependency audits.
 - [ ] **Semantic Code & Commit Search** — Local vector + BM25 hybrid search over repository history and documentation.
 - [ ] **Multi-Worktree Parallel Execution** — Concurrent safe worktree scheduling across distinct project branches.
 - [ ] **Voice Control & Audio Processing** — Voice message transcription and hands-free intent dispatching via Telegram and Web.

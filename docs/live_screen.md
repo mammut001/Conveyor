@@ -84,7 +84,7 @@ reaches Conveyor state.
 
 - X11 only. No audio, no clipboard sync from host to browser (paste into the
   viewer is typed as text).
-- The remote pointer is not drawn in the frames; your own cursor shows where
-  you are pointing.
+- Captures carry no cursor image. While watching, the console draws an arrow
+  at the host pointer's position; while in control, your own cursor is it.
 - A few frames per second: fine for clicking through a dialog or a login,
   not for video.

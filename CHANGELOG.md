@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Live screen shows the host pointer** while you are only watching, so you can see where the Agent is pointing (captures carry no cursor image); a pointer move alone now produces a new frame.
+- **Deploy reports systemd unit drift**: `deploy_vps.sh` warns when an installed `conveyor-*` unit differs from the repo copy, since deploys cannot install unit files.
 - **Web Console on a private VPN address** (`CONVEYOR_WEB_EXTRA_HOSTS`): the console can also listen on the host's WireGuard/Tailscale address so a phone on the VPN opens it directly, without an SSH tunnel. Same server object and bearer token as loopback; wildcard and public addresses are refused because the extra listeners are plain HTTP. See `docs/mobile_web.md`.
 - **Remember the console token on this device** (opt-in checkbox on the unlock screen): keeps the token in `localStorage` so a new tab does not ask again; the new **Lock** button, or a rejected token, forgets it. Unchecked, the token still lives in the tab only.
 - **Live screen: click the screen to take control**, and the view refreshes at 10 fps for a moment after each input (and immediately after it) instead of waiting for the next idle frame.
@@ -26,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Durable long-term memory** (`CONVEYOR_LONG_TERM_MEMORY`, default off): explicit remember / forget of one sentence via chat tools (`memory.remember`, `memory.forget`, `memory.list`, `memory.search`). Writes use the existing confirmation flow. Facts persist in `long_term_memory.db` under `codex_memory_root`, are shared across new chats and (by default, `CONVEYOR_LONG_TERM_MEMORY_SHARED=true`) across web / Telegram / Feishu, and only a bounded profile-plus-recent-log slice (plus up to 3 older rows matching the message) is injected. Chinese-aware search (2-character terms). Web Console **Memory** page and authenticated `GET/POST /api/memory`, `DELETE /api/memory/<id>` (delete needs explicit confirm in the UI). Group chats (Feishu `group`, Telegram group/supergroup) get no memory by default — nothing injected, `memory.*` refused (`CONVEYOR_LONG_TERM_MEMORY_GROUPS=true` to allow). Secrets and plain-language credentials are refused. Today's MEMORY.md journal and per-chat `chat_memory.db` are unchanged. See `docs/long_term_memory.md`.
 
 ### Fixed
+- **Live screen opened on a black frame** when a screensaver had to be dismissed first; the first frame is now published only once two consecutive captures agree (at most 1.5s).
+- **Host screenshot previews were blocked by the console's own CSP** (`img-src` lacked `blob:`).
+- Startup noise: pin the `GdkPixbuf` typelib version in the desktop chat window and silence python-telegram-bot's `per_message=False` notice.
+- README roadmaps listed the shipped sentry as upcoming.
 - **Live screen after a desktop resize**: the screen size was cached from the first capture, so after the desktop changed resolution clicks were mapped and bounds-checked against the old size. The size now comes from each frame's JPEG header, input is checked against the live display geometry, and a viewer returning after a pause waits for a fresh capture instead of being handed the last frame in memory.
 - **`make smoke` no longer grows `/tmp`**: the run gets its own `TMPDIR`, removed on exit. Several smokes leaked `mkdtemp` directories, which a deploy runs twice.
 - **Hourly maintenance never passed on a non-MiniMax deployment**: the provider health check required `MINIMAX_API_KEY` unconditionally. It now probes `/models` of whichever provider `~/.codex/config.toml` selects (check name `provider`), and parses the config without `tomllib` so it works on Python 3.10.

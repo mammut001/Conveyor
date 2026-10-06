@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import warnings
 from datetime import datetime
 
 from telegram import Update
+from telegram.warnings import PTBUserWarning
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                                ContextTypes, ConversationHandler,
                                MessageHandler, filters)
@@ -732,6 +734,9 @@ def main() -> None:
     # Onboarding (P2.3): ConversationHandler for /onboard.  Profile
     # helpers live in handlers/onboarding.py; Telegram-specific steps
     # stay in bot.py because they need Update / CallbackQuery types.
+    # per_message=False is intended here (the flow mixes commands, text and
+    # one callback button); PTB warns about that combination on every start.
+    warnings.filterwarnings("ignore", message="If 'per_message=False'", category=PTBUserWarning)
     application.add_handler(
         ConversationHandler(
             entry_points=[

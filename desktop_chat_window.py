@@ -129,6 +129,7 @@ def main() -> None:
     import gi
 
     gi.require_version("Gtk", "3.0")
+    gi.require_version("GdkPixbuf", "2.0")
     from gi.repository import GdkPixbuf, GLib, Gtk
 
     from config import load_runtime_settings
