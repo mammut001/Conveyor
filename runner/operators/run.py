@@ -308,9 +308,24 @@ async def _run_job(self, job: Job, on_progress: ProgressCallback) -> None:
             self.current_job = None
 
 
+def job_child_env(self, job: Job) -> dict[str, str]:
+    """Environment of the agent process that works on one job.
+
+    The process must only know its own worktree as "the workspace". With the
+    real CODEX_WORKSPACE_ROOT in its environment, a model that runs
+    ``cd "$CODEX_WORKSPACE_ROOT"`` edits the main checkout directly — past
+    the worktree, /diff and /apply — and, for an agent with its own project
+    folder, in the wrong repository altogether.
+    """
+    env = self._child_env()
+    if job.worktree_path is not None:
+        env["CODEX_WORKSPACE_ROOT"] = str(job.worktree_path)
+    return env
+
+
 async def _run_codex_attempt(self, job: Job, on_progress: ProgressCallback) -> None:
     command = self._codex_command(job)
-    env = self._child_env()
+    env = job_child_env(self, job)
 
     process = await asyncio.create_subprocess_exec(
         *command,
