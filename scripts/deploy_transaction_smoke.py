@@ -41,6 +41,14 @@ def main() -> int:
     require(text, 'write_smoke_fixture "${DEPLOY_PATH}"', "production smoke fixture")
     require(text, 'clean_smoke_fixture "${DEPLOY_PATH}"', "production fixture cleanup")
 
+    require(text, 'git bundle verify "${LOCAL_BUNDLE}"', "local bundle verification")
+    require(text, '"${TARGET_COMMIT_FULL}" == "${REQUESTED_SHA}"', "local bundle exact revision pin")
+    require(text, '"${OLD_COMMIT_FULL}" "${TARGET_COMMIT_FULL}"', "local bundle forward ancestry")
+    require(text, "unittest discover -s tests", "candidate unit test gate")
+    require(text, 'trap finish_deploy EXIT', "unexpected exit recovery")
+    require(text, 'sudo -n systemctl stop "${svc}"', "quiesced source cutover")
+    require(text, "Could not recheck queue after stopping services", "queue recheck before cutover")
+
     candidate = text.index("Validating detached candidate")
     candidate_fixture = text.index('write_smoke_fixture "${CANDIDATE}"')
     first_smoke = text.index("if ! make smoke")

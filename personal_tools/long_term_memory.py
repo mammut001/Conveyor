@@ -198,6 +198,8 @@ def owner_for_chat(settings: Any, operator_id: str, channel: str, chat_id: str) 
 
         agent = agents.agent_for_chat(settings, channel, chat_id)
     except Exception:
+        if channel == "telegram" and ":agent:" in str(chat_id):
+            raise  # Never fall back to operator memory for a pinned project.
         agent = None
     if agent and not agent.get("is_default"):
         return agent_owner(agent["id"])

@@ -24,7 +24,7 @@ logger = logging.getLogger("scheduler_tick")
 
 def _send_telegram(settings, chat_id: str, text: str) -> None:
     from scripts.telegram_api import send_message
-    send_message(settings, text, chat_id=int(chat_id))
+    send_message(settings, text, chat_id=chat_id)
 
 
 def _deliver_one(settings, reminder, *, dry_run: bool) -> tuple[bool, str]:

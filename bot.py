@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 import warnings
+from dataclasses import replace
 from datetime import datetime
 
 from telegram import Update
@@ -378,16 +379,13 @@ async def tool_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if parsed is None:
         return
     action, token = parsed
-    user = update.effective_user
-    chat = update.effective_chat
-    inbound = InboundMessage(
-        channel="telegram",
-        operator_id=str(getattr(user, "id", "") or ""),
-        chat_id=str(getattr(chat, "id", "") or ""),
-        message_id=str(getattr(query.message, "message_id", "") or "") if query.message else None,
-        text="",
-        raw=update,
-    )
+    from agents import AgentError, conversation_for_chat
+    inbound = inbound_from_update(update, text="")
+    try:
+        inbound = replace(inbound, chat_id=conversation_for_chat(settings, inbound.channel, inbound.chat_id))
+    except AgentError as exc:
+        await _reply(update, str(exc))
+        return
     port = make_outbound(update)
     if action == "confirm":
         await execute_confirmed(inbound, port, settings, token)
@@ -465,18 +463,35 @@ async def deep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if query is None:
         return
     await query.answer()
-    user = update.effective_user
-    chat = update.effective_chat
-    inbound = InboundMessage(
-        channel="telegram",
-        operator_id=str(getattr(user, "id", "") or ""),
-        chat_id=str(getattr(chat, "id", "") or ""),
-        message_id=str(getattr(query.message, "message_id", "") or "") if query.message else None,
-        text="/deep",
-        chat_type="p2p" if getattr(chat, "type", None) == "private" else "group",
-        raw=update,
-    )
+    from agents import AgentError, conversation_for_chat
+    from channel.telegram_identity import context_tag
+    inbound = inbound_from_update(update, text="/deep")
+    try:
+        routed = conversation_for_chat(settings, inbound.channel, inbound.chat_id)
+    except AgentError as exc:
+        await _reply(update, str(exc))
+        return
+    data = query.data or ""
+    expected = f"deep:{context_tag(routed)}"
+    if data != expected and not (data == "deep" and ":agent:" not in routed):
+        await _reply(update, "这个按钮属于之前的 Agent 对话。请切回原 Agent 后重试，或在当前对话发送 /deep。")
+        return
+    inbound = replace(inbound, chat_id=routed)
     await dispatch(inbound, make_outbound(update), settings, runner)
+
+
+async def agent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard(update):
+        return
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    from handlers.agent_selection import handle_agent_callback
+    await handle_agent_callback(
+        inbound_from_update(update, text="/agent"), make_outbound(update),
+        runner, settings, query.data or "",
+    )
 
 
 async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -638,6 +653,7 @@ async def post_init(application: Application) -> None:
     await runner.validate()
     await application.bot.set_my_commands(
         [
+            ("agent", "查看或绑定项目 Agent"),
             ("fix", "改文件：/fix <需求>"),
             ("jobs", "看最近任务"),
             ("last", "看最近结果"),
@@ -675,6 +691,7 @@ async def post_init(application: Application) -> None:
             ("audit_tools", "危险工具审计"),
         ]
     )
+    await get_job_queue().start_pending()
     if getattr(settings, "approval_relay_enabled", False):
         try:
             import approval_relay
@@ -760,7 +777,8 @@ def main() -> None:
     application.add_handler(CommandHandler("profile", profile_cmd))
     application.add_handler(CallbackQueryHandler(tool_callback, pattern=r"^tool:"))
     application.add_handler(CallbackQueryHandler(relay_callback, pattern=r"^relay:"))
-    application.add_handler(CallbackQueryHandler(deep_callback, pattern=r"^deep$"))
+    application.add_handler(CallbackQueryHandler(deep_callback, pattern=r"^deep(?::[a-f0-9]{16})?$"))
+    application.add_handler(CallbackQueryHandler(agent_callback, pattern=r"^agent:"))
     # Catch-all for COMMAND_TABLE entries without explicit CommandHandler above.
     application.add_handler(MessageHandler(filters.COMMAND, generic_command_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_cmd))

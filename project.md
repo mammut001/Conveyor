@@ -5,6 +5,20 @@ quickstart; **CHANGELOG.md** is the change history and current surface at a
 glance; this file is the design + deploy + invariants + open-items brief a
 new session needs to be useful fast.
 
+## Telegram project routing (2026-10-07)
+
+Telegram now selects agents per private chat, group chat or forum topic with
+`/agent`; explicit selections append the agent ID to the durable conversation
+address. The physical Telegram target is decoded only at transport boundaries.
+History, queue entries, refinement chains and approval context keys therefore
+remain pinned when a project is switched. The queue provides exact
+channel/chat/operator queries so task controls do not depend on a runner's
+shared last job. Read-only project tools use the selected repository, while
+host diagnostics retain their host scope. See `docs/agents.md` for commands,
+legacy-session handling and delivery behavior.
+
+The snapshot below is historical and predates the current agent architecture.
+
 Snapshot at HEAD `b4540d5` (2026-06-05, America/Toronto). 47 commits on
 `main`. No git remote configured. Working tree is clean. 93/93 smokes
 green (progress_smoke 19 -> 23 cases after chat-feel round 2; 23 -> 26

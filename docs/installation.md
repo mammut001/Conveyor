@@ -97,3 +97,22 @@ sudo bash scripts/install.sh
 ```
 
 This uses the same real installer as the one-line bootstrap.
+
+
+### Deploy a committed local revision over SSH
+
+For an operator-managed VPS, a Git bundle can deploy a local commit without
+publishing a branch. First commit the changes and create a bundle containing
+`HEAD`. Transfer it to the VPS and invoke the **candidate revision's**
+`scripts/deploy_vps.sh` with `CONVEYOR_DEPLOY_BUNDLE` set to the bundle's
+absolute path, `GITHUB_SHA` set to its exact 40-character commit ID, and
+`CONVEYOR_DEPLOY_PATH` set to the existing installation.
+
+The bundle must verify, match the requested commit, and extend the currently
+deployed revision. The tracked production checkout must be clean and the
+queue idle. The deployment backs up the queue database, validates a detached
+candidate with unit tests and smoke tests, stops previously active services,
+then rechecks the queue before switching source. An unexpected exit after
+stopping services restores the previous release and restarts those services.
+The deployment status records the exact commit and backup path. Normal
+GitHub deployments retain their validated `origin/main` ancestry check.

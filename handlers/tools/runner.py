@@ -80,6 +80,12 @@ async def run_tool(
     config: Any = None,
     placeholder: str | None = None,
 ) -> str:
+    if channel and chat_id and (tool_name == "git_status" or tool_name.startswith("files.")):
+        from agents import workspace_for_chat
+        from dataclasses import replace
+        workspace = workspace_for_chat(settings, channel, chat_id)
+        if workspace is not None:
+            settings = replace(settings, codex_workspace_root=workspace)
     if tool_name == "agents.parallel":
         from handlers.subagents import execute_parallel_subagents
         return await execute_parallel_subagents(
@@ -174,6 +180,8 @@ async def handle_route(
     route: RouteResult,
 ) -> None:
     """Execute deterministic tool(s) from a route result."""
+    from agents import settings_for_chat
+    settings = settings_for_chat(settings, msg.channel, msg.chat_id)
     if route.tool_items:
         combined = await run_tools_collected(settings, route.tool_items)
         await port.reply(msg, combined)
@@ -196,6 +204,8 @@ async def handle_hybrid(
     route: RouteResult,
 ) -> None:
     """Collect deterministic facts, then ask Codex to analyze."""
+    from agents import settings_for_chat
+    settings = settings_for_chat(settings, msg.channel, msg.chat_id)
     if route.tool_items:
         facts = await run_tools_collected(settings, route.tool_items)
     elif route.tools:

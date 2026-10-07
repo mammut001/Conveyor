@@ -985,7 +985,7 @@ async def _project_template(msg, port, _runner, settings, arg):
 
 async def _files_roots(msg, port, _runner, settings, _arg):
     from handlers.tools.runner import run_tool
-    await port.reply(msg, await run_tool(settings, "files.list_roots"))
+    await port.reply(msg, await run_tool(settings, "files.list_roots", operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _files_search(msg, port, _runner, settings, arg):
@@ -993,7 +993,7 @@ async def _files_search(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /files_search <查询词>")
         return
-    await port.reply(msg, await run_tool(settings, "files.search", arg))
+    await port.reply(msg, await run_tool(settings, "files.search", arg, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _files_read(msg, port, _runner, settings, arg):
@@ -1001,7 +1001,7 @@ async def _files_read(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /files_read <文件路径>")
         return
-    await port.reply(msg, await run_tool(settings, "files.read", arg))
+    await port.reply(msg, await run_tool(settings, "files.read", arg, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _kb_index(msg, port, _runner, settings, _arg):
@@ -1660,7 +1660,7 @@ async def _tool_service_status(msg, port, _runner, settings, arg):
 
 async def _tool_git_status(msg, port, _runner, settings, arg):
     from handlers.tools.runner import run_tool
-    await port.reply(msg, await run_tool(settings, "git_status", arg))
+    await port.reply(msg, await run_tool(settings, "git_status", arg, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _tools(msg, port, _runner, _settings, _arg):
@@ -1931,6 +1931,7 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/htop — top 风格的进程帧 (htop 是 TUI)\n"
     text += "/ps [full confirm] — 进程快照，comm 默认；full confirm 才含 args\n"
     text += "自然语言 '看看我的负载' / '跑 htop 看看' / 'check vps load' 也走快路径。\n"
+    text += "/agent — 查看当前项目 Agent；/agent list 列出；/agent <ID> 绑定聊天\n"
     text += "/tools — 列出 agent 工具层全部工具\n"
     text += "/diagnose [server|bot|logs|quick] — hybrid 主机诊断\n"
     text += "/restart telegram|feishu|maintain — 重启服务 (需确认)\n"
@@ -2034,10 +2035,16 @@ async def _queue_resume(msg, port, _runner, _settings, _arg):
     await queue.on_job_completed()
 
 
+async def _agent(msg, port, runner, settings, arg):
+    from handlers.agent_selection import handle_agent_command
+    await handle_agent_command(msg, port, runner, settings, arg)
+
+
 COMMAND_TABLE: dict[str, CommandSpec] = {
     spec.name: spec
     for spec in [
         # Telegram + Feishu
+        CommandSpec("agent", "查看或绑定项目 Agent", _agent, takes_optional_arg=True),
         CommandSpec("status", "当前任务", _status),
         CommandSpec("last", "最近结果", _last),
         CommandSpec("cancel", "中止任务", _cancel),
@@ -2370,6 +2377,9 @@ async def run_command(
     settings: Settings,
     arg: str,
 ) -> bool:
+    from handlers.conversation_jobs import handle_conversation_command
+    if await handle_conversation_command(cmd_name, msg, port, runner, settings, arg):
+        return True
     spec = COMMAND_TABLE.get(cmd_name)
     if not spec:
         return False

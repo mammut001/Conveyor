@@ -273,8 +273,9 @@ class TelegramRelayNotifier:
                 {"text": "❌ 拒绝", "callback_data": f"relay:reject:{request.token}"},
             ]]
         }
+        from channel.telegram_identity import destination
         data = {
-            "chat_id": str(request.target),
+            **destination(request.target),
             "text": truncate(text, 4000),
             "disable_web_page_preview": "true",
             "reply_markup": json.dumps(reply_markup),
@@ -295,8 +296,9 @@ class TelegramRelayNotifier:
         token = getattr(self.settings, "telegram_bot_token", "")
         if not token:
             return False
+        from channel.telegram_identity import TelegramAddress
         data = {
-            "chat_id": str(target),
+            "chat_id": TelegramAddress.parse(target).chat_id,
             "message_id": int(external_id),
             "text": truncate(text, 4000),
             "disable_web_page_preview": "true",

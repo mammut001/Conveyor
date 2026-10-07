@@ -5,7 +5,7 @@ standing instruction, and (in later phases) its own workspace and desktop.
 Each agent owns exactly one web conversation, whose chat id is derived from
 the agent id, so no session row has to be rewritten to belong to an agent.
 
-Messages from Telegram and Feishu, and web sessions that predate agents, all
+Unbound Telegram chats, Feishu, and web sessions that predate agents all
 belong to the built-in ``default`` agent. It has no instructions unless the
 operator sets some, so enabling agents changes nothing until one is created.
 """
@@ -87,7 +87,9 @@ def computer_target_for_chat(settings: Any, channel: str, chat_id: str) -> dict[
         return host
     try:
         agent = agent_for_chat(settings, channel, chat_id)
-    except (OSError, sqlite3.Error):
+    except (OSError, sqlite3.Error) as exc:
+        if channel == "telegram" and ":agent:" in str(chat_id):
+            raise AgentError("暂时无法读取此 Agent 的桌面配置，请稍后重试。") from exc
         return host
     if not agent or agent.get("display") is None:
         return host
@@ -98,11 +100,20 @@ def workspace_for_chat(settings: Any, channel: str, chat_id: str) -> Path | None
     """The git repository an agent's jobs run in, or None for the default one."""
     try:
         agent = agent_for_chat(settings, channel, chat_id)
-    except (OSError, sqlite3.Error):
+    except (OSError, sqlite3.Error) as exc:
+        if channel == "telegram" and ":agent:" in str(chat_id):
+            raise AgentError("暂时无法读取此 Agent 的项目配置，请稍后重试。") from exc
         return None
     if not agent or not agent.get("workspace_path"):
         return None
     return Path(agent["workspace_path"])
+
+
+def settings_for_chat(settings: Any, channel: str, chat_id: str) -> Any:
+    """Project-scoped settings for read-only tool batches; state roots stay shared."""
+    from dataclasses import replace
+    workspace = workspace_for_chat(settings, channel, chat_id)
+    return replace(settings, codex_workspace_root=workspace) if workspace is not None else settings
 
 
 def workspace_roots(settings: Any) -> set[Path]:
@@ -174,6 +185,15 @@ class AgentStore:
                            created_at REAL NOT NULL,
                            updated_at REAL NOT NULL,
                            archived INTEGER NOT NULL DEFAULT 0
+                       )"""
+                )
+                conn.execute(
+                    """CREATE TABLE IF NOT EXISTS agent_chat_bindings (
+                           channel TEXT NOT NULL,
+                           chat_id TEXT NOT NULL,
+                           agent_id TEXT NOT NULL REFERENCES agents(id),
+                           created_at REAL NOT NULL,
+                           PRIMARY KEY (channel, chat_id)
                        )"""
                 )
                 now = time.time()
@@ -310,6 +330,68 @@ class AgentStore:
         finally:
             conn.close()
 
+    def bound_agent_id(self, channel: str, chat_id: str) -> str | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT agent_id FROM agent_chat_bindings WHERE channel = ? AND chat_id = ?",
+                (channel, str(chat_id)),
+            ).fetchone()
+            return str(row[0]) if row else None
+        finally:
+            conn.close()
+
+    def bind_chat(self, channel: str, chat_id: str, agent_id: str | None) -> None:
+        """Select an agent; scoped jobs keep their original agent identity.
+
+        Legacy jobs/worktrees without an agent suffix must finish first,
+        because older versions resolved their project through this binding.
+        """
+        from channel.telegram_identity import source_address
+        if channel != "telegram":
+            raise AgentError("目前仅支持 Telegram 对话绑定。")
+        try:
+            source = source_address(chat_id)
+        except ValueError as exc:
+            raise AgentError("无效的 Telegram 对话。") from exc
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                agent = conn.execute(
+                    "SELECT archived FROM agents WHERE id = ?", (agent_id,),
+                ).fetchone()
+                if agent_id is not None and (agent is None or agent[0]):
+                    raise AgentError("Agent 不存在或已归档，请用 /agent list 查看。")
+                row = conn.execute(
+                    "SELECT agent_id FROM agent_chat_bindings WHERE channel = ? AND chat_id = ?",
+                    (channel, source),
+                ).fetchone()
+                if (row and row[0] == agent_id) or (not row and agent_id is None):
+                    return
+                tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+                if "queued_jobs" in tables and conn.execute(
+                    "SELECT 1 FROM queued_jobs WHERE channel = ? AND chat_id = ? AND state IN ('queued','running') LIMIT 1",
+                    (channel, source),
+                ).fetchone():
+                    raise AgentError("请先完成或取消此对话中旧版的排队和运行任务，再切换 Agent。")
+                if "session_worktrees" in tables and conn.execute(
+                    "SELECT 1 FROM session_worktrees WHERE channel = ? AND source_chat_id = ? AND state = 'active' LIMIT 1",
+                    (channel, source),
+                ).fetchone():
+                    raise AgentError("请先 /apply 或 /discard 此对话中旧版的 worktree，再切换 Agent。")
+                if agent_id is None:
+                    conn.execute("DELETE FROM agent_chat_bindings WHERE channel = ? AND chat_id = ?", (channel, source))
+                    return
+                conn.execute(
+                    """INSERT INTO agent_chat_bindings VALUES (?, ?, ?, ?)
+                       ON CONFLICT(channel, chat_id) DO UPDATE SET
+                       agent_id = excluded.agent_id, created_at = excluded.created_at""",
+                    (channel, source, agent_id, time.time()),
+                )
+        finally:
+            conn.close()
+
     def archive(self, agent_id: str) -> bool:
         """Hide an agent. Its conversation and files are kept."""
         if agent_id == DEFAULT_AGENT_ID:
@@ -331,6 +413,8 @@ class AgentStore:
 def agent_for_chat(settings: Any, channel: str, chat_id: str) -> dict[str, Any] | None:
     """The agent a conversation belongs to, or None when agents are off."""
     if not enabled(settings):
+        if channel == "telegram" and ":agent:" in str(chat_id):
+            raise AgentError("此任务属于已绑定的 Agent，但 Agent 功能已关闭。请重新开启后处理，任务不会转到默认项目。")
         return None
     store = AgentStore(settings)
     chat_id = str(chat_id or "")
@@ -338,14 +422,51 @@ def agent_for_chat(settings: Any, channel: str, chat_id: str) -> dict[str, Any] 
         agent = store.get(chat_id[len(AGENT_CHAT_PREFIX):])
         # An archived or unknown agent has no say over a conversation.
         return agent if agent and not agent["archived"] else None
+    if channel == "telegram":
+        from channel.telegram_identity import TelegramAddress
+        try:
+            address = TelegramAddress.parse(chat_id)
+        except ValueError:
+            address = None  # Non-Telegram synthetic IDs in legacy callers.
+        bound = address.agent_id if address else None
+        if not bound:
+            bound = store.bound_agent_id(channel, address.source if address else chat_id)
+        if bound:
+            agent = store.get(bound)
+            if not agent or agent["archived"]:
+                raise AgentError("此对话的 Agent 已归档。用 /agent 选择其他 Agent；旧任务不会自动转移到其他项目。")
+            return agent
     return store.get(DEFAULT_AGENT_ID)
+
+
+def conversation_for_chat(settings: Any, channel: str, chat_id: str, *, validate: bool = True) -> str:
+    """Pin the selected agent into the durable Telegram conversation address."""
+    if channel != "telegram" or not enabled(settings):
+        return chat_id
+    from channel.telegram_identity import TelegramAddress
+    try:
+        address = TelegramAddress.parse(chat_id)
+    except ValueError:
+        return chat_id
+    if address.agent_id:
+        if validate:
+            agent_for_chat(settings, channel, chat_id)
+        return chat_id
+    bound = AgentStore(settings).bound_agent_id(channel, address.source)
+    if not bound:
+        return chat_id
+    if validate:
+        agent_for_chat(settings, channel, chat_id)
+    return TelegramAddress(address.chat_id, address.topic_id, bound).conversation
 
 
 def instructions_for_chat(settings: Any, channel: str, chat_id: str) -> tuple[str, str]:
     """(agent name, instructions) for a conversation; empty when nothing applies."""
     try:
         agent = agent_for_chat(settings, channel, chat_id)
-    except (OSError, sqlite3.Error):
+    except (OSError, sqlite3.Error) as exc:
+        if channel == "telegram" and ":agent:" in str(chat_id):
+            raise AgentError("暂时无法读取此 Agent 的配置，请稍后重试。") from exc
         return "", ""
     if not agent or not agent["instructions"]:
         return "", ""

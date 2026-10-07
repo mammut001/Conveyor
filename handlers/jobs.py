@@ -33,6 +33,7 @@ single-concurrency.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import defaultdict
@@ -106,6 +107,26 @@ def _normalize_mode(mode: str | None) -> str:
     if mode in ("verbose", "compact", "quiet"):
         return mode
     return "compact"
+
+
+_JOB_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_execution(execution, queue_job_id, msg, port):
+    async def run():
+        try:
+            await execution
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Background Codex task failed: %s", queue_job_id)
+            from handlers.job_queue import get_job_queue
+            await get_job_queue().mark_running_failed(str(exc), queue_job_id)
+            await port.reply(msg, "任务执行异常，已记录失败并释放队列。请用 /status 查看。")
+    task = asyncio.create_task(run())
+    _JOB_TASKS.add(task)
+    task.add_done_callback(_JOB_TASKS.discard)
+    return task
 
 
 async def handle_codex_job(
@@ -191,9 +212,30 @@ async def submit_codex_job(
         if wait:
             await execution
         else:
-            import asyncio
-            asyncio.create_task(execution)
+            _spawn_execution(execution, dequeued_job.id, execute_msg, execute_port)
     return True, queue_msg, queued_job
+
+
+class _JobIdentityPort:
+    """Keep asynchronous job output identifiable after an agent switch."""
+    def __init__(self, port, label):
+        self._port = port
+        self._label = label
+
+    def __getattr__(self, name):
+        return getattr(self._port, name)
+
+    def _text(self, text):
+        return f"{self._label}\n{text}"
+
+    async def reply(self, msg, text):
+        return await self._port.reply(msg, self._text(text))
+
+    async def send_new(self, msg, text):
+        return await self._port.send_new(msg, self._text(text))
+
+    async def edit_progress(self, msg, placeholder, text):
+        return await self._port.edit_progress(msg, placeholder, self._text(text))
 
 
 async def _execute_codex_job(
@@ -215,11 +257,21 @@ async def _execute_codex_job(
     # jobs (handle_codex_job is only called for /run, /fix, and free
     # text fallback — never for deterministic commands).
     from handlers.session import build_context_prompt, append_turn
-    from agents import instructions_for_chat, profile_block
-    ctx_prompt = (
-        profile_block(*instructions_for_chat(runner.settings, msg.channel, msg.chat_id))
-        + build_context_prompt(runner.settings, msg)
-    )
+    from agents import AgentError, agent_for_chat, instructions_for_chat, profile_block, workspace_for_chat
+    try:
+        ctx_prompt = (
+            profile_block(*instructions_for_chat(runner.settings, msg.channel, msg.chat_id))
+            + build_context_prompt(runner.settings, msg)
+        )
+        agent_workspace = workspace_for_chat(runner.settings, msg.channel, msg.chat_id)
+        agent = agent_for_chat(runner.settings, msg.channel, msg.chat_id)
+    except AgentError as exc:
+        from handlers.job_queue import get_job_queue
+        await get_job_queue().mark_running_failed(str(exc), queue_job_id)
+        await port.reply(msg, str(exc))
+        return
+    if msg.channel == "telegram" and ":agent:" in msg.chat_id:
+        port = _JobIdentityPort(port, f"{agent['name']} · {queue_job_id or 'Codex'}")
     user_text_for_session = body  # remember for session recording
 
     progress_mode = _normalize_mode(getattr(runner.settings, "conveyor_progress_mode", "compact"))
@@ -321,8 +373,6 @@ async def _execute_codex_job(
 
     # An agent with its own project folder works there. Passed only when set,
     # so callers and fakes that predate agents see the same call as before.
-    from agents import workspace_for_chat
-    agent_workspace = workspace_for_chat(runner.settings, msg.channel, msg.chat_id)
     start_options = {"workspace_root": agent_workspace} if agent_workspace is not None else {}
     try:
         job = await runner.start(mode, effective_body, progress, **start_options)
@@ -496,7 +546,7 @@ class RecoveredOutboundPort:
             import asyncio
             try:
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, send_message, self.settings, text, int(self.chat_id))
+                await loop.run_in_executor(None, send_message, self.settings, text, self.chat_id)
                 return "recovered-msg-id"
             except Exception:
                 logger.exception("Failed to send recovered telegram message")
@@ -562,9 +612,9 @@ async def _start_queued_job_callback(queued_job: QueuedJob) -> None:
         
     mode = JobMode.FIX if queued_job.mode == "fix" else JobMode.RUN
     
-    asyncio.create_task(_execute_codex_job(
+    _spawn_execution(_execute_codex_job(
         msg, port, runner, mode, queued_job.prompt, queue_job_id=queued_job.id,
-    ))
+    ), queued_job.id, msg, port)
 
 from handlers.job_queue import get_job_queue
 get_job_queue().set_start_callback(_start_queued_job_callback)

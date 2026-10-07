@@ -865,7 +865,11 @@ async def ask_chat(
 
 async def _offer_deep(msg: InboundMessage, port: OutboundPort, text: str) -> None:
     if getattr(port, "supports_inline_buttons", False):
-        await port.reply_with_buttons(msg, text, [[{"text": "🔍 用 Codex 处理", "callback_data": "deep"}]])
+        data = "deep"
+        if msg.channel == "telegram" and (":agent:" in msg.chat_id or ":topic:" in msg.chat_id):
+            from channel.telegram_identity import context_tag
+            data = f"deep:{context_tag(msg.chat_id)}"
+        await port.reply_with_buttons(msg, text, [[{"text": "🔍 用 Codex 处理", "callback_data": data}]])
     else:
         await port.reply(msg, text)
 

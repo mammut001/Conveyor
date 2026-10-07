@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import sqlite3
+import socket
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -32,6 +33,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_QUEUE_LENGTH = 10
+
+
+def _process_start_token(pid: int) -> str | None:
+    try:
+        # Linux /proc field 22, after the parenthesized command name.
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def _owner_is_live(metadata: dict) -> bool:
+    pid = metadata.get("execution_owner_pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return False  # Legacy rows had no durable process identity.
+    if metadata.get("execution_owner_host") != socket.gethostname():
+        return True  # Never declare another host's process dead locally.
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    token = metadata.get("execution_owner_start")
+    return not token or token == _process_start_token(pid)
 
 
 class QueueJobState(str, Enum):
@@ -281,11 +306,16 @@ class JobQueue:
         try:
             with conn:
                 if mark_interrupted:
-                    conn.execute(
-                        "UPDATE queued_jobs SET state = 'interrupted', finished_at = ?, position = 0 "
-                        "WHERE state = 'running'",
-                        (now_str,),
-                    )
+                    for running in conn.execute("SELECT id, metadata_json FROM queued_jobs WHERE state = 'running'").fetchall():
+                        try:
+                            metadata = json.loads(running['metadata_json'] or '{}')
+                        except (ValueError, TypeError):
+                            metadata = {}
+                        if not isinstance(metadata, dict) or not _owner_is_live(metadata):
+                            conn.execute(
+                                "UPDATE queued_jobs SET state = 'interrupted', finished_at = ?, position = 0 WHERE id = ?",
+                                (now_str, running['id']),
+                            )
                 row = conn.execute(
                     "SELECT value FROM queue_metadata WHERE key = 'paused'"
                 ).fetchone()
@@ -470,10 +500,24 @@ class JobQueue:
                         return None
                     job_id = row["id"]
                     now_str = datetime.now(timezone.utc).isoformat()
+                    try:
+                        metadata = json.loads(row['metadata_json'] or '{}')
+                    except (ValueError, TypeError):
+                        metadata = {}
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    owner = getattr(self._runner, 'runtime_owner_id', None)
+                    if isinstance(owner, str):
+                        metadata.update({
+                            'execution_owner_id': owner,
+                            'execution_owner_pid': os.getpid(),
+                            'execution_owner_host': socket.gethostname(),
+                            'execution_owner_start': _process_start_token(os.getpid()),
+                        })
                     conn.execute(
                         "UPDATE queued_jobs SET state = 'running', started_at = ?, updated_at = ?, "
-                        "position = 0 WHERE id = ?",
-                        (now_str, now_str, job_id),
+                        "position = 0, metadata_json = ? WHERE id = ?",
+                        (now_str, now_str, json.dumps(metadata), job_id),
                     )
                     self._recalculate_positions(conn)
                     updated_row = conn.execute(
@@ -622,22 +666,44 @@ class JobQueue:
             rows = conn.execute(sql, params).fetchall()
             result: list[dict[str, Any]] = []
             for row in rows:
-                item = {key: row[key] for key in row.keys() if key != "prompt"}
-                try:
-                    metadata = json.loads(row["metadata_json"] or "{}")
-                except Exception:
-                    metadata = {}
-                item["metadata"] = metadata
-                item.pop("metadata_json", None)
-                item["refinement_intent"] = bool(item.get("refinement_intent"))
-                item["prompt_preview"] = truncate(redact_text(row["prompt"] or ""), 500)
+                item = self._public_job(row)
                 result.append(item)
             return result
         finally:
             conn.close()
 
+    @staticmethod
+    def _public_job(row) -> dict[str, Any]:
+        item = {key: row[key] for key in row.keys() if key != "prompt"}
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except Exception:
+            metadata = {}
+        item["metadata"] = metadata
+        item.pop("metadata_json", None)
+        item["refinement_intent"] = bool(item.get("refinement_intent"))
+        item["prompt_preview"] = truncate(redact_text(row["prompt"] or ""), 500)
+        return item
+
+    def conversation_jobs(self, channel: str, chat_id: str, operator_id: str, limit: int = 30) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                """SELECT * FROM queued_jobs WHERE channel = ? AND chat_id = ? AND operator_id = ?
+                   ORDER BY created_at DESC, rowid DESC LIMIT ?""",
+                (channel, chat_id, operator_id, min(100, max(1, int(limit)))),
+            ).fetchall()
+            return [self._public_job(row) for row in rows]
+        finally:
+            conn.close()
+
     def job_snapshot(self, job_id: str) -> dict[str, Any] | None:
-        return next((item for item in self.list_jobs(500) if item["id"] == job_id), None)
+        conn = self._get_conn()
+        try:
+            row = conn.execute("SELECT * FROM queued_jobs WHERE id = ?", (job_id,)).fetchone()
+            return self._public_job(row) if row is not None else None
+        finally:
+            conn.close()
 
     async def clear(self) -> int:
         async with self._lock:
@@ -841,6 +907,10 @@ class JobQueue:
                 {"error": redact_text(error_msg or "")} if error_msg else {},
             )
         await self._start_next_if_owned(now_str)
+
+    async def start_pending(self) -> None:
+        """Resume persisted pending jobs at channel startup without changing completed jobs."""
+        await self._start_next_if_owned(datetime.now(timezone.utc).isoformat())
 
     async def _start_next_if_owned(self, now_str: str) -> None:
         if self._paused:
