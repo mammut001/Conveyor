@@ -214,6 +214,8 @@ ALL_CANDIDATE_SERVICES=(
 SERVICES=()
 for svc in "${ALL_CANDIDATE_SERVICES[@]}"; do
   if sudo -n systemctl is-active --quiet "${svc}" 2>/dev/null; then
+    sudo -n -l /bin/systemctl stop "${svc}" >/dev/null 2>&1 \
+      || die "Deploy account needs NOPASSWD permission to stop ${svc} before a safe cutover"
     SERVICES+=("${svc}")
   else
     log "Skipping ${svc} (not active at capture)"

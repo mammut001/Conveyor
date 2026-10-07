@@ -116,3 +116,12 @@ then rechecks the queue before switching source. An unexpected exit after
 stopping services restores the previous release and restarts those services.
 The deployment status records the exact commit and backup path. Normal
 GitHub deployments retain their validated `origin/main` ancestry check.
+
+The deploy account must have non-interactive `systemctl stop`, `restart`, and
+`is-active` permission for the units in `ALL_CANDIDATE_SERVICES` in
+`scripts/deploy_vps.sh`, as well as the existing database-helper permission.
+Stopping services is required to prevent new requests during source cutover;
+restart-only sudoers rules are insufficient. Grant `stop` for those specific
+units, validate changes with `visudo`, and keep repository operations under
+the existing deploy account. The script checks stop permission for every
+active unit before stopping any of them.

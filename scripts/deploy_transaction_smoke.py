@@ -46,6 +46,7 @@ def main() -> int:
     require(text, '"${OLD_COMMIT_FULL}" "${TARGET_COMMIT_FULL}"', "local bundle forward ancestry")
     require(text, "unittest discover -s tests", "candidate unit test gate")
     require(text, 'trap finish_deploy EXIT', "unexpected exit recovery")
+    require(text, 'sudo -n -l /bin/systemctl stop "${svc}"', "service stop permission preflight")
     require(text, 'sudo -n systemctl stop "${svc}"', "quiesced source cutover")
     require(text, "Could not recheck queue after stopping services", "queue recheck before cutover")
 
