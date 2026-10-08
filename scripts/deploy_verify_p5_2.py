@@ -327,7 +327,7 @@ def _check_observe_lock_and_concurrency() -> None:
         from channel.types import InboundMessage
         import threading
 
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {}, poll_observe=True)
 
         msg = InboundMessage(
             channel="feishu", operator_id="ou_test", chat_id="oc_test", message_id="om_test", text="test",

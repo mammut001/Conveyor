@@ -1464,7 +1464,14 @@ async def _computer_stop(msg, port, _runner, settings, _arg):
 async def _computer_screenshot(msg, port, _runner, settings, _arg):
     """One-off observe/screenshot of the desktop via computer-use backend."""
     from handlers.tools.runner import run_tool
-    text = await run_tool(settings, "computer.observe", _arg or "")
+    text = await run_tool(
+        settings, "computer.observe", _arg or "",
+        operator_id=msg.operator_id,
+        channel=msg.channel,
+        chat_id=msg.chat_id,
+        port=port,
+        msg=msg,
+    )
     await port.reply(msg, text)
 
 

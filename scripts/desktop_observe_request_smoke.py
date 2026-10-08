@@ -404,7 +404,7 @@ def _test_concurrent_create() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp, max_pending=20)
         from nodes.state import register_desktop_node
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {}, poll_observe=True)
         
         processes = []
         for i in range(5):
@@ -436,7 +436,7 @@ def _test_concurrent_claim() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
         from nodes.state import register_desktop_node
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {}, poll_observe=True)
         
         created = create_observe_request(settings, _msg(), "claim test")
         request_id = created["request"]["request_id"]
@@ -483,7 +483,7 @@ def _test_complete_fail_conflict() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
         from nodes.state import register_desktop_node
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {}, poll_observe=True)
         
         created = create_observe_request(settings, _msg(), "complete/fail test")
         request_id = created["request"]["request_id"]
@@ -538,7 +538,7 @@ def _test_cancel_claim_conflict() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
         from nodes.state import register_desktop_node
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {}, poll_observe=True)
         
         created = create_observe_request(settings, _msg(), "cancel/claim test")
         request_id = created["request"]["request_id"]
@@ -585,7 +585,7 @@ def _test_corrupt_json_recovery() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
         from nodes.state import register_desktop_node
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {}, poll_observe=True)
         
         path = settings.codex_memory_root / "state" / "desktop_observe_requests.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -624,7 +624,7 @@ def _test_no_nested_deadlock() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
         from nodes.state import register_desktop_node
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {}, poll_observe=True)
         
         import signal
         has_alarm = hasattr(signal, "alarm")
@@ -661,7 +661,7 @@ def test_p543_auto_thumbnail_flags_and_routing():
     os.environ["CONVEYOR_DESKTOP_SCREENSHOT_HELPER"] = "/usr/local/bin/capture-screen-helper"
     settings = _settings(tmp, max_pending=3)
     from nodes.state import register_desktop_node
-    register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+    register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {}, poll_observe=True)
 
     from handlers.intent import route_intent
     route = route_intent("截图看看我电脑现在是什么")
@@ -701,7 +701,7 @@ def test_p543_auto_thumbnail_flags_and_routing():
 
     os.environ["CONVEYOR_DESKTOP_UPLOAD_ENABLED"] = "false"
     settings_off = _settings(tmp, max_pending=3)
-    register_desktop_node(settings_off, "macbook-payton", "Payton MacBook", "0.3.0", {})
+    register_desktop_node(settings_off, "macbook-payton", "Payton MacBook", "0.3.0", {}, poll_observe=True)
     res_off = create_observe_request(settings_off, msg, "截图", auto_upload_thumbnail=True)
     assert res_off.get("ok")
     ee = ensure_upload_request_for_observe(settings_off, res_off["request"], created_by_channel="t", created_by_chat_id="c")

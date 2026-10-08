@@ -27,4 +27,11 @@ if ! cua-driver status >/dev/null 2>&1; then
 fi
 
 cd /opt/conveyor
+# This process is the shared VPS desktop, not the retired Mac node.
+# load_dotenv() does not override variables already set here, so the
+# control plane must use the same id. Apply it with
+# scripts/migrate-desktop-node-id.sh (exact macbook-payton -> vps-desktop)
+# and restart the control plane. The old node record is left in place
+# and stops looking online once this process no longer heartbeats it.
+export CONVEYOR_DESKTOP_NODE_ID=vps-desktop
 exec /opt/conveyor/.venv/bin/python /opt/conveyor/desktop_agent.py --poll-computer

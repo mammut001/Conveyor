@@ -14,6 +14,24 @@ P5.2 adds **read-only screenshot observe** on the operator's MacBook. Screenshot
 - Absolute-path validation for `CONVEYOR_DESKTOP_SCREENSHOT_HELPER`
 - Atomic metadata writes and latest-metadata status output
 
+## Execution desktop (current session)
+
+With agents enabled, a generic `截图` / `截屏` or `/observe_request` captures the desktop of the conversation that is executing now. The target is stored on the computer task when the request starts.
+
+- The default agent (display unset), including the canonical main session, uses the configured host computer service (`HttpComputerBackend`). On the VPS that service is `scripts/run-vps-computer.sh`.
+- Another agent's own display uses the in-process X11 backend (`:101` and up). A secondary session of that same agent shares that display.
+- An archived or missing agent desktop fails closed. It is not replaced with the host desktop.
+- Replies name the worker and session, then the real target, for example `Conveyor › 主会话 / VPS共享桌面` plus the configured execution node, or `Alpha › … / Agent独立桌面(:101)`. A node id is not described as a Mac just because it used to say `macbook-payton`.
+- A request that names a Mac, MacBook, or a node id other than the configured host is rejected when that Mac is not a registered observe client. It does not capture the VPS instead.
+- Thumbnail delivery uses the physical chat port and the screenshot id from this task. `CONVEYOR_DESKTOP_UPLOAD_ENABLED=false`, `--metadata-only`, or a missing port returns metadata only.
+- The Web Console host screenshot stays on the explicit host observe request. It is not retargeted onto an agent desktop.
+
+The legacy observe queue remains for agents-disabled chats and for an explicit Mac whose registration platform is macOS and whose heartbeat sets `poll_observe`. A heartbeat without that flag is not an observe client (`node_does_not_poll_observe`), even if the node is online. `desktop_agent.py` reports the flag from `--poll-observe`.
+
+### VPS node id
+
+`scripts/run-vps-computer.sh` exports `CONVEYOR_DESKTOP_NODE_ID=vps-desktop` so this host desktop does not heartbeat as `macbook-payton`. The control plane still reads its own environment. After review, run `scripts/migrate-desktop-node-id.sh /opt/conveyor/.env` to replace an exact `macbook-payton` assignment with `vps-desktop` (backup, no other lines printed) and restart the control plane. The old node record is not deleted; it goes offline because the VPS process no longer updates it. A real Mac observer keeps its own id and must match the control plane if it is the configured desktop node.
+
 ## P5.3 Remote Observe Request
 
 **Supported:**

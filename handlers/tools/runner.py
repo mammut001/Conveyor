@@ -125,6 +125,23 @@ async def run_tool(
     if spec is None:
         return f"未知工具: {tool_name}"
     try:
+        if tool_name == "computer.observe":
+            from agents import enabled as agents_enabled
+            if agents_enabled(settings) and (msg is not None or (channel and chat_id)):
+                from channel.types import InboundMessage
+                from handlers.tools.observe_tools import exec_desktop_observe_request
+                bound = msg
+                if bound is None:
+                    bound = InboundMessage(
+                        channel=channel,  # type: ignore[arg-type]
+                        operator_id=operator_id,
+                        chat_id=chat_id,
+                        message_id=None,
+                        text=arg or "",
+                    )
+                return await exec_desktop_observe_request(
+                    settings, bound, arg or bound.text, port=port,
+                )
         if tool_name == "computer.task" and channel and chat_id:
             # The conversation decides which desktop the task runs on (an
             # agent's own, or the host's), so the task must know it.

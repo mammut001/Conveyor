@@ -174,6 +174,52 @@ def latest_screenshot_metadata(settings: Settings) -> dict | None:
     return records[0] if records else None
 
 
+def screenshot_metadata_by_id(settings: Settings, screenshot_id: str) -> dict | None:
+    """Load one screenshot's metadata by its exact id. Never the newest file."""
+    if not isinstance(screenshot_id, str):
+        return None
+    screenshot_id = screenshot_id.strip()
+    if (
+        not screenshot_id
+        or len(screenshot_id) > 128
+        or "/" in screenshot_id
+        or "\\" in screenshot_id
+        or ".." in screenshot_id
+        or screenshot_id.startswith(".")
+    ):
+        return None
+    screenshot_dir = resolve_screenshot_dir(settings)
+    if not screenshot_dir.is_dir():
+        return None
+    screenshot_dir = screenshot_dir.resolve()
+    metadata_path = (screenshot_dir / f"{screenshot_id}.json").resolve()
+    try:
+        metadata_path.relative_to(screenshot_dir)
+    except ValueError:
+        return None
+    if not metadata_path.is_file() or metadata_path.is_symlink():
+        return None
+    try:
+        data = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    record = _normalize_metadata_record(data, metadata_path)
+    if record is None:
+        return None
+    raw_path = record.get("path")
+    if not isinstance(raw_path, str) or not raw_path.startswith("/"):
+        return None
+    image_path = Path(raw_path)
+    if image_path.is_symlink() or not image_path.is_file():
+        return None
+    try:
+        image_path.resolve().relative_to(screenshot_dir)
+    except ValueError:
+        return None
+    record["path"] = str(image_path.resolve())
+    return record
+
+
 def validate_helper_payload(
     payload: dict,
     *,

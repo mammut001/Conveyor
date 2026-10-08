@@ -119,6 +119,7 @@ def register_desktop_node(
 
     if now is None:
         now = time.time()
+    poll_observe = bool(kwargs.get("poll_observe", False))
 
     # Sanitize inputs
     node_id_str = _safe_str(node_id, 128)
@@ -136,6 +137,7 @@ def register_desktop_node(
             "last_seen_at": now,
             "agent_state": "registered",
             "last_action": "register",
+            "poll_observe": poll_observe,
         }
         state[node_id_str] = node_state
         save_desktop_state(settings, state)
@@ -200,7 +202,12 @@ def record_heartbeat(
         poll_computer = kwargs.get("poll_computer")
         if poll_computer is not None:
             node_state["poll_computer"] = bool(poll_computer)
- 
+        # A heartbeat that omits the flag is not an observe client.
+        if "poll_observe" in kwargs and kwargs.get("poll_observe") is not None:
+            node_state["poll_observe"] = bool(kwargs.get("poll_observe"))
+        else:
+            node_state["poll_observe"] = False
+
         save_desktop_state(settings, state)
 
         display_name = _safe_str(node_state.get("display_name"), 100)

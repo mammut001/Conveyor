@@ -66,7 +66,7 @@ def get_json(url: str, token: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def register_agent(settings: Settings) -> dict:
+def register_agent(settings: Settings, *, poll_observe: bool = False, poll_computer: bool = False) -> dict:
     token = (settings.conveyor_desktop_agent_token or "").strip()
     if not token:
         return {"ok": False, "error": "missing_token"}
@@ -85,11 +85,15 @@ def register_agent(settings: Settings) -> dict:
             "hostname": socket.gethostname(),
             "arch": platform.machine(),
         },
+        "poll_observe": bool(poll_observe),
+        "poll_computer": bool(poll_computer),
     }
+    if node_id == "vps-desktop" and display_name in ("Payton MacBook", "macbook-payton"):
+        reg_data["display_name"] = "VPS desktop"
     return post_json(register_url, token, reg_data)
 
 
-def send_heartbeat_once(settings: Settings, *, poll_computer: bool = False) -> dict:
+def send_heartbeat_once(settings: Settings, *, poll_computer: bool = False, poll_observe: bool = False) -> dict:
     token = (settings.conveyor_desktop_agent_token or "").strip()
     control_plane_url = _control_plane_url()
     node_id = settings.conveyor_desktop_node_id or "macbook-payton"
@@ -99,6 +103,7 @@ def send_heartbeat_once(settings: Settings, *, poll_computer: bool = False) -> d
         "agent_state": "idle",
         "last_action": "heartbeat",
         "poll_computer": poll_computer,
+        "poll_observe": bool(poll_observe),
     }
     return post_json(heartbeat_url, token, hb_data)
 
@@ -632,7 +637,7 @@ def heartbeat_loop(settings: Settings, *, poll_observe: bool = False, poll_compu
 
     print("Registering agent with control plane...")
     try:
-        res = register_agent(settings)
+        res = register_agent(settings, poll_observe=poll_observe, poll_computer=poll_computer)
         if res.get("ok"):
             node_id = settings.conveyor_desktop_node_id or "macbook-payton"
             print(f"Desktop agent registered: {node_id}")
@@ -653,7 +658,9 @@ def heartbeat_loop(settings: Settings, *, poll_observe: bool = False, poll_compu
         now = time.time()
         if now - last_heartbeat >= heartbeat_interval:
             try:
-                res = send_heartbeat_once(settings, poll_computer=poll_computer)
+                res = send_heartbeat_once(
+                    settings, poll_computer=poll_computer, poll_observe=poll_observe,
+                )
                 if res.get("ok"):
                     print("Heartbeat ok: online")
                 else:

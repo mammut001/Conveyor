@@ -401,12 +401,22 @@ def create_observe_request(
             "message": "Desktop node is not enabled.",
         }
     node_id = settings.conveyor_desktop_node_id or "macbook-payton"
-    from nodes.state import is_desktop_online
+    from nodes.state import get_desktop_runtime, is_desktop_online
     if not is_desktop_online(settings, node_id):
         return {
             "ok": False,
             "error": "desktop_agent_offline",
-            "message": "Desktop agent is offline. Start `python desktop_agent.py --poll-observe` on the Mac.",
+            "message": "Desktop agent is offline. Start `python desktop_agent.py --poll-observe` on the observer.",
+        }
+    runtime = get_desktop_runtime(settings, node_id) or {}
+    if not runtime.get("poll_observe"):
+        return {
+            "ok": False,
+            "error": "node_does_not_poll_observe",
+            "message": (
+                "这个桌面节点没有在轮询 observe（需要 desktop_agent.py --poll-observe）。"
+                "已拒绝写入无人消费的截图队列。"
+            ),
         }
     from desktop_screenshot import helper_configuration_error
     helper_error = helper_configuration_error(settings)

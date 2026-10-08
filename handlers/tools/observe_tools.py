@@ -1,7 +1,9 @@
 """handlers/tools/observe_tools.py — P5.3 remote observe request tools."""
 from __future__ import annotations
 
+import re
 import time
+from pathlib import Path
 
 from channel.types import InboundMessage
 from config import Settings
@@ -188,7 +190,7 @@ def format_observe_request_created(record: dict, settings: Settings) -> str:
             "📸 已发起截图请求",
             "",
             f"请求：{record.get('request_id', '?')}",
-            f"目标 Mac：{node_id}",
+            f"执行节点：{node_id}",
             "",
             "截图完成后会把缩略图发到这里。",
             "高清原图只保存在 Mac 本地。",
@@ -198,10 +200,10 @@ def format_observe_request_created(record: dict, settings: Settings) -> str:
             "📸 已创建桌面截图请求（仅元数据）",
             "",
             f"请求：{record.get('request_id', '?')}",
-            f"目标 Mac：{node_id}",
+            f"执行节点：{node_id}",
             f"有效期：{ttl_minutes} 分钟",
             "",
-            "Mac agent 会在本地截一张图，只回传元数据，不上传图片。",
+            "观察端会在本地截一张图，只回传元数据，不上传图片。",
         ]
     return _safe_truncate("\n".join(lines))
 
@@ -232,6 +234,285 @@ def format_observe_completed(record: dict) -> str:
         "No image was uploaded.",
         "Computer Use control is not implemented.",
     ])
+    return _safe_truncate("\n".join(lines))
+
+
+_EXPLICIT_NODE = re.compile(
+    r"(?:node(?:_id)?|节点)\s*[:=：]?\s*([A-Za-z0-9][A-Za-z0-9_.-]{0,64})",
+    re.IGNORECASE,
+)
+_EXPLICIT_MAC = re.compile(r"(macbook|\bmac\b|苹果电脑)", re.IGNORECASE)
+_EXPLICIT_REMOTE = re.compile(r"远程\s*(?:节点|桌面|电脑)")
+_MAC_PLATFORMS = frozenset({"darwin", "macos", "mac", "mac os", "mac os x"})
+
+
+def _configured_desktop_node_id(settings: Settings) -> str:
+    return (settings.conveyor_desktop_node_id or "").strip() or "macbook-payton"
+
+
+def _host_platform(settings: Settings) -> str:
+    from nodes.state import get_desktop_runtime
+
+    runtime = get_desktop_runtime(settings, _configured_desktop_node_id(settings)) or {}
+    host = runtime.get("host") if isinstance(runtime.get("host"), dict) else {}
+    return str(host.get("platform") or "").strip().lower()
+
+
+def _configured_host_is_mac(settings: Settings) -> bool:
+    return _host_platform(settings) in _MAC_PLATFORMS
+
+
+def _explicit_desktop_request(text: str, settings: Settings) -> str | None:
+    """Reject a named Mac or unknown node instead of capturing the current desktop.
+
+    Returns an error string, ``\"legacy\"`` when the configured host is a Mac
+    that actually polls observe, or None when the current execution target applies.
+    """
+    named = _EXPLICIT_NODE.search(text or "")
+    wants_mac = bool(_EXPLICIT_MAC.search(text or "") or _EXPLICIT_REMOTE.search(text or ""))
+    if named:
+        node_id = named.group(1)
+        if node_id != _configured_desktop_node_id(settings):
+            return (
+                f"未知桌面节点「{node_id}」。不会改用当前桌面，也不会截取 VPS。"
+            )
+    if not wants_mac:
+        return None
+    from nodes.state import get_desktop_runtime
+
+    runtime = get_desktop_runtime(settings, _configured_desktop_node_id(settings)) or {}
+    if _configured_host_is_mac(settings) and runtime.get("poll_observe"):
+        return "legacy"
+    return (
+        "当前没有可用的 Mac 观察端（配置的执行节点不是正在轮询 observe 的 Mac）。"
+        "不会改为截取 VPS 桌面。"
+    )
+
+
+def _execution_who(settings: Settings, msg: InboundMessage) -> str:
+    from agents import DEFAULT_AGENT_NAME, agent_for_chat, enabled
+    from handlers.workers import current_context_line, session_context_label
+    from worker_sessions import WorkerSessionStore
+
+    if enabled(settings) and msg.channel in ("telegram", "feishu"):
+        line = current_context_line(settings, msg, persist=False)
+        if line.startswith("当前："):
+            return line[len("当前："):]
+    try:
+        agent = agent_for_chat(settings, msg.channel, msg.chat_id)
+    except Exception:
+        agent = None
+    name = str((agent or {}).get("name") or DEFAULT_AGENT_NAME)
+    if agent and msg.channel == "web":
+        try:
+            for row in WorkerSessionStore(settings).list(str(agent["id"])):
+                if row.get("source_chat_id") == msg.chat_id and row.get("kind") != "main":
+                    return f"{name} › {session_context_label(settings, row)}"
+        except Exception:
+            pass
+    return f"{name} › 主会话"
+
+
+def _desktop_sentence(settings: Settings, msg: InboundMessage, target: dict) -> str:
+    who = _execution_who(settings, msg)
+    if target.get("scope") == "default" or not target.get("agent_id"):
+        node_id = _configured_desktop_node_id(settings)
+        return f"当前：{who}\n目标：VPS共享桌面\n执行节点：{node_id}"
+    display = target.get("display")
+    shown = f":{display}" if display is not None else ""
+    return f"当前：{who}\n目标：Agent独立桌面({shown})"
+
+
+def _owned_agent_chat(settings: Settings, msg: InboundMessage) -> bool:
+    from worker_sessions import WorkerSessionStore
+
+    chat_id = str(msg.chat_id or "")
+    if msg.channel == "telegram" and ":agent:" in chat_id:
+        return True
+    if msg.channel != "web":
+        return False
+    if WorkerSessionStore.is_secondary_chat_id(chat_id):
+        return True
+    return chat_id.startswith("agent-") and chat_id != "agent-default"
+
+
+def _pinned_target_or_error(settings: Settings, msg: InboundMessage) -> tuple[dict | None, str | None]:
+    """Resolve the desktop now. A missing agent desktop does not fall back to the host."""
+    import agents
+    from agents import AgentError, agent_for_chat, desktops_enabled
+
+    try:
+        agent = agent_for_chat(settings, msg.channel, msg.chat_id)
+        target = agents.computer_target_for_chat(settings, msg.channel, msg.chat_id)
+    except AgentError as exc:
+        return None, str(exc)
+    if desktops_enabled(settings) and _owned_agent_chat(settings, msg):
+        if not agent or agent.get("archived") or agent.get("display") is None:
+            return None, "这个 Agent 的桌面不可用。不会改截共享桌面。"
+        if target.get("scope") == "default":
+            return None, "这个 Agent 的桌面不可用。不会改截共享桌面。"
+    return target, None
+
+
+def _thumbnail_for_screenshot(settings: Settings, record: dict) -> str | None:
+    """Write a bounded thumbnail for this exact image. None when that cannot be done."""
+    from desktop_agent import generate_thumbnail
+    from desktop_screenshot import resolve_screenshot_dir
+
+    source = Path(str(record.get("path") or ""))
+    screenshot_id = str(record.get("screenshot_id") or "")
+    screenshot_dir = resolve_screenshot_dir(settings).resolve()
+    dest = (screenshot_dir / f"thumb-{screenshot_id}.png").resolve()
+    try:
+        dest.relative_to(screenshot_dir)
+    except ValueError:
+        return None
+    max_width = int(getattr(settings, "conveyor_desktop_upload_max_width", 1280) or 1280)
+    max_height = int(getattr(settings, "conveyor_desktop_upload_max_height", 800) or 800)
+    max_bytes = int(getattr(settings, "conveyor_desktop_upload_max_bytes", 750000) or 750000)
+    if generate_thumbnail(source, dest, max_width, max_height, max_bytes) and dest.is_file():
+        return str(dest)
+    try:
+        from PIL import Image
+
+        with Image.open(source) as image:
+            image = image.convert("RGB")
+            image.thumbnail((max_width, max_height))
+            image.save(dest, format="PNG", optimize=True)
+        if dest.is_file() and dest.stat().st_size <= max_bytes:
+            return str(dest)
+    except Exception:
+        pass
+    try:
+        width = int(record.get("width") or 0)
+        height = int(record.get("height") or 0)
+        size = source.stat().st_size
+    except (OSError, TypeError, ValueError):
+        return None
+    if size <= max_bytes and 0 < width <= max_width and 0 < height <= max_height:
+        return str(source.resolve())
+    return None
+
+
+async def capture_pinned_desktop_screenshot(
+    settings: Settings,
+    msg: InboundMessage,
+    user_request: str,
+    *,
+    port: Any = None,
+    metadata_only: bool = False,
+) -> str:
+    """One observe-only computer task on the desktop pinned to this message."""
+    from agents import enabled as agents_enabled
+    from desktop_computer_loop import ComputerBackendError, build_backend, run_computer_loop
+    from desktop_computer_planner import ScriptedPlanner
+    from desktop_computer_requests import (
+        contains_blocked_keyword,
+        create_computer_task,
+        get_computer_task,
+        is_direct_mode_active,
+        x11_node_id,
+    )
+    from desktop_screenshot import screenshot_metadata_by_id
+    from human_takeover import HumanTakeoverStore
+
+    if not agents_enabled(settings):
+        return "Agent 执行未开启，不能按当前会话截取桌面。"
+    if not settings.conveyor_computer_use_enabled:
+        return "⚠️ Computer Use 未启用 (CONVEYOR_COMPUTER_USE_ENABLED=false)。未截图。"
+    if contains_blocked_keyword(settings, user_request or ""):
+        return "⛔ 含受限关键词，已拒绝。"
+    if not is_direct_mode_active(settings):
+        return "⚠️ Direct 模式未启用。先 /computer_arm [分钟] 或设置 CONVEYOR_COMPUTER_ALWAYS_DIRECT=true。未截图。"
+
+    target, error = _pinned_target_or_error(settings, msg)
+    if error or not target:
+        return error or "无法确定当前桌面。未截图。"
+    if HumanTakeoverStore(settings).current(str(target.get("scope") or "default")) is not None:
+        return "人工接管中，已暂停截图。"
+
+    where = _desktop_sentence(settings, msg, target)
+    created = create_computer_task(
+        settings,
+        "observe only 只观察 不要点击 不要输入",
+        direct_mode=True,
+        max_steps=2,
+        max_seconds=30,
+        operator_id=msg.operator_id,
+        chat_id=msg.chat_id,
+        channel=msg.channel,
+        single_active=True,
+    )
+    if not created.get("ok"):
+        return f"截图失败：{created.get('message') or created.get('error') or 'computer_task_failed'}"
+    task_id = str(created["task_id"])
+    try:
+        backend = build_backend(settings, task_id)
+    except ComputerBackendError as exc:
+        from desktop_computer_requests import set_task_status
+        set_task_status(settings, task_id, "error", blocked_reason=str(exc))
+        return "这个 Agent 的桌面不可用。不会改截共享桌面。"
+    planner = ScriptedPlanner([
+        {"action": "observe"},
+        {"action": "done", "summary": "observed"},
+    ])
+    result = await run_computer_loop(
+        settings,
+        "observe only 只观察 不要点击 不要输入",
+        planner=planner,
+        backend=backend,
+        operator_id=msg.operator_id,
+        chat_id=msg.chat_id,
+        channel=msg.channel,
+        max_steps=2,
+        max_seconds=30,
+        direct_mode=True,
+        task_id=task_id,
+    )
+    if not result.get("ok"):
+        return f"截图失败：{result.get('message') or result.get('error') or 'observe_failed'}\n\n{where}"
+    task = get_computer_task(settings, task_id) or {}
+    screenshot_id = ""
+    for entry in task.get("trajectory") or []:
+        if isinstance(entry, dict) and entry.get("screenshot_id"):
+            screenshot_id = str(entry["screenshot_id"])
+    record = screenshot_metadata_by_id(settings, screenshot_id) if screenshot_id else None
+    expected_node = (
+        _configured_desktop_node_id(settings)
+        if target.get("scope") == "default"
+        else x11_node_id(str(target.get("scope")))
+    )
+    if not record or record.get("node_id") != expected_node or record.get("screenshot_id") != screenshot_id:
+        return f"截图失败：没有拿到锁定桌面的截图。\n\n{where}"
+
+    upload_enabled = bool(getattr(settings, "conveyor_desktop_upload_enabled", False))
+    lines = [
+        "🖥 桌面观察完成",
+        "",
+        where,
+        f"screenshot_id: {screenshot_id}",
+    ]
+    if record.get("width") is not None and record.get("height") is not None:
+        lines.append(f"尺寸: {record.get('width')}x{record.get('height')}")
+    if metadata_only or port is None:
+        lines.append("")
+        lines.append("仅元数据，未发送图片。")
+        return _safe_truncate("\n".join(lines))
+    if not upload_enabled:
+        lines.append("")
+        lines.append("缩略图外发已关闭（CONVEYOR_DESKTOP_UPLOAD_ENABLED=false）。图片未发送。")
+        return _safe_truncate("\n".join(lines))
+    thumb = _thumbnail_for_screenshot(settings, record)
+    if not thumb:
+        return _safe_truncate(
+            "\n".join(lines + ["", "缩略图生成失败。图片未发送。"])
+        )
+    try:
+        await port.send_image(msg.chat_id, thumb, caption=where)
+    except Exception:
+        return _safe_truncate("\n".join(lines + ["", "缩略图发送失败。"]))
+    lines.append("")
+    lines.append("✅ 缩略图已发送。")
     return _safe_truncate("\n".join(lines))
 
 
@@ -270,6 +551,15 @@ async def exec_desktop_observe_request(
         preview_flag = False
     # clean for record
     clean_text = re.sub(r"\s*--(?:preview|metadata(?:-only)?)\b", "", text, flags=re.IGNORECASE).strip() or text
+
+    from agents import enabled as agents_enabled
+    explicit = _explicit_desktop_request(clean_text, settings)
+    if isinstance(explicit, str) and explicit != "legacy":
+        return explicit
+    if agents_enabled(settings) and explicit != "legacy":
+        return await capture_pinned_desktop_screenshot(
+            settings, msg, clean_text, port=port, metadata_only=metadata_only,
+        )
 
     # Decide auto
     upload_enabled = bool(getattr(settings, "conveyor_desktop_upload_enabled", False))
