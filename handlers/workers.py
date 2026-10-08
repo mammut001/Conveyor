@@ -7,7 +7,9 @@ session; callers only present the token plus the authenticated scope.
 """
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from agents import AgentError, AgentStore, agent_for_chat, enabled
@@ -185,6 +187,63 @@ def _agent_of(settings: Any, session_id: str) -> str:
 
 def _source(store: WorkerSessionStore, msg: InboundMessage) -> str:
     return store._physical_source(msg.channel, msg.chat_id)
+
+
+def legacy_job_card_allowed(settings: Any, msg: InboundMessage, job_id: str) -> bool:
+    """Old Feishu job cards may run only when no Workers session is selected,
+    or when their job id belongs to the selected canonical session.
+    """
+    if not enabled(settings) or msg.channel not in ("telegram", "feishu"):
+        return True
+    try:
+        selected = WorkerSessionStore(settings).selected(msg.channel, msg.chat_id, msg.operator_id)
+    except AgentError:
+        return False
+    if selected is None:
+        return True
+    job_id = str(job_id or "")
+    if not job_id:
+        return False
+    path = Path(settings.codex_memory_root) / "state" / "job_queue.sqlite3"
+    if not path.exists():
+        return False
+    conn = sqlite3.connect(str(path), timeout=10.0)
+    try:
+        row = conn.execute(
+            "SELECT channel, operator_id, chat_id FROM queued_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+    if row is None:
+        return False
+    return (
+        str(row[0]) == selected["channel"]
+        and str(row[1]) == selected["operator_id"]
+        and str(row[2]) == selected["source_chat_id"]
+    )
+
+
+def selection_conflict(settings: Any, msg: InboundMessage, channel: str, chat_id: str) -> str | None:
+    """Reject a legacy callback that would run under a different Workers session.
+
+    Returns an operator-facing error, or None when the click may proceed on
+    its original conversation. A matching selection is allowed. No selection
+    keeps the legacy route. This never rewrites the click onto the selection.
+    """
+    if not enabled(settings) or msg.channel not in ("telegram", "feishu"):
+        return None
+    try:
+        selected = WorkerSessionStore(settings).selected(msg.channel, msg.chat_id, msg.operator_id)
+    except AgentError as exc:
+        return str(exc)
+    if selected is None:
+        return None
+    if selected["channel"] == channel and selected["source_chat_id"] == chat_id:
+        return None
+    return "这个按钮属于之前的对话。请切回原会话或发送 /workers exit 后再试。"
 
 
 def bind_execution(msg: InboundMessage, port: Any, settings: Any) -> tuple[InboundMessage, Any]:

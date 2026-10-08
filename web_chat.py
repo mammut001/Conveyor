@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import sqlite3
 import time
 import uuid
 from typing import Any
@@ -20,6 +21,21 @@ WEB_CHAT_PREFIX = "webchat-"
 APPROVAL_PROMPT_PREFIX = "⚠️ 危险操作需确认"
 
 
+def _reserved_secondary_unavailable(control: Any, source_chat_id: str) -> bool:
+    """True when a reserved secondary id is missing, archived, or unreadable."""
+    from worker_sessions import WorkerSessionStore
+
+    if not WorkerSessionStore.is_secondary_chat_id(source_chat_id):
+        return False
+    settings = getattr(control, "settings", None)
+    if settings is None:
+        return True
+    try:
+        return WorkerSessionStore(settings).owner_agent_id("web", source_chat_id) is None
+    except (OSError, sqlite3.Error):
+        return True
+
+
 def resolve_or_create_session(
     control: Any,
     requested_session_id: str,
@@ -31,6 +47,8 @@ def resolve_or_create_session(
         resolved = control.resolve_session_identity(requested_session_id)
         if resolved:
             channel, operator_id, source_chat_id = resolved
+            if _reserved_secondary_unavailable(control, source_chat_id):
+                return None
             return channel, operator_id, source_chat_id, requested_session_id
         # A durable web id handed out by a previous /api/chat call whose turn
         # has not been persisted yet: keep using it instead of rejecting it.
@@ -39,6 +57,9 @@ def resolve_or_create_session(
             requested_session_id = requested_session_id[len(durable_prefix):]
     source_chat_id = requested_session_id or f"{new_prefix}{uuid.uuid4().hex[:12]}"
     if len(source_chat_id) > 128 or not all(ch.isalnum() or ch in "-_" for ch in source_chat_id):
+        return None
+    # A well-formed secondary id is not a license to invent a session.
+    if _reserved_secondary_unavailable(control, source_chat_id):
         return None
     channel, operator_id = "web", "web-console"
     durable_session_id = session_identity(channel, source_chat_id, operator_id)

@@ -76,6 +76,14 @@ def takeover_scope(agent_id: str) -> str:
     return f"agent:{agent_id}"
 
 
+def _owned_canonical_chat(channel: str, chat_id: str) -> bool:
+    """Web worker ids and pinned Telegram agents must not fall open on lookup errors."""
+    chat_id = str(chat_id or "")
+    if channel == "telegram" and ":agent:" in chat_id:
+        return True
+    return channel == WEB_CHANNEL and chat_id.startswith(AGENT_CHAT_PREFIX)
+
+
 def computer_target_for_chat(settings: Any, channel: str, chat_id: str) -> dict[str, Any]:
     """Which desktop a conversation's computer use acts on.
 
@@ -88,7 +96,7 @@ def computer_target_for_chat(settings: Any, channel: str, chat_id: str) -> dict[
     try:
         agent = agent_for_chat(settings, channel, chat_id)
     except (OSError, sqlite3.Error) as exc:
-        if channel == "telegram" and ":agent:" in str(chat_id):
+        if _owned_canonical_chat(channel, chat_id):
             raise AgentError("暂时无法读取此 Agent 的桌面配置，请稍后重试。") from exc
         return host
     if not agent or agent.get("display") is None:
@@ -101,7 +109,7 @@ def workspace_for_chat(settings: Any, channel: str, chat_id: str) -> Path | None
     try:
         agent = agent_for_chat(settings, channel, chat_id)
     except (OSError, sqlite3.Error) as exc:
-        if channel == "telegram" and ":agent:" in str(chat_id):
+        if _owned_canonical_chat(channel, chat_id):
             raise AgentError("暂时无法读取此 Agent 的项目配置，请稍后重试。") from exc
         return None
     if not agent or not agent.get("workspace_path"):
@@ -488,7 +496,7 @@ def instructions_for_chat(settings: Any, channel: str, chat_id: str) -> tuple[st
     try:
         agent = agent_for_chat(settings, channel, chat_id)
     except (OSError, sqlite3.Error) as exc:
-        if channel == "telegram" and ":agent:" in str(chat_id):
+        if _owned_canonical_chat(channel, chat_id):
             raise AgentError("暂时无法读取此 Agent 的配置，请稍后重试。") from exc
         return "", ""
     if not agent or not agent["instructions"]:

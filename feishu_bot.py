@@ -129,6 +129,14 @@ async def _handle_card_action(msg: Any) -> None:
             if not token:
                 await port.send_new(inbound, "无效的确认 token。")
                 return
+            from handlers.tools.confirm import get_pending
+            from handlers.workers import selection_conflict
+            pending = get_pending(token, settings=settings)
+            if pending is not None:
+                conflict = selection_conflict(settings, inbound, pending.channel, pending.chat_id)
+                if conflict:
+                    await port.send_new(inbound, conflict)
+                    return
             if action == "confirm":
                 await execute_confirmed(inbound, port, settings, token)
             else:
@@ -166,6 +174,11 @@ async def _handle_card_action(msg: Any) -> None:
         if cmd is None:
             await port.send_new(inbound, f"未知卡片操作: {action}")
             return
+        if cmd in ("status", "diff", "apply", "discard", "cancel"):
+            from handlers.workers import legacy_job_card_allowed
+            if not legacy_job_card_allowed(settings, inbound, str(payload.get("job_id") or "")):
+                await port.send_new(inbound, "这个卡片属于之前的对话。请切回原会话或发送 /workers exit 后再试。")
+                return
         # Synthesize a typed slash command and re-enter the regular
         # dispatch path. parse_command will recognize it.
         inbound = dataclasses.replace(inbound, text=f"/{cmd}")

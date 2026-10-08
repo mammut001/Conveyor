@@ -257,14 +257,21 @@ async def _execute_codex_job(
     # jobs (handle_codex_job is only called for /run, /fix, and free
     # text fallback — never for deterministic commands).
     from handlers.session import build_context_prompt, append_turn
-    from agents import AgentError, agent_for_chat, instructions_for_chat, profile_block, workspace_for_chat
+    from agents import (
+        AgentError, _owned_canonical_chat, agent_for_chat, instructions_for_chat,
+        profile_block, workspace_for_chat,
+    )
     try:
+        agent = agent_for_chat(runner.settings, msg.channel, msg.chat_id)
+        # Selection-time checks are not enough: the agent can be archived
+        # after enqueue. A canonical worker chat must not start on the host.
+        if _owned_canonical_chat(msg.channel, msg.chat_id) and (not agent or agent.get("archived")):
+            raise AgentError("此会话的 Agent 不可用，任务不会转到默认项目。")
         ctx_prompt = (
             profile_block(*instructions_for_chat(runner.settings, msg.channel, msg.chat_id))
             + build_context_prompt(runner.settings, msg)
         )
         agent_workspace = workspace_for_chat(runner.settings, msg.channel, msg.chat_id)
-        agent = agent_for_chat(runner.settings, msg.channel, msg.chat_id)
     except AgentError as exc:
         from handlers.job_queue import get_job_queue
         await get_job_queue().mark_running_failed(str(exc), queue_job_id)
@@ -565,11 +572,14 @@ def _feishu_http_text(settings: "Settings", chat_id: str, text: str) -> bool:
     )
     try:
         with urllib.request.urlopen(token_req, timeout=10) as resp:
-            tenant = json.loads(resp.read().decode("utf-8")).get("tenant_access_token")
+            tenant_body = json.loads(resp.read().decode("utf-8"))
     except Exception:
         logger.warning("Recovered Feishu delivery could not obtain a tenant token")
         return False
-    if not tenant:
+    if not isinstance(tenant_body, dict) or tenant_body.get("code") != 0:
+        return False
+    tenant = tenant_body.get("tenant_access_token")
+    if not isinstance(tenant, str) or not tenant:
         return False
     payload = json.dumps({
         "receive_id": chat_id,
@@ -584,10 +594,17 @@ def _feishu_http_text(settings: "Settings", chat_id: str, text: str) -> bool:
     )
     try:
         with urllib.request.urlopen(send_req, timeout=10) as resp:
-            return 200 <= getattr(resp, "status", 200) < 300
+            if not 200 <= getattr(resp, "status", 0) < 300:
+                return False
+            sent = json.loads(resp.read().decode("utf-8"))
     except Exception:
         logger.warning("Recovered Feishu delivery failed")
         return False
+    # Feishu returns HTTP 200 with a nonzero business code on rejection.
+    if not isinstance(sent, dict) or sent.get("code") != 0:
+        return False
+    data = sent.get("data")
+    return isinstance(data, dict) and isinstance(data.get("message_id"), str) and bool(data.get("message_id"))
 
 
 class RecoveredOutboundPort:

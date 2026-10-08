@@ -214,10 +214,20 @@ class WebControl:
         return channel, operator_id, source_chat_id
 
     def archive_session(self, session_id: str) -> bool:
-        return get_transcript_store(self.settings).archive_session(session_id)
+        from worker_sessions import WorkerSessionStore
+
+        transcript = get_transcript_store(self.settings).archive_session(session_id)
+        registry = WorkerSessionStore(self.settings).archive_registered(session_id)
+        return transcript or registry
 
     def delete_session(self, session_id: str) -> bool:
-        return get_transcript_store(self.settings).delete_session(session_id)
+        from worker_sessions import WorkerSessionStore
+
+        transcript = get_transcript_store(self.settings).delete_session(session_id)
+        # Keep the registry row, archived, so a deleted secondary cannot be
+        # recreated as an empty guessed id.
+        registry = WorkerSessionStore(self.settings).archive_registered(session_id)
+        return transcript or registry
 
     def events(self, job_id: str, after: int = 0, limit: int = 500) -> list[dict[str, Any]]:
         return [item.to_dict() for item in get_event_store(self.settings).list(job_id, after, limit)]
@@ -352,7 +362,7 @@ class WebControl:
         except Exception:
             pass
 
-        for action in list_pending(channel="web"):
+        for action in list_pending(channel="web", settings=self.settings):
             spec = get_tool(action.tool_name)
             if spec is not None:
                 summary = spec.summary

@@ -4,6 +4,7 @@ Handlers and the queue run for real. The Codex runner is never started.
 """
 from __future__ import annotations
 
+import importlib
 import json
 import sqlite3
 import tempfile
@@ -244,7 +245,8 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
             await port.reply(msg, "done")
 
         msg = self.message("hello there", operator="1")
-        with patch("handlers.dispatch.handle_codex_job", capture):
+        dispatch_module = importlib.import_module("handlers.dispatch")
+        with patch.object(dispatch_module, "handle_codex_job", capture):
             await dispatch(msg, self.port, self.settings, SimpleNamespace(settings=self.settings))
         self.assertEqual(seen["chat"], session["source_chat_id"])
         self.assertEqual(seen["channel"], "web")

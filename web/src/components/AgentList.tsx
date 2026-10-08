@@ -46,26 +46,27 @@ function preview(agent: Agent): string {
   return agent.instructions || 'No messages yet'
 }
 
-export function WorkerSessionPicker({ sessions, selectedId, onSelect, onCreate }: {
+export function WorkerSessionPicker({ sessions, selectedId, onSelect, onCreate, creating }: {
   sessions: WorkerSession[]
   selectedId: string
   onSelect: (sessionId: string) => void
   onCreate: () => void
+  creating?: boolean
 }) {
   if (!sessions.length) return null
   return (
     <div className="worker-session-picker">
-      <select aria-label="Worker session" value={selectedId} onChange={event => onSelect(event.target.value)}>
+      <select aria-label="Worker session" value={selectedId} onChange={event => onSelect(event.target.value)} disabled={creating}>
         {sessions.map(session => (
           <option key={session.id} value={session.id}>{session.title || session.id}</option>
         ))}
       </select>
-      <button type="button" onClick={onCreate}>新建会话</button>
+      <button type="button" onClick={onCreate} disabled={creating}>{creating ? '创建中…' : '新建会话'}</button>
     </div>
   )
 }
 
-export function AgentList({ agents, selectedId, onSelect, onNew, onEdit, workerSessions, selectedWorkerSessionId, onSelectWorkerSession, onCreateWorkerSession }: {
+export function AgentList({ agents, selectedId, onSelect, onNew, onEdit, workerSessions, selectedWorkerSessionId, onSelectWorkerSession, onCreateWorkerSession, creatingWorkerSession }: {
   agents: Agent[]
   selectedId: string
   onSelect: (agent: Agent) => void
@@ -75,6 +76,7 @@ export function AgentList({ agents, selectedId, onSelect, onNew, onEdit, workerS
   selectedWorkerSessionId?: string
   onSelectWorkerSession?: (sessionId: string) => void
   onCreateWorkerSession?: () => void
+  creatingWorkerSession?: boolean
 }) {
   return (
     <>
@@ -108,6 +110,7 @@ export function AgentList({ agents, selectedId, onSelect, onNew, onEdit, workerS
                 selectedId={selectedWorkerSessionId || workerSessions[0]?.id || ''}
                 onSelect={onSelectWorkerSession}
                 onCreate={onCreateWorkerSession}
+                creating={creatingWorkerSession}
               />
             )}
           </div>

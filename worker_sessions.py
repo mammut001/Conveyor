@@ -158,6 +158,24 @@ class WorkerSessionStore:
             conn.close()
         return str(row["agent_id"]) if row else None
 
+    def archive_registered(self, session_id: str) -> bool:
+        """Archive a created or legacy registry row. Synthetic mains have no row.
+
+        Selections that point at the row stay in place so the next command
+        fails with the existing unavailable-session error instead of running
+        somewhere else.
+        """
+        conn = self._connect()
+        try:
+            with conn:
+                cursor = conn.execute(
+                    "UPDATE worker_sessions SET archived = 1 WHERE session_id = ? AND archived = 0",
+                    (str(session_id or ""),),
+                )
+                return cursor.rowcount > 0
+        finally:
+            conn.close()
+
     def list(self, agent_id: str) -> list[dict[str, Any]]:
         """Canonical web sessions for one agent. Legacy IM rows stay off this list."""
         agent = AgentStore(self.settings).get(agent_id)

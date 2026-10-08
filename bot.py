@@ -380,7 +380,15 @@ async def tool_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     action, token = parsed
     from agents import AgentError, conversation_for_chat
+    from handlers.tools.confirm import get_pending
+    from handlers.workers import selection_conflict
     inbound = inbound_from_update(update, text="")
+    pending = get_pending(token, settings=settings)
+    if pending is not None:
+        conflict = selection_conflict(settings, inbound, pending.channel, pending.chat_id)
+        if conflict:
+            await _reply(update, conflict)
+            return
     try:
         inbound = replace(inbound, chat_id=conversation_for_chat(settings, inbound.channel, inbound.chat_id))
     except AgentError as exc:
@@ -475,6 +483,11 @@ async def deep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     expected = f"deep:{context_tag(routed)}"
     if data != expected and not (data == "deep" and ":agent:" not in routed):
         await _reply(update, "这个按钮属于之前的 Agent 对话。请切回原 Agent 后重试，或在当前对话发送 /deep。")
+        return
+    from handlers.workers import selection_conflict
+    conflict = selection_conflict(settings, inbound, "telegram", routed)
+    if conflict:
+        await _reply(update, conflict)
         return
     inbound = replace(inbound, chat_id=routed)
     await dispatch(inbound, make_outbound(update), settings, runner)

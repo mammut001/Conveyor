@@ -21,6 +21,7 @@ from handlers.tools.confirm import (
     matches_context,
     pop_pending,
     get_pending_for_context,
+    list_pending,
 )
 from handlers.tools.diagnose import build_hybrid_prompt, diagnose_tool_items, normalize_diagnose_mode
 from handlers.tools.registry import get_tool, requires_confirmation
@@ -390,6 +391,7 @@ async def _request_confirmation(
         operator_id=msg.operator_id,
         chat_id=msg.chat_id,
         channel=msg.channel,
+        settings=settings,
     )
     danger_label = _danger_label(tool_name, settings)
     source = "routine" if msg.chat_id.startswith("routine-") else "chat"
@@ -490,7 +492,7 @@ async def _relay_gate(
         return True
     if verdict == "ok":
         return True
-    pop_pending(action.token)
+    pop_pending(action.token, settings=settings)
     label = {
         "approved": "已批准",
         "rejected": "已拒绝",
@@ -510,7 +512,7 @@ async def execute_confirmed(
     token: str,
 ) -> bool:
     """Run a previously confirmed dangerous tool. Returns True if handled."""
-    action = get_pending(token)
+    action = get_pending(token, settings=settings)
     if action is None:
         await port.reply(msg, "确认已过期或无效，请重新发起。")
         return True
@@ -520,7 +522,7 @@ async def execute_confirmed(
         return True
     if not await _relay_gate(settings, action, msg, port, approve=True):
         return True
-    action = pop_pending(token)
+    action = pop_pending(token, settings=settings)
     if action is None:
         await port.reply(msg, "确认已过期或无效，请重新发起。")
         return True
@@ -588,7 +590,7 @@ async def cancel_pending(
     settings: Settings,
     token: str,
 ) -> bool:
-    action = get_pending(token)
+    action = get_pending(token, settings=settings)
     if action is None:
         await port.reply(msg, "没有待确认的操作。")
         return True
@@ -598,7 +600,7 @@ async def cancel_pending(
         return True
     if not await _relay_gate(settings, action, msg, port, approve=False):
         return True
-    action = pop_pending(token)
+    action = pop_pending(token, settings=settings)
     if action is None:
         await port.reply(msg, "没有待确认的操作。")
         return True
@@ -629,6 +631,11 @@ async def try_resolve_confirmation(
 ) -> bool:
     """Text-based YES/NO fallback (Feishu and Telegram). Returns True if consumed."""
     pending = get_pending_for_context(msg.operator_id, msg.chat_id, msg.channel)
+    if pending is None:
+        for action in list_pending(channel=msg.channel, settings=settings):
+            if matches_context(action, msg.operator_id, msg.chat_id, msg.channel):
+                pending = action
+                break
     if pending is None:
         return False
     if is_confirmation_text(msg.text):
