@@ -100,6 +100,7 @@ class PhysicalOriginPort:
                         session_id=session_id,
                         action=action,
                         extra={"native": data},
+                        bound_chat_type=self.origin.chat_type,
                     )
                 except AgentError:
                     return None
@@ -264,24 +265,45 @@ class EffectiveTarget:
     legacy_agent: dict[str, Any] | None = None
 
 
+_PRIMARY_UNAVAILABLE = "默认主会话不可用，任务不会转到其他项目。"
+
+
+def _primary_transcript_archived(settings: Any, session_id: str) -> bool:
+    """True only when the canonical primary already has an archived transcript row.
+
+    No row means the synthetic empty main is still usable. This does not create
+    or unarchive a row.
+    """
+    from agents import DEFAULT_AGENT_ID, session_id_for
+    from transcript_store import get_transcript_store
+    if str(session_id or "") != session_id_for(DEFAULT_AGENT_ID):
+        return False
+    saved = get_transcript_store(settings).get_session(session_id)
+    return bool(saved and saved.get("archived"))
+
+
 def canonical_main_session(settings: Any) -> dict[str, Any]:
     """The Web console's default primary, ``web:web-console:agent-default``.
 
     An archived or missing primary fails closed. There is no second candidate.
+    An archived transcript row for that primary also fails closed. A missing
+    transcript row is the normal empty main and stays usable.
     """
     from agents import DEFAULT_AGENT_ID, WEB_CHANNEL, session_id_for
     agent = AgentStore(settings).get(DEFAULT_AGENT_ID)
     if not agent or agent.get("archived"):
-        raise AgentError("默认主会话不可用，任务不会转到其他项目。")
-    session = WorkerSessionStore(settings).get(session_id_for(DEFAULT_AGENT_ID))
+        raise AgentError(_PRIMARY_UNAVAILABLE)
+    session_id = session_id_for(DEFAULT_AGENT_ID)
+    session = WorkerSessionStore(settings).get(session_id)
     if (
         session is None
         or session.get("archived")
         or session.get("agent_id") != DEFAULT_AGENT_ID
         or session.get("kind") != "main"
         or session.get("channel") != WEB_CHANNEL
+        or _primary_transcript_archived(settings, session_id)
     ):
-        raise AgentError("默认主会话不可用，任务不会转到其他项目。")
+        raise AgentError(_PRIMARY_UNAVAILABLE)
     return session
 
 
@@ -319,6 +341,8 @@ def resolve_effective(settings: Any, msg: InboundMessage, *, persist: bool) -> E
     store = WorkerSessionStore(settings)
     selected = store.selected(msg.channel, msg.chat_id, msg.operator_id)
     if selected is not None:
+        if _primary_transcript_archived(settings, str(selected["session_id"])):
+            raise AgentError(_PRIMARY_UNAVAILABLE)
         return EffectiveTarget("selected", selected)
     if not _is_private_im(msg):
         return EffectiveTarget("unbound")
@@ -435,7 +459,12 @@ def selection_conflict(settings: Any, msg: InboundMessage, channel: str, chat_id
         return None
     if selected["channel"] == channel and selected["source_chat_id"] == chat_id:
         return None
-    return "这个按钮属于之前的对话。请切回原会话或发送 /workers exit 后再试。"
+    return LEGACY_CALLBACK_CONFLICT
+
+
+# Shown when a click belongs to another session. Exit now selects the main
+# session in private chats, so it is not a way back to the old callback.
+LEGACY_CALLBACK_CONFLICT = "这个按钮属于之前的对话。请切回原来的会话后再试。Telegram 项目对话用 /agent 选回该项目。"
 
 
 def bind_execution(msg: InboundMessage, port: Any, settings: Any) -> tuple[InboundMessage, Any]:
@@ -587,7 +616,15 @@ def _discover_legacy(settings: Any, msg: InboundMessage, agent_id: str) -> None:
         return
     bound = AgentStore(settings).bound_agent_id("telegram", source)
     identities: list[str] = []
-    if bound == agent_id and _has_legacy_history(settings, "telegram", msg.operator_id, source):
+    # Raw chat history belongs to the default worker only while nothing is bound.
+    # An explicit /agent binding, including /agent default, uses :agent:<id> instead.
+    if (
+        bound is None
+        and agent_id == DEFAULT_AGENT_ID
+        and _has_legacy_history(settings, "telegram", msg.operator_id, source)
+    ):
+        identities.append(source)
+    elif bound == agent_id and _has_legacy_history(settings, "telegram", msg.operator_id, source):
         identities.append(source)
     suffixed = f"{source}:agent:{agent_id}"
     if _has_legacy_history(settings, "telegram", msg.operator_id, suffixed):
@@ -608,7 +645,8 @@ def _discover_legacy(settings: Any, msg: InboundMessage, agent_id: str) -> None:
             continue
         if addr.source != source:
             continue
-        if addr.agent_id == agent_id or (addr.agent_id is None and bound == agent_id):
+        raw_default = addr.agent_id is None and bound is None and agent_id == DEFAULT_AGENT_ID
+        if addr.agent_id == agent_id or (addr.agent_id is None and bound == agent_id) or raw_default:
             identities.append(addr.conversation)
     for identity in dict.fromkeys(identities):
         try:
@@ -677,6 +715,7 @@ def _issue(
     page: int = 0,
     extra: dict[str, Any] | None = None,
 ) -> str:
+    """Mint a token. ``msg.chat_type`` is stamped by the server, never by ``extra``."""
     return store.issue_token(
         operator_id=msg.operator_id,
         channel=msg.channel,
@@ -686,7 +725,23 @@ def _issue(
         action=action,
         page=page,
         extra=extra,
+        bound_chat_type=msg.chat_type,
     )
+
+
+def _with_token_chat_type(msg: InboundMessage, extra: dict[str, Any] | None) -> InboundMessage:
+    """Use the chat type captured when the token was minted.
+
+    Feishu card callbacks are all marked private by the adapter, including
+    groups. A token without a server stamp must not be treated as private
+    on Feishu. Telegram's adapter chat type is reliable for old tokens.
+    """
+    raw = extra.get("_wk_chat_type") if isinstance(extra, dict) else None
+    if raw in ("p2p", "group", "unknown"):
+        return replace(msg, chat_type=raw)  # type: ignore[arg-type]
+    if msg.channel == "feishu":
+        return replace(msg, chat_type="unknown")
+    return msg
 
 
 def _anchor(settings: Any, agent_id: str) -> dict[str, Any]:
@@ -752,10 +807,12 @@ def _detail_text(settings: Any, msg: InboundMessage, session: dict[str, Any]) ->
         task = f"{recent['id']} · {recent['state']} · {recent['prompt_preview']}"
     try:
         current = current_context_line(settings, msg, persist=False)
+        target = resolve_effective(settings, msg, persist=False)
+        same = bool(target.session) and target.session["session_id"] == session["session_id"]
     except AgentError as exc:
         current = str(exc)
+        same = False
     viewed = f"{_agent_name(settings, str(session['agent_id']))} › {session_context_label(settings, session)}"
-    same = bool(current) and current.endswith(viewed)
     place = "这是当前选中的会话。" if same else f"正在查看：{viewed}（尚未选中，点继续才会切换）"
     return "\n".join([
         current or place,
@@ -938,6 +995,7 @@ async def handle_workers_token(msg: InboundMessage, port: Any, settings: Any, ru
     except AgentError:
         await port.reply(msg, "这个按钮已失效。")
         return
+    msg = _with_token_chat_type(msg, found.get("extra") or {})
     action = str(found["action"])
     page = int(found["page"])
     origin = PhysicalOrigin(msg.channel, msg.operator_id, _source(store, msg), msg.chat_type, msg.message_id or "")
@@ -996,18 +1054,23 @@ async def handle_workers_token(msg: InboundMessage, port: Any, settings: Any, ru
         jobs = _recent_jobs(settings, session)
         try:
             context = current_context_line(settings, msg, persist=False)
+            target = resolve_effective(settings, msg, persist=False)
+            same = bool(target.session) and target.session["session_id"] == session["session_id"]
         except AgentError as exc:
             context = str(exc)
+            same = False
         viewed = f"{_agent_name(settings, str(session['agent_id']))} › {session_context_label(settings, session)}"
-        lines = [line for line in (context, "" if context.endswith(viewed) else f"正在查看：{viewed}（尚未选中）") if line]
+        lines = [line for line in (context, "" if same else f"正在查看：{viewed}（尚未选中）") if line]
         lines.append(f"{session['title']} 的任务")
         lines.extend(f"{job['id']} · {job['state']} · {job['prompt_preview']}" for job in jobs)
+        if not jobs:
+            lines.append("此会话还没有任务。")
         buttons = [
             {"text": label, "token": _issue(store, msg, session, name, page, {"agent_page": page})}
             for label, name in (("状态", "status"), ("取消", "cancel"), ("差异", "diff"), ("应用", "apply"), ("丢弃", "discard"))
         ]
         buttons.append({"text": "↩️返回", "token": _issue(store, msg, session, "open", page, {"agent_page": page})})
-        await _emit(msg, port, "\n".join(lines) if jobs else lines[0] + "\n此会话还没有任务。", buttons)
+        await _emit(msg, port, "\n".join(lines), buttons)
         return
     if action == "switch":
         extra = found.get("extra") or {}

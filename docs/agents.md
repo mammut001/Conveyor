@@ -64,8 +64,12 @@ menu is handled. One resolver feeds execution, the persistent menu, `/start`,
 viewing tasks does not change the selection. Group and topic chats keep the
 previous rule: no selection means the chat's own conversation. If agents are
 off, nothing is rewritten. An archived selection, an archived `/agent`
-binding, or an archived or missing canonical primary stops with an error and
-does not fall through to another project.
+binding, an archived transcript of the canonical primary, or a missing primary
+stops with an error and does not fall through to another project. No transcript
+row yet is the normal empty main session. Feishu card clicks do not include a
+reliable chat type, so they are not treated as private. A Workers token stores
+the chat type from the server when it is minted and later clicks use that,
+including exit. An old Feishu token with no stored type is not treated as private.
 
 While a worker is selected, the message runs as that worker's canonical Web
 session (the same transcript, jobs, and project). The operator's text is not
@@ -85,9 +89,13 @@ that agent's project.
 
 Older Telegram transcripts are not copied or merged into the Web main
 session. They stay under their original session id (`telegram:<operator>:<chat>`
-or with `:agent:<id>`). Choosing that project again with `/agent` continues
-the old thread. `/agent reset` in a private chat only unbinds the project;
-the old transcript remains, and the next message uses the Web main session.
+or with `:agent:<id>`). Choosing that project again with `/agent <id>` continues
+the `:agent:<id>` thread. `/agent default` is that explicit address, not the
+raw unbound chat. `/agent reset` in a private chat only unbinds the project;
+the next message uses the Web main session. The raw unbound transcript remains
+and shows up in the default Worker's session list for this physical chat and
+operator only. Selecting it continues that exact transcript. Another operator
+or chat is not listed or changed.
 
 In a private Telegram chat a persistent reply keyboard stays next to the
 input: 我的 Workers, 继续对话, 切换会话, and 查看任务. `/start` installs it
@@ -147,8 +155,11 @@ Selections live in `agent_chat_bindings` in the queue database and survive
 restarts. Telegram conversation addresses are `<chat>:topic:<thread>` for a
 topic and append `:agent:<id>` for an explicit agent selection; only transport
 adapters translate them to Bot API `chat_id` and `message_thread_id`.
-Unbound private chats keep their original session IDs and default history.
-`/agent reset` returns to that history without deleting project conversations.
+Unbound private chats keep their original session IDs. That raw history is not
+deleted by `/agent reset` and is not the `:agent:default` thread. In a private
+chat, reset unbinds the project and the next message uses the Web main session.
+The raw transcript stays available from the default Worker's session list for
+the same chat and operator.
 
 Before first binding or switching a **legacy** conversation, its old queued
 jobs and active worktree must be resolved: older jobs had no pinned agent.

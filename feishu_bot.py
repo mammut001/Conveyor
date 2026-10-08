@@ -71,7 +71,9 @@ def _extract_card_action_event(msg: Any) -> tuple[InboundMessage, dict] | None:
         chat_id=identity["chat_id"],
         message_id=identity["message_id"] or None,
         text="",
-        chat_type="p2p",  # card callbacks are p2p from the bot's view
+        # Card events do not say whether the chat is private or a group.
+        # Marking every click private would bind a group to the Web main session.
+        chat_type="unknown",
         mentioned_bot=False,
         raw=msg,
     )
@@ -177,7 +179,8 @@ async def _handle_card_action(msg: Any) -> None:
         if cmd in ("status", "diff", "apply", "discard", "cancel"):
             from handlers.workers import legacy_job_card_allowed
             if not legacy_job_card_allowed(settings, inbound, str(payload.get("job_id") or "")):
-                await port.send_new(inbound, "这个卡片属于之前的对话。请切回原会话或发送 /workers exit 后再试。")
+                from handlers.workers import LEGACY_CALLBACK_CONFLICT
+                await port.send_new(inbound, LEGACY_CALLBACK_CONFLICT)
                 return
         # Synthesize a typed slash command and re-enter the regular
         # dispatch path. parse_command will recognize it.

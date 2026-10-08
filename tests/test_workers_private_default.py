@@ -20,6 +20,7 @@ from handlers.agent_selection import handle_agent_command
 from handlers.dispatch import dispatch
 from handlers.job_queue import JobQueue, reset_job_queue
 from handlers.workers import (
+    _sessions_for,
     bind_execution,
     context_line_for_session,
     handle_workers_command,
@@ -290,6 +291,165 @@ class PrivateDefaultTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rewritten.channel, "telegram")
         self.assertEqual(rewritten.text, "hello")
         self.assertIsNone(self.store.selected("telegram", "42", "1"))
+
+    async def test_feishu_group_token_is_not_treated_as_private(self) -> None:
+        side = self.store.create(self.alpha["id"], title="Side A")
+        self.store.select("feishu", "oc_group", "1", side["session_id"])
+        buttons = SimpleNamespace(messages=[], buttons=[], supports_inline_buttons=True)
+
+        async def reply(_msg, text):
+            buttons.messages.append(text)
+            return "1"
+
+        async def reply_with_buttons(_msg, text, rows):
+            buttons.buttons.append(rows)
+            return await reply(_msg, text)
+
+        buttons.reply = reply
+        buttons.reply_with_buttons = reply_with_buttons
+        group = self.message("/workers", channel="feishu", chat="oc_group", chat_type="group")
+        await handle_workers_command(group, buttons, None, self.settings, "")
+        self.assertEqual(self.store.selected("feishu", "oc_group", "1")["session_id"], side["session_id"])
+        exit_token = next(
+            button["callback_data"][3:]
+            for grid in buttons.buttons
+            for row in grid
+            for button in row
+            if button["text"] == "退出 Workers"
+        )
+        clicked = replace(group, text="", chat_type="p2p")
+        await handle_workers_token(clicked, buttons, self.settings, None, exit_token)
+        self.assertIsNone(self.store.selected("feishu", "oc_group", "1"))
+        self.assertIn("回到原来的对话", buttons.messages[-1])
+        self.assertNotIn("主会话", buttons.messages[-1])
+
+        bare = self.store.issue_token(
+            operator_id="1", channel="feishu", topic="oc_group", agent_id=self.alpha["id"],
+            session_id=side["session_id"], action="exit",
+        )
+        self.store.select("feishu", "oc_group", "1", side["session_id"])
+        await handle_workers_token(clicked, buttons, self.settings, None, bare)
+        self.assertIsNone(self.store.selected("feishu", "oc_group", "1"))
+
+        quiet = SimpleNamespace(messages=[], buttons=[], supports_inline_buttons=True)
+
+        async def quiet_reply(_msg, text):
+            quiet.messages.append(text)
+            return "1"
+
+        async def quiet_buttons(_msg, text, rows):
+            quiet.buttons.append(rows)
+            return await quiet_reply(_msg, text)
+
+        quiet.reply = quiet_reply
+        quiet.reply_with_buttons = quiet_buttons
+        await handle_workers_command(
+            self.message("/workers", channel="feishu", chat="oc_other", chat_type="group"),
+            quiet, None, self.settings, "",
+        )
+        self.assertIsNone(self.store.selected("feishu", "oc_other", "1"))
+        listed = next(
+            button["callback_data"][3:]
+            for grid in quiet.buttons
+            for row in grid
+            for button in row
+            if button["callback_data"].startswith("wk:")
+        )
+        await handle_workers_token(
+            self.message("", channel="feishu", chat="oc_other", chat_type="p2p"),
+            quiet, None, self.settings, listed,
+        )
+        self.assertIsNone(self.store.selected("feishu", "oc_other", "1"))
+        fresh = self.message("hello", channel="feishu", chat="oc_private", chat_type="p2p")
+        rewritten, _port = bind_execution(fresh, self.port, self.settings)
+        self.assertEqual(rewritten.chat_id, "agent-default")
+        self.assertEqual(rewritten.text, "hello")
+        self.assertEqual(
+            self.store.selected("feishu", "oc_private", "1")["session_id"],
+            session_id_for("default"),
+        )
+
+    async def test_tasks_keep_viewed_session_when_empty(self) -> None:
+        side = self.store.create(self.alpha["id"], title="Side A")
+        self.store.select("telegram", "42", "1", side["session_id"])
+        other = self.store.create(self.alpha["id"], title="主会话")
+        token = self.store.issue_token(
+            operator_id="1", channel="telegram", topic="42", agent_id=self.alpha["id"],
+            session_id=other["session_id"], action="tasks", bound_chat_type="p2p",
+        )
+        await handle_workers_token(self.message(""), self.port, self.settings, None, token)
+        body = self.port.messages[-1][2]
+        self.assertIn("Side A", body)
+        self.assertIn("尚未选中", body)
+        self.assertIn("主会话 的任务", body)
+        self.assertIn("此会话还没有任务。", body)
+        self.assertNotIn("这是当前选中的会话", body)
+        detail = self.store.issue_token(
+            operator_id="1", channel="telegram", topic="42", agent_id=self.alpha["id"],
+            session_id=other["session_id"], action="open", bound_chat_type="p2p",
+        )
+        await handle_workers_token(self.message(""), self.port, self.settings, None, detail)
+        shown = self.port.messages[-1][2]
+        self.assertIn("尚未选中", shown)
+        self.assertNotIn("这是当前选中的会话", shown)
+        self.assertEqual(self.store.selected("telegram", "42", "1")["session_id"], side["session_id"])
+
+    async def test_archived_primary_transcript_fails_closed(self) -> None:
+        transcripts = get_transcript_store(self.settings)
+        session_id = session_id_for("default")
+        transcripts.ensure_session(
+            session_id, channel="web", operator_id="web-console", source_chat_id="agent-default",
+        )
+        self.assertTrue(transcripts.archive_session(session_id))
+        with self.assertRaises(AgentError) as caught:
+            bind_execution(self.message("hello"), self.port, self.settings)
+        self.assertIn("默认主会话不可用", str(caught.exception))
+        self.assertIsNone(self.store.selected("telegram", "42", "1"))
+        self.assertTrue(transcripts.get_session(session_id)["archived"])
+        self.store.select("telegram", "42", "1", session_id)
+        with self.assertRaises(AgentError):
+            resolve_effective(self.settings, self.message("again"), persist=True)
+        self.assertTrue(transcripts.get_session(session_id)["archived"])
+        self.assertFalse(transcripts.get_session(session_id)["messages"])
+
+    async def test_unbound_raw_telegram_history_is_selectable_for_this_chat_only(self) -> None:
+        transcripts = get_transcript_store(self.settings)
+        raw = session_identity("telegram", "42", "1")
+        transcripts.append(
+            session_id=raw, role="user", content="raw mine",
+            channel="telegram", operator_id="1", source_chat_id="42",
+        )
+        transcripts.append(
+            session_id=session_identity("telegram", "42", "8"), role="user", content="other person",
+            channel="telegram", operator_id="8", source_chat_id="42",
+        )
+        transcripts.append(
+            session_id=session_identity("telegram", "99", "1"), role="user", content="other chat",
+            channel="telegram", operator_id="1", source_chat_id="99",
+        )
+        msg = self.message("/workers")
+        found = _sessions_for(self.settings, msg, "default")
+        legacy = [row for row in found if row["kind"] == "legacy" and row["source_chat_id"] == "42"]
+        self.assertEqual(len(legacy), 1)
+        self.assertEqual(legacy[0]["operator_id"], "1")
+        self.assertFalse(any(row["operator_id"] == "8" or row["source_chat_id"] == "99" for row in found))
+        self.store.select("telegram", "42", "1", legacy[0]["session_id"])
+        rewritten, _port = bind_execution(self.message("hello"), self.port, self.settings)
+        self.assertEqual((rewritten.channel, rewritten.chat_id, rewritten.text), ("telegram", "42", "hello"))
+        self.assertEqual(transcripts.get_session(raw)["messages"][0]["content"], "raw mine")
+        self.assertIsNone(get_transcript_store(self.settings).get_session(session_id_for("default")))
+        self.assertIsNone(self.store.selected("telegram", "42", "8"))
+        self.assertIsNone(self.store.selected("telegram", "99", "1"))
+        self.agents.bind_chat("telegram", "7", self.alpha["id"])
+        bound_msg = self.message("/workers", chat="7")
+        transcripts.append(
+            session_id=session_identity("telegram", "7", "1"), role="user", content="before bind",
+            channel="telegram", operator_id="1", source_chat_id="7",
+        )
+        bound_rows = _sessions_for(self.settings, bound_msg, "default")
+        self.assertFalse(any(
+            row["kind"] == "legacy" and row["source_chat_id"] == "7" for row in bound_rows
+        ))
 
 
 if __name__ == "__main__":

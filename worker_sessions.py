@@ -379,6 +379,7 @@ class WorkerSessionStore:
         extra: dict[str, Any] | None = None,
         ttl: float = _DEFAULT_TTL,
         now: float | None = None,
+        bound_chat_type: str | None = None,
     ) -> str:
         """Issue a callback token.
 
@@ -393,9 +394,16 @@ class WorkerSessionStore:
             raise AgentError("session is outside this operator")
         if not _ACTION_RE.fullmatch(str(action or "")):
             raise AgentError("action is not available")
-        payload = extra or {}
-        if not isinstance(payload, dict):
+        if extra is None:
+            payload = {}
+        elif not isinstance(extra, dict):
             raise AgentError("token extra must be an object")
+        else:
+            payload = dict(extra)
+        # Callers cannot choose this. Only the server argument stamps the chat type.
+        payload.pop("_wk_chat_type", None)
+        if bound_chat_type in ("p2p", "group", "unknown"):
+            payload["_wk_chat_type"] = bound_chat_type
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
         if len(encoded) > _MAX_EXTRA:
             raise AgentError("token extra is too large")
