@@ -44,7 +44,25 @@
 
 ---
 
+## 演示图集
+
+2026-10-08 真实 Telegram 部署。Workers 菜单那张图来自同一周，画面上没有印日历日期。飞书实况卡片尚未核验，这里不作为演示。蒙特利尔天气的 Computer Use 仍是[案例说明](docs/demos.md)里的可运行配方，录屏尚未附上。
+
+<p>
+<img src="docs/assets/demos/telegram-workers-menu.png" alt="Telegram 私聊：从输入框旁的键盘图标打开常驻回复键盘，包含我的 Workers、继续对话、切换会话和查看任务。" width="350">
+<img src="docs/assets/demos/telegram-workers-live.png" alt="Telegram 上的 Workers 列表：Conveyor 空闲，并有继续对话、查看任务、切换会话和返回列表。" width="350">
+<img src="docs/assets/demos/telegram-screenshot-routing.png" alt="Telegram 截图：当前选中的 Conveyor 主会话，目标为 VPS 共享桌面，执行节点 vps-desktop，缩略图已发送。" width="350">
+</p>
+
+点输入框旁的键盘图标即可展开常驻菜单。`/start` 会装上这组键盘并进入引导。Workers → 选中一个 Worker → 继续对话或切换会话，会绑定当前私聊。私聊未选择时，默认是 Conveyor 的规范主会话。截图对准当前选中的 Agent：默认主会话和默认次会话共用 VPS 桌面；独立 Agent 使用自己的 X 显示。对应 Mac 离线时请求失败，不会改去另一块屏幕。
+
+[案例说明（含天气配方）](docs/demos.md) · [素材说明](docs/assets/demos/README.md)
+
+---
+
 ## 🎬 核心体验场景
+
+下面四段对话是示意，不是实况记录。
 
 ### 1. 📱 移动端随身修 Bug（Worktree 物理沙箱隔离）
 在通勤地铁上收到 CI 报警？直接在聊天群里发一句：

@@ -44,7 +44,25 @@ No public multi-tenant SaaS. No ephemeral throwaway containers that lose your de
 
 ---
 
+## Demo gallery
+
+Real Telegram deployment, 2026-10-08. The Workers menu frame is from the same week; the image itself does not print a calendar date. Feishu live cards are not shown here. The Montreal weather Computer Use run is a recipe in the [case guide](docs/demos.md) until a recording is attached.
+
+<p>
+<img src="docs/assets/demos/telegram-workers-menu.png" alt="Telegram private chat with the persistent reply keyboard open from the input keyboard icon: My Workers, Continue chat, Switch session, and View tasks." width="350">
+<img src="docs/assets/demos/telegram-workers-live.png" alt="Telegram Workers list for Conveyor, idle, with continue, view tasks, switch session, and back to the list." width="350">
+<img src="docs/assets/demos/telegram-screenshot-routing.png" alt="Telegram screenshot of the selected Conveyor main session on the shared VPS desktop, node vps-desktop, with the thumbnail sent." width="350">
+</p>
+
+Open the keyboard icon beside the message field to show the persistent menu. `/start` installs that keyboard and the onboarding prompt. Workers, then a worker, then continue or switch session binds this private chat. With nothing selected, a private chat uses the canonical Conveyor main session. A screenshot follows the Agent that is selected now: the default main session and a default secondary session share the VPS desktop; an independent Agent uses its own X display. If that Mac is offline, the request fails and does not switch to another screen.
+
+[Case guide, including the weather recipe](docs/demos.md) · [Asset notes](docs/assets/demos/README.md)
+
+---
+
 ## 🎬 What It Feels Like
+
+The four transcripts below are illustrative. They are not live captures.
 
 ### 1. 📱 Fix Bugs On The Go (Worktree Isolation)
 You're on the train and a CI pipeline breaks. Send a one-liner to your bot:
