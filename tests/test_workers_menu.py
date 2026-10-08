@@ -32,6 +32,9 @@ def _load_bot(settings, queue):
                     patch("runner.CodexRunner", return_value=SimpleNamespace()), \
                     patch("handlers.job_queue.get_job_queue", return_value=queue):
                 import bot  # noqa: F401
+        # The import-time patch must not stay bound on bot.get_job_queue.
+        import handlers.job_queue as job_queue
+        sys.modules["bot"].get_job_queue = job_queue.get_job_queue
     return sys.modules["bot"]
 
 
@@ -44,6 +47,9 @@ class WorkersMenuTests(unittest.IsolatedAsyncioTestCase):
         self.queue = JobQueue()
         self.queue.configure(self.settings, runner=None, recover=False)
         self.bot = _load_bot(self.settings, self.queue)
+        self._prior_settings = self.bot.settings
+        self._prior_runner = self.bot.runner
+        self._prior_get_job_queue = self.bot.get_job_queue
         self.bot.settings = self.settings
         self.bot.runner = SimpleNamespace()
         queue_patch = patch("handlers.job_queue.get_job_queue", return_value=self.queue)
@@ -53,6 +59,11 @@ class WorkersMenuTests(unittest.IsolatedAsyncioTestCase):
         self.dispatch = self.dispatched.start()
         self.addCleanup(self.dispatched.stop)
         self.agents = AgentStore(self.settings)
+
+    def tearDown(self) -> None:
+        self.bot.settings = self._prior_settings
+        self.bot.runner = self._prior_runner
+        self.bot.get_job_queue = self._prior_get_job_queue
 
     def update(self, text, *, user_id=1, chat_type="private", chat_id=42, mentioned=False):
         message = SimpleNamespace(
@@ -118,8 +129,13 @@ class WorkersMenuTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_workers_reinstalls_keyboard_and_keeps_inline_buttons(self) -> None:
         self._profile()
+        # This case must run the real /workers dispatcher so the inline list is sent.
+        self.dispatched.stop()
         update = self.update("/workers")
-        await self.bot.workers_cmd(update, MagicMock())
+        try:
+            await self.bot.workers_cmd(update, MagicMock())
+        finally:
+            self.dispatch = self.dispatched.start()
         self._keyboard(update)
         inline = next(item for item in self._markups(update) if isinstance(item, InlineKeyboardMarkup))
         data = [button.callback_data for row in inline.inline_keyboard for button in row]
@@ -141,9 +157,13 @@ class WorkersMenuTests(unittest.IsolatedAsyncioTestCase):
             await self.bot.text_cmd(update, MagicMock())
             body = self._texts(update)
             self.assertIn(needle, body)
-            self.assertNotIn("Other B", body)
             self.assertNotIn("第一次用", body)
-        self.assertEqual(store.selected("telegram", "42", "1")["session_id"], side["session_id"])
+            if label != "🔄 切换会话":
+                self.assertNotIn("Other B", body)
+            else:
+                self.assertIn("Other B", body)
+                self.assertIn("Side A", body)
+            self.assertEqual(store.selected("telegram", "42", "1")["session_id"], side["session_id"])
         self.assertNotEqual(side["session_id"], other["session_id"])
         self.dispatch.assert_not_awaited()
 
@@ -204,3 +224,22 @@ class WorkersMenuTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state, ConversationHandler.END)
         self.assertNotIn("operator_name", context.user_data["onboarding_draft"])
         self.assertIn("/onboard", self._texts(again))
+
+    async def test_onboarding_complete_and_skip_restore_keyboard(self) -> None:
+        query = AsyncMock()
+        query.data = "ob:style:terse"
+        finished = self.update("")
+        finished.callback_query = query
+        context = SimpleNamespace(user_data={"onboarding_draft": {
+            "operator_name": "Ada",
+            "operator_language": "zh-CN",
+        }})
+        state = await self.bot.onboard_style_button(finished, context)
+        self.assertEqual(state, ConversationHandler.END)
+        self._keyboard(finished)
+
+        skipped = self.update("/skip")
+        state = await self.bot.onboard_cancel(skipped, SimpleNamespace(user_data={}))
+        self.assertEqual(state, ConversationHandler.END)
+        self._keyboard(skipped)
+        self.assertIn("/onboard", self._texts(skipped))

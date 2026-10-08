@@ -17,7 +17,7 @@ import logging
 import re
 from typing import Any, Sequence
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 
 from channel.telegram_identity import TelegramAddress, destination
 from channel.mentions import mentions, strip_mention
@@ -410,7 +410,7 @@ async def send_text(
     update: Update,
     text: str,
     *,
-    reply_markup: Any = None,
+    reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None,
 ) -> str | None:
     """Send a message; return the sent message_id as str|None.
 
