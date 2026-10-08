@@ -14,12 +14,16 @@ export function parseWorkerSessionMap(raw) {
   }
 }
 
-/** Remembered session when it still exists, otherwise the agent's main session. */
-export function canonicalWorkerSessionId(agent, picks) {
+/** Remembered session when it still exists, otherwise the agent's main session.
+
+A pending id is the session just created, before the catalog refresh includes it.
+*/
+export function canonicalWorkerSessionId(agent, picks, pendingId = '') {
   if (!agent) return ''
   const sessions = Array.isArray(agent.sessions) ? agent.sessions : []
   const remembered = sessions.find(session => session && session.id === picks[agent.id])
   if (remembered) return remembered.id
+  if (pendingId && picks[agent.id] === pendingId) return pendingId
   const main = sessions.find(session => session && session.kind === 'main')
   if (main) return main.id
   if (sessions[0] && sessions[0].id) return sessions[0].id

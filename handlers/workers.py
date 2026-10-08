@@ -134,8 +134,66 @@ class PhysicalOriginPort:
     async def send_image(self, chat_id: str, image_path: str, *, caption: str | None = None) -> None:
         await self._inner.send_image(self.origin.chat_id, image_path, caption=caption)
 
+    def _translate_card(self, msg: InboundMessage, card: dict) -> dict | None:
+        """Rewrite dangerous confirm buttons onto ``wk:`` tokens before IM delivery.
+
+        A raw confirm card must not reach the client. If a dangerous button
+        cannot be scoped, the card is withheld.
+        """
+        import copy
+        safe = copy.deepcopy(card)
+        failed = False
+
+        def button_text(node: dict) -> str:
+            text = node.get("text")
+            if isinstance(text, dict):
+                return str(text.get("content") or "")
+            return str(text or "")
+
+        def walk(node: Any) -> None:
+            nonlocal failed
+            if failed:
+                return
+            if isinstance(node, dict):
+                value = node.get("value")
+                if isinstance(value, dict) and value.get("action") in ("confirm", "cancel_confirm", "deep"):
+                    action = str(value.get("action"))
+                    if action == "confirm":
+                        data = f"tool:confirm:{value.get('token') or ''}"
+                    elif action == "cancel_confirm":
+                        data = f"tool:cancel:{value.get('token') or ''}"
+                    else:
+                        data = "deep"
+                    translated = self._translate(msg, [[{"text": button_text(node), "callback_data": data}]])
+                    if not translated:
+                        failed = True
+                        return
+                    callback = str(translated[0][0].get("callback_data") or "")
+                    if not callback.startswith("wk:"):
+                        failed = True
+                        return
+                    node["value"] = {"action": "workers", "token": callback[3:]}
+                for child in node.values():
+                    walk(child)
+            elif isinstance(node, list):
+                for child in node:
+                    walk(child)
+
+        walk(safe)
+        return None if failed else safe
+
     async def send_card(self, msg: InboundMessage, card: dict, *, reply_to: str | None = None) -> str | None:
-        return await self._inner.send_card(self._physical(msg), card, reply_to=reply_to)
+        physical = self._physical(msg)
+        safe = self._translate_card(msg, card)
+        if safe is None:
+            from channel.feishu_cards import flatten_card_to_text
+            text = flatten_card_to_text(card)
+            return await self._inner.reply(physical, f"{text}\n\n确认按钮没能安全生成，请重新发送以刷新。")
+        sent = await self._inner.send_card(physical, safe, reply_to=reply_to)
+        if sent:
+            return sent
+        from channel.feishu_cards import flatten_card_to_text
+        return await self._inner.reply(physical, flatten_card_to_text(safe))
 
 
 def workers_card(text: str, buttons: list[dict[str, str]]) -> dict[str, Any]:
@@ -301,15 +359,44 @@ def _live_jobs(settings: Any, session: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _recent_jobs(settings: Any, session: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:
+    """Newest jobs for this session, including finished ones. Bounded."""
+    import sqlite3
+    store = WorkerSessionStore(settings)
+    conn = sqlite3.connect(str(store.path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """SELECT id, state, prompt FROM queued_jobs
+               WHERE channel = ? AND operator_id = ? AND chat_id = ?
+               ORDER BY created_at DESC LIMIT ?""",
+            (session["channel"], session["operator_id"], session["source_chat_id"], max(1, limit)),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+    return [
+        {"id": row["id"], "state": row["state"], "prompt_preview": redact_text(row["prompt"] or "")[:80]}
+        for row in rows
+    ]
+
+
+def _confirmation_db(settings: Any) -> Path:
+    return Path(settings.codex_memory_root) / "state" / "job_queue.sqlite3"
+
+
 def _session_state(settings: Any, session: dict[str, Any]) -> str:
     from handlers.tools.confirm import get_pending_for_context, shared_pending_contexts
     key = (session["channel"], session["operator_id"], session["source_chat_id"])
     try:
-        if key in shared_pending_contexts():
+        if key in shared_pending_contexts(_confirmation_db(settings)):
             return "等待确认"
     except Exception:
         pass
-    if get_pending_for_context(session["operator_id"], session["source_chat_id"], session["channel"]):
+    if get_pending_for_context(
+        session["operator_id"], session["source_chat_id"], session["channel"], settings=settings,
+    ):
         return "等待确认"
     if _live_jobs(settings, session):
         return "执行中"
@@ -341,10 +428,27 @@ def _has_legacy_history(settings: Any, channel: str, operator_id: str, chat_id: 
 
 def _discover_legacy(settings: Any, msg: InboundMessage, agent_id: str) -> None:
     """Register this operator's existing chat/topic legacy only. Never another chat."""
-    if msg.channel != "telegram":
-        return
+    from agents import DEFAULT_AGENT_ID
     store = WorkerSessionStore(settings)
     source = _source(store, msg)
+    if msg.channel == "feishu":
+        bound = AgentStore(settings).bound_agent_id("feishu", source)
+        if bound and bound != agent_id:
+            return
+        if not bound and agent_id != DEFAULT_AGENT_ID:
+            return
+        if _has_legacy_history(settings, "feishu", msg.operator_id, source):
+            try:
+                store.register_legacy(
+                    agent_id, channel="feishu", operator_id=msg.operator_id,
+                    source_chat_id=source, requester_operator=msg.operator_id,
+                    current_source=source,
+                )
+            except AgentError:
+                return
+        return
+    if msg.channel != "telegram":
+        return
     bound = AgentStore(settings).bound_agent_id("telegram", source)
     identities: list[str] = []
     if bound == agent_id and _has_legacy_history(settings, "telegram", msg.operator_id, source):
@@ -660,7 +764,7 @@ async def handle_workers_token(msg: InboundMessage, port: Any, settings: Any, ru
         await _render_detail(msg, port, settings, session, page)
         return
     if action == "tasks":
-        jobs = _live_jobs(settings, session)
+        jobs = _recent_jobs(settings, session)
         lines = [f"{session['title']} 的任务"]
         lines.extend(f"{job['id']} · {job['state']} · {job['prompt_preview']}" for job in jobs)
         buttons = [

@@ -833,7 +833,7 @@ def list_inbox(settings: Any, limit: int = 50) -> tuple[list[dict[str, Any]], in
                     item["approval"] = {"id": approval_id, "status": recorded_status}
                 else:
                     # Only decidable while it is live in this process's store.
-                    pending = get_pending(approval_id)
+                    pending = get_pending(approval_id, settings=settings)
                     if pending is not None:
                         item["approval"] = {
                             "id": approval_id,
@@ -962,7 +962,7 @@ def persist_routine_approval(settings: Any, token: str, routine_id: int) -> bool
     """Extend a routine-generated pending approval's TTL and persist it to SQLite."""
     from handlers.tools.confirm import set_pending_ttl
 
-    action = set_pending_ttl(token, approval_ttl_seconds(settings))
+    action = set_pending_ttl(token, approval_ttl_seconds(settings), settings=settings)
     if action is None:
         return False
     init_db(settings)
@@ -1029,7 +1029,7 @@ def expire_routine_approvals(settings: Any, now: float | None = None) -> int:
             ).fetchall()
             tokens = [r["token"] for r in rows]
             for token in tokens:
-                pop_pending(token)
+                pop_pending(token, settings=settings)
                 conn.execute("UPDATE routine_approvals SET status = 'expired' WHERE token = ?", (token,))
                 conn.execute(
                     "UPDATE routine_runs SET approval_status = 'expired', "
@@ -1069,7 +1069,7 @@ def restore_routine_approvals(settings: Any, now: float | None = None) -> int:
             created_at=float(r["created_at"]),
             ttl_seconds=float(r["expires_at"]) - float(r["created_at"]),
         )
-        if restore_pending(action):
+        if restore_pending(action, settings=settings):
             restored += 1
             try:
                 import approval_relay

@@ -472,14 +472,16 @@ async def _execute_codex_job(
         summary_truncated = truncate(summary)
         if summary_truncated.strip() != last_progress.strip():
             if is_feishu:
+                sent = None
                 try:
                     from channel.feishu_cards import job_finished_card
-                    await port.send_card(msg, job_finished_card(
+                    sent = await port.send_card(msg, job_finished_card(
                         job_id=job_id,
                         summary=summary,
                     ))
                 except Exception:
                     logger.debug("Feishu job_finished_card failed", exc_info=True)
+                if not sent:
                     await port.send_new(msg, summary)
             else:
                 await port.send_new(msg, summary)
@@ -488,14 +490,16 @@ async def _execute_codex_job(
         final_answer = f"[error] {err_truncated}"
         if err_truncated.strip() != last_progress.strip():
             if is_feishu:
+                sent = None
                 try:
                     from channel.feishu_cards import job_failed_card
-                    await port.send_card(msg, job_failed_card(
+                    sent = await port.send_card(msg, job_failed_card(
                         job_id=job_id,
                         error=err_truncated,
                     ))
                 except Exception:
                     logger.debug("Feishu job_failed_card failed", exc_info=True)
+                if not sent:
                     await port.send_new(msg, err_truncated)
             else:
                 await port.send_new(msg, err_truncated)
@@ -620,44 +624,55 @@ class RecoveredOutboundPort:
     async def reply(self, msg: InboundMessage, text: str) -> str | None:
         return await self.send_new(msg, text)
 
+    def _im_chat(self) -> tuple[str, str] | None:
+        """Physical IM destination. Canonical web session ids are never sent."""
+        channel = str(self.channel or "")
+        chat_id = str(self.chat_id or "")
+        if channel not in ("telegram", "feishu") or not chat_id:
+            return None
+        if chat_id.startswith("agent-") or chat_id.startswith("web:"):
+            return None
+        return channel, chat_id
+
     async def send_new(self, msg: InboundMessage, text: str) -> str | None:
-        if self.channel == "telegram":
+        target = self._im_chat()
+        if target is None:
+            logger.warning("Recovered delivery skipped a canonical session id")
+            return None
+        channel, chat_id = target
+        if not text:
+            return None
+        if channel == "telegram":
             from scripts.telegram_api import send_message
             import asyncio
             try:
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, send_message, self.settings, text, self.chat_id)
+                await loop.run_in_executor(None, send_message, self.settings, text, chat_id)
                 return "recovered-msg-id"
             except Exception:
                 logger.exception("Failed to send recovered telegram message")
                 return None
-        elif self.channel == "feishu":
+        if channel == "feishu":
             import asyncio
             try:
                 loop = asyncio.get_running_loop()
-                ok = await loop.run_in_executor(None, _feishu_http_text, self.settings, self.chat_id, text)
+                ok = await loop.run_in_executor(None, _feishu_http_text, self.settings, chat_id, text)
                 if ok:
                     return "recovered-msg-id"
             except Exception:
                 logger.warning("Recovered Feishu delivery failed")
+        logger.warning("Recovered delivery did not reach the operator")
         return None
 
     async def edit_progress(self, msg: InboundMessage, placeholder_id: Any, text: str) -> bool:
         return False
 
     async def send_card(self, msg: InboundMessage, card: dict, *, reply_to: str | None = None) -> str | None:
-        if self.channel == "feishu":
-            try:
-                from feishu_bot import _get_channel
-                feishu_channel = _get_channel()
-                if feishu_channel:
-                    from channel.feishu import FeishuOutbound
-                    port = FeishuOutbound(feishu_channel)
-                    return await port.send_card(msg, card, reply_to=reply_to)
-            except Exception:
-                logger.exception("Failed to send recovered feishu card")
         from channel.feishu_cards import flatten_card_to_text
         text = flatten_card_to_text(card)
+        if not text:
+            logger.warning("Recovered card had no text to deliver")
+            return None
         return await self.send_new(msg, text)
 
 

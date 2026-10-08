@@ -27,11 +27,6 @@ class WebControl:
         self.queue = queue
         self.started_at = time.time()
         self._init_approvals()
-        try:
-            from handlers.tools.confirm import configure_confirmation_store
-            configure_confirmation_store(self.queue._db_path())
-        except Exception:
-            pass
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.queue._db_path()), timeout=10.0)
@@ -689,6 +684,38 @@ class WebControl:
 
     # ---- agents -----------------------------------------------------------
 
+    def _legacy_sessions(self, agent_id: str) -> list[dict[str, Any]]:
+        """Registered IM sessions for this agent. Canonical web rows stay separate."""
+        from worker_sessions import WorkerSessionStore
+
+        store = WorkerSessionStore(self.settings)
+        conn = store._connect()
+        try:
+            rows = conn.execute(
+                """SELECT * FROM worker_sessions
+                   WHERE agent_id = ? AND kind = 'legacy' AND archived = 0""",
+                (agent_id,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
+        return [store._row_dict(row) for row in rows]
+
+    def _bound_sources(self, agent_id: str) -> set[str]:
+        """Physical Telegram chats explicitly bound to this agent. Not the default."""
+        conn = sqlite3.connect(str(self.queue._db_path()), timeout=10.0)
+        try:
+            rows = conn.execute(
+                "SELECT chat_id FROM agent_chat_bindings WHERE agent_id = ? AND channel = 'telegram'",
+                (agent_id,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return set()
+        finally:
+            conn.close()
+        return {str(row[0]) for row in rows}
+
     def _agent_view(
         self,
         agent: dict[str, Any],
@@ -700,26 +727,55 @@ class WebControl:
         from redaction import redact_text
         from worker_sessions import WorkerSessionStore
 
-        canonical = WorkerSessionStore(self.settings).list(agent["id"]) if not agent.get("archived") else []
+        store = WorkerSessionStore(self.settings)
+        canonical = store.list(agent["id"]) if not agent.get("archived") else []
+        legacy = self._legacy_sessions(agent["id"]) if not agent.get("archived") else []
         transcript = get_transcript_store(self.settings)
         last: dict[str, Any] | None = None
         status = "idle"
         owned_ids = {item["session_id"] for item in canonical}
+        owned_ids.update(item["session_id"] for item in legacy)
         owned_chats = {
             (item["channel"], item["operator_id"], item["source_chat_id"]) for item in canonical
         }
-        for item in canonical:
+        owned_chats.update(
+            (item["channel"], item["operator_id"], item["source_chat_id"]) for item in legacy
+        )
+        bound_sources = self._bound_sources(agent["id"]) if not agent.get("archived") else set()
+        for item in [*canonical, *legacy]:
             message = transcript.last_message(item["session_id"])
             if message and (last is None or str(message.get("created_at") or "") >= str(last.get("created_at") or "")):
                 last = message
             if item["session_id"] in waiting:
                 status = "waiting"
         active_states = ("running", "queued")
+        def _owns_job(channel: str, operator_id: str, chat_id: str, session_id: str) -> bool:
+            key = (channel, operator_id, chat_id)
+            if key in owned_chats or (session_id and session_id in owned_ids):
+                return True
+            if channel == "telegram" and chat_id:
+                from channel.telegram_identity import TelegramAddress
+                try:
+                    addr = TelegramAddress.parse(chat_id)
+                except ValueError:
+                    return False
+                if addr.agent_id:
+                    return addr.agent_id == agent["id"]
+                return addr.source in bound_sources
+            return False
+
         for job in jobs or []:
-            key = (str(job.get("channel") or ""), str(job.get("operator_id") or ""), str(job.get("chat_id") or ""))
-            if key not in owned_chats and str(job.get("session_id") or "") not in owned_ids:
+            channel = str(job.get("channel") or "")
+            operator_id = str(job.get("operator_id") or "")
+            chat_id = str(job.get("chat_id") or "")
+            session_id = str(job.get("session_id") or "")
+            if not _owns_job(channel, operator_id, chat_id, session_id):
                 continue
-            if str(job.get("session_id") or "") in waiting or job.get("state") in ("needs_approval", "approval"):
+            if session_id and session_id not in owned_ids:
+                message = transcript.last_message(session_id)
+                if message and (last is None or str(message.get("created_at") or "") >= str(last.get("created_at") or "")):
+                    last = message
+            if session_id in waiting or job.get("state") in ("needs_approval", "approval"):
                 status = "waiting"
             elif status != "waiting" and job.get("state") in active_states:
                 status = "working"
@@ -729,7 +785,7 @@ class WebControl:
         try:
             from handlers.tools.confirm import shared_pending_contexts
             pending = shared_pending_contexts(self.queue._db_path())
-            if owned_chats & pending:
+            if any(_owns_job(channel, operator_id, chat_id, "") for channel, operator_id, chat_id in pending):
                 status = "waiting"
         except Exception:
             pass
@@ -742,8 +798,9 @@ class WebControl:
             finally:
                 connection.close()
             for row in rows:
-                key = (str(row["channel"] or ""), str(row["operator_id"] or ""), str(row["chat_id"] or ""))
-                if key in owned_chats and status != "waiting":
+                if _owns_job(
+                    str(row["channel"] or ""), str(row["operator_id"] or ""), str(row["chat_id"] or ""), "",
+                ) and status != "waiting":
                     status = "working"
         except Exception:
             pass

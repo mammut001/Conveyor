@@ -24,4 +24,9 @@ test('one canonical session per agent, remembered over primary', () => {
   assert.equal(canonicalWorkerSessionId(agent, { alpha: 'missing' }), 'primary')
   assert.equal(canonicalWorkerSessionId(agent, {}), 'primary')
   assert.equal(canonicalWorkerSessionId({ id: 'beta', session_id: 'only' }, {}), 'only')
+  assert.equal(
+    canonicalWorkerSessionId(agent, { alpha: 'brand-new' }, 'brand-new'),
+    'brand-new',
+  )
+  assert.equal(canonicalWorkerSessionId(agent, { alpha: 'brand-new' }), 'primary')
 })

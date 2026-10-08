@@ -260,7 +260,7 @@ def edit_pending(settings: Any, token: str, draft: dict[str, Any]) -> PendingToo
     Raises PermissionError if not editable or if original arg was redacted.
     Raises ValueError on validation failure.
     """
-    action = get_pending(token)
+    action = get_pending(token, settings=settings)
     if action is None:
         raise KeyError(f"Pending tool action {token} not found or expired")
     if action.channel != "web":
@@ -277,7 +277,7 @@ def edit_pending(settings: Any, token: str, draft: dict[str, Any]) -> PendingToo
     new_arg = build_arg(action.tool_name, draft)
 
     old_arg = action.arg
-    updated = replace_pending_arg(token, new_arg)
+    updated = replace_pending_arg(token, new_arg, settings=settings)
     if updated is None:
         raise KeyError(f"Pending tool action {token} expired during edit")
 

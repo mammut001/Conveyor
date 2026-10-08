@@ -197,11 +197,6 @@ class JobQueue:
         if hasattr(settings, "conveyor_max_pending_jobs"):
             self._max_length = settings.conveyor_max_pending_jobs
         self.recover_and_load(mark_interrupted=recover)
-        try:
-            from handlers.tools.confirm import configure_confirmation_store
-            configure_confirmation_store(self._db_path())
-        except Exception:
-            pass
 
     def _db_path(self) -> Path:
         if self._settings and hasattr(self._settings, "codex_memory_root"):

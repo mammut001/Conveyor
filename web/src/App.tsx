@@ -146,8 +146,12 @@ export default function App() {
   // With agents on, the selected agent's one conversation is the session.
   const selectedAgent = agentState.enabled ? (agentState.agents.find(agent => agent.id === selectedAgentId) || agentState.agents[0]) : undefined
   const [workerSessionPick, setWorkerSessionPick] = useState<Record<string, string>>(() => parseWorkerSessionMap(localStorage.getItem('conveyor-worker-sessions')))
+  const [pendingWorkerSession, setPendingWorkerSession] = useState<{ agentId: string; sessionId: string } | null>(null)
   const workerSessions = selectedAgent?.sessions || []
-  const canonicalSessionId = canonicalWorkerSessionId(selectedAgent, workerSessionPick)
+  const pendingForAgent = pendingWorkerSession && selectedAgent && pendingWorkerSession.agentId === selectedAgent.id
+    ? pendingWorkerSession.sessionId
+    : ''
+  const canonicalSessionId = canonicalWorkerSessionId(selectedAgent, workerSessionPick, pendingForAgent)
   const activeWorkerSession = workerSessions.find(session => session.id === canonicalSessionId)
   const agentSessionRef = useRef('')
   agentSessionRef.current = canonicalSessionId
@@ -185,6 +189,7 @@ export default function App() {
   const selectedSessionRef = useRef('')
   const selectedJobRef = useRef('')
   const workerPickRef = useRef(workerSessionPick)
+  const pendingWorkerRef = useRef(pendingWorkerSession)
   const selectedAgentIdRef = useRef(selectedAgentId)
   const approvalInboxFetchGen = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
@@ -358,14 +363,16 @@ export default function App() {
       // while this one was in flight. Drop it so a late poll cannot restore
       // a pending approval or an old job state.
       if (isStale(gen, refreshGen.current)) return
+      if (selectionEpoch.current !== epoch) return
       const taskSessions = taskSessionsOnly(sessionData.sessions)
       setSessions(taskSessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setError('')
       setAgentState(agentData)
-      if (selectionEpoch.current !== epoch) return
       if (agentData.enabled) {
         const agent = agentData.agents.find(item => item.id === (localStorage.getItem('conveyor-agent') || selectedAgentIdRef.current)) || agentData.agents[0]
-        const canonical = canonicalWorkerSessionId(agent, workerPickRef.current)
+        const pending = pendingWorkerRef.current
+        const pendingId = pending && pending.agentId === agent.id ? pending.sessionId : ''
+        const canonical = canonicalWorkerSessionId(agent, workerPickRef.current, pendingId)
         // Keep the user's canonical session. Only fill an empty job for it.
         if (canonical && selectedSessionRef.current === canonical && !selectedJobRef.current) {
           const latest = taskSessions.find(item => item.id === canonical)?.latest_job
@@ -399,24 +406,48 @@ export default function App() {
   }, [api, creatingSession, selectedJobId, selectedSessionId, token])
 
   const refreshTranscript = useCallback(async () => {
-    if (!authenticated || !selectedSessionId) { setTranscript([]); return }
+    const sessionId = selectedSessionId
+    const epoch = selectionEpoch.current
+    const stillCurrent = () => selectionEpoch.current === epoch && selectedSessionRef.current === sessionId
+    if (!authenticated || !sessionId) {
+      if (selectionEpoch.current === epoch) setTranscript([])
+      return
+    }
     try {
-      const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`)
+      const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(sessionId)}`)
+      if (!stillCurrent()) return
       setTranscript(session.messages || [])
-    } catch { setTranscript([]) }
+    } catch {
+      if (!stillCurrent()) return
+      setTranscript([])
+    }
   }, [api, authenticated, selectedSessionId])
 
   selectedSessionRef.current = selectedSessionId
   selectedJobRef.current = selectedJobId
   workerPickRef.current = workerSessionPick
+  pendingWorkerRef.current = pendingWorkerSession
   selectedAgentIdRef.current = selectedAgentId
   useEffect(() => {
     try { localStorage.setItem('conveyor-worker-sessions', JSON.stringify(workerSessionPick)) } catch { /* storage unavailable */ }
   }, [workerSessionPick])
   useEffect(() => {
+    if (
+      pendingWorkerSession
+      && selectedAgent?.sessions?.some(session => session.id === pendingWorkerSession.sessionId)
+    ) {
+      setPendingWorkerSession(null)
+    }
+  }, [pendingWorkerSession, selectedAgent])
+  useEffect(() => {
     if (!agentState.enabled || !canonicalSessionId || selectedSessionId === canonicalSessionId) return
+    if (
+      pendingWorkerSession
+      && pendingWorkerSession.sessionId === selectedSessionId
+      && pendingWorkerSession.agentId === selectedAgent?.id
+    ) return
     selectSession(canonicalSessionId, '')
-  }, [agentState.enabled, canonicalSessionId, selectSession, selectedSessionId])
+  }, [agentState.enabled, canonicalSessionId, pendingWorkerSession, selectSession, selectedAgent, selectedSessionId])
 
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
@@ -621,6 +652,7 @@ export default function App() {
       if (selectedAgentIdRef.current !== agentId || selectionEpoch.current !== epoch) return
       const sessionId = created.session_id || created.id || ''
       if (sessionId) {
+        setPendingWorkerSession({ agentId, sessionId })
         rememberWorkerSession(agentId, sessionId)
         selectSession(sessionId, '')
       }

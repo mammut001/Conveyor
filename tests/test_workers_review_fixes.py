@@ -290,7 +290,35 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
         execute.assert_awaited()
 
     async def test_old_feishu_cards_do_not_follow_a_new_workers_session(self) -> None:
-        import feishu_bot
+        import ast
+        import dataclasses
+        import logging
+
+        from channel.auth import is_allowed
+        from channel.feishu_cards import action_to_command, extract_card_action
+
+        source = (ROOT / "feishu_bot.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        wanted = {"_extract_card_action_event", "_handle_card_action"}
+        chunks = [
+            ast.get_source_segment(source, node)
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name in wanted
+        ]
+        self.assertEqual(len(chunks), 2)
+        namespace: dict = {
+            "settings": self.settings,
+            "logger": logging.getLogger("feishu-card-test"),
+            "is_allowed": is_allowed,
+            "extract_card_action": extract_card_action,
+            "action_to_command": action_to_command,
+            "InboundMessage": InboundMessage,
+            "dataclasses": dataclasses,
+            "asyncio": asyncio,
+            "Any": object,
+        }
+        exec("\n\n".join(chunk for chunk in chunks if chunk), namespace)
+        handle = namespace["_handle_card_action"]
 
         self.store.select("feishu", "oc_room", "ou_user", self.session["session_id"])
         pending = create_pending("notes.add", "legacy", "ou_user", "oc_room", "feishu", settings=self.settings)
@@ -301,6 +329,8 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
             return "1"
 
         port.send_new = send_new
+        namespace["FeishuOutbound"] = lambda _channel: port
+        namespace["_get_channel"] = lambda: None
         confirm = {
             "event": {
                 "operator": {"open_id": "ou_user"},
@@ -309,13 +339,14 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         execute = AsyncMock()
-        with patch("feishu_bot.settings", self.settings), patch("feishu_bot.FeishuOutbound", return_value=port), \
-                patch("feishu_bot.execute_confirmed", execute):
-            await feishu_bot._handle_card_action(confirm)
+        namespace["execute_confirmed"] = execute
+        namespace["cancel_pending"] = AsyncMock()
+        await handle(confirm)
         execute.assert_not_awaited()
         self.assertIn("之前", port.messages[-1])
 
         dispatch = AsyncMock()
+        namespace["dispatch"] = dispatch
         status = {
             "event": {
                 "operator": {"open_id": "ou_user"},
@@ -323,9 +354,7 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
                 "context": {"open_chat_id": "oc_room"},
             }
         }
-        with patch("feishu_bot.settings", self.settings), patch("feishu_bot.FeishuOutbound", return_value=port), \
-                patch("feishu_bot.dispatch", dispatch):
-            await feishu_bot._handle_card_action(status)
+        await handle(status)
         dispatch.assert_not_awaited()
 
         queue = JobQueue()
@@ -344,9 +373,7 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
                 "context": {"open_chat_id": "oc_room"},
             }
         }
-        with patch("feishu_bot.settings", self.settings), patch("feishu_bot.FeishuOutbound", return_value=port), \
-                patch("feishu_bot.dispatch", dispatch):
-            await feishu_bot._handle_card_action(matched)
+        await handle(matched)
         dispatch.assert_awaited()
         forwarded = dispatch.await_args.args[0]
         self.assertEqual(forwarded.text, "/diff")

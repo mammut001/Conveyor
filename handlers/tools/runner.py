@@ -630,7 +630,7 @@ async def try_resolve_confirmation(
     settings: Settings,
 ) -> bool:
     """Text-based YES/NO fallback (Feishu and Telegram). Returns True if consumed."""
-    pending = get_pending_for_context(msg.operator_id, msg.chat_id, msg.channel)
+    pending = get_pending_for_context(msg.operator_id, msg.chat_id, msg.channel, settings=settings)
     if pending is None:
         for action in list_pending(channel=msg.channel, settings=settings):
             if matches_context(action, msg.operator_id, msg.chat_id, msg.channel):
