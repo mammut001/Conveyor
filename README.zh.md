@@ -44,25 +44,25 @@
 
 ---
 
-## 演示图集
+## 实拍截图回放
 
-Screenshot walkthrough / 实拍截图回放。2026-10-08 部署上三次分开的 Telegram 交互，按菜单、Workers、目标桌面各停留 3 秒、3 秒、4 秒。时间被压缩。这不是一段连续录屏。菜单那张图上没有日历日期。
+实拍 Telegram 画面：常驻菜单 → Workers → 当前 Agent 桌面。GIF 与 MP4 把这些分开的截图接成 10 秒回放，不是连续录屏。
 
 <p>
 <a href="docs/assets/demos/telegram-workers-walkthrough.mp4">
-<img src="docs/assets/demos/telegram-workers-walkthrough.gif" alt="Screenshot walkthrough / 实拍截图回放。三次独立交互的压缩序列：常驻菜单、Workers 列表、然后是选中的桌面。不是连续录屏。" width="350">
+<img src="docs/assets/demos/telegram-workers-walkthrough.gif" alt="常驻菜单，然后 Workers，然后当前 Agent 桌面。" width="350">
 </a>
 </p>
 
 GIF 是预览。播放器不自动开始时，请[下载 MP4](docs/assets/demos/telegram-workers-walkthrough.mp4)。
 
 <p>
-<img src="docs/assets/demos/telegram-workers-menu.png" alt="Telegram 私聊：从输入框旁的键盘图标打开常驻回复键盘，包含我的 Workers、继续对话、切换会话和查看任务。" width="350">
-<img src="docs/assets/demos/telegram-workers-live.png" alt="Telegram 上的 Workers 列表：Conveyor 空闲，并有继续对话、查看任务、切换会话和返回列表。" width="350">
-<img src="docs/assets/demos/telegram-screenshot-routing.png" alt="Telegram 截图：当前选中的 Conveyor 主会话，目标为 VPS 共享桌面，执行节点 vps-desktop，缩略图已发送。" width="350">
+<img src="docs/assets/demos/telegram-workers-menu.png" alt="常驻菜单：我的 Workers、继续对话、切换会话、查看任务。" width="350">
+<img src="docs/assets/demos/telegram-workers-live.png" alt="当前 Conveyor Agent 的 Workers 列表。" width="350">
+<img src="docs/assets/demos/telegram-screenshot-routing.png" alt="当前 Agent 桌面：Conveyor 主会话，VPS 共享桌面。" width="350">
 </p>
 
-点输入框旁的键盘图标展开常驻菜单。`/start` 装上这组键盘。每位操作者、每个聊天、每个话题的选择彼此隔离。未选择时，只有私聊使用 Conveyor 的规范主会话。截图对准当前选中的 Agent。默认主会话和默认次会话共用 VPS 桌面。独立 Agent 使用自己的 X 显示，桌面缺失时请求失败并关闭。明确指向不可用 Mac 的请求会被拒绝。
+点输入框旁的键盘图标展开常驻菜单。`/start` 装上这组键盘。每位操作者、每个聊天、每个话题的选择彼此隔离。继续或切换会话会记住所选会话。未选择时，只有私聊使用 Conveyor 的规范主会话。截图对准当前选中的 Agent。默认主会话和默认次会话共用 VPS 桌面。独立 Agent 使用自己的 X 显示。桌面缺失时拒绝截图。明确指向不可用 Mac 的请求会被拒绝。
 
 [案例说明](docs/demos.md) · [素材说明](docs/assets/demos/README.md)
 

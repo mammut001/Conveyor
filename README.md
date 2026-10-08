@@ -46,23 +46,23 @@ No public multi-tenant SaaS. No ephemeral throwaway containers that lose your de
 
 ## Demo gallery
 
-Screenshot walkthrough / 实拍截图回放. Three stills from separate Telegram interactions on the 2026-10-08 deployment, played in order for 3s, 3s, and 4s. Timing is condensed. This is not a continuous screen recording. The menu frame does not print a calendar date.
+Actual Telegram screens: persistent menu → Workers → current agent desktop. The GIF and MP4 stitch those separate screenshots into a 10s replay. They are not a continuous recording.
 
 <p>
 <a href="docs/assets/demos/telegram-workers-walkthrough.mp4">
-<img src="docs/assets/demos/telegram-workers-walkthrough.gif" alt="Screenshot walkthrough / 实拍截图回放. Condensed sequence of three separate interactions: persistent menu, Workers list, then the selected desktop. Not a continuous screen recording." width="350">
+<img src="docs/assets/demos/telegram-workers-walkthrough.gif" alt="Persistent menu, then Workers, then the current agent desktop." width="350">
 </a>
 </p>
 
 The GIF is the preview. [Download the MP4](docs/assets/demos/telegram-workers-walkthrough.mp4) if the player does not start it.
 
 <p>
-<img src="docs/assets/demos/telegram-workers-menu.png" alt="Telegram private chat with the persistent reply keyboard open from the input keyboard icon: My Workers, Continue chat, Switch session, and View tasks." width="350">
-<img src="docs/assets/demos/telegram-workers-live.png" alt="Telegram Workers list for Conveyor, idle, with continue, view tasks, switch session, and back to the list." width="350">
-<img src="docs/assets/demos/telegram-screenshot-routing.png" alt="Telegram screenshot of the selected Conveyor main session on the shared VPS desktop, node vps-desktop, with the thumbnail sent." width="350">
+<img src="docs/assets/demos/telegram-workers-menu.png" alt="Persistent menu: My Workers, Continue chat, Switch session, View tasks." width="350">
+<img src="docs/assets/demos/telegram-workers-live.png" alt="Workers list for the current Conveyor agent." width="350">
+<img src="docs/assets/demos/telegram-screenshot-routing.png" alt="Current agent desktop: Conveyor main session on the shared VPS desktop." width="350">
 </p>
 
-Open the keyboard icon beside the message field to show the persistent menu. `/start` installs that keyboard. Each operator, chat, and topic selection is isolated. With nothing selected, only a private chat uses the canonical Conveyor main session. A screenshot follows the Agent selected now. The default main session and a default secondary session share the VPS desktop. An independent Agent uses its own X display, and a missing desktop fails closed. An explicit request for an unavailable Mac is rejected.
+Open the keyboard icon beside the message field to show the persistent menu. `/start` installs that keyboard. Each operator, chat, and topic selection is isolated. Continue or switch session remembers the selected session. With nothing selected, only a private chat uses the canonical Conveyor main session. A screenshot follows the Agent selected now. The default main session and a default secondary session share the VPS desktop. An independent Agent uses its own X display. A missing desktop refuses the screenshot. An explicit request for an unavailable Mac is rejected.
 
 [Case guide](docs/demos.md) · [Asset notes](docs/assets/demos/README.md)
 
