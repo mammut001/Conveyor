@@ -225,31 +225,136 @@ def poll_observe_once(settings: Settings) -> None:
         raise SystemExit(_PERMISSION_RESTART_EXIT_CODE)
 
 
-def generate_thumbnail(
+def _thumbnail_within_bounds(path: Path, max_width: int, max_height: int, max_bytes: int) -> bool:
+    """True only for a real image that respects width, height, and bytes."""
+    try:
+        if not path.is_file():
+            return False
+        size = path.stat().st_size
+        if size <= 0 or size > max_bytes:
+            return False
+        from PIL import Image
+
+        with Image.open(path) as image:
+            width, height = image.size
+    except (OSError, ValueError):
+        return False
+    return 0 < width <= max_width and 0 < height <= max_height
+
+
+def _write_bounded_thumbnail_pil(
     source_path: Path,
     dest_path: Path,
     max_width: int,
     max_height: int,
     max_bytes: int,
 ) -> bool:
+    from PIL import Image
+
+    with Image.open(source_path) as image:
+        image = image.convert("RGB")
+        width, height = max_width, max_height
+        for _ in range(6):
+            frame = image.copy()
+            frame.thumbnail((width, height))
+            dest_path.unlink(missing_ok=True)
+            frame.save(dest_path, format="PNG", optimize=True)
+            if _thumbnail_within_bounds(dest_path, max_width, max_height, max_bytes):
+                return True
+            width = max(1, int(width * 0.7))
+            height = max(1, int(height * 0.7))
+    dest_path.unlink(missing_ok=True)
+    return False
+
+
+def _write_bounded_thumbnail_imagemagick(
+    source_path: Path,
+    dest_path: Path,
+    max_width: int,
+    max_height: int,
+    max_bytes: int,
+    *,
+    timeout: float,
+) -> bool:
+    import shutil
     import subprocess
-    from pathlib import Path
-    dim = max_width
-    for attempt in range(4):
-        cmd = ["sips", "-Z", str(dim), str(source_path), "--out", str(dest_path)]
+
+    binary = shutil.which("magick") or shutil.which("convert")
+    if not binary:
+        return False
+    width, height = max_width, max_height
+    for _ in range(6):
+        dest_path.unlink(missing_ok=True)
+        command = [
+            binary,
+            str(source_path),
+            "-auto-orient",
+            "-thumbnail",
+            f"{width}x{height}>",
+            "-strip",
+            f"png:{dest_path}",
+        ]
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            if res.returncode == 0 and dest_path.is_file():
-                size = dest_path.stat().st_size
-                if size <= max_bytes:
-                    return True
-                else:
-                    dim = int(dim * 0.8)
-            else:
-                logger.error("sips failure: %s %s", res.stdout, res.stderr)
-        except Exception as e:
-            logger.error("sips execution failed: %s", e)
-            break
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error("thumbnail timed out")
+            dest_path.unlink(missing_ok=True)
+            return False
+        except (OSError, ValueError) as exc:
+            logger.error("thumbnail execution failed: %s", exc)
+            dest_path.unlink(missing_ok=True)
+            return False
+        if result.returncode != 0:
+            detail = (result.stderr or b"")[:200]
+            logger.error("thumbnail convert failed: %s", detail)
+            dest_path.unlink(missing_ok=True)
+            return False
+        if _thumbnail_within_bounds(dest_path, max_width, max_height, max_bytes):
+            return True
+        width = max(1, int(width * 0.7))
+        height = max(1, int(height * 0.7))
+    dest_path.unlink(missing_ok=True)
+    return False
+
+
+def generate_thumbnail(
+    source_path: Path,
+    dest_path: Path,
+    max_width: int,
+    max_height: int,
+    max_bytes: int,
+    *,
+    timeout: float = 20,
+) -> bool:
+    """Write a thumbnail that fits width, height, and bytes. Never the original."""
+    from pathlib import Path
+
+    source_path = Path(source_path)
+    dest_path = Path(dest_path)
+    if max_width < 1 or max_height < 1 or max_bytes < 1 or timeout <= 0:
+        logger.error("thumbnail bounds are invalid")
+        return False
+    if not source_path.is_file() or source_path.resolve() == dest_path.resolve():
+        logger.error("thumbnail source is missing or is the destination")
+        return False
+    try:
+        if _write_bounded_thumbnail_imagemagick(
+            source_path, dest_path, max_width, max_height, max_bytes, timeout=timeout,
+        ):
+            return True
+        if _write_bounded_thumbnail_pil(source_path, dest_path, max_width, max_height, max_bytes):
+            return True
+    except Exception as exc:
+        logger.error("thumbnail generation failed: %s", exc)
+        dest_path.unlink(missing_ok=True)
+        return False
+    logger.error("thumbnail generation failed: no bounded image")
+    dest_path.unlink(missing_ok=True)
     return False
 
 
@@ -427,7 +532,7 @@ def poll_upload_once(settings: Settings) -> None:
                     "upload_id": upload_id,
                     "node_id": node_id,
                     "error": "thumbnail_generation_failed",
-                    "message": "Failed to generate thumbnail via sips.",
+                    "message": "Failed to generate a bounded thumbnail.",
                 },
             )
         except Exception as exc:
@@ -458,19 +563,43 @@ def poll_upload_once(settings: Settings) -> None:
             logger.info("upload fail report failed: %s", exc)
         return
 
-    width = max_width
-    height = max_height
     try:
-        import subprocess
-        res = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(thumb_path)], capture_output=True, text=True, check=False)
-        if res.returncode == 0:
-            for line in res.stdout.splitlines():
-                if "pixelWidth:" in line:
-                    width = int(line.split(":")[-1].strip())
-                elif "pixelHeight:" in line:
-                    height = int(line.split(":")[-1].strip())
-    except Exception:
-        pass
+        from PIL import Image
+
+        with Image.open(thumb_path) as image:
+            width, height = image.size
+    except (OSError, ValueError) as exc:
+        logger.error("thumbnail dimensions unreadable: %s", exc)
+        try:
+            post_json(
+                f"{control_plane_url}/desktop/upload/fail",
+                token,
+                {
+                    "upload_id": upload_id,
+                    "node_id": node_id,
+                    "error": "thumbnail_generation_failed",
+                    "message": "Failed to read bounded thumbnail dimensions.",
+                },
+            )
+        except Exception as report_exc:
+            logger.info("upload fail report failed: %s", report_exc)
+        return
+    if width > max_width or height > max_height or len(thumb_bytes) > max_bytes:
+        logger.error("thumbnail exceeds bounds upload_id=%s", upload_id)
+        try:
+            post_json(
+                f"{control_plane_url}/desktop/upload/fail",
+                token,
+                {
+                    "upload_id": upload_id,
+                    "node_id": node_id,
+                    "error": "thumbnail_generation_failed",
+                    "message": "Thumbnail exceeds the width, height, or byte limit.",
+                },
+            )
+        except Exception as report_exc:
+            logger.info("upload fail report failed: %s", report_exc)
+        return
 
     import hashlib
     hasher = hashlib.sha256()

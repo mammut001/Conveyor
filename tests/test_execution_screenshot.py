@@ -75,7 +75,12 @@ def _install_loop(test: unittest.TestCase, settings):
         screenshot_id = f"shot-{task_id}"
         directory = ensure_screenshot_dir(settings)
         image = directory / f"{screenshot_id}.png"
-        image.write_bytes(b"\x89PNG\r\n")
+        from io import BytesIO
+        from PIL import Image
+
+        buffer = BytesIO()
+        Image.new("RGB", (2, 2), (12, 24, 36)).save(buffer, format="PNG")
+        image.write_bytes(buffer.getvalue())
         record = {
             "screenshot_id": screenshot_id,
             "path": str(image.resolve()),
@@ -251,6 +256,112 @@ class ExecutionScreenshotTests(unittest.TestCase):
             self.settings, _msg("agent-default"), "截图", port=None,
         ))
         self.assertIn("仅元数据", bare)
+
+    def test_default_secondary_uses_host(self) -> None:
+        import asyncio
+        from worker_sessions import WorkerSessionStore
+        secondary = WorkerSessionStore(self.settings).create("default", title="草稿")
+        text = asyncio.run(exec_desktop_observe_request(
+            self.settings, _msg(secondary["source_chat_id"]), "截图", port=_Images(),
+        ))
+        self.assertIn("VPS共享桌面", text)
+        self.assertIn("执行节点：vps-desktop", text)
+        self.assertEqual(self.calls, [("HttpComputerBackend", "default")])
+
+    def test_group_without_binding_has_no_fake_context(self) -> None:
+        import asyncio
+        from dataclasses import replace as replace_msg
+        msg = replace_msg(_msg("group-1", channel="feishu"), chat_type="group")
+        text = asyncio.run(exec_desktop_observe_request(
+            self.settings, msg, "截图", port=_Images(),
+        ))
+        self.assertIn("VPS共享桌面", text)
+        self.assertNotIn("主会话", text)
+        self.assertNotIn("当前：", text)
+        self.assertEqual(self.calls, [("HttpComputerBackend", "default")])
+
+    def test_named_configured_host_does_not_override_agent(self) -> None:
+        import asyncio
+        text = asyncio.run(exec_desktop_observe_request(
+            self.settings, _msg("agent-default"), "截图 node:vps-desktop", port=_Images(),
+        ))
+        self.assertIn("VPS共享桌面", text)
+        self.assertEqual(self.calls, [("HttpComputerBackend", "default")])
+        agent = self.store.create({"name": "Alpha"})
+        self.store.ensure_display(agent["id"])
+        refused = asyncio.run(exec_desktop_observe_request(
+            self.settings, _msg(f"agent-{agent['id']}"), "screenshot node:vps-desktop", port=_Images(),
+        ))
+        self.assertIn("不会改截配置的主机桌面", refused)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_english_remote_is_not_a_mac_request(self) -> None:
+        import asyncio
+        text = asyncio.run(exec_desktop_observe_request(
+            self.settings, _msg("agent-default"), "take a screenshot of the remote desktop", port=_Images(),
+        ))
+        self.assertIn("VPS共享桌面", text)
+        self.assertNotIn("Mac", text)
+        self.assertEqual(self.calls, [("HttpComputerBackend", "default")])
+
+    def test_changed_target_stops_before_capture(self) -> None:
+        import asyncio
+        import agents
+        original = agents.computer_target_for_chat
+        answers = iter([
+            {"scope": "default"},
+            {"scope": "agent:other", "agent_id": "other", "display": 101},
+        ])
+
+        def flipped(settings, channel, chat_id):
+            try:
+                return next(answers)
+            except StopIteration:
+                return original(settings, channel, chat_id)
+
+        with mock.patch("agents.computer_target_for_chat", flipped):
+            text = asyncio.run(exec_desktop_observe_request(
+                self.settings, _msg("agent-default"), "截图", port=_Images(),
+            ))
+        self.assertIn("已停止任务", text)
+        self.assertEqual(self.calls, [])
+        store = json.loads(computer_requests_path(self.settings).read_text(encoding="utf-8"))
+        record = next(iter(store["tasks"].values()))
+        self.assertEqual(record["status"], "error")
+        self.assertEqual(record["takeover_scope"], "agent:other")
+
+    def test_thumbnail_linux_without_sips_and_oversize_stays_local(self) -> None:
+        import asyncio
+        from desktop_agent import generate_thumbnail
+
+        source = self.root / "wide.png"
+        dest = self.root / "thumb.png"
+        from PIL import Image
+        Image.new("RGB", (40, 20), (1, 2, 3)).save(source, format="PNG")
+
+        def refuse_shell(command, **kwargs):
+            raise AssertionError(command)
+
+        with mock.patch("shutil.which", return_value=None), mock.patch("subprocess.run", refuse_shell):
+            self.assertTrue(generate_thumbnail(source, dest, 8, 8, 200000))
+        self.assertTrue(dest.is_file())
+        self.assertNotEqual(dest.read_bytes(), source.read_bytes())
+        with Image.open(dest) as image:
+            self.assertLessEqual(image.size[0], 8)
+            self.assertLessEqual(image.size[1], 8)
+        dest.unlink()
+        self.assertFalse(generate_thumbnail(source, dest, 8, 8, 30))
+        self.assertFalse(dest.exists())
+        self.assertFalse(generate_thumbnail(self.root / "missing.png", dest, 8, 8, 200000))
+
+        images = _Images()
+        with mock.patch("desktop_agent.generate_thumbnail", return_value=False):
+            text = asyncio.run(exec_desktop_observe_request(
+                self.settings, _msg("agent-default"), "截图", port=images,
+            ))
+        self.assertIn("缩略图生成失败", text)
+        self.assertIn("图片未发送", text)
+        self.assertEqual(images.sent, [])
 
 
 if __name__ == "__main__":

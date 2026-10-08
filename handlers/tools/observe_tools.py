@@ -242,7 +242,6 @@ _EXPLICIT_NODE = re.compile(
     re.IGNORECASE,
 )
 _EXPLICIT_MAC = re.compile(r"(macbook|\bmac\b|苹果电脑)", re.IGNORECASE)
-_EXPLICIT_REMOTE = re.compile(r"远程\s*(?:节点|桌面|电脑)")
 _MAC_PLATFORMS = frozenset({"darwin", "macos", "mac", "mac os", "mac os x"})
 
 
@@ -262,25 +261,49 @@ def _configured_host_is_mac(settings: Settings) -> bool:
     return _host_platform(settings) in _MAC_PLATFORMS
 
 
-def _explicit_desktop_request(text: str, settings: Settings) -> str | None:
+def _explicit_desktop_request(
+    text: str,
+    settings: Settings,
+    msg: InboundMessage | None = None,
+) -> str | None:
     """Reject a named Mac or unknown node instead of capturing the current desktop.
 
-    Returns an error string, ``\"legacy\"`` when the configured host is a Mac
-    that actually polls observe, or None when the current execution target applies.
+    A named configured host is captured only when that host is already the
+    pinned target. Naming it does not make the request a Mac request and does
+    not move an Agent desktop onto the host. English wording such as "remote
+    desktop" is not treated as a Mac. Returns an error string, ``\"legacy\"``
+    when the configured host is a Mac that actually polls observe, or None
+    when the current execution target applies.
     """
     named = _EXPLICIT_NODE.search(text or "")
-    wants_mac = bool(_EXPLICIT_MAC.search(text or "") or _EXPLICIT_REMOTE.search(text or ""))
+    wants_mac = bool(_EXPLICIT_MAC.search(text or ""))
+    configured = _configured_desktop_node_id(settings)
     if named:
         node_id = named.group(1)
-        if node_id != _configured_desktop_node_id(settings):
+        if node_id != configured:
             return (
                 f"未知桌面节点「{node_id}」。不会改用当前桌面，也不会截取 VPS。"
             )
+        target, error = (None, None)
+        if msg is not None:
+            target, error = _pinned_target_or_error(settings, msg)
+        if error:
+            return error
+        host_is_current = (
+            target is None
+            or target.get("scope") == "default"
+            or not target.get("agent_id")
+        )
+        if not host_is_current:
+            return "当前会话钉在 Agent 桌面。不会改截配置的主机桌面。"
+        if not _configured_host_is_mac(settings):
+            return None
+        wants_mac = True
     if not wants_mac:
         return None
     from nodes.state import get_desktop_runtime
 
-    runtime = get_desktop_runtime(settings, _configured_desktop_node_id(settings)) or {}
+    runtime = get_desktop_runtime(settings, configured) or {}
     if _configured_host_is_mac(settings) and runtime.get("poll_observe"):
         return "legacy"
     return (
@@ -298,6 +321,8 @@ def _execution_who(settings: Settings, msg: InboundMessage) -> str:
         line = current_context_line(settings, msg, persist=False)
         if line.startswith("当前："):
             return line[len("当前："):]
+        # An unbound group has no Workers session. Do not invent the main one.
+        return ""
     try:
         agent = agent_for_chat(settings, msg.channel, msg.chat_id)
     except Exception:
@@ -315,12 +340,13 @@ def _execution_who(settings: Settings, msg: InboundMessage) -> str:
 
 def _desktop_sentence(settings: Settings, msg: InboundMessage, target: dict) -> str:
     who = _execution_who(settings, msg)
+    prefix = f"当前：{who}\n" if who else ""
     if target.get("scope") == "default" or not target.get("agent_id"):
         node_id = _configured_desktop_node_id(settings)
-        return f"当前：{who}\n目标：VPS共享桌面\n执行节点：{node_id}"
+        return f"{prefix}目标：VPS共享桌面\n执行节点：{node_id}"
     display = target.get("display")
     shown = f":{display}" if display is not None else ""
-    return f"当前：{who}\n目标：Agent独立桌面({shown})"
+    return f"{prefix}目标：Agent独立桌面({shown})"
 
 
 def _owned_agent_chat(settings: Settings, msg: InboundMessage) -> bool:
@@ -332,7 +358,9 @@ def _owned_agent_chat(settings: Settings, msg: InboundMessage) -> bool:
     if msg.channel != "web":
         return False
     if WorkerSessionStore.is_secondary_chat_id(chat_id):
-        return True
+        # The default worker has no display. Its secondary sessions share the
+        # host desktop, the same way agent-default does.
+        return not chat_id.startswith("agent-default-s-")
     return chat_id.startswith("agent-") and chat_id != "agent-default"
 
 
@@ -371,26 +399,9 @@ def _thumbnail_for_screenshot(settings: Settings, record: dict) -> str | None:
     max_height = int(getattr(settings, "conveyor_desktop_upload_max_height", 800) or 800)
     max_bytes = int(getattr(settings, "conveyor_desktop_upload_max_bytes", 750000) or 750000)
     if generate_thumbnail(source, dest, max_width, max_height, max_bytes) and dest.is_file():
+        if dest.resolve() == source.resolve():
+            return None
         return str(dest)
-    try:
-        from PIL import Image
-
-        with Image.open(source) as image:
-            image = image.convert("RGB")
-            image.thumbnail((max_width, max_height))
-            image.save(dest, format="PNG", optimize=True)
-        if dest.is_file() and dest.stat().st_size <= max_bytes:
-            return str(dest)
-    except Exception:
-        pass
-    try:
-        width = int(record.get("width") or 0)
-        height = int(record.get("height") or 0)
-        size = source.stat().st_size
-    except (OSError, TypeError, ValueError):
-        return None
-    if size <= max_bytes and 0 < width <= max_width and 0 < height <= max_height:
-        return str(source.resolve())
     return None
 
 
@@ -446,12 +457,36 @@ async def capture_pinned_desktop_screenshot(
     if not created.get("ok"):
         return f"截图失败：{created.get('message') or created.get('error') or 'computer_task_failed'}"
     task_id = str(created["task_id"])
+    created_task = get_computer_task(settings, task_id) or {}
+
+    def _stop_changed(reason: str) -> str:
+        from desktop_computer_requests import set_task_status
+        set_task_status(settings, task_id, "error", blocked_reason=reason)
+        return "桌面目标已变化。已停止任务，不会截取另一块屏幕。"
+
+    created_scope = str(created_task.get("takeover_scope") or "default")
+    created_agent = created_task.get("agent_id") or None
+    locked_scope = str(target.get("scope") or "default")
+    locked_agent = target.get("agent_id") or None
+    if created_scope != locked_scope or created_agent != locked_agent:
+        return _stop_changed("desktop_target_changed")
     try:
         backend = build_backend(settings, task_id)
     except ComputerBackendError as exc:
         from desktop_computer_requests import set_task_status
         set_task_status(settings, task_id, "error", blocked_reason=str(exc))
         return "这个 Agent 的桌面不可用。不会改截共享桌面。"
+    if locked_scope == "default":
+        if type(backend).__name__ != "HttpComputerBackend":
+            return _stop_changed("desktop_backend_mismatch")
+    else:
+        desktop = getattr(backend, "desktop", None)
+        if (
+            type(backend).__name__ != "X11ComputerBackend"
+            or getattr(backend, "agent_id", None) != locked_agent
+            or getattr(desktop, "display", None) != target.get("display")
+        ):
+            return _stop_changed("desktop_backend_mismatch")
     planner = ScriptedPlanner([
         {"action": "observe"},
         {"action": "done", "summary": "observed"},
@@ -553,7 +588,7 @@ async def exec_desktop_observe_request(
     clean_text = re.sub(r"\s*--(?:preview|metadata(?:-only)?)\b", "", text, flags=re.IGNORECASE).strip() or text
 
     from agents import enabled as agents_enabled
-    explicit = _explicit_desktop_request(clean_text, settings)
+    explicit = _explicit_desktop_request(clean_text, settings, msg)
     if isinstance(explicit, str) and explicit != "legacy":
         return explicit
     if agents_enabled(settings) and explicit != "legacy":
