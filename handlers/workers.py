@@ -1001,10 +1001,14 @@ async def handle_workers_token(msg: InboundMessage, port: Any, settings: Any, ru
     origin = PhysicalOrigin(msg.channel, msg.operator_id, _source(store, msg), msg.chat_type, msg.message_id or "")
     wrapped = PhysicalOriginPort(port, origin, settings)
     if action in _GATED:
+        # Compare the captured session with the effective one. An unselected
+        # private chat is the canonical main, not "no session". A group with
+        # no selection still runs the captured session. A stale selection fails closed.
         try:
-            current = store.selected(msg.channel, msg.chat_id, msg.operator_id)
-        except AgentError:
-            current = {"session_id": ""}
+            current = resolve_effective(settings, msg, persist=False).session
+        except AgentError as exc:
+            await port.reply(msg, str(exc))
+            return
         if current is not None and current["session_id"] != session["session_id"]:
             await port.reply(msg, "当前已切换到其他会话。切回原来的会话后再确认。")
             return

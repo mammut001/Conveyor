@@ -118,8 +118,9 @@ class PrivateDefaultTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(delivered[0], channel)
             self.assertEqual(delivered[1], chat)
             self.assertIn("当前：Conveyor › 主会话", delivered[2])
-            self.assertIn("IDLE", delivered[2])
+            self.assertIn("此 Agent 对话还没有任务", delivered[2])
             self.assertNotIn("/status", delivered[2])
+            self.assertNotIn("IDLE", delivered[2])
         rewritten, wrapped = bind_execution(self.message("hello"), self.port, self.settings)
         self.assertEqual(rewritten.text, "hello")
         self.assertEqual(rewritten.channel, "web")
@@ -129,6 +130,54 @@ class PrivateDefaultTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.port.messages[-1][1], "42")
         self.assertEqual(self.port.messages[-1][2], "answer")
         self.assertFalse(get_transcript_store(self.settings).list_sessions(20))
+        web = InboundMessage("web", "web-console", "agent-default", "1", "ship")
+        await self.queue.enqueue("run", "ship the widget", web, self.port, SimpleNamespace(settings=self.settings))
+        other = InboundMessage("web", "web-console", "agent-other", "1", "elsewhere")
+        await self.queue.enqueue("run", "other project only", other, self.port, SimpleNamespace(settings=self.settings))
+        self.port.messages.clear()
+        await dispatch(self.message("/status"), self.port, self.settings, runner)
+        body = self.port.messages[-1][2]
+        self.assertEqual(self.port.messages[-1][0], "telegram")
+        self.assertIn("当前：Conveyor › 主会话", body)
+        self.assertIn("ship the widget", body)
+        self.assertNotIn("other project only", body)
+        self.assertFalse(any("当前：" in (item.get("content") or "") for item in (
+            (get_transcript_store(self.settings).get_session(session_id_for("default")) or {}).get("messages") or []
+        )))
+        plain = Port()
+        from handlers.conversation_jobs import handle_conversation_command
+        await handle_conversation_command(
+            "jobs", web, plain, runner, self.settings, "",
+        )
+        self.assertNotIn("当前：", plain.messages[-1][2])
+        self.assertIn("ship the widget", plain.messages[-1][2])
+
+    async def test_cleared_private_selection_blocks_old_secondary_confirm(self) -> None:
+        side = self.store.create(self.alpha["id"], title="Side A")
+        self.store.select("telegram", "42", "1", side["session_id"])
+        token = self.store.issue_token(
+            operator_id="1", channel="telegram", topic="42", agent_id=self.alpha["id"],
+            session_id=side["session_id"], action="confirm",
+            extra={"native": "tool:confirm:abc"}, bound_chat_type="p2p",
+        )
+        self.store.clear("telegram", "42", "1")
+        execute = AsyncMock()
+        with patch("handlers.tools.runner.execute_confirmed", execute):
+            await handle_workers_token(self.message(""), self.port, self.settings, None, token)
+        execute.assert_not_awaited()
+        self.assertIn("当前已切换到其他会话", self.port.messages[-1][2])
+        self.assertIsNone(self.store.selected("telegram", "42", "1"))
+        group = self.message("", chat="-100", chat_type="group")
+        group_token = self.store.issue_token(
+            operator_id="1", channel="telegram", topic="-100", agent_id=self.alpha["id"],
+            session_id=side["session_id"], action="confirm",
+            extra={"native": "tool:confirm:group"}, bound_chat_type="group",
+        )
+        execute.reset_mock()
+        with patch("handlers.tools.runner.execute_confirmed", execute):
+            await handle_workers_token(group, self.port, self.settings, None, group_token)
+        execute.assert_awaited()
+        self.assertIsNone(self.store.selected("telegram", "-100", "1"))
 
     async def test_secondary_is_retained(self) -> None:
         side = self.store.create(self.alpha["id"], title="Side A")

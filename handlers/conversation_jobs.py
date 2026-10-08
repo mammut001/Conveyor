@@ -20,6 +20,39 @@ def _scoped(msg, settings) -> bool:
     )
 
 
+def _im_context_line(msg, port, settings) -> str:
+    """Context for a physical IM reply. Web responses and model prompts stay plain.
+
+    The execution message may already be the canonical web session. The line
+    is taken from the delivery origin, matching ``handlers.commands._status``.
+    """
+    origin = getattr(port, "origin", None)
+    if origin is None:
+        return ""
+    from dataclasses import replace
+
+    from agents import AgentError, enabled
+    if enabled(settings) is not True:
+        return ""
+    physical = replace(
+        msg,
+        channel=origin.channel,
+        operator_id=origin.operator_id,
+        chat_id=origin.chat_id,
+        chat_type=origin.chat_type or getattr(msg, "chat_type", "unknown"),
+    )
+    from handlers.workers import current_context_line
+    try:
+        return current_context_line(settings, physical, persist=False)
+    except AgentError as exc:
+        return str(exc)
+
+
+async def _reply_jobs(msg, port, settings, text: str, *, context: bool) -> None:
+    line = _im_context_line(msg, port, settings) if context else ""
+    await port.reply(msg, f"{line}\n{text}" if line else text)
+
+
 async def handle_conversation_command(name, msg, port, runner, settings, arg) -> bool:
     if name not in _COMMANDS or not _scoped(msg, settings):
         return False
@@ -35,10 +68,13 @@ async def handle_conversation_command(name, msg, port, runner, settings, arg) ->
         except ValueError:
             limit = 8
         text = '\n'.join(f"{j['id']} · {j['state']} · {j['prompt_preview'][:100]}" for j in jobs[:limit])
-        await port.reply(msg, text or '此 Agent 对话还没有任务。')
+        await _reply_jobs(msg, port, settings, text or '此 Agent 对话还没有任务。', context=True)
         return True
     if not jobs:
-        await port.reply(msg, '此 Agent 对话还没有任务。其他项目的任务不会在这里操作。')
+        if name == 'status':
+            await _reply_jobs(msg, port, settings, '此 Agent 对话还没有任务。其他项目的任务不会在这里操作。', context=True)
+        else:
+            await port.reply(msg, '此 Agent 对话还没有任务。其他项目的任务不会在这里操作。')
         return True
     control = WebControl(settings, runner, queue)
     if name == 'cancel':
@@ -61,7 +97,7 @@ async def handle_conversation_command(name, msg, port, runner, settings, arg) ->
         lines = [f"任务：{job['id']}", f"状态：{job['state']}", f"需求：{job['prompt_preview']}"]
         if runtime.get('last_event'):
             lines.append(f"进度：{truncate(str(runtime['last_event']), 1000)}")
-        await port.reply(msg, redact_text('\n'.join(lines)))
+        await _reply_jobs(msg, port, settings, redact_text('\n'.join(lines)), context=True)
         return True
     if name == 'last':
         # Read the durable result of this conversation, even after a restart.
