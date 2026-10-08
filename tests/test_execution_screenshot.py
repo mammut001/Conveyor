@@ -439,5 +439,45 @@ class ExecutionScreenshotTests(unittest.TestCase):
         self.assertEqual(images.sent, [])
 
 
+class ScreenshotPhraseRouteTests(unittest.TestCase):
+    def test_exact_screenshot_phrases_route_deterministically(self) -> None:
+        from handlers.intent import route_intent
+
+        for phrase in (
+            "截一下Mac屏幕",
+            "给我截一张VPS桌面",
+            "截一下当前Agent的屏幕",
+        ):
+            route = route_intent(phrase)
+            self.assertEqual(route.kind, "deterministic", phrase)
+            self.assertEqual(route.tools, ("desktop.observe.request",), phrase)
+            self.assertEqual(route.arg, "", phrase)
+
+    def test_run_tool_observe_keeps_original_mac_text_over_model_arg(self) -> None:
+        import asyncio
+
+        from handlers.tools.runner import run_tool
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            msg = _msg("agent-default", "截一下Mac屏幕")
+            with mock.patch(
+                "handlers.tools.observe_tools.capture_pinned_desktop_screenshot",
+                new_callable=mock.AsyncMock,
+            ) as capture:
+                for arg in ("", "截一下VPS桌面"):
+                    text = asyncio.run(run_tool(
+                        settings,
+                        "computer.observe",
+                        arg,
+                        operator_id=msg.operator_id,
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        msg=msg,
+                    ))
+                    self.assertIn("不会改为截取 VPS", text)
+                capture.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

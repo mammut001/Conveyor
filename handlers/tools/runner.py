@@ -139,6 +139,13 @@ async def run_tool(
                         message_id=None,
                         text=arg or "",
                     )
+                else:
+                    # The model's arg can be empty or name a different desktop.
+                    # The user's own text still decides a named Mac or node.
+                    from handlers.tools.observe_tools import _explicit_desktop_request
+                    explicit = _explicit_desktop_request(msg.text, settings, msg)
+                    if isinstance(explicit, str) and explicit != "legacy":
+                        return explicit
                 return await exec_desktop_observe_request(
                     settings, bound, arg or bound.text, port=port,
                 )
