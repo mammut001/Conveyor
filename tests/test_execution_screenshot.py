@@ -396,7 +396,11 @@ class ExecutionScreenshotTests(unittest.TestCase):
             source.write_bytes(_png(40, 20, (1, 2, 3)))
             self.assertEqual(_png_size(source), (40, 20))
             binary = shutil.which("magick") or shutil.which("convert")
-            self.assertTrue(binary, "ImageMagick is required to prove the Linux thumbnail path")
+            if not binary:
+                self.skipTest(
+                    "ImageMagick (magick or convert) is not installed; "
+                    "this external integration test proves the Linux thumbnail path only when convert is available"
+                )
 
             real_import = builtins.__import__
 
