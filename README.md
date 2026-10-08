@@ -46,7 +46,15 @@ No public multi-tenant SaaS. No ephemeral throwaway containers that lose your de
 
 ## Demo gallery
 
-Real Telegram deployment, 2026-10-08. The Workers menu frame is from the same week; the image itself does not print a calendar date. Feishu live cards are not shown here. The Montreal weather Computer Use run is a recipe in the [case guide](docs/demos.md) until a recording is attached.
+Screenshot walkthrough / 实拍截图回放. Three stills from separate Telegram interactions on the 2026-10-08 deployment, played in order for 3s, 3s, and 4s. Timing is condensed. This is not a continuous screen recording. The menu frame does not print a calendar date.
+
+<p>
+<a href="docs/assets/demos/telegram-workers-walkthrough.mp4">
+<img src="docs/assets/demos/telegram-workers-walkthrough.gif" alt="Screenshot walkthrough / 实拍截图回放. Condensed sequence of three separate interactions: persistent menu, Workers list, then the selected desktop. Not a continuous screen recording." width="350">
+</a>
+</p>
+
+The GIF is the preview. [Download the MP4](docs/assets/demos/telegram-workers-walkthrough.mp4) if the player does not start it.
 
 <p>
 <img src="docs/assets/demos/telegram-workers-menu.png" alt="Telegram private chat with the persistent reply keyboard open from the input keyboard icon: My Workers, Continue chat, Switch session, and View tasks." width="350">
@@ -54,9 +62,9 @@ Real Telegram deployment, 2026-10-08. The Workers menu frame is from the same we
 <img src="docs/assets/demos/telegram-screenshot-routing.png" alt="Telegram screenshot of the selected Conveyor main session on the shared VPS desktop, node vps-desktop, with the thumbnail sent." width="350">
 </p>
 
-Open the keyboard icon beside the message field to show the persistent menu. `/start` installs that keyboard and the onboarding prompt. Workers, then a worker, then continue or switch session binds this private chat. With nothing selected, a private chat uses the canonical Conveyor main session. A screenshot follows the Agent that is selected now: the default main session and a default secondary session share the VPS desktop; an independent Agent uses its own X display. If that Mac is offline, the request fails and does not switch to another screen.
+Open the keyboard icon beside the message field to show the persistent menu. `/start` installs that keyboard. Each operator, chat, and topic selection is isolated. With nothing selected, only a private chat uses the canonical Conveyor main session. A screenshot follows the Agent selected now. The default main session and a default secondary session share the VPS desktop. An independent Agent uses its own X display, and a missing desktop fails closed. An explicit request for an unavailable Mac is rejected.
 
-[Case guide, including the weather recipe](docs/demos.md) · [Asset notes](docs/assets/demos/README.md)
+[Case guide](docs/demos.md) · [Asset notes](docs/assets/demos/README.md)
 
 ---
 

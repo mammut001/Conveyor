@@ -46,7 +46,15 @@
 
 ## 演示图集
 
-2026-10-08 真实 Telegram 部署。Workers 菜单那张图来自同一周，画面上没有印日历日期。飞书实况卡片尚未核验，这里不作为演示。蒙特利尔天气的 Computer Use 仍是[案例说明](docs/demos.md)里的可运行配方，录屏尚未附上。
+Screenshot walkthrough / 实拍截图回放。2026-10-08 部署上三次分开的 Telegram 交互，按菜单、Workers、目标桌面各停留 3 秒、3 秒、4 秒。时间被压缩。这不是一段连续录屏。菜单那张图上没有日历日期。
+
+<p>
+<a href="docs/assets/demos/telegram-workers-walkthrough.mp4">
+<img src="docs/assets/demos/telegram-workers-walkthrough.gif" alt="Screenshot walkthrough / 实拍截图回放。三次独立交互的压缩序列：常驻菜单、Workers 列表、然后是选中的桌面。不是连续录屏。" width="350">
+</a>
+</p>
+
+GIF 是预览。播放器不自动开始时，请[下载 MP4](docs/assets/demos/telegram-workers-walkthrough.mp4)。
 
 <p>
 <img src="docs/assets/demos/telegram-workers-menu.png" alt="Telegram 私聊：从输入框旁的键盘图标打开常驻回复键盘，包含我的 Workers、继续对话、切换会话和查看任务。" width="350">
@@ -54,9 +62,9 @@
 <img src="docs/assets/demos/telegram-screenshot-routing.png" alt="Telegram 截图：当前选中的 Conveyor 主会话，目标为 VPS 共享桌面，执行节点 vps-desktop，缩略图已发送。" width="350">
 </p>
 
-点输入框旁的键盘图标即可展开常驻菜单。`/start` 会装上这组键盘并进入引导。Workers → 选中一个 Worker → 继续对话或切换会话，会绑定当前私聊。私聊未选择时，默认是 Conveyor 的规范主会话。截图对准当前选中的 Agent：默认主会话和默认次会话共用 VPS 桌面；独立 Agent 使用自己的 X 显示。对应 Mac 离线时请求失败，不会改去另一块屏幕。
+点输入框旁的键盘图标展开常驻菜单。`/start` 装上这组键盘。每位操作者、每个聊天、每个话题的选择彼此隔离。未选择时，只有私聊使用 Conveyor 的规范主会话。截图对准当前选中的 Agent。默认主会话和默认次会话共用 VPS 桌面。独立 Agent 使用自己的 X 显示，桌面缺失时请求失败并关闭。明确指向不可用 Mac 的请求会被拒绝。
 
-[案例说明（含天气配方）](docs/demos.md) · [素材说明](docs/assets/demos/README.md)
+[案例说明](docs/demos.md) · [素材说明](docs/assets/demos/README.md)
 
 ---
 
