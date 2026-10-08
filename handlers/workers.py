@@ -247,18 +247,138 @@ def _source(store: WorkerSessionStore, msg: InboundMessage) -> str:
     return store._physical_source(msg.channel, msg.chat_id)
 
 
-def legacy_job_card_allowed(settings: Any, msg: InboundMessage, job_id: str) -> bool:
-    """Old Feishu job cards may run only when no Workers session is selected,
-    or when their job id belongs to the selected canonical session.
-    """
-    if not enabled(settings) or msg.channel not in ("telegram", "feishu"):
-        return True
-    try:
-        selected = WorkerSessionStore(settings).selected(msg.channel, msg.chat_id, msg.operator_id)
-    except AgentError:
+def _is_private_im(msg: InboundMessage) -> bool:
+    """Telegram and Feishu direct chats. Groups and forum topics stay on the old route."""
+    if msg.channel not in ("telegram", "feishu"):
         return False
-    if selected is None:
-        return True
+    if ":topic:" in str(msg.chat_id or ""):
+        return False
+    return msg.chat_type == "p2p"
+
+
+@dataclass(frozen=True)
+class EffectiveTarget:
+    """What this physical chat executes as. ``session`` is None when the IM chat itself runs."""
+    mode: str
+    session: dict[str, Any] | None = None
+    legacy_agent: dict[str, Any] | None = None
+
+
+def canonical_main_session(settings: Any) -> dict[str, Any]:
+    """The Web console's default primary, ``web:web-console:agent-default``.
+
+    An archived or missing primary fails closed. There is no second candidate.
+    """
+    from agents import DEFAULT_AGENT_ID, WEB_CHANNEL, session_id_for
+    agent = AgentStore(settings).get(DEFAULT_AGENT_ID)
+    if not agent or agent.get("archived"):
+        raise AgentError("默认主会话不可用，任务不会转到其他项目。")
+    session = WorkerSessionStore(settings).get(session_id_for(DEFAULT_AGENT_ID))
+    if (
+        session is None
+        or session.get("archived")
+        or session.get("agent_id") != DEFAULT_AGENT_ID
+        or session.get("kind") != "main"
+        or session.get("channel") != WEB_CHANNEL
+    ):
+        raise AgentError("默认主会话不可用，任务不会转到其他项目。")
+    return session
+
+
+def _explicit_legacy_agent(settings: Any, msg: InboundMessage) -> dict[str, Any] | None:
+    """Telegram ``/agent`` binding, including an address that already names an agent.
+
+    Archived and missing bindings fail closed. Feishu has no project binding.
+    """
+    if msg.channel != "telegram":
+        return None
+    from channel.telegram_identity import TelegramAddress
+    try:
+        address = TelegramAddress.parse(msg.chat_id)
+    except ValueError:
+        return None
+    bound = address.agent_id or AgentStore(settings).bound_agent_id("telegram", address.source)
+    if not bound:
+        return None
+    agent = AgentStore(settings).get(bound)
+    if not agent or agent.get("archived"):
+        raise AgentError("此对话的 Agent 已归档。用 /agent 选择其他 Agent；旧任务不会自动转移到其他项目。")
+    return agent
+
+
+def resolve_effective(settings: Any, msg: InboundMessage, *, persist: bool) -> EffectiveTarget:
+    """One routing decision for execution, menus, /start, and the context line.
+
+    An existing selection is honored, including an archived one, which fails
+    closed. A private chat with no selection and no explicit Telegram project
+    binding uses the canonical main session. ``persist`` writes that default
+    for the physical chat and operator. Group and topic chats are unchanged.
+    """
+    if msg.channel not in ("telegram", "feishu") or not enabled(settings):
+        return EffectiveTarget("disabled")
+    store = WorkerSessionStore(settings)
+    selected = store.selected(msg.channel, msg.chat_id, msg.operator_id)
+    if selected is not None:
+        return EffectiveTarget("selected", selected)
+    if not _is_private_im(msg):
+        return EffectiveTarget("unbound")
+    legacy = _explicit_legacy_agent(settings, msg)
+    if legacy is not None:
+        return EffectiveTarget("legacy", legacy_agent=legacy)
+    session = canonical_main_session(settings)
+    if persist:
+        store.select(msg.channel, msg.chat_id, msg.operator_id, session["session_id"])
+    return EffectiveTarget("default", session)
+
+
+def _agent_name(settings: Any, agent_id: str) -> str:
+    agent = AgentStore(settings).get(agent_id)
+    return str((agent or {}).get("name") or agent_id)
+
+
+def session_context_label(settings: Any, session: dict[str, Any]) -> str:
+    """Main sessions read as 主会话. Duplicate titles gain the session-id suffix."""
+    if session.get("kind") == "main":
+        return "主会话"
+    title = str(session.get("title") or "")
+    try:
+        titles = [str(row["title"]) for row in WorkerSessionStore(settings).list(str(session["agent_id"]))]
+    except AgentError:
+        titles = [title]
+    if titles.count(title) > 1:
+        return f"{title} · {str(session['session_id'])[-6:]}"
+    return title
+
+
+def context_line_for_session(settings: Any, session: dict[str, Any]) -> str:
+    return f"当前：{_agent_name(settings, str(session['agent_id']))} › {session_context_label(settings, session)}"
+
+
+def current_context_line(settings: Any, msg: InboundMessage, *, persist: bool) -> str:
+    """Chinese current-context line, or empty when this chat has no Workers target."""
+    target = resolve_effective(settings, msg, persist=persist)
+    if target.mode == "legacy" and target.legacy_agent:
+        return f"当前：{target.legacy_agent['name']} › Telegram 独立会话"
+    if target.session is None:
+        return ""
+    return context_line_for_session(settings, target.session)
+
+
+def _exit_label(settings: Any, msg: InboundMessage) -> str:
+    if not _is_private_im(msg):
+        return "退出 Workers"
+    from agents import DEFAULT_AGENT_ID, DEFAULT_AGENT_NAME
+    return f"返回 {_agent_name(settings, DEFAULT_AGENT_ID) or DEFAULT_AGENT_NAME} 主会话"
+
+
+def reset_private_to_main(settings: Any, msg: InboundMessage) -> dict[str, Any]:
+    """Point this private chat at the canonical main session. Histories stay."""
+    session = canonical_main_session(settings)
+    WorkerSessionStore(settings).select(msg.channel, msg.chat_id, msg.operator_id, session["session_id"])
+    return session
+
+
+def _job_matches_session(settings: Any, session: dict[str, Any], job_id: str) -> bool:
     job_id = str(job_id or "")
     if not job_id:
         return False
@@ -278,25 +398,39 @@ def legacy_job_card_allowed(settings: Any, msg: InboundMessage, job_id: str) -> 
     if row is None:
         return False
     return (
-        str(row[0]) == selected["channel"]
-        and str(row[1]) == selected["operator_id"]
-        and str(row[2]) == selected["source_chat_id"]
+        str(row[0]) == session["channel"]
+        and str(row[1]) == session["operator_id"]
+        and str(row[2]) == session["source_chat_id"]
     )
+
+
+def legacy_job_card_allowed(settings: Any, msg: InboundMessage, job_id: str) -> bool:
+    """Old Feishu job cards follow the same effective session as execution.
+
+    No Workers target (groups, disabled agents, or an explicit Telegram project
+    binding) keeps the legacy card. A canonical or selected session must own the job.
+    """
+    try:
+        target = resolve_effective(settings, msg, persist=False)
+    except AgentError:
+        return False
+    if target.session is None:
+        return True
+    return _job_matches_session(settings, target.session, job_id)
 
 
 def selection_conflict(settings: Any, msg: InboundMessage, channel: str, chat_id: str) -> str | None:
     """Reject a legacy callback that would run under a different Workers session.
 
     Returns an operator-facing error, or None when the click may proceed on
-    its original conversation. A matching selection is allowed. No selection
-    keeps the legacy route. This never rewrites the click onto the selection.
+    its original conversation. A matching effective session is allowed. No
+    Workers target keeps the legacy route. This never rewrites the click.
     """
-    if not enabled(settings) or msg.channel not in ("telegram", "feishu"):
-        return None
     try:
-        selected = WorkerSessionStore(settings).selected(msg.channel, msg.chat_id, msg.operator_id)
+        target = resolve_effective(settings, msg, persist=False)
     except AgentError as exc:
         return str(exc)
+    selected = target.session
     if selected is None:
         return None
     if selected["channel"] == channel and selected["source_chat_id"] == chat_id:
@@ -305,16 +439,18 @@ def selection_conflict(settings: Any, msg: InboundMessage, channel: str, chat_id
 
 
 def bind_execution(msg: InboundMessage, port: Any, settings: Any) -> tuple[InboundMessage, Any]:
-    """Rewrite execution onto the selected canonical session. Delivery stays physical."""
-    if msg.channel not in ("telegram", "feishu") or not enabled(settings):
-        return msg, port
-    store = WorkerSessionStore(settings)
-    selected = store.selected(msg.channel, msg.chat_id, msg.operator_id)
+    """Rewrite execution onto the effective canonical session. Delivery stays physical.
+
+    The inbound text is not prefixed. A separate status reply is not sent.
+    """
+    target = resolve_effective(settings, msg, persist=True)
+    selected = target.session
     if selected is None:
         return msg, port
     agent = agent_for_chat(settings, selected["channel"], selected["source_chat_id"])
     if not agent:
         raise AgentError("已选会话的 Agent 不可用，任务不会转到默认项目。发送 /workers exit 或 /agent 恢复。")
+    store = WorkerSessionStore(settings)
     origin = PhysicalOrigin(
         msg.channel,
         msg.operator_id,
@@ -559,12 +695,11 @@ def _anchor(settings: Any, agent_id: str) -> dict[str, Any]:
 
 
 def _open_session(settings: Any, msg: InboundMessage, agent_id: str) -> dict[str, Any]:
-    """Selected session when it belongs to this agent; otherwise the main session."""
-    store = WorkerSessionStore(settings)
-    try:
-        selected = store.selected(msg.channel, msg.chat_id, msg.operator_id)
-    except AgentError:
-        selected = None
+    """Selected session when it belongs to this agent; otherwise that agent's main session.
+
+    An archived selection is not replaced with another session. The caller surfaces the error.
+    """
+    selected = WorkerSessionStore(settings).selected(msg.channel, msg.chat_id, msg.operator_id)
     if selected and selected["agent_id"] == agent_id and not selected["archived"]:
         return selected
     return _anchor(settings, agent_id)
@@ -580,7 +715,8 @@ async def _render_list(msg: InboundMessage, port: Any, settings: Any, page: int)
     pages = max(1, (len(rows) + _PAGE - 1) // _PAGE)
     page = max(0, min(page, pages - 1))
     window = rows[page * _PAGE:(page + 1) * _PAGE]
-    lines = [f"我的 Workers {page + 1}/{pages}"]
+    context = current_context_line(settings, msg, persist=_is_private_im(msg))
+    lines = ([context] if context else []) + [f"我的 Workers {page + 1}/{pages}"]
     buttons = []
     for agent in window:
         status = str(agent.get("status") or "idle")
@@ -599,11 +735,11 @@ async def _render_list(msg: InboundMessage, port: Any, settings: Any, page: int)
         buttons.append({"text": "上一页", "token": _issue(store, msg, anchor, "list", page - 1)})
     if page + 1 < pages:
         buttons.append({"text": "下一页", "token": _issue(store, msg, anchor, "list", page + 1)})
-    buttons.append({"text": "退出 Workers", "token": _issue(store, msg, anchor, "exit", page)})
+    buttons.append({"text": _exit_label(settings, msg), "token": _issue(store, msg, anchor, "exit", page)})
     await _emit(msg, port, "\n".join(lines), buttons)
 
 
-def _detail_text(settings: Any, session: dict[str, Any]) -> str:
+def _detail_text(settings: Any, msg: InboundMessage, session: dict[str, Any]) -> str:
     from transcript_store import get_transcript_store
     agent = AgentStore(settings).get(session["agent_id"])
     jobs = _live_jobs(settings, session)
@@ -614,13 +750,22 @@ def _detail_text(settings: Any, session: dict[str, Any]) -> str:
     if jobs:
         recent = jobs[0]
         task = f"{recent['id']} · {recent['state']} · {recent['prompt_preview']}"
+    try:
+        current = current_context_line(settings, msg, persist=False)
+    except AgentError as exc:
+        current = str(exc)
+    viewed = f"{_agent_name(settings, str(session['agent_id']))} › {session_context_label(settings, session)}"
+    same = bool(current) and current.endswith(viewed)
+    place = "这是当前选中的会话。" if same else f"正在查看：{viewed}（尚未选中，点继续才会切换）"
     return "\n".join([
+        current or place,
+        place if current else "",
         str((agent or {}).get("name") or session["agent_id"]),
         f"会话：{session['title']}",
         f"状态：{state}",
         f"最近消息：{preview or '无'}",
         f"任务：{task}",
-    ])
+    ]).replace("\n\n", "\n")
 
 
 async def _render_detail(msg: InboundMessage, port: Any, settings: Any, session: dict[str, Any], page: int) -> None:
@@ -632,7 +777,7 @@ async def _render_detail(msg: InboundMessage, port: Any, settings: Any, session:
         {"text": "🔄切换会话", "token": _issue(store, msg, session, "switch", page, {**extra, "switch_page": 0})},
         {"text": "↩️返回列表", "token": _issue(store, msg, session, "back", page, extra)},
     ]
-    await _emit(msg, port, _detail_text(settings, session), buttons)
+    await _emit(msg, port, _detail_text(settings, msg, session), buttons)
 
 
 async def _render_switch(
@@ -645,13 +790,10 @@ async def _render_switch(
     window = rows[switch_page * _PAGE:(switch_page + 1) * _PAGE]
     buttons = []
     extra = {"agent_page": agent_page, "switch_page": switch_page}
-    titles = [str(choice["title"]) for choice in rows]
     for choice in window:
-        title = str(choice["title"])
-        label = ("主会话 " if choice["kind"] == "main" else "") + title
-        if titles.count(title) > 1:
-            suffix = f" · {str(choice['session_id'])[-6:]}"
-            label = f"{label[:40 - len(suffix)]}{suffix}"
+        label = session_context_label(settings, choice)
+        if choice["kind"] == "main":
+            label = f"主会话 {choice['title']}"
         label = label[:40]
         buttons.append({
             "text": label[:40],
@@ -669,7 +811,12 @@ async def _render_switch(
         })
     buttons.append({"text": "新建会话", "token": _issue(store, msg, session, "new", agent_page, extra)})
     buttons.append({"text": "↩️返回列表", "token": _issue(store, msg, session, "back", agent_page, {"agent_page": agent_page})})
-    await _emit(msg, port, f"切换会话 {switch_page + 1}/{pages}。点选或新建会绑定；返回列表不会。", buttons)
+    try:
+        context = current_context_line(settings, msg, persist=False)
+    except AgentError as exc:
+        context = str(exc)
+    head = f"{context}\n" if context else ""
+    await _emit(msg, port, f"{head}切换会话 {switch_page + 1}/{pages}。点选或新建会绑定；返回列表不会。", buttons)
 
 
 PERSISTENT_MENU_ACTIONS = {
@@ -678,14 +825,15 @@ PERSISTENT_MENU_ACTIONS = {
     "🔄 切换会话": "switch",
     "📋 查看任务": "tasks",
 }
-_CHOOSE_WORKER = "还没有选中的 Worker。先从列表里点一个。"
+_LEGACY_MENU = "这个聊天绑定的是 Telegram 独立会话。从列表里点「继续对话」才会改用 Web 会话。"
 
 
 async def handle_persistent_menu(msg: InboundMessage, port: Any, settings: Any, runner: Any) -> bool:
     """Private-chat reply-keyboard labels. Groups and other text return False.
 
-    Continue, switch, and tasks mint a token for the current selection and
-    reuse ``handle_workers_token``. Nothing is bound when no session is selected.
+    Continue, switch, and tasks mint a token for the effective session and
+    reuse ``handle_workers_token``. A private chat with nothing selected
+    persists the canonical main session and does not call the model.
     """
     action = PERSISTENT_MENU_ACTIONS.get((msg.text or "").strip())
     if action is None or msg.channel != "telegram" or msg.chat_type != "p2p":
@@ -693,27 +841,36 @@ async def handle_persistent_menu(msg: InboundMessage, port: Any, settings: Any, 
     if not enabled(settings):
         await port.reply(msg, "Agent 功能未开启：设置 CONVEYOR_AGENTS_ENABLED=true 后重启服务。")
         return True
-    if action == "list":
-        await _render_list(msg, port, settings, 0)
-        return True
-    store = WorkerSessionStore(settings)
     try:
-        selected = store.selected(msg.channel, msg.chat_id, msg.operator_id)
+        if action == "list":
+            await _render_list(msg, port, settings, 0)
+            return True
+        target = resolve_effective(settings, msg, persist=True)
     except AgentError as exc:
         await port.reply(msg, str(exc))
         return True
-    if selected is None:
-        await port.reply(msg, _CHOOSE_WORKER)
-        await _render_list(msg, port, settings, 0)
+    if target.mode == "legacy":
+        await port.reply(msg, f"{current_context_line(settings, msg, persist=False)}\n{_LEGACY_MENU}")
+        try:
+            await _render_list(msg, port, settings, 0)
+        except AgentError as exc:
+            await port.reply(msg, str(exc))
         return True
+    if target.session is None:
+        await port.reply(msg, "还没有选中的 Worker。")
+        return True
+    store = WorkerSessionStore(settings)
     extra = {"agent_page": 0, "switch_page": 0} if action == "switch" else {"agent_page": 0}
-    token = _issue(store, msg, selected, action, 0, extra)
+    token = _issue(store, msg, target.session, action, 0, extra)
     await handle_workers_token(msg, port, settings, runner, token)
     return True
 
 
 async def handle_workers_command(msg: InboundMessage, port: Any, runner: Any, settings: Any, arg: str) -> None:
-    """List or leave Workers. Does not bind a session, except ``exit`` clears the binding."""
+    """List Workers, or reset the private chat to the canonical main session.
+
+    Group ``exit`` still only clears the binding. Neither path deletes history.
+    """
     if msg.channel not in ("telegram", "feishu"):
         await port.reply(msg, "在 Telegram 或飞书里发送 /workers。Web 控制台可以直接选择会话。")
         return
@@ -722,14 +879,34 @@ async def handle_workers_command(msg: InboundMessage, port: Any, runner: Any, se
         return
     store = WorkerSessionStore(settings)
     if (arg or "").strip() == "exit":
-        store.clear(msg.channel, msg.chat_id, msg.operator_id)
-        await port.reply(msg, "已退出 Workers。这个聊天回到原来的对话，Workers 里的历史还在。")
+        await _leave_workers(msg, port, settings, store)
         return
     try:
         page = int(arg) - 1 if (arg or "").strip().isdigit() else 0
     except ValueError:
         page = 0
-    await _render_list(msg, port, settings, page)
+    try:
+        await _render_list(msg, port, settings, page)
+    except AgentError as exc:
+        await port.reply(msg, str(exc))
+
+
+async def _leave_workers(msg: InboundMessage, port: Any, settings: Any, store: WorkerSessionStore) -> None:
+    if _is_private_im(msg):
+        try:
+            session = reset_private_to_main(settings, msg)
+        except AgentError as exc:
+            await port.reply(msg, str(exc))
+            return
+        name = _agent_name(settings, str(session["agent_id"]))
+        await port.reply(
+            msg,
+            f"{context_line_for_session(settings, session)}\n"
+            f"已返回「{name}」主会话。Workers 里的历史还在，这个聊天原来的记录也还在，不会删除或合并。",
+        )
+        return
+    store.clear(msg.channel, msg.chat_id, msg.operator_id)
+    await port.reply(msg, "已退出 Workers。这个聊天回到原来的对话，Workers 里的历史还在。")
 
 
 def _canonical(msg: InboundMessage, session: dict[str, Any], text: str) -> InboundMessage:
@@ -794,24 +971,36 @@ async def handle_workers_token(msg: InboundMessage, port: Any, settings: Any, ru
             await port.reply(msg, "此会话没有可操作的任务。")
         return
     if action == "exit":
-        store.clear(msg.channel, msg.chat_id, msg.operator_id)
-        await port.reply(msg, "已退出 Workers。这个聊天回到原来的对话，Workers 里的历史还在。")
+        await _leave_workers(msg, port, settings, store)
         return
     if action == "continue" or action == "select":
         store.select(msg.channel, msg.chat_id, msg.operator_id, session["session_id"])
-        await port.reply(msg, f"已在这个聊天继续「{session['title']}」。之后的消息进入该会话；应用或丢弃改动需要单独确认。")
+        await port.reply(
+            msg,
+            f"{context_line_for_session(settings, session)}\n"
+            f"已在这个聊天继续「{session['title']}」。之后的消息进入该会话；应用或丢弃改动需要单独确认。",
+        )
         return
     if action == "new":
         created = store.create(session["agent_id"])
         store.select(msg.channel, msg.chat_id, msg.operator_id, created["session_id"])
-        await port.reply(msg, f"已新建并绑定「{created['title']}」。")
+        await port.reply(
+            msg,
+            f"{context_line_for_session(settings, created)}\n已新建并绑定「{created['title']}」。",
+        )
         return
     if action == "open":
         await _render_detail(msg, port, settings, session, page)
         return
     if action == "tasks":
         jobs = _recent_jobs(settings, session)
-        lines = [f"{session['title']} 的任务"]
+        try:
+            context = current_context_line(settings, msg, persist=False)
+        except AgentError as exc:
+            context = str(exc)
+        viewed = f"{_agent_name(settings, str(session['agent_id']))} › {session_context_label(settings, session)}"
+        lines = [line for line in (context, "" if context.endswith(viewed) else f"正在查看：{viewed}（尚未选中）") if line]
+        lines.append(f"{session['title']} 的任务")
         lines.extend(f"{job['id']} · {job['state']} · {job['prompt_preview']}" for job in jobs)
         buttons = [
             {"text": label, "token": _issue(store, msg, session, name, page, {"agent_page": page})}

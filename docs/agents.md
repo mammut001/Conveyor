@@ -47,26 +47,58 @@ worker shows one session (the chat's current selection when it belongs to
 that worker, otherwise the worker's main session) and four actions: continue,
 tasks, switch session, and back. Back returns to the full worker list.
 Browsing does not bind the chat. Continue, choosing a session, or creating
-one does, for this physical chat, topic, and operator only. `/workers exit`
-clears that binding and leaves history in place. An explicit `/agent` switch,
+one does, for this physical chat, topic, and operator only. In a private
+Telegram or Feishu chat, `/workers exit` and the list button “返回 <默认名> 主会话”
+select the canonical main session again. In a group or forum topic, exit only
+clears the binding. Neither path deletes history. An explicit `/agent` switch,
 new agent, or reset also leaves Workers mode; `/agent` and `/agent list` do not.
+The next private message after `/agent` stays on that Telegram project and is
+not moved onto the canonical main session.
+
+Private Telegram and Feishu chats with agents enabled and no Workers selection
+use the same main session as the Web console: `web:web-console:agent-default`
+(the built-in agent, shown as “主会话”). The choice is stored for that
+physical chat and operator when the first message, `/start`, or the Workers
+menu is handled. One resolver feeds execution, the persistent menu, `/start`,
+`/status`, and the “当前：” line, so they cannot disagree. Opening a card or
+viewing tasks does not change the selection. Group and topic chats keep the
+previous rule: no selection means the chat's own conversation. If agents are
+off, nothing is rewritten. An archived selection, an archived `/agent`
+binding, or an archived or missing canonical primary stops with an error and
+does not fall through to another project.
 
 While a worker is selected, the message runs as that worker's canonical Web
-session (the same transcript, jobs, and project). Replies, cards, and images
-go back to the originating chat and topic. Task commands use that session's
-jobs. Apply and discard stay explicit. Callback buttons are short server
-tokens bound to the operator and the full physical chat, not a bare topic
-number.
+session (the same transcript, jobs, and project). The operator's text is not
+given an execution prefix, and ordinary messages do not get an extra status
+reply. Replies, cards, and images go back to the originating chat and topic.
+Task commands use that session's jobs. Apply and discard stay explicit.
+Callback buttons are short server tokens bound to the operator and the full
+physical chat, not a bare topic number.
+
+Lists, details, the switch menu, tasks, and continue / select / new
+confirmations start with a current-context line such as `当前：Conveyor › 主会话`.
+A detail that is only being browsed says so and is not the selected session.
+Duplicate session titles append the last six characters of the session id,
+for example `当前：Conveyor › Conveyor · 515095`. An explicit Telegram
+`/agent` binding is shown as `当前：<Agent> › Telegram 独立会话` and keeps
+that agent's project.
+
+Older Telegram transcripts are not copied or merged into the Web main
+session. They stay under their original session id (`telegram:<operator>:<chat>`
+or with `:agent:<id>`). Choosing that project again with `/agent` continues
+the old thread. `/agent reset` in a private chat only unbinds the project;
+the old transcript remains, and the next message uses the Web main session.
 
 In a private Telegram chat a persistent reply keyboard stays next to the
 input: 我的 Workers, 继续对话, 切换会话, and 查看任务. `/start` installs it
-(a separate message when the welcome also has the inline onboarding button)
-and lists Workers when agents are enabled. `/workers` installs it again.
-The inline session buttons stay. Continue, switch, and tasks use only the
-chat's current selected session; an archived selection fails closed, and
-with nothing selected the bot shows the list and asks you to choose a
-Worker. Those taps do not start a job or bind a default session. Group
-chats do not get the keyboard, and the same words stay ordinary text there.
+(a separate message when the welcome also has the inline onboarding button),
+shows the current context, and lists Workers when agents are enabled.
+`/workers` installs it again. The inline session buttons stay. Continue,
+switch, and tasks use the effective session, which is the canonical main
+session when nothing else is selected. An archived selection fails closed.
+Those taps do not start a job. Group chats do not get the keyboard, and the
+same words stay ordinary text there.
+
 During onboarding those buttons are not saved as your name; send `/onboard`
 again to finish. The first message before onboarding also shows the keyboard.
 

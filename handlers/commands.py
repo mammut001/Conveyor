@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Awaitable, Callable
 
@@ -78,8 +78,26 @@ def _join_arg(arg: str) -> str:
 
 # ---- Built-in commands ----------------------------------------------------
 
-async def _status(msg, port, runner, _settings, _arg):
-    await port.reply(msg, runner.status_text())
+async def _status(msg, port, runner, settings, _arg):
+    text = runner.status_text()
+    origin = getattr(port, "origin", None)
+    if origin is not None:
+        msg = replace(
+            msg,
+            channel=origin.channel,
+            operator_id=origin.operator_id,
+            chat_id=origin.chat_id,
+            chat_type=origin.chat_type or msg.chat_type,
+        )
+    line = ""
+    from agents import AgentError, enabled
+    if enabled(settings):
+        from handlers.workers import current_context_line
+        try:
+            line = current_context_line(settings, msg, persist=False)
+        except AgentError as exc:
+            line = str(exc)
+    await port.reply(msg, f"{line}\n{text}" if line else text)
 
 
 async def _last(msg, port, runner, _settings, _arg):
@@ -1932,7 +1950,7 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/ps [full confirm] — 进程快照，comm 默认；full confirm 才含 args\n"
     text += "自然语言 '看看我的负载' / '跑 htop 看看' / 'check vps load' 也走快路径。\n"
     text += "/agent — 查看当前项目 Agent；/agent list 列出；/agent <ID> 绑定聊天\n"
-    text += "/workers — 列出并继续 Web 上的同一 Worker 会话；/workers exit 回到原来的对话\n"
+    text += "/workers — 列出并继续 Web 上的同一 Worker 会话；私聊 /workers exit 回到主会话，群聊退出后回到原来的对话\n"
     text += "/tools — 列出 agent 工具层全部工具\n"
     text += "/diagnose [server|bot|logs|quick] — hybrid 主机诊断\n"
     text += "/restart telegram|feishu|maintain — 重启服务 (需确认)\n"

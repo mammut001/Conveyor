@@ -174,13 +174,15 @@ class WorkersMenuTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(side["session_id"], other["session_id"])
         self.dispatch.assert_not_awaited()
 
-    async def test_no_selection_shows_list_and_does_not_bind(self) -> None:
+    async def test_no_selection_uses_canonical_main_without_llm(self) -> None:
         update = self.update("💬 继续对话")
         await self.bot.text_cmd(update, MagicMock())
         body = self._texts(update)
-        self.assertIn("先从列表里点一个", body)
-        self.assertIn("我的 Workers", body)
-        self.assertIsNone(WorkerSessionStore(self.settings).selected("telegram", "42", "1"))
+        self.assertIn("当前：Conveyor › 主会话", body)
+        self.assertIn("已在这个聊天继续", body)
+        selected = WorkerSessionStore(self.settings).selected("telegram", "42", "1")
+        self.assertEqual(selected["source_chat_id"], "agent-default")
+        self.assertEqual(selected["channel"], "web")
         self.dispatch.assert_not_awaited()
 
     async def test_archived_selection_fails_closed(self) -> None:

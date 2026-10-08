@@ -53,6 +53,20 @@ DATE_ARG_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _WORKERS_KEYBOARD_TEXT = "Workers 在输入框旁边，不用记 /workers。"
 
 
+def _workers_context_suffix(update: Update) -> str:
+    """Current Worker line for private-chat welcome and the menu hint."""
+    from agents import AgentError, enabled
+    from handlers.workers import current_context_line
+    inbound = inbound_from_update(update)
+    if not enabled(settings) or inbound.chat_type != "p2p":
+        return ""
+    try:
+        line = current_context_line(settings, inbound, persist=True)
+    except AgentError as exc:
+        line = str(exc)
+    return f"\n{line}" if line else ""
+
+
 def workers_reply_keyboard() -> ReplyKeyboardMarkup:
     """Persistent private-chat menu. Not an inline card, so it stays by the input."""
     return ReplyKeyboardMarkup(
@@ -76,7 +90,7 @@ async def _attach_workers_keyboard(update: Update, text: str = _WORKERS_KEYBOARD
     """Install the reply keyboard in a private chat. Groups are left alone."""
     if inbound_from_update(update).chat_type != "p2p":
         return
-    await _reply(update, text, reply_markup=workers_reply_keyboard())
+    await _reply(update, text + _workers_context_suffix(update), reply_markup=workers_reply_keyboard())
 
 
 async def _show_workers_list(update: Update) -> None:
@@ -739,7 +753,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "你好！看起来这是第一次用。\n\n"
             "`/onboard` 告诉我怎么称呼你、用啥语言、想要啥风格，"
             "之后每次都会按这个走。\n"
-            "不想设的话 `/skip` 跳过（用默认）。",
+            "不想设的话 `/skip` 跳过（用默认）。"
+            + _workers_context_suffix(update),
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("开始 onboarding", callback_data="ob:start")],
             ]),
@@ -751,7 +766,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if inbound.chat_type == "p2p":
         await _reply(
             update,
-            "你好！直接发消息就行，我会像对话一样处理（shell、查资料、改文件都可以）。运维命令用 /help。",
+            "你好！直接发消息就行，我会像对话一样处理（shell、查资料、改文件都可以）。运维命令用 /help。"
+            + _workers_context_suffix(update),
             reply_markup=workers_reply_keyboard(),
         )
     else:

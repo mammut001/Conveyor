@@ -118,7 +118,17 @@ async def handle_agent_command(msg, port, runner, settings, arg: str) -> None:
         if arg == 'reset':
             store.bind_chat('telegram', source, None)
             _leave_workers(settings, msg, source)
-            await port.reply(msg, "已返回默认对话，默认会话原有历史仍保留。已绑定 Agent 的历史、任务和改动也保留，选择它即可继续。")
+            from agents import DEFAULT_AGENT_ID, DEFAULT_AGENT_NAME
+            from handlers.workers import _is_private_im
+            if _is_private_im(msg):
+                name = (store.get(DEFAULT_AGENT_ID) or {}).get('name') or DEFAULT_AGENT_NAME
+                await port.reply(
+                    msg,
+                    f"已解除项目绑定。下一条消息进入「{name}」主会话（与 Web 同一份记录）。"
+                    "原来的 Telegram 记录仍留在这个聊天的旧会话里，不会删除或合并。",
+                )
+            else:
+                await port.reply(msg, "已返回默认对话，默认会话原有历史仍保留。已绑定 Agent 的历史、任务和改动也保留，选择它即可继续。")
             return
         if arg.startswith('new '):
             name, sep, path = arg[4:].partition('|')
