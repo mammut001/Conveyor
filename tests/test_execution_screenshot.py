@@ -386,9 +386,10 @@ class ExecutionScreenshotTests(unittest.TestCase):
         import asyncio
         import builtins
         import shutil
-        from desktop_agent import generate_thumbnail
+        import desktop_agent
 
         self._routing_thumb.stop()
+        generate_thumbnail = desktop_agent.generate_thumbnail
         try:
             source = self.root / "wide.png"
             dest = self.root / "thumb.png"
