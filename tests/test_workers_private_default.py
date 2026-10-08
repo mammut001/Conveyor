@@ -406,7 +406,7 @@ class PrivateDefaultTests(unittest.IsolatedAsyncioTestCase):
         )
         await handle_workers_token(
             self.message("", channel="feishu", chat="oc_other", chat_type="p2p"),
-            quiet, None, self.settings, listed,
+            quiet, self.settings, None, listed,
         )
         self.assertIsNone(self.store.selected("feishu", "oc_other", "1"))
         fresh = self.message("hello", channel="feishu", chat="oc_private", chat_type="p2p")
