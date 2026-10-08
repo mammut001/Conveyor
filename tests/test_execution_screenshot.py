@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import struct
 import tempfile
 import unittest
+import zlib
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -62,6 +64,22 @@ class _Images:
         self.sent.append((chat_id, image_path, caption))
 
 
+def _png(width: int, height: int, rgb: tuple[int, int, int] = (12, 24, 36)) -> bytes:
+    """Uncompressed RGB PNG. Stdlib only, so routing tests do not need Pillow."""
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    raw = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+
+
+def _png_size(path: Path) -> tuple[int, int]:
+    data = path.read_bytes()
+    return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+
+
 def _install_loop(test: unittest.TestCase, settings):
     calls: list[tuple[str, str]] = []
 
@@ -69,18 +87,13 @@ def _install_loop(test: unittest.TestCase, settings):
         task = get_computer_task(settings, task_id) or {}
         scope = str(task.get("takeover_scope") or "default")
         node = settings.conveyor_desktop_node_id if scope == "default" else f"x11:{scope}"
-        from desktop_computer_requests import append_trajectory
+        from desktop_computer_requests import append_trajectory, set_task_status
         from desktop_screenshot import ensure_screenshot_dir
 
         screenshot_id = f"shot-{task_id}"
         directory = ensure_screenshot_dir(settings)
         image = directory / f"{screenshot_id}.png"
-        from io import BytesIO
-        from PIL import Image
-
-        buffer = BytesIO()
-        Image.new("RGB", (2, 2), (12, 24, 36)).save(buffer, format="PNG")
-        image.write_bytes(buffer.getvalue())
+        image.write_bytes(_png(2, 2))
         record = {
             "screenshot_id": screenshot_id,
             "path": str(image.resolve()),
@@ -97,6 +110,8 @@ def _install_loop(test: unittest.TestCase, settings):
             "screenshot_id": screenshot_id,
         })
         calls.append((type(backend).__name__, scope))
+        # The real loop marks the task terminal. Leaving it running blocks the next capture.
+        set_task_status(settings, task_id, "done", summary="observed")
         return {"ok": True, "task_id": task_id, "steps_used": 1}
 
     patch = mock.patch("desktop_computer_loop.run_computer_loop", _loop)
@@ -114,6 +129,19 @@ class ExecutionScreenshotTests(unittest.TestCase):
         self.calls = _install_loop(self, self.settings)
         from agents import AgentStore
         self.store = AgentStore(self.settings)
+
+        def _routing_thumb(source, dest, max_width, max_height, max_bytes, **kwargs):
+            dest = Path(dest)
+            raw = _png(1, 1)
+            if max_width < 1 or max_height < 1 or len(raw) > max_bytes:
+                return False
+            dest.write_bytes(raw)
+            return True
+
+        thumb = mock.patch("desktop_agent.generate_thumbnail", _routing_thumb)
+        thumb.start()
+        self.addCleanup(thumb.stop)
+        self._routing_thumb = thumb
 
     def test_canonical_main_uses_host_computer_not_observe_queue(self) -> None:
         import asyncio
@@ -256,6 +284,30 @@ class ExecutionScreenshotTests(unittest.TestCase):
             self.settings, _msg("agent-default"), "截图", port=None,
         ))
         self.assertIn("仅元数据", bare)
+        done = json.loads(computer_requests_path(self.settings).read_text(encoding="utf-8"))
+        self.assertTrue(all(task.get("status") == "done" for task in done["tasks"].values()))
+
+    def test_running_task_rejects_another_capture(self) -> None:
+        import asyncio
+        from desktop_computer_requests import create_computer_task
+
+        active = create_computer_task(
+            self.settings,
+            "observe only",
+            direct_mode=True,
+            max_steps=2,
+            max_seconds=30,
+            chat_id="agent-default",
+            channel="web",
+            single_active=True,
+        )
+        self.assertTrue(active.get("ok"))
+        text = asyncio.run(exec_desktop_observe_request(
+            self.settings, _msg("agent-default"), "截图", port=_Images(),
+        ))
+        self.assertIn("已有 Computer Use 任务", text)
+        self.assertIn("正在运行", text)
+        self.assertEqual(self.calls, [])
 
     def test_default_secondary_uses_host(self) -> None:
         import asyncio
@@ -332,27 +384,45 @@ class ExecutionScreenshotTests(unittest.TestCase):
 
     def test_thumbnail_linux_without_sips_and_oversize_stays_local(self) -> None:
         import asyncio
+        import builtins
+        import shutil
         from desktop_agent import generate_thumbnail
 
-        source = self.root / "wide.png"
-        dest = self.root / "thumb.png"
-        from PIL import Image
-        Image.new("RGB", (40, 20), (1, 2, 3)).save(source, format="PNG")
+        self._routing_thumb.stop()
+        try:
+            source = self.root / "wide.png"
+            dest = self.root / "thumb.png"
+            source.write_bytes(_png(40, 20, (1, 2, 3)))
+            self.assertEqual(_png_size(source), (40, 20))
+            binary = shutil.which("magick") or shutil.which("convert")
+            self.assertTrue(binary, "ImageMagick is required to prove the Linux thumbnail path")
 
-        def refuse_shell(command, **kwargs):
-            raise AssertionError(command)
+            real_import = builtins.__import__
 
-        with mock.patch("shutil.which", return_value=None), mock.patch("subprocess.run", refuse_shell):
-            self.assertTrue(generate_thumbnail(source, dest, 8, 8, 200000))
-        self.assertTrue(dest.is_file())
-        self.assertNotEqual(dest.read_bytes(), source.read_bytes())
-        with Image.open(dest) as image:
-            self.assertLessEqual(image.size[0], 8)
-            self.assertLessEqual(image.size[1], 8)
-        dest.unlink()
-        self.assertFalse(generate_thumbnail(source, dest, 8, 8, 30))
-        self.assertFalse(dest.exists())
-        self.assertFalse(generate_thumbnail(self.root / "missing.png", dest, 8, 8, 200000))
+            def hide_pil(name, globals=None, locals=None, fromlist=(), level=0):
+                if name == "PIL" or name.startswith("PIL."):
+                    raise ImportError("PIL absent")
+                return real_import(name, globals, locals, fromlist, level)
+
+            with mock.patch("builtins.__import__", hide_pil):
+                self.assertTrue(generate_thumbnail(source, dest, 8, 8, 200000))
+                self.assertTrue(dest.is_file())
+                self.assertNotEqual(dest.read_bytes(), source.read_bytes())
+                width, height = _png_size(dest)
+                self.assertGreater(width, 0)
+                self.assertGreater(height, 0)
+                self.assertLessEqual(width, 8)
+                self.assertLessEqual(height, 8)
+                dest.unlink()
+                self.assertFalse(generate_thumbnail(source, dest, 8, 8, 30))
+                self.assertFalse(dest.exists())
+                self.assertFalse(generate_thumbnail(self.root / "missing.png", dest, 8, 8, 200000))
+                invalid = self.root / "invalid.png"
+                invalid.write_bytes(b"\x89PNG\r\n")
+                self.assertFalse(generate_thumbnail(invalid, dest, 8, 8, 200000))
+                self.assertFalse(dest.exists())
+        finally:
+            self._routing_thumb.start()
 
         images = _Images()
         with mock.patch("desktop_agent.generate_thumbnail", return_value=False):

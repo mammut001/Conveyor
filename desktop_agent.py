@@ -225,21 +225,38 @@ def poll_observe_once(settings: Settings) -> None:
         raise SystemExit(_PERMISSION_RESTART_EXIT_CODE)
 
 
+def _png_dimensions(path: Path) -> tuple[int, int] | None:
+    """Read width and height from a PNG IHDR. No image library required."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if len(data) < 33 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    if int.from_bytes(data[8:12], "big") < 13 or data[12:16] != b"IHDR":
+        return None
+    width = int.from_bytes(data[16:20], "big")
+    height = int.from_bytes(data[20:24], "big")
+    if width <= 0 or height <= 0 or b"IEND" not in data:
+        return None
+    return width, height
+
+
 def _thumbnail_within_bounds(path: Path, max_width: int, max_height: int, max_bytes: int) -> bool:
-    """True only for a real image that respects width, height, and bytes."""
+    """True only for a real PNG that respects width, height, and bytes."""
     try:
         if not path.is_file():
             return False
         size = path.stat().st_size
         if size <= 0 or size > max_bytes:
             return False
-        from PIL import Image
-
-        with Image.open(path) as image:
-            width, height = image.size
-    except (OSError, ValueError):
+        dimensions = _png_dimensions(path)
+    except OSError:
         return False
-    return 0 < width <= max_width and 0 < height <= max_height
+    if dimensions is None:
+        return False
+    width, height = dimensions
+    return width <= max_width and height <= max_height
 
 
 def _write_bounded_thumbnail_pil(
@@ -249,7 +266,12 @@ def _write_bounded_thumbnail_pil(
     max_height: int,
     max_bytes: int,
 ) -> bool:
-    from PIL import Image
+    """Optional local fallback. Production thumbnails use ImageMagick and do not import Pillow."""
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.info("thumbnail Pillow fallback unavailable")
+        return False
 
     with Image.open(source_path) as image:
         image = image.convert("RGB")
@@ -563,13 +585,9 @@ def poll_upload_once(settings: Settings) -> None:
             logger.info("upload fail report failed: %s", exc)
         return
 
-    try:
-        from PIL import Image
-
-        with Image.open(thumb_path) as image:
-            width, height = image.size
-    except (OSError, ValueError) as exc:
-        logger.error("thumbnail dimensions unreadable: %s", exc)
+    dimensions = _png_dimensions(thumb_path)
+    if dimensions is None:
+        logger.error("thumbnail dimensions unreadable")
         try:
             post_json(
                 f"{control_plane_url}/desktop/upload/fail",
@@ -584,6 +602,7 @@ def poll_upload_once(settings: Settings) -> None:
         except Exception as report_exc:
             logger.info("upload fail report failed: %s", report_exc)
         return
+    width, height = dimensions
     if width > max_width or height > max_height or len(thumb_bytes) > max_bytes:
         logger.error("thumbnail exceeds bounds upload_id=%s", upload_id)
         try:
