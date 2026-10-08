@@ -9,10 +9,14 @@
 # rejected. The previous node record stays in the desktop state file; this
 # script does not delete history.
 #
-# The backup is created mode 0600 with O_EXCL before any rewrite. The temp
-# file is opened 0600 before its contents are written, then receives the
-# original mode and ownership. Output is the backup path and whether the
-# file changed. Other lines, including secrets, are not printed.
+# The backup is created mode 0600 with O_EXCL before any rewrite and does
+# not receive the service ACL. The temp file is opened 0600 before its
+# contents are written, then shutil.copystat copies mode, times, and xattrs
+# (including the POSIX ACL). Owner and group must match the original or the
+# script stops before replacing the file. If the original ACL cannot be
+# copied, the original file is left unchanged. Output is the backup path
+# and whether the file changed. Other lines, including secrets, are not
+# printed.
 #
 # Run this on the VPS after review, then restart the control plane so it
 # agrees with scripts/run-vps-computer.sh. That script uses vps-desktop /
@@ -32,9 +36,10 @@ if [[ ! -f "$env_file" ]]; then
 fi
 
 python3 - "$env_file" "$from_id" "$to_id" "$from_name" "$to_name" <<'PY'
+import errno
 import os
 import pathlib
-import stat
+import shutil
 import sys
 import time
 
@@ -113,6 +118,37 @@ original = file.stat()
 payload = "".join(out).encode("utf-8")
 
 
+ACL_XATTR = "system.posix_acl_access"
+_ABSENT = (
+    errno.ENOTSUP,
+    getattr(errno, "EOPNOTSUPP", errno.ENOTSUP),
+    getattr(errno, "ENODATA", errno.ENOENT),
+    getattr(errno, "ENOATTR", errno.ENOENT),
+)
+
+
+def read_acl(target: pathlib.Path):
+    """Return the POSIX ACL xattr, or None when the file or platform has none."""
+    if not hasattr(os, "getxattr"):
+        return None
+    try:
+        return os.getxattr(target, ACL_XATTR)
+    except OSError as exc:
+        if exc.errno in _ABSENT:
+            return None
+        raise
+
+
+def acl_matches(source: pathlib.Path, target: pathlib.Path) -> bool:
+    original_acl = read_acl(source)
+    if original_acl is None:
+        return True
+    try:
+        return read_acl(target) == original_acl
+    except OSError:
+        return False
+
+
 def write_exclusive(target: pathlib.Path, data: bytes) -> None:
     fd = os.open(str(target), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
@@ -129,11 +165,18 @@ def write_exclusive(target: pathlib.Path, data: bytes) -> None:
 try:
     write_exclusive(backup, file.read_bytes())
     write_exclusive(tmp, payload)
-    os.chmod(tmp, stat.S_IMODE(original.st_mode))
+    shutil.copystat(file, tmp)
     try:
         os.chown(tmp, original.st_uid, original.st_gid)
     except PermissionError:
         pass
+    published = tmp.stat()
+    if published.st_uid != original.st_uid or published.st_gid != original.st_gid:
+        tmp.unlink(missing_ok=True)
+        fail("refusing to publish: owner or group does not match the original", 1)
+    if not acl_matches(file, tmp):
+        tmp.unlink(missing_ok=True)
+        fail("refusing to publish: POSIX ACL was not preserved", 1)
     os.replace(tmp, file)
 except Exception:
     tmp.unlink(missing_ok=True)
