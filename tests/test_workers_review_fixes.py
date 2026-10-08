@@ -1,8 +1,10 @@
 """Regressions for the workers-card review: fail closed, claims, legacy callbacks."""
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
+import logging
 import sqlite3
 import subprocess
 import tempfile
@@ -26,6 +28,7 @@ from handlers.tools.confirm import (
 )
 from personal_tools import long_term_memory as ltm
 from tests.test_agents import _settings
+from transcript_store import get_transcript_store
 from web_chat import resolve_or_create_session
 from web_control import WebControl
 from worker_sessions import WorkerSessionStore
@@ -128,6 +131,62 @@ class SessionRegistryTests(unittest.TestCase):
         self.assertTrue(self.store.get(again["session_id"])["archived"])
         self.assertIsNone(resolve_or_create_session(self.control, again["source_chat_id"]))
 
+    def test_archived_or_unknown_primary_does_not_fall_open(self) -> None:
+        primary = f"agent-{self.agent['id']}"
+        durable = self.agent["session_id"]
+        active = resolve_or_create_session(self.control, durable)
+        self.assertEqual(active[2], primary)
+        self.assertEqual(resolve_or_create_session(self.control, primary)[2], primary)
+        secondary = self.store.create(self.agent["id"])
+        self.assertEqual(
+            resolve_or_create_session(self.control, secondary["source_chat_id"])[2],
+            secondary["source_chat_id"],
+        )
+        self.assertEqual(
+            resolve_or_create_session(self.control, secondary["session_id"])[2],
+            secondary["source_chat_id"],
+        )
+        free = resolve_or_create_session(self.control, "web-plainchat")
+        self.assertEqual(free[0], "web")
+        self.assertEqual(free[2], "web-plainchat")
+        legacy = get_transcript_store(self.settings)
+        legacy.append(
+            "telegram:1:42", "user", "hi",
+            channel="telegram", operator_id="1", source_chat_id="42",
+        )
+        self.assertEqual(resolve_or_create_session(self.control, "telegram:1:42")[:3], ("telegram", "1", "42"))
+
+        AgentStore(self.settings).archive(self.agent["id"])
+        self.assertIsNone(resolve_or_create_session(self.control, durable))
+        self.assertIsNone(resolve_or_create_session(self.control, primary))
+        self.assertIsNone(resolve_or_create_session(self.control, secondary["source_chat_id"]))
+        self.assertEqual(resolve_or_create_session(self.control, "web-plainchat")[2], "web-plainchat")
+        self.assertEqual(resolve_or_create_session(self.control, "telegram:1:42")[0], "telegram")
+
+    def test_archived_primary_transcript_missing_primary_and_disabled_feature(self) -> None:
+        primary = f"agent-{self.agent['id']}"
+        durable = self.agent["session_id"]
+        get_transcript_store(self.settings).append(
+            durable, "user", "kept",
+            channel="web", operator_id="web-console", source_chat_id=primary,
+        )
+        AgentStore(self.settings).archive(self.agent["id"])
+        self.assertIsNone(resolve_or_create_session(self.control, durable))
+        self.assertIsNone(resolve_or_create_session(self.control, primary))
+
+        missing = "agent-notarealid"
+        self.assertIsNone(resolve_or_create_session(self.control, missing))
+        self.assertIsNone(resolve_or_create_session(self.control, f"web:web-console:{missing}"))
+
+        disabled = replace(self.settings, agents_enabled=False)
+        queue = JobQueue()
+        queue.configure(disabled, runner=None, recover=False)
+        control = WebControl(disabled, runner=None, queue=queue)
+        live = AgentStore(self.settings).create({"name": "Beta", "instructions": "B"})
+        self.assertIsNone(resolve_or_create_session(control, live["session_id"]))
+        self.assertIsNone(resolve_or_create_session(control, f"agent-{live['id']}"))
+        self.assertEqual(resolve_or_create_session(control, "web-plainchat")[2], "web-plainchat")
+
 
 class ConfirmationScopeTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -228,6 +287,47 @@ def _telegram_update(data: str):
     )
 
 
+def _telegram_callbacks(settings):
+    """Load Telegram callback handlers without importing bot.py.
+
+    Importing bot.py loads settings, starts logging, and configures the global
+    job queue. The real ``_guard`` plus the real inbound/outbound helpers keep
+    the allowlist and chat context. ``runner`` is only an argument dispatch
+    receives.
+    """
+    from channel.auth import is_allowed
+    from channel.telegram import inbound_from_update, make_outbound
+    from handlers.tools.runner import cancel_pending, execute_confirmed, parse_tool_callback
+
+    source = (ROOT / "bot.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    wanted = {"_guard", "tool_callback", "deep_callback"}
+    chunks = [
+        ast.get_source_segment(source, node)
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in wanted
+    ]
+    if len([chunk for chunk in chunks if chunk]) != 3:
+        raise AssertionError("telegram callback sources missing")
+    namespace: dict = {
+        "settings": settings,
+        "logger": logging.getLogger("telegram-callback-test"),
+        "is_allowed": is_allowed,
+        "inbound_from_update": inbound_from_update,
+        "make_outbound": make_outbound,
+        "parse_tool_callback": parse_tool_callback,
+        "execute_confirmed": execute_confirmed,
+        "cancel_pending": cancel_pending,
+        "replace": replace,
+        "Update": object,
+        "ContextTypes": SimpleNamespace(DEFAULT_TYPE=object),
+        "runner": SimpleNamespace(),
+        "dispatch": AsyncMock(),
+    }
+    exec("\n\n".join(chunk for chunk in chunks if chunk), namespace)
+    return namespace
+
+
 class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -239,9 +339,9 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
         self.session = self.store.create(self.agent["id"], title="Side")
         clear_all_pending()
         self.addCleanup(clear_all_pending)
+        self.callbacks = _telegram_callbacks(self.settings)
 
     async def test_old_deep_button_does_not_run_another_workers_session(self) -> None:
-        import bot
         from channel.telegram_identity import context_tag
 
         self.store.select("telegram", "42", "1", self.session["session_id"])
@@ -256,19 +356,17 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
         async def _reply(_update, text, reply_markup=None):
             replies.append(text)
 
-        with patch("bot.settings", self.settings), patch("bot.dispatch", capture), patch("bot._reply", _reply):
-            await bot.deep_callback(update, SimpleNamespace())
+        self.callbacks["dispatch"] = capture
+        self.callbacks["_reply"] = _reply
+        await self.callbacks["deep_callback"](update, SimpleNamespace())
         self.assertEqual(seen, [])
         self.assertTrue(replies and "之前" in replies[-1])
 
         self.store.clear("telegram", "42", "1")
-        with patch("bot.settings", self.settings), patch("bot.dispatch", capture), patch("bot._reply", _reply):
-            await bot.deep_callback(update, SimpleNamespace())
+        await self.callbacks["deep_callback"](update, SimpleNamespace())
         self.assertEqual(seen, [("telegram", "42")])
 
     async def test_old_tool_callback_does_not_confirm_under_another_session(self) -> None:
-        import bot
-
         pending = create_pending("notes.add", "legacy", "1", "42", "telegram", settings=self.settings)
         self.store.select("telegram", "42", "1", self.session["session_id"])
         update = _telegram_update(f"tool:confirm:{pending.token}")
@@ -278,15 +376,15 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
         async def _reply(_update, text, reply_markup=None):
             replies.append(text)
 
-        with patch("bot.settings", self.settings), patch("bot.execute_confirmed", execute), patch("bot._reply", _reply):
-            await bot.tool_callback(update, SimpleNamespace())
+        self.callbacks["execute_confirmed"] = execute
+        self.callbacks["_reply"] = _reply
+        await self.callbacks["tool_callback"](update, SimpleNamespace())
         execute.assert_not_awaited()
         self.assertIn("之前", replies[-1])
         self.assertIsNotNone(get_pending(pending.token, settings=self.settings))
 
         self.store.clear("telegram", "42", "1")
-        with patch("bot.settings", self.settings), patch("bot.execute_confirmed", execute), patch("bot._reply", _reply):
-            await bot.tool_callback(update, SimpleNamespace())
+        await self.callbacks["tool_callback"](update, SimpleNamespace())
         execute.assert_awaited()
 
     async def test_old_feishu_cards_do_not_follow_a_new_workers_session(self) -> None:
@@ -316,6 +414,7 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
             "dataclasses": dataclasses,
             "asyncio": asyncio,
             "Any": object,
+            "runner": SimpleNamespace(),
         }
         exec("\n\n".join(chunk for chunk in chunks if chunk), namespace)
         handle = namespace["_handle_card_action"]
