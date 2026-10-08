@@ -8,10 +8,20 @@ from redaction import redact_text, truncate
 _COMMANDS = frozenset({'status', 'last', 'jobs', 'cancel', 'diff', 'apply', 'discard'})
 
 
+def _scoped(msg, settings) -> bool:
+    """Telegram conversations, and a Workers-selected canonical web session."""
+    if msg.channel == 'telegram':
+        return getattr(settings, 'agents_enabled', False) is True or ':topic:' in msg.chat_id
+    return (
+        msg.channel == 'web'
+        and msg.operator_id == 'web-console'
+        and getattr(settings, 'agents_enabled', False) is True
+        and str(msg.chat_id).startswith('agent-')
+    )
+
+
 async def handle_conversation_command(name, msg, port, runner, settings, arg) -> bool:
-    if name not in _COMMANDS or msg.channel != 'telegram':
-        return False
-    if getattr(settings, 'agents_enabled', False) is not True and ':topic:' not in msg.chat_id:
+    if name not in _COMMANDS or not _scoped(msg, settings):
         return False
     from handlers.job_queue import get_job_queue
     from refinement_store import RefinementStore, stable_session_id

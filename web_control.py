@@ -27,6 +27,11 @@ class WebControl:
         self.queue = queue
         self.started_at = time.time()
         self._init_approvals()
+        try:
+            from handlers.tools.confirm import configure_confirmation_store
+            configure_confirmation_store(self.queue._db_path())
+        except Exception:
+            pass
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.queue._db_path()), timeout=10.0)
@@ -697,19 +702,41 @@ class WebControl:
             message = transcript.last_message(item["session_id"])
             if message and (last is None or str(message.get("created_at") or "") >= str(last.get("created_at") or "")):
                 last = message
-            latest_job = (sessions.get(item["session_id"]) or {}).get("latest_job") or {}
             if item["session_id"] in waiting:
                 status = "waiting"
-            elif status != "waiting" and latest_job.get("state") in ("running", "queued"):
-                status = "working"
+        active_states = ("running", "queued")
         for job in jobs or []:
             key = (str(job.get("channel") or ""), str(job.get("operator_id") or ""), str(job.get("chat_id") or ""))
             if key not in owned_chats and str(job.get("session_id") or "") not in owned_ids:
                 continue
             if str(job.get("session_id") or "") in waiting or job.get("state") in ("needs_approval", "approval"):
                 status = "waiting"
-            elif status != "waiting" and job.get("state") in ("running", "queued"):
+            elif status != "waiting" and job.get("state") in active_states:
                 status = "working"
+        # A newer terminal job must not hide an older running job, including
+        # one past the recent-job snapshot. Confirmations live in the shared
+        # file so another process's pending tool still shows as waiting.
+        try:
+            from handlers.tools.confirm import shared_pending_contexts
+            pending = shared_pending_contexts(self.queue._db_path())
+            if owned_chats & pending:
+                status = "waiting"
+        except Exception:
+            pass
+        try:
+            connection = self._connect()
+            try:
+                rows = connection.execute(
+                    "SELECT channel, operator_id, chat_id, state FROM queued_jobs WHERE state IN ('queued', 'running')"
+                ).fetchall()
+            finally:
+                connection.close()
+            for row in rows:
+                key = (str(row["channel"] or ""), str(row["operator_id"] or ""), str(row["chat_id"] or ""))
+                if key in owned_chats and status != "waiting":
+                    status = "working"
+        except Exception:
+            pass
         session = sessions.get(agent["session_id"]) or {}
         preview = " ".join(redact_text(str((last or {}).get("content") or "")).split())[:160]
         # Jobs only run in a project folder that is the root of a git repository.

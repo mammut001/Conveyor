@@ -120,6 +120,10 @@ async def _handle_card_action(msg: Any) -> None:
 
     action = payload["action"]
     try:
+        if action == "workers":
+            from handlers.workers import handle_workers_token
+            await handle_workers_token(inbound, port, settings, runner, str(payload.get("token") or ""))
+            return
         if action in ("confirm", "cancel_confirm"):
             token = payload.get("token", "")
             if not token:
@@ -164,7 +168,7 @@ async def _handle_card_action(msg: Any) -> None:
             return
         # Synthesize a typed slash command and re-enter the regular
         # dispatch path. parse_command will recognize it.
-        inbound.text = f"/{cmd}"
+        inbound = dataclasses.replace(inbound, text=f"/{cmd}")
         await dispatch(inbound, port, settings, runner)
     except Exception:
         logger.exception("Card action handler failed: action=%s", action)

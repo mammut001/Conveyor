@@ -81,6 +81,8 @@ class WorkerSessionStore:
                         token TEXT PRIMARY KEY,
                         operator_id TEXT NOT NULL,
                         channel TEXT NOT NULL,
+                        -- Full physical source (chat and topic), not a bare topic number.
+                        -- Another chat can reuse the same topic id.
                         topic TEXT NOT NULL DEFAULT '',
                         agent_id TEXT NOT NULL,
                         session_id TEXT NOT NULL,
@@ -89,6 +91,8 @@ class WorkerSessionStore:
                         extra_json TEXT NOT NULL DEFAULT '{}',
                         expires_at REAL NOT NULL
                     );
+                    CREATE INDEX IF NOT EXISTS idx_worker_callback_tokens_expiry
+                        ON worker_callback_tokens(expires_at);
                     """
                 )
         finally:
@@ -210,12 +214,20 @@ class WorkerSessionStore:
         current_source: str,
         title: Any = None,
     ) -> dict[str, Any]:
-        """Bind an existing IM chat to an agent for this operator's current chat only."""
+        """Bind an existing IM chat to an agent for this operator's current chat only.
+
+        The stored id is ``requested.conversation`` (Telegram suffix kept). The
+        physical chat/topic must be the caller's current chat. A ``:agent:``
+        suffix must name ``agent_id``. A raw chat is accepted only for the
+        default agent, or when this chat is already bound to ``agent_id``.
+        Existing legacy rows are not repointed at another agent.
+        """
         self._active_agent(agent_id)
         channel = str(channel or "")
         if str(operator_id) != str(requester_operator):
             raise AgentError("session is outside this operator")
         if channel == "telegram":
+            from agents import DEFAULT_AGENT_ID
             from channel.telegram_identity import TelegramAddress
 
             try:
@@ -225,7 +237,16 @@ class WorkerSessionStore:
                 raise AgentError("invalid telegram chat") from exc
             if requested.source != current.source:
                 raise AgentError("session is outside this chat")
-            source = requested.source
+            if requested.agent_id:
+                if requested.agent_id != agent_id:
+                    raise AgentError("legacy session belongs to another agent")
+            else:
+                bound = AgentStore(self.settings).bound_agent_id(channel, requested.source)
+                if bound and bound != agent_id:
+                    raise AgentError("legacy session belongs to another agent")
+                if not bound and agent_id != DEFAULT_AGENT_ID:
+                    raise AgentError("legacy session belongs to another agent")
+            source = requested.conversation
         elif channel == "feishu":
             source = str(source_chat_id or "")
             if not source or source != str(current_source or ""):
@@ -269,8 +290,13 @@ class WorkerSessionStore:
         if session is None or session["archived"]:
             raise AgentError("session is not available")
         self._active_agent(session["agent_id"])
-        if session["kind"] == "legacy" and session["operator_id"] != str(operator_id):
-            raise AgentError("session is outside this operator")
+        if session["kind"] == "legacy":
+            if session["operator_id"] != str(operator_id) or session["channel"] != str(channel or ""):
+                raise AgentError("session is outside this operator")
+            legacy_source = self._physical_source(session["channel"], session["source_chat_id"])
+            current_source = self._physical_source(str(channel or ""), source_chat_id)
+            if legacy_source != current_source:
+                raise AgentError("session is outside this chat")
         source = self._physical_source(str(channel or ""), source_chat_id)
         if not source or not str(operator_id or ""):
             raise AgentError("selection context is incomplete")
@@ -303,7 +329,10 @@ class WorkerSessionStore:
             return None
         session = self.get(str(row["session_id"]))
         if session is None or session["archived"]:
-            return None
+            raise AgentError("已选会话不可用。发送 /workers exit 或 /agent 恢复。")
+        self._active_agent(session["agent_id"])
+        if session["kind"] == "legacy" and session["operator_id"] != str(operator_id or ""):
+            raise AgentError("已选会话不可用。发送 /workers exit 或 /agent 恢复。")
         return session
 
     def clear(self, channel: str, source_chat_id: str, operator_id: str) -> None:
@@ -333,10 +362,17 @@ class WorkerSessionStore:
         ttl: float = _DEFAULT_TTL,
         now: float | None = None,
     ) -> str:
+        """Issue a callback token.
+
+        ``topic`` stores the full physical source (chat id and forum topic),
+        not a bare topic number. Two chats can both have topic 2.
+        """
         self._active_agent(agent_id)
         session = self.get(session_id)
         if session is None or session["archived"] or session["agent_id"] != agent_id:
             raise AgentError("session is not available")
+        if session["kind"] == "legacy" and session["operator_id"] != str(operator_id):
+            raise AgentError("session is outside this operator")
         if not _ACTION_RE.fullmatch(str(action or "")):
             raise AgentError("action is not available")
         payload = extra or {}
@@ -346,10 +382,17 @@ class WorkerSessionStore:
         if len(encoded) > _MAX_EXTRA:
             raise AgentError("token extra is too large")
         stamp = time.time() if now is None else now
-        token = secrets.token_urlsafe(24)
+        token = secrets.token_urlsafe(18)
         conn = self._connect()
         try:
             with conn:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_worker_callback_tokens_expiry ON worker_callback_tokens(expires_at)"
+                )
+                conn.execute(
+                    "DELETE FROM worker_callback_tokens WHERE expires_at <= ?",
+                    (stamp,),
+                )
                 conn.execute(
                     """INSERT INTO worker_callback_tokens
                        (token, operator_id, channel, topic, agent_id, session_id, action, page, extra_json, expires_at)
@@ -363,6 +406,38 @@ class WorkerSessionStore:
             conn.close()
         return token
 
+    def lookup_token(
+        self,
+        token: str,
+        *,
+        operator_id: str,
+        channel: str,
+        topic: Any = "",
+        agent_id: str | None = None,
+        session_id: str | None = None,
+        action: str | None = None,
+        page: int | None = None,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Return the captured callback given only the token and the authenticated scope.
+
+        Callers do not supply agent, session, or action. Optional expected
+        fields, when passed, must match the stored row. ``topic`` is the full
+        physical source (chat and topic).
+        """
+        return self._resolve(
+            token,
+            operator_id=operator_id,
+            channel=channel,
+            topic=topic,
+            agent_id=agent_id,
+            session_id=session_id,
+            action=action,
+            page=page,
+            now=now,
+            require_target=False,
+        )
+
     def resolve_token(
         self,
         token: str,
@@ -375,6 +450,33 @@ class WorkerSessionStore:
         action: str,
         page: int | None = None,
         now: float | None = None,
+    ) -> dict[str, Any]:
+        return self._resolve(
+            token,
+            operator_id=operator_id,
+            channel=channel,
+            topic=topic,
+            agent_id=agent_id,
+            session_id=session_id,
+            action=action,
+            page=page,
+            now=now,
+            require_target=True,
+        )
+
+    def _resolve(
+        self,
+        token: str,
+        *,
+        operator_id: str,
+        channel: str,
+        topic: Any,
+        agent_id: str | None,
+        session_id: str | None,
+        action: str | None,
+        page: int | None,
+        now: float | None,
+        require_target: bool,
     ) -> dict[str, Any]:
         conn = self._connect()
         try:
@@ -392,15 +494,27 @@ class WorkerSessionStore:
             "operator_id": str(operator_id),
             "channel": str(channel),
             "topic": str(topic or ""),
-            "agent_id": str(agent_id),
-            "session_id": str(session_id),
-            "action": str(action),
         }
+        if require_target or agent_id is not None:
+            expected["agent_id"] = str(agent_id or "")
+        if require_target or session_id is not None:
+            expected["session_id"] = str(session_id or "")
+        if require_target or action is not None:
+            expected["action"] = str(action or "")
         for key, value in expected.items():
             if str(row[key]) != value:
                 raise AgentError("callback token rejected")
         if page is not None and int(row["page"]) != int(page):
             raise AgentError("callback token rejected")
+        session = self.get(str(row["session_id"]))
+        if session is None or session["archived"] or session["agent_id"] != str(row["agent_id"]):
+            raise AgentError("callback token rejected")
+        if session["kind"] == "legacy" and session["operator_id"] != str(row["operator_id"]):
+            raise AgentError("callback token rejected")
+        try:
+            self._active_agent(str(row["agent_id"]))
+        except AgentError as exc:
+            raise AgentError("callback token rejected") from exc
         try:
             extra = json.loads(row["extra_json"] or "{}")
         except json.JSONDecodeError:

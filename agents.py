@@ -411,24 +411,36 @@ class AgentStore:
 
 
 def agent_for_chat(settings: Any, channel: str, chat_id: str) -> dict[str, Any] | None:
-    """The agent a conversation belongs to, or None when agents are off."""
+    """The agent a conversation belongs to, or None when agents are off.
+
+    Reserved secondary session ids (``agent-<id>-s-<hex>``) never fall through
+    to the default workspace. Unknown, archived, and disabled targets raise
+    ``AgentError`` so execution stops. A legacy primary web id (``agent-<id>``)
+    still returns None when that agent is archived or missing.
+    """
+    from worker_sessions import WorkerSessionStore
+
+    chat_id = str(chat_id or "")
     if not enabled(settings):
-        if channel == "telegram" and ":agent:" in str(chat_id):
+        if channel == "telegram" and ":agent:" in chat_id:
             raise AgentError("此任务属于已绑定的 Agent，但 Agent 功能已关闭。请重新开启后处理，任务不会转到默认项目。")
+        if channel == WEB_CHANNEL and WorkerSessionStore.is_secondary_chat_id(chat_id):
+            raise AgentError("此会话的 Agent 不可用，任务不会转到默认项目。")
         return None
     store = AgentStore(settings)
-    chat_id = str(chat_id or "")
     if channel == WEB_CHANNEL:
-        from worker_sessions import WorkerSessionStore
-
         sessions = WorkerSessionStore(settings)
+        if sessions.is_secondary_chat_id(chat_id):
+            owned = sessions.owner_agent_id(WEB_CHANNEL, chat_id)
+            agent = store.get(owned) if owned else None
+            if not agent or agent["archived"]:
+                raise AgentError("此会话的 Agent 不可用，任务不会转到默认项目。")
+            return agent
         owned = sessions.owner_agent_id(WEB_CHANNEL, chat_id)
         if owned is not None:
             agent = store.get(owned)
             # Archived, disabled, or missing registry targets do not fall through.
             return agent if agent and not agent["archived"] else None
-        if sessions.is_secondary_chat_id(chat_id):
-            return None
         if chat_id.startswith(AGENT_CHAT_PREFIX):
             agent = store.get(chat_id[len(AGENT_CHAT_PREFIX):])
             # An archived or unknown agent has no say over a conversation.

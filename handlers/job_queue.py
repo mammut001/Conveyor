@@ -83,6 +83,7 @@ class QueuedJob:
     position: int = 0
     session_id: str = ""
     refinement_intent: bool = False
+    delivery_origin: dict[str, Any] | None = None
 
     _msg: "InboundMessage | None" = field(default=None, repr=False)
     _port: "OutboundPort | None" = field(default=None, repr=False)
@@ -196,6 +197,11 @@ class JobQueue:
         if hasattr(settings, "conveyor_max_pending_jobs"):
             self._max_length = settings.conveyor_max_pending_jobs
         self.recover_and_load(mark_interrupted=recover)
+        try:
+            from handlers.tools.confirm import configure_confirmation_store
+            configure_confirmation_store(self._db_path())
+        except Exception:
+            pass
 
     def _db_path(self) -> Path:
         if self._settings and hasattr(self._settings, "codex_memory_root"):
@@ -370,6 +376,7 @@ class JobQueue:
             position=row["position"],
             session_id=str(row["session_id"] or "") if "session_id" in keys else "",
             refinement_intent=bool(row["refinement_intent"]) if "refinement_intent" in keys else False,
+            delivery_origin=metadata.get("delivery_origin") if isinstance(metadata.get("delivery_origin"), dict) else None,
             _msg=msg,
             _port=port,
             _runner=runner,
@@ -424,11 +431,21 @@ class JobQueue:
 
                 job_id = self._next_id(conn)
                 now_str = datetime.now(timezone.utc).isoformat()
-                metadata_json = json.dumps({
+                metadata: dict[str, Any] = {
                     "original_text": original_text or msg.text,
                     "session_id": session_id,
                     "refinement_intent": refinement_intent,
-                })
+                }
+                origin = getattr(port, "delivery_origin", None)
+                if isinstance(origin, dict) and origin.get("channel") and origin.get("chat_id") and origin.get("operator_id"):
+                    metadata["delivery_origin"] = {
+                        "channel": str(origin["channel"]),
+                        "operator_id": str(origin["operator_id"]),
+                        "chat_id": str(origin["chat_id"]),
+                        "chat_type": str(origin.get("chat_type") or ""),
+                        "message_id": str(origin.get("message_id") or ""),
+                    }
+                metadata_json = json.dumps(metadata)
                 conn.execute(
                     """INSERT INTO queued_jobs (
                            id, operator_id, channel, chat_id, mode, prompt, state,

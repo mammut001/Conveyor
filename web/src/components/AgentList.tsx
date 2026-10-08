@@ -14,6 +14,14 @@ export type Agent = {
   last_message_role?: string | null
   last_activity?: string | null
   message_count: number
+  sessions?: WorkerSession[]
+}
+
+export type WorkerSession = {
+  id: string
+  title: string
+  kind: string
+  source_chat_id: string
 }
 
 export const AGENT_COLORS = ['#2f7df6', '#f59e0b', '#f97316', '#8b5cf6', '#10b981', '#ec4899', '#a16207', '#64748b']
@@ -38,12 +46,35 @@ function preview(agent: Agent): string {
   return agent.instructions || 'No messages yet'
 }
 
-export function AgentList({ agents, selectedId, onSelect, onNew, onEdit }: {
+export function WorkerSessionPicker({ sessions, selectedId, onSelect, onCreate }: {
+  sessions: WorkerSession[]
+  selectedId: string
+  onSelect: (sessionId: string) => void
+  onCreate: () => void
+}) {
+  if (!sessions.length) return null
+  return (
+    <div className="worker-session-picker">
+      <select aria-label="Worker session" value={selectedId} onChange={event => onSelect(event.target.value)}>
+        {sessions.map(session => (
+          <option key={session.id} value={session.id}>{session.title || session.id}</option>
+        ))}
+      </select>
+      <button type="button" onClick={onCreate}>新建会话</button>
+    </div>
+  )
+}
+
+export function AgentList({ agents, selectedId, onSelect, onNew, onEdit, workerSessions, selectedWorkerSessionId, onSelectWorkerSession, onCreateWorkerSession }: {
   agents: Agent[]
   selectedId: string
   onSelect: (agent: Agent) => void
   onNew: () => void
   onEdit: (agent: Agent) => void
+  workerSessions?: WorkerSession[]
+  selectedWorkerSessionId?: string
+  onSelectWorkerSession?: (sessionId: string) => void
+  onCreateWorkerSession?: () => void
 }) {
   return (
     <>
@@ -71,6 +102,14 @@ export function AgentList({ agents, selectedId, onSelect, onNew, onEdit }: {
               {agent.status !== 'idle' && <span className={`agent-status-dot ${agent.status}`} aria-label={agent.status === 'waiting' ? 'Waiting for you' : 'Working'} />}
             </button>
             <button type="button" className="agent-edit-btn" title="Edit agent" aria-label={`Edit ${agent.name}`} onClick={() => onEdit(agent)}>⋯</button>
+            {agent.id === selectedId && workerSessions && onSelectWorkerSession && onCreateWorkerSession && (
+              <WorkerSessionPicker
+                sessions={workerSessions}
+                selectedId={selectedWorkerSessionId || workerSessions[0]?.id || ''}
+                onSelect={onSelectWorkerSession}
+                onCreate={onCreateWorkerSession}
+              />
+            )}
           </div>
         ))}
       </div>

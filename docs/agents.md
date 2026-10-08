@@ -39,6 +39,28 @@ sessions and the queue.
   the agent leaves the list and its instructions stop applying. `default`
   cannot be removed.
 
+## Workers
+
+`/workers` on Telegram and Feishu lists every agent the Web console lists,
+a page at a time, with the same idle / working / waiting status. Opening a
+worker shows one session (the chat's current selection when it belongs to
+that worker, otherwise the worker's main session) and four actions: continue,
+tasks, switch session, and back. Back returns to the full worker list.
+Browsing does not bind the chat. Continue, choosing a session, or creating
+one does, for this physical chat, topic, and operator only. `/workers exit`
+clears that binding and leaves history in place. An explicit `/agent` switch,
+new agent, or reset also leaves Workers mode; `/agent` and `/agent list` do not.
+
+While a worker is selected, the message runs as that worker's canonical Web
+session (the same transcript, jobs, and project). Replies, cards, and images
+go back to the originating chat and topic. Task commands use that session's
+jobs. Apply and discard stay explicit. Callback buttons are short server
+tokens bound to the operator and the full physical chat, not a bare topic
+number.
+
+`/agent` remains the way to bind a Telegram chat to its own legacy project
+conversation. That history is not rewritten into the Web session.
+
 ## Telegram project conversations
 
 Enable `CONVEYOR_AGENTS_ENABLED=true`, then select a project in Telegram:

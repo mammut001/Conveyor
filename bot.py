@@ -480,6 +480,30 @@ async def deep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await dispatch(inbound, make_outbound(update), settings, runner)
 
 
+async def workers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard(update):
+        return
+    await _dispatch_command(update)
+
+
+async def workers_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Server token for Workers navigation, captured-session tasks, and translated confirms."""
+    if not await _guard(update):
+        return
+    query = update.callback_query
+    if query is None:
+        return
+    data = query.data or ""
+    if len(data.encode("utf-8")) > 64 or not data.startswith("wk:") or not data[3:]:
+        await query.answer()
+        await _reply(update, "这个按钮已失效。")
+        return
+    await query.answer()
+    from handlers.workers import handle_workers_token
+    inbound = inbound_from_update(update, text="")
+    await handle_workers_token(inbound, make_outbound(update), settings, runner, data[3:])
+
+
 async def agent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
@@ -654,6 +678,7 @@ async def post_init(application: Application) -> None:
     await application.bot.set_my_commands(
         [
             ("agent", "查看或绑定项目 Agent"),
+            ("workers", "列出或继续 Worker 会话"),
             ("fix", "改文件：/fix <需求>"),
             ("jobs", "看最近任务"),
             ("last", "看最近结果"),
@@ -775,6 +800,8 @@ def main() -> None:
         )
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
+    application.add_handler(CommandHandler("workers", workers_cmd))
+    application.add_handler(CallbackQueryHandler(workers_callback, pattern=r"^wk:"))
     application.add_handler(CallbackQueryHandler(tool_callback, pattern=r"^tool:"))
     application.add_handler(CallbackQueryHandler(relay_callback, pattern=r"^relay:"))
     application.add_handler(CallbackQueryHandler(deep_callback, pattern=r"^deep(?::[a-f0-9]{16})?$"))

@@ -11,6 +11,12 @@ from channel.telegram_identity import TelegramAddress, context_tag
 _PAGE_SIZE = 6
 
 
+def _leave_workers(settings, msg, source: str) -> None:
+    """An explicit /agent switch leaves Workers mode. Listing agents does not."""
+    from worker_sessions import WorkerSessionStore
+    WorkerSessionStore(settings).clear('telegram', source, msg.operator_id)
+
+
 def _source(msg) -> str:
     return TelegramAddress.parse(msg.chat_id).source
 
@@ -111,6 +117,7 @@ async def handle_agent_command(msg, port, runner, settings, arg: str) -> None:
             return
         if arg == 'reset':
             store.bind_chat('telegram', source, None)
+            _leave_workers(settings, msg, source)
             await port.reply(msg, "已返回默认对话，默认会话原有历史仍保留。已绑定 Agent 的历史、任务和改动也保留，选择它即可继续。")
             return
         if arg.startswith('new '):
@@ -123,6 +130,7 @@ async def handle_agent_command(msg, port, runner, settings, arg: str) -> None:
             selected = _resolve(store, arg)
         try:
             store.bind_chat('telegram', source, selected['id'])
+            _leave_workers(settings, msg, source)
         except AgentError as exc:
             if arg.startswith('new '):
                 raise AgentError(f"已创建 {selected['name']} ({selected['id']})，尚未切换：{exc}") from exc

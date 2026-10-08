@@ -5,10 +5,12 @@ the operator confirms via Telegram inline button or text YES/确认.
 """
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 _CONFIRM_TTL_SECONDS = 300.0
 
@@ -37,6 +39,85 @@ class PendingToolAction:
 _lock = threading.RLock()
 _pending: dict[str, PendingToolAction] = {}
 _by_context: dict[ContextKey, str] = {}
+_store_path: Path | None = None
+
+
+def configure_confirmation_store(path: Path | str | None) -> None:
+    """Shared pending-confirmation file so another process can see waiting work."""
+    global _store_path
+    _store_path = Path(path) if path else None
+
+
+def _persist_conn() -> sqlite3.Connection | None:
+    if _store_path is None:
+        return None
+    _store_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(_store_path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS pending_tool_confirmations (
+               token TEXT PRIMARY KEY,
+               tool_name TEXT NOT NULL,
+               operator_id TEXT NOT NULL,
+               chat_id TEXT NOT NULL,
+               channel TEXT NOT NULL,
+               created_at REAL NOT NULL,
+               expires_at REAL NOT NULL
+           )"""
+    )
+    return conn
+
+
+def _persist_upsert(action: PendingToolAction) -> None:
+    conn = _persist_conn()
+    if conn is None:
+        return
+    try:
+        with conn:
+            conn.execute(
+                """INSERT INTO pending_tool_confirmations
+                   (token, tool_name, operator_id, chat_id, channel, created_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(token) DO UPDATE SET
+                     expires_at = excluded.expires_at, chat_id = excluded.chat_id""",
+                (
+                    action.token, action.tool_name, action.operator_id, action.chat_id,
+                    action.channel, action.created_at, action.expires_at,
+                ),
+            )
+    finally:
+        conn.close()
+
+
+def _persist_delete(token: str) -> None:
+    conn = _persist_conn()
+    if conn is None:
+        return
+    try:
+        with conn:
+            conn.execute("DELETE FROM pending_tool_confirmations WHERE token = ?", (token,))
+    finally:
+        conn.close()
+
+
+def shared_pending_contexts(path: Path | str | None = None, *, now: float | None = None) -> set[tuple[str, str, str]]:
+    """Live confirmation contexts ``(channel, operator_id, chat_id)`` from the shared file."""
+    target = Path(path) if path else _store_path
+    if target is None or not target.exists():
+        return set()
+    stamp = time.time() if now is None else now
+    conn = sqlite3.connect(str(target), timeout=10.0)
+    try:
+        rows = conn.execute(
+            """SELECT channel, operator_id, chat_id FROM pending_tool_confirmations
+               WHERE expires_at > ?""",
+            (stamp,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return set()
+    finally:
+        conn.close()
+    return {(str(row[0]), str(row[1]), str(row[2])) for row in rows}
 
 
 def _context_key(operator_id: str, chat_id: str, channel: str) -> ContextKey:
@@ -62,6 +143,7 @@ def create_pending(
     with _lock:
         _pending[token] = action
         _by_context[_context_key(operator_id, chat_id, channel)] = token
+    _persist_upsert(action)
     return action
 
 
@@ -96,7 +178,9 @@ def set_pending_ttl(token: str, ttl_seconds: float) -> PendingToolAction | None:
         action = get_pending(token)
         if action is not None:
             action.ttl_seconds = float(ttl_seconds)
-        return action
+    if action is not None:
+        _persist_upsert(action)
+    return action
 
 
 def restore_pending(action: PendingToolAction) -> bool:
@@ -112,7 +196,10 @@ def restore_pending(action: PendingToolAction) -> bool:
         current = _pending.get(_by_context.get(key, ""))
         if current is None or current.created_at <= action.created_at:
             _by_context[key] = action.token
-        return True
+        saved = True
+    if saved:
+        _persist_upsert(action)
+    return saved
 
 
 def pop_pending(token: str) -> PendingToolAction | None:
@@ -122,7 +209,9 @@ def pop_pending(token: str) -> PendingToolAction | None:
             key = _context_key(action.operator_id, action.chat_id, action.channel)
             if _by_context.get(key) == token:
                 _by_context.pop(key, None)
-        return action
+    if action is not None:
+        _persist_delete(token)
+    return action
 
 
 def get_pending_for_context(

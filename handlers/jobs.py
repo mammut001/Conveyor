@@ -270,8 +270,23 @@ async def _execute_codex_job(
         await get_job_queue().mark_running_failed(str(exc), queue_job_id)
         await port.reply(msg, str(exc))
         return
-    if msg.channel == "telegram" and ":agent:" in msg.chat_id:
-        port = _JobIdentityPort(port, f"{agent['name']} · {queue_job_id or 'Codex'}")
+    from handlers.workers import PhysicalOriginPort
+    if agent and (
+        isinstance(port, PhysicalOriginPort)
+        or (msg.channel == "telegram" and ":agent:" in msg.chat_id)
+    ):
+        label = agent["name"]
+        try:
+            from transcript_store import session_identity
+            from worker_sessions import WorkerSessionStore
+            owned = WorkerSessionStore(runner.settings).get(
+                session_identity(msg.channel, msg.chat_id, msg.operator_id)
+            )
+            if owned and owned.get("title"):
+                label = f"{label} · {owned['title']}"
+        except Exception:
+            pass
+        port = _JobIdentityPort(port, f"{label} · {queue_job_id or 'Codex'}")
     user_text_for_session = body  # remember for session recording
 
     progress_mode = _normalize_mode(getattr(runner.settings, "conveyor_progress_mode", "compact"))
@@ -530,8 +545,56 @@ async def _sleep(seconds: float) -> None:
     await asyncio.sleep(seconds)
 
 
+def _feishu_http_text(settings: "Settings", chat_id: str, text: str) -> bool:
+    """Send a recovered Feishu message with the app credentials over HTTP.
+
+    Does not read or log the secret. Works from the Web process, which does
+    not hold the Feishu bot's in-process channel.
+    """
+    import json
+    import urllib.request
+    app_id = getattr(settings, "lark_app_id", None)
+    app_secret = getattr(settings, "lark_app_secret", None)
+    if not app_id or not app_secret or not chat_id:
+        return False
+    token_req = urllib.request.Request(
+        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+        data=json.dumps({"app_id": app_id, "app_secret": app_secret}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(token_req, timeout=10) as resp:
+            tenant = json.loads(resp.read().decode("utf-8")).get("tenant_access_token")
+    except Exception:
+        logger.warning("Recovered Feishu delivery could not obtain a tenant token")
+        return False
+    if not tenant:
+        return False
+    payload = json.dumps({
+        "receive_id": chat_id,
+        "msg_type": "text",
+        "content": json.dumps({"text": text}),
+    }).encode("utf-8")
+    send_req = urllib.request.Request(
+        "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+        data=payload,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {tenant}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(send_req, timeout=10) as resp:
+            return 200 <= getattr(resp, "status", 200) < 300
+    except Exception:
+        logger.warning("Recovered Feishu delivery failed")
+        return False
+
+
 class RecoveredOutboundPort:
     """OutboundPort that sends messages back to the operator for recovered jobs after a process restart."""
+    supports_inline_buttons = False
+    supports_attachments = False
+
     def __init__(self, channel: str, chat_id: str, settings: "Settings") -> None:
         self.channel = channel
         self.chat_id = chat_id
@@ -552,17 +615,14 @@ class RecoveredOutboundPort:
                 logger.exception("Failed to send recovered telegram message")
                 return None
         elif self.channel == "feishu":
+            import asyncio
             try:
-                from feishu_bot import _get_channel
-                feishu_channel = _get_channel()
-                if feishu_channel:
-                    from channel.feishu import FeishuOutbound
-                    port = FeishuOutbound(feishu_channel)
-                    return await port.send_new(msg, text)
-                else:
-                    logger.warning("Feishu channel not initialized, cannot send recovered feishu message")
+                loop = asyncio.get_running_loop()
+                ok = await loop.run_in_executor(None, _feishu_http_text, self.settings, self.chat_id, text)
+                if ok:
+                    return "recovered-msg-id"
             except Exception:
-                logger.exception("Failed to send recovered feishu message")
+                logger.warning("Recovered Feishu delivery failed")
         return None
 
     async def edit_progress(self, msg: InboundMessage, placeholder_id: Any, text: str) -> bool:
@@ -605,10 +665,15 @@ async def _start_queued_job_callback(queued_job: QueuedJob) -> None:
             message_id=None,
             text=queued_job.prompt,
         )
-        
+
     port = queued_job._port
     if port is None:
-        port = RecoveredOutboundPort(queued_job.channel, queued_job.chat_id, settings)
+        origin = queued_job.delivery_origin or {}
+        port = RecoveredOutboundPort(
+            str(origin.get("channel") or queued_job.channel),
+            str(origin.get("chat_id") or queued_job.chat_id),
+            settings,
+        )
         
     mode = JobMode.FIX if queued_job.mode == "fix" else JobMode.RUN
     

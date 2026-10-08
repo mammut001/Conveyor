@@ -144,8 +144,15 @@ export default function App() {
   const [agentTab, setAgentTab] = useState<'details' | 'library' | 'computer'>('details')
   // With agents on, the selected agent's one conversation is the session.
   const selectedAgent = agentState.enabled ? (agentState.agents.find(agent => agent.id === selectedAgentId) || agentState.agents[0]) : undefined
+  const [workerSessionPick, setWorkerSessionPick] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('conveyor-worker-sessions') || '{}') } catch { return {} }
+  })
+  const workerSessions = selectedAgent?.sessions || []
+  const activeWorkerSession = workerSessions.find(session => session.id === (selectedAgent ? workerSessionPick[selectedAgent.id] : ''))
+    || workerSessions.find(session => session.kind === 'main')
+    || workerSessions[0]
   const agentSessionRef = useRef('')
-  agentSessionRef.current = selectedAgent?.session_id || ''
+  agentSessionRef.current = activeWorkerSession?.id || selectedAgent?.session_id || ''
   // Agents are conversations first: land on Chat the moment they are on.
   useEffect(() => { if (agentState.enabled) setView(current => current === 'tasks' ? 'chat' : current) }, [agentState.enabled])
   const [tokenDraft, setTokenDraft] = useState('')
@@ -574,6 +581,23 @@ export default function App() {
     try { if (rememberToken) localStorage.setItem('conveyor-token', value); else localStorage.removeItem('conveyor-token') } catch { /* storage unavailable */ }
     setToken(value); setTokenDraft('')
   }
+  const rememberWorkerSession = (agentId: string, sessionId: string) => {
+    setWorkerSessionPick(previous => {
+      const next = { ...previous, [agentId]: sessionId }
+      try { localStorage.setItem('conveyor-worker-sessions', JSON.stringify(next)) } catch { /* storage unavailable */ }
+      return next
+    })
+  }
+  const createWorkerSession = async () => {
+    if (!selectedAgent) return
+    const created = await api<{ session_id?: string; id?: string }>(`/api/agents/${encodeURIComponent(selectedAgent.id)}/sessions`, {
+      method: 'POST', body: JSON.stringify({ title: '新会话' }),
+    })
+    const sessionId = created.session_id || created.id || ''
+    if (sessionId) rememberWorkerSession(selectedAgent.id, sessionId)
+    await refresh()
+    setView('chat')
+  }
   const selectAgent = (agent: Agent) => {
     setSelectedAgentId(agent.id)
     localStorage.setItem('conveyor-agent', agent.id)
@@ -621,7 +645,7 @@ export default function App() {
           <button type="button" className="drawer-close-btn" aria-label="Close sessions" onClick={() => setSessionsDrawerOpen(false)}>×</button>
         </div>
         {agentState.enabled
-          ? <AgentList agents={agentState.agents} selectedId={selectedAgent?.id || ''} onSelect={selectAgent} onNew={() => setAgentDialog({})} onEdit={agent => setAgentDialog({ agent })} />
+          ? <AgentList agents={agentState.agents} selectedId={selectedAgent?.id || ''} onSelect={selectAgent} onNew={() => setAgentDialog({})} onEdit={agent => setAgentDialog({ agent })} workerSessions={workerSessions} selectedWorkerSessionId={activeWorkerSession?.id || ''} onSelectWorkerSession={sessionId => selectedAgent && rememberWorkerSession(selectedAgent.id, sessionId)} onCreateWorkerSession={() => void createWorkerSession()} />
           : <>
         <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { selectSession('', ''); setCreatingSession(true); setPrompt(''); setSessionsDrawerOpen(false); }} aria-label="New session">＋</button></div>
         <div className="session-list">
@@ -729,8 +753,8 @@ export default function App() {
           />
         ) : view === 'chat' ? (
           <ChatPanel
-            key={selectedAgent?.id || 'free-chat'}
-            agentSessionId={selectedAgent?.session_id}
+            key={activeWorkerSession?.id || selectedAgent?.id || 'free-chat'}
+            agentSessionId={activeWorkerSession?.id || selectedAgent?.session_id}
             agentName={selectedAgent?.name}
             token={token}
             onApprovalDecided={() => {

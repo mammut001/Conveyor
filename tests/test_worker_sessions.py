@@ -80,12 +80,25 @@ class Case(unittest.TestCase):
             store.select("telegram", "10", "7", "web:web-console:not-a-session")
 
     def test_legacy_registration_stays_on_the_requesting_chat(self) -> None:
+        full = f"10:topic:4:agent:{self.agent['id']}"
         bound = self.store.register_legacy(
-            self.agent["id"], channel="telegram", operator_id="7", source_chat_id="10:topic:4",
+            self.agent["id"], channel="telegram", operator_id="7", source_chat_id=full,
             requester_operator="7", current_source="10:topic:4", title="Old",
         )
         self.assertEqual(bound["kind"], "legacy")
+        self.assertEqual(bound["source_chat_id"], full)
         self.assertNotIn(bound["session_id"], {item["session_id"] for item in self.store.list(self.agent["id"])})
+        with self.assertRaises(AgentError):
+            self.store.register_legacy(
+                self.agent["id"], channel="telegram", operator_id="7", source_chat_id="10:topic:4",
+                requester_operator="7", current_source="10:topic:4",
+            )
+        with self.assertRaises(AgentError):
+            self.store.register_legacy(
+                self.agent["id"], channel="telegram", operator_id="7",
+                source_chat_id="10:topic:4:agent:default",
+                requester_operator="7", current_source="10:topic:4",
+            )
         with self.assertRaises(AgentError):
             self.store.register_legacy(
                 self.agent["id"], channel="telegram", operator_id="9", source_chat_id="10:topic:4",
@@ -148,9 +161,11 @@ class Case(unittest.TestCase):
         name, instructions = agents.instructions_for_chat(self.settings, "web", session["source_chat_id"])
         self.assertEqual(name, "Astra")
         self.assertIn("Study", instructions)
-        self.assertIsNone(agents.agent_for_chat(self.settings, "web", "agent-abcdef-s-0123456789ab"))
+        with self.assertRaises(AgentError):
+            agents.agent_for_chat(self.settings, "web", "agent-abcdef-s-0123456789ab")
         self.agents.archive(self.agent["id"])
-        self.assertIsNone(agents.agent_for_chat(self.settings, "web", session["source_chat_id"]))
+        with self.assertRaises(AgentError):
+            agents.agent_for_chat(self.settings, "web", session["source_chat_id"])
         self.assertEqual(agents.agent_for_chat(self.settings, "web", "webchat-abc")["id"], "default")
 
 
@@ -230,10 +245,16 @@ class HttpTests(Case):
             session_id=created["session_id"], role="assistant", content="from the side session",
             channel="web", operator_id="web-console", source_chat_id=created["source_chat_id"],
         )
-        self.control.queue.list_jobs.return_value = [{
-            "channel": "web", "operator_id": "web-console", "chat_id": created["source_chat_id"],
-            "state": "running",
-        }]
+        self.control.queue.list_jobs.return_value = [
+            {
+                "id": "job-new", "channel": "web", "operator_id": "web-console",
+                "chat_id": created["source_chat_id"], "state": "completed",
+            },
+            {
+                "id": "job-old", "channel": "web", "operator_id": "web-console",
+                "chat_id": created["source_chat_id"], "state": "running",
+            },
+        ]
         status, payload = self.call("GET", "/api/agents")
         self.assertEqual(status, 200)
         row = next(item for item in payload["agents"] if item["id"] == self.agent["id"])
