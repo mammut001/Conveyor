@@ -58,6 +58,18 @@ jobs. Apply and discard stay explicit. Callback buttons are short server
 tokens bound to the operator and the full physical chat, not a bare topic
 number.
 
+In a private Telegram chat a persistent reply keyboard stays next to the
+input: 我的 Workers, 继续对话, 切换会话, and 查看任务. `/start` installs it
+(a separate message when the welcome also has the inline onboarding button)
+and lists Workers when agents are enabled. `/workers` installs it again.
+The inline session buttons stay. Continue, switch, and tasks use only the
+chat's current selected session; an archived selection fails closed, and
+with nothing selected the bot shows the list and asks you to choose a
+Worker. Those taps do not start a job or bind a default session. Group
+chats do not get the keyboard, and the same words stay ordinary text there.
+During onboarding those buttons are not saved as your name; send `/onboard`
+again to finish. The first message before onboarding also shows the keyboard.
+
 `/agent` remains the way to bind a Telegram chat to its own legacy project
 conversation. That history is not rewritten into the Web session.
 

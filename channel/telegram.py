@@ -410,7 +410,7 @@ async def send_text(
     update: Update,
     text: str,
     *,
-    reply_markup: InlineKeyboardMarkup | None = None,
+    reply_markup: Any = None,
 ) -> str | None:
     """Send a message; return the sent message_id as str|None.
 

@@ -672,6 +672,46 @@ async def _render_switch(
     await _emit(msg, port, f"切换会话 {switch_page + 1}/{pages}。点选或新建会绑定；返回列表不会。", buttons)
 
 
+PERSISTENT_MENU_ACTIONS = {
+    "👷 我的 Workers": "list",
+    "💬 继续对话": "continue",
+    "🔄 切换会话": "switch",
+    "📋 查看任务": "tasks",
+}
+_CHOOSE_WORKER = "还没有选中的 Worker。先从列表里点一个。"
+
+
+async def handle_persistent_menu(msg: InboundMessage, port: Any, settings: Any, runner: Any) -> bool:
+    """Private-chat reply-keyboard labels. Groups and other text return False.
+
+    Continue, switch, and tasks mint a token for the current selection and
+    reuse ``handle_workers_token``. Nothing is bound when no session is selected.
+    """
+    action = PERSISTENT_MENU_ACTIONS.get((msg.text or "").strip())
+    if action is None or msg.channel != "telegram" or msg.chat_type != "p2p":
+        return False
+    if not enabled(settings):
+        await port.reply(msg, "Agent 功能未开启：设置 CONVEYOR_AGENTS_ENABLED=true 后重启服务。")
+        return True
+    if action == "list":
+        await _render_list(msg, port, settings, 0)
+        return True
+    store = WorkerSessionStore(settings)
+    try:
+        selected = store.selected(msg.channel, msg.chat_id, msg.operator_id)
+    except AgentError as exc:
+        await port.reply(msg, str(exc))
+        return True
+    if selected is None:
+        await port.reply(msg, _CHOOSE_WORKER)
+        await _render_list(msg, port, settings, 0)
+        return True
+    extra = {"agent_page": 0, "switch_page": 0} if action == "switch" else {"agent_page": 0}
+    token = _issue(store, msg, selected, action, 0, extra)
+    await handle_workers_token(msg, port, settings, runner, token)
+    return True
+
+
 async def handle_workers_command(msg: InboundMessage, port: Any, runner: Any, settings: Any, arg: str) -> None:
     """List or leave Workers. Does not bind a session, except ``exit`` clears the binding."""
     if msg.channel not in ("telegram", "feishu"):

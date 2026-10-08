@@ -12,7 +12,7 @@ from telegram.warnings import PTBUserWarning
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                                ContextTypes, ConversationHandler,
                                MessageHandler, filters)
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 from channel import InboundMessage
 from channel.auth import is_allowed
@@ -50,6 +50,42 @@ get_job_queue().configure(settings, runner)
 
 # YYYY-MM-DD, used to slice a specific day's archived journal.
 DATE_ARG_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_WORKERS_KEYBOARD_TEXT = "Workers 在输入框旁边，不用记 /workers。"
+
+
+def workers_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Persistent private-chat menu. Not an inline card, so it stays by the input."""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("👷 我的 Workers"), KeyboardButton("💬 继续对话")],
+            [KeyboardButton("🔄 切换会话"), KeyboardButton("📋 查看任务")],
+        ],
+        is_persistent=True,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
+def _menu_text_filter():
+    from handlers.workers import PERSISTENT_MENU_ACTIONS
+    pattern = "^(" + "|".join(re.escape(label) for label in PERSISTENT_MENU_ACTIONS) + ")$"
+    return filters.Regex(pattern)
+
+
+async def _attach_workers_keyboard(update: Update, text: str = _WORKERS_KEYBOARD_TEXT) -> None:
+    """Install the reply keyboard in a private chat. Groups are left alone."""
+    if inbound_from_update(update).chat_type != "p2p":
+        return
+    await _reply(update, text, reply_markup=workers_reply_keyboard())
+
+
+async def _show_workers_list(update: Update) -> None:
+    from agents import enabled
+    from handlers.workers import handle_workers_command
+    inbound = inbound_from_update(update)
+    if inbound.chat_type != "p2p" or not enabled(settings):
+        return
+    await handle_workers_command(inbound, make_outbound(update), runner, settings, "")
 
 
 # ---- Channel adapter shim (P2.1: adapter moved to channel/telegram.py) ----
@@ -289,11 +325,30 @@ async def onboard_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ONBOARDING_NAME
 
 
+async def _pause_onboarding_for_menu(update: Update) -> int:
+    """Menu labels are navigation, not a name. Offer /onboard again."""
+    await _reply(update, "这个按钮不是名字，问卷先停在这里。之后发送 /onboard 可以继续。")
+    from handlers.workers import handle_persistent_menu
+    inbound = inbound_from_update(update)
+    if inbound.chat_type == "p2p":
+        await handle_persistent_menu(inbound, make_outbound(update), settings, runner)
+    return ConversationHandler.END
+
+
+async def onboard_menu_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await _guard(update):
+        return ConversationHandler.END
+    return await _pause_onboarding_for_menu(update)
+
+
 async def onboard_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     name = (update.effective_message.text or "").strip()
     if not name:
         await _reply(update, "名字不能为空。直接回复名字，或 `/skip` 跳过：")
         return ONBOARDING_NAME
+    from handlers.workers import PERSISTENT_MENU_ACTIONS
+    if name in PERSISTENT_MENU_ACTIONS:
+        return await _pause_onboarding_for_menu(update)
     context.user_data["onboarding_draft"]["operator_name"] = name
     await _reply(
         update,
@@ -345,11 +400,13 @@ async def onboard_style_button(update: Update, context: ContextTypes.DEFAULT_TYP
         f"生效需要重启 bot（runner 启动时读这份 JSON）。\n"
         f"改用 /profile；重做问卷 /onboard。"
     )
+    await _attach_workers_keyboard(update)
     return ConversationHandler.END
 
 
 async def onboard_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await _reply(update, "Onboarding 取消。继续用 .env 默认值。")
+    await _reply(update, "Onboarding 取消。继续用 .env 默认值。之后发送 /onboard 可以设置。")
+    await _attach_workers_keyboard(update)
     return ConversationHandler.END
 
 
@@ -496,6 +553,8 @@ async def deep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def workers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
+    # Reply keyboard cannot share reply_markup with the inline worker list.
+    await _attach_workers_keyboard(update)
     await _dispatch_command(update)
 
 
@@ -538,6 +597,16 @@ async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if not await _guard(update):
         return
+    message = update.effective_message
+    prompt = ((message.text or message.caption) if message else "") or ""
+    prompt = prompt.strip()
+    inbound = inbound_from_update(update, text=prompt)
+    # Exact menu labels are navigation. They never become a job, a transcript
+    # line, or the first-run profile prompt. Groups keep ordinary text.
+    if inbound.chat_type == "p2p" and prompt:
+        from handlers.workers import handle_persistent_menu
+        if await handle_persistent_menu(inbound, make_outbound(update), settings, runner):
+            return
     # Onboarding-C: first-run nudge. If the user types ANY message
     # before running /onboard, surface the prompt instead of
     # silently starting a job. They can still /onboard later to
@@ -546,18 +615,19 @@ async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not operator_profile_exists(settings):
         # First-run nudge: same button as /start so the user does
         # not have to type /onboard after reading the hint.
+        # The reply keyboard is a second message: one reply_markup
+        # cannot be both inline and persistent.
         await _reply(
             update,
             "第一次用先告诉我你是谁：\n"
-            "`/onboard` 走 3 步问卷，或 `/skip` 用默认。",
+            "`/onboard` 走 3 步问卷，或 `/skip` 用默认。\n"
+            "Workers 在输入框旁边的按钮里。",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("开始 onboarding", callback_data="ob:start")],
             ]),
         )
+        await _attach_workers_keyboard(update)
         return
-    message = update.effective_message
-    prompt = ((message.text or message.caption) if message else "") or ""
-    prompt = prompt.strip()
     # A photo without a caption is still a request ("what is this?").
     has_image = bool(message and (message.photo or message.document))
     if not prompt and not has_image:
@@ -674,8 +744,19 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 [InlineKeyboardButton("开始 onboarding", callback_data="ob:start")],
             ]),
         )
+        await _attach_workers_keyboard(update)
+        await _show_workers_list(update)
         return
-    await _reply(update, "你好！直接发消息就行，我会像对话一样处理（shell、查资料、改文件都可以）。运维命令用 /help。")
+    inbound = inbound_from_update(update)
+    if inbound.chat_type == "p2p":
+        await _reply(
+            update,
+            "你好！直接发消息就行，我会像对话一样处理（shell、查资料、改文件都可以）。运维命令用 /help。",
+            reply_markup=workers_reply_keyboard(),
+        )
+    else:
+        await _reply(update, "你好！直接发消息就行，我会像对话一样处理（shell、查资料、改文件都可以）。运维命令用 /help。")
+    await _show_workers_list(update)
 
 
 async def generic_command_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -800,7 +881,7 @@ def main() -> None:
             ],
             states={
                 ONBOARDING_NAME: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, onboard_name),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND & ~_menu_text_filter(), onboard_name),
                 ],
                 ONBOARDING_LANG: [
                     CallbackQueryHandler(onboard_lang_button, pattern=r"^ob:lang:"),
@@ -809,7 +890,10 @@ def main() -> None:
                     CallbackQueryHandler(onboard_style_button, pattern=r"^ob:style:"),
                 ],
             },
-            fallbacks=[CommandHandler("skip", onboard_cancel)],
+            fallbacks=[
+                MessageHandler(_menu_text_filter(), onboard_menu_interrupt),
+                CommandHandler("skip", onboard_cancel),
+            ],
         )
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
