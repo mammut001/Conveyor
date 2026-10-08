@@ -241,7 +241,10 @@ _EXPLICIT_NODE = re.compile(
     r"(?:node(?:_id)?|节点)\s*[:=：]?\s*([A-Za-z0-9][A-Za-z0-9_.-]{0,64})",
     re.IGNORECASE,
 )
-_EXPLICIT_MAC = re.compile(r"(macbook|\bmac\b|苹果电脑)", re.IGNORECASE)
+_EXPLICIT_MAC = re.compile(
+    r"(?<![A-Za-z0-9_])mac(?:book)?(?![A-Za-z0-9_])|苹果电脑",
+    re.IGNORECASE,
+)
 _MAC_PLATFORMS = frozenset({"darwin", "macos", "mac", "mac os", "mac os x"})
 
 

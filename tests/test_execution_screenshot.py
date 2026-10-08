@@ -478,6 +478,13 @@ class ScreenshotPhraseRouteTests(unittest.TestCase):
                     self.assertIn("不会改为截取 VPS", text)
                 capture.assert_not_called()
 
+    def test_explicit_mac_matches_adjacent_chinese_not_non_mac_word(self) -> None:
+        from handlers.tools.observe_tools import _EXPLICIT_MAC
+
+        self.assertIsNotNone(_EXPLICIT_MAC.search("截一下Mac屏幕"))
+        self.assertIsNotNone(_EXPLICIT_MAC.search("苹果电脑"))
+        self.assertIsNone(_EXPLICIT_MAC.search("machine"))
+
 
 if __name__ == "__main__":
     unittest.main()
