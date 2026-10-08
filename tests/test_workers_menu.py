@@ -161,8 +161,15 @@ class WorkersMenuTests(unittest.IsolatedAsyncioTestCase):
             if label != "🔄 切换会话":
                 self.assertNotIn("Other B", body)
             else:
-                self.assertIn("Other B", body)
-                self.assertIn("Side A", body)
+                buttons = [
+                    button.text
+                    for markup in self._markups(update)
+                    if isinstance(markup, InlineKeyboardMarkup)
+                    for row in markup.inline_keyboard
+                    for button in row
+                ]
+                self.assertTrue(any("Other B" in text for text in buttons))
+                self.assertTrue(any("Side A" in text for text in buttons))
             self.assertEqual(store.selected("telegram", "42", "1")["session_id"], side["session_id"])
         self.assertNotEqual(side["session_id"], other["session_id"])
         self.dispatch.assert_not_awaited()
