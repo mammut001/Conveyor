@@ -418,10 +418,21 @@ def agent_for_chat(settings: Any, channel: str, chat_id: str) -> dict[str, Any] 
         return None
     store = AgentStore(settings)
     chat_id = str(chat_id or "")
-    if channel == WEB_CHANNEL and chat_id.startswith(AGENT_CHAT_PREFIX):
-        agent = store.get(chat_id[len(AGENT_CHAT_PREFIX):])
-        # An archived or unknown agent has no say over a conversation.
-        return agent if agent and not agent["archived"] else None
+    if channel == WEB_CHANNEL:
+        from worker_sessions import WorkerSessionStore
+
+        sessions = WorkerSessionStore(settings)
+        owned = sessions.owner_agent_id(WEB_CHANNEL, chat_id)
+        if owned is not None:
+            agent = store.get(owned)
+            # Archived, disabled, or missing registry targets do not fall through.
+            return agent if agent and not agent["archived"] else None
+        if sessions.is_secondary_chat_id(chat_id):
+            return None
+        if chat_id.startswith(AGENT_CHAT_PREFIX):
+            agent = store.get(chat_id[len(AGENT_CHAT_PREFIX):])
+            # An archived or unknown agent has no say over a conversation.
+            return agent if agent and not agent["archived"] else None
     if channel == "telegram":
         from channel.telegram_identity import TelegramAddress
         try:

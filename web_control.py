@@ -171,12 +171,36 @@ class WebControl:
                     "created_at": None, "last_activity": None,
                     "jobs": [], "messages": [], "job_count": 0, "message_count": 0,
                 }
-        return None
+        from worker_sessions import WorkerSessionStore
+
+        row = WorkerSessionStore(self.settings).get(session_id)
+        if row is None or row["archived"] or row["channel"] != agents.WEB_CHANNEL or row["kind"] == "legacy":
+            return None
+        agent = agents.AgentStore(self.settings).get(row["agent_id"])
+        if agent is None or agent["archived"]:
+            return None
+        return {
+            "id": session_id, "channel": row["channel"], "operator_id": row["operator_id"],
+            "source_chat_id": row["source_chat_id"], "title": row["title"] or agent["name"],
+            "created_at": None, "last_activity": None,
+            "jobs": [], "messages": [], "job_count": 0, "message_count": 0,
+        }
 
     def resolve_session_identity(self, session_id: str) -> tuple[str, str, str] | None:
         transcript = get_transcript_store(self.settings).get_session(session_id)
         if transcript is None:
-            return None
+            import agents
+            from worker_sessions import WorkerSessionStore
+
+            if not agents.enabled(self.settings):
+                return None
+            row = WorkerSessionStore(self.settings).get(session_id)
+            if row is None or row["archived"] or row["kind"] == "legacy":
+                return None
+            agent = agents.AgentStore(self.settings).get(row["agent_id"])
+            if agent is None or agent["archived"] or row["channel"] != agents.WEB_CHANNEL:
+                return None
+            return row["channel"], row["operator_id"], row["source_chat_id"]
         channel = str(transcript.get("channel") or "")
         operator_id = str(transcript.get("operator_id") or "")
         source_chat_id = str(transcript.get("source_chat_id") or "")
@@ -650,20 +674,43 @@ class WebControl:
 
     # ---- agents -----------------------------------------------------------
 
-    def _agent_view(self, agent: dict[str, Any], sessions: dict[str, dict[str, Any]], waiting: set[str]) -> dict[str, Any]:
+    def _agent_view(
+        self,
+        agent: dict[str, Any],
+        sessions: dict[str, dict[str, Any]],
+        waiting: set[str],
+        jobs: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """An agent plus what its row in the list shows: preview and status."""
         from redaction import redact_text
+        from worker_sessions import WorkerSessionStore
 
-        session_id = agent["session_id"]
-        session = sessions.get(session_id) or {}
-        last = get_transcript_store(self.settings).last_message(session_id)
-        latest_job = session.get("latest_job") or {}
-        if session_id in waiting:
-            status = "waiting"
-        elif latest_job.get("state") in ("running", "queued"):
-            status = "working"
-        else:
-            status = "idle"
+        canonical = WorkerSessionStore(self.settings).list(agent["id"]) if not agent.get("archived") else []
+        transcript = get_transcript_store(self.settings)
+        last: dict[str, Any] | None = None
+        status = "idle"
+        owned_ids = {item["session_id"] for item in canonical}
+        owned_chats = {
+            (item["channel"], item["operator_id"], item["source_chat_id"]) for item in canonical
+        }
+        for item in canonical:
+            message = transcript.last_message(item["session_id"])
+            if message and (last is None or str(message.get("created_at") or "") >= str(last.get("created_at") or "")):
+                last = message
+            latest_job = (sessions.get(item["session_id"]) or {}).get("latest_job") or {}
+            if item["session_id"] in waiting:
+                status = "waiting"
+            elif status != "waiting" and latest_job.get("state") in ("running", "queued"):
+                status = "working"
+        for job in jobs or []:
+            key = (str(job.get("channel") or ""), str(job.get("operator_id") or ""), str(job.get("chat_id") or ""))
+            if key not in owned_chats and str(job.get("session_id") or "") not in owned_ids:
+                continue
+            if str(job.get("session_id") or "") in waiting or job.get("state") in ("needs_approval", "approval"):
+                status = "waiting"
+            elif status != "waiting" and job.get("state") in ("running", "queued"):
+                status = "working"
+        session = sessions.get(agent["session_id"]) or {}
         preview = " ".join(redact_text(str((last or {}).get("content") or "")).split())[:160]
         # Jobs only run in a project folder that is the root of a git repository.
         workspace_status = ""
@@ -678,6 +725,17 @@ class WebControl:
             "last_message_role": (last or {}).get("role"),
             "last_activity": (last or {}).get("created_at") or session.get("last_activity"),
             "message_count": session.get("message_count") or 0,
+            "sessions": [
+                {
+                    "id": item["session_id"],
+                    "title": item["title"],
+                    "kind": item["kind"],
+                    "source_chat_id": item["source_chat_id"],
+                    "channel": item["channel"],
+                    "operator_id": item["operator_id"],
+                }
+                for item in canonical
+            ],
         }
 
     def list_agents(self) -> dict[str, Any]:
@@ -687,9 +745,13 @@ class WebControl:
             return {"enabled": False, "agents": []}
         sessions = {str(item.get("id")): item for item in self.list_sessions(200)}
         waiting = {str(item.get("session_id") or "") for item in self.list_approvals()}
+        jobs = self.list_jobs(200)
         return {
             "enabled": True,
-            "agents": [self._agent_view(agent, sessions, waiting) for agent in agents.AgentStore(self.settings).list()],
+            "agents": [
+                self._agent_view(agent, sessions, waiting, jobs)
+                for agent in agents.AgentStore(self.settings).list()
+            ],
         }
 
     def save_agent(self, agent_id: str | None, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -699,6 +761,30 @@ class WebControl:
         store = agents.AgentStore(self.settings)
         agent = store.create(payload) if agent_id is None else store.update(agent_id, payload)
         return self._agent_view(agent, {}, set()) if agent else None
+
+    def list_agent_sessions(self, agent_id: str) -> dict[str, Any] | None:
+        import agents
+        from worker_sessions import WorkerSessionStore
+
+        if not agents.enabled(self.settings):
+            return None
+        agent = agents.AgentStore(self.settings).get(agent_id)
+        if agent is None or agent["archived"]:
+            return None
+        rows = WorkerSessionStore(self.settings).list(agent_id)
+        return {"agent_id": agent_id, "sessions": rows}
+
+    def create_agent_session(self, agent_id: str, payload: dict[str, Any] | None) -> dict[str, Any] | None:
+        import agents
+        from worker_sessions import WorkerSessionStore
+
+        if not agents.enabled(self.settings):
+            return None
+        agent = agents.AgentStore(self.settings).get(agent_id)
+        if agent is None or agent["archived"]:
+            return None
+        title = (payload or {}).get("title")
+        return WorkerSessionStore(self.settings).create(agent_id, title)
 
     def archive_agent(self, agent_id: str) -> bool:
         import agents
