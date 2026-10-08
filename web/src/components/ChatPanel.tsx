@@ -425,7 +425,7 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
             <div className="brand-mark">C</div>
             <h2>{agentName || 'Conveyor Direct Chat'}</h2>
             <p>{agentName
-              ? 'This is the one conversation with this agent. Ask it something, or give it a task.'
+              ? 'This conversation with this agent. Ask it something, or give it a task.'
               : 'Direct chat tier answering in seconds without Codex. READ tools run automatically; WRITE tools require approval.'}</p>
           </div>
         )}

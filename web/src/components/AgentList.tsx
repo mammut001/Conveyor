@@ -39,6 +39,14 @@ export function AgentAvatar({ agent, size = 44 }: { agent: Pick<Agent, 'name' | 
   )
 }
 
+/** Disambiguate identical titles in the picker. Stored titles stay unchanged. */
+export function workerSessionLabel(session: WorkerSession, sessions: WorkerSession[]): string {
+  const title = session.title || session.id
+  const duplicated = sessions.filter(item => (item.title || item.id) === title).length > 1
+  if (!duplicated) return title
+  return `${title} · ${session.id.slice(-6)}`
+}
+
 function preview(agent: Agent): string {
   if (agent.status === 'waiting') return 'Waiting for you'
   if (agent.status === 'working') return 'Working…'
@@ -58,7 +66,7 @@ export function WorkerSessionPicker({ sessions, selectedId, onSelect, onCreate, 
     <div className="worker-session-picker">
       <select aria-label="Worker session" value={selectedId} onChange={event => onSelect(event.target.value)} disabled={creating}>
         {sessions.map(session => (
-          <option key={session.id} value={session.id}>{session.title || session.id}</option>
+          <option key={session.id} value={session.id}>{workerSessionLabel(session, sessions)}</option>
         ))}
       </select>
       <button type="button" onClick={onCreate} disabled={creating}>{creating ? '创建中…' : '新建会话'}</button>

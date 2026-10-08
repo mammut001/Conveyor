@@ -427,7 +427,7 @@ export default function App() {
   selectedJobRef.current = selectedJobId
   workerPickRef.current = workerSessionPick
   pendingWorkerRef.current = pendingWorkerSession
-  selectedAgentIdRef.current = selectedAgentId
+  selectedAgentIdRef.current = selectedAgent?.id || ''
   useEffect(() => {
     try { localStorage.setItem('conveyor-worker-sessions', JSON.stringify(workerSessionPick)) } catch { /* storage unavailable */ }
   }, [workerSessionPick])

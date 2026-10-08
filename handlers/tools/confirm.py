@@ -101,6 +101,7 @@ def _action_from_row(row: sqlite3.Row, store_key: str) -> PendingToolAction:
 
 
 def _persist_upsert(action: PendingToolAction, settings: Any = None) -> None:
+    """Insert a new or explicitly restored row. Arg/TTL edits must not use this."""
     path = Path(action.store_key) if action.store_key else _confirmation_path(settings)
     conn = _persist_conn(path)
     if conn is None:
@@ -120,6 +121,42 @@ def _persist_upsert(action: PendingToolAction, settings: Any = None) -> None:
             )
     finally:
         conn.close()
+
+
+def _persist_update_live(
+    action: PendingToolAction,
+    *,
+    arg: str | None = None,
+    ttl_seconds: float | None = None,
+) -> PendingToolAction | None:
+    """Update one unexpired row. A missing row is not inserted again."""
+    if not action.store_key:
+        return None
+    path = Path(action.store_key)
+    if not path.exists():
+        return None
+    conn = _persist_conn(path)
+    if conn is None:
+        return None
+    new_arg = action.arg if arg is None else arg
+    ttl = action.ttl_seconds if ttl_seconds is None else float(ttl_seconds)
+    expires = action.created_at + ttl
+    try:
+        with conn:
+            row = conn.execute(
+                """UPDATE pending_tool_confirmations
+                   SET arg = ?, expires_at = ?
+                   WHERE token = ? AND expires_at > ?
+                   RETURNING token, tool_name, arg, operator_id, chat_id, channel, created_at, expires_at""",
+                (new_arg, expires, action.token, time.time()),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return _action_from_row(row, action.store_key)
 
 
 def _claim_db(token: str, path: Path | None) -> tuple[str, PendingToolAction | None]:
@@ -260,13 +297,19 @@ def _load_pending_row(token: str, settings: Any = None) -> PendingToolAction | N
 def get_pending(token: str, settings: Any = None) -> PendingToolAction | None:
     """Return a live action. A settings root trusts its database, not a stale cache.
 
-    Memory-only actions (no ``store_key``) stay visible to callers that omit
-    settings. They are invisible to a different settings root. A token that was
-    persisted is gone once its row is gone, so a claimed token cannot be
-    revived from this process's cache.
+    Memory-only actions (``store_key`` empty) stay visible with or without
+    settings. They are not scoped to a root. A persisted token is read from
+    the matching root's database; a missing row is not filled from cache.
     """
     if settings is not None:
         path = _confirmation_path(settings)
+        with _lock:
+            cached = _pending.get(token)
+        if cached is not None and not cached.store_key:
+            if cached.is_expired():
+                pop_pending(token, settings=settings)
+                return None
+            return cached
         if path is None:
             return None
         loaded = _load_token(path, token)
@@ -314,33 +357,43 @@ def replace_pending_arg(token: str, new_arg: str, settings: Any = None) -> Pendi
     action = get_pending(token, settings=settings) if settings is not None else get_pending(token)
     if action is None:
         return None
+    if not action.store_key:
+        action.arg = new_arg
+        return action
     if settings is not None:
         expected = _confirmation_path(settings)
         if expected is None or action.store_key != str(expected):
             return None
-    if action.store_key and _load_token(Path(action.store_key), token) is None:
+    updated = _persist_update_live(action, arg=new_arg)
+    if updated is None:
         with _lock:
             _forget(token)
         return None
-    action.arg = new_arg
-    if action.store_key:
-        _persist_upsert(action)
-    return action
+    with _lock:
+        _remember(updated)
+    return updated
 
 
 def set_pending_ttl(token: str, ttl_seconds: float, settings: Any = None) -> PendingToolAction | None:
-    """Extend/shorten the lifetime of a live pending action (e.g. routine approvals)."""
+    """Extend/shorten the lifetime of a live pending action (e.g. routine approvals).
+
+    An empty ``store_key`` is updated in memory only. Passing ``settings`` does
+    not copy that legacy action into the confirmation database.
+    """
     action = get_pending(token, settings=settings) if settings is not None else get_pending(token)
     if action is None:
         return None
-    if action.store_key and _load_token(Path(action.store_key), token) is None:
+    if not action.store_key:
+        action.ttl_seconds = float(ttl_seconds)
+        return action
+    updated = _persist_update_live(action, ttl_seconds=float(ttl_seconds))
+    if updated is None:
         with _lock:
             _forget(token)
         return None
-    action.ttl_seconds = float(ttl_seconds)
-    if action.store_key or settings is not None:
-        _persist_upsert(action, settings)
-    return action
+    with _lock:
+        _remember(updated)
+    return updated
 
 
 def restore_pending(action: PendingToolAction, settings: Any = None) -> bool:
@@ -367,18 +420,23 @@ def pop_pending(token: str, settings: Any = None) -> PendingToolAction | None:
     """Claim one confirmation. The database delete is the cross-process lock."""
     with _lock:
         action = _pending.get(token)
-    store_key = action.store_key if action is not None else ""
-    expected = _confirmation_path(settings) if settings is not None else None
-    if settings is not None and not store_key and action is not None:
-        return None
-    if settings is not None and store_key and expected is not None and store_key != str(expected):
-        return None
-    if store_key:
-        path: Path | None = Path(store_key)
-    elif settings is not None:
-        path = expected
-    else:
-        path = _store_path
+        # Legacy actions are unscoped. Claim them once in memory; do not look
+        # for a database row and do not drop them because a scoped root is empty.
+        if action is not None and not action.store_key:
+            _forget(token)
+            if action.is_expired():
+                return None
+            return action
+        expected = _confirmation_path(settings) if settings is not None else None
+        store_key = action.store_key if action is not None else ""
+        if settings is not None and store_key and expected is not None and store_key != str(expected):
+            return None
+        if store_key:
+            path: Path | None = Path(store_key)
+        elif settings is not None:
+            path = expected
+        else:
+            path = _store_path
     if path is not None and not path.exists() and store_key:
         with _lock:
             _forget(token)
@@ -408,11 +466,16 @@ def get_pending_for_context(
 ) -> PendingToolAction | None:
     if settings is not None:
         loaded = _load_context(_confirmation_path(settings), operator_id, chat_id, channel)
-        if loaded is None:
-            return None
+        if loaded is not None:
+            with _lock:
+                _remember(loaded)
+            return loaded
         with _lock:
-            _remember(loaded)
-        return loaded
+            token = _by_context.get(_context_key(operator_id, chat_id, channel))
+            cached = _pending.get(token) if token else None
+            if cached is not None and not cached.store_key and not cached.is_expired():
+                return cached
+        return None
     with _lock:
         token = _by_context.get(_context_key(operator_id, chat_id, channel))
     if not token:
@@ -456,7 +519,8 @@ def list_pending(channel: str | None = None, settings: Any = None) -> list[Pendi
         actions = []
         for action in _pending.values():
             if settings is not None:
-                if not path_key or action.store_key != path_key:
+                # Persisted rows come from this root only. Empty store_key stays.
+                if action.store_key:
                     continue
             elif action.store_key and path_key and action.store_key != path_key:
                 continue
@@ -482,9 +546,7 @@ def list_pending(channel: str | None = None, settings: Any = None) -> list[Pendi
                     continue
                 actions.append(_action_from_row(row, path_key))
         actions = [action for action in actions if not action.store_key or action.token in live_tokens]
-    elif settings is not None:
-        actions = []
-    else:
+    elif settings is None:
         confirmed = []
         for action in actions:
             if not action.store_key:

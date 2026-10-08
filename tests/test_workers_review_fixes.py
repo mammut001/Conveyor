@@ -303,7 +303,7 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
         chunks = [
             ast.get_source_segment(source, node)
             for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name in wanted
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in wanted
         ]
         self.assertEqual(len(chunks), 2)
         namespace: dict = {

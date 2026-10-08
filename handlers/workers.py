@@ -645,8 +645,14 @@ async def _render_switch(
     window = rows[switch_page * _PAGE:(switch_page + 1) * _PAGE]
     buttons = []
     extra = {"agent_page": agent_page, "switch_page": switch_page}
+    titles = [str(choice["title"]) for choice in rows]
     for choice in window:
-        label = ("主会话 " if choice["kind"] == "main" else "") + str(choice["title"])[:24]
+        title = str(choice["title"])
+        label = ("主会话 " if choice["kind"] == "main" else "") + title
+        if titles.count(title) > 1:
+            suffix = f" · {str(choice['session_id'])[-6:]}"
+            label = f"{label[:40 - len(suffix)]}{suffix}"
+        label = label[:40]
         buttons.append({
             "text": label[:40],
             "token": _issue(store, msg, choice, "select", agent_page, extra),
