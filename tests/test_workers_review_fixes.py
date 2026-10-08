@@ -277,10 +277,10 @@ class FeishuDeliveryTests(unittest.TestCase):
             self.assertFalse(_feishu_http_text(blank, "oc_physical", "hello"))
 
 
-def _telegram_update(data: str):
+def _telegram_update(data: str, *, chat_id: int = 42, chat_type: str = "private"):
     query = SimpleNamespace(data=data, answer=AsyncMock())
     user = SimpleNamespace(id=1, username="op")
-    chat = SimpleNamespace(id=42, type="private")
+    chat = SimpleNamespace(id=chat_id, type=chat_type)
     message = SimpleNamespace(text="", caption=None, message_id=3, reply_text=AsyncMock())
     return SimpleNamespace(
         effective_user=user, effective_chat=chat, effective_message=message, callback_query=query,
@@ -341,6 +341,21 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(clear_all_pending)
         self.callbacks = _telegram_callbacks(self.settings)
 
+    def _select_raw_legacy(self, chat_id: str) -> None:
+        """Register and select the original raw IM session for this chat and operator."""
+        from agents import DEFAULT_AGENT_ID
+
+        scoped = self.store
+        legacy = scoped.register_legacy(
+            DEFAULT_AGENT_ID,
+            channel="telegram",
+            operator_id="1",
+            source_chat_id=chat_id,
+            requester_operator="1",
+            current_source=chat_id,
+        )
+        scoped.select("telegram", chat_id, "1", legacy["session_id"])
+
     async def test_old_deep_button_does_not_run_another_workers_session(self) -> None:
         from channel.telegram_identity import context_tag
 
@@ -362,7 +377,13 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, [])
         self.assertTrue(replies and "之前" in replies[-1])
 
+        # A cleared private chat is the canonical main, so the raw button stays rejected.
         self.store.clear("telegram", "42", "1")
+        await self.callbacks["deep_callback"](update, SimpleNamespace())
+        self.assertEqual(seen, [])
+        self.assertIn("之前", replies[-1])
+
+        self._select_raw_legacy("42")
         await self.callbacks["deep_callback"](update, SimpleNamespace())
         self.assertEqual(seen, [("telegram", "42")])
 
@@ -385,7 +406,58 @@ class LegacyCallbackTests(unittest.IsolatedAsyncioTestCase):
 
         self.store.clear("telegram", "42", "1")
         await self.callbacks["tool_callback"](update, SimpleNamespace())
+        execute.assert_not_awaited()
+        self.assertIn("之前", replies[-1])
+        self.assertIsNotNone(get_pending(pending.token, settings=self.settings))
+
+        self._select_raw_legacy("42")
+        await self.callbacks["tool_callback"](update, SimpleNamespace())
         execute.assert_awaited()
+        inbound = execute.await_args.args[0]
+        self.assertEqual((inbound.channel, inbound.chat_id), ("telegram", "42"))
+
+    async def test_group_without_selection_still_accepts_old_callbacks(self) -> None:
+        from channel.telegram_identity import context_tag
+
+        chat = "-100"
+        self.store.select("telegram", chat, "1", self.session["session_id"])
+        seen = []
+
+        async def capture(msg, *_args):
+            seen.append((msg.channel, msg.chat_id))
+
+        deep = _telegram_update(f"deep:{context_tag(chat)}", chat_id=-100, chat_type="group")
+        replies = []
+
+        async def _reply(_update, text, reply_markup=None):
+            replies.append(text)
+
+        self.callbacks["dispatch"] = capture
+        self.callbacks["_reply"] = _reply
+        await self.callbacks["deep_callback"](deep, SimpleNamespace())
+        self.assertEqual(seen, [])
+        self.assertIn("之前", replies[-1])
+
+        self.store.clear("telegram", chat, "1")
+        await self.callbacks["deep_callback"](deep, SimpleNamespace())
+        self.assertEqual(seen, [("telegram", chat)])
+
+        pending = create_pending("notes.add", "legacy", "1", chat, "telegram", settings=self.settings)
+        self.store.select("telegram", chat, "1", self.session["session_id"])
+        tool = _telegram_update(f"tool:confirm:{pending.token}", chat_id=-100, chat_type="group")
+        execute = AsyncMock()
+        self.callbacks["execute_confirmed"] = execute
+        await self.callbacks["tool_callback"](tool, SimpleNamespace())
+        execute.assert_not_awaited()
+        self.assertIn("之前", replies[-1])
+        self.assertIsNotNone(get_pending(pending.token, settings=self.settings))
+
+        self.store.clear("telegram", chat, "1")
+        await self.callbacks["tool_callback"](tool, SimpleNamespace())
+        execute.assert_awaited()
+        inbound = execute.await_args.args[0]
+        self.assertEqual((inbound.channel, inbound.chat_id), ("telegram", chat))
+        self.assertIsNone(self.store.selected("telegram", chat, "1"))
 
     async def test_old_feishu_cards_do_not_follow_a_new_workers_session(self) -> None:
         import ast
