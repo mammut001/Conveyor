@@ -29,6 +29,8 @@ from typing import Any, Awaitable, Callable
 from config import Settings
 from desktop_computer_planner import (
     infer_target_app,
+    goal_needs_browser,
+    is_observe_only_goal,
     maybe_followup_label_action,
     maybe_observe_only_action,
     maybe_simple_digit_action,
@@ -229,6 +231,13 @@ async def run_computer_loop(
     observation: dict[str, Any] = {"initial": True}
     trajectory: list[dict] = []
     followup_observe = False
+    fallback_observe = False
+    target_app_suppressed = False
+    last_failed_signature: tuple[str, str, str] | None = None
+    repeated_failures = 0
+    pending_visual_hash: str | None = None
+    no_visual_change_count = 0
+    browser_goal = goal_needs_browser(goal) and not is_observe_only_goal(goal)
     takeover_store = HumanTakeoverStore(settings)
     # The lease that pauses this task is the one for the desktop it acts on.
     scope = task_scope(get_computer_task(settings, task_id))
@@ -261,13 +270,15 @@ async def run_computer_loop(
                 # Discard any planner result and refresh the desktop after a
                 # handoff. The old plan was made against a pre-human screen.
                 followup_observe = True
+                pending_visual_hash = None
+                no_visual_change_count = 0
 
-            if followup_observe:
-                # Refresh the desktop after every mutating/wait action before
-                # asking the planner for its next decision. This prevents a
-                # successful click from being mistaken for a verified UI state.
+            if followup_observe or fallback_observe:
+                # A failed targeted observation must be followed by a plain
+                # screenshot: never re-inject the same broken target_app.
                 action = {"action": "observe"}
                 followup_observe = False
+                fallback_observe = False
             else:
                 # Explicit read-only goals use a deterministic observe->done
                 # policy so the planner cannot add an unnecessary click.
@@ -297,6 +308,10 @@ async def run_computer_loop(
                     # The model cannot see the screen until a screenshot
                     # exists. Looking first saves one Codex round trip.
                     action = {"action": "observe"}
+                    if browser_goal:
+                        # An OS-controlled browser preflight (Linux only);
+                        # independent X11 desktops have their own bootstrap.
+                        action["ensure_browser"] = True
                 if action is None:
                     try:
                         remaining = max_seconds - (time.monotonic() - start)
@@ -326,7 +341,10 @@ async def run_computer_loop(
                         )
                         break
                 target_app = infer_target_app(goal)
-                if target_app and action.get("action") == "observe" and not action.get("target_app"):
+                if (
+                    target_app and not target_app_suppressed
+                    and action.get("action") == "observe" and not action.get("target_app")
+                ):
                     action["target_app"] = target_app
             action = normalize_action(action)
             action = _with_observed_target(action, observation)
@@ -336,7 +354,7 @@ async def run_computer_loop(
                 # A planner summary is not a desktop change. Three failed
                 # clicks followed by "the file manager is already open"
                 # left the window where it was.
-                if _latest_mutation_failed(trajectory):
+                if _latest_mutation_failed(trajectory) or no_visual_change_count:
                     false_done += 1
                     trajectory.append({
                         "action_type": "done",
@@ -385,6 +403,9 @@ async def run_computer_loop(
                 set_task_status(settings, task_id, "error", blocked_reason=step.get("error", "step_create_failed"))
                 break
             step_id = step["step_id"]
+            # Compare the actual post-action screenshot, not just the tool's
+            # success return code. PNG hashes are retained only as metadata.
+            before_visual_hash = observation.get("sha256") if isinstance(observation, dict) else None
             step_start = time.monotonic()
             try:
                 result = await backend.execute_step(settings, task_id, step_id, action)
@@ -407,7 +428,29 @@ async def run_computer_loop(
                 set_task_status(settings, task_id, "error", blocked_reason=str(exc))
                 break
             duration_ms = int((time.monotonic() - step_start) * 1000)
+            success = bool(result.get("result_ok", True)) if isinstance(result, dict) else False
+            error_code = str((result or {}).get("error") or "") if isinstance(result, dict) else "invalid_result"
+            if act == "observe" and success and pending_visual_hash is not None:
+                if (result or {}).get("sha256") == pending_visual_hash:
+                    no_visual_change_count += 1
+                    result["effect"] = "no_visible_change"
+                else:
+                    no_visual_change_count = 0
+                    result["effect"] = "visible_change"
+                pending_visual_hash = None
+            elif act in {"click", "type", "hotkey", "scroll"} and success:
+                pending_visual_hash = before_visual_hash if isinstance(before_visual_hash, str) else None
 
+            if not success:
+                signature = (str(act), error_code, str(action.get("target_app") or ""))
+                repeated_failures = repeated_failures + 1 if signature == last_failed_signature else 1
+                last_failed_signature = signature
+                if (
+                    error_code in {"target_app_not_found", "target_app_activate_failed", "target_app_not_running"}
+                    or error_code.startswith("browser_") or error_code == "xdotool_missing"
+                ):
+                    target_app_suppressed = True
+                    fallback_observe = True
             # Record a redacted trajectory entry (include short clicked_label for completion).
             clicked_label = resolve_clicked_label(action, observation)
             entry = {
@@ -419,6 +462,8 @@ async def run_computer_loop(
                 "error": (result or {}).get("error"),
                 "duration_ms": duration_ms,
             }
+            if isinstance(result, dict) and result.get("effect"):
+                entry["effect"] = result["effect"]
             # Preserve only the already allow-listed, short driver metadata
             # that makes a desktop click auditable without storing UI text.
             if isinstance(result, dict):
@@ -441,6 +486,12 @@ async def run_computer_loop(
             steps_used += 1
             if act != "observe":
                 followup_observe = True
+            if repeated_failures >= 3:
+                set_task_status(settings, task_id, "error", blocked_reason="repeated_action_failure")
+                break
+            if no_visual_change_count >= 2:
+                set_task_status(settings, task_id, "stopped", blocked_reason="no_visual_progress")
+                break
 
             # Post-step app gate: blocklist always; allowlist only for
             # mutating actions. Bare observe often reports frontmost=Codex
