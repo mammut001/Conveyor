@@ -27,11 +27,21 @@ type Job = {
   changed_files?: { status: string; path: string }[]
   runtime?: Record<string, unknown>
 }
+type ActiveRefinement = {
+  chain_id: string; state: string; turn_count: number
+  root_queue_job_id?: string; latest_queue_job_id?: string
+  latest_runtime_job_id?: string; updated_at?: string
+}
+type RunSummary = {
+  id: string; state: string; mode: string; created_at?: string; updated_at?: string
+  finished_at?: string; prompt_preview?: string; refinement_intent: boolean; refinement_turn?: number
+}
 type Session = {
   id: string; channel?: string; title?: string; created_at: string; updated_at?: string; last_activity: string
   operator_id?: string; source_chat_id?: string; job_count: number; message_count?: number; latest_job?: Job
+  active_refinement?: ActiveRefinement | null
 }
-type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[] }
+type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[]; runs?: RunSummary[] }
 // Sessions created by the Chat view (POST /api/chat) live only in the Chat view.
 const isChatSessionId = (id: string) => id.includes(':webchat-') || id.startsWith('webchat-')
 const isChatSession = (session: Session) => isChatSessionId(session.id) || (session.source_chat_id || '').startsWith('webchat-')
@@ -156,12 +166,14 @@ export default function App() {
   const [selectedJobId, setSelectedJobId] = useState('')
   const [creatingSession, setCreatingSession] = useState(false)
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([])
+  const [selectedSessionDetail, setSelectedSessionDetail] = useState<SessionDetail | null>(null)
+  const sessionDetailFetchGen = useRef(0)
   const [events, setEvents] = useState<EventItem[]>([])
   const [approvals, setApprovals] = useState<Approval[]>([])
   const [nodes, setNodes] = useState<NodeInfo[]>([])
   const [system, setSystem] = useState<SystemStatus | null>(null)
   const [computer, setComputer] = useState<ComputerStatus | null>(null)
-  const [diff, setDiff] = useState('')
+  const [changesDiff, setChangesDiff] = useState('')
   const [prompt, setPrompt] = useState('')
   const [mode, setMode] = useState<'run' | 'fix'>('run')
   const [busy, setBusy] = useState(false)
@@ -386,11 +398,22 @@ export default function App() {
   }, [api, creatingSession, selectedJobId, selectedSessionId, token])
 
   const refreshTranscript = useCallback(async () => {
-    if (!authenticated || !selectedSessionId) { setTranscript([]); return }
+    const generation = ++sessionDetailFetchGen.current
+    if (!authenticated || !selectedSessionId) {
+      setTranscript([])
+      setSelectedSessionDetail(null)
+      return
+    }
     try {
       const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`)
+      if (generation !== sessionDetailFetchGen.current) return
       setTranscript(session.messages || [])
-    } catch { setTranscript([]) }
+      setSelectedSessionDetail(session)
+    } catch {
+      if (generation !== sessionDetailFetchGen.current) return
+      setTranscript([])
+      setSelectedSessionDetail(null)
+    }
   }, [api, authenticated, selectedSessionId])
 
   useEffect(() => { void refresh() }, [refresh])
@@ -440,13 +463,12 @@ export default function App() {
   useEffect(() => {
     if (!authenticated || !selectedJobId) return
     let stopped = false; let controller: AbortController | null = null; let retry: number | undefined
-    lastSequence.current = 0; setEvents([]); setDiff('')
+    lastSequence.current = 0; setEvents([])
     void api<{ events: EventItem[] }>(`/api/jobs/${selectedJobId}/events`).then(({ events: initial }) => {
       if (stopped) return
       const unique = [...new Map(initial.map(item => [item.event_id, item])).values()]
       setEvents(unique.slice(-1000)); lastSequence.current = unique.at(-1)?.sequence || 0
     }).catch(reason => setError(String(reason)))
-    void api<{ diff: string }>(`/api/jobs/${selectedJobId}/diff`).then(data => !stopped && setDiff(data.diff)).catch(() => {})
 
     const connect = async () => {
       controller = new AbortController()
@@ -478,7 +500,14 @@ export default function App() {
     return () => { stopped = true; controller?.abort(); if (retry) window.clearTimeout(retry) }
   }, [api, authenticated, refresh, refreshTranscript, selectedJobId, token])
 
-  const selectedJob = useMemo(() => jobs.find(job => job.id === selectedJobId), [jobs, selectedJobId])
+  // Old runs may be older than the global /api/jobs page. Their session
+  // history remains available independently of global queue pagination.
+  const sessionDetail = selectedSessionDetail?.id === selectedSessionId ? selectedSessionDetail : null
+  const selectedJob = useMemo(
+    () => (sessionDetail?.jobs || []).find(job => job.id === selectedJobId)
+      || jobs.find(job => job.id === selectedJobId),
+    [jobs, selectedJobId, sessionDetail],
+  )
   const selectedSession = useMemo(() => sessions.find(session => session.id === selectedSessionId), [sessions, selectedSessionId])
   useEffect(() => {
     if (!selectedJob || creatingSession) return
@@ -493,10 +522,26 @@ export default function App() {
   const pendingToolApprovals = approvals.filter(item => item.kind === 'tool' && !isChatSessionId(item.session_id || '') && (!selectedSessionId || item.session_id === selectedSessionId))
   const runtimeOwner = runtimeOwnerFromJob(selectedJob)
   const toolEvents = useMemo(() => events.filter(item => item.kind.startsWith('tool.')), [events])
-  const refinementTurn = Number(selectedJob?.metadata?.refinement_turn || 0)
-  const refinementClosed = useMemo(() => events.some(item => item.kind === 'refinement.closed'), [events])
-  const activeRefinement = Boolean(selectedJob?.metadata?.refinement_chain_id && !refinementClosed)
-  const activeChangedFiles = selectedJob?.changed_files?.length || 0
+  // The SQLite session chain is authoritative, not the selected job's old
+  // events. Viewing turn 1 must not make an already-applied chain look active.
+  const activeRefinement = sessionDetail?.active_refinement || selectedSession?.active_refinement || null
+  const refinementTurn = activeRefinement?.turn_count || 0
+  const changedFilesJob = activeRefinement
+    ? (sessionDetail?.jobs?.find(job => job.id === activeRefinement.latest_queue_job_id)
+      || selectedSession?.latest_job || selectedJob)
+    : selectedJob
+  const activeChangedFiles = changedFilesJob?.changed_files?.length || 0
+  const changesJobId = changedFilesJob?.id || ''
+  useEffect(() => {
+    let stopped = false
+    setChangesDiff('')
+    if (authenticated && changesJobId) {
+      void api<{ diff: string }>(`/api/jobs/${encodeURIComponent(changesJobId)}/diff`)
+        .then(data => { if (!stopped) setChangesDiff(data.diff || '') })
+        .catch(() => {})
+    }
+    return () => { stopped = true }
+  }, [api, authenticated, changesJobId, selectedSessionId])
   const liveAssistantText = useMemo(() => {
     if (!selectedJob || terminalJobState(selectedJob.state)) return ''
     return events
@@ -752,7 +797,7 @@ export default function App() {
         ) : (
           <>
             <div className="event-stream" ref={streamRef}>
-              {activeRefinement && <div className="job-notice"><strong>Active changes</strong><span>{refinementTurn || 1} refinement turn{(refinementTurn || 1) === 1 ? '' : 's'} · {activeChangedFiles} file{activeChangedFiles === 1 ? '' : 's'} changed · Fix feedback continues the same worktree.</span></div>}
+              {activeRefinement && <div className="job-notice"><strong>Active changes</strong><span>{refinementTurn} refinement turn{refinementTurn === 1 ? '' : 's'} · {activeChangedFiles} file{activeChangedFiles === 1 ? '' : 's'} changed · Feedback continues the same worktree.</span></div>}
               {!transcript.length && selectedJob?.state === 'failed' && <div className="job-notice failed"><strong>Task failed</strong><span>{selectedJob.error || 'See the execution details below.'}</span></div>}
               {!transcript.length && selectedJob?.state === 'cancelled' && <div className="job-notice"><strong>Task cancelled</strong><span>This task was cancelled; start a new message to continue.</span></div>}
 
@@ -876,12 +921,35 @@ export default function App() {
           <AgentLibrary key={selectedAgent.id} agentId={selectedAgent.id} token={token} />
         </ContextSection>}
         {(!selectedAgent || agentTab === 'details') && <>
+        <ContextSection title="Runs">
+          {activeRefinement && <div className="session-chain-summary">
+            <strong>Active refinement · turn {refinementTurn}</strong>
+            <small>One shared worktree across runs. Apply/Discard closes this chain.</small>
+          </div>}
+          <div className="session-run-list" role="group" aria-label="Session run history">
+            {(sessionDetail?.runs || []).map(run => (
+              <button key={run.id} type="button"
+                className={`session-run ${run.id === selectedJobId ? 'selected' : ''}`}
+                aria-pressed={run.id === selectedJobId}
+                onClick={() => setSelectedJobId(run.id)}>
+                <span className="session-run-heading">
+                  <strong>{run.prompt_preview || run.id}</strong>
+                  <span className={`status-rail ${run.state}`} />
+                </span>
+                <small>{run.mode} · {stateLabel(run.state)} · {formatTime(run.created_at)}
+                  {run.refinement_turn ? ` · turn ${run.refinement_turn}` : ''}
+                </small>
+              </button>
+            ))}
+            {!sessionDetail?.runs?.length && <Empty text="No runs in this session yet" />}
+          </div>
+        </ContextSection>
         <ContextSection title="Job">
           {selectedJob ? <>
             <KeyValue label="ID" value={selectedJob.id} mono /><KeyValue label="State" value={selectedJob.state} />
             <KeyValue label="Provider" value="Codex" /><KeyValue label="Mode" value={selectedJob.mode} />
             <KeyValue label="Started" value={formatTime(selectedJob.started_at)} />
-            {activeRefinement && <KeyValue label="Refinement" value={`${refinementTurn || 1} turn${(refinementTurn || 1) === 1 ? '' : 's'} · active`} />}
+            {activeRefinement && <KeyValue label="Refinement" value={`${refinementTurn} turn${refinementTurn === 1 ? '' : 's'} · active`} />}
             <RuntimeOwnerCard owner={runtimeOwner} state={selectedJob.state} />
             <div className="action-row"><button disabled={busy || !['queued','running'].includes(selectedJob.state)} onClick={() => action(`/api/jobs/${selectedJob.id}/cancel`)}>Cancel</button></div>
             {events.length > 0 && (
@@ -923,8 +991,8 @@ export default function App() {
         ))}
         <ContextSection title="Changes" className="context-section--changes" collapsible storageKey="conveyor-changes-collapsed">
           {activeRefinement && <KeyValue label="Active changes" value={`${activeChangedFiles} file${activeChangedFiles === 1 ? '' : 's'} · cumulative`} />}
-          <div className="file-list">{selectedJob?.changed_files?.map(file => <div key={file.path}><span className="file-status">{file.status || 'M'}</span><code>{file.path}</code></div>)}{selectedJob && !selectedJob.changed_files?.length && <Empty text="No changed files" />}</div>
-          {selectedJob && <><details className="diff-view"><summary>Unified diff</summary><pre>{diff || 'No diff available.'}</pre></details><div className="action-row"><button className="danger" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/discard`)}>{activeRefinement ? 'Discard active changes…' : 'Discard…'}</button><button className="primary" disabled={busy} onClick={() => action(`/api/jobs/${selectedJob.id}/apply`)}>{activeRefinement ? 'Apply active changes…' : 'Apply…'}</button></div></>}
+          <div className="file-list">{changedFilesJob?.changed_files?.map(file => <div key={file.path}><span className="file-status">{file.status || 'M'}</span><code>{file.path}</code></div>)}{changedFilesJob && !changedFilesJob.changed_files?.length && <Empty text="No changed files" />}</div>
+          {changedFilesJob && <><details className="diff-view"><summary>Cumulative diff</summary><pre>{changesDiff || 'No diff available.'}</pre></details><div className="action-row"><button className="danger" disabled={busy} onClick={() => action(`/api/jobs/${changedFilesJob.id}/discard`)}>{activeRefinement ? 'Discard active changes…' : 'Discard…'}</button><button className="primary" disabled={busy} onClick={() => action(`/api/jobs/${changedFilesJob.id}/apply`)}>{activeRefinement ? 'Apply active changes…' : 'Apply…'}</button></div></>}
         </ContextSection>
         </>}
         {(!selectedAgent || agentTab === 'computer') && <>
