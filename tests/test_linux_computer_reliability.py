@@ -1269,3 +1269,55 @@ class DynamicPageReadinessTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(gate.loaded_after_deadline(104.99))
         self.assertTrue(gate.loaded_after_deadline(105.0))
         self.assertFalse(gate.loaded_after_deadline(106.0))
+
+    def test_cua_driver_socket_extraction_and_invocation(self):
+        from desktop_cua import (
+            _extract_driver_socket,
+            LocalCuaTransport,
+            probe_cua_driver,
+        )
+        # 1. Extraction from cmd line
+        self.assertEqual(
+            _extract_driver_socket("cua-driver --socket /tmp/isolated.sock mcp"),
+            "/tmp/isolated.sock",
+        )
+        self.assertEqual(
+            _extract_driver_socket("cua-driver --socket=/tmp/isolated2.sock mcp"),
+            "/tmp/isolated2.sock",
+        )
+        self.assertIsNone(_extract_driver_socket("cua-driver mcp"))
+
+        # 2. Extraction from environment
+        with mock.patch.dict(os.environ, {"CONVEYOR_CUA_DRIVER_SOCKET": "/tmp/env.sock"}):
+            self.assertEqual(_extract_driver_socket("cua-driver mcp"), "/tmp/env.sock")
+
+        # 3. probe_cua_driver refuses dead daemon on isolated socket
+        with mock.patch("shutil.which", return_value="/usr/bin/cua-driver"), \
+             mock.patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                mock.Mock(returncode=0, stdout="0.33.1\n", stderr=""),  # --version
+                mock.Mock(returncode=1, stdout="", stderr="daemon down"),  # status probe
+            ]
+            probe = probe_cua_driver("cua-driver --socket /tmp/dead.sock mcp")
+            self.assertFalse(probe["available"])
+            self.assertIn("driver_daemon_not_running", probe["error"])
+
+        # 4. LocalCuaTransport includes socket and devnull stdin in _call_tool
+        with tempfile.TemporaryDirectory() as temp:
+            settings = _settings(Path(temp))
+            transport = LocalCuaTransport(
+                "cua-driver --socket /tmp/live.sock mcp",
+                settings=settings,
+            )
+            self.assertEqual(transport.socket_path, "/tmp/live.sock")
+            with mock.patch("subprocess.run") as mock_run:
+                mock_run.return_value = mock.Mock(returncode=0, stdout="{\"ok\": true}", stderr="")
+                res = transport._call_tool("list_windows", {})
+                self.assertTrue(res["ok"])
+                call_args = mock_run.call_args
+                cmd_called = call_args[0][0]
+                self.assertEqual(cmd_called[:4], ["cua-driver", "--socket", "/tmp/live.sock", "call"])
+                self.assertEqual(cmd_called[4], "list_windows")
+                self.assertEqual(cmd_called[5], "{}")
+                self.assertEqual(call_args[1].get("stdin"), subprocess.DEVNULL)
+

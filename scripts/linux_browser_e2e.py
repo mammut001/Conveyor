@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ import stat
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -154,7 +156,7 @@ def _production_paths_rejected(settings, root: Path) -> None:
             _refuse("a storage root points at production")
 
 
-def _settings(root: Path, wrapper: Path):
+def _settings(root: Path, wrapper: Path, backend_mode: str = "x11"):
     """Load provider settings, then force every storage root under ``root``."""
     if not PRODUCTION_ENV.is_file():
         _refuse("production env file missing")
@@ -174,6 +176,13 @@ def _settings(root: Path, wrapper: Path):
     os.environ["CONVEYOR_COMPUTER_USE_ENABLED"] = "true"
     os.environ["CONVEYOR_COMPUTER_DIRECT_ENABLED"] = "true"
     os.environ["CONVEYOR_COMPUTER_BACKEND"] = "http"
+    socket_path = root / "cua-driver.sock"
+    if backend_mode == "host-cua":
+        os.environ["CONVEYOR_CUA_DRIVER_SOCKET"] = str(socket_path)
+        os.environ["CONVEYOR_CUA_DRIVER_CMD"] = f"cua-driver --socket {socket_path}"
+        os.environ["CONVEYOR_CONTROL_PLANE_URL"] = "http://127.0.0.1:18766"
+        os.environ["CONVEYOR_DESKTOP_AGENT_SERVER_PORT"] = "18766"
+        os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
     from config import load_runtime_settings
 
     settings = load_runtime_settings(PRODUCTION_ENV)
@@ -194,6 +203,8 @@ def _settings(root: Path, wrapper: Path):
         conveyor_computer_use_enabled=True,
         conveyor_computer_direct_enabled=True,
         conveyor_computer_backend="http",
+        conveyor_cua_driver_cmd=f"cua-driver --socket {socket_path}" if backend_mode == "host-cua" else settings.conveyor_cua_driver_cmd,
+        conveyor_desktop_node_enabled=True,
     )
     _production_paths_rejected(settings, root)
     if not (workspace / ".git").is_dir():
@@ -348,6 +359,41 @@ def _close_own_firefox(display: int) -> list[int]:
     return closed
 
 
+def _owned_test_launcher(pid: int, display: int) -> bool:
+    proc = Path("/proc") / str(pid)
+    try:
+        raw = (proc / "environ").read_bytes()
+        comm = (proc / "comm").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    if "appfinder" not in comm:
+        return False
+    env: dict[str, str] = {}
+    for item in raw.split(b"\0"):
+        if b"=" not in item:
+            continue
+        key, value = item.split(b"=", 1)
+        env[key.decode("latin1", "replace")] = value.decode("latin1", "replace")
+    return env.get("DISPLAY") == f":{display}"
+
+
+def _close_own_launcher(display: int) -> list[int]:
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return []
+    closed = []
+    for entry in proc.iterdir():
+        if entry.name.isdigit() and _owned_test_launcher(int(entry.name), display):
+            try:
+                os.kill(int(entry.name), signal.SIGTERM)
+                closed.append(int(entry.name))
+            except OSError:
+                continue
+    if closed:
+        time.sleep(0.3)
+    return closed
+
+
 def _run_x(env: dict[str, str], *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["xdotool", *args], env=env, capture_output=True, text=True, timeout=15, check=False,
@@ -381,6 +427,7 @@ def _setup_scenario(name: str, display: int, authority: str, page: str) -> dict:
 
     env = _display_env(display, authority)
     record: dict = {"scenario": name, "phase": "setup", "commands": [], "setup_ok": False}
+    _close_own_launcher(display)
     if name == "closed":
         record["closed_pids"] = _close_own_firefox(display)
         record["remaining_owned_pids"] = _firefox_pids(display)
@@ -673,7 +720,8 @@ class _MeasuredPlanner:
 
 
 async def _one(settings, *, case: str, round_index: int, scenario: str, display: int,
-               authority: str, chat_id: str, expected: dict, artifact: Path, log_path: Path) -> dict:
+               authority: str, chat_id: str, expected: dict, artifact: Path, log_path: Path,
+               backend_mode: str = "x11") -> dict:
     from desktop_computer_loop import build_backend, run_computer_loop
     from desktop_computer_requests import create_computer_task, get_computer_task
 
@@ -708,9 +756,15 @@ async def _one(settings, *, case: str, round_index: int, scenario: str, display:
     task_id = created["task_id"]
     os.environ["XAUTHORITY"] = authority
     backend = build_backend(settings, task_id)
-    desktop_env = getattr(getattr(backend, "desktop", None), "env", {})
-    if desktop_env.get("XAUTHORITY") != authority or desktop_env.get("DISPLAY") != f":{display}":
-        _refuse("backend desktop is not the private display")
+    if backend_mode == "x11":
+        desktop_env = getattr(getattr(backend, "desktop", None), "env", {})
+        if desktop_env.get("XAUTHORITY") != authority or desktop_env.get("DISPLAY") != f":{display}":
+            _refuse("backend desktop is not the private display")
+    else:
+        from desktop_computer_loop import HttpComputerBackend
+        if not isinstance(backend, HttpComputerBackend):
+            _refuse(f"backend is {type(backend).__name__}, expected HttpComputerBackend")
+        backend.poll_interval = 0.25
     planner = _MeasuredPlanner(settings, screen_coordinates=True, sandbox="read-only")
     started = time.monotonic()
     result = await run_computer_loop(
@@ -841,12 +895,138 @@ def _metrics(rows: list[dict]) -> dict:
     }
 
 
+@contextlib.contextmanager
+def _host_cua_services(root: Path, display: int, authority: str, settings):
+    """Start isolated cua-driver daemon, desktop agent server, and desktop agent.
+
+    Guarantees no processes, sockets, or ports touch production.
+    Cleanly shuts down on exit.
+    """
+    socket_path = root / "cua-driver.sock"
+    agent_port = 18766
+    log_dir = root / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env["DISPLAY"] = f":{display}"
+    env["XAUTHORITY"] = authority
+    env["CODEX_TASK_ROOT"] = str(settings.codex_task_root)
+    env["CODEX_WORKSPACE_ROOT"] = str(settings.codex_workspace_root)
+    env["CODEX_MEMORY_ROOT"] = str(settings.codex_memory_root)
+    env["CONVEYOR_DESKTOP_SCREENSHOT_DIR"] = str(settings.conveyor_desktop_screenshot_dir)
+    env["CONVEYOR_DESKTOP_AGENT_SERVER_PORT"] = str(agent_port)
+    env["CONVEYOR_CONTROL_PLANE_URL"] = f"http://127.0.0.1:{agent_port}"
+    env["CONVEYOR_CUA_DRIVER_SOCKET"] = str(socket_path)
+    env["CONVEYOR_CUA_DRIVER_CMD"] = f"cua-driver --socket {socket_path}"
+    env["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
+    env["CONVEYOR_DESKTOP_AGENT_TOKEN"] = str(settings.conveyor_desktop_agent_token or "e2e-token")
+    env["CONVEYOR_DESKTOP_NODE_ID"] = str(settings.conveyor_desktop_node_id or "macbook-payton")
+    env["CONVEYOR_DESKTOP_OBSERVE_POLL_INTERVAL_SECONDS"] = "1"
+
+    procs: list[tuple[subprocess.Popen, object]] = []
+
+    # 1. cua-driver daemon
+    def _is_daemon_ready() -> bool:
+        if not socket_path.exists():
+            return False
+        try:
+            res = subprocess.run(
+                ["cua-driver", "--socket", str(socket_path), "status"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    if not _is_daemon_ready():
+        cua_log = open(log_dir / "cua_serve.log", "a", encoding="utf-8")
+        p_cua = subprocess.Popen(
+            ["cua-driver", "serve", "--socket", str(socket_path)],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=cua_log,
+            stderr=cua_log,
+        )
+        procs.append((p_cua, cua_log))
+        for _ in range(30):
+            time.sleep(0.2)
+            if _is_daemon_ready():
+                break
+        else:
+            _refuse("isolated cua-driver serve daemon failed to start")
+
+    # 2. desktop_agent_server.py
+    srv_log = open(log_dir / "agent_server.log", "a", encoding="utf-8")
+    p_srv = subprocess.Popen(
+        [sys.executable, str(ROOT / "desktop_agent_server.py")],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=srv_log,
+        stderr=srv_log,
+    )
+    procs.append((p_srv, srv_log))
+    health_url = f"http://127.0.0.1:{agent_port}/desktop/status"
+    token = str(settings.conveyor_desktop_agent_token or "e2e-token")
+    req = urllib.request.Request(health_url, headers={"Authorization": f"Bearer {token}"})
+    for _ in range(30):
+        time.sleep(0.2)
+        try:
+            with urllib.request.urlopen(req, timeout=1) as resp:
+                if resp.status == 200:
+                    break
+        except Exception:
+            pass
+    else:
+        _refuse("isolated desktop_agent_server failed to start")
+
+    # 3. desktop_agent.py --poll-computer
+    agent_log = open(log_dir / "agent_poll.log", "a", encoding="utf-8")
+    p_agent = subprocess.Popen(
+        [sys.executable, str(ROOT / "desktop_agent.py"), "--poll-computer"],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=agent_log,
+        stderr=agent_log,
+    )
+    procs.append((p_agent, agent_log))
+    time.sleep(1.0)
+
+    try:
+        yield
+    finally:
+        for p, log_f in reversed(procs):
+            try:
+                p.terminate()
+                p.wait(timeout=3)
+            except Exception:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+            try:
+                log_f.close()
+            except Exception:
+                pass
+        if socket_path.exists():
+            try:
+                socket_path.unlink()
+            except Exception:
+                pass
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Real isolated X11 browser loop")
     parser.add_argument("--root", required=True)
     parser.add_argument("--cases", required=True)
     parser.add_argument("--rounds", type=int, default=None)
     parser.add_argument("--manifest", required=True)
+    parser.add_argument(
+        "--backend", choices=("x11", "host-cua"), default="x11",
+        help="Backend to use: x11 (Agent display) or host-cua (Host HttpComputerBackend + CuaDriver)",
+    )
     args = parser.parse_args()
     if args.rounds is not None and (args.rounds < 1 or args.rounds > 20):
         _refuse("rounds must be 1..20")
@@ -859,39 +1039,46 @@ def main() -> None:
     artifact.mkdir(parents=True, exist_ok=True)
     log_path = artifact / "codex-event-types.jsonl"
     wrapper = _write_wrapper(root, log_path)
-    settings = _settings(root, wrapper)
-    _agent, chat_id = _assign_display(settings, display)
+    backend_mode = args.backend
+    settings = _settings(root, wrapper, backend_mode=backend_mode)
+    if backend_mode == "x11":
+        _agent, chat_id = _assign_display(settings, display)
+        service_ctx = contextlib.nullcontext()
+    else:
+        chat_id = "host-direct"
+        service_ctx = _host_cua_services(root, display, authority, settings)
     rows: list[dict] = []
 
     def publish() -> None:
-        report = {"run_id": run_id, "metrics": _metrics(rows), "runs": rows}
+        report = {"run_id": run_id, "backend": backend_mode, "metrics": _metrics(rows), "runs": rows}
         (artifact / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-    for case in cases:
-        # Stability is the 20-round statistic. The other cases run once
-        # unless --rounds was set explicitly.
-        count = args.rounds if args.rounds is not None else (20 if case == "stability" else 1)
-        for round_index in range(1, count + 1):
-            scenario = SCENARIOS[(round_index - 1) % len(SCENARIOS)]
-            try:
-                row = asyncio.run(_one(
-                    settings, case=case, round_index=round_index, scenario=scenario,
-                    display=display, authority=authority, chat_id=chat_id, expected=expected,
-                    artifact=artifact, log_path=log_path,
-                ))
-            except Exception as exc:
-                row = {
+    with service_ctx:
+        for case in cases:
+            # Stability is the 20-round statistic. The other cases run once
+            # unless --rounds was set explicitly.
+            count = args.rounds if args.rounds is not None else (20 if case == "stability" else 1)
+            for round_index in range(1, count + 1):
+                scenario = SCENARIOS[(round_index - 1) % len(SCENARIOS)]
+                try:
+                    row = asyncio.run(_one(
+                        settings, case=case, round_index=round_index, scenario=scenario,
+                        display=display, authority=authority, chat_id=chat_id, expected=expected,
+                        artifact=artifact, log_path=log_path, backend_mode=backend_mode,
+                    ))
+                except Exception as exc:
+                    row = {
+                        "case": case, "round": round_index, "scenario": scenario,
+                        "status": "error", "success": False, "failure_class": "incomplete",
+                        "error_type": type(exc).__name__, "setup_ok": None,
+                    }
+                rows.append(row)
+                publish()
+                print(json.dumps({
                     "case": case, "round": round_index, "scenario": scenario,
-                    "status": "error", "success": False, "failure_class": "incomplete",
-                    "error_type": type(exc).__name__, "setup_ok": None,
-                }
-            rows.append(row)
-            publish()
-            print(json.dumps({
-                "case": case, "round": round_index, "scenario": scenario,
-                "status": row.get("status"), "success": row.get("success"),
-                "failure_class": row.get("failure_class"), "run_id": run_id,
-            }))
+                    "status": row.get("status"), "success": row.get("success"),
+                    "failure_class": row.get("failure_class"), "run_id": run_id,
+                }))
     publish()
     print(json.dumps(_metrics(rows)))
 

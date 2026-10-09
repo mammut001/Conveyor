@@ -11,7 +11,7 @@ try:
 except ImportError:  # pragma: no cover - production installs python-dotenv
     def load_dotenv(env_file: str | Path = ".env") -> bool:
         path = Path(env_file)
-        if not path.exists():
+        if not path.is_file():
             return False
         for raw_line in path.read_text(encoding="utf-8").splitlines():
             line = raw_line.strip()

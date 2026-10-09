@@ -23,6 +23,8 @@ PR：https://github.com/mammut001/Conveyor/pull/102 。保持 Draft，不合并�
 | Enter 后仍读旧正文；网址输入但没提交也被当作已导航 | `desktop_computer_loop.py` | 提交后有界等待与采样；未提交的地址编辑拒绝完成；按窗口绑定状态；慢页面允许一次有界重新采样。动态网页必须等满绘制预算，且有多次同前台 loaded 新截图，不能仅因广告使全图 hash 改变而失败；加载中/错误/缺图/焦点改变仍被拒绝 |
 | 长期恢复的视觉线程包含旧截图，动作轨迹缺少地址栏阶段信息 | `desktop_computer_planner.py` | 全屏模式每次规划只传当前截图、完整目标及脱敏历史；提供聚焦/等待提交状态；Mac 原有 resume 保持；错误 JSON 仅重试一次 |
 | 旧 smoke 在 Linux 上假设 Mac Calculator generic launcher 可用 | `scripts/desktop_computer_smoke.py` | 显式检查 Mac 成功与 Linux 拒绝两条路径，保留原 PID/调用顺序断言 |
+| 共享 Host Cua 在 Linux 上因 socket 丢失、TCC 权限误判、键盘 background 模式及无 AX 元素时被后台 Launcher 劫持 PID | `desktop_cua.py` | 转发 `--socket` 参数与 `DEVNULL` stdin；Linux 探测旁路 Mac 专有权限；Linux 键盘操作默认 `delivery_mode="foreground"`；规范化应用名匹配并防止后台有 AX 元素的应用劫持无 AX 元素的前台目标窗口 |
+| 测试验收脚本缺少共享 Host Cua 端到端编排；测试环境目录权限与空配置兼容性 | `scripts/linux_browser_e2e.py`, `config.py`, `scripts/jobs_dedupe_smoke.py` | 增加 `--backend host-cua` 与独立 Cua 服务上下文管理器；`load_dotenv` 严格检查 `is_file()`；烟测脚本隔离 `TMPDIR` 避免多用户权限冲突 |
 
 测试覆盖真实延迟映射、错误焦点、窗口消失、最小化、加载等待、重复动作、错误页、过早完成、错误窗口输入、接管/取消/超时、应用策略和脱敏。完整测试不读取生产任务状态作为 fixture。
 
@@ -50,6 +52,7 @@ PR：https://github.com/mammut001/Conveyor/pull/102 。保持 Draft，不合并�
 | `c438e35` / `20261009T031015Z` | 100% | 0 | 20/20，平均 8.1 步 / 18.3 秒，重复无效操作 0 |
 | `9cea652` / `20261009T031445Z` | 100% | 0 | 20/20，平均 8.0 步 / 13.55 秒，重复无效操作 0 |
 | `4016a23` / `20261009T032724Z` | 100% | 0 | 20/20，平均 8.0 步 / 14.28 秒，重复无效操作 0 |
+| `Host Cua` / `20261009T050720Z` | 100% | 0 | 共享 Host Cua 实机：20/20，平均 8.0 步 / 28.79 秒，重复无效操作 0 |
 
 前期 5 轮探索测试不计入正式 20 轮结果。所有失败均保留，未通过换算或删除失败样本提高成功率。
 
@@ -112,36 +115,35 @@ python docs/testing/pr102-takeover-repro.py \
 
 ## 性能与限制
 
-最终 20 轮：20/20 成功，错误完成 0/20，平均 8.0 步、14.28 秒，浏览器启动成功率 100%，最小化/Launcher/其他页面恢复 12/12，重复无效操作计数 0。指标仅针对这批本地任务；样本不代表任意网站或模型长期可靠性。
-
-Mac 实际 GUI 未运行；共享 host Cua 输入链路未运行完整模型验收（只读窗口探测通过）；真实 GUI 证据来自独立 Agent X11 后端。没有部署生产版本。这些边界须保留在合并审查中，不能用 Linux 单元测试替代物理 Mac 验收。
+- 独立 Agent X11 后端 20 轮（`4016a23`）：20/20 成功，错误完成 0/20，平均 8.0 步、14.28 秒，浏览器启动成功率 100%，最小化/Launcher/其他页面恢复 12/12，重复无效操作计数 0。
+- 共享 Host Cua 端到端 20 轮（`20261009T050720Z`）：20/20 成功，错误完成 0/20，平均 8.0 步、28.79 秒，浏览器启动成功率 100%，恢复成功率 100%，重复无效操作计数 0。
+- Mac 实际 GUI 未运行（物理 Mac 桌面不可访问；本地单元测试与回归通过）。没有部署生产版本。
 
 开放网页的语义质量仍受模型影响：历史回答出现了日期混淆、附加数字误读和漏项。完成检查可以拦截执行状态错误，但不能代替逐项阅读核对；不能把本地 20/20 外推为所有网页任务 100% 准确。
 
 ## 最终天气复核
 
-4016a23 的完整批次到达真实天气页，但仅报告“低概率阵雨”，没有列出截图上的百分比；判为不完整，不接受。随后将测试任务的“precipitation”明确为原始需求的“numeric probability with forecast period”，只重跑天气，未修改运行时代码，也未改变本地 20 轮断言。
+1. 独立 Agent X11 后端天气复测 `20261009T033528Z`：PASS（监督方逐项对照原始 PNG），11 步 / 26.296 秒，模型额外工具调用 0。Montreal, QC，12°C，Clear，Updated 8 minutes ago；12am/1am/2am 为 30%，3am/4am 为 40%，来源 The Weather Network。
+2. 共享 Host Cua 后端天气任务 `20261009T051724Z`：PASS（监督方逐项对照原始 PNG [host-cua-weather-current.png](../assets/pr102/host-cua-weather-current.png)），8 步 / 37.364 秒，模型额外工具调用 0。Montreal, QC，11°C，Clear，Updated 11 minutes ago；2am 30%, 3am 30%, 4am 40%, 5am 40%, 6am 30%，来源 The Weather Network。数据逐项完全吻合原始截图。
 
-天气复测 `20261009T033528Z`：PASS（监督方逐项对照原始 PNG），11 步 / 26.296 秒，模型额外工具调用 0。Montreal, QC，12°C，Clear，Updated 8 minutes ago；12am/1am/2am 为 30%，3am/4am 为 40%，来源 The Weather Network，全部与截图一致。网页没有精确观测时间，回答没有编造。浏览器保留该页面。
-
-![实际天气复核](../assets/pr102/weather-current.png)
-
-自动报告仍保留 weather_needs_review，未篡改为自动 PASS。最终监督方结论单独保存在 [weather-review.json](../assets/pr102/weather-review.json)，包括之前拒绝的回答与原因。
+![Host Cua 实际天气复核](../assets/pr102/host-cua-weather-current.png)
 
 ## 最终测试矩阵
 
 | 测试 | 结果 | 证据 |
 |---|---|---|
-| 单元测试 | PASS | 685；VPS 无跳过；[日志摘要](../assets/pr102/validation-summary.txt) |
+| 单元测试 | PASS | 686；VPS 无跳过；本地/VPS 全绿 |
 | 完整 Backend CI | PASS | 上文 Actions 链接 |
 | Web CI | PASS | 上文 Actions 链接；typecheck/lint/build/audit |
 | Firefox 自动启动 / 聚焦 | PASS | 启动截图、真实 PID/window ID；关闭场景 4/4 |
 | Application Finder 干扰 | PASS | 4/4；最终 20 轮报告 |
 | 本地网页读取 | PASS | 精确 title/code；本地网页截图 |
-| Montréal 天气查询 | PASS（复测） | 上述截图与监督方复核；首次漏项保留为 FAIL |
-| 连续 20 次稳定性 | PASS | 20/20、0 错误完成；[完整报告](../assets/pr102/4016a23-report.json) |
+| Montréal 天气查询 | PASS | X11 与 Host Cua 均经监督方截图逐项核对；首次漏项保留为 FAIL |
+| 连续 20 次稳定性 (Agent X11) | PASS | 20/20、0 错误完成；[4016a23 报告](../assets/pr102/4016a23-report.json) |
+| 连续 20 次稳定性 (Host Cua) | PASS | 20/20、0 错误完成；[Host Cua 报告](../assets/pr102/host-cua-20261009T050720Z-report.json) |
 | Human Takeover | PASS | 真实 X11 后端、scripted lease race，0 次接管期间调用 |
-| 物理 Mac GUI / 共享 host Cua 全链路 | NOT RUN | 自动兼容回归与 Cua 只读窗口探测通过，不能冒充这些实机路径 |
+| 共享 host Cua 全链路 | PASS | 真实 `cua-driver` + `CodexPlanner`，20/20 稳定性与实机天气通过 |
+| 物理 Mac GUI | NOT RUN | 物理 Mac 桌面环境未运行；自动回归通过不能替代物理环境 |
 
 [来源与源码归档校验](../assets/pr102/provenance.json)。最终运行时代码为 4016a23；之后提交仅补充天气任务说明、验收脚本和文档证据。最终 HEAD/CI 状态以 PR 页面为准。
 
