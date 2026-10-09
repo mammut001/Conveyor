@@ -77,6 +77,21 @@ def _with_observed_target(action: dict, observation: dict) -> dict:
     return bound
 
 
+def _browser_foreground_observed(observation: dict) -> bool:
+    """Do not let the model declare a browser task done from XFCE panels.
+
+    This is only a browser-window gate, not proof that a webpage loaded or
+    that a weather forecast was read. End-to-end page verification is separate.
+    """
+    if not isinstance(observation, dict):
+        return False
+    from desktop_linux_browser import BROWSERS, canonical_browser
+    app = observation.get("active_app")
+    if app and app != "Unknown":
+        return canonical_browser(app) in BROWSERS
+    return canonical_browser(observation.get("ax_app")) in BROWSERS
+
+
 class ComputerBackendError(Exception):
     """Raised when a step cannot be executed / observed."""
 
@@ -351,22 +366,25 @@ async def run_computer_loop(
             act = action.get("action")
 
             if act == "done":
-                # A planner summary is not a desktop change. Three failed
-                # clicks followed by "the file manager is already open"
-                # left the window where it was.
-                if _latest_mutation_failed(trajectory) or no_visual_change_count:
+                # A planner claim is not evidence that Firefox is on screen.
+                # The browser gate is deliberately weaker than page-content
+                # verification; it catches the XFCE launcher false success.
+                missing_browser = browser_goal and not _browser_foreground_observed(observation)
+                unverified = _latest_mutation_failed(trajectory) or bool(no_visual_change_count)
+                if unverified or missing_browser:
                     false_done += 1
+                    reason = "unverified_browser_window" if missing_browser else "unverified_done"
                     trajectory.append({
                         "action_type": "done",
                         "result_ok": False,
-                        "error": "unverified_done",
+                        "error": reason,
                     })
                     if false_done >= 2:
                         set_task_status(
                             settings,
                             task_id,
                             "error",
-                            blocked_reason="unverified_done",
+                            blocked_reason=reason,
                         )
                         break
                     continue
