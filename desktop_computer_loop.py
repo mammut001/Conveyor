@@ -571,7 +571,7 @@ async def run_computer_loop(
                         action = await asyncio.wait_for(
                             planner.next_action(
                                 goal=goal,
-                                observation=observation,
+                                observation=dict(observation, browser_navigation_status=submission.status(observation)),
                                 trajectory=trajectory,
                                 steps_used=steps_used,
                                 max_steps=max_steps,
@@ -921,6 +921,14 @@ class _BrowserSubmission:
     @property
     def pending(self) -> bool:
         return self.pending_focus is not None
+
+    def status(self, observation: dict) -> str:
+        focus = _focus_identity(observation)
+        if self.pending_focus is not None:
+            return "awaiting_submit"
+        if self.address_focus == focus:
+            return "address_focused"
+        return "unknown"
 
     def note_success(self, action: dict, observation: dict) -> None:
         if not self.enabled or not _browser_foreground_observed(observation):

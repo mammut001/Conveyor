@@ -108,6 +108,20 @@ class _Proc:
 
 
 class PlannerImageTest(unittest.IsolatedAsyncioTestCase):
+    async def test_fullscreen_decisions_use_only_the_current_frame(self):
+        with tempfile.TemporaryDirectory() as temp:
+            planner = CodexPlanner(_settings(Path(temp)), screen_coordinates=True,
+                                   resume_thread_id="11111111-1111-1111-1111-111111111111")
+            with mock.patch.object(planner, "_run_codex", new=mock.AsyncMock(
+                    return_value='{"action":"hotkey","keys":["enter"]}')) as run:
+                action = await planner.next_action(
+                    goal="Open the webpage", observation={"browser_navigation_status": "awaiting_submit"},
+                    trajectory=[], steps_used=4, max_steps=16,
+                )
+            self.assertEqual(action["keys"], ["enter"])
+            self.assertIs(run.await_args.kwargs["resume"], False)
+            self.assertIn("browser_navigation_status=awaiting_submit", run.await_args.args[0])
+
     async def test_malformed_model_action_gets_one_safe_retry(self):
         for replies, expected in (
             (["{broken}", '{"action":"observe"}'], "observe"),

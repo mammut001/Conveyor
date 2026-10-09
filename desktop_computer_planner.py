@@ -49,6 +49,8 @@ logger = logging.getLogger(__name__)
 _BROWSER_NAV_RULE = (
     "浏览器导航：地址栏输入网址或搜索词后必须按 Enter 提交，再根据新页面截图核实结果。"
     "地址栏显示新网址不表示已打开该页面；禁止把旧正文作为新结果。"
+    "状态 address_focused 表示地址栏已经聚焦，下一步应 type，勿重复 Ctrl+L；"
+    "awaiting_submit 表示网址已输入但未提交，下一步应 hotkey [\"enter\"]，勿 done。"
     "若用户明确要求只输入不提交，则遵守该要求。\n"
 )
 
@@ -550,6 +552,9 @@ def _obs_summary(observation: dict) -> str:
     ax_app = observation.get("ax_app")
     if isinstance(ax_app, str) and ax_app.strip():
         parts.append(f"ax_app={ax_app.strip()[:64]}")
+    nav = observation.get("browser_navigation_status")
+    if nav in ("address_focused", "awaiting_submit", "unknown"):
+        parts.append(f"browser_navigation_status={nav}")
     # Surface AX / element / action hints so the planner can prefer them.
     for key in (
         "pid", "window_id", "element_index", "element_token",
@@ -841,7 +846,13 @@ class CodexPlanner(Planner):
             max_steps=max_steps,
         ) + image_note
         try:
-            if self._thread_id:
+            if self.screen_coordinates:
+                # Keep one current frame per visual decision. Resumed threads
+                # accumulate old screenshots and stale address-bar states.
+                # The full goal and redacted action history still travel with
+                # every call; the legacy AX/macOS resume path is unchanged.
+                raw = await self._run_codex(full, image=image, resume=False)
+            elif self._thread_id:
                 raw = await self._run_codex(followup, image=image)
                 if raw is None:
                     raw = await self._run_codex(full, image=image, resume=False)
