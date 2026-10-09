@@ -1,0 +1,186 @@
+{
+  "run_id": "20261009T051724Z",
+  "backend": "host-cua",
+  "metrics": {
+    "success_percent": null,
+    "stability_rounds": 0,
+    "total_rounds": 1,
+    "avg_steps": 8.0,
+    "avg_seconds": 37.36,
+    "launch_success_percent": 100.0,
+    "recovery_success_percent": null,
+    "false_completion": 0,
+    "repeats": 0,
+    "repeats_definition": "identical click/type/hotkey/scroll model actions retried against the same pre-action screenshot and focus; wait/observe/loading excluded; indicator, not proof of a GUI failure",
+    "failure_classes": [
+      "weather_needs_review"
+    ]
+  },
+  "runs": [
+    {
+      "case": "weather",
+      "round": 1,
+      "scenario": "closed",
+      "setup": {
+        "scenario": "closed",
+        "phase": "setup",
+        "commands": [],
+        "setup_ok": true,
+        "closed_pids": [
+          416608
+        ],
+        "remaining_owned_pids": []
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T051726Z_7db3bafd",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": null,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T051729Z-cua-1973dcd1",
+          "screenshot_hash": "006b19200eaa0d98efc34edfa22f54e1361eaa26a9c4b6a849dceac09b5b8e4e",
+          "pid": 421503,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 2998
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 421503,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "active_app": "Firefox",
+          "duration_ms": 1018
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T051734Z-cua-3d8c52a7",
+          "screenshot_hash": "f8d0b3e191b5faf801edf160c900b7102b98a18e3e9b864b1ffab83ad460f56e",
+          "pid": 421503,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 1830
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 421503,
+            "text_len": 60,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "active_app": "Firefox",
+          "duration_ms": 2368
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T051742Z-cua-85c4ec46",
+          "screenshot_hash": "c53e80cf731577646a978dd4f55684c7a1f21494fd7918ac166a02f1e7551538",
+          "pid": 421503,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 1753
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 421503,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "active_app": "Firefox",
+          "duration_ms": 1892
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T051750Z-cua-7e3f409c",
+          "screenshot_hash": "6bdc88dc8d6abd0b697b24ab4eb103d8f2829cfc1c2a5bb85c2324b8dbf52c95",
+          "pid": 421503,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 2740
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T051753Z-cua-f077bfbd",
+          "screenshot_hash": "d3f175bfb3e0069d084e0bcbc9e54d030b76921589068157540f5b2c74b6579d",
+          "pid": 421503,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 2765
+        }
+      ],
+      "screenshot_id": "20261009T051753Z-cua-f077bfbd",
+      "sha256": "d3f175bfb3e0069d084e0bcbc9e54d030b76921589068157540f5b2c74b6579d",
+      "window_focus_pid": 421503,
+      "window_focus_id": 6291459,
+      "duration_seconds": 37.364,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 1,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": false,
+      "requires_supervisor_screenshot_review": true,
+      "observed_title": "Montreal, QC Current Weather - The Weather Network \u2014 Mozilla Firefox",
+      "summary_sanitized": "Place: Montreal, Quebec (shown as Montreal, QC). Current observed temperature: 11\u00b0C. Condition: Clear (Current tab). Observation local date/time: 'Updated 11 minutes ago' (page shows only relative time). Precipitation probability with forecast period: 2am 30%, 3am 30%, 4am 40%, 5am 40%, 6am 30%. Source: The Weather Network, www.theweathernetwork.com/en/marine/ca/quebec/montreal/current.",
+      "failure_class": "weather_needs_review"
+    }
+  ]
+}

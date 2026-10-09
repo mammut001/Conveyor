@@ -1,0 +1,15 @@
+{
+  "production_sha": "6be6b4918a63e7a66c3408424432e5d2383621ff",
+  "running_computer_tasks": 0,
+  "active_takeover_leases": 0,
+  "desktop_tcp_bindings": [
+    "127.0.0.1:3389"
+  ],
+  "services": {
+    "conveyor-vps-computer": "active",
+    "conveyor-agent-desktops": "active",
+    "conveyor-web": "active"
+  },
+  "vnc_or_websockify_processes": [],
+  "checked_at_utc": "2026-10-09T03:38:34Z"
+}

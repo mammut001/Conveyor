@@ -24,12 +24,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import base64
 import hashlib
 import re
 import shutil
 import shlex
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -46,7 +48,10 @@ from desktop_computer_requests import (
 )
 
 def get_active_app_macos() -> str:
-    """Return the frontmost application name (best-effort)."""
+    """Return the frontmost application name (best-effort, also on Linux)."""
+    if sys.platform.startswith("linux"):
+        from desktop_linux_browser import LinuxBrowserController
+        return LinuxBrowserController().active_app()
     try:
         cmd = [
             "osascript",
@@ -64,12 +69,15 @@ def get_active_app_macos() -> str:
 
 
 def get_app_name_for_pid(pid: int) -> str | None:
-    """Resolve macOS process name for a unix pid (best-effort).
+    """Resolve the OS process name for a unix pid (best-effort).
 
     Used for AX-targeted actions so allowlist/blocklist checks the *target*
     app (e.g. Calculator) instead of whatever is currently frontmost
     (often Codex / Terminal while the agent is driving).
     """
+    if sys.platform.startswith("linux"):
+        from desktop_linux_browser import linux_process_app
+        return linux_process_app(pid)
     try:
         pid_int = int(pid)
     except (TypeError, ValueError):
@@ -127,6 +135,28 @@ def _driver_binary(cmd: str) -> str:
     return parts[0] if parts else "cua-driver"
 
 
+def _extract_driver_socket(cmd: str | None = None, *, settings: Settings | None = None) -> str | None:
+    """Extract optional daemon socket path from settings, env, or cmd flags."""
+    if settings is not None:
+        sock = getattr(settings, "conveyor_cua_driver_socket", None)
+        if isinstance(sock, (str, Path)) and str(sock).strip():
+            return str(sock).strip()
+    env_sock = os.getenv("CONVEYOR_CUA_DRIVER_SOCKET") or os.getenv("CUA_DRIVER_SOCKET")
+    if env_sock and env_sock.strip():
+        return env_sock.strip()
+    if cmd:
+        try:
+            parts = shlex.split(cmd)
+        except ValueError:
+            parts = []
+        for i, token in enumerate(parts):
+            if token == "--socket" and i + 1 < len(parts):
+                return parts[i + 1].strip()
+            if token.startswith("--socket="):
+                return token.split("=", 1)[1].strip()
+    return None
+
+
 def probe_cua_driver(cmd: str | None = None, *, settings: Settings | None = None) -> dict:
     """Probe whether the Cua driver is available on this Mac.
 
@@ -150,6 +180,7 @@ def probe_cua_driver(cmd: str | None = None, *, settings: Settings | None = None
     try:
         proc = subprocess.run(
             [path, "--version"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=10,
@@ -158,10 +189,37 @@ def probe_cua_driver(cmd: str | None = None, *, settings: Settings | None = None
             version = (proc.stdout or proc.stderr).strip().splitlines()[0][:64] or None
     except Exception:
         version = None
+    daemon_running = None
+    socket_path = _extract_driver_socket(cmd, settings=settings)
+    if socket_path:
+        try:
+            status_proc = subprocess.run(
+                [path, "--socket", socket_path, "status"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if status_proc.returncode != 0:
+                return {
+                    "available": False,
+                    "path": path,
+                    "version": version,
+                    "permissions": None,
+                    "error": f"driver_daemon_not_running:{socket_path}",
+                }
+            daemon_running = True
+        except Exception:
+            pass
     permissions = None
     try:
+        perm_cmd = [path]
+        if socket_path:
+            perm_cmd.extend(["--socket", socket_path])
+        perm_cmd.extend(["permissions", "status", "--json"])
         proc = subprocess.run(
-            [path, "permissions", "status", "--json"],
+            perm_cmd,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=10,
@@ -173,9 +231,13 @@ def probe_cua_driver(cmd: str | None = None, *, settings: Settings | None = None
                 status = parsed.get("status")
                 if status is None and parsed.get("accessibility") is True and parsed.get("screen_recording") is True:
                     status = "granted"
-                daemon_running = parsed.get("daemon_running")
+                if daemon_running is None:
+                    daemon_running = parsed.get("daemon_running")
                 if daemon_running is None and source.get("attribution") == "driver-daemon":
                     daemon_running = True
+                if sys.platform.startswith("linux") and daemon_running:
+                    # Linux X11 has no macOS TCC; running daemon is fully functional
+                    status = "granted"
                 permissions = {
                     "status": status,
                     "daemon_running": daemon_running,
@@ -186,6 +248,15 @@ def probe_cua_driver(cmd: str | None = None, *, settings: Settings | None = None
                 }
     except Exception:
         permissions = None
+    if permissions is None and daemon_running:
+        permissions = {
+            "status": "granted" if sys.platform.startswith("linux") else "unknown",
+            "daemon_running": True,
+            "accessibility": None,
+            "screen_recording": None,
+            "screen_recording_capturable": None,
+            "reason": None,
+        }
     return {
         "available": True,
         "path": path,
@@ -219,9 +290,10 @@ class LocalCuaTransport(CuaTransport):
         self.settings = settings
         self.timeout_seconds = timeout_seconds
         self.binary = _driver_binary(self.cmd)
+        self.socket_path = _extract_driver_socket(self.cmd, settings=self.settings)
 
     def execute(self, action: dict, node_id: str) -> dict:
-        probe = probe_cua_driver(self.cmd)
+        probe = probe_cua_driver(self.cmd, settings=self.settings)
         if not probe.get("available"):
             return {
                 "result_ok": False,
@@ -307,7 +379,41 @@ class LocalCuaTransport(CuaTransport):
         A named app that is installed but not running is launched, then
         brought to the front. An unknown name is still reported as missing.
         """
-        if not isinstance(action, dict) or not action.get("target_app"):
+        if not isinstance(action, dict):
+            return None
+        # The shared Linux VPS needs a real X11 browser window, not a
+        # name from cua-driver's often incomplete installed-app list.
+        # Browser is a fixed capability, never an arbitrary executable.
+        if sys.platform.startswith("linux"):
+            from desktop_linux_browser import LinuxBrowserController, canonical_browser
+            target = action.get("target_app")
+            named = canonical_browser(target) if target else None
+            if target and named is None:
+                # Existing, policy-approved PIDs may still be inspected. Linux
+                # must never fall through to the macOS installed-app launcher.
+                return None if action.get("pid") is not None else "target_app_not_found"
+            # Strings and other model-controlled values are not a launch flag.
+            if action.get("ensure_browser") is True or named:
+                try:
+                    expected_pid = int(action["pid"]) if action.get("pid") is not None else None
+                    expected_window = int(action["window_id"]) if action.get("window_id") is not None else None
+                except (TypeError, ValueError):
+                    return "target_identity_conflict"
+                browser = LinuxBrowserController().ensure(
+                    str(named or "Browser"),
+                    allowed_apps=tuple(getattr(self.settings, "conveyor_computer_allowed_apps", ()) or ()),
+                    blocked_apps=tuple(getattr(self.settings, "conveyor_computer_blocked_apps", ()) or ()),
+                    expected_pid=expected_pid,
+                    expected_window=expected_window,
+                )
+                if not browser.get("ok"):
+                    return str(browser.get("error") or "browser_unavailable")
+                # Verified pair only. ensure() refuses a contradictory pid
+                # or window instead of focusing a different one.
+                action["pid"] = int(browser["pid"])
+                action["window_id"] = int(browser["window_id"])
+                return None
+        if not action.get("target_app"):
             return None
         if action.get("pid") is not None:
             return None
@@ -383,12 +489,16 @@ class LocalCuaTransport(CuaTransport):
         return None
 
     def _call_tool(self, tool: str, args: dict | None = None, *, timeout: int | None = None) -> dict:
-        cmd = [self.binary, "call", tool]
-        if args:
+        cmd = [self.binary]
+        if self.socket_path:
+            cmd.extend(["--socket", self.socket_path])
+        cmd.extend(["call", tool])
+        if args is not None:
             cmd.append(json.dumps(args, ensure_ascii=False))
         try:
             proc = subprocess.run(
                 cmd,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=timeout or self.timeout_seconds,
@@ -402,6 +512,9 @@ class LocalCuaTransport(CuaTransport):
             detail = err[0][:120] if err else ""
             if not detail:
                 detail = _driver_stdout_code(proc.stdout or "")
+            if "background_unavailable" in detail and isinstance(args, dict) and args.get("delivery_mode") != "foreground":
+                retry_args = dict(args, delivery_mode="foreground")
+                return self._call_tool(tool, retry_args, timeout=timeout)
             suffix = f":{detail}" if detail else ""
             return {"ok": False, "error": f"driver_exit_{proc.returncode}{suffix}"}
         try:
@@ -451,7 +564,33 @@ class LocalCuaTransport(CuaTransport):
             return res
         if hints:
             res.update(hints)
+        self._attach_browser_page_state(res)
         return res
+
+    def _attach_browser_page_state(self, res: dict) -> None:
+        """Record a coarse page state and drop any raw window title.
+
+        The title is read only to classify blank, error, loading, or loaded.
+        It is not logged and is not left on the result.
+        """
+        from desktop_computer_requests import browser_page_state_from_title
+
+        title = res.pop("window_title", None)
+        if not isinstance(title, str) or not title.strip():
+            title = ""
+            windows = res.get("windows")
+            matched = None
+            if isinstance(windows, list):
+                matched = _match_listed_window(windows, res.get("pid"), res.get("window_id"))
+            if isinstance(matched, dict) and isinstance(matched.get("title"), str):
+                title = matched["title"].strip()[:120]
+            if not title and sys.platform.startswith("linux"):
+                try:
+                    from desktop_linux_browser import LinuxBrowserController
+                    title = LinuxBrowserController().active_window_title()
+                except Exception:
+                    title = ""
+        res["browser_page_state"] = browser_page_state_from_title(str(title or "")[:120])
 
     def _collect_ax_hints(self, action: dict | None = None) -> dict[str, Any]:
         """Pick a target app window and return pid/window_id/element_hints.
@@ -505,8 +644,23 @@ class LocalCuaTransport(CuaTransport):
                 return 0.0
 
         def _match_app(w: dict, names: list[str]) -> bool:
-            app = str(w.get("app_name") or "").strip().lower()
-            return bool(app) and app in names
+            app = str(w.get("app_name") or w.get("app") or "").strip().lower()
+            if not app:
+                return False
+            for n in names:
+                n_l = str(n).strip().lower()
+                if not n_l:
+                    continue
+                if app == n_l or n_l in app or app in n_l:
+                    return True
+                if sys.platform.startswith("linux"):
+                    try:
+                        from desktop_linux_browser import canonical_app
+                        if canonical_app(app).lower() == canonical_app(n_l).lower():
+                            return True
+                    except Exception:
+                        pass
+            return False
 
         candidates = list(windows)
         if preferred_pid:
@@ -519,7 +673,7 @@ class LocalCuaTransport(CuaTransport):
             if filtered:
                 candidates = filtered
         elif front and front != "Unknown":
-            filtered = [w for w in candidates if _match_app(w, [front.lower()])]
+            filtered = [w for w in candidates if _match_app(w, [front])]
             if filtered:
                 candidates = filtered
 
@@ -534,7 +688,7 @@ class LocalCuaTransport(CuaTransport):
         candidates = sorted(
             candidates,
             key=lambda w: (
-                0 if _is_chrome_app(str(w.get("app_name") or "")) else 1,
+                0 if _is_chrome_app(str(w.get("app_name") or w.get("app") or "")) else 1,
                 _z_index(w),
                 1 if w.get("is_on_screen") else 0,
                 1 if _area(w) >= 5000 else 0,
@@ -546,6 +700,14 @@ class LocalCuaTransport(CuaTransport):
             prefer = [w for w in candidates if int(w.get("window_id") or -1) == preferred_wid]
             if prefer:
                 candidates = prefer + [w for w in candidates if w not in prefer]
+
+        top_target = None
+        for w in candidates:
+            if not _is_chrome_app(str(w.get("app_name") or w.get("app") or "")):
+                top_target = w
+                break
+        if top_target is None and candidates:
+            top_target = candidates[0]
 
         chosen = None
         for w in candidates:
@@ -572,13 +734,23 @@ class LocalCuaTransport(CuaTransport):
             chosen = {
                 "pid": pid,
                 "window_id": wid,
-                "ax_app": str(w.get("app_name") or "")[:128] or None,
+                "ax_app": str(w.get("app_name") or w.get("app") or "")[:128] or None,
                 "element_hints": hints,
             }
             if hints:
                 break
+
+        # A background window with elements must NEVER hijack the target window
+        if chosen and top_target:
+            try:
+                if int(chosen["pid"]) != int(top_target["pid"]):
+                    if not _match_app(chosen, [str(top_target.get("app_name") or top_target.get("app") or "")]):
+                        chosen = None
+            except (TypeError, ValueError):
+                pass
+
         summary = summarize_windows(windows)
-        if not chosen and not summary:
+        if not chosen and not summary and not top_target:
             return {}
         out: dict[str, Any] = {}
         if chosen:
@@ -588,6 +760,13 @@ class LocalCuaTransport(CuaTransport):
                 out["ax_app"] = chosen["ax_app"]
             if chosen.get("element_hints"):
                 out["element_hints"] = chosen["element_hints"]
+        elif top_target:
+            try:
+                out["pid"] = int(top_target["pid"])
+                out["window_id"] = int(top_target["window_id"])
+                out["ax_app"] = str(top_target.get("app_name") or top_target.get("app") or "")[:128] or None
+            except (TypeError, ValueError):
+                pass
         if summary:
             out["windows"] = summary
         return out
@@ -900,7 +1079,26 @@ class LocalCuaTransport(CuaTransport):
         logger.info("Click method used: %s", used_method)
         return result
 
+    def _linux_keyboard_blocked(self, action: dict) -> str | None:
+        """On Linux, refuse keys unless the verified window is still in front.
+
+        macOS keeps AX delivery to a background pid; that path is unchanged.
+        """
+        if not sys.platform.startswith("linux"):
+            return None
+        if not isinstance(action, dict):
+            return None
+        if action.get("pid") is None and action.get("window_id") is None:
+            return None
+        from desktop_linux_browser import LinuxBrowserController
+        if LinuxBrowserController().keyboard_target_ready(action.get("pid"), action.get("window_id")):
+            return None
+        return "keyboard_target_not_foreground"
+
     def _type_text(self, action: dict, node_id: str) -> dict:
+        blocked = self._linux_keyboard_blocked(action)
+        if blocked:
+            return {"result_ok": False, "error": blocked, "action_type": "type", "node_id": node_id}
         pid = action.get("pid")
         if pid is None:
             return {
@@ -911,6 +1109,8 @@ class LocalCuaTransport(CuaTransport):
             }
         args = {"pid": int(pid), "text": str(action.get("text", ""))}
         _copy_optional(action, args, ("window_id", "element_index", "element_token", "x", "y", "delivery_mode"))
+        if sys.platform.startswith("linux") and "delivery_mode" not in args:
+            args["delivery_mode"] = "foreground"
         called = self._call_tool("type_text", args)
         result = _result_from_call(called, "type", node_id)
         if result.get("result_ok"):
@@ -918,6 +1118,9 @@ class LocalCuaTransport(CuaTransport):
         return result
 
     def _hotkey(self, action: dict, node_id: str) -> dict:
+        blocked = self._linux_keyboard_blocked(action)
+        if blocked:
+            return {"result_ok": False, "error": blocked, "action_type": "hotkey", "node_id": node_id}
         pid = action.get("pid")
         if pid is None:
             return {
@@ -931,6 +1134,8 @@ class LocalCuaTransport(CuaTransport):
             return {"result_ok": False, "error": "bad_keys", "action_type": "hotkey", "node_id": node_id}
         args = {"pid": int(pid), "keys": [str(k) for k in keys]}
         _copy_optional(action, args, ("window_id", "x", "y", "delivery_mode"))
+        if sys.platform.startswith("linux") and "delivery_mode" not in args:
+            args["delivery_mode"] = "foreground"
         called = self._call_tool("hotkey", args)
         result = _result_from_call(called, "hotkey", node_id)
         if result.get("result_ok"):
@@ -956,6 +1161,8 @@ class LocalCuaTransport(CuaTransport):
             amount = max(1, min(50, int(abs(dy) / 120) or 1))
         args = {"pid": int(pid), "direction": direction, "amount": amount, "by": "line"}
         _copy_optional(action, args, ("window_id", "element_index", "element_token", "x", "y", "delivery_mode"))
+        if sys.platform.startswith("linux") and "delivery_mode" not in args:
+            args["delivery_mode"] = "foreground"
         called = self._call_tool("scroll", args)
         return _result_from_call(called, "scroll", node_id)
 
@@ -1410,6 +1617,7 @@ class CuaDriver:
             "effect", "path", "verified", "error", "node_id", "created_at",
             "keys_len", "text_len", "click_method", "active_app",
             "pid", "window_id", "ax_app", "element_hints", "windows",
+            "browser_page_state",
         }
         return {k: v for k, v in result.items() if k in allowed}
 

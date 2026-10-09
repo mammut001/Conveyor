@@ -1197,7 +1197,8 @@ def _test_ax_target_app_allowlist_not_frontmost() -> None:
 
 
 def _test_target_app_activation_metadata() -> None:
-    """Explicit target_app resolves a running app and activates it locally."""
+    """Mac resolves a running app; Linux refuses generic app discovery."""
+    from unittest import mock
     from desktop_cua import LocalCuaTransport
 
     settings = _mk_settings()
@@ -1216,12 +1217,19 @@ def _test_target_app_activation_metadata() -> None:
 
     transport._call_tool = fake_call
     action = {"action": "observe", "target_app": "Calculator"}
-    err = transport._prepare_target_app(action)
+    with mock.patch("desktop_cua.sys.platform", "darwin"):
+        err = transport._prepare_target_app(action)
     if err or action.get("pid") != 4242:
         _fail("target_app_activation_metadata", f"err={err}, action={action}")
         return
     if [name for name, _ in calls[:2]] != ["list_apps", "bring_to_front"]:
         _fail("target_app_activation_metadata", f"calls={calls}")
+        return
+    calls.clear()
+    with mock.patch("desktop_cua.sys.platform", "linux"):
+        refused = transport._prepare_target_app({"action": "observe", "target_app": "Calculator"})
+    if refused != "target_app_not_found" or calls:
+        _fail("target_app_activation_metadata", f"Linux boundary: error={refused}, calls={calls}")
         return
     print("[pass] target_app_activation_metadata")
 
@@ -1649,6 +1657,11 @@ def _test_trajectory_records_click_metadata() -> None:
                 "window_id": 456,
                 "ax_app": "Calculator",
             }
+            # The completion gate requires a real observation id and hash.
+            # Only the observe result carries them. The click stays metadata.
+            if action.get("action") == "observe":
+                result["screenshot_id"] = "obs_click_meta"
+                result["sha256"] = "cafebabe"
             complete_computer_step(settings, step_id, "mac-test", result)
             return result
 

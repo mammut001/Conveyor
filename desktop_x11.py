@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -35,7 +36,9 @@ MAX_WAIT_SECONDS = 10.0
 BROWSER_WAIT_SECONDS = 40.0
 TYPE_CHUNK = 400
 # X window classes of the browsers an agent desktop may run (regex).
-BROWSER_CLASSES = "firefox|Navigator|chromium|chrome"
+# ``firefox_firefox`` is the Snap instance/class. A search hit is not trusted
+# until the window is a normal (or minimized) browser and its PID is verified.
+BROWSER_CLASSES = "firefox|firefox_firefox|Navigator|chromium|chrome"
 # A planner used to macOS says "cmd"; on this desktop the shortcut key is ctrl.
 MODIFIERS = {
     "ctrl": "ctrl", "control": "ctrl", "cmd": "ctrl", "command": "ctrl", "meta": "ctrl",
@@ -81,6 +84,70 @@ def hotkey_argument(keys: Any) -> str:
     return "+".join(parts)
 
 
+def _browser_class_label(value: object) -> bool:
+    """True when a WM_CLASS token is a browser, including the Snap class."""
+    from desktop_linux_browser import canonical_browser
+
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if canonical_browser(text) not in (None, "Browser"):
+        return True
+    folded = text.lower()
+    return folded in {"firefox_firefox", "navigator"} or "firefox" in folded or "chrome" in folded or "chromium" in folded
+
+
+def _policy_app_lists(settings: Settings) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    allowed = tuple(getattr(settings, "conveyor_computer_allowed_apps", ()) or ())
+    blocked = tuple(getattr(settings, "conveyor_computer_blocked_apps", ()) or ())
+    return allowed, blocked
+
+
+def _browser_policy_allows(settings: Settings) -> bool:
+    """True when at least one known browser is still selectable.
+
+    Chrome may stay allowed while Firefox is blocked. That must not look
+    like a total denial before the controller picks Chrome. A generic
+    ``Browser`` block denies every candidate.
+    """
+    from desktop_linux_browser import BROWSERS, browser_permitted
+
+    allowed, blocked = _policy_app_lists(settings)
+    return any(browser_permitted(name, allowed_apps=allowed, blocked_apps=blocked) for name in BROWSERS)
+
+
+def _firefox_bootstrap_allowed(settings: Settings) -> bool:
+    """The supervisor request starts Firefox, not whichever browser is allowed."""
+    from desktop_linux_browser import browser_permitted
+
+    allowed, blocked = _policy_app_lists(settings)
+    return browser_permitted("Firefox", allowed_apps=allowed, blocked_apps=blocked)
+
+
+def _action_requests_browser(action: dict) -> bool:
+    """True when this step asks the display controller to show a browser.
+
+    Those steps must not sit in the supervisor wait. Launch stays inside
+    the claimed execute path, after takeover checks.
+    """
+    if not isinstance(action, dict):
+        return False
+    if action.get("ensure_browser") is True:
+        return True
+    from desktop_linux_browser import canonical_browser
+
+    target = action.get("target_app")
+    return bool(target) and canonical_browser(target) is not None
+
+
+def _observe_requests_browser(action: dict) -> bool:
+    return (
+        isinstance(action, dict)
+        and action.get("action") == "observe"
+        and _action_requests_browser(action)
+    )
+
+
 class X11Desktop:
     """Blocking operations on one X display."""
 
@@ -88,11 +155,15 @@ class X11Desktop:
         self.settings = settings
         self.agent_id = agent_id
         self.display = display
+        # One private X authority. Prefer the process value (a supervisor can
+        # point at a session cookie) and otherwise the shared client file.
+        # The rest of the process environment, including secrets, stays out.
+        xauthority = os.environ.get("XAUTHORITY", "").strip() or str(agents.client_xauthority_path())
         self.env = {
             "PATH": "/usr/local/bin:/usr/bin:/bin",
             "HOME": str(Path.home()),
             "DISPLAY": f":{display}",
-            "XAUTHORITY": str(agents.client_xauthority_path()),
+            "XAUTHORITY": xauthority,
         }
 
     def _run(self, *command: str, timeout: float = 15.0, text: bool = True) -> subprocess.CompletedProcess:
@@ -106,6 +177,22 @@ class X11Desktop:
             raise X11Error("xdotool_missing")
         if self._run("xdotool", *args).returncode != 0:
             raise X11Error("input_failed")
+
+    def private_display_ready(self) -> bool:
+        """True when this agent's own display answers and its cookie exists.
+
+        Display ``:0`` and ``:1`` are never treated as an agent desktop.
+        """
+        if self.display < 2:
+            return False
+        authority = self.env.get("XAUTHORITY") or ""
+        if not authority or not os.path.isfile(authority):
+            return False
+        try:
+            self.geometry()
+        except X11Error:
+            return False
+        return True
 
     def geometry(self) -> tuple[int, int]:
         try:
@@ -124,12 +211,84 @@ class X11Desktop:
             raise X11Error("point_outside_screen")
         return str(x), str(y)
 
-    def active_app(self) -> str | None:
+    def _window_pid(self, wid: str) -> int | None:
         try:
-            name = self._run("xdotool", "getactivewindow", "getwindowclassname", timeout=5).stdout.strip()
+            pid = self._run("xdotool", "getwindowpid", wid, timeout=5)
         except (OSError, subprocess.SubprocessError):
             return None
-        return name[:64] or None
+        text = (pid.stdout or "").strip()
+        if pid.returncode != 0 or not text.isdigit() or int(text) <= 0:
+            return None
+        return int(text)
+
+    def active_app(self) -> str | None:
+        """Foreground app from a verified PID.
+
+        A trusted browser PID becomes the canonical name (``Firefox``),
+        including Snap windows whose raw class is ``firefox_firefox``.
+        WM_CLASS is only a fallback for a non-browser label. An unreadable
+        or untrusted PID cannot be promoted to a browser from the class or
+        from ``comm``.
+        """
+        from desktop_linux_browser import canonical_browser, linux_process_app, parse_wm_class
+
+        try:
+            active = self._run("xdotool", "getactivewindow", timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        wid = (active.stdout or "").strip()
+        if active.returncode != 0 or not wid.isdigit():
+            return None
+        pid = self._window_pid(wid)
+        if pid is not None:
+            app = linux_process_app(pid)
+            browser = canonical_browser(app)
+            if browser and browser != "Browser":
+                return browser
+            if app and app != "Unknown":
+                return app[:64]
+            return None
+        try:
+            prop = self._run("xprop", "-id", wid, "WM_CLASS", timeout=5)
+            parsed = parse_wm_class(prop.stdout or "")
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if not parsed:
+            return None
+        label = (parsed[1] or parsed[0]).strip()
+        if not label or _browser_class_label(label) or _browser_class_label(parsed[0]):
+            return None
+        return label[:64]
+
+    def active_window(self) -> dict:
+        """Read-only focus identity on this display. Missing fields stay absent.
+
+        A window title can be private UI text. It is classified into
+        ``browser_page_state`` and is not returned.
+        """
+        try:
+            active = self._run("xdotool", "getactivewindow", timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        wid = (active.stdout or "").strip()
+        if active.returncode != 0 or not wid.isdigit():
+            return {}
+        out: dict[str, Any] = {"window_id": int(wid)}
+        pid = self._window_pid(wid)
+        if pid is not None:
+            out["pid"] = pid
+        title = ""
+        try:
+            named = self._run("xdotool", "getwindowname", wid, timeout=5)
+            if named.returncode == 0:
+                title = (named.stdout or "").strip()[:120]
+        except (OSError, subprocess.SubprocessError):
+            title = ""
+        # The title can be private UI text. Keep only the coarse state.
+        from desktop_computer_requests import browser_page_state_from_title
+
+        out["browser_page_state"] = browser_page_state_from_title(title)
+        return out
 
     def has_browser_window(self) -> bool:
         """True once a browser window is mapped.
@@ -141,7 +300,26 @@ class X11Desktop:
             found = self._run("xdotool", "search", "--onlyvisible", "--class", BROWSER_CLASSES, timeout=5)
         except (OSError, subprocess.SubprocessError):
             return False
-        return bool(found.stdout.strip())
+        from desktop_linux_browser import xprop_browser_target
+
+        for wid in (found.stdout or "").split():
+            if not wid.isdigit():
+                continue
+            try:
+                prop = self._run(
+                    "xprop", "-id", wid, "WM_CLASS", "WM_STATE", "_NET_WM_WINDOW_TYPE", timeout=5,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if not xprop_browser_target(prop.stdout or ""):
+                continue
+            from desktop_linux_browser import canonical_browser, linux_process_app
+
+            pid = self._window_pid(wid)
+            app = linux_process_app(pid) if pid is not None else ""
+            if canonical_browser(app) not in (None, "Browser"):
+                return True
+        return False
 
     # ---- actions ------------------------------------------------------------
 
@@ -162,10 +340,12 @@ class X11Desktop:
         )
         if not recorded.get("ok"):
             raise X11Error("screenshot_record_error")
-        return {
+        result = {
             "screenshot_id": recorded["screenshot_id"], "sha256": recorded["sha256"],
             "width": recorded["width"], "height": recorded["height"],
         }
+        result.update(self.active_window())
+        return result
 
     def click(self, action: dict) -> dict:
         x, y = self._point(action)
@@ -175,7 +355,29 @@ class X11Desktop:
         self._xdotool("mousemove", x, y, "click", button)
         return {"click_method": "xtest"}
 
+    def _require_keyboard_target(self, action: dict) -> None:
+        """If the loop bound a window, type only while that window is in front.
+
+        Agent desktops have no separate browser-controller fallback; this
+        uses the same DISPLAY as the rest of the step.
+        """
+        pid = action.get("pid")
+        wid = action.get("window_id")
+        if pid is None and wid is None:
+            return
+        active = self._run("xdotool", "getactivewindow", timeout=5)
+        current = (active.stdout or "").strip()
+        if active.returncode != 0 or not current.isdigit():
+            raise X11Error("keyboard_target_not_foreground")
+        if wid is not None and int(wid) != int(current):
+            raise X11Error("keyboard_target_not_foreground")
+        if pid is not None:
+            got = self._run("xdotool", "getwindowpid", current, timeout=5)
+            if (got.stdout or "").strip() != str(int(pid)):
+                raise X11Error("keyboard_target_not_foreground")
+
     def type_text(self, action: dict) -> dict:
+        self._require_keyboard_target(action)
         text = action.get("text")
         if not isinstance(text, str) or not text:
             raise X11Error("type_needs_text")
@@ -185,6 +387,7 @@ class X11Desktop:
         return {"text_len": len(text)}
 
     def hotkey(self, action: dict) -> dict:
+        self._require_keyboard_target(action)
         keys = action.get("keys")
         self._xdotool("key", "--clearmodifiers", hotkey_argument(keys))
         return {"keys_len": len(keys)}
@@ -206,8 +409,137 @@ class X11Desktop:
         self._xdotool(*args, "click", "--repeat", steps, button)
         return {}
 
+    def _activate_browser(self, action: dict) -> dict | None:
+        """Focus a verified browser on this display, or return an error result.
+
+        ``ensure_browser`` must be boolean true. A canonical browser target
+        is activated the same way. Any other target name is refused and is
+        never launched. Allow and block lists are applied before focus.
+        """
+        from desktop_linux_browser import LinuxBrowserController, canonical_browser
+
+        if self.display < 2:
+            return {"result_ok": False, "error": "browser_display_missing", "action_type": str(action.get("action"))}
+        target = action.get("target_app")
+        named = canonical_browser(target) if target else None
+        if target and named is None:
+            return {"result_ok": False, "error": "target_app_not_found", "action_type": str(action.get("action"))}
+        if action.get("ensure_browser") is not True and named is None:
+            return None
+        try:
+            expected_pid = int(action["pid"]) if action.get("pid") is not None else None
+            expected_window = int(action["window_id"]) if action.get("window_id") is not None else None
+        except (TypeError, ValueError):
+            return {
+                "result_ok": False, "error": "target_identity_conflict",
+                "action_type": str(action.get("action")),
+            }
+        browser = LinuxBrowserController(self.env).ensure(
+            str(named or "Browser"),
+            allowed_apps=tuple(getattr(self.settings, "conveyor_computer_allowed_apps", ()) or ()),
+            blocked_apps=tuple(getattr(self.settings, "conveyor_computer_blocked_apps", ()) or ()),
+            expected_pid=expected_pid,
+            expected_window=expected_window,
+        )
+        if not browser.get("ok"):
+            return {
+                "result_ok": False,
+                "error": str(browser.get("error") or "browser_unavailable"),
+                "action_type": str(action.get("action")),
+            }
+        # Verified pair only. A contradictory pid or window is not overwritten.
+        action["pid"] = int(browser["pid"])
+        action["window_id"] = int(browser["window_id"])
+        return None
+
+    def _trusted_app_name(self, pid: int) -> str | None:
+        from desktop_linux_browser import canonical_browser, linux_process_app
+
+        app = linux_process_app(pid)
+        browser = canonical_browser(app)
+        if browser and browser != "Browser":
+            return browser
+        if app and app != "Unknown":
+            return app[:64]
+        return None
+
+    def _policy_app(self, action: dict) -> str | None:
+        """Trusted app for the action target, else the current foreground app.
+
+        A pid or window that does not resolve is unresolved. Keyboard input
+        must not fall back to some other frontmost name.
+        """
+        pid = action.get("pid")
+        if pid is not None:
+            try:
+                pid_i = int(pid)
+            except (TypeError, ValueError):
+                return None
+            if pid_i <= 0:
+                return None
+            return self._trusted_app_name(pid_i)
+        wid = action.get("window_id")
+        if wid is not None:
+            try:
+                wid_s = str(int(wid))
+            except (TypeError, ValueError):
+                return None
+            got = self._window_pid(wid_s)
+            if got is None:
+                return None
+            return self._trusted_app_name(got)
+        return self.active_app()
+
+    def _mutation_denied(self, action: dict) -> dict | None:
+        """Blocklist, and allowlist for mutating actions, before any input.
+
+        Observe and wait stay allowlist-exempt. Keyboard with no trusted
+        app fails closed. A bare click or scroll uses the current app.
+        """
+        from desktop_computer_requests import (
+            action_enforces_app_allowlist,
+            check_app_allowlist_blocklist,
+        )
+
+        kind = str(action.get("action") or "")
+        if kind in {"observe", "wait"}:
+            app = self._policy_app(action)
+            if not app:
+                return None
+            is_ok, reason = check_app_allowlist_blocklist(
+                self.settings, app, enforce_allowlist=False,
+            )
+            if is_ok:
+                return None
+            return {
+                "result_ok": False, "error": reason, "action_type": kind, "active_app": app,
+            }
+        if kind not in {"click", "type", "hotkey", "scroll"}:
+            return None
+        app = self._policy_app(action)
+        if kind in {"type", "hotkey"} and not app:
+            return {
+                "result_ok": False, "error": "app_identity_unresolved", "action_type": kind,
+            }
+        if not app:
+            return None
+        is_ok, reason = check_app_allowlist_blocklist(
+            self.settings, app, enforce_allowlist=action_enforces_app_allowlist(action),
+        )
+        if is_ok:
+            return None
+        return {
+            "result_ok": False, "error": reason, "action_type": kind, "active_app": app,
+        }
+
     def execute(self, action: dict) -> dict:
         kind = action.get("action")
+        prepared = self._activate_browser(action)
+        if prepared is not None:
+            return prepared
+        denied = self._mutation_denied(action)
+        if denied is not None:
+            return denied
         try:
             if kind == "observe":
                 result = self.observe()
@@ -232,6 +564,8 @@ class X11Desktop:
         app = self.active_app()
         if app:
             result["active_app"] = app
+        for key, value in self.active_window().items():
+            result.setdefault(key, value)
         return result
 
 
@@ -244,34 +578,80 @@ class X11ComputerBackend:
         self.node_id = x11_node_id(scope)
         self.desktop = X11Desktop(settings, agent_id=agent_id, display=display)
         self._prepared = False
+        # Set once this task asks the browser controller to run. Later steps
+        # stay off the supervisor bootstrap even when that ensure failed.
+        # _prepared stays false: failure is not a successful prepare.
+        self._browser_controller = False
+
+    def _takeover_active(self, settings: Settings) -> bool:
+        from human_takeover import HumanTakeoverStore
+
+        return HumanTakeoverStore(settings).current(agents.takeover_scope(self.agent_id)) is not None
 
     async def _prepare(self) -> None:
-        """A bare desktop has nothing to look at: have the browser up first."""
+        """A bare desktop has nothing to look at: have the browser up first.
+
+        A human lease is checked before any launch and again before waiting,
+        so preparation never starts a browser the operator just took over.
+        """
         if self._prepared:
             return
-        self._prepared = True
+        if self._takeover_active(self.settings):
+            from desktop_computer_loop import ComputerBackendError
+            raise ComputerBackendError("human_takeover_active")
         if await asyncio.to_thread(self.desktop.has_browser_window):
+            self._prepared = True
+            return
+        if self._takeover_active(self.settings):
+            from desktop_computer_loop import ComputerBackendError
+            raise ComputerBackendError("human_takeover_active")
+        # The agent supervisor opens Firefox on this display. There is no
+        # host-display fallback. A blocked browser policy or a display that
+        # is not this private server does not send that request.
+        if not _firefox_bootstrap_allowed(self.settings) or not self.desktop.private_display_ready():
+            logger.warning("agent %s: browser bootstrap skipped", self.agent_id)
+            self._prepared = True
             return
         from agent_desktops import request_browser
 
         request_browser(self.settings, self.agent_id)
         deadline = time.monotonic() + BROWSER_WAIT_SECONDS
         while time.monotonic() < deadline:
+            if self._takeover_active(self.settings):
+                from desktop_computer_loop import ComputerBackendError
+                raise ComputerBackendError("human_takeover_active")
             await asyncio.sleep(1.0)
             if await asyncio.to_thread(self.desktop.has_browser_window):
                 # Let the first page paint before the first screenshot.
                 await asyncio.sleep(3.0)
+                self._prepared = True
                 return
+        # Leave _prepared false so a missed launch is retried. Marking
+        # success here hid a browser that never appeared.
         logger.warning("agent %s: no window appeared on its desktop", self.agent_id)
 
     async def execute_step(self, settings: Settings, task_id: str, step_id: str, action: dict) -> dict:
         from desktop_computer_loop import ComputerBackendError
 
-        await self._prepare()
+        if self._takeover_active(settings):
+            raise ComputerBackendError("human_takeover_active")
+        # A browser observe launches through the claimed step's controller.
+        # Once this task has asked for that, every later step — including a
+        # bare diagnostic observe after a failed bootstrap — skips the
+        # supervisor wait. A caller that never names a browser keeps it.
+        requests_browser = _action_requests_browser(action)
+        if requests_browser:
+            self._browser_controller = True
+        if not self._browser_controller:
+            await self._prepare()
+        if self._takeover_active(settings):
+            raise ComputerBackendError("human_takeover_active")
         claimed = claim_computer_step(settings, step_id, self.node_id)
         if not claimed.get("ok"):
             error = str(claimed.get("error") or "claim_failed")
             raise ComputerBackendError("human_takeover_active" if error == "human_takeover_active" else f"step_{error}")
+        if self._takeover_active(settings):
+            raise ComputerBackendError("human_takeover_active")
         result = await asyncio.to_thread(self.desktop.execute, claimed["step"].get("action") or action)
         completed = complete_computer_step(settings, step_id, self.node_id, result)
         if not completed.get("ok"):

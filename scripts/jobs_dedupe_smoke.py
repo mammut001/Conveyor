@@ -30,13 +30,14 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+_tmp_base = os.environ.get("TMPDIR") or "/tmp"
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "fake-token")
 os.environ.setdefault("TELEGRAM_ALLOWED_USER_ID", "0")
 os.environ.setdefault("LARK_APP_ID", "cli_fake")
 os.environ.setdefault("LARK_APP_SECRET", "fake")
-os.environ.setdefault("CODEX_WORKSPACE_ROOT", "/tmp/codex-dedupe-ws")
-os.environ.setdefault("CODEX_TASK_ROOT", "/tmp/codex-dedupe-task")
-os.environ.setdefault("CODEX_MEMORY_ROOT", "/tmp/codex-dedupe-mem")
+os.environ.setdefault("CODEX_WORKSPACE_ROOT", f"{_tmp_base}/codex-dedupe-ws")
+os.environ.setdefault("CODEX_TASK_ROOT", f"{_tmp_base}/codex-dedupe-task")
+os.environ.setdefault("CODEX_MEMORY_ROOT", f"{_tmp_base}/codex-dedupe-mem")
 os.environ.setdefault("CODEX_BIN", "codex")
 os.environ.setdefault("USER_TIMEZONE", "UTC")
 
@@ -118,7 +119,7 @@ def _fake_runner(*, summary: str | None, progress_text: str | None) -> mock.Mock
     runner.start = fake_start
     runner.current_job = None
     runner.settings = SimpleNamespace(
-        codex_memory_root=Path("/tmp/codex-dedupe-mem"),
+        codex_memory_root=Path(os.environ["CODEX_MEMORY_ROOT"]),
         conveyor_progress_mode="verbose",
         conveyor_session_enabled=False,
         conveyor_max_jobs_per_hour=60,

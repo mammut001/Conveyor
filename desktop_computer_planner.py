@@ -46,6 +46,15 @@ from desktop_screenshot import resolve_screenshot_dir
 logger = logging.getLogger(__name__)
 
 
+_BROWSER_NAV_RULE = (
+    "浏览器导航：地址栏输入网址或搜索词后必须按 Enter 提交，再根据新页面截图核实结果。"
+    "地址栏显示新网址不表示已打开该页面；禁止把旧正文作为新结果。"
+    "状态 address_focused 表示地址栏已经聚焦，下一步应 type，勿重复 Ctrl+L；"
+    "awaiting_submit 表示网址已输入但未提交，下一步应 hotkey [\"enter\"]，勿 done。"
+    "若用户明确要求只输入不提交，则遵守该要求。\n"
+)
+
+
 _ALLOWED = ("observe", "click", "type", "hotkey", "scroll", "wait", "done", "stop")
 
 # Preferred Clear button labels on macOS Calculator (short, safe).
@@ -124,6 +133,32 @@ def infer_target_app(goal: str) -> str | None:
         if app in text:
             return app.title() if app != "textedit" else "TextEdit"
     return None
+
+
+def goal_needs_loaded_page(goal: str) -> bool:
+    """True when success requires leaving the browser's initial blank page.
+
+    The loop only uses this with a window title the desktop already reported.
+    It does not read pixels or decide whether a forecast is correct.
+    """
+    text = (goal or "").lower()
+    return any(word in text for word in (
+        "webpage", "website", "weather", "http://", "https://",
+        "网页", "网站", "天气",
+    ))
+
+
+def goal_needs_browser(goal: str) -> bool:
+    """Recognize desktop goals whose first useful surface is a browser.
+
+    Only used for a fixed browser bootstrap, not for URL inference, shell
+    commands, or changing the user's selected desktop.
+    """
+    text = (goal or "").lower()
+    return any(word in text for word in (
+        "browser", "firefox", "chromium", "chrome", "safari", "webpage", "website",
+        "weather", "浏览器", "网页", "网站", "天气",
+    ))
 
 
 def extract_single_digit_click_goal(goal: str) -> str | None:
@@ -517,11 +552,14 @@ def _obs_summary(observation: dict) -> str:
     ax_app = observation.get("ax_app")
     if isinstance(ax_app, str) and ax_app.strip():
         parts.append(f"ax_app={ax_app.strip()[:64]}")
+    nav = observation.get("browser_navigation_status")
+    if nav in ("address_focused", "awaiting_submit", "unknown"):
+        parts.append(f"browser_navigation_status={nav}")
     # Surface AX / element / action hints so the planner can prefer them.
     for key in (
         "pid", "window_id", "element_index", "element_token",
         "elements", "element_hints", "windows", "action_hints", "ax_hints",
-        "click_method",
+        "click_method", "effect",
     ):
         val = observation.get(key)
         if val is None or val == "" or val == []:
@@ -545,7 +583,7 @@ def _trajectory_summary(trajectory: list[dict]) -> str:
     if not trajectory:
         return "(none)"
     lines = []
-    for entry in trajectory[-8:]:
+    for entry in trajectory[-10:]:
         if not isinstance(entry, dict):
             continue
         act = entry.get("action_type") or entry.get("action") or "?"
@@ -558,6 +596,9 @@ def _trajectory_summary(trajectory: list[dict]) -> str:
             red = entry.get("action_redacted") or {}
             if isinstance(red, dict) and red.get("element_index") is not None:
                 extra = f" element_index={red.get('element_index')}"
+        effect = entry.get("effect")
+        if effect == "no_visible_change":
+            extra += " visual_state=unchanged"
         err = entry.get("error")
         if isinstance(err, str) and err.strip():
             extra += f" error={err.strip()[:64]}"
@@ -712,6 +753,7 @@ class CodexPlanner(Planner):
                 "描述下一步要执行的单个桌面动作。可选 action：\n"
                 f"{allowed}\n\n"
                 f"{_SCREEN_CLICK_RULE}"
+                f"{_BROWSER_NAV_RULE}"
                 "- 上一次动作失败时不要输出 done。\n"
                 f"{digit_rule}\n"
                 "动作示例：\n"
@@ -728,6 +770,7 @@ class CodexPlanner(Planner):
             f"{allowed}\n\n"
             "点击策略：\n"
             f"{_CLICK_RULE}"
+            f"{_BROWSER_NAV_RULE}"
             "- 若观察里有 elements / element_hints / action_hints，先据此选择目标。\n"
             "- 如果目标明确提到某个 App，observe 时加入 target_app（使用 App 的正式名称）；"
             "不要凭空猜测未提到的 App。\n"
@@ -765,6 +808,7 @@ class CodexPlanner(Planner):
         return (
             "按当前要求继续操作这台桌面。只输出一个 JSON 对象，不要解释。\n"
             f"{_SCREEN_CLICK_RULE if self.screen_coordinates else _CLICK_RULE}"
+            f"{_BROWSER_NAV_RULE}"
             f"目标：{goal}\n"
             f"当前观察: {_obs_summary(observation)}\n"
             f"已完成步骤 ({steps_used}/{max_steps}):\n{_trajectory_summary(trajectory)}\n"
@@ -802,16 +846,31 @@ class CodexPlanner(Planner):
             max_steps=max_steps,
         ) + image_note
         try:
-            if self._thread_id:
+            if self.screen_coordinates:
+                # Keep one current frame per visual decision. Resumed threads
+                # accumulate old screenshots and stale address-bar states.
+                # The full goal and redacted action history still travel with
+                # every call; the legacy AX/macOS resume path is unchanged.
+                raw = await self._run_codex(full, image=image, resume=False)
+            elif self._thread_id:
                 raw = await self._run_codex(followup, image=image)
                 if raw is None:
                     raw = await self._run_codex(full, image=image, resume=False)
             else:
                 raw = await self._run_codex(full, image=image)
+            action = self._parse_action(raw or "")
+            if action.get("action") == "stop" and action.get("reason") in {
+                "invalid_json_in_planner_output", "no_json_in_planner_output",
+            }:
+                # No desktop action has run. Retry the same observation once,
+                # without quoting or recording the malformed model response.
+                retry = full + "\n上一输出无法解析。只输出一个合法 JSON 动作对象，不要附加其他内容。"
+                raw = await self._run_codex(retry, image=image, resume=False)
+                action = self._parse_action(raw or "")
+            return action
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("CodexPlanner codex run failed: %s", exc)
             return {"action": "stop", "reason": f"planner_error:{type(exc).__name__}"}
-        return self._parse_action(raw or "")
 
     async def _run_codex(
         self,
