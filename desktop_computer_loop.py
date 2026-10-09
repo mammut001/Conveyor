@@ -645,6 +645,11 @@ async def run_computer_loop(
                             blocked_reason=reason,
                         )
                         break
+                    if reason == "navigation_unsettled" and nav_unsettled:
+                        # One bounded fresh sampling period lets a slow page
+                        # recover; it never declares an unstable frame done.
+                        nav = _NavigationSettle(_monotonic())
+                        nav_unsettled = False
                     # Look again before the next done. A second claim has to
                     # see the same invalid page, not a screenshot-less fallback.
                     if (
@@ -716,7 +721,7 @@ async def run_computer_loop(
             error_code = str((result or {}).get("error") or "") if isinstance(result, dict) else "invalid_result"
             settle_outcome = None
             if (
-                nav is not None and nav.active and act == "observe" and success
+                nav is not None and (nav.active or nav_unsettled) and act == "observe" and success
                 and isinstance(result, dict)
             ):
                 settle_outcome = nav.sample(result, _monotonic())

@@ -1174,3 +1174,38 @@ class BrowserSubmissionTest(unittest.IsolatedAsyncioTestCase):
         gate.note_success({"action": "type", "text": "Montreal weather"}, frame)
         self.assertTrue(gate.pending)
         self.assertNotIn("Montreal", repr(vars(gate)))
+
+
+class LateNavigationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_slow_page_can_settle_after_first_deadline_without_more_input(self):
+        import desktop_computer_loop as loop
+        clock = {"now": 100.0}
+        async def sleep(seconds):
+            clock["now"] += seconds
+        actions = []
+        class Backend:
+            async def execute_step(self, settings, task_id, step_id, action):
+                actions.append(action["action"])
+                if action["action"] != "observe":
+                    return {"result_ok": True}
+                ready = clock["now"] >= 106.0
+                return {"result_ok": True, "screenshot_id": str(clock["now"]),
+                        "sha256": "ready" if ready else str(clock["now"]), "active_app": "Firefox",
+                        "pid": 4, "window_id": 8, "browser_page_state": "loaded" if ready else "loading"}
+        class Planner:
+            def __init__(self): self.submitted = False
+            async def next_action(self, **kwargs):
+                if not self.submitted:
+                    self.submitted = True
+                    return {"action": "hotkey", "keys": ["enter"]}
+                return {"action": "done", "summary": "read new page"}
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(loop, "_monotonic", lambda: clock["now"]), \
+                mock.patch.object(loop, "_sleep", sleep):
+            result = await run_computer_loop(
+                _settings(Path(temp)), "Open the webpage in Firefox", planner=Planner(), backend=Backend(),
+                max_steps=32, max_seconds=30, direct_mode=True, open_with_observe=True,
+            )
+        self.assertEqual(result["status"], "done")
+        self.assertGreaterEqual(clock["now"], 106.3)
+        self.assertEqual(actions.count("hotkey"), 1)
