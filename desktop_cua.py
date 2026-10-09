@@ -30,6 +30,7 @@ import re
 import shutil
 import shlex
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -46,7 +47,10 @@ from desktop_computer_requests import (
 )
 
 def get_active_app_macos() -> str:
-    """Return the frontmost application name (best-effort)."""
+    """Return the frontmost application name (best-effort, also on Linux)."""
+    if sys.platform.startswith("linux"):
+        from desktop_linux_browser import LinuxBrowserController
+        return LinuxBrowserController().active_app()
     try:
         cmd = [
             "osascript",
@@ -64,12 +68,15 @@ def get_active_app_macos() -> str:
 
 
 def get_app_name_for_pid(pid: int) -> str | None:
-    """Resolve macOS process name for a unix pid (best-effort).
+    """Resolve the OS process name for a unix pid (best-effort).
 
     Used for AX-targeted actions so allowlist/blocklist checks the *target*
     app (e.g. Calculator) instead of whatever is currently frontmost
     (often Codex / Terminal while the agent is driving).
     """
+    if sys.platform.startswith("linux"):
+        from desktop_linux_browser import linux_process_app
+        return linux_process_app(pid)
     try:
         pid_int = int(pid)
     except (TypeError, ValueError):
@@ -307,7 +314,25 @@ class LocalCuaTransport(CuaTransport):
         A named app that is installed but not running is launched, then
         brought to the front. An unknown name is still reported as missing.
         """
-        if not isinstance(action, dict) or not action.get("target_app"):
+        if not isinstance(action, dict):
+            return None
+        # The shared Linux VPS needs a real X11 browser window, not a
+        # name from cua-driver's often incomplete installed-app list.
+        # Browser is a fixed capability, never an arbitrary executable.
+        if sys.platform.startswith("linux"):
+            from desktop_linux_browser import LinuxBrowserController, canonical_browser
+            target = action.get("target_app")
+            if action.get("ensure_browser") or canonical_browser(target):
+                browser = LinuxBrowserController().ensure(
+                    str(target or "Browser"),
+                    allowed_apps=tuple(getattr(self.settings, "conveyor_computer_allowed_apps", ()) or ()),
+                    blocked_apps=tuple(getattr(self.settings, "conveyor_computer_blocked_apps", ()) or ()),
+                )
+                if not browser.get("ok"):
+                    return str(browser.get("error") or "browser_unavailable")
+                action["pid"] = int(browser["pid"])
+                return None
+        if not action.get("target_app"):
             return None
         if action.get("pid") is not None:
             return None
