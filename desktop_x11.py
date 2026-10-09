@@ -125,11 +125,37 @@ class X11Desktop:
         return str(x), str(y)
 
     def active_app(self) -> str | None:
+        """Foreground class from ``xprop WM_CLASS``, else the trusted PID."""
         try:
-            name = self._run("xdotool", "getactivewindow", "getwindowclassname", timeout=5).stdout.strip()
+            active = self._run("xdotool", "getactivewindow", timeout=5)
         except (OSError, subprocess.SubprocessError):
             return None
-        return name[:64] or None
+        wid = (active.stdout or "").strip()
+        if active.returncode != 0 or not wid.isdigit():
+            return None
+        try:
+            prop = self._run("xprop", "-id", wid, "WM_CLASS", timeout=5)
+            from desktop_linux_browser import parse_wm_class
+
+            parsed = parse_wm_class(prop.stdout or "")
+            if parsed:
+                label = (parsed[1] or parsed[0]).strip()
+                if label:
+                    return label[:64]
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            pid = self._run("xdotool", "getwindowpid", wid, timeout=5)
+            text = (pid.stdout or "").strip()
+            if pid.returncode == 0 and text.isdigit() and int(text) > 0:
+                from desktop_linux_browser import linux_process_app
+
+                app = linux_process_app(int(text))
+                if app and app != "Unknown":
+                    return app[:64]
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return None
+        return None
 
     def active_window(self) -> dict:
         """Read-only focus identity on this display. Missing fields stay absent.
@@ -170,7 +196,20 @@ class X11Desktop:
             found = self._run("xdotool", "search", "--onlyvisible", "--class", BROWSER_CLASSES, timeout=5)
         except (OSError, subprocess.SubprocessError):
             return False
-        return bool(found.stdout.strip())
+        from desktop_linux_browser import xprop_browser_target
+
+        for wid in (found.stdout or "").split():
+            if not wid.isdigit():
+                continue
+            try:
+                prop = self._run(
+                    "xprop", "-id", wid, "WM_CLASS", "WM_STATE", "_NET_WM_WINDOW_TYPE", timeout=5,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if xprop_browser_target(prop.stdout or ""):
+                return True
+        return False
 
     # ---- actions ------------------------------------------------------------
 

@@ -36,19 +36,53 @@ def _cp(*argv: str, out: str = "", rc: int = 0) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(argv, rc, out, "")
 
 
+def _xprop_window(
+    instance: str = "Navigator",
+    klass: str = "Firefox",
+    state: str = "Normal",
+    window_type: str = "_NET_WM_WINDOW_TYPE_NORMAL",
+    *,
+    include_state: bool = True,
+    include_type: bool = True,
+) -> str:
+    """Faithful ``xprop -id WINDOW WM_CLASS WM_STATE _NET_WM_WINDOW_TYPE`` stdout."""
+    lines = [f'WM_CLASS(STRING) = "{instance}", "{klass}"']
+    if include_state:
+        lines.extend([
+            "WM_STATE(WM_STATE):",
+            f"\t\twindow state: {state}",
+            "\t\ticon window: 0x0",
+        ])
+    if include_type:
+        lines.append(f"_NET_WM_WINDOW_TYPE(ATOM) = {window_type}")
+    return "\n".join(lines) + "\n"
+
+
 def _scripted_run(script):
-    """Return an xdotool stub. `script` maps the subcommand to stdout."""
+    """Return an xdotool/xprop stub. `script` maps the subcommand to stdout.
+
+    ``xprop`` may be a string, a list consumed in order, or a dict keyed by
+    window id (``xprop -id WINDOW ...``).
+    """
 
     def run(*argv):
-        key = argv[1]
+        if argv and argv[0] == "xprop":
+            key = "xprop"
+            wid = argv[2] if len(argv) > 2 and argv[1] == "-id" else ""
+        else:
+            key = argv[1]
+            wid = ""
         if key not in script:
             return _cp(*argv, rc=1)
         value = script[key]
-        if isinstance(value, list):
+        if isinstance(value, dict):
+            value = value.get(wid, "")
+        elif isinstance(value, list):
             value = value.pop(0) if value else ""
         if value is None:
             return _cp(*argv, rc=1)
-        return _cp(*argv, out=value if value.endswith("\n") or value == "" else value + "\n")
+        text = str(value)
+        return _cp(*argv, out=text if text.endswith("\n") or text == "" else text + "\n")
 
     return run
 
@@ -72,7 +106,7 @@ class LinuxBrowserTest(unittest.TestCase):
         controller = self._controller({
             "getdisplaygeometry": "100 100",
             "search": "4242",
-            "getwindowclassname": "Navigator",
+            "xprop": _xprop_window(),
             "getwindowpid": "123",
             "windowmap": "",
             "windowactivate": "",
@@ -92,7 +126,7 @@ class LinuxBrowserTest(unittest.TestCase):
         self.assertNotIn("--onlyvisible", search)
         self.assertIn("windowmap", [cmd[1] for cmd in observed])
         self.assertLess(
-            [cmd[1] for cmd in observed].index("getwindowclassname"),
+            [cmd[0] for cmd in observed].index("xprop"),
             [cmd[1] for cmd in observed].index("windowactivate"),
         )
 
@@ -103,7 +137,7 @@ class LinuxBrowserTest(unittest.TestCase):
         controller = self._controller({
             "getdisplaygeometry": "100 100",
             "search": "4242",
-            "getwindowclassname": "Navigator",
+            "xprop": _xprop_window(),
             "getwindowpid": "123",
             "windowmap": "",
             "windowactivate": "",
@@ -119,7 +153,7 @@ class LinuxBrowserTest(unittest.TestCase):
         controller = self._controller({
             "getdisplaygeometry": "100 100",
             "search": "4242",
-            "getwindowclassname": "Navigator",
+            "xprop": _xprop_window(),
             "getwindowpid": "9",
             "windowmap": "",
             "windowactivate": "",
@@ -139,6 +173,65 @@ class LinuxBrowserTest(unittest.TestCase):
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
     @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    def test_helper_and_dialog_are_not_browser_targets(self, popen, _which):
+        helper = _xprop_window(instance="Firefox", klass="firefox_firefox", include_state=False, include_type=False)
+        dialog = _xprop_window(
+            instance="Firefox", klass="firefox_firefox",
+            window_type="_NET_WM_WINDOW_TYPE_DIALOG",
+        )
+        real = _xprop_window(instance="Firefox", klass="firefox_firefox")
+        activated = []
+        controller = self._controller({
+            "getdisplaygeometry": "100 100",
+            "search": "10\n11\n12",
+            "xprop": {"10": helper, "11": dialog, "12": real},
+            "getwindowpid": "123",
+            "windowmap": "",
+            "windowactivate": "",
+            "getactivewindow": "12",
+        })
+        real_run = controller._run
+
+        def run(*argv):
+            if len(argv) > 1 and argv[1] == "windowactivate":
+                activated.append(argv[-1])
+            return real_run(*argv)
+
+        controller._run = run
+        result = controller.ensure("Firefox")
+        self.assertEqual(result, {"ok": True, "name": "Firefox", "pid": 123, "window_id": 12})
+        self.assertEqual(activated, ["12"])
+        popen.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
+    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    def test_minimized_snap_firefox_is_mapped(self, popen, _which):
+        controller = self._controller({
+            "getdisplaygeometry": "100 100",
+            "search": "77",
+            "xprop": _xprop_window(instance="Firefox", klass="firefox_firefox", state="Iconic"),
+            "getwindowpid": "123",
+            "windowmap": "",
+            "windowactivate": "",
+            "getactivewindow": "77",
+        })
+        calls = []
+        real_run = controller._run
+
+        def run(*argv):
+            calls.append(argv)
+            return real_run(*argv)
+
+        controller._run = run
+        result = controller.ensure("Firefox")
+        self.assertEqual(result, {"ok": True, "name": "Firefox", "pid": 123, "window_id": 77})
+        self.assertTrue(any(cmd[1] == "windowmap" and cmd[-1] == "77" for cmd in calls))
+        popen.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
+    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
     @mock.patch("desktop_linux_browser._trusted_browser_binary", return_value="/usr/bin/firefox")
     @mock.patch("desktop_linux_browser.subprocess.Popen")
     @mock.patch("desktop_linux_browser.time.sleep")
@@ -153,8 +246,8 @@ class LinuxBrowserTest(unittest.TestCase):
                 if searches["n"] < 3:
                     return _cp(*argv, out="")
                 return _cp(*argv, out="500\n")
-            if argv[1] == "getwindowclassname":
-                return _cp(*argv, out="Navigator\n")
+            if argv[0] == "xprop":
+                return _cp(*argv, out=_xprop_window())
             if argv[1] == "getwindowpid":
                 return _cp(*argv, out="55\n")
             if argv[1] in {"windowmap", "windowactivate"}:
@@ -591,7 +684,7 @@ class IdentityTest(unittest.TestCase):
         controller._run = _scripted_run({
             "getdisplaygeometry": "100 100",
             "search": "4242",
-            "getwindowclassname": "Navigator",
+            "xprop": _xprop_window(),
             "getwindowpid": "9",
             "windowmap": "",
             "windowactivate": "",
@@ -640,7 +733,54 @@ class IdentityTest(unittest.TestCase):
             controller.ensure("Firefox", timeout=1)
         profile = popen.call_args.args[0][3]
         self.assertIn("/snap/firefox/common/", profile)
+        self.assertIn("conveyor-", profile)
         self.assertIn("_98", profile)
+
+    def test_snap_bin_firefox_symlink_is_snap_before_realpath(self):
+        import os as os_mod
+        import stat as stat_mod
+
+        from desktop_linux_browser import _is_snap_firefox, _profile_dir
+
+        root = Path(tempfile.mkdtemp())
+        usr_snap = root / "usr" / "bin" / "snap"
+        usr_snap.parent.mkdir(parents=True)
+        usr_snap.write_bytes(b"#!/bin/sh\n")
+        link = root / "snap" / "bin" / "firefox"
+        link.parent.mkdir(parents=True)
+        link.symlink_to("/usr/bin/snap")
+        self.assertEqual(os_mod.readlink(link), "/usr/bin/snap")
+        self.assertFalse(os_mod.path.realpath(link).startswith("/snap/firefox/"))
+
+        real_realpath = os_mod.path.realpath
+        real_stat = os_mod.stat
+
+        def realpath(path):
+            if os_mod.path.abspath(path) == "/snap/bin/firefox":
+                return "/usr/bin/snap"
+            return real_realpath(path)
+
+        def stat(path, *args, **kwargs):
+            if os_mod.path.abspath(path) in {"/usr/bin/snap", "/snap/bin/firefox"}:
+                return os_mod.stat_result((stat_mod.S_IFREG | 0o755, 0, 0, 1, 0, 0, 4096, 0, 0, 0))
+            return real_stat(path, *args, **kwargs)
+
+        with mock.patch("desktop_linux_browser.os.path.realpath", side_effect=realpath), \
+                mock.patch("desktop_linux_browser.os.stat", side_effect=stat):
+            self.assertTrue(_is_snap_firefox("/snap/bin/firefox"))
+            self.assertEqual(os_mod.path.realpath("/snap/bin/firefox"), "/usr/bin/snap")
+            home = Path(tempfile.mkdtemp())
+            with mock.patch("desktop_linux_browser.Path.home", return_value=home), \
+                    mock.patch.dict(os.environ, {"DISPLAY": ":98"}):
+                profile = _profile_dir("Firefox", "/snap/bin/firefox")
+            self.assertEqual(
+                profile,
+                home / "snap" / "firefox" / "common" / "conveyor-_98",
+            )
+            untrusted = os_mod.stat_result((stat_mod.S_IFREG | 0o755, 0, 0, 1, 1000, 1000, 4096, 0, 0, 0))
+            with mock.patch("desktop_linux_browser.os.stat", return_value=untrusted):
+                self.assertFalse(_is_snap_firefox("/snap/bin/firefox"))
+        self.assertFalse(_is_snap_firefox("/usr/bin/snap"))
 
 
 class TransportTimeoutTest(unittest.IsolatedAsyncioTestCase):

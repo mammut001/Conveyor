@@ -211,7 +211,25 @@ def _trusted_browser_binary(browser: str) -> str | None:
     return None
 
 
+def _is_known_snap_launcher(path: str) -> bool:
+    """True for the Snap Firefox launcher before symlink resolution.
+
+    On Ubuntu ``/snap/bin/firefox`` is a symlink to ``/usr/bin/snap``.
+    ``realpath`` therefore leaves ``/snap/`` and cannot be the only check.
+    """
+    try:
+        original = os.path.abspath(path)
+    except (OSError, ValueError):
+        return False
+    return original == "/snap/bin/firefox" or original.startswith("/snap/firefox/")
+
+
 def _is_snap_firefox(binary: str) -> bool:
+    # The launcher path is decided before realpath. Trust still applies:
+    # a known Snap path must resolve to a root-owned system file
+    # (the ``/usr/bin/snap`` multiplexer qualifies).
+    if _is_known_snap_launcher(binary):
+        return _path_is_trusted(binary)
     real = os.path.realpath(binary)
     if real.startswith("/snap/") or "/snap/firefox/" in real:
         return True
@@ -248,6 +266,60 @@ def _class_matches(browser: str, class_name: str) -> bool:
     return re.fullmatch(BROWSERS[browser][1], text, flags=re.IGNORECASE) is not None
 
 
+_WM_CLASS_RE = re.compile(
+    r'WM_CLASS\(STRING\)\s*=\s*"((?:\\.|[^"\\])*)"\s*,\s*"((?:\\.|[^"\\])*)"'
+)
+# Snap Firefox reports this pair. It is not a substring match on "firefox".
+_SNAP_FIREFOX_CLASS = ("Firefox", "firefox_firefox")
+
+
+def parse_wm_class(text: str) -> tuple[str, str] | None:
+    """Parse ``xprop WM_CLASS`` output into ``(instance, class)``."""
+    match = _WM_CLASS_RE.search(text or "")
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
+def wm_class_matches(browser: str, instance: str, klass: str) -> bool:
+    """Exact WM_CLASS pair for one allow-listed browser.
+
+    Snap Firefox is ``"Firefox", "firefox_firefox"``. Other builds match the
+    existing class or instance token exactly (``firefox``, ``Navigator``, …).
+    """
+    inst = (instance or "").strip()
+    kind = (klass or "").strip()
+    if browser == "Firefox" and (inst, kind) == _SNAP_FIREFOX_CLASS:
+        return True
+    if kind == "firefox_firefox" or inst == "firefox_firefox":
+        return False
+    return _class_matches(browser, kind) or _class_matches(browser, inst)
+
+
+def xprop_browser_target(text: str, browser: str | None = None) -> bool:
+    """True for a managed normal or minimized browser window.
+
+    Hidden Firefox helpers omit ``WM_STATE``. The profile-lock dialog is
+    ``_NET_WM_WINDOW_TYPE_DIALOG`` (title "Close Firefox"). Neither is a
+    typing target. Iconic (minimized) normal windows still count.
+    """
+    parsed = parse_wm_class(text or "")
+    if parsed is None:
+        return False
+    instance, klass = parsed
+    if browser is None:
+        matched = any(wm_class_matches(name, instance, klass) for name in BROWSERS)
+    else:
+        matched = wm_class_matches(browser, instance, klass)
+    if not matched:
+        return False
+    state = re.search(r"window state:\s*([A-Za-z]+)", text or "")
+    if state is None or state.group(1) not in {"Normal", "Iconic"}:
+        return False
+    types = re.findall(r"_NET_WM_WINDOW_TYPE_[A-Z0-9_]+", text or "")
+    return types == ["_NET_WM_WINDOW_TYPE_NORMAL"]
+
+
 class LinuxBrowserController:
     """Deterministic, allow-listed browser activation on a single X display."""
 
@@ -271,21 +343,30 @@ class LinuxBrowserController:
             return "browser_display_unreachable"
         return None
 
+    def _xprop(self, window: str) -> str:
+        # One supported xprop call. A missing property makes xprop exit 1
+        # while still printing the properties that exist; parse stdout either way.
+        result = self._run(
+            "xprop", "-id", window, "WM_CLASS", "WM_STATE", "_NET_WM_WINDOW_TYPE",
+        )
+        return result.stdout or ""
+
     def _window_ids(self, browser: str) -> list[str]:
         # Include minimized/occluded windows. --onlyvisible misses a live
-        # browser and the next step launches a duplicate.
+        # browser and the next step launches a duplicate. Search hits helper
+        # and dialog windows too; those are dropped after xprop.
         regex = BROWSERS[browser][1]
         result = self._run("xdotool", "search", "--class", regex)
         if result.returncode and not (result.stdout or "").strip():
             return []
         ids = [line.strip() for line in (result.stdout or "").splitlines()]
-        return [wid for wid in ids if re.fullmatch(r"\d{1,12}", wid)]
-
-    def _window_class(self, window: str) -> str:
-        result = self._run("xdotool", "getwindowclassname", window)
-        if result.returncode:
-            return ""
-        return (result.stdout or "").strip()
+        accepted: list[str] = []
+        for wid in ids:
+            if not re.fullmatch(r"\d{1,12}", wid):
+                continue
+            if xprop_browser_target(self._xprop(wid), browser):
+                accepted.append(wid)
+        return accepted
 
     def _window_pid(self, window: str) -> int | None:
         result = self._run("xdotool", "getwindowpid", window)
@@ -296,8 +377,12 @@ class LinuxBrowserController:
         return value if value > 0 else None
 
     def _trusted_window_pid(self, window: str, browser: str) -> int | None:
-        """Class and process must both match before any focus change."""
-        if not _class_matches(browser, self._window_class(window)):
+        """Class and process must both match before any focus change.
+
+        WM_CLASS comes from xprop. Snap Firefox's class is ``firefox_firefox``
+        and still requires a trusted browser PID.
+        """
+        if not xprop_browser_target(self._xprop(window), browser):
             return None
         pid = self._window_pid(window)
         if pid is None or canonical_browser(linux_process_app(pid)) != browser:

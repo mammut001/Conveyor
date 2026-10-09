@@ -1,6 +1,7 @@
 """The desktop planner attaches a saved observe screenshot to Codex."""
 from __future__ import annotations
 
+import hashlib
 import struct
 import tempfile
 import unittest
@@ -184,10 +185,12 @@ class PlannerImageTest(unittest.IsolatedAsyncioTestCase):
         class ShotBackend:
             async def execute_step(self, settings, task_id, step_id, action):
                 if action.get("action") == "observe":
+                    png = png_path.read_bytes()
                     return {
                         "result_ok": True,
                         "action_type": "observe",
                         "screenshot_id": "20261005T000000Z-cua-abc12345",
+                        "sha256": hashlib.sha256(png).hexdigest(),
                         "width": 1,
                         "height": 1,
                     }

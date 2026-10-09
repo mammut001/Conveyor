@@ -75,6 +75,18 @@ class _Display:
 
     def run(self, command, env=None, **_kwargs):
         self.envs.append(dict(env or {}))
+        if command[0] == "xprop":
+            return subprocess.CompletedProcess(
+                command, 0,
+                stdout=(
+                    'WM_CLASS(STRING) = "Navigator", "firefox"\n'
+                    "WM_STATE(WM_STATE):\n"
+                    "\t\twindow state: Normal\n"
+                    "\t\ticon window: 0x0\n"
+                    "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_NORMAL\n"
+                ),
+                stderr="",
+            )
         if command[0] == "import":
             self.imports += 1
             Path(command[-1].split(":", 1)[1]).write_bytes(PNG)
@@ -83,8 +95,6 @@ class _Display:
         out = ""
         if args[:1] == ["getdisplaygeometry"]:
             out = "1440 900\n"
-        elif args[:2] == ["getactivewindow", "getwindowclassname"]:
-            out = "firefox\n"
         elif args == ["getactivewindow"]:
             out = self.active_id + "\n"
         elif args[:1] == ["getwindowpid"]:
@@ -117,6 +127,9 @@ class _Sequence:
 
 
 class Case(unittest.TestCase):
+    def desktop(self) -> X11Desktop:
+        return X11Desktop(self.settings, agent_id=self.agent["id"], display=self.display)
+
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -220,9 +233,6 @@ class TakeoverTests(Case):
 
 
 class DesktopTests(Case):
-    def desktop(self) -> X11Desktop:
-        return X11Desktop(self.settings, agent_id=self.agent["id"], display=self.display)
-
     def test_every_call_addresses_the_agents_display_and_nothing_else(self) -> None:
         self.desktop().execute({"action": "click", "x": 10, "y": 20})
         self.assertTrue(self.x.envs)
