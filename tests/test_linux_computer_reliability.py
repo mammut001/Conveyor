@@ -872,7 +872,8 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
                 planner=Keys(), backend=page, max_steps=10, max_seconds=30,
                 direct_mode=True, open_with_observe=True,
             )
-        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("browser_navigation_not_submitted", result["blocked_reason"])
         self.assertEqual(focus_calls[1] - focus_calls[0], 0.0)
         self.assertNotIn("run-02.html", str(result))
 
@@ -1115,3 +1116,59 @@ class BrowserInitialInputTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrowserSubmissionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_old_loaded_page_cannot_finish_after_url_edit_until_enter(self):
+        import desktop_computer_loop as loop
+        clock = {"now": 100.0}
+        async def sleep(seconds):
+            clock["now"] += seconds
+        class Backend:
+            async def execute_step(self, settings, task_id, step_id, action):
+                if action["action"] != "observe":
+                    return {"result_ok": True}
+                return {"result_ok": True, "action_type": "observe", "sha256": "pixels",
+                        "screenshot_id": "fresh", "active_app": "Firefox", "pid": 4,
+                        "window_id": 8, "browser_page_state": "loaded"}
+        class Planner:
+            def __init__(self):
+                self.actions = iter([
+                    {"action": "hotkey", "keys": ["ctrl", "l"]},
+                    {"action": "type", "text": "http://localhost/new-page"},
+                    {"action": "done", "summary": "old page"},
+                    {"action": "hotkey", "keys": ["enter"]},
+                    {"action": "done", "summary": "new page verified"},
+                ])
+            async def next_action(self, **kwargs):
+                return next(self.actions)
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(loop, "_monotonic", lambda: clock["now"]), \
+                mock.patch.object(loop, "_sleep", sleep):
+            result = await run_computer_loop(
+                _settings(Path(temp)), "Open the webpage in Firefox",
+                planner=Planner(), backend=Backend(), max_steps=16, max_seconds=30,
+                direct_mode=True, open_with_observe=True,
+            )
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["summary"], "new page verified")
+
+    def test_submission_is_window_bound_and_draft_goals_are_exempt(self):
+        from desktop_computer_loop import _BrowserSubmission
+        frame = {"active_app": "Firefox", "pid": 4, "window_id": 8}
+        gate = _BrowserSubmission("Open https://example.org in Firefox")
+        gate.note_success({"action": "type", "text": "https://example.org"}, frame)
+        self.assertTrue(gate.pending)
+        gate.note_success({"action": "click", "x": 1, "y": 1}, frame)
+        gate.note_success({"action": "hotkey", "keys": ["enter"]}, dict(frame, window_id=9))
+        self.assertTrue(gate.pending)
+        gate.note_success({"action": "hotkey", "keys": ["return"]}, frame)
+        self.assertFalse(gate.pending)
+        draft = _BrowserSubmission("Type https://example.org in Firefox without submitting")
+        draft.note_success({"action": "type", "text": "https://example.org"}, frame)
+        self.assertFalse(draft.pending)
+        gate = _BrowserSubmission("Read weather in Firefox")
+        gate.note_success({"action": "hotkey", "keys": ["ctrl", "l"]}, frame)
+        gate.note_success({"action": "type", "text": "Montreal weather"}, frame)
+        self.assertTrue(gate.pending)
+        self.assertNotIn("Montreal", repr(vars(gate)))

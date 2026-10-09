@@ -46,6 +46,13 @@ from desktop_screenshot import resolve_screenshot_dir
 logger = logging.getLogger(__name__)
 
 
+_BROWSER_NAV_RULE = (
+    "浏览器导航：地址栏输入网址或搜索词后必须按 Enter 提交，再根据新页面截图核实结果。"
+    "地址栏显示新网址不表示已打开该页面；禁止把旧正文作为新结果。"
+    "若用户明确要求只输入不提交，则遵守该要求。\n"
+)
+
+
 _ALLOWED = ("observe", "click", "type", "hotkey", "scroll", "wait", "done", "stop")
 
 # Preferred Clear button labels on macOS Calculator (short, safe).
@@ -741,6 +748,7 @@ class CodexPlanner(Planner):
                 "描述下一步要执行的单个桌面动作。可选 action：\n"
                 f"{allowed}\n\n"
                 f"{_SCREEN_CLICK_RULE}"
+                f"{_BROWSER_NAV_RULE}"
                 "- 上一次动作失败时不要输出 done。\n"
                 f"{digit_rule}\n"
                 "动作示例：\n"
@@ -757,6 +765,7 @@ class CodexPlanner(Planner):
             f"{allowed}\n\n"
             "点击策略：\n"
             f"{_CLICK_RULE}"
+            f"{_BROWSER_NAV_RULE}"
             "- 若观察里有 elements / element_hints / action_hints，先据此选择目标。\n"
             "- 如果目标明确提到某个 App，observe 时加入 target_app（使用 App 的正式名称）；"
             "不要凭空猜测未提到的 App。\n"
@@ -794,6 +803,7 @@ class CodexPlanner(Planner):
         return (
             "按当前要求继续操作这台桌面。只输出一个 JSON 对象，不要解释。\n"
             f"{_SCREEN_CLICK_RULE if self.screen_coordinates else _CLICK_RULE}"
+            f"{_BROWSER_NAV_RULE}"
             f"目标：{goal}\n"
             f"当前观察: {_obs_summary(observation)}\n"
             f"已完成步骤 ({steps_used}/{max_steps}):\n{_trajectory_summary(trajectory)}\n"

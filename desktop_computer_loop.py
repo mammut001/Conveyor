@@ -452,6 +452,7 @@ async def run_computer_loop(
     progress = _VisualProgress()
     nav: _NavigationSettle | None = None
     nav_unsettled = False
+    submission = _BrowserSubmission(goal)
     browser_goal = goal_needs_browser(goal) and not is_observe_only_goal(goal)
     takeover_store = HumanTakeoverStore(settings)
     # The lease that pauses this task is the one for the desktop it acts on.
@@ -490,6 +491,7 @@ async def run_computer_loop(
                 # navigation samples and look at the desktop again.
                 nav = None
                 nav_unsettled = False
+                submission = _BrowserSubmission(goal)
                 # The human may have changed the desktop. Consecutive
                 # pre-takeover failures are not evidence about the new screen.
                 repeated_failures = 0
@@ -623,6 +625,7 @@ async def run_computer_loop(
                     trajectory=trajectory,
                     progress=progress,
                     navigation_pending=bool(nav is not None and nav.active) or nav_unsettled,
+                    address_pending=submission.pending,
                 )
                 if reason == "no_visual_progress":
                     set_task_status(settings, task_id, "stopped", blocked_reason=reason)
@@ -734,6 +737,7 @@ async def run_computer_loop(
                     elif effect in {"unchanged", "needs_recovery", "stall"}:
                         result["effect"] = "no_visible_change"
             elif act in _MUTATING_ACTIONS and success:
+                submission.note_success(action, observation)
                 progress.note_mutation(action, before_visual_hash, observation)
                 if _is_browser_navigation(action, observation):
                     nav = _NavigationSettle(_monotonic())
@@ -896,6 +900,52 @@ def _is_browser_navigation(action: dict, observation: dict) -> bool:
     return str(keys[0]).strip().lower() in {"enter", "return"}
 
 
+class _BrowserSubmission:
+    """Do not confuse an edited address bar with a loaded destination.
+
+    Keep only focus identity and booleans, never the address or search text.
+    Enter must be executed successfully on the same browser window. Explicit
+    draft-only goals remain valid without submitting their text.
+    """
+
+    def __init__(self, goal: str) -> None:
+        text = (goal or "").lower()
+        draft_only = any(token in text for token in (
+            "without submitting", "do not submit", "don't submit", "without pressing enter",
+            "do not press enter", "don't press enter", "不要提交", "不要按回车", "不按回车",
+        ))
+        self.enabled = goal_needs_loaded_page(goal) and not draft_only
+        self.address_focus: tuple | None = None
+        self.pending_focus: tuple | None = None
+
+    @property
+    def pending(self) -> bool:
+        return self.pending_focus is not None
+
+    def note_success(self, action: dict, observation: dict) -> None:
+        if not self.enabled or not _browser_foreground_observed(observation):
+            return
+        focus = _focus_identity(observation)
+        act = action.get("action")
+        keys = {str(k).strip().lower() for k in (action.get("keys") or [])}
+        if act == "hotkey":
+            if keys in ({"ctrl", "l"}, {"control", "l"}, {"cmd", "l"},
+                        {"command", "l"}, {"meta", "l"}, {"alt", "d"}, {"f6"}):
+                self.address_focus = focus
+            elif keys in ({"enter"}, {"return"}):
+                if self.pending_focus == focus:
+                    self.pending_focus = None
+                self.address_focus = None
+        elif act == "type":
+            text = str(action.get("text") or "").strip().lower()
+            if self.address_focus == focus or text.startswith(("http://", "https://")):
+                self.pending_focus = focus
+        elif act == "click":
+            # Clicking might dismiss the suggestions; it does not prove that
+            # an edited address was submitted.
+            self.address_focus = None
+
+
 class _NavigationSettle:
     """Fresh observes until the GUI stops changing, or the deadline passes.
 
@@ -950,8 +1000,11 @@ def _reject_done(
     trajectory: list[dict],
     progress: _VisualProgress,
     navigation_pending: bool = False,
+    address_pending: bool = False,
 ) -> str | None:
     """Return a reason to refuse a planner ``done``, or None to accept it."""
+    if address_pending:
+        return "browser_navigation_not_submitted: press Enter in the address bar, then verify the new page"
     if navigation_pending:
         # A loaded title captured before the next document paints is not done.
         return "navigation_unsettled"
