@@ -105,6 +105,14 @@ class SessionWorkbenchTests(unittest.TestCase):
         # must never combine those jobs in one response.
         self.assertIsNone(self.control.get_session("same"))
 
+    def test_many_colliding_channel_jobs_cannot_hide_own_runs(self):
+        self.insert_job("web-1", "web")
+        for index in range(220):
+            self.insert_job(f"tg-{index:03d}", "telegram")
+        detail = self.control.get_session(self.web_session)
+        self.assertEqual([run["id"] for run in detail["runs"]], ["web-1"])
+        self.assertEqual([job["id"] for job in detail["jobs"]], ["web-1"])
+
     def test_batch_summaries_do_not_leak_other_sessions(self):
         active = self.make_active()
         self.assertEqual(self.store.active_summaries([]), {})
