@@ -97,32 +97,40 @@ def _browser_class_label(value: object) -> bool:
     return folded in {"firefox_firefox", "navigator"} or "firefox" in folded or "chrome" in folded or "chromium" in folded
 
 
+def _policy_app_lists(settings: Settings) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    allowed = tuple(getattr(settings, "conveyor_computer_allowed_apps", ()) or ())
+    blocked = tuple(getattr(settings, "conveyor_computer_blocked_apps", ()) or ())
+    return allowed, blocked
+
+
 def _browser_policy_allows(settings: Settings) -> bool:
-    """False when the operator policy forbids the agent browser."""
-    from desktop_linux_browser import BROWSERS, canonical_app
+    """True when at least one known browser is still selectable.
 
-    allowed = {canonical_app(item).lower() for item in (getattr(settings, "conveyor_computer_allowed_apps", ()) or ())}
-    blocked = {canonical_app(item).lower() for item in (getattr(settings, "conveyor_computer_blocked_apps", ()) or ())}
-    if "browser" in blocked:
-        return False
-    names = [name.lower() for name in BROWSERS]
-    if any(name in blocked for name in names) and all(name in blocked for name in names):
-        return False
-    if "firefox" in blocked and (not allowed or "firefox" not in allowed):
-        # The supervisor request starts Firefox. A block on Firefox skips it.
-        return False
-    if allowed and "browser" not in allowed and not any(name in allowed for name in names):
-        return False
-    return True
+    Chrome may stay allowed while Firefox is blocked. That must not look
+    like a total denial before the controller picks Chrome. A generic
+    ``Browser`` block denies every candidate.
+    """
+    from desktop_linux_browser import BROWSERS, browser_permitted
+
+    allowed, blocked = _policy_app_lists(settings)
+    return any(browser_permitted(name, allowed_apps=allowed, blocked_apps=blocked) for name in BROWSERS)
 
 
-def _observe_requests_browser(action: dict) -> bool:
-    """True when this observe asks the display controller to show a browser.
+def _firefox_bootstrap_allowed(settings: Settings) -> bool:
+    """The supervisor request starts Firefox, not whichever browser is allowed."""
+    from desktop_linux_browser import browser_permitted
+
+    allowed, blocked = _policy_app_lists(settings)
+    return browser_permitted("Firefox", allowed_apps=allowed, blocked_apps=blocked)
+
+
+def _action_requests_browser(action: dict) -> bool:
+    """True when this step asks the display controller to show a browser.
 
     Those steps must not sit in the supervisor wait. Launch stays inside
     the claimed execute path, after takeover checks.
     """
-    if not isinstance(action, dict) or action.get("action") != "observe":
+    if not isinstance(action, dict):
         return False
     if action.get("ensure_browser") is True:
         return True
@@ -130,6 +138,14 @@ def _observe_requests_browser(action: dict) -> bool:
 
     target = action.get("target_app")
     return bool(target) and canonical_browser(target) is not None
+
+
+def _observe_requests_browser(action: dict) -> bool:
+    return (
+        isinstance(action, dict)
+        and action.get("action") == "observe"
+        and _action_requests_browser(action)
+    )
 
 
 class X11Desktop:
@@ -436,11 +452,94 @@ class X11Desktop:
         action["window_id"] = int(browser["window_id"])
         return None
 
+    def _trusted_app_name(self, pid: int) -> str | None:
+        from desktop_linux_browser import canonical_browser, linux_process_app
+
+        app = linux_process_app(pid)
+        browser = canonical_browser(app)
+        if browser and browser != "Browser":
+            return browser
+        if app and app != "Unknown":
+            return app[:64]
+        return None
+
+    def _policy_app(self, action: dict) -> str | None:
+        """Trusted app for the action target, else the current foreground app.
+
+        A pid or window that does not resolve is unresolved. Keyboard input
+        must not fall back to some other frontmost name.
+        """
+        pid = action.get("pid")
+        if pid is not None:
+            try:
+                pid_i = int(pid)
+            except (TypeError, ValueError):
+                return None
+            if pid_i <= 0:
+                return None
+            return self._trusted_app_name(pid_i)
+        wid = action.get("window_id")
+        if wid is not None:
+            try:
+                wid_s = str(int(wid))
+            except (TypeError, ValueError):
+                return None
+            got = self._window_pid(wid_s)
+            if got is None:
+                return None
+            return self._trusted_app_name(got)
+        return self.active_app()
+
+    def _mutation_denied(self, action: dict) -> dict | None:
+        """Blocklist, and allowlist for mutating actions, before any input.
+
+        Observe and wait stay allowlist-exempt. Keyboard with no trusted
+        app fails closed. A bare click or scroll uses the current app.
+        """
+        from desktop_computer_requests import (
+            action_enforces_app_allowlist,
+            check_app_allowlist_blocklist,
+        )
+
+        kind = str(action.get("action") or "")
+        if kind in {"observe", "wait"}:
+            app = self._policy_app(action)
+            if not app:
+                return None
+            is_ok, reason = check_app_allowlist_blocklist(
+                self.settings, app, enforce_allowlist=False,
+            )
+            if is_ok:
+                return None
+            return {
+                "result_ok": False, "error": reason, "action_type": kind, "active_app": app,
+            }
+        if kind not in {"click", "type", "hotkey", "scroll"}:
+            return None
+        app = self._policy_app(action)
+        if kind in {"type", "hotkey"} and not app:
+            return {
+                "result_ok": False, "error": "app_identity_unresolved", "action_type": kind,
+            }
+        if not app:
+            return None
+        is_ok, reason = check_app_allowlist_blocklist(
+            self.settings, app, enforce_allowlist=action_enforces_app_allowlist(action),
+        )
+        if is_ok:
+            return None
+        return {
+            "result_ok": False, "error": reason, "action_type": kind, "active_app": app,
+        }
+
     def execute(self, action: dict) -> dict:
         kind = action.get("action")
         prepared = self._activate_browser(action)
         if prepared is not None:
             return prepared
+        denied = self._mutation_denied(action)
+        if denied is not None:
+            return denied
         try:
             if kind == "observe":
                 result = self.observe()
@@ -479,6 +578,10 @@ class X11ComputerBackend:
         self.node_id = x11_node_id(scope)
         self.desktop = X11Desktop(settings, agent_id=agent_id, display=display)
         self._prepared = False
+        # Set once this task asks the browser controller to run. Later steps
+        # stay off the supervisor bootstrap even when that ensure failed.
+        # _prepared stays false: failure is not a successful prepare.
+        self._browser_controller = False
 
     def _takeover_active(self, settings: Settings) -> bool:
         from human_takeover import HumanTakeoverStore
@@ -505,7 +608,7 @@ class X11ComputerBackend:
         # The agent supervisor opens Firefox on this display. There is no
         # host-display fallback. A blocked browser policy or a display that
         # is not this private server does not send that request.
-        if not _browser_policy_allows(self.settings) or not self.desktop.private_display_ready():
+        if not _firefox_bootstrap_allowed(self.settings) or not self.desktop.private_display_ready():
             logger.warning("agent %s: browser bootstrap skipped", self.agent_id)
             self._prepared = True
             return
@@ -533,8 +636,13 @@ class X11ComputerBackend:
         if self._takeover_active(settings):
             raise ComputerBackendError("human_takeover_active")
         # A browser observe launches through the claimed step's controller.
-        # The supervisor request is only for callers that do not name a browser.
-        if not _observe_requests_browser(action):
+        # Once this task has asked for that, every later step — including a
+        # bare diagnostic observe after a failed bootstrap — skips the
+        # supervisor wait. A caller that never names a browser keeps it.
+        requests_browser = _action_requests_browser(action)
+        if requests_browser:
+            self._browser_controller = True
+        if not self._browser_controller:
             await self._prepare()
         if self._takeover_active(settings):
             raise ComputerBackendError("human_takeover_active")

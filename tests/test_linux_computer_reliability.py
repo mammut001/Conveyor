@@ -351,8 +351,43 @@ class LinuxBrowserTest(unittest.TestCase):
         self.assertEqual(controller.ensure("Firefox", blocked_apps=("Firefox",))["error"], "browser_disallowed")
         self.assertEqual(controller.ensure("chrome", blocked_apps=("Google Chrome",))["error"], "browser_disallowed")
         self.assertEqual(controller.ensure("Not-A-Real-App")["error"], "browser_not_supported")
+        self.assertEqual(controller.ensure("Firefox", blocked_apps=("Browser",))["error"], "browser_disallowed")
+        self.assertEqual(controller.ensure("Browser", blocked_apps=("Browser",))["error"], "browser_disallowed")
+        self.assertEqual(
+            controller.ensure("Firefox", allowed_apps=("Browser",), blocked_apps=("Firefox",))["error"],
+            "browser_disallowed",
+        )
         popen.assert_not_called()
         controller._run.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
+    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    def test_generic_browser_allow_can_select_chrome_when_firefox_is_blocked(self, popen, _which):
+        controller = LinuxBrowserController()
+        searches: list[tuple] = []
+
+        def run(*argv):
+            if len(argv) > 1 and argv[1] == "search":
+                searches.append(argv)
+                return _cp(*argv, out="")
+            if len(argv) > 1 and argv[1] == "getdisplaygeometry":
+                return _cp(*argv, out="100 100\n")
+            return _cp(*argv, rc=1)
+
+        controller._run = run
+        controller._binary = lambda _name: None
+        denied = controller.ensure("Firefox", allowed_apps=("Browser",), blocked_apps=("Firefox",))
+        self.assertEqual(denied["error"], "browser_disallowed")
+        self.assertEqual(searches, [])
+        selected = controller.ensure(
+            "Browser", allowed_apps=("Google Chrome",), blocked_apps=("Firefox",),
+        )
+        self.assertEqual(selected["error"], "browser_binary_missing")
+        self.assertTrue(searches)
+        self.assertTrue(all("firefox" not in " ".join(call).lower() for call in searches))
+        self.assertTrue(any("Chrome" in " ".join(call) for call in searches))
+        popen.assert_not_called()
 
     @mock.patch("desktop_cua.sys.platform", "linux")
     @mock.patch("desktop_linux_browser.LinuxBrowserController.ensure")

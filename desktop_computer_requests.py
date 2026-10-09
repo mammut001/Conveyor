@@ -1220,6 +1220,17 @@ def validate_computer_result(result: object) -> dict | None:
             return None
     cleaned: dict[str, Any] = {}
     for field in RESULT_ALLOWED_FIELDS:
+        if field == "browser_page_state":
+            if field not in result:
+                continue
+            value = result[field]
+            # A JSON list or dict is unhashable; the type check has to win
+            # before membership or validation throws TypeError. Null is not
+            # a member of the enum either.
+            if not isinstance(value, str) or value not in BROWSER_PAGE_STATES:
+                return None
+            cleaned[field] = value
+            continue
         value = result.get(field)
         if value is None:
             continue
@@ -1228,11 +1239,6 @@ def validate_computer_result(result: object) -> dict | None:
                 cleaned[field] = int(value)
             except (TypeError, ValueError):
                 continue
-            continue
-        if field == "browser_page_state":
-            if value not in BROWSER_PAGE_STATES:
-                return None
-            cleaned[field] = value
             continue
         if field == "element_hints":
             hints = _clean_element_hints(value)

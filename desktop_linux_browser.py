@@ -77,6 +77,25 @@ def canonical_app(value: object) -> str:
     return canonical_browser(raw) or raw or "Unknown"
 
 
+def browser_permitted(name: str, *, allowed_apps: tuple[str, ...] = (), blocked_apps: tuple[str, ...] = ()) -> bool:
+    """Whether one known browser may be focused or launched.
+
+    ``Browser`` on the block list denies every known browser. ``Browser`` on
+    the allow list admits only those browsers. A specific block (Firefox)
+    still wins over the generic allow.
+    """
+    allowed = {canonical_app(item).lower() for item in allowed_apps}
+    blocked = {canonical_app(item).lower() for item in blocked_apps}
+    if "browser" in blocked:
+        return False
+    key = canonical_app(name).lower()
+    if key in blocked:
+        return False
+    if not allowed or "browser" in allowed:
+        return True
+    return key in allowed
+
+
 # comm is at most 15 bytes. These prefixes are unique among terminal names.
 _TERMINAL_NAMES = {
     "gnome-terminal": "Terminal",
@@ -502,15 +521,10 @@ class LinuxBrowserController:
         if not shutil.which("xdotool"):
             return {"ok": False, "error": "xdotool_missing"}
 
-        allowed = {canonical_app(a).lower() for a in allowed_apps}
-        blocked = {canonical_app(a).lower() for a in blocked_apps}
         candidates = list(BROWSERS) if browser == "Browser" else [browser]
-        if browser == "Browser":
-            # active_app hits the display; skip it until policy allows a browser.
-            pass
         candidates = [
-            item for item in candidates if item.lower() not in blocked
-            and (not allowed or item.lower() in allowed)
+            item for item in candidates
+            if browser_permitted(item, allowed_apps=allowed_apps, blocked_apps=blocked_apps)
         ]
         if not candidates:
             return {"ok": False, "error": "browser_disallowed"}
