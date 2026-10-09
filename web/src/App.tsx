@@ -521,7 +521,19 @@ export default function App() {
     if (agentSessionRef.current) return
     if (target && target !== selectedSessionId) setSelectedSessionId(target)
   }, [creatingSession, selectedJob, selectedSessionId, sessions])
-  const pendingForJob = approvals.filter(item => (!item.kind || item.kind === 'job') && Boolean(item.job_id && item.job_id === selectedJobId))
+  // Apply/Discard from Changes always targets the latest job in the active
+  // session chain. When an older run is selected, its approval still belongs
+  // to this session and must remain visible; matching only selectedJobId hid
+  // the pending decision from the operator.
+  const sessionRunIds = useMemo(() => new Set([
+    ...(sessionDetail?.runs || []).map(run => run.id),
+    sessionDetail?.active_refinement?.latest_queue_job_id,
+    selectedSession?.active_refinement?.latest_queue_job_id,
+  ].filter((id): id is string => Boolean(id))), [selectedSession, sessionDetail])
+  const pendingForJob = approvals.filter(item =>
+    (!item.kind || item.kind === 'job')
+    && Boolean(item.job_id && (item.job_id === selectedJobId || sessionRunIds.has(item.job_id)))
+  )
   const pendingToolApprovals = approvals.filter(item => item.kind === 'tool' && !isChatSessionId(item.session_id || '') && (!selectedSessionId || item.session_id === selectedSessionId))
   const runtimeOwner = runtimeOwnerFromJob(selectedJob)
   const toolEvents = useMemo(() => events.filter(item => item.kind.startsWith('tool.')), [events])
