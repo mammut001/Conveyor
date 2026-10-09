@@ -488,7 +488,37 @@ class LocalCuaTransport(CuaTransport):
             return res
         if hints:
             res.update(hints)
+        self._attach_window_title(res)
         return res
+
+    def _attach_window_title(self, res: dict) -> None:
+        """Copy the focused window title from the window list, or X11.
+
+        Only the row that matches the observation's pid or window id is
+        used. A missing row leaves the title absent. The title is not logged.
+        """
+        if res.get("window_title"):
+            title = res.get("window_title")
+            if isinstance(title, str):
+                res["window_title"] = title.strip()[:120]
+            return
+        windows = res.get("windows")
+        matched = None
+        if isinstance(windows, list):
+            matched = _match_listed_window(windows, res.get("pid"), res.get("window_id"))
+        title = ""
+        if isinstance(matched, dict):
+            raw = matched.get("title")
+            if isinstance(raw, str):
+                title = raw.strip()[:120]
+        if not title and sys.platform.startswith("linux"):
+            try:
+                from desktop_linux_browser import LinuxBrowserController
+                title = LinuxBrowserController().active_window_title()
+            except Exception:
+                title = ""
+        if title:
+            res["window_title"] = title[:120]
 
     def _collect_ax_hints(self, action: dict | None = None) -> dict[str, Any]:
         """Pick a target app window and return pid/window_id/element_hints.
@@ -1469,6 +1499,7 @@ class CuaDriver:
             "effect", "path", "verified", "error", "node_id", "created_at",
             "keys_len", "text_len", "click_method", "active_app",
             "pid", "window_id", "ax_app", "element_hints", "windows",
+            "window_title",
         }
         return {k: v for k, v in result.items() if k in allowed}
 

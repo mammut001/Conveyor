@@ -68,10 +68,15 @@ class _Display:
         self.envs: list[dict] = []
         self.windows = "12345\n"
         self.searches: list[list[str]] = []
+        self.active_id = "12345"
+        self.active_pid = "4242"
+        self.active_title = "Example Domain"
+        self.imports = 0
 
     def run(self, command, env=None, **_kwargs):
         self.envs.append(dict(env or {}))
         if command[0] == "import":
+            self.imports += 1
             Path(command[-1].split(":", 1)[1]).write_bytes(PNG)
             return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
         args = list(command[1:])
@@ -80,6 +85,18 @@ class _Display:
             out = "1440 900\n"
         elif args[:2] == ["getactivewindow", "getwindowclassname"]:
             out = "firefox\n"
+        elif args == ["getactivewindow"]:
+            out = self.active_id + "\n"
+        elif args[:1] == ["getwindowpid"]:
+            out = self.active_pid + "\n"
+        elif args[:1] == ["getwindowname"]:
+            out = self.active_title + "\n"
+            if getattr(self, "move_focus_after_observe", False) and not getattr(self, "_focus_moved", False):
+                self._focus_moved = True
+                self.active_id = "99999"
+                self.active_pid = "88"
+        elif args[:1] == ["getwindowgeometry"]:
+            out = "Position: 0,0\nGeometry: 100x100\n"
         elif args[:1] == ["search"]:
             self.searches.append(args)
             out = self.windows
@@ -259,6 +276,7 @@ class DesktopTests(Case):
         result = self.desktop().execute({"action": "observe"})
         self.assertTrue(result["result_ok"], result)
         self.assertEqual((result["width"], result["height"], result["active_app"]), (1, 1, "firefox"))
+        self.assertEqual((result["window_id"], result["pid"], result["window_title"]), (12345, 4242, "Example Domain"))
         path = planner_screenshot_path(self.settings, result)
         self.assertIsNotNone(path)
         self.assertEqual(path.read_bytes(), PNG)
@@ -334,6 +352,26 @@ class LoopTests(Case):
         self.assertEqual(result["status"], "done")
         self.assertEqual(result["summary"], "opened")
 
+    def test_focus_change_between_observe_and_type_refuses_keystrokes(self) -> None:
+        self.x.move_focus_after_observe = True
+        task = self.task()
+        result = self.run_loop([
+            {"action": "observe"},
+            {"action": "type", "text": "hello"},
+            {"action": "done", "summary": "typed"},
+        ], task)
+        self.assertFalse(any(call[:1] == ["type"] for call in self.x.xdotool))
+        self.assertNotEqual(result["status"], "done")
+        final = get_computer_task(self.settings, task["task_id"])
+        typed = [
+            step for step in final["steps"].values()
+            if (step.get("action") or {}).get("action") == "type"
+        ]
+        self.assertTrue(typed)
+        self.assertEqual(typed[0]["action"].get("pid"), 4242)
+        self.assertEqual(typed[0]["action"].get("window_id"), 12345)
+        self.assertNotIn("hello", str(final["trajectory"]))
+
     def test_type_stops_when_the_bound_window_is_not_foreground(self) -> None:
         desktop = self.desktop()
         result = desktop.execute({"action": "type", "text": "secret", "window_id": 999, "pid": 5})
@@ -362,6 +400,50 @@ class LoopTests(Case):
         self.assertTrue(self.x.searches)
         for search in self.x.searches:
             self.assertEqual(search[search.index("--class") + 1], desktop_x11.BROWSER_CLASSES)
+
+    def test_lease_before_execute_does_not_launch_or_observe(self) -> None:
+        task = self.task()
+        self.x.windows = ""
+        backend = build_backend(self.settings, task["task_id"])
+        step_id = create_computer_step(self.settings, task["task_id"], {"action": "observe"})["step_id"]
+        HumanTakeoverStore(self.settings).start(
+            reason="operator_requested", scope=self.scope, ttl_seconds=30,
+        )
+
+        async def scenario():
+            with self.assertRaises(ComputerBackendError) as caught:
+                await backend.execute_step(self.settings, task["task_id"], step_id, {"action": "observe"})
+            self.assertEqual(str(caught.exception), "human_takeover_active")
+
+        asyncio.run(scenario())
+        self.assertEqual(self.x.searches, [])
+        self.assertEqual(self.x.imports, 0)
+        self.assertFalse((agents.desktop_dir(self.settings, self.agent["id"]) / "want_browser").exists())
+        self.assertEqual(backend.node_id, x11_node_id(self.scope))
+
+    def test_lease_during_prepare_races_ahead_of_launch_and_observe(self) -> None:
+        task = self.task()
+        self.x.windows = ""
+        backend = build_backend(self.settings, task["task_id"])
+        step_id = create_computer_step(self.settings, task["task_id"], {"action": "observe"})["step_id"]
+        leases = HumanTakeoverStore(self.settings)
+        original = backend.desktop.has_browser_window
+
+        def has_browser():
+            leases.start(reason="operator_requested", scope=self.scope, ttl_seconds=30)
+            return original()
+
+        backend.desktop.has_browser_window = has_browser
+
+        async def scenario():
+            with self.assertRaises(ComputerBackendError) as caught:
+                await backend.execute_step(self.settings, task["task_id"], step_id, {"action": "observe"})
+            self.assertEqual(str(caught.exception), "human_takeover_active")
+
+        asyncio.run(scenario())
+        self.assertFalse((agents.desktop_dir(self.settings, self.agent["id"]) / "want_browser").exists())
+        self.assertEqual(self.x.imports, 0)
+        self.assertEqual(backend.node_id, x11_node_id(self.scope))
 
 
 class PlannerPromptTests(unittest.TestCase):

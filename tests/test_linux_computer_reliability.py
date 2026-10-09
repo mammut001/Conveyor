@@ -288,14 +288,14 @@ class _Desktop:
 
 
 class RecoveryTest(unittest.IsolatedAsyncioTestCase):
-    async def test_browser_goal_bootstraps_once_and_finishes(self):
+    async def test_open_firefox_verifies_foreground_once(self):
         with tempfile.TemporaryDirectory() as temp:
             backend = _Desktop([{
                 "result_ok": True, "action_type": "observe", "sha256": "first",
                 "screenshot_id": "fake", "active_app": "Firefox",
             }])
             result = await run_computer_loop(
-                _settings(Path(temp)), "Check weather in current browser",
+                _settings(Path(temp)), "Open Firefox",
                 planner=_Sequence({"action": "done", "summary": "observed"}),
                 backend=backend, max_steps=5, max_seconds=30, direct_mode=True,
                 open_with_observe=True,
@@ -310,7 +310,7 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
                 {"result_ok": True, "action_type": "observe", "sha256": "new", "screenshot_id": "fake", "active_app": "Firefox"},
             ])
             result = await run_computer_loop(
-                _settings(Path(temp)), "Open Firefox to check weather",
+                _settings(Path(temp)), "Open Firefox",
                 planner=_Sequence({"action": "done", "summary": "observed"}),
                 backend=backend, max_steps=5, max_seconds=30, direct_mode=True,
                 open_with_observe=True,
@@ -404,12 +404,20 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(result["blocked_reason"], "no_visual_progress")
 
     async def test_about_blank_and_network_error_are_not_success(self):
-        for title in ("about:blank — Mozilla Firefox", "Problem loading page"):
+        titles = (
+            "about:blank — Mozilla Firefox",
+            "Problem loading page",
+            "Mozilla Firefox",
+            "Google Chrome",
+            "",
+        )
+        for title in titles:
             with tempfile.TemporaryDirectory() as temp:
-                backend = _Desktop([{
+                frame = {
                     "result_ok": True, "action_type": "observe", "sha256": "blank",
                     "screenshot_id": "fake", "active_app": "Firefox", "window_title": title,
-                }])
+                }
+                backend = _Desktop([dict(frame), dict(frame)])
                 result = await run_computer_loop(
                     _settings(Path(temp)), "Check weather in current browser",
                     planner=_Sequence({"action": "done", "summary": "sunny"},
@@ -418,7 +426,32 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
                     open_with_observe=True,
                 )
                 self.assertEqual(result["status"], "error", title)
+                self.assertNotEqual(result["status"], "done", title)
                 self.assertEqual(result["blocked_reason"], "unverified_browser_window", title)
+
+    async def test_loaded_page_missing_title_is_not_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            frame = {
+                "result_ok": True, "action_type": "observe", "sha256": "blank",
+                "screenshot_id": "fake", "active_app": "Firefox",
+                "windows": [{"app": "Firefox", "title": "Problem loading page", "pid": 5, "window_id": 9, "z": 1}],
+                "pid": 5, "window_id": 9,
+            }
+            absent = {
+                "result_ok": True, "action_type": "observe", "sha256": "blank",
+                "screenshot_id": "fake", "active_app": "Firefox",
+            }
+            for label, rows in (("derived", [dict(frame), dict(frame)]), ("absent", [dict(absent), dict(absent)])):
+                backend = _Desktop(rows)
+                result = await run_computer_loop(
+                    _settings(Path(temp)), "Check the weather webpage",
+                    planner=_Sequence({"action": "done", "summary": "sunny"},
+                                      {"action": "done", "summary": "sunny"}),
+                    backend=backend, max_steps=6, max_seconds=30, direct_mode=True,
+                    open_with_observe=True,
+                )
+                self.assertEqual(result["status"], "error", label)
+                self.assertEqual(result["blocked_reason"], "unverified_browser_window", label)
 
     async def test_early_done_without_screenshot_is_refused(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -524,6 +557,61 @@ class IdentityTest(unittest.TestCase):
         self.assertEqual(app_from_process_names("chromium", None), "Chromium")
         self.assertEqual(app_from_process_names(None, "chrome"), "Google Chrome")
 
+    def test_spoofed_exe_is_not_a_browser_and_terminals_map(self):
+        from desktop_linux_browser import linux_process_app
+
+        spoof = Path(tempfile.mkdtemp()) / "firefox"
+        spoof.write_text("#!/bin/sh\n", encoding="utf-8")
+        spoof.chmod(0o755)
+        with mock.patch("desktop_linux_browser._proc_exe", return_value=str(spoof)), \
+                mock.patch("desktop_linux_browser._proc_comm", return_value="firefox"):
+            self.assertEqual(linux_process_app(9), "Unknown")
+        with mock.patch("desktop_linux_browser._proc_exe", return_value="/usr/bin/gnome-terminal"), \
+                mock.patch("desktop_linux_browser._proc_comm", return_value="gnome-terminal"):
+            self.assertEqual(linux_process_app(9), "Terminal")
+        with mock.patch("desktop_linux_browser._proc_exe", return_value=None), \
+                mock.patch("desktop_linux_browser._proc_comm", return_value="firefox"):
+            self.assertEqual(linux_process_app(9), "Firefox")
+        with mock.patch("desktop_linux_browser._proc_exe", return_value="/usr/bin/gedit"), \
+                mock.patch("desktop_linux_browser._proc_comm", return_value="gedit"):
+            self.assertEqual(linux_process_app(9), "gedit")
+        with mock.patch("desktop_linux_browser._proc_exe", return_value="/usr/bin/firefox"), \
+                mock.patch("desktop_linux_browser._path_is_trusted", return_value=True), \
+                mock.patch("desktop_linux_browser._proc_comm", return_value="bash"):
+            self.assertEqual(linux_process_app(9), "Firefox")
+
+    @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
+    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    def test_spoofed_exe_and_class_never_focus_or_launch(self, popen, _which):
+        spoof = Path(tempfile.mkdtemp()) / "firefox"
+        spoof.write_text("#!/bin/sh\n", encoding="utf-8")
+        spoof.chmod(0o755)
+        controller = LinuxBrowserController()
+        controller._run = _scripted_run({
+            "getdisplaygeometry": "100 100",
+            "search": "4242",
+            "getwindowclassname": "Navigator",
+            "getwindowpid": "9",
+            "windowmap": "",
+            "windowactivate": "",
+            "getactivewindow": "4242",
+        })
+        calls = []
+        real = controller._run
+
+        def run(*argv):
+            calls.append(argv)
+            return real(*argv)
+
+        controller._run = run
+        with mock.patch("desktop_linux_browser._proc_exe", return_value=str(spoof)), \
+                mock.patch("desktop_linux_browser._proc_comm", return_value="firefox"):
+            result = controller.ensure("Firefox")
+        self.assertEqual(result["error"], "browser_activate_failed")
+        popen.assert_not_called()
+        self.assertFalse(any(cmd[1] == "windowactivate" for cmd in calls))
+
     def test_untrusted_path_is_not_a_browser_binary(self):
         from desktop_linux_browser import _path_is_trusted
 
@@ -575,13 +663,16 @@ class TransportTimeoutTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ComputerBackendError) as caught:
                 await backend.execute_step(settings, created["task_id"], step["step_id"], {"action": "observe"})
             self.assertEqual(str(caught.exception), "step_timeout")
-            step2 = create_computer_step(settings, created["task_id"], {"action": "observe"})
+
+            positive = replace(settings, conveyor_computer_max_seconds=30)
+            step2 = create_computer_step(positive, created["task_id"], {"action": "observe"})
             self.assertTrue(cancel_pending_computer_step(
-                settings, created["task_id"], step2["step_id"], reason="operator_stop",
+                positive, created["task_id"], step2["step_id"], reason="operator_stop",
             ))
+            backend.settings = positive
             with self.assertRaises(ComputerBackendError) as cancelled:
-                await backend.execute_step(settings, created["task_id"], step2["step_id"], {"action": "observe"})
-            self.assertIn("cancelled", str(cancelled.exception))
+                await backend.execute_step(positive, created["task_id"], step2["step_id"], {"action": "observe"})
+            self.assertEqual(str(cancelled.exception), "step_cancelled")
 
 
 if __name__ == "__main__":

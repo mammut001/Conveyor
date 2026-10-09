@@ -76,6 +76,30 @@ def canonical_app(value: object) -> str:
     return canonical_browser(raw) or raw or "Unknown"
 
 
+# comm is at most 15 bytes. These prefixes are unique among terminal names.
+_TERMINAL_NAMES = {
+    "gnome-terminal": "Terminal",
+    "gnome-terminal-server": "Terminal",
+    "konsole": "Terminal",
+    "xterm": "Terminal",
+    "xfce4-terminal": "Terminal",
+    "alacritty": "Terminal",
+    "kitty": "Terminal",
+    "tilix": "Terminal",
+    "terminator": "Terminal",
+    "kgx": "Terminal",
+    "ptyxis": "Terminal",
+    "wezterm": "Terminal",
+    "wezterm-gui": "Terminal",
+    "foot": "Terminal",
+    "urxvt": "Terminal",
+    "lxterminal": "Terminal",
+    "qterminal": "Terminal",
+    "mate-terminal": "Terminal",
+    "gnome-terminal-": "Terminal",
+}
+
+
 def app_from_process_names(exe_base: str | None, comm: str | None) -> str:
     """Map a process to a browser using exact names only.
 
@@ -98,26 +122,69 @@ def app_from_process_names(exe_base: str | None, comm: str | None) -> str:
     return "Unknown"
 
 
+def _terminal_name(value: str) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text in _TERMINAL_NAMES:
+        return "Terminal"
+    if len(text) == 15:
+        matches = [
+            name for name in _TERMINAL_NAMES
+            if len(name) > 15 and name.startswith(text)
+        ]
+        if len(matches) == 1:
+            return "Terminal"
+    return None
+
+
+def _proc_exe(pid: int) -> str | None:
+    try:
+        return os.readlink(f"/proc/{pid}/exe")
+    except (OSError, ValueError):
+        return None
+
+
+def _proc_comm(pid: int) -> str | None:
+    try:
+        text = Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+    return text[:64] or None
+
+
 def linux_process_app(pid: int) -> str:
-    """Best-effort local PID attribution; never fall back to another app."""
+    """Attribute a PID without trusting a user-owned browser basename.
+
+    A readable ``/proc/<pid>/exe`` is the source of truth. Browser names
+    require a root-owned executable under a system directory. When that
+    path is readable but untrusted, ``comm`` is not allowed to promote the
+    process to Firefox or Chrome. Other basenames stay available so
+    allow and block lists can still name the real program, and common
+    terminal binaries map to Terminal (the default blocklist entry).
+    """
     try:
         pid_i = int(pid)
     except (TypeError, ValueError):
         return "Unknown"
     if pid_i <= 0:
         return "Unknown"
-    exe_base = None
-    comm = None
-    exe = Path(f"/proc/{pid_i}/exe")
-    try:
-        exe_base = os.path.basename(os.readlink(exe))
-    except (OSError, ValueError):
-        exe_base = None
-    try:
-        comm = Path(f"/proc/{pid_i}/comm").read_text(encoding="utf-8").strip()
-    except (OSError, ValueError):
-        comm = None
-    return app_from_process_names(exe_base, comm)
+    exe = _proc_exe(pid_i)
+    if exe:
+        base = os.path.basename(exe)
+        terminal = _terminal_name(base)
+        if terminal:
+            return terminal
+        if base in _PROCESS_BASENAMES:
+            if _path_is_trusted(exe):
+                return _PROCESS_BASENAMES[base]
+            return "Unknown"
+        return base or "Unknown"
+    comm = _proc_comm(pid_i) or ""
+    browser = app_from_process_names(None, comm)
+    if browser != "Unknown":
+        return browser
+    return _terminal_name(comm) or comm or "Unknown"
 
 
 def _path_is_trusted(path: str) -> bool:
@@ -149,7 +216,8 @@ def _is_snap_firefox(binary: str) -> bool:
     if real.startswith("/snap/") or "/snap/firefox/" in real:
         return True
     try:
-        head = Path(binary).read_text(encoding="utf-8", errors="ignore")[:4096]
+        with open(binary, "rb") as handle:
+            head = handle.read(4096).decode("utf-8", errors="ignore")
     except OSError:
         return False
     if not head.startswith("#!"):
@@ -263,6 +331,20 @@ class LinuxBrowserController:
         if pid is None:
             return "Unknown"
         return linux_process_app(pid)
+
+    def active_window_title(self) -> str:
+        """Capped title of the active X window. Empty when the query fails."""
+        if not os.environ.get("DISPLAY"):
+            return ""
+        active = self._run("xdotool", "getactivewindow")
+        wid = (active.stdout or "").strip()
+        if active.returncode or not re.fullmatch(r"\d{1,12}", wid):
+            return ""
+        named = self._run("xdotool", "getwindowname", wid)
+        title = (named.stdout or "").strip()
+        if named.returncode or not title:
+            return ""
+        return title[:120]
 
     def keyboard_target_ready(self, pid: object, window_id: object) -> bool:
         """True when the intended window is still mapped and in front.

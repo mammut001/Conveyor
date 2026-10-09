@@ -121,15 +121,61 @@ def _focus_identity(observation: dict) -> tuple:
     return (observation.get("active_app"), pid_i, wid_i)
 
 
-def _page_title_blocks_done(title: object) -> bool:
-    """Blank and browser error pages are not a completed webpage goal.
+_DEFAULT_BROWSER_TITLES = frozenset({
+    "mozilla firefox", "firefox", "google chrome", "chrome", "chromium",
+    "chromium web browser", "new tab",
+})
 
-    This reads a title the desktop backend already exposed. It does not
-    interpret the screenshot (no weather/OCR check).
+
+def _reported_window_title(observation: dict) -> str:
+    """Title the backend already reported, or the matching window's title.
+
+    Legacy Mac observations list windows but omit ``window_title``. Only a
+    row that matches the observed pid or window id is used. Nothing is
+    invented when that identity is missing.
+    """
+    if not isinstance(observation, dict):
+        return ""
+    raw = observation.get("window_title")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()[:120]
+    windows = observation.get("windows")
+    if not isinstance(windows, list):
+        return ""
+    pid = observation.get("pid")
+    wid = observation.get("window_id")
+    for row in windows:
+        if not isinstance(row, dict):
+            continue
+        matched = False
+        if wid is not None:
+            try:
+                matched = int(row.get("window_id")) == int(wid)
+            except (TypeError, ValueError):
+                matched = False
+        if not matched and pid is not None and wid is None:
+            try:
+                matched = int(row.get("pid")) == int(pid)
+            except (TypeError, ValueError):
+                matched = False
+        if not matched:
+            continue
+        title = row.get("title")
+        if isinstance(title, str) and title.strip():
+            return title.strip()[:120]
+    return ""
+
+
+def _page_title_blocks_done(title: object) -> bool:
+    """Blank, default, and browser error pages are not a completed webpage.
+
+    A missing title is not evidence that a page loaded. This reads a title
+    the desktop backend already exposed. It does not interpret the
+    screenshot (no weather/OCR check).
     """
     text = str(title or "").strip().lower()
-    if not text:
-        return False
+    if not text or text in _DEFAULT_BROWSER_TITLES:
+        return True
     tokens = (
         "about:blank", "about:newtab", "about:home", "new tab", "moz-extension",
         "loading", "正在加载", "正在连接",
@@ -546,6 +592,13 @@ async def run_computer_loop(
                             blocked_reason=reason,
                         )
                         break
+                    # Look again before the next done. A second claim has to
+                    # see the same invalid page, not a screenshot-less fallback.
+                    if (
+                        reason == "unverified_browser_window"
+                        and _browser_foreground_observed(observation)
+                    ):
+                        followup_observe = True
                     continue
                 set_task_status(settings, task_id, "done", summary=action.get("summary") or "completed")
                 break
@@ -669,6 +722,10 @@ async def run_computer_loop(
                     if merged.get(k) is None and observation.get(k) is not None:
                         merged[k] = observation.get(k)
                 observation = merged
+                if not observation.get("window_title"):
+                    derived = _reported_window_title(observation)
+                    if derived:
+                        observation["window_title"] = derived
             steps_used += 1
             if act != "observe":
                 followup_observe = True
@@ -777,7 +834,7 @@ def _reject_done(
     )
     if not fresh or not _browser_foreground_observed(observation):
         return "unverified_browser_window" if not _browser_foreground_observed(observation) else "unverified_done"
-    if goal_needs_loaded_page(goal) and _page_title_blocks_done(observation.get("window_title")):
+    if goal_needs_loaded_page(goal) and _page_title_blocks_done(_reported_window_title(observation)):
         return "unverified_browser_window"
     return None
 

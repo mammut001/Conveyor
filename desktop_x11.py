@@ -131,6 +131,35 @@ class X11Desktop:
             return None
         return name[:64] or None
 
+    def active_window(self) -> dict:
+        """Read-only focus identity on this display. Missing fields stay absent.
+
+        The title is capped and never logged: it can be private UI text.
+        """
+        try:
+            active = self._run("xdotool", "getactivewindow", timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        wid = (active.stdout or "").strip()
+        if active.returncode != 0 or not wid.isdigit():
+            return {}
+        out: dict[str, Any] = {"window_id": int(wid)}
+        try:
+            pid = self._run("xdotool", "getwindowpid", wid, timeout=5)
+            text = (pid.stdout or "").strip()
+            if pid.returncode == 0 and text.isdigit() and int(text) > 0:
+                out["pid"] = int(text)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+        try:
+            named = self._run("xdotool", "getwindowname", wid, timeout=5)
+            title = (named.stdout or "").strip()
+            if named.returncode == 0 and title:
+                out["window_title"] = title[:120]
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return out
+
     def has_browser_window(self) -> bool:
         """True once a browser window is mapped.
 
@@ -162,10 +191,12 @@ class X11Desktop:
         )
         if not recorded.get("ok"):
             raise X11Error("screenshot_record_error")
-        return {
+        result = {
             "screenshot_id": recorded["screenshot_id"], "sha256": recorded["sha256"],
             "width": recorded["width"], "height": recorded["height"],
         }
+        result.update(self.active_window())
+        return result
 
     def click(self, action: dict) -> dict:
         x, y = self._point(action)
@@ -255,6 +286,8 @@ class X11Desktop:
         app = self.active_app()
         if app:
             result["active_app"] = app
+        for key, value in self.active_window().items():
+            result.setdefault(key, value)
         return result
 
 
@@ -268,18 +301,37 @@ class X11ComputerBackend:
         self.desktop = X11Desktop(settings, agent_id=agent_id, display=display)
         self._prepared = False
 
+    def _takeover_active(self, settings: Settings) -> bool:
+        from human_takeover import HumanTakeoverStore
+
+        return HumanTakeoverStore(settings).current(agents.takeover_scope(self.agent_id)) is not None
+
     async def _prepare(self) -> None:
-        """A bare desktop has nothing to look at: have the browser up first."""
+        """A bare desktop has nothing to look at: have the browser up first.
+
+        A human lease is checked before any launch and again before waiting,
+        so preparation never starts a browser the operator just took over.
+        """
         if self._prepared:
             return
-        self._prepared = True
+        if self._takeover_active(self.settings):
+            from desktop_computer_loop import ComputerBackendError
+            raise ComputerBackendError("human_takeover_active")
         if await asyncio.to_thread(self.desktop.has_browser_window):
+            self._prepared = True
             return
+        if self._takeover_active(self.settings):
+            from desktop_computer_loop import ComputerBackendError
+            raise ComputerBackendError("human_takeover_active")
         from agent_desktops import request_browser
 
         request_browser(self.settings, self.agent_id)
+        self._prepared = True
         deadline = time.monotonic() + BROWSER_WAIT_SECONDS
         while time.monotonic() < deadline:
+            if self._takeover_active(self.settings):
+                from desktop_computer_loop import ComputerBackendError
+                raise ComputerBackendError("human_takeover_active")
             await asyncio.sleep(1.0)
             if await asyncio.to_thread(self.desktop.has_browser_window):
                 # Let the first page paint before the first screenshot.
@@ -290,11 +342,17 @@ class X11ComputerBackend:
     async def execute_step(self, settings: Settings, task_id: str, step_id: str, action: dict) -> dict:
         from desktop_computer_loop import ComputerBackendError
 
+        if self._takeover_active(settings):
+            raise ComputerBackendError("human_takeover_active")
         await self._prepare()
+        if self._takeover_active(settings):
+            raise ComputerBackendError("human_takeover_active")
         claimed = claim_computer_step(settings, step_id, self.node_id)
         if not claimed.get("ok"):
             error = str(claimed.get("error") or "claim_failed")
             raise ComputerBackendError("human_takeover_active" if error == "human_takeover_active" else f"step_{error}")
+        if self._takeover_active(settings):
+            raise ComputerBackendError("human_takeover_active")
         result = await asyncio.to_thread(self.desktop.execute, claimed["step"].get("action") or action)
         completed = complete_computer_step(settings, step_id, self.node_id, result)
         if not completed.get("ok"):
