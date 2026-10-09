@@ -14,10 +14,12 @@ logging. MUST NOT import `runner` or any `handlers/*` business logic.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Sequence
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 
+from channel.telegram_identity import TelegramAddress, destination
 from channel.mentions import mentions, strip_mention
 from channel.types import Attachment, InboundMessage, OutboundPort, ReplyContext
 from redaction import truncate
@@ -188,11 +190,25 @@ def inbound_from_update(
     reply_to = _reply_context(msg, bot_id)
     mentioned = _mentions_bot(msg, text_value, username, bot_id) or _replies_to_bot(msg, bot_id)
     if username:
+        # Telegram group commands carry /command@BotUsername. Ordinary
+        # mention stripping intentionally excludes an @ after a word.
+        text_value, command_mentions = re.subn(
+            r"^(/[a-zA-Z0-9_]+)@" + re.escape(username) + r"(?=\s|$)",
+            r"\1", text_value, flags=re.IGNORECASE,
+        )
+        mentioned = mentioned or bool(command_mentions)
         text_value = strip_mention(text_value, username)
     return InboundMessage(
         channel="telegram",
         operator_id=str(getattr(user, "id", "") or ""),
-        chat_id=str(getattr(chat, "id", "") or ""),
+        chat_id=(
+            TelegramAddress(
+                int(chat.id),
+                int(msg.message_thread_id) if msg is not None
+                and getattr(msg, "is_topic_message", False)
+                and getattr(msg, "message_thread_id", None) else None,
+            ).conversation if chat is not None else ""
+        ),
         message_id=(str(getattr(msg, "message_id", "") or "")
                     if msg is not None else None),
         text=text_value.strip(),
@@ -218,6 +234,9 @@ class TelegramOutbound:
     """
     supports_inline_buttons: bool = True
     supports_attachments: bool = True
+    # PTB processes updates sequentially (onboarding relies on this). Release
+    # the update after enqueue so /cancel and project switches remain usable.
+    wait_for_job: bool = False
 
     def __init__(self, update: Update) -> None:
         self._update = update
@@ -309,7 +328,7 @@ class TelegramOutbound:
         try:
             with open(image_path, "rb") as f:
                 await bot.send_photo(
-                    chat_id=chat_id,
+                    **destination(chat_id),
                     photo=f,
                     caption=caption,
                 )
@@ -341,7 +360,7 @@ class TelegramChatOutbound(OutboundPort):
     async def send_new(self, msg: InboundMessage, text: str) -> str | None:
         try:
             sent = await self.bot.send_message(
-                chat_id=int(self.chat_id),
+                **destination(self.chat_id),
                 text=truncate(text),
                 disable_web_page_preview=True,
             )
@@ -351,7 +370,15 @@ class TelegramChatOutbound(OutboundPort):
             return None
 
     async def edit_progress(self, msg: InboundMessage, placeholder_id: str, text: str) -> bool:
-        return True
+        try:
+            await self.bot.edit_message_text(
+                chat_id=TelegramAddress.parse(self.chat_id).chat_id,
+                message_id=int(placeholder_id), text=truncate(text),
+                disable_web_page_preview=True,
+            )
+            return True
+        except Exception as exc:
+            return "not modified" in str(exc).lower()
 
     async def reply_with_buttons(
         self,
@@ -365,7 +392,7 @@ class TelegramChatOutbound(OutboundPort):
                 for row in buttons
             ]
             sent = await self.bot.send_message(
-                chat_id=int(self.chat_id),
+                **destination(self.chat_id),
                 text=truncate(text),
                 disable_web_page_preview=True,
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -383,7 +410,7 @@ async def send_text(
     update: Update,
     text: str,
     *,
-    reply_markup: InlineKeyboardMarkup | None = None,
+    reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None,
 ) -> str | None:
     """Send a message; return the sent message_id as str|None.
 

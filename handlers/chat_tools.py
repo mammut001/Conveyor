@@ -351,6 +351,17 @@ async def run_tool_loop(
                         config=config,
                         placeholder=placeholder,
                     )
+                elif real_tool_name == "computer.observe":
+                    raw_res = await run_tool(
+                        settings,
+                        real_tool_name,
+                        arg,
+                        operator_id=msg.operator_id,
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        port=port,
+                        msg=msg,
+                    )
                 else:
                     raw_res = await run_tool(
                         settings,

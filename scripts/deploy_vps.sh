@@ -21,6 +21,9 @@ DEPLOY_SOURCE="${DEPLOY_SOURCE:-manual}"
 REQUESTED_SHA="${GITHUB_SHA:-}"
 GIT_REF="${GITHUB_REF_NAME:-}"
 RUN_ID="${GITHUB_RUN_ID:-}"
+LOCAL_BUNDLE="${CONVEYOR_DEPLOY_BUNDLE:-}"
+SERVICES_STOPPED=false
+DEPLOY_SUCCEEDED=false
 CANDIDATE=""
 ROLLBACK_ATTEMPTED=false
 
@@ -32,7 +35,15 @@ clean_candidate() {
     git -C "${DEPLOY_PATH}" worktree remove --force "${CANDIDATE}" >/dev/null 2>&1 || rm -rf "${CANDIDATE}" || true
   fi
 }
-trap clean_candidate EXIT
+finish_deploy() {
+  local result=$?
+  clean_candidate
+  if [[ "${SERVICES_STOPPED}" == "true" && "${DEPLOY_SUCCEEDED}" != "true" && "${ROLLBACK_ATTEMPTED}" != "true" ]]; then
+    rollback_release "unexpected deployment exit" || true
+  fi
+  return "${result}"
+}
+trap finish_deploy EXIT
 
 clean_live_checkout() {
   git clean -fd \
@@ -81,16 +92,29 @@ OLD_COMMIT_FULL="$(git rev-parse HEAD)"
 OLD_COMMIT="$(git rev-parse --short HEAD)"
 log "Current commit: ${OLD_COMMIT}"
 
-log "Fetching origin/main..."
-git fetch origin main --quiet
-ORIGIN_MAIN="$(git rev-parse origin/main)"
-if [[ -n "${REQUESTED_SHA}" ]]; then
-  git cat-file -e "${REQUESTED_SHA}^{commit}" 2>/dev/null || die "Requested SHA is not available after fetching origin/main"
-  TARGET_COMMIT_FULL="$(git rev-parse "${REQUESTED_SHA}^{commit}")"
-  git merge-base --is-ancestor "${TARGET_COMMIT_FULL}" "${ORIGIN_MAIN}" \
-    || die "Requested SHA is not reachable from current origin/main"
+if [[ -n "${LOCAL_BUNDLE}" ]]; then
+  # An authenticated SSH operator can deploy a committed local revision
+  # without publishing it to GitHub. It must extend the current release.
+  [[ "${REQUESTED_SHA}" =~ ^[a-f0-9]{40}$ ]] || die "Local bundle deployment requires an exact GITHUB_SHA"
+  [[ -f "${LOCAL_BUNDLE}" ]] || die "Local Git bundle not found"
+  git bundle verify "${LOCAL_BUNDLE}" >/dev/null 2>&1 || die "Invalid local Git bundle"
+  git fetch --no-tags "${LOCAL_BUNDLE}" HEAD --quiet || die "Cannot import local Git bundle"
+  TARGET_COMMIT_FULL="$(git rev-parse FETCH_HEAD)"
+  [[ "${TARGET_COMMIT_FULL}" == "${REQUESTED_SHA}" ]] || die "Bundle HEAD does not match requested SHA"
+  git merge-base --is-ancestor "${OLD_COMMIT_FULL}" "${TARGET_COMMIT_FULL}" \
+    || die "Local bundle must extend the current production revision"
 else
-  TARGET_COMMIT_FULL="${ORIGIN_MAIN}"
+  log "Fetching origin/main..."
+  git fetch origin main --quiet
+  ORIGIN_MAIN="$(git rev-parse origin/main)"
+  if [[ -n "${REQUESTED_SHA}" ]]; then
+    git cat-file -e "${REQUESTED_SHA}^{commit}" 2>/dev/null || die "Requested SHA is not available after fetching origin/main"
+    TARGET_COMMIT_FULL="$(git rev-parse "${REQUESTED_SHA}^{commit}")"
+    git merge-base --is-ancestor "${TARGET_COMMIT_FULL}" "${ORIGIN_MAIN}" \
+      || die "Requested SHA is not reachable from current origin/main"
+  else
+    TARGET_COMMIT_FULL="${ORIGIN_MAIN}"
+  fi
 fi
 TARGET_COMMIT="$(git rev-parse --short "${TARGET_COMMIT_FULL}")"
 log "Target commit:  ${TARGET_COMMIT}"
@@ -164,6 +188,7 @@ write_smoke_fixture "${CANDIDATE}"
 (
   cd "${CANDIDATE}"
   .venv/bin/python -m compileall -q .
+  CONVEYOR_ENV_FILE=.env.test .venv/bin/python -m unittest discover -s tests -q
   if ! make smoke; then
     exit 1
   fi
@@ -189,6 +214,8 @@ ALL_CANDIDATE_SERVICES=(
 SERVICES=()
 for svc in "${ALL_CANDIDATE_SERVICES[@]}"; do
   if sudo -n systemctl is-active --quiet "${svc}" 2>/dev/null; then
+    sudo -n -l /bin/systemctl stop "${svc}" >/dev/null 2>&1 \
+      || die "Deploy account needs NOPASSWD permission to stop ${svc} before a safe cutover"
     SERVICES+=("${svc}")
   else
     log "Skipping ${svc} (not active at capture)"
@@ -223,6 +250,17 @@ rollback_release() {
   fi
   return 1
 }
+
+# Quiesce request producers only after candidate validation. Then re-read
+# authoritative queue state: work may have arrived while tests were running.
+SERVICES_STOPPED=true
+for svc in "${SERVICES[@]}"; do
+  sudo -n systemctl stop "${svc}" || die "Could not stop ${svc} before cutover"
+done
+read -r QUEUED_COUNT RUNNING_COUNT < <(deploy_db idle) \
+  || die "Could not recheck queue after stopping services"
+[[ "${QUEUED_COUNT}" == "0" && "${RUNNING_COUNT}" == "0" ]] \
+  || die "Queue changed during validation (queued=${QUEUED_COUNT}, running=${RUNNING_COUNT}); restoring services without deploying"
 
 # ---- live cutover ---------------------------------------------------------
 if [[ "${OLD_COMMIT_FULL}" != "${TARGET_COMMIT_FULL}" ]]; then
@@ -320,3 +358,5 @@ for svc in "${SERVICES[@]}"; do
   log "  ${svc}: ${SVC_STATUS[$svc]:-unknown}"
 done
 log "Deploy complete: ${OLD_COMMIT} → ${NEW_COMMIT}"
+
+DEPLOY_SUCCEEDED=true

@@ -106,7 +106,7 @@ def _deliver_topic_message(settings: Settings, channel: str, chat_id: str, text:
     if channel == "telegram":
         try:
             from scripts.telegram_api import send_message
-            send_message(settings, text, chat_id=int(chat_id))
+            send_message(settings, text, chat_id=chat_id)
             return True
         except Exception as exc:
             logger.error("Failed to send Telegram topic watch notification: %s", exc)

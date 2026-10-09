@@ -1520,6 +1520,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .agent-avatar { display: inline-grid; flex: none; place-items: center; border-radius: 50%; color: #fff; font-weight: 650; line-height: 1; user-select: none; }
 .agent-list { padding: 8px; }
 .agent-row { position: relative; }
+.worker-session-picker { display: flex; gap: 6px; align-items: center; margin: 0 8px 8px 54px; }
+.worker-session-picker select { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: inherit; padding: 4px 6px; font-size: 12px; }
+.worker-session-picker button { flex: none; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 4px 8px; font-size: 12px; cursor: pointer; }
 .agent-item { display: flex; align-items: center; gap: 12px; width: 100%; margin-bottom: 2px; padding: 10px 34px 10px 10px; border: 0; border-radius: 14px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .agent-item:hover { background: #f0f0f1; }
 .agent-item.active { background: #e9e9eb; }

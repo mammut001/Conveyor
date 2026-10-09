@@ -366,7 +366,11 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                         return
                     sanitized_host[k] = v[:128]
 
-            register_desktop_node(settings, node_id, display_name, agent_version, sanitized_host)
+            poll_observe = body.get("poll_observe")
+            register_desktop_node(
+                settings, node_id, display_name, agent_version, sanitized_host,
+                poll_observe=bool(poll_observe) if poll_observe is not None else False,
+            )
             self.send_json(HTTPStatus.OK, {
                 "ok": True,
                 "node_id": node_id,
@@ -408,7 +412,12 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                     return
 
             poll_computer = body.get("poll_computer")
-            node_info = record_heartbeat(settings, node_id, agent_state, last_action, poll_computer=poll_computer)
+            poll_observe = body.get("poll_observe")
+            node_info = record_heartbeat(
+                settings, node_id, agent_state, last_action,
+                poll_computer=poll_computer,
+                poll_observe=bool(poll_observe) if poll_observe is not None else False,
+            )
 
             if node_info is None:
                 self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": f"Node {node_id} not registered"})

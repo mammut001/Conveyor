@@ -33,11 +33,142 @@ sessions and the queue.
 - An agent's conversation is the web session `web:web-console:agent-<id>`.
   The mapping is derived from the id, so no session row is rewritten and an
   agent's conversation exists (empty) from the moment the agent does.
-- Telegram, Feishu and web sessions created before agents were turned on all
-  belong to the `default` agent.
+- Unbound Telegram chats, Feishu and older web sessions belong to the
+  `default` agent. Telegram chats can explicitly bind an agent (see below).
 - Removing an agent archives it: the conversation and its jobs are kept but
   the agent leaves the list and its instructions stop applying. `default`
   cannot be removed.
+
+## Workers
+
+`/workers` on Telegram and Feishu lists every agent the Web console lists,
+a page at a time, with the same idle / working / waiting status. Opening a
+worker shows one session (the chat's current selection when it belongs to
+that worker, otherwise the worker's main session) and four actions: continue,
+tasks, switch session, and back. Back returns to the full worker list.
+Browsing does not bind the chat. Continue, choosing a session, or creating
+one does, for this physical chat, topic, and operator only. In a private
+Telegram or Feishu chat, `/workers exit` and the list button “返回 <默认名> 主会话”
+select the canonical main session again. In a group or forum topic, exit only
+clears the binding. Neither path deletes history. An explicit `/agent` switch,
+new agent, or reset also leaves Workers mode; `/agent` and `/agent list` do not.
+The next private message after `/agent` stays on that Telegram project and is
+not moved onto the canonical main session.
+
+Private Telegram and Feishu chats with agents enabled and no Workers selection
+use the same main session as the Web console: `web:web-console:agent-default`
+(the built-in agent, shown as “主会话”). The choice is stored for that
+physical chat and operator when the first message, `/start`, or the Workers
+menu is handled. One resolver feeds execution, the persistent menu, `/start`,
+`/status`, and the “当前：” line, so they cannot disagree. Opening a card or
+viewing tasks does not change the selection. Group and topic chats keep the
+previous rule: no selection means the chat's own conversation. If agents are
+off, nothing is rewritten. An archived selection, an archived `/agent`
+binding, an archived transcript of the canonical primary, or a missing primary
+stops with an error and does not fall through to another project. No transcript
+row yet is the normal empty main session. Feishu card clicks do not include a
+reliable chat type, so they are not treated as private. A Workers token stores
+the chat type from the server when it is minted and later clicks use that,
+including exit. An old Feishu token with no stored type is not treated as private.
+
+While a worker is selected, the message runs as that worker's canonical Web
+session (the same transcript, jobs, and project). The operator's text is not
+given an execution prefix, and ordinary messages do not get an extra status
+reply. Replies, cards, and images go back to the originating chat and topic.
+Task commands use that session's jobs. Apply and discard stay explicit.
+Callback buttons are short server tokens bound to the operator and the full
+physical chat, not a bare topic number.
+
+Lists, details, the switch menu, tasks, and continue / select / new
+confirmations start with a current-context line such as `当前：Conveyor › 主会话`.
+A detail that is only being browsed says so and is not the selected session.
+Duplicate session titles append the last six characters of the session id,
+for example `当前：Conveyor › Conveyor · 515095`. An explicit Telegram
+`/agent` binding is shown as `当前：<Agent> › Telegram 独立会话` and keeps
+that agent's project.
+
+Older Telegram transcripts are not copied or merged into the Web main
+session. They stay under their original session id (`telegram:<operator>:<chat>`
+or with `:agent:<id>`). Choosing that project again with `/agent <id>` continues
+the `:agent:<id>` thread. `/agent default` is that explicit address, not the
+raw unbound chat. `/agent reset` in a private chat only unbinds the project;
+the next message uses the Web main session. The raw unbound transcript remains
+and shows up in the default Worker's session list for this physical chat and
+operator only. Selecting it continues that exact transcript. Another operator
+or chat is not listed or changed.
+
+In a private Telegram chat a persistent reply keyboard stays next to the
+input: 我的 Workers, 继续对话, 切换会话, and 查看任务. `/start` installs it
+(a separate message when the welcome also has the inline onboarding button),
+shows the current context, and lists Workers when agents are enabled.
+`/workers` installs it again. The inline session buttons stay. Continue,
+switch, and tasks use the effective session, which is the canonical main
+session when nothing else is selected. An archived selection fails closed.
+Those taps do not start a job. Group chats do not get the keyboard, and the
+same words stay ordinary text there.
+
+During onboarding those buttons are not saved as your name; send `/onboard`
+again to finish. The first message before onboarding also shows the keyboard.
+
+`/agent` remains the way to bind a Telegram chat to its own legacy project
+conversation. That history is not rewritten into the Web session.
+
+## Telegram project conversations
+
+Enable `CONVEYOR_AGENTS_ENABLED=true`, then select a project in Telegram:
+
+| Command | Action |
+|---|---|
+| `/agent` | Show the current agent and a paginated project picker |
+| `/agent list [page]` | List agent IDs, project folders and selection buttons |
+| `/agent <name or ID>` | Select an existing agent (names must be unique) |
+| `/agent new Name \| /absolute/repository` | Create and select an agent for an existing Git repository root |
+| `/agent new Name` | Create an agent that uses the configured workspace |
+| `/agent reset` | Return to the original default conversation, preserving all agent histories |
+
+In private chats you can switch projects and switch back to continue. In a
+forum group, **each topic selects its own agent and has its own conversation**.
+The general chat and different topics never implicitly inherit each other's
+selection. Group commands such as `/agent@YourBot list` work; ordinary group
+messages still need to mention or reply to the bot. Only the configured
+operator can select or create agents or use the buttons.
+
+Every selected agent has a separate history within that chat/topic. Jobs,
+retained worktrees, chat memory, `/deep` requests and approvals keep the agent
+that created them, even after selection changes or the process restarts.
+Switching back restores that conversation. Telegram releases the inbound
+update after enqueue, so long jobs do not block `/cancel` or project selection;
+queued jobs are resumed when the Telegram service starts. Telegram history stays separate
+from the agent's Web conversation; long-term memory, standing instructions,
+project folder and desktop are shared with that agent, subject to the existing
+memory feature/group-privacy settings. Agent instructions can be edited in Web.
+
+`/status`, `/jobs`, `/last`, `/cancel`, `/diff`, `/apply` and `/discard` locate
+jobs by conversation, channel and operator, independently of runner lanes and
+the concurrency limit. Asynchronous job output includes the agent name and
+job ID so a result arriving after a switch remains identifiable. `/git_status`
+and file search use the selected repository; host diagnostics still inspect
+the host. Reminders, routine reports, images, approvals and recovered task
+output are delivered to their original topic.
+
+Selections live in `agent_chat_bindings` in the queue database and survive
+restarts. Telegram conversation addresses are `<chat>:topic:<thread>` for a
+topic and append `:agent:<id>` for an explicit agent selection; only transport
+adapters translate them to Bot API `chat_id` and `message_thread_id`.
+Unbound private chats keep their original session IDs. That raw history is not
+deleted by `/agent reset` and is not the `:agent:default` thread. In a private
+chat, reset unbinds the project and the next message uses the Web main session.
+The raw transcript stays available from the default Worker's session list for
+the same chat and operator.
+
+Before first binding or switching a **legacy** conversation, its old queued
+jobs and active worktree must be resolved: older jobs had no pinned agent.
+New scoped jobs can remain queued/running while switching, because their
+identity cannot change. If an agent is archived, new requests fail explicitly;
+read-only task controls, cancellation and discard remain available. Agent
+configuration/database failures cannot silently send a pinned task to the
+default repository, desktop or memory. Old group jobs created before topic
+isolation remain in their original group session and can be inspected in Web.
 
 ## Web Console
 
@@ -132,7 +263,7 @@ conversation ─▶ task {takeover_scope: agent:<id>} ─▶ X11ComputerBackend 
   block one on another's or on the host's.
 - **Takeover is per desktop.** While you hold an agent's screen its task
   waits and re-observes when you release; nothing else is paused.
-- Tasks from Telegram, Feishu, the default agent and the one-shot
+- Tasks from unbound Telegram chats, Feishu, the default agent and the one-shot
   `/computer_observe` / `/computer_action` commands still use the host
   desktop.
 - An app allow-list (`CONVEYOR_COMPUTER_ALLOWED_APPS`), if you set one, is
@@ -160,16 +291,16 @@ the host; the Details tab says so if it is missing or not one.
   (secrets, `.git`, `node_modules`, virtualenvs…), the high-risk gate
   (workflows, deploy and auth files; `CONVEYOR_APPLY_ALLOW_HIGH_RISK`) and the
   untracked-file checks (no symlinks, binaries or oversized files) all do.
-- An agent without a project folder, and everything from Telegram and
-  Feishu, keeps using the configured workspace.
-- Host read-only tools (`/git_status`, file search) still look at the
-  configured workspace.
+- An agent without a project folder, and unbound Telegram chats and
+  Feishu, keep using the configured workspace.
+- `/git_status` and file search use the selected agent workspace; host
+  diagnostics still inspect the host.
 
 ## Memory, scheduled checks and the Library (phase 4)
 
 - **Memory.** Every agent you create keeps its own long-term memory: facts
   remembered in its conversation are in its prompts and visible to its
-  `memory.*` tools only. The default agent — and so Telegram and Feishu —
+  `memory.*` tools only. The default agent — and so unbound Telegram chats and Feishu —
   keeps using the operator's store. With an agent selected, the Memory view
   shows and edits that agent's facts (`/api/memory?agent=<id>`).
 - **Scheduled checks.** A routine created while an agent is selected (or by
@@ -192,7 +323,7 @@ CONVEYOR_AGENT_PARALLEL_JOBS=2     # 1 (default) = one Codex job at a time
 
 Above 1, every agent **with its own project folder** gets a lane
 (`job_lanes.py`). Jobs in one lane never overlap; jobs in different lanes
-may, up to the limit. Everything else — the default agent, Telegram, Feishu,
+may, up to the limit. Everything else — the default agent, unbound Telegram chats, Feishu,
 agents without a folder — shares the `default` lane, because those jobs all
 work in the configured workspace.
 

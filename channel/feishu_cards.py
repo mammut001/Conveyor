@@ -56,6 +56,8 @@ ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "desktop_screenshot_status",
     "desktop_observe_status",
     "desktop_observe_cancel",
+    # Workers navigation. The only client field is a server token.
+    "workers",
 })
 
 #: Maximum number of action buttons rendered in a single card row.
@@ -138,7 +140,9 @@ def parse_action(value: Any) -> dict[str, Any] | None:
     # a token, slash-style actions may carry a job_id. Don't enforce
     # job_id presence (a `status` action has no job_id) but reject
     # token on slash actions since it's meaningless.
-    if action in ("confirm", "cancel_confirm", "relay_approve", "relay_reject", "relay_confirm", "relay_cancel") and "token" not in payload:
+    if action in ("confirm", "cancel_confirm", "relay_approve", "relay_reject", "relay_confirm", "relay_cancel", "workers") and "token" not in payload:
+        return None
+    if action == "workers" and "job_id" in payload:
         return None
     slash_actions = (
         "status", "diff", "apply", "discard", "cancel",

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import sqlite3
 import time
 import uuid
 from typing import Any
@@ -20,6 +21,47 @@ WEB_CHAT_PREFIX = "webchat-"
 APPROVAL_PROMPT_PREFIX = "⚠️ 危险操作需确认"
 
 
+def _reserved_web_agent_unavailable(control: Any, source_chat_id: str) -> bool:
+    """True when a reserved web agent chat must not be opened.
+
+    Primary ids (``agent-<id>``) and secondary ids (``agent-<id>-s-<hex>``)
+    both require the agents feature, an active owned agent, and an unarchived
+    registry view. Unknown, missing, archived, or disabled targets fail closed.
+    Any other chat id is left to the generic web session path.
+    """
+    import agents
+    from worker_sessions import WorkerSessionStore
+
+    chat_id = str(source_chat_id or "")
+    if not chat_id.startswith(agents.AGENT_CHAT_PREFIX):
+        return False
+    settings = getattr(control, "settings", None)
+    if settings is None or not agents.enabled(settings):
+        return True
+    try:
+        sessions = WorkerSessionStore(settings)
+        store = agents.AgentStore(settings)
+        if sessions.is_secondary_chat_id(chat_id):
+            owner = sessions.owner_agent_id(agents.WEB_CHANNEL, chat_id)
+            if not owner:
+                return True
+            agent = store.get(owner)
+            return not agent or bool(agent.get("archived"))
+        agent_id = chat_id[len(agents.AGENT_CHAT_PREFIX):]
+        agent = store.get(agent_id)
+        if not agent or agent.get("archived"):
+            return True
+        row = sessions.get(agents.session_id_for(agent_id))
+        return (
+            row is None
+            or bool(row.get("archived"))
+            or row.get("source_chat_id") != chat_id
+            or row.get("channel") != agents.WEB_CHANNEL
+        )
+    except (OSError, sqlite3.Error):
+        return True
+
+
 def resolve_or_create_session(
     control: Any,
     requested_session_id: str,
@@ -31,6 +73,8 @@ def resolve_or_create_session(
         resolved = control.resolve_session_identity(requested_session_id)
         if resolved:
             channel, operator_id, source_chat_id = resolved
+            if channel == "web" and _reserved_web_agent_unavailable(control, source_chat_id):
+                return None
             return channel, operator_id, source_chat_id, requested_session_id
         # A durable web id handed out by a previous /api/chat call whose turn
         # has not been persisted yet: keep using it instead of rejecting it.
@@ -39,6 +83,9 @@ def resolve_or_create_session(
             requested_session_id = requested_session_id[len(durable_prefix):]
     source_chat_id = requested_session_id or f"{new_prefix}{uuid.uuid4().hex[:12]}"
     if len(source_chat_id) > 128 or not all(ch.isalnum() or ch in "-_" for ch in source_chat_id):
+        return None
+    # A well-formed secondary id is not a license to invent a session.
+    if _reserved_web_agent_unavailable(control, source_chat_id):
         return None
     channel, operator_id = "web", "web-console"
     durable_session_id = session_identity(channel, source_chat_id, operator_id)

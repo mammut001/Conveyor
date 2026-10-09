@@ -363,6 +363,9 @@ _DESKTOP_UPLOAD_PATTERNS = (
 
 # P5.3: remote observe request phrases (create pending request).
 _OBSERVE_REQUEST_PATTERNS = (
+    re.compile(r"截一下\s*mac\s*屏幕", re.IGNORECASE),
+    re.compile(r"给我截一张\s*vps\s*桌面", re.IGNORECASE),
+    re.compile(r"截一下当前\s*agent\s*的屏幕", re.IGNORECASE),
     re.compile(r"截图看看我电脑现在是什么", re.IGNORECASE),
     re.compile(r"帮我截一下\s*mac\s*屏幕", re.IGNORECASE),
     re.compile(r"看一下\s*(macbook|mac|电脑)\s*屏幕", re.IGNORECASE),

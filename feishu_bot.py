@@ -71,7 +71,9 @@ def _extract_card_action_event(msg: Any) -> tuple[InboundMessage, dict] | None:
         chat_id=identity["chat_id"],
         message_id=identity["message_id"] or None,
         text="",
-        chat_type="p2p",  # card callbacks are p2p from the bot's view
+        # Card events do not say whether the chat is private or a group.
+        # Marking every click private would bind a group to the Web main session.
+        chat_type="unknown",
         mentioned_bot=False,
         raw=msg,
     )
@@ -120,11 +122,23 @@ async def _handle_card_action(msg: Any) -> None:
 
     action = payload["action"]
     try:
+        if action == "workers":
+            from handlers.workers import handle_workers_token
+            await handle_workers_token(inbound, port, settings, runner, str(payload.get("token") or ""))
+            return
         if action in ("confirm", "cancel_confirm"):
             token = payload.get("token", "")
             if not token:
                 await port.send_new(inbound, "无效的确认 token。")
                 return
+            from handlers.tools.confirm import get_pending
+            from handlers.workers import selection_conflict
+            pending = get_pending(token, settings=settings)
+            if pending is not None:
+                conflict = selection_conflict(settings, inbound, pending.channel, pending.chat_id)
+                if conflict:
+                    await port.send_new(inbound, conflict)
+                    return
             if action == "confirm":
                 await execute_confirmed(inbound, port, settings, token)
             else:
@@ -162,9 +176,15 @@ async def _handle_card_action(msg: Any) -> None:
         if cmd is None:
             await port.send_new(inbound, f"未知卡片操作: {action}")
             return
+        if cmd in ("status", "diff", "apply", "discard", "cancel"):
+            from handlers.workers import legacy_job_card_allowed
+            if not legacy_job_card_allowed(settings, inbound, str(payload.get("job_id") or "")):
+                from handlers.workers import LEGACY_CALLBACK_CONFLICT
+                await port.send_new(inbound, LEGACY_CALLBACK_CONFLICT)
+                return
         # Synthesize a typed slash command and re-enter the regular
         # dispatch path. parse_command will recognize it.
-        inbound.text = f"/{cmd}"
+        inbound = dataclasses.replace(inbound, text=f"/{cmd}")
         await dispatch(inbound, port, settings, runner)
     except Exception:
         logger.exception("Card action handler failed: action=%s", action)

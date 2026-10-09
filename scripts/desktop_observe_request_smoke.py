@@ -128,6 +128,18 @@ def _settings(tmp: str, *, max_pending: int = 3) -> object:
     return load_settings()
 
 
+def _arm_observer(settings, node_id: str = "macbook-payton") -> None:
+    """Tests that consume observe register the poller and repeat that flag on heartbeat.
+
+    A heartbeat that omits poll_observe clears the flag. That is the production
+    rule, so every observer fixture passes poll_observe=True.
+    """
+    from nodes.state import record_heartbeat, register_desktop_node
+
+    register_desktop_node(settings, node_id, "Payton MacBook", "0.3.0", {}, poll_observe=True)
+    record_heartbeat(settings, node_id, "idle", "heartbeat", poll_observe=True)
+
+
 def _fake_result(screenshot_dir: Path | str | None = None) -> dict:
     if screenshot_dir is None:
         mem_root = os.environ.get("CODEX_MEMORY_ROOT")
@@ -154,8 +166,8 @@ def _fake_result(screenshot_dir: Path | str | None = None) -> dict:
 def _test_create_and_pending() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
-        with mock.patch("nodes.state.is_desktop_online", return_value=True):
-            created = create_observe_request(settings, _msg(), "截图看看我电脑现在是什么")
+        _arm_observer(settings)
+        created = create_observe_request(settings, _msg(), "截图看看我电脑现在是什么")
         if not created.get("ok"):
             _fail("create_request", str(created))
             return
@@ -173,8 +185,8 @@ def _test_claim_complete() -> None:
         print("DEBUG IN TEST: tmp =", tmp)
         print("DEBUG IN TEST: env =", os.environ.get("CODEX_MEMORY_ROOT"))
         print("DEBUG IN TEST: settings.codex_memory_root =", settings.codex_memory_root)
-        with mock.patch("nodes.state.is_desktop_online", return_value=True):
-            created = create_observe_request(settings, _msg(), "test")
+        _arm_observer(settings)
+        created = create_observe_request(settings, _msg(), "test")
         request_id = created["request"]["request_id"]
         claim = claim_observe_request(settings, request_id, "macbook-payton")
         if not claim.get("ok") or claim["request"]["status"] != "claimed":
@@ -192,8 +204,8 @@ def _test_claim_complete() -> None:
 def _test_claim_fail() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
-        with mock.patch("nodes.state.is_desktop_online", return_value=True):
-            created = create_observe_request(settings, _msg(), "test")
+        _arm_observer(settings)
+        created = create_observe_request(settings, _msg(), "test")
         request_id = created["request"]["request_id"]
         claim_observe_request(settings, request_id, "macbook-payton")
         failed = fail_observe_request(
@@ -210,8 +222,8 @@ def _test_claim_fail() -> None:
 def _test_expired_cannot_claim() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
-        with mock.patch("nodes.state.is_desktop_online", return_value=True):
-            created = create_observe_request(settings, _msg(), "test")
+        _arm_observer(settings)
+        created = create_observe_request(settings, _msg(), "test")
         request_id = created["request"]["request_id"]
         store = load_observe_requests(settings)
         store[request_id]["expires_at"] = "2020-01-01T00:00:00Z"
@@ -227,8 +239,8 @@ def _test_expired_cannot_claim() -> None:
 def _test_wrong_node_rejected() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
-        with mock.patch("nodes.state.is_desktop_online", return_value=True):
-            created = create_observe_request(settings, _msg(), "test")
+        _arm_observer(settings)
+        created = create_observe_request(settings, _msg(), "test")
         request_id = created["request"]["request_id"]
         claim = claim_observe_request(settings, request_id, "wrong-node")
         if claim.get("ok"):
@@ -240,9 +252,9 @@ def _test_wrong_node_rejected() -> None:
 def _test_too_many_pending() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp, max_pending=1)
-        with mock.patch("nodes.state.is_desktop_online", return_value=True):
-            first = create_observe_request(settings, _msg(), "one")
-            second = create_observe_request(settings, _msg(), "two")
+        _arm_observer(settings)
+        first = create_observe_request(settings, _msg(), "one")
+        second = create_observe_request(settings, _msg(), "two")
         if not first.get("ok") or second.get("ok"):
             _fail("too_many_pending", f"first={first} second={second}")
             return
@@ -337,8 +349,8 @@ def _test_feishu_card_buttons() -> None:
 def _test_no_image_bytes_stored() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
-        with mock.patch("nodes.state.is_desktop_online", return_value=True):
-            created = create_observe_request(settings, _msg(), "test")
+        _arm_observer(settings)
+        created = create_observe_request(settings, _msg(), "test")
         request_id = created["request"]["request_id"]
         claim_observe_request(settings, request_id, "macbook-payton")
         complete_observe_request(settings, request_id, "macbook-payton", _fake_result())
@@ -403,8 +415,7 @@ def _test_concurrent_create() -> None:
     import multiprocessing
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp, max_pending=20)
-        from nodes.state import register_desktop_node
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        _arm_observer(settings)
         
         processes = []
         for i in range(5):
@@ -435,8 +446,7 @@ def _test_concurrent_claim() -> None:
     import multiprocessing
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
-        from nodes.state import register_desktop_node
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        _arm_observer(settings)
         
         created = create_observe_request(settings, _msg(), "claim test")
         request_id = created["request"]["request_id"]
@@ -482,8 +492,7 @@ def _test_complete_fail_conflict() -> None:
     import multiprocessing
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
-        from nodes.state import register_desktop_node
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        _arm_observer(settings)
         
         created = create_observe_request(settings, _msg(), "complete/fail test")
         request_id = created["request"]["request_id"]
@@ -537,8 +546,7 @@ def _test_cancel_claim_conflict() -> None:
     import multiprocessing
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
-        from nodes.state import register_desktop_node
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        _arm_observer(settings)
         
         created = create_observe_request(settings, _msg(), "cancel/claim test")
         request_id = created["request"]["request_id"]
@@ -584,8 +592,7 @@ def _test_cancel_claim_conflict() -> None:
 def _test_corrupt_json_recovery() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
-        from nodes.state import register_desktop_node
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        _arm_observer(settings)
         
         path = settings.codex_memory_root / "state" / "desktop_observe_requests.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -623,8 +630,7 @@ def _test_corrupt_json_recovery() -> None:
 def _test_no_nested_deadlock() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
-        from nodes.state import register_desktop_node
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        _arm_observer(settings)
         
         import signal
         has_alarm = hasattr(signal, "alarm")
@@ -660,8 +666,7 @@ def test_p543_auto_thumbnail_flags_and_routing():
     os.environ["CONVEYOR_DESKTOP_AUTO_THUMBNAIL_ON_OBSERVE"] = "true"
     os.environ["CONVEYOR_DESKTOP_SCREENSHOT_HELPER"] = "/usr/local/bin/capture-screen-helper"
     settings = _settings(tmp, max_pending=3)
-    from nodes.state import register_desktop_node
-    register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+    _arm_observer(settings)
 
     from handlers.intent import route_intent
     route = route_intent("截图看看我电脑现在是什么")
@@ -701,7 +706,7 @@ def test_p543_auto_thumbnail_flags_and_routing():
 
     os.environ["CONVEYOR_DESKTOP_UPLOAD_ENABLED"] = "false"
     settings_off = _settings(tmp, max_pending=3)
-    register_desktop_node(settings_off, "macbook-payton", "Payton MacBook", "0.3.0", {})
+    _arm_observer(settings_off)
     res_off = create_observe_request(settings_off, msg, "截图", auto_upload_thumbnail=True)
     assert res_off.get("ok")
     ee = ensure_upload_request_for_observe(settings_off, res_off["request"], created_by_channel="t", created_by_chat_id="c")

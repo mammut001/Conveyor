@@ -546,6 +546,11 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, self.server.control.teammate_status())
             elif path == "/api/agents":
                 self._json(HTTPStatus.OK, self.server.control.list_agents())
+            elif len(parts) == 4 and parts[:2] == ["api", "agents"] and parts[3] == "sessions":
+                if not self._agents_on():
+                    return
+                listed = self.server.control.list_agent_sessions(parts[2])
+                self._json(HTTPStatus.OK if listed else HTTPStatus.NOT_FOUND, listed or {"error": "not found"})
             elif len(parts) == 4 and parts[:2] == ["api", "agents"] and parts[3] == "library":
                 library = self.server.control.agent_library(parts[2])
                 self._json(HTTPStatus.OK if library else HTTPStatus.NOT_FOUND, library or {"error": "not found"})
@@ -1192,6 +1197,15 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.CREATED, self.server.control.save_agent(None, body))
                 except AgentError as exc:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            elif len(parts) == 4 and parts[:2] == ["api", "agents"] and parts[3] == "sessions":
+                if not self._agents_on():
+                    return
+                try:
+                    created = self.server.control.create_agent_session(parts[2], body)
+                except AgentError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+                self._json(HTTPStatus.CREATED if created else HTTPStatus.NOT_FOUND, created or {"error": "not found"})
             elif parsed.path == "/api/screen/control":
                 action = str(body.get("action", "")).strip().lower()
                 if action not in ("take", "release"):

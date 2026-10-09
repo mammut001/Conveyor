@@ -33,6 +33,7 @@ single-concurrency.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import defaultdict
@@ -106,6 +107,26 @@ def _normalize_mode(mode: str | None) -> str:
     if mode in ("verbose", "compact", "quiet"):
         return mode
     return "compact"
+
+
+_JOB_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_execution(execution, queue_job_id, msg, port):
+    async def run():
+        try:
+            await execution
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Background Codex task failed: %s", queue_job_id)
+            from handlers.job_queue import get_job_queue
+            await get_job_queue().mark_running_failed(str(exc), queue_job_id)
+            await port.reply(msg, "任务执行异常，已记录失败并释放队列。请用 /status 查看。")
+    task = asyncio.create_task(run())
+    _JOB_TASKS.add(task)
+    task.add_done_callback(_JOB_TASKS.discard)
+    return task
 
 
 async def handle_codex_job(
@@ -191,9 +212,30 @@ async def submit_codex_job(
         if wait:
             await execution
         else:
-            import asyncio
-            asyncio.create_task(execution)
+            _spawn_execution(execution, dequeued_job.id, execute_msg, execute_port)
     return True, queue_msg, queued_job
+
+
+class _JobIdentityPort:
+    """Keep asynchronous job output identifiable after an agent switch."""
+    def __init__(self, port, label):
+        self._port = port
+        self._label = label
+
+    def __getattr__(self, name):
+        return getattr(self._port, name)
+
+    def _text(self, text):
+        return f"{self._label}\n{text}"
+
+    async def reply(self, msg, text):
+        return await self._port.reply(msg, self._text(text))
+
+    async def send_new(self, msg, text):
+        return await self._port.send_new(msg, self._text(text))
+
+    async def edit_progress(self, msg, placeholder, text):
+        return await self._port.edit_progress(msg, placeholder, self._text(text))
 
 
 async def _execute_codex_job(
@@ -215,11 +257,43 @@ async def _execute_codex_job(
     # jobs (handle_codex_job is only called for /run, /fix, and free
     # text fallback — never for deterministic commands).
     from handlers.session import build_context_prompt, append_turn
-    from agents import instructions_for_chat, profile_block
-    ctx_prompt = (
-        profile_block(*instructions_for_chat(runner.settings, msg.channel, msg.chat_id))
-        + build_context_prompt(runner.settings, msg)
+    from agents import (
+        AgentError, _owned_canonical_chat, agent_for_chat, instructions_for_chat,
+        profile_block, workspace_for_chat,
     )
+    try:
+        agent = agent_for_chat(runner.settings, msg.channel, msg.chat_id)
+        # Selection-time checks are not enough: the agent can be archived
+        # after enqueue. A canonical worker chat must not start on the host.
+        if _owned_canonical_chat(msg.channel, msg.chat_id) and (not agent or agent.get("archived")):
+            raise AgentError("此会话的 Agent 不可用，任务不会转到默认项目。")
+        ctx_prompt = (
+            profile_block(*instructions_for_chat(runner.settings, msg.channel, msg.chat_id))
+            + build_context_prompt(runner.settings, msg)
+        )
+        agent_workspace = workspace_for_chat(runner.settings, msg.channel, msg.chat_id)
+    except AgentError as exc:
+        from handlers.job_queue import get_job_queue
+        await get_job_queue().mark_running_failed(str(exc), queue_job_id)
+        await port.reply(msg, str(exc))
+        return
+    from handlers.workers import PhysicalOriginPort
+    if agent and (
+        isinstance(port, PhysicalOriginPort)
+        or (msg.channel == "telegram" and ":agent:" in msg.chat_id)
+    ):
+        label = agent["name"]
+        try:
+            from transcript_store import session_identity
+            from worker_sessions import WorkerSessionStore
+            owned = WorkerSessionStore(runner.settings).get(
+                session_identity(msg.channel, msg.chat_id, msg.operator_id)
+            )
+            if owned and owned.get("title"):
+                label = f"{label} · {owned['title']}"
+        except Exception:
+            pass
+        port = _JobIdentityPort(port, f"{label} · {queue_job_id or 'Codex'}")
     user_text_for_session = body  # remember for session recording
 
     progress_mode = _normalize_mode(getattr(runner.settings, "conveyor_progress_mode", "compact"))
@@ -321,8 +395,6 @@ async def _execute_codex_job(
 
     # An agent with its own project folder works there. Passed only when set,
     # so callers and fakes that predate agents see the same call as before.
-    from agents import workspace_for_chat
-    agent_workspace = workspace_for_chat(runner.settings, msg.channel, msg.chat_id)
     start_options = {"workspace_root": agent_workspace} if agent_workspace is not None else {}
     try:
         job = await runner.start(mode, effective_body, progress, **start_options)
@@ -400,14 +472,16 @@ async def _execute_codex_job(
         summary_truncated = truncate(summary)
         if summary_truncated.strip() != last_progress.strip():
             if is_feishu:
+                sent = None
                 try:
                     from channel.feishu_cards import job_finished_card
-                    await port.send_card(msg, job_finished_card(
+                    sent = await port.send_card(msg, job_finished_card(
                         job_id=job_id,
                         summary=summary,
                     ))
                 except Exception:
                     logger.debug("Feishu job_finished_card failed", exc_info=True)
+                if not sent:
                     await port.send_new(msg, summary)
             else:
                 await port.send_new(msg, summary)
@@ -416,14 +490,16 @@ async def _execute_codex_job(
         final_answer = f"[error] {err_truncated}"
         if err_truncated.strip() != last_progress.strip():
             if is_feishu:
+                sent = None
                 try:
                     from channel.feishu_cards import job_failed_card
-                    await port.send_card(msg, job_failed_card(
+                    sent = await port.send_card(msg, job_failed_card(
                         job_id=job_id,
                         error=err_truncated,
                     ))
                 except Exception:
                     logger.debug("Feishu job_failed_card failed", exc_info=True)
+                if not sent:
                     await port.send_new(msg, err_truncated)
             else:
                 await port.send_new(msg, err_truncated)
@@ -480,8 +556,66 @@ async def _sleep(seconds: float) -> None:
     await asyncio.sleep(seconds)
 
 
+def _feishu_http_text(settings: "Settings", chat_id: str, text: str) -> bool:
+    """Send a recovered Feishu message with the app credentials over HTTP.
+
+    Does not read or log the secret. Works from the Web process, which does
+    not hold the Feishu bot's in-process channel.
+    """
+    import json
+    import urllib.request
+    app_id = getattr(settings, "lark_app_id", None)
+    app_secret = getattr(settings, "lark_app_secret", None)
+    if not app_id or not app_secret or not chat_id:
+        return False
+    token_req = urllib.request.Request(
+        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+        data=json.dumps({"app_id": app_id, "app_secret": app_secret}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(token_req, timeout=10) as resp:
+            tenant_body = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        logger.warning("Recovered Feishu delivery could not obtain a tenant token")
+        return False
+    if not isinstance(tenant_body, dict) or tenant_body.get("code") != 0:
+        return False
+    tenant = tenant_body.get("tenant_access_token")
+    if not isinstance(tenant, str) or not tenant:
+        return False
+    payload = json.dumps({
+        "receive_id": chat_id,
+        "msg_type": "text",
+        "content": json.dumps({"text": text}),
+    }).encode("utf-8")
+    send_req = urllib.request.Request(
+        "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+        data=payload,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {tenant}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(send_req, timeout=10) as resp:
+            if not 200 <= getattr(resp, "status", 0) < 300:
+                return False
+            sent = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        logger.warning("Recovered Feishu delivery failed")
+        return False
+    # Feishu returns HTTP 200 with a nonzero business code on rejection.
+    if not isinstance(sent, dict) or sent.get("code") != 0:
+        return False
+    data = sent.get("data")
+    return isinstance(data, dict) and isinstance(data.get("message_id"), str) and bool(data.get("message_id"))
+
+
 class RecoveredOutboundPort:
     """OutboundPort that sends messages back to the operator for recovered jobs after a process restart."""
+    supports_inline_buttons = False
+    supports_attachments = False
+
     def __init__(self, channel: str, chat_id: str, settings: "Settings") -> None:
         self.channel = channel
         self.chat_id = chat_id
@@ -490,47 +624,55 @@ class RecoveredOutboundPort:
     async def reply(self, msg: InboundMessage, text: str) -> str | None:
         return await self.send_new(msg, text)
 
+    def _im_chat(self) -> tuple[str, str] | None:
+        """Physical IM destination. Canonical web session ids are never sent."""
+        channel = str(self.channel or "")
+        chat_id = str(self.chat_id or "")
+        if channel not in ("telegram", "feishu") or not chat_id:
+            return None
+        if chat_id.startswith("agent-") or chat_id.startswith("web:"):
+            return None
+        return channel, chat_id
+
     async def send_new(self, msg: InboundMessage, text: str) -> str | None:
-        if self.channel == "telegram":
+        target = self._im_chat()
+        if target is None:
+            logger.warning("Recovered delivery skipped a canonical session id")
+            return None
+        channel, chat_id = target
+        if not text:
+            return None
+        if channel == "telegram":
             from scripts.telegram_api import send_message
             import asyncio
             try:
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, send_message, self.settings, text, int(self.chat_id))
+                await loop.run_in_executor(None, send_message, self.settings, text, chat_id)
                 return "recovered-msg-id"
             except Exception:
                 logger.exception("Failed to send recovered telegram message")
                 return None
-        elif self.channel == "feishu":
+        if channel == "feishu":
+            import asyncio
             try:
-                from feishu_bot import _get_channel
-                feishu_channel = _get_channel()
-                if feishu_channel:
-                    from channel.feishu import FeishuOutbound
-                    port = FeishuOutbound(feishu_channel)
-                    return await port.send_new(msg, text)
-                else:
-                    logger.warning("Feishu channel not initialized, cannot send recovered feishu message")
+                loop = asyncio.get_running_loop()
+                ok = await loop.run_in_executor(None, _feishu_http_text, self.settings, chat_id, text)
+                if ok:
+                    return "recovered-msg-id"
             except Exception:
-                logger.exception("Failed to send recovered feishu message")
+                logger.warning("Recovered Feishu delivery failed")
+        logger.warning("Recovered delivery did not reach the operator")
         return None
 
     async def edit_progress(self, msg: InboundMessage, placeholder_id: Any, text: str) -> bool:
         return False
 
     async def send_card(self, msg: InboundMessage, card: dict, *, reply_to: str | None = None) -> str | None:
-        if self.channel == "feishu":
-            try:
-                from feishu_bot import _get_channel
-                feishu_channel = _get_channel()
-                if feishu_channel:
-                    from channel.feishu import FeishuOutbound
-                    port = FeishuOutbound(feishu_channel)
-                    return await port.send_card(msg, card, reply_to=reply_to)
-            except Exception:
-                logger.exception("Failed to send recovered feishu card")
         from channel.feishu_cards import flatten_card_to_text
         text = flatten_card_to_text(card)
+        if not text:
+            logger.warning("Recovered card had no text to deliver")
+            return None
         return await self.send_new(msg, text)
 
 
@@ -555,16 +697,21 @@ async def _start_queued_job_callback(queued_job: QueuedJob) -> None:
             message_id=None,
             text=queued_job.prompt,
         )
-        
+
     port = queued_job._port
     if port is None:
-        port = RecoveredOutboundPort(queued_job.channel, queued_job.chat_id, settings)
+        origin = queued_job.delivery_origin or {}
+        port = RecoveredOutboundPort(
+            str(origin.get("channel") or queued_job.channel),
+            str(origin.get("chat_id") or queued_job.chat_id),
+            settings,
+        )
         
     mode = JobMode.FIX if queued_job.mode == "fix" else JobMode.RUN
     
-    asyncio.create_task(_execute_codex_job(
+    _spawn_execution(_execute_codex_job(
         msg, port, runner, mode, queued_job.prompt, queue_job_id=queued_job.id,
-    ))
+    ), queued_job.id, msg, port)
 
 from handlers.job_queue import get_job_queue
 get_job_queue().set_start_callback(_start_queued_job_callback)

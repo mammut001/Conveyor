@@ -254,8 +254,10 @@ def _check_observe_request_store_transitions() -> None:
         os.environ["CONVEYOR_DESKTOP_SCREENSHOT_HELPER"] = "/usr/local/bin/fake-helper"
         os.environ["CONVEYOR_DESKTOP_SCREENSHOT_DIR"] = "/tmp"
         settings = _settings("/usr/local/bin/fake-helper", Path(tmp))
-        with mock.patch("nodes.state.is_desktop_online", return_value=True):
-            created = create_observe_request(settings, msg, "test request")
+        from nodes.state import record_heartbeat, register_desktop_node
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {}, poll_observe=True)
+        record_heartbeat(settings, "macbook-payton", "idle", "heartbeat", poll_observe=True)
+        created = create_observe_request(settings, msg, "test request")
         if not created.get("ok"):
             _fail("observe_store_create", str(created))
             return
@@ -322,12 +324,13 @@ def _check_observe_lock_and_concurrency() -> None:
             return
 
         # 3. concurrent create mini-check
-        from nodes.state import register_desktop_node
+        from nodes.state import record_heartbeat, register_desktop_node
         from desktop_observe_requests import create_observe_request, load_observe_requests
         from channel.types import InboundMessage
         import threading
 
-        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {})
+        register_desktop_node(settings, "macbook-payton", "Payton MacBook", "0.3.0", {}, poll_observe=True)
+        record_heartbeat(settings, "macbook-payton", "idle", "heartbeat", poll_observe=True)
 
         msg = InboundMessage(
             channel="feishu", operator_id="ou_test", chat_id="oc_test", message_id="om_test", text="test",

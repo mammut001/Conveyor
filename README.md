@@ -44,7 +44,33 @@ No public multi-tenant SaaS. No ephemeral throwaway containers that lose your de
 
 ---
 
+## Demo gallery
+
+Actual Telegram screens: persistent menu → Workers → current agent desktop. The GIF and MP4 stitch those separate screenshots into a 10s replay. They are not a continuous recording.
+
+<p>
+<a href="docs/assets/demos/telegram-workers-walkthrough.mp4">
+<img src="docs/assets/demos/telegram-workers-walkthrough.gif" alt="Persistent menu, then Workers, then the current agent desktop." width="350">
+</a>
+</p>
+
+The GIF is the preview. [Download the MP4](docs/assets/demos/telegram-workers-walkthrough.mp4) if the player does not start it.
+
+<p>
+<img src="docs/assets/demos/telegram-workers-menu.png" alt="Persistent menu: My Workers, Continue chat, Switch session, View tasks." width="350">
+<img src="docs/assets/demos/telegram-workers-live.png" alt="Workers list for the current Conveyor agent." width="350">
+<img src="docs/assets/demos/telegram-screenshot-routing.png" alt="Current agent desktop: Conveyor main session on the shared VPS desktop." width="350">
+</p>
+
+Open the keyboard icon beside the message field to show the persistent menu. `/start` installs that keyboard. Each operator, chat, and topic selection is isolated. Continue or switch session remembers the selected session. With nothing selected, only a private chat uses the canonical Conveyor main session. A screenshot follows the Agent selected now. The default main session and a default secondary session share the VPS desktop. An independent Agent uses its own X display. A missing desktop refuses the screenshot. An explicit request for an unavailable Mac is rejected.
+
+[Case guide](docs/demos.md) · [Asset notes](docs/assets/demos/README.md)
+
+---
+
 ## 🎬 What It Feels Like
+
+The four transcripts below are illustrative. They are not live captures.
 
 ### 1. 📱 Fix Bugs On The Go (Worktree Isolation)
 You're on the train and a CI pipeline breaks. Send a one-liner to your bot:

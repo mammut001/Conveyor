@@ -8,21 +8,38 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "fake-token")
-os.environ.setdefault("TELEGRAM_ALLOWED_USER_ID", "12345")
-os.environ.setdefault("LARK_APP_ID", "cli_fake")
-os.environ.setdefault("LARK_APP_SECRET", "fake")
-os.environ.setdefault("CODEX_WORKSPACE_ROOT", "/tmp/codex-restart-ws")
-os.environ.setdefault("CODEX_TASK_ROOT", "/tmp/codex-restart-task")
-os.environ.setdefault("CODEX_MEMORY_ROOT", "/tmp/codex-restart-mem")
-os.environ.setdefault("CODEX_BIN", "codex")
-os.environ.setdefault("USER_TIMEZONE", "UTC")
+
+def _bind_roots(tmp: Path) -> None:
+    """One disposable workspace/task/memory tree for the current check."""
+    ws = tmp / "ws"
+    task = tmp / "task"
+    mem = tmp / "mem"
+    ws.mkdir(exist_ok=True)
+    task.mkdir(exist_ok=True)
+    mem.mkdir(exist_ok=True)
+    os.environ["CODEX_WORKSPACE_ROOT"] = str(ws)
+    os.environ["CODEX_TASK_ROOT"] = str(task)
+    os.environ["CODEX_MEMORY_ROOT"] = str(mem)
+
+
+_BOOT = tempfile.TemporaryDirectory(prefix="codex-restart-smoke-")
+_BLANK_ENV = Path(_BOOT.name) / "blank.env"
+_BLANK_ENV.write_text("")
+_bind_roots(Path(_BOOT.name))
+
+os.environ["TELEGRAM_BOT_TOKEN"] = "fake-token"
+os.environ["TELEGRAM_ALLOWED_USER_ID"] = "12345"
+os.environ["LARK_APP_ID"] = "cli_fake"
+os.environ["LARK_APP_SECRET"] = "fake"
+os.environ["CODEX_BIN"] = "codex"
+os.environ["USER_TIMEZONE"] = "UTC"
 
 import handlers.tools.executors  # noqa: F401
 from channel import InboundMessage
@@ -66,7 +83,7 @@ def _msg(text: str = "") -> InboundMessage:
 
 
 def _settings():
-    return replace(load_settings(), telegram_allowed_user_id=12345)
+    return replace(load_settings(_BLANK_ENV), telegram_allowed_user_id=12345)
 
 
 def _test_alias_map() -> CheckResult:
@@ -107,9 +124,14 @@ async def _test_restart_unknown_usage() -> CheckResult:
 def main() -> int:
     sync = [_test_alias_map]
     async_fns = [_test_restart_telegram_pending, _test_restart_unknown_usage]
-    results = [fn() for fn in sync]
-    for fn in async_fns:
-        results.append(asyncio.run(fn()))
+    results: list[CheckResult] = []
+    for fn in (*sync, *async_fns):
+        with tempfile.TemporaryDirectory(prefix="codex-restart-smoke-") as raw:
+            _bind_roots(Path(raw))
+            outcome = fn()
+            if asyncio.iscoroutine(outcome):
+                outcome = asyncio.run(outcome)
+            results.append(outcome)
     print_results(results)
     ok = all(r.ok for r in results)
     print("restart alias smoke ok" if ok else "restart alias smoke failed")

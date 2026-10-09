@@ -2952,9 +2952,12 @@ def _test_start_cmd_first_run_welcome_with_button() -> CheckResult:
                 # update.effective_message.reply_text.
                 update, context = _make_fake_handler_update(text="/start")
                 asyncio.run(bot_mod.start_cmd(update, context))
-                # _reply was called once on the welcome path
-                update.effective_message.reply_text.assert_called_once()
-                args, kwargs = update.effective_message.reply_text.call_args
+                # Welcome inline button, then a separate persistent reply keyboard.
+                # One reply_markup cannot carry both.
+                calls = update.effective_message.reply_text.call_args_list
+                if len(calls) != 2:
+                    return CheckResult(name, False, f"expected 2 replies, got {len(calls)}: {calls}")
+                args, kwargs = calls[0]
                 text = args[0]
                 if "看起来这是第一次用" not in text:
                     return CheckResult(name, False, f"first-run welcome text missing: {text!r}")
@@ -2969,9 +2972,20 @@ def _test_start_cmd_first_run_welcome_with_button() -> CheckResult:
                     for button in row
                 ):
                     return CheckResult(name, False, f"ob:start button not in reply_markup: {markup}")
+                menu_args, menu_kwargs = calls[1]
+                menu = menu_kwargs.get("reply_markup")
+                if menu is None or not getattr(menu, "is_persistent", False):
+                    return CheckResult(name, False, f"persistent reply keyboard missing: {menu_args!r} {menu_kwargs!r}")
+                if not getattr(menu, "resize_keyboard", False) or getattr(menu, "one_time_keyboard", True):
+                    return CheckResult(name, False, f"reply keyboard flags wrong: {menu}")
+                labels = [button.text for row in menu.keyboard for button in row]
+                if labels != ["👷 我的 Workers", "💬 继续对话", "🔄 切换会话", "📋 查看任务"]:
+                    return CheckResult(name, False, f"reply keyboard labels wrong: {labels}")
+                if (memory_root / "operator.json").exists():
+                    return CheckResult(name, False, "fresh /start wrote operator.json")
                 return CheckResult(
                     name, True,
-                    f"first-run /start sent welcome with inline 'ob:start' button: {text[:80]!r}",
+                    f"first-run /start sent welcome with inline 'ob:start' button and persistent menu: {text[:80]!r}",
                 )
     except Exception as exc:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")
@@ -3011,11 +3025,15 @@ def _test_text_cmd_first_run_nudge_with_button() -> CheckResult:
                 # but the assertion is: reply was called (so we
                 # showed the user the nudge) and the message text
                 # was the nudge (not a job start).
-                update.effective_message.reply_text.assert_called_once()
-                args, kwargs = update.effective_message.reply_text.call_args
+                calls = update.effective_message.reply_text.call_args_list
+                if len(calls) != 2:
+                    return CheckResult(name, False, f"expected 2 replies, got {len(calls)}: {calls}")
+                args, kwargs = calls[0]
                 text = args[0]
                 if "第一次用" not in text and "first" not in text.lower():
                     return CheckResult(name, False, f"first-run nudge text missing: {text!r}")
+                if "⏳" in text or text.startswith("/"):
+                    return CheckResult(name, False, f"first-run nudge started a job: {text!r}")
                 if "reply_markup" not in kwargs:
                     return CheckResult(name, False, "reply_markup not attached to first-run nudge")
                 markup = kwargs["reply_markup"]
@@ -3025,9 +3043,20 @@ def _test_text_cmd_first_run_nudge_with_button() -> CheckResult:
                     for button in row
                 ):
                     return CheckResult(name, False, f"ob:start button not in reply_markup: {markup}")
+                menu_args, menu_kwargs = calls[1]
+                menu = menu_kwargs.get("reply_markup")
+                if menu is None or not getattr(menu, "is_persistent", False):
+                    return CheckResult(name, False, f"persistent reply keyboard missing: {menu_args!r} {menu_kwargs!r}")
+                if not getattr(menu, "resize_keyboard", False) or getattr(menu, "one_time_keyboard", True):
+                    return CheckResult(name, False, f"reply keyboard flags wrong: {menu}")
+                labels = [button.text for row in menu.keyboard for button in row]
+                if labels != ["👷 我的 Workers", "💬 继续对话", "🔄 切换会话", "📋 查看任务"]:
+                    return CheckResult(name, False, f"reply keyboard labels wrong: {labels}")
+                if (memory_root / "operator.json").exists():
+                    return CheckResult(name, False, "fresh text_cmd wrote operator.json")
                 return CheckResult(
                     name, True,
-                    f"first-run text_cmd sent nudge with inline 'ob:start' button: {text[:80]!r}",
+                    f"first-run text_cmd sent nudge with inline 'ob:start' button and persistent menu: {text[:80]!r}",
                 )
     except Exception as exc:
         return CheckResult(name, False, f"raised {type(exc).__name__}: {exc}")

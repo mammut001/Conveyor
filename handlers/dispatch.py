@@ -7,6 +7,7 @@ Telegram adapter and is opted-in via port.supports_inline_buttons.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 from channel.auth import is_allowed
 from channel.types import InboundMessage, OutboundPort
@@ -59,6 +60,28 @@ async def dispatch(
 
     if not is_allowed(msg, settings):
         await port.reply(msg, "Unauthorized.")
+        return
+
+    # Validate bindings before any fallback can silently run in the default
+    # workspace. /agent remains available to explain an archived binding.
+    from agents import AgentError, conversation_for_chat
+    parsed = parse_command(msg.text)
+    if parsed is not None and parsed[0] in ("agent", "workers"):
+        await run_command(parsed[0], msg, port, runner, settings, parsed[1])
+        return
+    try:
+        from handlers.workers import bind_execution
+        msg, port = bind_execution(msg, port, settings)
+    except AgentError as exc:
+        await port.reply(msg, str(exc))
+        return
+    try:
+        msg = replace(msg, chat_id=conversation_for_chat(
+            settings, msg.channel, msg.chat_id,
+            validate=not (parsed and parsed[0] in ("status", "last", "jobs", "cancel", "diff", "discard")),
+        ))
+    except AgentError as exc:
+        await port.reply(msg, str(exc))
         return
 
     # Commands in a conversation act on that conversation's lane: /status,

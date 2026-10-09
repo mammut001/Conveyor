@@ -21,6 +21,7 @@ from handlers.tools.confirm import (
     matches_context,
     pop_pending,
     get_pending_for_context,
+    list_pending,
 )
 from handlers.tools.diagnose import build_hybrid_prompt, diagnose_tool_items, normalize_diagnose_mode
 from handlers.tools.registry import get_tool, requires_confirmation
@@ -80,6 +81,12 @@ async def run_tool(
     config: Any = None,
     placeholder: str | None = None,
 ) -> str:
+    if channel and chat_id and (tool_name == "git_status" or tool_name.startswith("files.")):
+        from agents import workspace_for_chat
+        from dataclasses import replace
+        workspace = workspace_for_chat(settings, channel, chat_id)
+        if workspace is not None:
+            settings = replace(settings, codex_workspace_root=workspace)
     if tool_name == "agents.parallel":
         from handlers.subagents import execute_parallel_subagents
         return await execute_parallel_subagents(
@@ -118,6 +125,30 @@ async def run_tool(
     if spec is None:
         return f"未知工具: {tool_name}"
     try:
+        if tool_name == "computer.observe":
+            from agents import enabled as agents_enabled
+            if agents_enabled(settings) and (msg is not None or (channel and chat_id)):
+                from channel.types import InboundMessage
+                from handlers.tools.observe_tools import exec_desktop_observe_request
+                bound = msg
+                if bound is None:
+                    bound = InboundMessage(
+                        channel=channel,  # type: ignore[arg-type]
+                        operator_id=operator_id,
+                        chat_id=chat_id,
+                        message_id=None,
+                        text=arg or "",
+                    )
+                else:
+                    # The model's arg can be empty or name a different desktop.
+                    # The user's own text still decides a named Mac or node.
+                    from handlers.tools.observe_tools import _explicit_desktop_request
+                    explicit = _explicit_desktop_request(msg.text, settings, msg)
+                    if isinstance(explicit, str) and explicit != "legacy":
+                        return explicit
+                return await exec_desktop_observe_request(
+                    settings, bound, arg or bound.text, port=port,
+                )
         if tool_name == "computer.task" and channel and chat_id:
             # The conversation decides which desktop the task runs on (an
             # agent's own, or the host's), so the task must know it.
@@ -174,6 +205,8 @@ async def handle_route(
     route: RouteResult,
 ) -> None:
     """Execute deterministic tool(s) from a route result."""
+    from agents import settings_for_chat
+    settings = settings_for_chat(settings, msg.channel, msg.chat_id)
     if route.tool_items:
         combined = await run_tools_collected(settings, route.tool_items)
         await port.reply(msg, combined)
@@ -196,6 +229,8 @@ async def handle_hybrid(
     route: RouteResult,
 ) -> None:
     """Collect deterministic facts, then ask Codex to analyze."""
+    from agents import settings_for_chat
+    settings = settings_for_chat(settings, msg.channel, msg.chat_id)
     if route.tool_items:
         facts = await run_tools_collected(settings, route.tool_items)
     elif route.tools:
@@ -380,6 +415,7 @@ async def _request_confirmation(
         operator_id=msg.operator_id,
         chat_id=msg.chat_id,
         channel=msg.channel,
+        settings=settings,
     )
     danger_label = _danger_label(tool_name, settings)
     source = "routine" if msg.chat_id.startswith("routine-") else "chat"
@@ -480,7 +516,7 @@ async def _relay_gate(
         return True
     if verdict == "ok":
         return True
-    pop_pending(action.token)
+    pop_pending(action.token, settings=settings)
     label = {
         "approved": "已批准",
         "rejected": "已拒绝",
@@ -500,7 +536,7 @@ async def execute_confirmed(
     token: str,
 ) -> bool:
     """Run a previously confirmed dangerous tool. Returns True if handled."""
-    action = get_pending(token)
+    action = get_pending(token, settings=settings)
     if action is None:
         await port.reply(msg, "确认已过期或无效，请重新发起。")
         return True
@@ -510,7 +546,7 @@ async def execute_confirmed(
         return True
     if not await _relay_gate(settings, action, msg, port, approve=True):
         return True
-    action = pop_pending(token)
+    action = pop_pending(token, settings=settings)
     if action is None:
         await port.reply(msg, "确认已过期或无效，请重新发起。")
         return True
@@ -578,7 +614,7 @@ async def cancel_pending(
     settings: Settings,
     token: str,
 ) -> bool:
-    action = get_pending(token)
+    action = get_pending(token, settings=settings)
     if action is None:
         await port.reply(msg, "没有待确认的操作。")
         return True
@@ -588,7 +624,7 @@ async def cancel_pending(
         return True
     if not await _relay_gate(settings, action, msg, port, approve=False):
         return True
-    action = pop_pending(token)
+    action = pop_pending(token, settings=settings)
     if action is None:
         await port.reply(msg, "没有待确认的操作。")
         return True
@@ -618,7 +654,12 @@ async def try_resolve_confirmation(
     settings: Settings,
 ) -> bool:
     """Text-based YES/NO fallback (Feishu and Telegram). Returns True if consumed."""
-    pending = get_pending_for_context(msg.operator_id, msg.chat_id, msg.channel)
+    pending = get_pending_for_context(msg.operator_id, msg.chat_id, msg.channel, settings=settings)
+    if pending is None:
+        for action in list_pending(channel=msg.channel, settings=settings):
+            if matches_context(action, msg.operator_id, msg.chat_id, msg.channel):
+                pending = action
+                break
     if pending is None:
         return False
     if is_confirmation_text(msg.text):

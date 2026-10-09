@@ -14,6 +14,7 @@ import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
 import { dropApproval, isStale, shouldRefreshForEvent } from './approvalFreshness'
+import { canonicalWorkerSessionId, parseWorkerSessionMap } from './workerSelection'
 
 type EventItem = {
   schema_version: number; event_id: string; sequence: number; timestamp: string
@@ -144,8 +145,16 @@ export default function App() {
   const [agentTab, setAgentTab] = useState<'details' | 'library' | 'computer'>('details')
   // With agents on, the selected agent's one conversation is the session.
   const selectedAgent = agentState.enabled ? (agentState.agents.find(agent => agent.id === selectedAgentId) || agentState.agents[0]) : undefined
+  const [workerSessionPick, setWorkerSessionPick] = useState<Record<string, string>>(() => parseWorkerSessionMap(localStorage.getItem('conveyor-worker-sessions')))
+  const [pendingWorkerSession, setPendingWorkerSession] = useState<{ agentId: string; sessionId: string } | null>(null)
+  const workerSessions = selectedAgent?.sessions || []
+  const pendingForAgent = pendingWorkerSession && selectedAgent && pendingWorkerSession.agentId === selectedAgent.id
+    ? pendingWorkerSession.sessionId
+    : ''
+  const canonicalSessionId = canonicalWorkerSessionId(selectedAgent, workerSessionPick, pendingForAgent)
+  const activeWorkerSession = workerSessions.find(session => session.id === canonicalSessionId)
   const agentSessionRef = useRef('')
-  agentSessionRef.current = selectedAgent?.session_id || ''
+  agentSessionRef.current = canonicalSessionId
   // Agents are conversations first: land on Chat the moment they are on.
   useEffect(() => { if (agentState.enabled) setView(current => current === 'tasks' ? 'chat' : current) }, [agentState.enabled])
   const [tokenDraft, setTokenDraft] = useState('')
@@ -176,6 +185,12 @@ export default function App() {
   const [chatDraft, setChatDraft] = useState('')
   const lastSequence = useRef(0)
   const refreshGen = useRef(0)
+  const selectionEpoch = useRef(0)
+  const selectedSessionRef = useRef('')
+  const selectedJobRef = useRef('')
+  const workerPickRef = useRef(workerSessionPick)
+  const pendingWorkerRef = useRef(pendingWorkerSession)
+  const selectedAgentIdRef = useRef(selectedAgentId)
   const approvalInboxFetchGen = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
 
@@ -290,12 +305,15 @@ export default function App() {
   }, [sessionsDrawerOpen, contextDrawerOpen])
 
   const selectSession = useCallback((sessionId: string, jobId?: string) => {
+    selectionEpoch.current += 1
     setCreatingSession(false)
     setSelectedSessionId(sessionId)
     if (sessionId) sessionStorage.setItem('conveyor-selected-session', sessionId)
     else sessionStorage.removeItem('conveyor-selected-session')
     setSelectedJobId(jobId || '')
     setTranscript([])
+    setEvents([])
+    setDiff('')
   }, [])
 
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -333,6 +351,7 @@ export default function App() {
   const refresh = useCallback(async () => {
     if (!token) return
     const gen = ++refreshGen.current
+    const epoch = selectionEpoch.current
     try {
       const [sessionData, jobData, approvalData, nodeData, systemData, computerData, agentData] = await Promise.all([
         api<{ sessions: Session[] }>('/api/sessions'), api<{ jobs: Job[] }>('/api/jobs'),
@@ -344,38 +363,39 @@ export default function App() {
       // while this one was in flight. Drop it so a late poll cannot restore
       // a pending approval or an old job state.
       if (isStale(gen, refreshGen.current)) return
+      if (selectionEpoch.current !== epoch) return
       const taskSessions = taskSessionsOnly(sessionData.sessions)
       setSessions(taskSessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setError('')
       setAgentState(agentData)
-      const pinned = agentData.enabled
-        ? (agentData.agents.find(agent => agent.id === (localStorage.getItem('conveyor-agent') || '')) || agentData.agents[0])?.session_id
-        : ''
-      if (pinned) {
-        // An agent's conversation is the session, whether or not it has messages yet.
-        if (selectedSessionId !== pinned) { setSelectedSessionId(pinned); setSelectedJobId('') }
-        else if (!selectedJobId) {
-          const latest = taskSessions.find(item => item.id === pinned)?.latest_job
+      if (agentData.enabled) {
+        const agent = agentData.agents.find(item => item.id === (localStorage.getItem('conveyor-agent') || selectedAgentIdRef.current)) || agentData.agents[0]
+        const pending = pendingWorkerRef.current
+        const pendingId = pending && pending.agentId === agent.id ? pending.sessionId : ''
+        const canonical = canonicalWorkerSessionId(agent, workerPickRef.current, pendingId)
+        // Keep the user's canonical session. Only fill an empty job for it.
+        if (canonical && selectedSessionRef.current === canonical && !selectedJobRef.current) {
+          const latest = taskSessions.find(item => item.id === canonical)?.latest_job
           if (latest) setSelectedJobId(latest.id)
         }
       } else if (!creatingSession) {
         const savedSessionId = sessionStorage.getItem('conveyor-selected-session')
-        const currentTargetId = selectedSessionId || savedSessionId
+        const currentTargetId = selectedSessionRef.current || savedSessionId
         const matched = taskSessions.find(item => item.id === currentTargetId)
         if (matched) {
-          if (selectedSessionId !== matched.id) {
+          if (selectedSessionRef.current !== matched.id) {
             setSelectedSessionId(matched.id)
             setSelectedJobId(matched.latest_job?.id || '')
-          } else if (!selectedJobId && matched.latest_job) {
+          } else if (!selectedJobRef.current && matched.latest_job) {
             setSelectedJobId(matched.latest_job.id)
           }
-        } else if (!selectedSessionId || isChatSessionId(selectedSessionId)) {
+        } else if (!selectedSessionRef.current || isChatSessionId(selectedSessionRef.current)) {
           const initial = taskSessions[0]
           if (initial) {
             setSelectedSessionId(initial.id)
             setSelectedJobId(initial.latest_job?.id || '')
             sessionStorage.setItem('conveyor-selected-session', initial.id)
-          } else if (selectedSessionId) {
+          } else if (selectedSessionRef.current) {
             setSelectedSessionId('')
             setSelectedJobId('')
             sessionStorage.removeItem('conveyor-selected-session')
@@ -386,12 +406,48 @@ export default function App() {
   }, [api, creatingSession, selectedJobId, selectedSessionId, token])
 
   const refreshTranscript = useCallback(async () => {
-    if (!authenticated || !selectedSessionId) { setTranscript([]); return }
+    const sessionId = selectedSessionId
+    const epoch = selectionEpoch.current
+    const stillCurrent = () => selectionEpoch.current === epoch && selectedSessionRef.current === sessionId
+    if (!authenticated || !sessionId) {
+      if (selectionEpoch.current === epoch) setTranscript([])
+      return
+    }
     try {
-      const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`)
+      const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(sessionId)}`)
+      if (!stillCurrent()) return
       setTranscript(session.messages || [])
-    } catch { setTranscript([]) }
+    } catch {
+      if (!stillCurrent()) return
+      setTranscript([])
+    }
   }, [api, authenticated, selectedSessionId])
+
+  selectedSessionRef.current = selectedSessionId
+  selectedJobRef.current = selectedJobId
+  workerPickRef.current = workerSessionPick
+  pendingWorkerRef.current = pendingWorkerSession
+  selectedAgentIdRef.current = selectedAgent?.id || ''
+  useEffect(() => {
+    try { localStorage.setItem('conveyor-worker-sessions', JSON.stringify(workerSessionPick)) } catch { /* storage unavailable */ }
+  }, [workerSessionPick])
+  useEffect(() => {
+    if (
+      pendingWorkerSession
+      && selectedAgent?.sessions?.some(session => session.id === pendingWorkerSession.sessionId)
+    ) {
+      setPendingWorkerSession(null)
+    }
+  }, [pendingWorkerSession, selectedAgent])
+  useEffect(() => {
+    if (!agentState.enabled || !canonicalSessionId || selectedSessionId === canonicalSessionId) return
+    if (
+      pendingWorkerSession
+      && pendingWorkerSession.sessionId === selectedSessionId
+      && pendingWorkerSession.agentId === selectedAgent?.id
+    ) return
+    selectSession(canonicalSessionId, '')
+  }, [agentState.enabled, canonicalSessionId, pendingWorkerSession, selectSession, selectedAgent, selectedSessionId])
 
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
@@ -526,13 +582,16 @@ export default function App() {
   async function submit(event: FormEvent) {
     event.preventDefault(); if (!prompt.trim() || busy) return
     setBusy(true); setError('')
+    const epoch = selectionEpoch.current
+    const sessionAtSubmit = selectedSessionId
     try {
       const result = await api<{ job_id: string; session_id?: string }>('/api/tasks', {
-        method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSessionId || undefined }),
+        method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: sessionAtSubmit || undefined }),
       })
       setPrompt('')
       setCreatingSession(false)
-      if (result.session_id) setSelectedSessionId(result.session_id)
+      if (selectionEpoch.current !== epoch) return
+      if (result.session_id && result.session_id !== sessionAtSubmit && !agentSessionRef.current) setSelectedSessionId(result.session_id)
       setSelectedJobId(result.job_id || '')
       await Promise.all([refresh(), refreshTranscript()])
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Submit failed') }
@@ -574,12 +633,49 @@ export default function App() {
     try { if (rememberToken) localStorage.setItem('conveyor-token', value); else localStorage.removeItem('conveyor-token') } catch { /* storage unavailable */ }
     setToken(value); setTokenDraft('')
   }
+  const [workerCreateBusy, setWorkerCreateBusy] = useState(false)
+  const workerCreateLock = useRef(false)
+  const rememberWorkerSession = (agentId: string, sessionId: string) => {
+    setWorkerSessionPick(previous => ({ ...previous, [agentId]: sessionId }))
+  }
+  const createWorkerSession = async () => {
+    if (!selectedAgent || workerCreateBusy || workerCreateLock.current) return
+    const agentId = selectedAgent.id
+    const epoch = selectionEpoch.current
+    workerCreateLock.current = true
+    setWorkerCreateBusy(true)
+    setError('')
+    try {
+      const created = await api<{ session_id?: string; id?: string }>(`/api/agents/${encodeURIComponent(agentId)}/sessions`, {
+        method: 'POST', body: JSON.stringify({ title: '新会话' }),
+      })
+      if (selectedAgentIdRef.current !== agentId || selectionEpoch.current !== epoch) return
+      const sessionId = created.session_id || created.id || ''
+      if (sessionId) {
+        setPendingWorkerSession({ agentId, sessionId })
+        rememberWorkerSession(agentId, sessionId)
+        selectSession(sessionId, '')
+      }
+      await refresh()
+      setView('chat')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not create a session')
+    } finally {
+      workerCreateLock.current = false
+      setWorkerCreateBusy(false)
+    }
+  }
   const selectAgent = (agent: Agent) => {
     setSelectedAgentId(agent.id)
     localStorage.setItem('conveyor-agent', agent.id)
-    selectSession(agent.session_id)
+    selectSession(canonicalWorkerSessionId(agent, workerPickRef.current), '')
     setView('chat')
     setSessionsDrawerOpen(false)
+  }
+  const selectWorkerSession = (sessionId: string) => {
+    if (!selectedAgent) return
+    rememberWorkerSession(selectedAgent.id, sessionId)
+    selectSession(sessionId, '')
   }
   const saveAgent = async (draft: AgentDraft, agent?: Agent) => {
     const saved = await api<Agent>(agent ? `/api/agents/${encodeURIComponent(agent.id)}` : '/api/agents', {
@@ -621,7 +717,7 @@ export default function App() {
           <button type="button" className="drawer-close-btn" aria-label="Close sessions" onClick={() => setSessionsDrawerOpen(false)}>×</button>
         </div>
         {agentState.enabled
-          ? <AgentList agents={agentState.agents} selectedId={selectedAgent?.id || ''} onSelect={selectAgent} onNew={() => setAgentDialog({})} onEdit={agent => setAgentDialog({ agent })} />
+          ? <AgentList agents={agentState.agents} selectedId={selectedAgent?.id || ''} onSelect={selectAgent} onNew={() => setAgentDialog({})} onEdit={agent => setAgentDialog({ agent })} workerSessions={workerSessions} selectedWorkerSessionId={canonicalSessionId} onSelectWorkerSession={selectWorkerSession} onCreateWorkerSession={() => void createWorkerSession()} creatingWorkerSession={workerCreateBusy} />
           : <>
         <div className="panel-heading"><div><p className="eyebrow">WORKSPACES</p><h2>Sessions</h2></div><button className="icon-button" onClick={() => { selectSession('', ''); setCreatingSession(true); setPrompt(''); setSessionsDrawerOpen(false); }} aria-label="New session">＋</button></div>
         <div className="session-list">
@@ -729,8 +825,8 @@ export default function App() {
           />
         ) : view === 'chat' ? (
           <ChatPanel
-            key={selectedAgent?.id || 'free-chat'}
-            agentSessionId={selectedAgent?.session_id}
+            key={canonicalSessionId || selectedAgent?.id || 'free-chat'}
+            agentSessionId={canonicalSessionId || selectedSessionId}
             agentName={selectedAgent?.name}
             token={token}
             onApprovalDecided={() => {

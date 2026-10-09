@@ -50,6 +50,8 @@ class InboundMessage:
     """A single message arriving on any channel. Immutable."""
     channel: ChannelName
     operator_id: str
+    # Logical conversation address. Telegram may include topic and agent;
+    # channel transports decode it before calling the Bot API.
     chat_id: str
     message_id: str | None
     text: str

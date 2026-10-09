@@ -66,7 +66,7 @@ def get_json(url: str, token: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def register_agent(settings: Settings) -> dict:
+def register_agent(settings: Settings, *, poll_observe: bool = False, poll_computer: bool = False) -> dict:
     token = (settings.conveyor_desktop_agent_token or "").strip()
     if not token:
         return {"ok": False, "error": "missing_token"}
@@ -85,11 +85,15 @@ def register_agent(settings: Settings) -> dict:
             "hostname": socket.gethostname(),
             "arch": platform.machine(),
         },
+        "poll_observe": bool(poll_observe),
+        "poll_computer": bool(poll_computer),
     }
+    if node_id == "vps-desktop" and display_name in ("Payton MacBook", "macbook-payton"):
+        reg_data["display_name"] = "VPS desktop"
     return post_json(register_url, token, reg_data)
 
 
-def send_heartbeat_once(settings: Settings, *, poll_computer: bool = False) -> dict:
+def send_heartbeat_once(settings: Settings, *, poll_computer: bool = False, poll_observe: bool = False) -> dict:
     token = (settings.conveyor_desktop_agent_token or "").strip()
     control_plane_url = _control_plane_url()
     node_id = settings.conveyor_desktop_node_id or "macbook-payton"
@@ -99,6 +103,7 @@ def send_heartbeat_once(settings: Settings, *, poll_computer: bool = False) -> d
         "agent_state": "idle",
         "last_action": "heartbeat",
         "poll_computer": poll_computer,
+        "poll_observe": bool(poll_observe),
     }
     return post_json(heartbeat_url, token, hb_data)
 
@@ -220,31 +225,158 @@ def poll_observe_once(settings: Settings) -> None:
         raise SystemExit(_PERMISSION_RESTART_EXIT_CODE)
 
 
-def generate_thumbnail(
+def _png_dimensions(path: Path) -> tuple[int, int] | None:
+    """Read width and height from a PNG IHDR. No image library required."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if len(data) < 33 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    if int.from_bytes(data[8:12], "big") < 13 or data[12:16] != b"IHDR":
+        return None
+    width = int.from_bytes(data[16:20], "big")
+    height = int.from_bytes(data[20:24], "big")
+    if width <= 0 or height <= 0 or b"IEND" not in data:
+        return None
+    return width, height
+
+
+def _thumbnail_within_bounds(path: Path, max_width: int, max_height: int, max_bytes: int) -> bool:
+    """True only for a real PNG that respects width, height, and bytes."""
+    try:
+        if not path.is_file():
+            return False
+        size = path.stat().st_size
+        if size <= 0 or size > max_bytes:
+            return False
+        dimensions = _png_dimensions(path)
+    except OSError:
+        return False
+    if dimensions is None:
+        return False
+    width, height = dimensions
+    return width <= max_width and height <= max_height
+
+
+def _write_bounded_thumbnail_pil(
     source_path: Path,
     dest_path: Path,
     max_width: int,
     max_height: int,
     max_bytes: int,
 ) -> bool:
+    """Optional local fallback. Production thumbnails use ImageMagick and do not import Pillow."""
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.info("thumbnail Pillow fallback unavailable")
+        return False
+
+    with Image.open(source_path) as image:
+        image = image.convert("RGB")
+        width, height = max_width, max_height
+        for _ in range(6):
+            frame = image.copy()
+            frame.thumbnail((width, height))
+            dest_path.unlink(missing_ok=True)
+            frame.save(dest_path, format="PNG", optimize=True)
+            if _thumbnail_within_bounds(dest_path, max_width, max_height, max_bytes):
+                return True
+            width = max(1, int(width * 0.7))
+            height = max(1, int(height * 0.7))
+    dest_path.unlink(missing_ok=True)
+    return False
+
+
+def _write_bounded_thumbnail_imagemagick(
+    source_path: Path,
+    dest_path: Path,
+    max_width: int,
+    max_height: int,
+    max_bytes: int,
+    *,
+    timeout: float,
+) -> bool:
+    import shutil
     import subprocess
-    from pathlib import Path
-    dim = max_width
-    for attempt in range(4):
-        cmd = ["sips", "-Z", str(dim), str(source_path), "--out", str(dest_path)]
+
+    binary = shutil.which("magick") or shutil.which("convert")
+    if not binary:
+        return False
+    width, height = max_width, max_height
+    for _ in range(6):
+        dest_path.unlink(missing_ok=True)
+        command = [
+            binary,
+            str(source_path),
+            "-auto-orient",
+            "-thumbnail",
+            f"{width}x{height}>",
+            "-strip",
+            f"png:{dest_path}",
+        ]
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            if res.returncode == 0 and dest_path.is_file():
-                size = dest_path.stat().st_size
-                if size <= max_bytes:
-                    return True
-                else:
-                    dim = int(dim * 0.8)
-            else:
-                logger.error("sips failure: %s %s", res.stdout, res.stderr)
-        except Exception as e:
-            logger.error("sips execution failed: %s", e)
-            break
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error("thumbnail timed out")
+            dest_path.unlink(missing_ok=True)
+            return False
+        except (OSError, ValueError) as exc:
+            logger.error("thumbnail execution failed: %s", exc)
+            dest_path.unlink(missing_ok=True)
+            return False
+        if result.returncode != 0:
+            detail = (result.stderr or b"")[:200]
+            logger.error("thumbnail convert failed: %s", detail)
+            dest_path.unlink(missing_ok=True)
+            return False
+        if _thumbnail_within_bounds(dest_path, max_width, max_height, max_bytes):
+            return True
+        width = max(1, int(width * 0.7))
+        height = max(1, int(height * 0.7))
+    dest_path.unlink(missing_ok=True)
+    return False
+
+
+def generate_thumbnail(
+    source_path: Path,
+    dest_path: Path,
+    max_width: int,
+    max_height: int,
+    max_bytes: int,
+    *,
+    timeout: float = 20,
+) -> bool:
+    """Write a thumbnail that fits width, height, and bytes. Never the original."""
+    from pathlib import Path
+
+    source_path = Path(source_path)
+    dest_path = Path(dest_path)
+    if max_width < 1 or max_height < 1 or max_bytes < 1 or timeout <= 0:
+        logger.error("thumbnail bounds are invalid")
+        return False
+    if not source_path.is_file() or source_path.resolve() == dest_path.resolve():
+        logger.error("thumbnail source is missing or is the destination")
+        return False
+    try:
+        if _write_bounded_thumbnail_imagemagick(
+            source_path, dest_path, max_width, max_height, max_bytes, timeout=timeout,
+        ):
+            return True
+        if _write_bounded_thumbnail_pil(source_path, dest_path, max_width, max_height, max_bytes):
+            return True
+    except Exception as exc:
+        logger.error("thumbnail generation failed: %s", exc)
+        dest_path.unlink(missing_ok=True)
+        return False
+    logger.error("thumbnail generation failed: no bounded image")
+    dest_path.unlink(missing_ok=True)
     return False
 
 
@@ -422,7 +554,7 @@ def poll_upload_once(settings: Settings) -> None:
                     "upload_id": upload_id,
                     "node_id": node_id,
                     "error": "thumbnail_generation_failed",
-                    "message": "Failed to generate thumbnail via sips.",
+                    "message": "Failed to generate a bounded thumbnail.",
                 },
             )
         except Exception as exc:
@@ -453,19 +585,40 @@ def poll_upload_once(settings: Settings) -> None:
             logger.info("upload fail report failed: %s", exc)
         return
 
-    width = max_width
-    height = max_height
-    try:
-        import subprocess
-        res = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(thumb_path)], capture_output=True, text=True, check=False)
-        if res.returncode == 0:
-            for line in res.stdout.splitlines():
-                if "pixelWidth:" in line:
-                    width = int(line.split(":")[-1].strip())
-                elif "pixelHeight:" in line:
-                    height = int(line.split(":")[-1].strip())
-    except Exception:
-        pass
+    dimensions = _png_dimensions(thumb_path)
+    if dimensions is None:
+        logger.error("thumbnail dimensions unreadable")
+        try:
+            post_json(
+                f"{control_plane_url}/desktop/upload/fail",
+                token,
+                {
+                    "upload_id": upload_id,
+                    "node_id": node_id,
+                    "error": "thumbnail_generation_failed",
+                    "message": "Failed to read bounded thumbnail dimensions.",
+                },
+            )
+        except Exception as report_exc:
+            logger.info("upload fail report failed: %s", report_exc)
+        return
+    width, height = dimensions
+    if width > max_width or height > max_height or len(thumb_bytes) > max_bytes:
+        logger.error("thumbnail exceeds bounds upload_id=%s", upload_id)
+        try:
+            post_json(
+                f"{control_plane_url}/desktop/upload/fail",
+                token,
+                {
+                    "upload_id": upload_id,
+                    "node_id": node_id,
+                    "error": "thumbnail_generation_failed",
+                    "message": "Thumbnail exceeds the width, height, or byte limit.",
+                },
+            )
+        except Exception as report_exc:
+            logger.info("upload fail report failed: %s", report_exc)
+        return
 
     import hashlib
     hasher = hashlib.sha256()
@@ -632,7 +785,7 @@ def heartbeat_loop(settings: Settings, *, poll_observe: bool = False, poll_compu
 
     print("Registering agent with control plane...")
     try:
-        res = register_agent(settings)
+        res = register_agent(settings, poll_observe=poll_observe, poll_computer=poll_computer)
         if res.get("ok"):
             node_id = settings.conveyor_desktop_node_id or "macbook-payton"
             print(f"Desktop agent registered: {node_id}")
@@ -653,7 +806,9 @@ def heartbeat_loop(settings: Settings, *, poll_observe: bool = False, poll_compu
         now = time.time()
         if now - last_heartbeat >= heartbeat_interval:
             try:
-                res = send_heartbeat_once(settings, poll_computer=poll_computer)
+                res = send_heartbeat_once(
+                    settings, poll_computer=poll_computer, poll_observe=poll_observe,
+                )
                 if res.get("ok"):
                     print("Heartbeat ok: online")
                 else:

@@ -204,11 +204,7 @@ def history(
     from handlers import chat_memory
 
     now = time.time() if now is None else now
-    thread = _threads.get(key)
-    if thread is not None and now - thread.last <= HISTORY_TTL_SECONDS:
-        return list(thread.turns)[-2 * max(0, limit):]
-
-    # Not in memory or expired in memory; try persistent SQLite store
+    # Another process writes the same SQLite file. The in-process cache is not authoritative.
     if settings is not None:
         turns = chat_memory.get_history(
             settings.codex_memory_root,
@@ -222,7 +218,12 @@ def history(
             th.turns = deque(turns, maxlen=2 * max(1, limit))
             th.last = now
             return turns
+        _threads.pop(key, None)
+        return []
 
+    thread = _threads.get(key)
+    if thread is not None and now - thread.last <= HISTORY_TTL_SECONDS:
+        return list(thread.turns)[-2 * max(0, limit):]
     _threads.pop(key, None)
     return []
 
@@ -283,10 +284,9 @@ def pop_last(
     mem_last = _last.pop(key, None)
     if settings is not None:
         stored = chat_memory.pop_last_request(settings.codex_memory_root, key)
-        if mem_last is not None:
-            return mem_last
-        if stored is not None:
-            return LastRequest(codex_prompt=stored.codex_prompt, confirm=stored.confirm)
+        if stored is None:
+            return None
+        return LastRequest(codex_prompt=stored.codex_prompt, confirm=stored.confirm)
     return mem_last
 
 
@@ -865,7 +865,11 @@ async def ask_chat(
 
 async def _offer_deep(msg: InboundMessage, port: OutboundPort, text: str) -> None:
     if getattr(port, "supports_inline_buttons", False):
-        await port.reply_with_buttons(msg, text, [[{"text": "🔍 用 Codex 处理", "callback_data": "deep"}]])
+        data = "deep"
+        if msg.channel == "telegram" and (":agent:" in msg.chat_id or ":topic:" in msg.chat_id):
+            from channel.telegram_identity import context_tag
+            data = f"deep:{context_tag(msg.chat_id)}"
+        await port.reply_with_buttons(msg, text, [[{"text": "🔍 用 Codex 处理", "callback_data": data}]])
     else:
         await port.reply(msg, text)
 

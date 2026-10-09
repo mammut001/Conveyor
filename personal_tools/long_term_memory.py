@@ -198,6 +198,13 @@ def owner_for_chat(settings: Any, operator_id: str, channel: str, chat_id: str) 
 
         agent = agents.agent_for_chat(settings, channel, chat_id)
     except Exception:
+        # Reserved or pinned worker chats must not read the operator's memory
+        # when lookup fails. Ordinary chats keep the previous fallback.
+        if channel == "telegram" and ":agent:" in str(chat_id):
+            raise
+        import agents as agents_mod
+        if agents_mod._owned_canonical_chat(channel, chat_id):
+            raise
         agent = None
     if agent and not agent.get("is_default"):
         return agent_owner(agent["id"])

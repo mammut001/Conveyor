@@ -27,4 +27,23 @@ if ! cua-driver status >/dev/null 2>&1; then
 fi
 
 cd /opt/conveyor
+# This process is the shared VPS desktop. load_dotenv() does not override
+# variables already set, so an id exported here would hide the control
+# plane's .env value and the client would no longer match the server.
+# Use the VPS defaults only when neither the environment nor .env sets
+# them. A legacy macbook-payton / "Payton MacBook" pair is moved together
+# by scripts/migrate-desktop-node-id.sh, which does not print the file.
+env_file="${CONVEYOR_ENV_FILE:-/opt/conveyor/.env}"
+if [[ -z "${CONVEYOR_DESKTOP_NODE_ID:-}" ]] && [[ -f "$env_file" ]] \
+  && grep -Eq '^[[:space:]]*(export[[:space:]]+)?CONVEYOR_DESKTOP_NODE_ID=' "$env_file"; then
+  :
+elif [[ -z "${CONVEYOR_DESKTOP_NODE_ID:-}" ]]; then
+  export CONVEYOR_DESKTOP_NODE_ID=vps-desktop
+fi
+if [[ -z "${CONVEYOR_DESKTOP_NODE_NAME:-}" ]] && [[ -f "$env_file" ]] \
+  && grep -Eq '^[[:space:]]*(export[[:space:]]+)?CONVEYOR_DESKTOP_NODE_NAME=' "$env_file"; then
+  :
+elif [[ -z "${CONVEYOR_DESKTOP_NODE_NAME:-}" ]]; then
+  export CONVEYOR_DESKTOP_NODE_NAME="VPS desktop"
+fi
 exec /opt/conveyor/.venv/bin/python /opt/conveyor/desktop_agent.py --poll-computer

@@ -8,19 +8,42 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+
+def _bind_roots(tmp: Path) -> None:
+    """Point workspace, task, and memory roots at one disposable tree.
+
+    Assigned once per check. ``_settings()`` reads the environment, so
+    repeated calls inside that check share the same memory root.
+    """
+    ws = tmp / "ws"
+    task = tmp / "task"
+    mem = tmp / "mem"
+    ws.mkdir(exist_ok=True)
+    task.mkdir(exist_ok=True)
+    mem.mkdir(exist_ok=True)
+    os.environ["CODEX_WORKSPACE_ROOT"] = str(ws)
+    os.environ["CODEX_TASK_ROOT"] = str(task)
+    os.environ["CODEX_MEMORY_ROOT"] = str(mem)
+
+
+# Import-time fallback only. main() rebinds a fresh tree for every check
+# so a durable confirmation cannot leak into the next scenario.
+_BOOT = tempfile.TemporaryDirectory(prefix="codex-tools-smoke-")
+_BLANK_ENV = Path(_BOOT.name) / "blank.env"
+_BLANK_ENV.write_text("")
+_bind_roots(Path(_BOOT.name))
+
 os.environ["TELEGRAM_BOT_TOKEN"] = "fake-token"
 os.environ["TELEGRAM_ALLOWED_USER_ID"] = "12345"
 os.environ["LARK_APP_ID"] = "cli_fake"
 os.environ["LARK_APP_SECRET"] = "fake"
-os.environ["CODEX_WORKSPACE_ROOT"] = "/tmp/codex-tools-ws"
-os.environ["CODEX_TASK_ROOT"] = "/tmp/codex-tools-task"
-os.environ["CODEX_MEMORY_ROOT"] = "/tmp/codex-tools-mem"
 os.environ["CODEX_BIN"] = "codex"
 os.environ["USER_TIMEZONE"] = "UTC"
 
@@ -36,8 +59,8 @@ from scripts.harness_common import CheckResult, print_results
 
 
 def _settings() -> Settings:
-    """Hermetic settings for dispatch tests (avoid .env overriding allowlist)."""
-    base = load_settings()
+    """Hermetic settings. Roots come from the check's environment, not .env."""
+    base = load_settings(_BLANK_ENV)
     return replace(base, telegram_allowed_user_id=12345)
 
 
@@ -262,9 +285,14 @@ def main() -> int:
         _test_natural_lang_ambiguous_no_telegram_default,
         _test_dispatch_disk_deterministic_no_codex,
     ]
-    results = [fn() for fn in sync_checks]
-    for fn in async_checks:
-        results.append(asyncio.run(fn()))
+    results: list[CheckResult] = []
+    for fn in (*sync_checks, *async_checks):
+        with tempfile.TemporaryDirectory(prefix="codex-tools-smoke-") as raw:
+            _bind_roots(Path(raw))
+            outcome = fn()
+            if asyncio.iscoroutine(outcome):
+                outcome = asyncio.run(outcome)
+            results.append(outcome)
     print_results(results)
     ok = all(r.ok for r in results)
     print("tools runner smoke ok" if ok else "tools runner smoke failed")

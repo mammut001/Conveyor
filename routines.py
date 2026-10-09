@@ -354,6 +354,12 @@ def _row_to_routine(row: sqlite3.Row | dict) -> dict[str, Any]:
     # Routines created in an agent's conversation carry that agent's id.
     origin = str(item.get("origin_chat_id") or "")
     item["agent_id"] = origin[len("agent-"):] if item.get("origin_channel") == "web" and origin.startswith("agent-") else None
+    if item.get("origin_channel") == "telegram":
+        from channel.telegram_identity import TelegramAddress
+        try:
+            item["agent_id"] = TelegramAddress.parse(origin).agent_id
+        except ValueError:
+            pass
     item["enabled"] = bool(item.get("enabled", 1))
     if item.get("hook_id"):
         item["hook"] = {
@@ -827,7 +833,7 @@ def list_inbox(settings: Any, limit: int = 50) -> tuple[list[dict[str, Any]], in
                     item["approval"] = {"id": approval_id, "status": recorded_status}
                 else:
                     # Only decidable while it is live in this process's store.
-                    pending = get_pending(approval_id)
+                    pending = get_pending(approval_id, settings=settings)
                     if pending is not None:
                         item["approval"] = {
                             "id": approval_id,
@@ -956,7 +962,7 @@ def persist_routine_approval(settings: Any, token: str, routine_id: int) -> bool
     """Extend a routine-generated pending approval's TTL and persist it to SQLite."""
     from handlers.tools.confirm import set_pending_ttl
 
-    action = set_pending_ttl(token, approval_ttl_seconds(settings))
+    action = set_pending_ttl(token, approval_ttl_seconds(settings), settings=settings)
     if action is None:
         return False
     init_db(settings)
@@ -1023,7 +1029,7 @@ def expire_routine_approvals(settings: Any, now: float | None = None) -> int:
             ).fetchall()
             tokens = [r["token"] for r in rows]
             for token in tokens:
-                pop_pending(token)
+                pop_pending(token, settings=settings)
                 conn.execute("UPDATE routine_approvals SET status = 'expired' WHERE token = ?", (token,))
                 conn.execute(
                     "UPDATE routine_runs SET approval_status = 'expired', "
@@ -1063,7 +1069,7 @@ def restore_routine_approvals(settings: Any, now: float | None = None) -> int:
             created_at=float(r["created_at"]),
             ttl_seconds=float(r["expires_at"]) - float(r["created_at"]),
         )
-        if restore_pending(action):
+        if restore_pending(action, settings=settings):
             restored += 1
             try:
                 import approval_relay
@@ -1131,14 +1137,16 @@ def _owning_agent(settings: Any, origin_channel: str, origin_chat_id: str) -> di
 
     The default agent does not count: its routines stay ordinary inbox items.
     """
-    if origin_channel != "web" or not origin_chat_id:
+    if origin_channel not in ("web", "telegram") or not origin_chat_id:
         return None
     try:
         import agents
 
-        if not origin_chat_id.startswith(agents.AGENT_CHAT_PREFIX):
+        if origin_channel == "web" and not origin_chat_id.startswith(agents.AGENT_CHAT_PREFIX):
             return None
-        agent = agents.agent_for_chat(settings, "web", origin_chat_id)
+        if origin_channel == "telegram" and ":agent:" not in origin_chat_id:
+            return None  # Legacy routines must not follow a mutable selection.
+        agent = agents.agent_for_chat(settings, origin_channel, origin_chat_id)
     except Exception:
         return None
     return agent if agent and not agent.get("is_default") else None
@@ -1218,8 +1226,8 @@ async def run_single_routine(
     agent = _owning_agent(settings, origin_channel, origin_chat_id)
 
     msg = InboundMessage(
-        channel="web",
-        operator_id="web-console",
+        channel=origin_channel if agent else "web",
+        operator_id=str(settings.telegram_allowed_user_id) if agent and origin_channel == "telegram" else "web-console",
         chat_id=origin_chat_id if agent else f"routine-{routine_id}",
         message_id=f"routine-run-{uuid.uuid4().hex[:12]}",
         text=prompt,
@@ -1295,7 +1303,9 @@ async def run_single_routine(
                 tg_target = None
                 if origin_channel == "telegram" and origin_chat_id:
                     try:
-                        tg_target = int(origin_chat_id)
+                        from channel.telegram_identity import TelegramAddress
+                        TelegramAddress.parse(origin_chat_id)
+                        tg_target = origin_chat_id
                     except ValueError:
                         pass
                 if tg_target is None:

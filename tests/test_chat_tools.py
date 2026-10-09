@@ -446,6 +446,42 @@ class TestChatToolsLoop(unittest.IsolatedAsyncioTestCase):
         names = {s["function"]["name"] for s in build_tool_schemas(star)}
         self.assertIn("web__fetch", names)
 
+    async def test_computer_observe_passes_original_message_and_port(self) -> None:
+        self.msg = _make_msg("截一下Mac屏幕")
+        call = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "c_obs",
+                "type": "function",
+                "function": {
+                    "name": "computer__observe",
+                    "arguments": json.dumps({"arg": ""}),
+                },
+            }],
+        }
+        final = {"role": "assistant", "content": "done"}
+        mock_complete = AsyncMock(side_effect=[call, final])
+        with patch("handlers.chat_tools.complete_chat", mock_complete):
+            with patch("handlers.chat_tools.run_tool", new_callable=AsyncMock, return_value="refused") as mock_run:
+                await run_tool_loop(
+                    self.msg,
+                    self.port,
+                    self.settings,
+                    [{"role": "user", "content": self.msg.text}],
+                    self.cfg,
+                )
+        mock_run.assert_awaited_once_with(
+            self.settings,
+            "computer.observe",
+            "",
+            operator_id="12345",
+            channel="telegram",
+            chat_id="chat-1",
+            msg=self.msg,
+            port=self.port,
+        )
+
 class FakeHTTPHandler(http.server.BaseHTTPRequestHandler):
     recorded_requests: list[dict] = []
     response_status: int = 200
