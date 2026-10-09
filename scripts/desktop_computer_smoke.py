@@ -1649,6 +1649,11 @@ def _test_trajectory_records_click_metadata() -> None:
                 "window_id": 456,
                 "ax_app": "Calculator",
             }
+            # The completion gate requires a real observation id and hash.
+            # Only the observe result carries them. The click stays metadata.
+            if action.get("action") == "observe":
+                result["screenshot_id"] = "obs_click_meta"
+                result["sha256"] = "cafebabe"
             complete_computer_step(settings, step_id, "mac-test", result)
             return result
 

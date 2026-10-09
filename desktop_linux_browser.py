@@ -13,6 +13,7 @@ import shutil
 import stat
 import subprocess
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -181,9 +182,9 @@ def linux_process_app(pid: int) -> str:
             return "Unknown"
         return base or "Unknown"
     comm = _proc_comm(pid_i) or ""
-    browser = app_from_process_names(None, comm)
-    if browser != "Unknown":
-        return browser
+    # No readable exe: comm is not evidence of a browser. Fail closed.
+    if app_from_process_names(None, comm) != "Unknown":
+        return "Unknown"
     return _terminal_name(comm) or comm or "Unknown"
 
 
@@ -243,14 +244,15 @@ def _is_snap_firefox(binary: str) -> bool:
     return "/snap/bin/firefox" in head or "snap run firefox" in head or "snap run --firefox" in head
 
 
-def _display_slug() -> str:
-    raw = os.environ.get("DISPLAY") or "nodisplay"
+def _display_slug(env: Mapping[str, str] | None = None) -> str:
+    source = os.environ if env is None else env
+    raw = source.get("DISPLAY") or "nodisplay"
     return re.sub(r"[^A-Za-z0-9._-]+", "_", raw)[:40] or "nodisplay"
 
 
-def _profile_dir(browser: str, binary: str) -> Path:
+def _profile_dir(browser: str, binary: str, env: Mapping[str, str] | None = None) -> Path:
     """One profile per DISPLAY so two X servers do not share a Firefox lock."""
-    slug = _display_slug()
+    slug = _display_slug(env)
     if browser == "Firefox" and _is_snap_firefox(binary):
         return Path.home() / "snap" / "firefox" / "common" / f"conveyor-{slug}"
     return (
@@ -320,21 +322,36 @@ def xprop_browser_target(text: str, browser: str | None = None) -> bool:
     return types == ["_NET_WM_WINDOW_TYPE_NORMAL"]
 
 
+def _env_copy(env: Mapping[str, str] | None) -> dict[str, str]:
+    """Snapshot an environment. Never writes back to ``os.environ``."""
+    source = os.environ if env is None else env
+    return {str(key): str(value) for key, value in source.items()}
+
+
 class LinuxBrowserController:
-    """Deterministic, allow-listed browser activation on a single X display."""
+    """Deterministic, allow-listed browser activation on a single X display.
+
+    ``env`` is the display this controller talks to. The default is a copy of
+    the process environment taken at init. Later changes to ``os.environ``
+    are ignored, and this object does not mutate the process environment.
+    """
+
+    def __init__(self, env: Mapping[str, str] | None = None) -> None:
+        self.env = _env_copy(env)
 
     def _run(self, *argv: str) -> subprocess.CompletedProcess:
         try:
             return subprocess.run(
                 argv, capture_output=True, text=True, timeout=5, check=False,
+                env=self.env,
             )
         except (OSError, subprocess.TimeoutExpired):
             return subprocess.CompletedProcess(argv, 1, "", "")
 
     def _display_error(self) -> str | None:
-        if not os.environ.get("DISPLAY"):
+        if not self.env.get("DISPLAY"):
             return "browser_display_missing"
-        xauth = os.environ.get("XAUTHORITY")
+        xauth = self.env.get("XAUTHORITY")
         if xauth and not os.path.isfile(xauth):
             return "browser_display_unreachable"
         probe = self._run("xdotool", "getdisplaygeometry")
@@ -419,7 +436,7 @@ class LinuxBrowserController:
 
     def active_window_title(self) -> str:
         """Capped title of the active X window. Empty when the query fails."""
-        if not os.environ.get("DISPLAY"):
+        if not self.env.get("DISPLAY"):
             return ""
         active = self._run("xdotool", "getactivewindow")
         wid = (active.stdout or "").strip()
@@ -528,18 +545,20 @@ class LinuxBrowserController:
         if selected is None:
             return {"ok": False, "error": "browser_binary_missing"}
         item, binary = selected
-        profile = _profile_dir(item, binary)
+        profile = _profile_dir(item, binary, self.env)
         try:
             profile.mkdir(parents=True, exist_ok=True, mode=0o700)
             if item == "Firefox":
                 command = [binary, "--no-remote", "--profile", str(profile), "--new-window", "about:blank"]
             else:
                 command = [binary, f"--user-data-dir={profile}", "--new-window", "about:blank"]
-            # Never a shell or a model-supplied command/URL.
+            # Never a shell or a model-supplied command/URL. The child sees
+            # this display's env copy, not a mutated process environment.
             subprocess.Popen(
                 command,
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, start_new_session=True,
+                env=self.env,
             )
         except OSError:
             return {"ok": False, "error": "browser_launch_failed"}

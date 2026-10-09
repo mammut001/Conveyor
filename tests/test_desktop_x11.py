@@ -283,9 +283,10 @@ class DesktopTests(Case):
     def test_observe_stores_a_screenshot_the_planner_can_open(self) -> None:
         from desktop_computer_planner import planner_screenshot_path
 
-        result = self.desktop().execute({"action": "observe"})
+        with mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox"):
+            result = self.desktop().execute({"action": "observe"})
         self.assertTrue(result["result_ok"], result)
-        self.assertEqual((result["width"], result["height"], result["active_app"]), (1, 1, "firefox"))
+        self.assertEqual((result["width"], result["height"], result["active_app"]), (1, 1, "Firefox"))
         self.assertEqual((result["window_id"], result["pid"], result["window_title"]), (12345, 4242, "Example Domain"))
         path = planner_screenshot_path(self.settings, result)
         self.assertIsNotNone(path)
@@ -344,23 +345,125 @@ class LoopTests(Case):
         self.assertEqual(result["status"], "done")
         self.assertEqual(self.x.xdotool, [["mousemove", "5", "5", "click", "1"]])
 
-    def test_agent_desktop_does_not_use_the_host_browser_controller(self) -> None:
+    def test_observe_activates_browser_on_this_display(self) -> None:
         created = create_computer_task(
             self.settings, "open firefox and read the page", direct_mode=True,
             max_steps=6, max_seconds=30, operator_id="web-console", chat_id=self.chat, channel="web",
         )
         self.assertTrue(created["ok"], created)
         task = created["task"]
-        with mock.patch(
-            "desktop_linux_browser.LinuxBrowserController.ensure",
-            side_effect=AssertionError("host browser controller"),
-        ):
+        seen: list[dict] = []
+
+        def ensure(controller, name, **kwargs):
+            seen.append({"name": name, "env": dict(controller.env), "kwargs": kwargs})
+            return {"ok": True, "name": "Firefox", "pid": 4242, "window_id": 12345}
+
+        with mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox"), \
+                mock.patch("desktop_linux_browser.LinuxBrowserController.ensure", ensure):
             result = self.run_loop([
                 {"action": "observe"},
                 {"action": "done", "summary": "opened"},
             ], task)
         self.assertEqual(result["status"], "done")
-        self.assertEqual(result["summary"], "opened")
+        self.assertTrue(seen)
+        self.assertEqual(seen[0]["env"]["DISPLAY"], f":{self.display}")
+        self.assertNotIn("url", seen[0]["kwargs"])
+        self.assertGreaterEqual(self.x.imports, 1)
+
+    def test_unknown_target_is_not_launched(self) -> None:
+        with mock.patch("desktop_linux_browser.subprocess.Popen") as popen:
+            result = self.desktop().execute({"action": "observe", "target_app": "Launcher", "url": "http://evil.example"})
+        self.assertEqual(result["error"], "target_app_not_found")
+        popen.assert_not_called()
+        self.assertEqual(self.x.imports, 0)
+
+    def test_false_identity_is_not_overwritten(self) -> None:
+        def ensure(_controller, _name, **kwargs):
+            self.assertEqual(kwargs["expected_pid"], 999)
+            self.assertEqual(kwargs["expected_window"], 888)
+            return {"ok": False, "error": "target_identity_conflict"}
+
+        with mock.patch("desktop_linux_browser.LinuxBrowserController.ensure", ensure):
+            result = self.desktop().execute({
+                "action": "observe", "ensure_browser": True, "target_app": "Firefox",
+                "pid": 999, "window_id": 888, "url": "http://127.0.0.1/secret",
+            })
+        self.assertEqual(result["error"], "target_identity_conflict")
+        self.assertNotIn("pid", result)
+        self.assertEqual(self.x.imports, 0)
+
+    def test_minimized_browser_is_reused_and_launcher_gets_no_url(self) -> None:
+        from desktop_linux_browser import LinuxBrowserController
+
+        scripted = {
+            "getdisplaygeometry": "100 100",
+            "search": "77",
+            "xprop": (
+                'WM_CLASS(STRING) = "Firefox", "firefox_firefox"\n'
+                "WM_STATE(WM_STATE):\n\t\twindow state: Iconic\n"
+                "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_NORMAL\n"
+            ),
+            "getwindowpid": "4242",
+            "windowmap": "",
+            "windowactivate": "",
+            "getactivewindow": "77",
+        }
+        calls: list[tuple] = []
+
+        def run(*argv, **kwargs):
+            calls.append(argv)
+            key = argv[1] if argv and argv[0] != "xprop" else "xprop"
+            if argv and argv[0] == "xprop":
+                key = "xprop"
+            elif len(argv) > 1:
+                key = argv[1]
+            text = scripted.get(key, "")
+            return subprocess.CompletedProcess(argv, 0, stdout=text if isinstance(text, str) else "", stderr="")
+
+        desktop = self.desktop()
+        auth = self.root / "Xauthority"
+        auth.write_text("cookie", encoding="utf-8")
+        desktop.env["XAUTHORITY"] = str(auth)
+        controller_env = dict(desktop.env)
+        with mock.patch("desktop_linux_browser.subprocess.run", run), \
+                mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox"), \
+                mock.patch("desktop_linux_browser.subprocess.Popen") as popen, \
+                mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool"):
+            focused = LinuxBrowserController(controller_env).ensure("Firefox")
+            self.assertEqual(focused["window_id"], 77)
+            popen.assert_not_called()
+            imports_before = self.x.imports
+            result = desktop.execute({"action": "observe", "ensure_browser": True})
+        self.assertTrue(result["result_ok"], result)
+        self.assertGreater(self.x.imports, imports_before)
+        self.assertTrue(any(cmd[1] == "windowmap" for cmd in calls if len(cmd) > 1))
+
+    def test_snap_class_alone_is_not_a_browser(self) -> None:
+        self.x.active_title = "spoof"
+        desktop = self.desktop()
+        with mock.patch("desktop_linux_browser.linux_process_app", return_value="Unknown"):
+            self.assertIsNone(desktop.active_app())
+        with mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox"):
+            self.assertEqual(desktop.active_app(), "Firefox")
+        with mock.patch("desktop_linux_browser.linux_process_app", return_value="gedit"):
+            self.assertEqual(desktop.active_app(), "gedit")
+
+    def test_blocked_browser_policy_does_not_request_one(self) -> None:
+        from dataclasses import replace
+
+        self.settings = replace(self.settings, conveyor_computer_blocked_apps=("Firefox", "Chromium", "Google Chrome"))
+        task = self.task()
+        self.x.windows = ""
+        backend = build_backend(self.settings, task["task_id"])
+        auth = self.root / "Xauthority"
+        auth.write_text("cookie", encoding="utf-8")
+        backend.desktop.env["XAUTHORITY"] = str(auth)
+
+        async def scenario():
+            await backend._prepare()
+
+        asyncio.run(scenario())
+        self.assertFalse((agents.desktop_dir(self.settings, self.agent["id"]) / "want_browser").exists())
 
     def test_focus_change_between_observe_and_type_refuses_keystrokes(self) -> None:
         self.x.move_focus_after_observe = True
@@ -398,6 +501,9 @@ class LoopTests(Case):
         task = self.task()
         self.x.windows = ""
         backend = build_backend(self.settings, task["task_id"])
+        auth = self.root / "Xauthority"
+        auth.write_text("cookie", encoding="utf-8")
+        backend.desktop.env["XAUTHORITY"] = str(auth)
 
         async def scenario():
             with mock.patch.object(desktop_x11, "BROWSER_WAIT_SECONDS", 1.5):

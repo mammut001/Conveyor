@@ -55,8 +55,12 @@ and keep their profile in the home directory.
 Agents with their own desktop are unaffected; those are kept by
 `conveyor-agent-desktops.service` (see [agents.md](agents.md)). An agent task
 never falls back to this host display: `X11ComputerBackend` is selected from
-the task, and its browser bootstrap is the existing per-agent `want_browser`
-flag. The host path (`LinuxBrowserController`) is separate.
+the task. When a step asks for a browser, `X11Desktop` uses
+`LinuxBrowserController` with that display's own environment (DISPLAY and
+XAUTHORITY only). An empty desktop still asks the agent supervisor through
+the existing `want_browser` file, and that request is skipped when browser
+policy blocks it or the private display does not answer. There is no host
+fallback.
 
 ## Host browser launch
 
@@ -73,3 +77,19 @@ not a shell and not a model-supplied command.
 - A repeated click that leaves the same window and the same pixels gets one different recovery (a plain observation, or one verified browser focus). If that is still stuck, the task stops. A different action with the same image is not a stall. A missing screenshot, a stale pre-action screenshot, an `about:blank` title, or a browser error-page title cannot be reported as a finished webpage. The loop does not read the image to decide whether the page content is correct.
 
 On a machine with Xvfb and xdotool, `python -m unittest tests.test_linux_browser_x11_integration` checks the controller against a private X server. The test starts its own Xvfb and does not attach to the host display.
+
+## Opt-in Linux browser loop on a private display
+
+`scripts/linux_browser_e2e.py` is not part of unit tests or deploy. A supervisor runs it on an already-started private X server and the already-served loopback pages. The harness does not start X, does not listen on a port, and does not edit `/opt/conveyor/.env`. It loads that file for provider settings, then points workspace, task, memory, and screenshot roots at the test directory.
+
+`session.json` names the private display and cookie, for example `{"display": 109, "xauthority": "/tmp/conveyor-pr102-vps/Xauthority"}`. Display `:0` and `:1` are refused.
+
+```bash
+python scripts/linux_browser_e2e.py \
+  --root /tmp/conveyor-pr102-vps \
+  --cases startup/local/weather/stability \
+  --rounds 20 \
+  --manifest /tmp/conveyor-pr102-vps/session.json
+```
+
+Pages are `http://127.0.0.1:19202/index.html` and `run-01.html` through `run-20.html`. Expected codes live only in `/tmp/conveyor-pr102-vps/expected.json` (outside the model workspace). The weather case is marked for a human screenshot review. Results are written under the test root.

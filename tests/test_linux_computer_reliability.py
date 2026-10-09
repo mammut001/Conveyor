@@ -98,6 +98,16 @@ class LinuxBrowserTest(unittest.TestCase):
         self.addCleanup(self._process.stop)
         return controller
 
+    def test_env_argument_is_isolated_from_process_environ(self):
+        with mock.patch.dict(os.environ, {"DISPLAY": ":1"}):
+            controller = LinuxBrowserController({
+                "DISPLAY": ":109", "XAUTHORITY": "/tmp/private-xauth", "PATH": "/usr/bin",
+            })
+            os.environ["DISPLAY"] = ":0"
+            self.assertEqual(controller.env["DISPLAY"], ":109")
+            self.assertEqual(os.environ["DISPLAY"], ":0")
+            self.assertIsNot(controller.env, os.environ)
+
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
     @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
     @mock.patch("desktop_linux_browser.subprocess.Popen")
@@ -534,10 +544,11 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
                 "result_ok": True, "action_type": "observe", "sha256": "blank",
                 "screenshot_id": "fake", "active_app": "Firefox",
             }
+            settings = _settings(Path(temp))
             for label, rows in (("derived", [dict(frame), dict(frame)]), ("absent", [dict(absent), dict(absent)])):
                 backend = _Desktop(rows)
                 result = await run_computer_loop(
-                    _settings(Path(temp)), "Check the weather webpage",
+                    settings, "Check the weather webpage",
                     planner=_Sequence({"action": "done", "summary": "sunny"},
                                       {"action": "done", "summary": "sunny"}),
                     backend=backend, max_steps=6, max_seconds=30, direct_mode=True,
@@ -664,7 +675,10 @@ class IdentityTest(unittest.TestCase):
             self.assertEqual(linux_process_app(9), "Terminal")
         with mock.patch("desktop_linux_browser._proc_exe", return_value=None), \
                 mock.patch("desktop_linux_browser._proc_comm", return_value="firefox"):
-            self.assertEqual(linux_process_app(9), "Firefox")
+            self.assertEqual(linux_process_app(9), "Unknown")
+        with mock.patch("desktop_linux_browser._proc_exe", return_value="/tmp/firefox"), \
+                mock.patch("desktop_linux_browser._proc_comm", return_value="firefox"):
+            self.assertEqual(linux_process_app(9), "Unknown")
         with mock.patch("desktop_linux_browser._proc_exe", return_value="/usr/bin/gedit"), \
                 mock.patch("desktop_linux_browser._proc_comm", return_value="gedit"):
             self.assertEqual(linux_process_app(9), "gedit")

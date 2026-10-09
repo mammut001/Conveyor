@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -35,7 +36,9 @@ MAX_WAIT_SECONDS = 10.0
 BROWSER_WAIT_SECONDS = 40.0
 TYPE_CHUNK = 400
 # X window classes of the browsers an agent desktop may run (regex).
-BROWSER_CLASSES = "firefox|Navigator|chromium|chrome"
+# ``firefox_firefox`` is the Snap instance/class. A search hit is not trusted
+# until the window is a normal (or minimized) browser and its PID is verified.
+BROWSER_CLASSES = "firefox|firefox_firefox|Navigator|chromium|chrome"
 # A planner used to macOS says "cmd"; on this desktop the shortcut key is ctrl.
 MODIFIERS = {
     "ctrl": "ctrl", "control": "ctrl", "cmd": "ctrl", "command": "ctrl", "meta": "ctrl",
@@ -81,6 +84,38 @@ def hotkey_argument(keys: Any) -> str:
     return "+".join(parts)
 
 
+def _browser_class_label(value: object) -> bool:
+    """True when a WM_CLASS token is a browser, including the Snap class."""
+    from desktop_linux_browser import canonical_browser
+
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if canonical_browser(text) not in (None, "Browser"):
+        return True
+    folded = text.lower()
+    return folded in {"firefox_firefox", "navigator"} or "firefox" in folded or "chrome" in folded or "chromium" in folded
+
+
+def _browser_policy_allows(settings: Settings) -> bool:
+    """False when the operator policy forbids the agent browser."""
+    from desktop_linux_browser import BROWSERS, canonical_app
+
+    allowed = {canonical_app(item).lower() for item in (getattr(settings, "conveyor_computer_allowed_apps", ()) or ())}
+    blocked = {canonical_app(item).lower() for item in (getattr(settings, "conveyor_computer_blocked_apps", ()) or ())}
+    if "browser" in blocked:
+        return False
+    names = [name.lower() for name in BROWSERS]
+    if any(name in blocked for name in names) and all(name in blocked for name in names):
+        return False
+    if "firefox" in blocked and (not allowed or "firefox" not in allowed):
+        # The supervisor request starts Firefox. A block on Firefox skips it.
+        return False
+    if allowed and "browser" not in allowed and not any(name in allowed for name in names):
+        return False
+    return True
+
+
 class X11Desktop:
     """Blocking operations on one X display."""
 
@@ -88,11 +123,15 @@ class X11Desktop:
         self.settings = settings
         self.agent_id = agent_id
         self.display = display
+        # One private X authority. Prefer the process value (a supervisor can
+        # point at a session cookie) and otherwise the shared client file.
+        # The rest of the process environment, including secrets, stays out.
+        xauthority = os.environ.get("XAUTHORITY", "").strip() or str(agents.client_xauthority_path())
         self.env = {
             "PATH": "/usr/local/bin:/usr/bin:/bin",
             "HOME": str(Path.home()),
             "DISPLAY": f":{display}",
-            "XAUTHORITY": str(agents.client_xauthority_path()),
+            "XAUTHORITY": xauthority,
         }
 
     def _run(self, *command: str, timeout: float = 15.0, text: bool = True) -> subprocess.CompletedProcess:
@@ -106,6 +145,22 @@ class X11Desktop:
             raise X11Error("xdotool_missing")
         if self._run("xdotool", *args).returncode != 0:
             raise X11Error("input_failed")
+
+    def private_display_ready(self) -> bool:
+        """True when this agent's own display answers and its cookie exists.
+
+        Display ``:0`` and ``:1`` are never treated as an agent desktop.
+        """
+        if self.display < 2:
+            return False
+        authority = self.env.get("XAUTHORITY") or ""
+        if not authority or not os.path.isfile(authority):
+            return False
+        try:
+            self.geometry()
+        except X11Error:
+            return False
+        return True
 
     def geometry(self) -> tuple[int, int]:
         try:
@@ -124,8 +179,27 @@ class X11Desktop:
             raise X11Error("point_outside_screen")
         return str(x), str(y)
 
+    def _window_pid(self, wid: str) -> int | None:
+        try:
+            pid = self._run("xdotool", "getwindowpid", wid, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        text = (pid.stdout or "").strip()
+        if pid.returncode != 0 or not text.isdigit() or int(text) <= 0:
+            return None
+        return int(text)
+
     def active_app(self) -> str | None:
-        """Foreground class from ``xprop WM_CLASS``, else the trusted PID."""
+        """Foreground app from a verified PID.
+
+        A trusted browser PID becomes the canonical name (``Firefox``),
+        including Snap windows whose raw class is ``firefox_firefox``.
+        WM_CLASS is only a fallback for a non-browser label. An unreadable
+        or untrusted PID cannot be promoted to a browser from the class or
+        from ``comm``.
+        """
+        from desktop_linux_browser import canonical_browser, linux_process_app, parse_wm_class
+
         try:
             active = self._run("xdotool", "getactivewindow", timeout=5)
         except (OSError, subprocess.SubprocessError):
@@ -133,29 +207,26 @@ class X11Desktop:
         wid = (active.stdout or "").strip()
         if active.returncode != 0 or not wid.isdigit():
             return None
+        pid = self._window_pid(wid)
+        if pid is not None:
+            app = linux_process_app(pid)
+            browser = canonical_browser(app)
+            if browser and browser != "Browser":
+                return browser
+            if app and app != "Unknown":
+                return app[:64]
+            return None
         try:
             prop = self._run("xprop", "-id", wid, "WM_CLASS", timeout=5)
-            from desktop_linux_browser import parse_wm_class
-
             parsed = parse_wm_class(prop.stdout or "")
-            if parsed:
-                label = (parsed[1] or parsed[0]).strip()
-                if label:
-                    return label[:64]
         except (OSError, subprocess.SubprocessError):
-            pass
-        try:
-            pid = self._run("xdotool", "getwindowpid", wid, timeout=5)
-            text = (pid.stdout or "").strip()
-            if pid.returncode == 0 and text.isdigit() and int(text) > 0:
-                from desktop_linux_browser import linux_process_app
-
-                app = linux_process_app(int(text))
-                if app and app != "Unknown":
-                    return app[:64]
-        except (OSError, subprocess.SubprocessError, ValueError):
             return None
-        return None
+        if not parsed:
+            return None
+        label = (parsed[1] or parsed[0]).strip()
+        if not label or _browser_class_label(label) or _browser_class_label(parsed[0]):
+            return None
+        return label[:64]
 
     def active_window(self) -> dict:
         """Read-only focus identity on this display. Missing fields stay absent.
@@ -170,13 +241,9 @@ class X11Desktop:
         if active.returncode != 0 or not wid.isdigit():
             return {}
         out: dict[str, Any] = {"window_id": int(wid)}
-        try:
-            pid = self._run("xdotool", "getwindowpid", wid, timeout=5)
-            text = (pid.stdout or "").strip()
-            if pid.returncode == 0 and text.isdigit() and int(text) > 0:
-                out["pid"] = int(text)
-        except (OSError, subprocess.SubprocessError, ValueError):
-            pass
+        pid = self._window_pid(wid)
+        if pid is not None:
+            out["pid"] = pid
         try:
             named = self._run("xdotool", "getwindowname", wid, timeout=5)
             title = (named.stdout or "").strip()
@@ -207,7 +274,13 @@ class X11Desktop:
                 )
             except (OSError, subprocess.SubprocessError):
                 continue
-            if xprop_browser_target(prop.stdout or ""):
+            if not xprop_browser_target(prop.stdout or ""):
+                continue
+            from desktop_linux_browser import canonical_browser, linux_process_app
+
+            pid = self._window_pid(wid)
+            app = linux_process_app(pid) if pid is not None else ""
+            if canonical_browser(app) not in (None, "Browser"):
                 return True
         return False
 
@@ -299,8 +372,54 @@ class X11Desktop:
         self._xdotool(*args, "click", "--repeat", steps, button)
         return {}
 
+    def _activate_browser(self, action: dict) -> dict | None:
+        """Focus a verified browser on this display, or return an error result.
+
+        ``ensure_browser`` must be boolean true. A canonical browser target
+        is activated the same way. Any other target name is refused and is
+        never launched. Allow and block lists are applied before focus.
+        """
+        from desktop_linux_browser import LinuxBrowserController, canonical_browser
+
+        if self.display < 2:
+            return {"result_ok": False, "error": "browser_display_missing", "action_type": str(action.get("action"))}
+        target = action.get("target_app")
+        named = canonical_browser(target) if target else None
+        if target and named is None:
+            return {"result_ok": False, "error": "target_app_not_found", "action_type": str(action.get("action"))}
+        if action.get("ensure_browser") is not True and named is None:
+            return None
+        try:
+            expected_pid = int(action["pid"]) if action.get("pid") is not None else None
+            expected_window = int(action["window_id"]) if action.get("window_id") is not None else None
+        except (TypeError, ValueError):
+            return {
+                "result_ok": False, "error": "target_identity_conflict",
+                "action_type": str(action.get("action")),
+            }
+        browser = LinuxBrowserController(self.env).ensure(
+            str(named or "Browser"),
+            allowed_apps=tuple(getattr(self.settings, "conveyor_computer_allowed_apps", ()) or ()),
+            blocked_apps=tuple(getattr(self.settings, "conveyor_computer_blocked_apps", ()) or ()),
+            expected_pid=expected_pid,
+            expected_window=expected_window,
+        )
+        if not browser.get("ok"):
+            return {
+                "result_ok": False,
+                "error": str(browser.get("error") or "browser_unavailable"),
+                "action_type": str(action.get("action")),
+            }
+        # Verified pair only. A contradictory pid or window is not overwritten.
+        action["pid"] = int(browser["pid"])
+        action["window_id"] = int(browser["window_id"])
+        return None
+
     def execute(self, action: dict) -> dict:
         kind = action.get("action")
+        prepared = self._activate_browser(action)
+        if prepared is not None:
+            return prepared
         try:
             if kind == "observe":
                 result = self.observe()
@@ -362,6 +481,13 @@ class X11ComputerBackend:
         if self._takeover_active(self.settings):
             from desktop_computer_loop import ComputerBackendError
             raise ComputerBackendError("human_takeover_active")
+        # The agent supervisor opens Firefox on this display. There is no
+        # host-display fallback. A blocked browser policy or a display that
+        # is not this private server does not send that request.
+        if not _browser_policy_allows(self.settings) or not self.desktop.private_display_ready():
+            logger.warning("agent %s: browser bootstrap skipped", self.agent_id)
+            self._prepared = True
+            return
         from agent_desktops import request_browser
 
         request_browser(self.settings, self.agent_id)
