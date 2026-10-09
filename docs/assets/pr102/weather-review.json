@@ -1,0 +1,43 @@
+{
+  "method": "supervisor visual inspection of original VPS PNGs; auto reports unchanged",
+  "runtime_commit": "4016a236b365e41b21d3ad7c943e8c11f5cd2138",
+  "rejected": [
+    {
+      "run_id": "20261009T030119Z",
+      "reason": "next-day forecast presented as today, not current conditions"
+    },
+    {
+      "run_id": "20261009T031445Z",
+      "reason": "extra high temperature 18C contradicts screenshot 16C"
+    },
+    {
+      "run_id": "20261009T032113Z",
+      "reason": "navigation_unsettled; changing ads on a loaded page; fixed in 4016a23"
+    },
+    {
+      "run_id": "20261009T032724Z",
+      "reason": "precipitation percentages omitted although visible"
+    }
+  ],
+  "accepted": {
+    "run_id": "20261009T033528Z",
+    "result": "PASS",
+    "place": "Montreal, QC",
+    "temperature_c": 12,
+    "condition": "Clear",
+    "update_time": "Updated 8 minutes ago; no exact timestamp printed",
+    "precipitation_percent": {
+      "12am": 30,
+      "1am": 30,
+      "2am": 30,
+      "3am": 40,
+      "4am": 40
+    },
+    "source": "The Weather Network",
+    "gui_forbidden": 0,
+    "steps": 11,
+    "seconds": 26.296,
+    "screenshot_sha256": "a165a7a55c099de98457332943b0eb82422c9aa8ced0aa9b19b76c7d0523b3d8",
+    "qa_harness_sha256": "058bb8cb3691affc3e8b97264c30b69faca74d6758e2b5719c3a2d2597c7cc8e"
+  }
+}

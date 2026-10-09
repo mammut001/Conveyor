@@ -1,0 +1,13 @@
+{
+  "pass": true,
+  "backend": "real isolated X11",
+  "planner": "scripted adversarial handoff",
+  "calls_during_takeover": 0,
+  "post_handoff_actions": [
+    "observe"
+  ],
+  "old_click_executed": false,
+  "fresh_screenshot_id": "20261009T032800Z-cua-1f0c7ce9",
+  "task_id": "ctsk_20261009T032759Z_bfb53ee7",
+  "display": 109
+}

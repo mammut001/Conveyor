@@ -1,0 +1,4277 @@
+{
+  "run_id": "20261009T032724Z",
+  "metrics": {
+    "success_percent": 100.0,
+    "stability_rounds": 20,
+    "total_rounds": 23,
+    "avg_steps": 8.0,
+    "avg_seconds": 14.28,
+    "launch_success_percent": 100.0,
+    "recovery_success_percent": 100.0,
+    "false_completion": 0,
+    "repeats": 0,
+    "repeats_definition": "identical click/type/hotkey/scroll model actions retried against the same pre-action screenshot and focus; wait/observe/loading excluded; indicator, not proof of a GUI failure",
+    "failure_classes": [
+      "ok",
+      "weather_needs_review"
+    ]
+  },
+  "runs": [
+    {
+      "case": "startup",
+      "round": 1,
+      "scenario": "closed",
+      "setup": {
+        "scenario": "closed",
+        "phase": "setup",
+        "commands": [],
+        "setup_ok": true,
+        "closed_pids": [
+          330668
+        ],
+        "remaining_owned_pids": []
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T032725Z_36d84c24",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032727Z-cua-521e70cf",
+          "screenshot_hash": "006b19200eaa0d98efc34edfa22f54e1361eaa26a9c4b6a849dceac09b5b8e4e",
+          "pid": 333722,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 1802
+        }
+      ],
+      "screenshot_id": "20261009T032727Z-cua-521e70cf",
+      "sha256": "006b19200eaa0d98efc34edfa22f54e1361eaa26a9c4b6a849dceac09b5b8e4e",
+      "window_focus_pid": 333722,
+      "window_focus_id": 6291459,
+      "duration_seconds": 4.198,
+      "steps": 1,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 1,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "local",
+      "round": 1,
+      "scenario": "closed",
+      "setup": {
+        "scenario": "closed",
+        "phase": "setup",
+        "commands": [],
+        "setup_ok": true,
+        "closed_pids": [
+          333722
+        ],
+        "remaining_owned_pids": []
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T032730Z_94052d77",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032732Z-cua-fa228223",
+          "screenshot_hash": "006b19200eaa0d98efc34edfa22f54e1361eaa26a9c4b6a849dceac09b5b8e4e",
+          "pid": 334318,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 2342
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 334318,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 334318,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 91
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032735Z-cua-b23c7f28",
+          "screenshot_hash": "abacb785a5a1951e72b88e32ecdfe419c04ee9832358e4571992756d530d3f21",
+          "pid": 334318,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 182
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 334318,
+            "text_len": 33,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 334318,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 244
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032738Z-cua-982a1ca3",
+          "screenshot_hash": "1e793254214025e3fb8d73df5d4b6a31cc1e6460d2d97184ec38352548ebcab0",
+          "pid": 334318,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 191
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 334318,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 334318,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 89
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032742Z-cua-0dc5ebd4",
+          "screenshot_hash": "69da5882004b2605d84177b21d8ee0c4a465dca7c2f2fb96a76899820a1a97e9",
+          "pid": 334318,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 190
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032742Z-cua-a64fa87e",
+          "screenshot_hash": "69da5882004b2605d84177b21d8ee0c4a465dca7c2f2fb96a76899820a1a97e9",
+          "pid": 334318,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 169
+        }
+      ],
+      "screenshot_id": "20261009T032742Z-cua-a64fa87e",
+      "sha256": "69da5882004b2605d84177b21d8ee0c4a465dca7c2f2fb96a76899820a1a97e9",
+      "window_focus_pid": 334318,
+      "window_focus_id": 6291459,
+      "duration_seconds": 15.275,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 1,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": "Firefox \u5df2\u6253\u5f00 http://127.0.0.1:19202/index.html\u3002\u5f53\u524d\u6807\u7b7e\u9875\u6587\u6863\u6807\u9898\u4e3a \"Conveyor E2E Test\"\uff08\u6807\u7b7e\u9875\u663e\u793a Conveyor E2E Test\uff0c\u7a97\u53e3\u6807\u9898\u4e3a \"Conveyor E2E Test \u2014 Mozilla Firefox\"\uff09\u3002\u9875\u9762\u6b63\u6587\u663e\u793a\u7684 Expected code \u4e3a MINT-2026-102\u3002",
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 1,
+      "scenario": "closed",
+      "setup": {
+        "scenario": "closed",
+        "phase": "setup",
+        "commands": [],
+        "setup_ok": true,
+        "closed_pids": [
+          334318
+        ],
+        "remaining_owned_pids": []
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T032746Z_12b9de7e",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032748Z-cua-6d6eb698",
+          "screenshot_hash": "006b19200eaa0d98efc34edfa22f54e1361eaa26a9c4b6a849dceac09b5b8e4e",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 2333
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 335299,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 152
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032750Z-cua-9f04157a",
+          "screenshot_hash": "2b960e8653879e3ddba2232673c0603a93108e2b777693216bb6bd666faf1fe0",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 177
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 335299,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 252
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032753Z-cua-98c16ca0",
+          "screenshot_hash": "46ef8ba974b2035383f513c87aed779b31c8891f3925c2124af00a89d53841ee",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 172
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 335299,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 86
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032757Z-cua-84e9d2e1",
+          "screenshot_hash": "2720e7fddf3d4040fe1335498970456e659b62816af95a913b981926e2613a60",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 177
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032757Z-cua-493d6fa7",
+          "screenshot_hash": "2720e7fddf3d4040fe1335498970456e659b62816af95a913b981926e2613a60",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 187
+        }
+      ],
+      "screenshot_id": "20261009T032757Z-cua-493d6fa7",
+      "sha256": "2720e7fddf3d4040fe1335498970456e659b62816af95a913b981926e2613a60",
+      "window_focus_pid": 335299,
+      "window_focus_id": 6291459,
+      "duration_seconds": 14.575,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 1,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 2,
+      "scenario": "open",
+      "setup": {
+        "scenario": "open",
+        "phase": "setup",
+        "commands": [],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459,
+        "foreground": {
+          "rc": 0,
+          "window_id": 6291459,
+          "pid": 335299,
+          "comm": "firefox"
+        }
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T032800Z_1842460e",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032800Z-cua-fc48a644",
+          "screenshot_hash": "2720e7fddf3d4040fe1335498970456e659b62816af95a913b981926e2613a60",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 224
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 335299,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 101
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032803Z-cua-1e7e3317",
+          "screenshot_hash": "3f1c85ddd431f767023cfe58004fac7efb3c0d44cc41c9a92f30f81fc26f1528",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 182
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 335299,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 259
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032806Z-cua-c385e737",
+          "screenshot_hash": "f7b189ec6f1281de77dcc4a54651be54ac07658a0e58700fa8d7b26397b79ee5",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 187
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 335299,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 87
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032810Z-cua-5a821469",
+          "screenshot_hash": "79542cfe4427e8508684642026bcf175bdc4ac5f42b90b608613f442c9ed07ca",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 174
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032810Z-cua-0dc793b1",
+          "screenshot_hash": "79542cfe4427e8508684642026bcf175bdc4ac5f42b90b608613f442c9ed07ca",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 189
+        }
+      ],
+      "screenshot_id": "20261009T032810Z-cua-0dc793b1",
+      "sha256": "79542cfe4427e8508684642026bcf175bdc4ac5f42b90b608613f442c9ed07ca",
+      "window_focus_pid": 335299,
+      "window_focus_id": 6291459,
+      "duration_seconds": 12.598,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 3,
+      "scenario": "minimized",
+      "setup": {
+        "scenario": "minimized",
+        "phase": "setup",
+        "commands": [
+          {
+            "xdotool": "windowminimize",
+            "window_id": 6291459,
+            "rc": 0
+          }
+        ],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T032813Z_76baefbb",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032813Z-cua-eb923784",
+          "screenshot_hash": "79542cfe4427e8508684642026bcf175bdc4ac5f42b90b608613f442c9ed07ca",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 237
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 335299,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 99
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032816Z-cua-2e88fa3c",
+          "screenshot_hash": "dd7307d8de30c9185a23082f78bd8636149265469282be1434b83bf63ea0b937",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 185
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 335299,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 251
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032819Z-cua-2e6bf62c",
+          "screenshot_hash": "3a693bad9728bfb28c9112a7e010719d3d7453cd1d9ca3dff2796add4b3a97f9",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 203
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 335299,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 106
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032822Z-cua-f4000bd0",
+          "screenshot_hash": "971d3c4f785db7624a77c60e7359b517a889ed4ba1b1e4741166adeab24755a6",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 194
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032823Z-cua-f0f7ed91",
+          "screenshot_hash": "971d3c4f785db7624a77c60e7359b517a889ed4ba1b1e4741166adeab24755a6",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 176
+        }
+      ],
+      "screenshot_id": "20261009T032823Z-cua-f0f7ed91",
+      "sha256": "971d3c4f785db7624a77c60e7359b517a889ed4ba1b1e4741166adeab24755a6",
+      "window_focus_pid": 335299,
+      "window_focus_id": 6291459,
+      "duration_seconds": 12.189,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 4,
+      "scenario": "launcher",
+      "setup": {
+        "scenario": "launcher",
+        "phase": "setup",
+        "commands": [
+          {
+            "setup_launch": "xfce4-appfinder",
+            "pid": 337964
+          }
+        ],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459,
+        "foreground": {
+          "rc": 0,
+          "window_id": 20971528,
+          "pid": 337964,
+          "comm": "xfce4-appfinder"
+        }
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T032826Z_42720176",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032826Z-cua-61573146",
+          "screenshot_hash": "13765eaf9eabea74a6d2a2326681f523139b6e650c9117495c4ca0e6231b9da7",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 273
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 335299,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 95
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032829Z-cua-d8998610",
+          "screenshot_hash": "8e39a4c57ce42ec0ad1813adb4b18f7cf5baeb5df97895c9a685108b74f34e5e",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 177
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 335299,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 244
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032833Z-cua-260fc652",
+          "screenshot_hash": "c2f663e61be017c9bdc6208935e6fbc62eb69ccc9359e44827797a9ae3994359",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 184
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 335299,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 118
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032837Z-cua-8a9c71d7",
+          "screenshot_hash": "04bca1321e5e9a7676415a5386272e07a6d733bb27d33ec815ba790bddd77e3a",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 183
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032837Z-cua-1aa6ab49",
+          "screenshot_hash": "04bca1321e5e9a7676415a5386272e07a6d733bb27d33ec815ba790bddd77e3a",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 177
+        }
+      ],
+      "screenshot_id": "20261009T032837Z-cua-1aa6ab49",
+      "sha256": "04bca1321e5e9a7676415a5386272e07a6d733bb27d33ec815ba790bddd77e3a",
+      "window_focus_pid": 335299,
+      "window_focus_id": 6291459,
+      "duration_seconds": 13.757,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 5,
+      "scenario": "otherpage",
+      "setup": {
+        "scenario": "otherpage",
+        "phase": "setup",
+        "commands": [
+          {
+            "xdotool": "key",
+            "window_id": 6291459,
+            "rc": 0
+          },
+          {
+            "xdotool": "type",
+            "window_id": 6291459,
+            "rc": 0
+          },
+          {
+            "xdotool": "key",
+            "window_id": 6291459,
+            "rc": 0
+          }
+        ],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459,
+        "foreground": {
+          "rc": 0,
+          "window_id": 6291459,
+          "pid": 335299,
+          "comm": "firefox"
+        }
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T032841Z_b2b11e28",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032841Z-cua-38c0c637",
+          "screenshot_hash": "2402d7e2931eb69103853d786a4728d4abacdb8536cd646d14e2a42001855d08",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 242
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 335299,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 112
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032844Z-cua-8b5bc9aa",
+          "screenshot_hash": "b2ee2fc35ad272aa0cdb90acd755583ad3a2f15d167ece57453fa6b40d010976",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 202
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 335299,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 269
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032848Z-cua-cea1ef06",
+          "screenshot_hash": "36b877088c01cf0474d841ea29e8c9a7b04f83838198deecb651897dd7e066e8",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 211
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 335299,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 134
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032851Z-cua-1ec3896e",
+          "screenshot_hash": "80aae9dd541ef49ae8071ffebbed3d040e677f6538ef0f5bd1f3a8f4d0599858",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 196
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032852Z-cua-2337c11b",
+          "screenshot_hash": "80aae9dd541ef49ae8071ffebbed3d040e677f6538ef0f5bd1f3a8f4d0599858",
+          "pid": 335299,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 186
+        }
+      ],
+      "screenshot_id": "20261009T032852Z-cua-2337c11b",
+      "sha256": "80aae9dd541ef49ae8071ffebbed3d040e677f6538ef0f5bd1f3a8f4d0599858",
+      "window_focus_pid": 335299,
+      "window_focus_id": 6291459,
+      "duration_seconds": 13.944,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 6,
+      "scenario": "closed",
+      "setup": {
+        "scenario": "closed",
+        "phase": "setup",
+        "commands": [],
+        "setup_ok": true,
+        "closed_pids": [
+          335299
+        ],
+        "remaining_owned_pids": []
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T032856Z_6231c9bb",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032857Z-cua-ba02b93a",
+          "screenshot_hash": "fd20f81444678f8582d41e482b13e3513af90764afdb166e67350d3f07a489db",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 1860
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 339946,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 127
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032901Z-cua-84efe9aa",
+          "screenshot_hash": "822b8e6b717fa742498270d05ceb66227b7d8ff89a174ecc47afc983ad108b26",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 195
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 339946,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 289
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032904Z-cua-614fd59d",
+          "screenshot_hash": "ed8593083cebc4a568ba61c69ed5834be29dbc0b87fb9692e7fd2e3513038717",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 206
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 339946,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 115
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032907Z-cua-e10c1d7d",
+          "screenshot_hash": "2402d7e2931eb69103853d786a4728d4abacdb8536cd646d14e2a42001855d08",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 191
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032908Z-cua-5439c17c",
+          "screenshot_hash": "2402d7e2931eb69103853d786a4728d4abacdb8536cd646d14e2a42001855d08",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 321
+        }
+      ],
+      "screenshot_id": "20261009T032908Z-cua-5439c17c",
+      "sha256": "2402d7e2931eb69103853d786a4728d4abacdb8536cd646d14e2a42001855d08",
+      "window_focus_pid": 339946,
+      "window_focus_id": 6291459,
+      "duration_seconds": 14.72,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 1,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 7,
+      "scenario": "open",
+      "setup": {
+        "scenario": "open",
+        "phase": "setup",
+        "commands": [],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459,
+        "foreground": {
+          "rc": 0,
+          "window_id": 6291459,
+          "pid": 339946,
+          "comm": "firefox"
+        }
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T032910Z_2645a165",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032911Z-cua-48b7a3e4",
+          "screenshot_hash": "2402d7e2931eb69103853d786a4728d4abacdb8536cd646d14e2a42001855d08",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 263
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 339946,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 124
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032914Z-cua-0ada226b",
+          "screenshot_hash": "5ad9b5b8bcf0fef82fec9afcfd65f9ec8ca405898bcab8a750e2c7e056cf86c3",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 214
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 339946,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 282
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032917Z-cua-5abac283",
+          "screenshot_hash": "d9bc487d8cf1e5ed6fcdcb91cc91a63db8965d8cb813bc409686831c292611a7",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 197
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 339946,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 104
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032922Z-cua-512e6cf4",
+          "screenshot_hash": "5899e5e2e901bf11d9cbe3aae2be84cdd024fc84af2652ebb38067c735787194",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 190
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032922Z-cua-bc8b1534",
+          "screenshot_hash": "5899e5e2e901bf11d9cbe3aae2be84cdd024fc84af2652ebb38067c735787194",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 178
+        }
+      ],
+      "screenshot_id": "20261009T032922Z-cua-bc8b1534",
+      "sha256": "5899e5e2e901bf11d9cbe3aae2be84cdd024fc84af2652ebb38067c735787194",
+      "window_focus_pid": 339946,
+      "window_focus_id": 6291459,
+      "duration_seconds": 14.482,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 8,
+      "scenario": "minimized",
+      "setup": {
+        "scenario": "minimized",
+        "phase": "setup",
+        "commands": [
+          {
+            "xdotool": "windowminimize",
+            "window_id": 6291459,
+            "rc": 0
+          }
+        ],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T032925Z_d1622e54",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032925Z-cua-f949669d",
+          "screenshot_hash": "5899e5e2e901bf11d9cbe3aae2be84cdd024fc84af2652ebb38067c735787194",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 249
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 339946,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 124
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032928Z-cua-45e3c9cb",
+          "screenshot_hash": "a1cec1764220a76d0ba6aa9318de7c7868e190396af1e548f1676bfb793a2071",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 183
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 339946,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 245
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032931Z-cua-a914a6e7",
+          "screenshot_hash": "26c826e889f2c0ce70da478b04049332a56c8917f60a162a4f3324d95b394432",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 187
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 339946,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 95
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032935Z-cua-27e13598",
+          "screenshot_hash": "e0e49ed5a2417d0ac992e45b8f010e7702b6d4d198d51ec24d46f4f5e8b9428a",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 171
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032935Z-cua-f6bd1bce",
+          "screenshot_hash": "e0e49ed5a2417d0ac992e45b8f010e7702b6d4d198d51ec24d46f4f5e8b9428a",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 174
+        }
+      ],
+      "screenshot_id": "20261009T032935Z-cua-f6bd1bce",
+      "sha256": "e0e49ed5a2417d0ac992e45b8f010e7702b6d4d198d51ec24d46f4f5e8b9428a",
+      "window_focus_pid": 339946,
+      "window_focus_id": 6291459,
+      "duration_seconds": 13.596,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 9,
+      "scenario": "launcher",
+      "setup": {
+        "scenario": "launcher",
+        "phase": "setup",
+        "commands": [
+          {
+            "setup_launch": "xfce4-appfinder",
+            "pid": 342964
+          }
+        ],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459,
+        "foreground": {
+          "rc": 0,
+          "window_id": 23068680,
+          "pid": 342964,
+          "comm": "xfce4-appfinder"
+        }
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T032939Z_44b8e01f",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032939Z-cua-a2a90b00",
+          "screenshot_hash": "e0e49ed5a2417d0ac992e45b8f010e7702b6d4d198d51ec24d46f4f5e8b9428a",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 276
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 339946,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 110
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032942Z-cua-aa0ccffc",
+          "screenshot_hash": "d31c47f7b0e104e56f2d03466dd7fb0455e5b4698d3cd18044824207fda7e9b3",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 190
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 339946,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 254
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032946Z-cua-6b8c704d",
+          "screenshot_hash": "91417f051d4d42901ad7c3b872a638c194b99b92c3a763dfe8cb927d89e6757e",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 189
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 339946,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 108
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032949Z-cua-c9ac791b",
+          "screenshot_hash": "1dcb383886930213319dab8a05d8353e0d32be2a38809aee46a03608410a63fa",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 174
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032950Z-cua-9cc9ebef",
+          "screenshot_hash": "1dcb383886930213319dab8a05d8353e0d32be2a38809aee46a03608410a63fa",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 175
+        }
+      ],
+      "screenshot_id": "20261009T032950Z-cua-9cc9ebef",
+      "sha256": "1dcb383886930213319dab8a05d8353e0d32be2a38809aee46a03608410a63fa",
+      "window_focus_pid": 339946,
+      "window_focus_id": 6291459,
+      "duration_seconds": 13.893,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 10,
+      "scenario": "otherpage",
+      "setup": {
+        "scenario": "otherpage",
+        "phase": "setup",
+        "commands": [
+          {
+            "xdotool": "key",
+            "window_id": 6291459,
+            "rc": 0
+          },
+          {
+            "xdotool": "type",
+            "window_id": 6291459,
+            "rc": 0
+          },
+          {
+            "xdotool": "key",
+            "window_id": 6291459,
+            "rc": 0
+          }
+        ],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459,
+        "foreground": {
+          "rc": 0,
+          "window_id": 6291459,
+          "pid": 339946,
+          "comm": "firefox"
+        }
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T032954Z_b208c50d",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032955Z-cua-5dfa53c6",
+          "screenshot_hash": "91e25350b52d574b42b9c9ff3f4e37dd93e5db08854bbac79eac3b55d3d6d178",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 240
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 339946,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 112
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T032957Z-cua-697cf0a5",
+          "screenshot_hash": "67159c114ed4a4041aff72d140c72865846505619037bb6bc632b50bf44ce146",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 187
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 339946,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 248
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033001Z-cua-aa6a6bdd",
+          "screenshot_hash": "7cd1811ea259e9bfb9fa30fe341df9e981fd39c303e2d38ef4d7349d75334aa8",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 193
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 339946,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 98
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033006Z-cua-d5f298a0",
+          "screenshot_hash": "542702509c8fe22ce2c922b866b72a11c079e34ae80405af4c532f4141995ebc",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 176
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033007Z-cua-97106b0a",
+          "screenshot_hash": "542702509c8fe22ce2c922b866b72a11c079e34ae80405af4c532f4141995ebc",
+          "pid": 339946,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 181
+        }
+      ],
+      "screenshot_id": "20261009T033007Z-cua-97106b0a",
+      "sha256": "542702509c8fe22ce2c922b866b72a11c079e34ae80405af4c532f4141995ebc",
+      "window_focus_pid": 339946,
+      "window_focus_id": 6291459,
+      "duration_seconds": 14.737,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 11,
+      "scenario": "closed",
+      "setup": {
+        "scenario": "closed",
+        "phase": "setup",
+        "commands": [],
+        "setup_ok": true,
+        "closed_pids": [
+          339946
+        ],
+        "remaining_owned_pids": []
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T033010Z_17dfcf42",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033012Z-cua-88ca4fd6",
+          "screenshot_hash": "006b19200eaa0d98efc34edfa22f54e1361eaa26a9c4b6a849dceac09b5b8e4e",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 1836
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 344093,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 110
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033015Z-cua-4eb0fa57",
+          "screenshot_hash": "1780ace9879495967b2dced24023081f4611b7a451e221b69cfca49f6da6e248",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 195
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 344093,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 256
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033017Z-cua-69d34997",
+          "screenshot_hash": "345c8ede891135ce44b418b3f87787a62bb6afdef4e937da30cc79999946fc1b",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 206
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 344093,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 102
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033021Z-cua-b4621b14",
+          "screenshot_hash": "91e25350b52d574b42b9c9ff3f4e37dd93e5db08854bbac79eac3b55d3d6d178",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 183
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033022Z-cua-eb5dfe14",
+          "screenshot_hash": "91e25350b52d574b42b9c9ff3f4e37dd93e5db08854bbac79eac3b55d3d6d178",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 179
+        }
+      ],
+      "screenshot_id": "20261009T033022Z-cua-eb5dfe14",
+      "sha256": "91e25350b52d574b42b9c9ff3f4e37dd93e5db08854bbac79eac3b55d3d6d178",
+      "window_focus_pid": 344093,
+      "window_focus_id": 6291459,
+      "duration_seconds": 14.197,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 1,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 12,
+      "scenario": "open",
+      "setup": {
+        "scenario": "open",
+        "phase": "setup",
+        "commands": [],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459,
+        "foreground": {
+          "rc": 0,
+          "window_id": 6291459,
+          "pid": 344093,
+          "comm": "firefox"
+        }
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T033024Z_d577d37f",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033024Z-cua-fcb5451d",
+          "screenshot_hash": "91e25350b52d574b42b9c9ff3f4e37dd93e5db08854bbac79eac3b55d3d6d178",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 244
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 344093,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 119
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033028Z-cua-b52e2245",
+          "screenshot_hash": "70b8c558feeb30c0aac87f095b4bb032b043329f9433e2f6ac74c9a916f2bc7d",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 200
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 344093,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 248
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033030Z-cua-d6852837",
+          "screenshot_hash": "7ba6941c9f3dfded520d0649daf4f9b1b7dafb833eb27c54561693fd1854b6e0",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 195
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 344093,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 119
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033034Z-cua-a978ad36",
+          "screenshot_hash": "d7848b6ff101204db20b08bd6a28b6b4819329fa3450aecef7bb7ac333435311",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 189
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033034Z-cua-58027a6e",
+          "screenshot_hash": "d7848b6ff101204db20b08bd6a28b6b4819329fa3450aecef7bb7ac333435311",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 182
+        }
+      ],
+      "screenshot_id": "20261009T033034Z-cua-58027a6e",
+      "sha256": "d7848b6ff101204db20b08bd6a28b6b4819329fa3450aecef7bb7ac333435311",
+      "window_focus_pid": 344093,
+      "window_focus_id": 6291459,
+      "duration_seconds": 12.891,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 13,
+      "scenario": "minimized",
+      "setup": {
+        "scenario": "minimized",
+        "phase": "setup",
+        "commands": [
+          {
+            "xdotool": "windowminimize",
+            "window_id": 6291459,
+            "rc": 0
+          }
+        ],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T033037Z_c1ae11a7",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033037Z-cua-49d01134",
+          "screenshot_hash": "d7848b6ff101204db20b08bd6a28b6b4819329fa3450aecef7bb7ac333435311",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 256
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 344093,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 115
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033040Z-cua-38dc5e08",
+          "screenshot_hash": "bcf281f0433823925853163f12495c7e960f139b8bcc302f81fd3e80fdd85d2d",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 198
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 344093,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 252
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033043Z-cua-3261365e",
+          "screenshot_hash": "eec5d3f5ac1911831f72e49d9cefb67dd2cf53a979c079ca922834c862a2eb41",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 200
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 344093,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 110
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033047Z-cua-f77ebdfc",
+          "screenshot_hash": "84fa269e74296fe7e35088a90a34bd2bb826fb0178f6b7647a4f800698290cf8",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 222
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033048Z-cua-2d409fae",
+          "screenshot_hash": "84fa269e74296fe7e35088a90a34bd2bb826fb0178f6b7647a4f800698290cf8",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 197
+        }
+      ],
+      "screenshot_id": "20261009T033048Z-cua-2d409fae",
+      "sha256": "84fa269e74296fe7e35088a90a34bd2bb826fb0178f6b7647a4f800698290cf8",
+      "window_focus_pid": 344093,
+      "window_focus_id": 6291459,
+      "duration_seconds": 14.279,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 14,
+      "scenario": "launcher",
+      "setup": {
+        "scenario": "launcher",
+        "phase": "setup",
+        "commands": [
+          {
+            "setup_launch": "xfce4-appfinder",
+            "pid": 346278
+          }
+        ],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459,
+        "foreground": {
+          "rc": 0,
+          "window_id": 25165832,
+          "pid": 346278,
+          "comm": "xfce4-appfinder"
+        }
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T033052Z_f856bf0f",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033052Z-cua-f5d4012d",
+          "screenshot_hash": "8c78cab7b8ff5b346aba49e89694cd631058bf5c68abeb54ce5654d50549cc84",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 285
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 344093,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 118
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033055Z-cua-c7881f72",
+          "screenshot_hash": "f6b4987acba767a565bab562a4b4e67a3c6a2362e40016a42230e0f16376e670",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 200
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 344093,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 253
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033058Z-cua-4166612a",
+          "screenshot_hash": "ab3bd86f0839f5e77f9c8a9a95e3902229baa4c05caf18ccc6f459d00d13b624",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 199
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 344093,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 112
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033102Z-cua-1d1acf21",
+          "screenshot_hash": "28e93c01666a25af3501db17eb507eb9e7b0d3c67f2f3c2a250275602a4b21a5",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 191
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033103Z-cua-b715e9d6",
+          "screenshot_hash": "28e93c01666a25af3501db17eb507eb9e7b0d3c67f2f3c2a250275602a4b21a5",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 188
+        }
+      ],
+      "screenshot_id": "20261009T033103Z-cua-b715e9d6",
+      "sha256": "28e93c01666a25af3501db17eb507eb9e7b0d3c67f2f3c2a250275602a4b21a5",
+      "window_focus_pid": 344093,
+      "window_focus_id": 6291459,
+      "duration_seconds": 13.325,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 15,
+      "scenario": "otherpage",
+      "setup": {
+        "scenario": "otherpage",
+        "phase": "setup",
+        "commands": [
+          {
+            "xdotool": "key",
+            "window_id": 6291459,
+            "rc": 0
+          },
+          {
+            "xdotool": "type",
+            "window_id": 6291459,
+            "rc": 0
+          },
+          {
+            "xdotool": "key",
+            "window_id": 6291459,
+            "rc": 0
+          }
+        ],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459,
+        "foreground": {
+          "rc": 0,
+          "window_id": 6291459,
+          "pid": 344093,
+          "comm": "firefox"
+        }
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T033107Z_7eada8f3",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033107Z-cua-69344efd",
+          "screenshot_hash": "102ec4f3d944aef4cdd97bf7b4ad5fed69069ac03701bb614430d3a274d2a71f",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 253
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 344093,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 152
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033111Z-cua-4e92a417",
+          "screenshot_hash": "5a42a53720d5af60c473e568c42668f7a5787f3d66b84ed53596e817c0ecf053",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 199
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 344093,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 259
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033114Z-cua-8af087a0",
+          "screenshot_hash": "5846d836b6370be7bd3ac8b1f7d2e6b41e9f9cc3217efb27893fc429ce02988e",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 193
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 344093,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 112
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033121Z-cua-23305fbf",
+          "screenshot_hash": "e9755780f2b6c6fcd16470847d92d8303b211e3b3ec524087427531cf72563e8",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 210
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033121Z-cua-1bdfa811",
+          "screenshot_hash": "e9755780f2b6c6fcd16470847d92d8303b211e3b3ec524087427531cf72563e8",
+          "pid": 344093,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 203
+        }
+      ],
+      "screenshot_id": "20261009T033121Z-cua-1bdfa811",
+      "sha256": "e9755780f2b6c6fcd16470847d92d8303b211e3b3ec524087427531cf72563e8",
+      "window_focus_pid": 344093,
+      "window_focus_id": 6291459,
+      "duration_seconds": 17.202,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 16,
+      "scenario": "closed",
+      "setup": {
+        "scenario": "closed",
+        "phase": "setup",
+        "commands": [],
+        "setup_ok": true,
+        "closed_pids": [
+          344093
+        ],
+        "remaining_owned_pids": []
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T033125Z_4b103f53",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033126Z-cua-8ac99a78",
+          "screenshot_hash": "006b19200eaa0d98efc34edfa22f54e1361eaa26a9c4b6a849dceac09b5b8e4e",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 1866
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 347414,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 116
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033129Z-cua-cf7bbbeb",
+          "screenshot_hash": "d195ae3e527bba9c20f86adc83b02ff5772ff80a06a179042f0c869435b1e270",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 204
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 347414,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 263
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033132Z-cua-1a59b441",
+          "screenshot_hash": "8b73995df8b4f406f105c2254aff125d1d8d390d41d7f2f24af9c543ede77ca8",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 184
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 347414,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 111
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033136Z-cua-03080b3f",
+          "screenshot_hash": "102ec4f3d944aef4cdd97bf7b4ad5fed69069ac03701bb614430d3a274d2a71f",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 189
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033136Z-cua-8cc099a2",
+          "screenshot_hash": "102ec4f3d944aef4cdd97bf7b4ad5fed69069ac03701bb614430d3a274d2a71f",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 198
+        }
+      ],
+      "screenshot_id": "20261009T033136Z-cua-8cc099a2",
+      "sha256": "102ec4f3d944aef4cdd97bf7b4ad5fed69069ac03701bb614430d3a274d2a71f",
+      "window_focus_pid": 347414,
+      "window_focus_id": 6291459,
+      "duration_seconds": 13.938,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 1,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 17,
+      "scenario": "open",
+      "setup": {
+        "scenario": "open",
+        "phase": "setup",
+        "commands": [],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459,
+        "foreground": {
+          "rc": 0,
+          "window_id": 6291459,
+          "pid": 347414,
+          "comm": "firefox"
+        }
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T033139Z_663b1f05",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033139Z-cua-62d1a5b7",
+          "screenshot_hash": "102ec4f3d944aef4cdd97bf7b4ad5fed69069ac03701bb614430d3a274d2a71f",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 255
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 347414,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 120
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033142Z-cua-60e346dc",
+          "screenshot_hash": "1b14935942be711408ce10267934f109102109522c81fc05eaabe16e354225c7",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 198
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 347414,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 259
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033145Z-cua-f5e91653",
+          "screenshot_hash": "72362c58cc43d7ede70a1b719a9e113761ce603140aea512ad9ab4c81056460b",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 197
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 347414,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 107
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033150Z-cua-31ac4622",
+          "screenshot_hash": "9a526b644c3548c29b494c779d14ceb5cbaeff93b53cb3a8bd0c938a65cce4b6",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 188
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033151Z-cua-516c5290",
+          "screenshot_hash": "9a526b644c3548c29b494c779d14ceb5cbaeff93b53cb3a8bd0c938a65cce4b6",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 184
+        }
+      ],
+      "screenshot_id": "20261009T033151Z-cua-516c5290",
+      "sha256": "9a526b644c3548c29b494c779d14ceb5cbaeff93b53cb3a8bd0c938a65cce4b6",
+      "window_focus_pid": 347414,
+      "window_focus_id": 6291459,
+      "duration_seconds": 14.836,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 18,
+      "scenario": "minimized",
+      "setup": {
+        "scenario": "minimized",
+        "phase": "setup",
+        "commands": [
+          {
+            "xdotool": "windowminimize",
+            "window_id": 6291459,
+            "rc": 0
+          }
+        ],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T033154Z_9b1dcfbf",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033154Z-cua-e43ce388",
+          "screenshot_hash": "9a526b644c3548c29b494c779d14ceb5cbaeff93b53cb3a8bd0c938a65cce4b6",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 264
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 347414,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 121
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033156Z-cua-516ff8a4",
+          "screenshot_hash": "3f570ab11e3e381baa545a796e508e951cc0475b055975a48f8de228f2c3267e",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 205
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 347414,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 259
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033159Z-cua-495a46aa",
+          "screenshot_hash": "8c9b12c62292d1bb8064e41c691d8dab486eb1732f95f955bb15379d42e5eb2e",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 196
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 347414,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 113
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033203Z-cua-d4521615",
+          "screenshot_hash": "319ab2464c20263703ab103f854ebbb7d88099c568622623f86ee1a068fc29cc",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 195
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033204Z-cua-45921c1b",
+          "screenshot_hash": "319ab2464c20263703ab103f854ebbb7d88099c568622623f86ee1a068fc29cc",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 193
+        }
+      ],
+      "screenshot_id": "20261009T033204Z-cua-45921c1b",
+      "sha256": "319ab2464c20263703ab103f854ebbb7d88099c568622623f86ee1a068fc29cc",
+      "window_focus_pid": 347414,
+      "window_focus_id": 6291459,
+      "duration_seconds": 12.477,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 19,
+      "scenario": "launcher",
+      "setup": {
+        "scenario": "launcher",
+        "phase": "setup",
+        "commands": [
+          {
+            "setup_launch": "xfce4-appfinder",
+            "pid": 349545
+          }
+        ],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459,
+        "foreground": {
+          "rc": 0,
+          "window_id": 27262984,
+          "pid": 349545,
+          "comm": "xfce4-appfinder"
+        }
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T033207Z_e2851038",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033207Z-cua-3e73e1a8",
+          "screenshot_hash": "319ab2464c20263703ab103f854ebbb7d88099c568622623f86ee1a068fc29cc",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 291
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 347414,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 122
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033210Z-cua-749382af",
+          "screenshot_hash": "41929149701d3cfaaf332b954a62c6c6f333b8e78f76402aa01a0075709c1b62",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 198
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 347414,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 267
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033213Z-cua-ee5da025",
+          "screenshot_hash": "5da9e360ae4dbbbc62b441ce9a36e912d40119c2ab3c92f56906b4a60d22fed9",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 199
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 347414,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 116
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033223Z-cua-b8d1eb7a",
+          "screenshot_hash": "e7483121422c397c1f646dd5e767eb8cbee78fb83c638b2105c5fc20eb031ce9",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 197
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033223Z-cua-5266ee76",
+          "screenshot_hash": "e7483121422c397c1f646dd5e767eb8cbee78fb83c638b2105c5fc20eb031ce9",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 192
+        }
+      ],
+      "screenshot_id": "20261009T033223Z-cua-5266ee76",
+      "sha256": "e7483121422c397c1f646dd5e767eb8cbee78fb83c638b2105c5fc20eb031ce9",
+      "window_focus_pid": 347414,
+      "window_focus_id": 6291459,
+      "duration_seconds": 18.903,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "stability",
+      "round": 20,
+      "scenario": "otherpage",
+      "setup": {
+        "scenario": "otherpage",
+        "phase": "setup",
+        "commands": [
+          {
+            "xdotool": "key",
+            "window_id": 6291459,
+            "rc": 0
+          },
+          {
+            "xdotool": "type",
+            "window_id": 6291459,
+            "rc": 0
+          },
+          {
+            "xdotool": "key",
+            "window_id": 6291459,
+            "rc": 0
+          }
+        ],
+        "setup_ok": true,
+        "ensure": {
+          "ok": true,
+          "error": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "name": "Firefox"
+        },
+        "verified_window_id": 6291459,
+        "foreground": {
+          "rc": 0,
+          "window_id": 6291459,
+          "pid": 347414,
+          "comm": "firefox"
+        }
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T033227Z_40b9b0a8",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": true,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true,
+            "target_app": "Firefox"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033227Z-cua-d3f81f5b",
+          "screenshot_hash": "2720e7fddf3d4040fe1335498970456e659b62816af95a913b981926e2613a60",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 270
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 347414,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 123
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033230Z-cua-622e61b9",
+          "screenshot_hash": "8168bc0f48d416bc64cf7b87846a9f746905720b7fc5167ecef59e1842bf1b0a",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 204
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 347414,
+            "text_len": 34,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 265
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033233Z-cua-8cae3f52",
+          "screenshot_hash": "247eee73ee57adc8acb22bec89375abbdd2d07a836b7ec661d8f24bebd4020eb",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 206
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 347414,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 116
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033239Z-cua-09c707e0",
+          "screenshot_hash": "fad9e42d4893710bdff98bc730b600f691ca808972c3c63932e30dc0e20073ed",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 195
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033240Z-cua-6533d322",
+          "screenshot_hash": "fad9e42d4893710bdff98bc730b600f691ca808972c3c63932e30dc0e20073ed",
+          "pid": 347414,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 194
+        }
+      ],
+      "screenshot_id": "20261009T033240Z-cua-6533d322",
+      "sha256": "fad9e42d4893710bdff98bc730b600f691ca808972c3c63932e30dc0e20073ed",
+      "window_focus_pid": 347414,
+      "window_focus_id": 6291459,
+      "duration_seconds": 15.026,
+      "steps": 8,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 0,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": true,
+      "requires_supervisor_screenshot_review": false,
+      "observed_title": "Conveyor E2E Test \u2014 Mozilla Firefox",
+      "summary_sanitized": null,
+      "failure_class": "ok"
+    },
+    {
+      "case": "weather",
+      "round": 1,
+      "scenario": "closed",
+      "setup": {
+        "scenario": "closed",
+        "phase": "setup",
+        "commands": [],
+        "setup_ok": true,
+        "closed_pids": [
+          347414
+        ],
+        "remaining_owned_pids": []
+      },
+      "setup_ok": true,
+      "task_id": "ctsk_20261009T033243Z_e035394d",
+      "status": "done",
+      "blocked_reason": null,
+      "summary_correct": null,
+      "result_status": "done",
+      "trajectory": [
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe",
+            "ensure_browser": true
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033245Z-cua-18ff4ada",
+          "screenshot_hash": "006b19200eaa0d98efc34edfa22f54e1361eaa26a9c4b6a849dceac09b5b8e4e",
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 1925
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 2,
+            "keys_redacted": "***",
+            "pid": 350788,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 125
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033249Z-cua-195e2d22",
+          "screenshot_hash": "18f046270b30dec809432d4da4b25cd91270b83603c54ed9c19cdd91dbeffc4d",
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 208
+        },
+        {
+          "action_type": "type",
+          "action_redacted": {
+            "action": "type",
+            "pid": 350788,
+            "text_len": 68,
+            "text_redacted": "***",
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 438
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033252Z-cua-5d859b5b",
+          "screenshot_hash": "8e59dd9232de2b212c07136efc1109addd99f7663b8047aecd22a7033bf9a498",
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 196
+        },
+        {
+          "action_type": "hotkey",
+          "action_redacted": {
+            "action": "hotkey",
+            "keys_len": 1,
+            "keys_redacted": "***",
+            "pid": 350788,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 119
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033255Z-cua-9a2474fa",
+          "screenshot_hash": "562027e826935bcbdd18d48f257b0ae275ba2f8b25ab504cf4ab782c4bf74d3e",
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 452
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033256Z-cua-23652479",
+          "screenshot_hash": "fb1e85b2ed5096c555efc01a9bd945e4bf04de9e0fcced6d5f4a89231b7542ee",
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 401
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033257Z-cua-f15804d7",
+          "screenshot_hash": "4c0ab1fb71efec47868eac24eb43c3996efee8f49251ff14837e90ed72173bfa",
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 339
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033258Z-cua-73b2f7c8",
+          "screenshot_hash": "6a7d44454f397255941cac4e1df78e8be8db794cf5cc883a1e36f2b6e1fa313a",
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 373
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033259Z-cua-8e491f3a",
+          "screenshot_hash": "a3a0baa3a9511b6e88b1eca9e0145af0dfcd83c6ab2963691ea852da4af9da84",
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 477
+        },
+        {
+          "action_type": "wait",
+          "action_redacted": {
+            "action": "wait",
+            "seconds": 2
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 2100
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033305Z-cua-e11c5b59",
+          "screenshot_hash": "400541e72023790e566a8db884598169048606d4a03f41d44c148f64afb1dc00",
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 349
+        },
+        {
+          "action_type": "scroll",
+          "action_redacted": {
+            "action": "scroll",
+            "dx": 0,
+            "dy": 400,
+            "pid": 350788,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 411
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033310Z-cua-af80e94e",
+          "screenshot_hash": "0048acf262646243dc3ac507860fa88cd930ddb6c3d8ae310a2ef04969728804",
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 608
+        },
+        {
+          "action_type": "scroll",
+          "action_redacted": {
+            "action": "scroll",
+            "dx": 0,
+            "dy": 500,
+            "pid": 350788,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 522
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033316Z-cua-5cba016e",
+          "screenshot_hash": "77523950cae672370e145a41f2bc047cf8c14f29282c242353ad8833c7cf6232",
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 631
+        },
+        {
+          "action_type": "scroll",
+          "action_redacted": {
+            "action": "scroll",
+            "dx": 0,
+            "dy": -400,
+            "pid": 350788,
+            "window_id": 6291459
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": null,
+          "screenshot_hash": null,
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 398
+        },
+        {
+          "action_type": "observe",
+          "action_redacted": {
+            "action": "observe"
+          },
+          "result_ok": true,
+          "error": null,
+          "screenshot_id": "20261009T033323Z-cua-35f8bdcc",
+          "screenshot_hash": "c45e399071a3f5d2e16883b0d248bdbb1bd8a2c3d496de827fc0de2b4dee66d7",
+          "pid": 350788,
+          "window_id": 6291459,
+          "active_app": "Firefox",
+          "duration_ms": 610
+        }
+      ],
+      "screenshot_id": "20261009T033323Z-cua-35f8bdcc",
+      "sha256": "c45e399071a3f5d2e16883b0d248bdbb1bd8a2c3d496de827fc0de2b4dee66d7",
+      "window_focus_pid": 350788,
+      "window_focus_id": 6291459,
+      "duration_seconds": 51.824,
+      "steps": 19,
+      "repeated_unchanged_operations": 0,
+      "owned_launch_count": 1,
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "gui_forbidden": 0,
+      "browser_foreground": true,
+      "fresh_image": true,
+      "structural_ok": true,
+      "success": false,
+      "requires_supervisor_screenshot_review": true,
+      "observed_title": "Montr\u00e9al, QC Current Weather - The Weather Network \u2014 Mozilla Firefox",
+      "summary_sanitized": "Place: Montr\u00e9al, Quebec, Canada. Current Conditions: 12\u00b0C and Clear. Observation local date: October 8, 2026. Precipitation: page shows a low chance of a shower overnight. Source: The Weather Network (theweathernetwork.com).",
+      "failure_class": "weather_needs_review"
+    }
+  ]
+}

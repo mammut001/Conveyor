@@ -76,7 +76,7 @@ not a shell and not a model-supplied command.
 - If `DISPLAY` is unset, or `XAUTHORITY` is missing, or the X server does not answer `getdisplaygeometry`, the controller returns an error and does not start a browser.
 - Typing and hotkeys on Linux are sent only while the verified window is still mapped and foreground. macOS still delivers keys to the AX pid in the background.
 - A repeated click that leaves the same window and the same pixels gets one different recovery (a plain observation, or one verified browser focus). If that is still stuck, the task stops. A different action with the same image is not a stall. A missing screenshot, a stale pre-action screenshot, an `about:blank` title, or a browser error-page title cannot be reported as a finished webpage. The loop does not read the image to decide whether the page content is correct.
-- Browser Enter/Return and clicks wait for painting, then sample fresh screenshots until two consecutive samples agree, with a bounded deadline. The planner cannot finish while navigation is unsettled. This is a GUI stability check, not proof of page content. Results store a coarse `browser_page_state`; raw window titles remain forbidden.
+- Browser Enter/Return and clicks wait for painting, then sample fresh screenshots until two consecutive samples agree. After the full bounded paint interval, changing pixels are also allowed when multiple fresh observations consistently show the same foreground browser in loaded state; ads and clocks do not alone prove failure. Loading/error/missing-image/focus-change states remain rejected, with one late-page recovery. The planner cannot finish while navigation is unsettled. Editing the address bar also blocks completion until Enter succeeds on the same window; draft-only goals and ordinary URL form fields remain supported. This is a GUI stability check, not proof of page content. Results store a coarse `browser_page_state`; raw window titles remain forbidden.
 - Linux cannot use the generic installed-app launcher to start arbitrary applications. The macOS launcher and Safari path remain available. An explicitly requested browser must match the observed browser before completion.
 
 On a machine with Xvfb and xdotool, `python -m unittest tests.test_linux_browser_x11_integration` checks the controller against a private X server. The test starts its own Xvfb and does not attach to the host display.
@@ -108,9 +108,13 @@ contain URLs and instructions, never expected answers. Tab titles and body
 headings are explicitly distinguished; the verifier still checks both the
 tab title and exact random code.
 
+Full-screen planning uses only the current screenshot per decision, the full goal, and redacted action history. Explicit address-focus/submission state prevents confusing an edited address with a loaded page. The legacy AX/macOS thread-resume path is unchanged.
+
 The harness uses the real CodexPlanner and X11 backend. It disables auxiliary
 model tools and audits event types; forbidden calls fail GUI-only acceptance.
 It writes incremental results and actual screenshots to `e2e/<run-id>/`.
-Weather requires a separate screenshot review of the returned data. Repeated
+Weather requires a separate screenshot review of current conditions, observed local date/time, precipitation if shown, and the source. A next-day forecast is not a substitute for current conditions. Repeated
 unchanged-operation counts are measured in memory without persisting keyboard
 text or its fingerprint. These counts indicate repetition, not proven failure.
+
+PR #102 acceptance evidence and known limits: [Linux VPS report](testing/pr102-linux-acceptance.md).
