@@ -47,13 +47,13 @@ class LinuxBrowserTest(unittest.TestCase):
         def run(*argv):
             observed.append(argv)
             if argv[1] == "search":
-                return _cp(*argv, out="4242\\n")
+                return _cp(*argv, out="4242\n")
             if argv[1] == "windowactivate":
                 return _cp(*argv)
             if argv[1] == "getactivewindow":
-                return _cp(*argv, out="4242\\n")
+                return _cp(*argv, out="4242\n")
             if argv[1] == "getwindowpid":
-                return _cp(*argv, out="123\\n")
+                return _cp(*argv, out="123\n")
             return _cp(*argv, rc=1)
 
         controller._run = run
@@ -69,9 +69,9 @@ class LinuxBrowserTest(unittest.TestCase):
         controller = LinuxBrowserController()
         def run(*argv):
             if argv[1] == "search":
-                return _cp(*argv, out="4242\\n")
+                return _cp(*argv, out="4242\n")
             if argv[1] == "getactivewindow":
-                return _cp(*argv, out="5555\\n")
+                return _cp(*argv, out="5555\n")
             return _cp(*argv)
         controller._run = run
         self.assertEqual(controller.ensure("Firefox")["error"], "browser_activate_failed")
