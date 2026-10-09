@@ -116,6 +116,22 @@ def _browser_policy_allows(settings: Settings) -> bool:
     return True
 
 
+def _observe_requests_browser(action: dict) -> bool:
+    """True when this observe asks the display controller to show a browser.
+
+    Those steps must not sit in the supervisor wait. Launch stays inside
+    the claimed execute path, after takeover checks.
+    """
+    if not isinstance(action, dict) or action.get("action") != "observe":
+        return False
+    if action.get("ensure_browser") is True:
+        return True
+    from desktop_linux_browser import canonical_browser
+
+    target = action.get("target_app")
+    return bool(target) and canonical_browser(target) is not None
+
+
 class X11Desktop:
     """Blocking operations on one X display."""
 
@@ -231,7 +247,8 @@ class X11Desktop:
     def active_window(self) -> dict:
         """Read-only focus identity on this display. Missing fields stay absent.
 
-        The title is capped and never logged: it can be private UI text.
+        A window title can be private UI text. It is classified into
+        ``browser_page_state`` and is not returned.
         """
         try:
             active = self._run("xdotool", "getactivewindow", timeout=5)
@@ -244,13 +261,17 @@ class X11Desktop:
         pid = self._window_pid(wid)
         if pid is not None:
             out["pid"] = pid
+        title = ""
         try:
             named = self._run("xdotool", "getwindowname", wid, timeout=5)
-            title = (named.stdout or "").strip()
-            if named.returncode == 0 and title:
-                out["window_title"] = title[:120]
+            if named.returncode == 0:
+                title = (named.stdout or "").strip()[:120]
         except (OSError, subprocess.SubprocessError):
-            pass
+            title = ""
+        # The title can be private UI text. Keep only the coarse state.
+        from desktop_computer_requests import browser_page_state_from_title
+
+        out["browser_page_state"] = browser_page_state_from_title(title)
         return out
 
     def has_browser_window(self) -> bool:
@@ -491,7 +512,6 @@ class X11ComputerBackend:
         from agent_desktops import request_browser
 
         request_browser(self.settings, self.agent_id)
-        self._prepared = True
         deadline = time.monotonic() + BROWSER_WAIT_SECONDS
         while time.monotonic() < deadline:
             if self._takeover_active(self.settings):
@@ -501,7 +521,10 @@ class X11ComputerBackend:
             if await asyncio.to_thread(self.desktop.has_browser_window):
                 # Let the first page paint before the first screenshot.
                 await asyncio.sleep(3.0)
+                self._prepared = True
                 return
+        # Leave _prepared false so a missed launch is retried. Marking
+        # success here hid a browser that never appeared.
         logger.warning("agent %s: no window appeared on its desktop", self.agent_id)
 
     async def execute_step(self, settings: Settings, task_id: str, step_id: str, action: dict) -> dict:
@@ -509,7 +532,10 @@ class X11ComputerBackend:
 
         if self._takeover_active(settings):
             raise ComputerBackendError("human_takeover_active")
-        await self._prepare()
+        # A browser observe launches through the claimed step's controller.
+        # The supervisor request is only for callers that do not name a browser.
+        if not _observe_requests_browser(action):
+            await self._prepare()
         if self._takeover_active(settings):
             raise ComputerBackendError("human_takeover_active")
         claimed = claim_computer_step(settings, step_id, self.node_id)

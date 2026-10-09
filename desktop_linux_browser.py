@@ -271,8 +271,14 @@ def _class_matches(browser: str, class_name: str) -> bool:
 _WM_CLASS_RE = re.compile(
     r'WM_CLASS\(STRING\)\s*=\s*"((?:\\.|[^"\\])*)"\s*,\s*"((?:\\.|[^"\\])*)"'
 )
-# Snap Firefox reports this pair. It is not a substring match on "firefox".
-_SNAP_FIREFOX_CLASS = ("Firefox", "firefox_firefox")
+# Snap Firefox pairs, matched exactly. A substring of "firefox" is not enough.
+# The visible browser is ("Navigator", "firefox_firefox"). The profile-lock
+# dialog is ("Firefox", "firefox_firefox") and is still rejected by window
+# type. The hidden helper is ("firefox_firefox", "Firefox_firefox").
+_SNAP_FIREFOX_PAIRS = frozenset({
+    ("Firefox", "firefox_firefox"),
+    ("Navigator", "firefox_firefox"),
+})
 
 
 def parse_wm_class(text: str) -> tuple[str, str] | None:
@@ -286,12 +292,14 @@ def parse_wm_class(text: str) -> tuple[str, str] | None:
 def wm_class_matches(browser: str, instance: str, klass: str) -> bool:
     """Exact WM_CLASS pair for one allow-listed browser.
 
-    Snap Firefox is ``"Firefox", "firefox_firefox"``. Other builds match the
-    existing class or instance token exactly (``firefox``, ``Navigator``, …).
+    Snap's visible window is ``"Navigator", "firefox_firefox"``. The dialog
+    pair ``"Firefox", "firefox_firefox"`` matches here and is rejected later
+    unless its type is normal. The hidden helper pair does not match.
+    Other builds match the class or instance token exactly (``firefox``, …).
     """
     inst = (instance or "").strip()
     kind = (klass or "").strip()
-    if browser == "Firefox" and (inst, kind) == _SNAP_FIREFOX_CLASS:
+    if browser == "Firefox" and (inst, kind) in _SNAP_FIREFOX_PAIRS:
         return True
     if kind == "firefox_firefox" or inst == "firefox_firefox":
         return False

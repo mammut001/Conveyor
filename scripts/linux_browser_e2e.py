@@ -12,8 +12,10 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -23,8 +25,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-PROTECTED_FIREFOX_PIDS = {24589}
 PRODUCTION_ENV = Path("/opt/conveyor/.env")
+PAGE_TITLE = "Conveyor E2E Test"
+SNAP_TEST_XAUTHORITY = "/home/ubuntu/snap/firefox/common/conveyor-pr102-test/Xauthority"
+_XAUTH_TEST_MARKER = "conveyor-pr102-test"
 FIXTURE_ORIGIN = "http://127.0.0.1:19202"
 FORBIDDEN_ITEM_TYPES = {
     "command_execution", "local_shell", "shell_command", "shell",
@@ -58,6 +62,50 @@ def _parse_cases(text: str) -> list[str]:
     return parts
 
 
+def _parse_display(value: object) -> int:
+    """Accept ``109`` or the session string ``':109'``."""
+    if isinstance(value, bool) or value is None:
+        _refuse("manifest display missing")
+    if isinstance(value, int):
+        display = value
+    else:
+        text = str(value).strip()
+        if text.startswith(":"):
+            text = text[1:]
+        if not text.isdigit():
+            _refuse("manifest display missing")
+        display = int(text)
+    if display in {0, 1} or display < 2:
+        _refuse("display 0 and 1 are refused")
+    return display
+
+
+def _accept_xauthority(authority: str, root: Path) -> None:
+    """Private test cookie only. A generic ``~/.Xauthority`` is refused.
+
+    The Snap Firefox test cookie is the exact path below. It is mode 0600,
+    owned by this user, and lives under the ``conveyor-pr102-test`` marker.
+    """
+    if not authority or not os.path.isfile(authority):
+        _refuse("private X authority missing")
+    try:
+        info = os.stat(authority)
+    except OSError:
+        _refuse("private X authority unreadable")
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        _refuse("X authority mode is not 0600")
+    if info.st_uid != os.getuid():
+        _refuse("X authority owner mismatch")
+    if authority == SNAP_TEST_XAUTHORITY:
+        if _XAUTH_TEST_MARKER not in authority:
+            _refuse("X authority test marker missing")
+        return
+    if authority.endswith("/.Xauthority"):
+        _refuse("generic home X authority is refused")
+    if not _under(Path(authority), root) and not authority.startswith("/tmp/"):
+        _refuse("X authority is not a private test cookie")
+
+
 def _load_manifest(path: Path, root: Path) -> tuple[int, str]:
     if not path.is_file():
         _refuse("manifest missing")
@@ -65,17 +113,9 @@ def _load_manifest(path: Path, root: Path) -> tuple[int, str]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         _refuse("manifest unreadable")
-    try:
-        display = int(data["display"])
-    except (KeyError, TypeError, ValueError):
-        _refuse("manifest display missing")
-    if display in {0, 1} or display < 2:
-        _refuse("display 0 and 1 are refused")
+    display = _parse_display(data.get("display"))
     authority = str(data.get("xauthority") or data.get("Xauthority") or "")
-    if not authority or not os.path.isfile(authority):
-        _refuse("private X authority missing")
-    if not _under(Path(authority), root) and not authority.startswith("/tmp/"):
-        _refuse("X authority is not a private test cookie")
+    _accept_xauthority(authority, root)
     return display, authority
 
 
@@ -139,11 +179,12 @@ def _settings(root: Path, wrapper: Path):
     settings = load_runtime_settings(PRODUCTION_ENV)
     from dataclasses import replace
 
-    model = settings.codex_model or "deepseek-flash"
+    # None keeps the CLI's configured model. Screenshot vision already uses
+    # the default DeepSeek Flash path when the operator has not pinned one.
     settings = replace(
         settings,
         codex_bin=str(wrapper),
-        codex_model=model,
+        codex_model=settings.codex_model,
         codex_workspace_root=workspace,
         codex_task_root=tasks,
         codex_memory_root=memory,
@@ -166,20 +207,22 @@ def _settings(root: Path, wrapper: Path):
 
 
 def _supported_flags(codex: str) -> list[str]:
+    """Disable known features that ``codex features list`` actually installs.
+
+    ``exec --help`` does not list those names, so it must not be the probe.
+    ``web_search="disabled"`` is a real CLI config override.
+    """
+    flags = ["-c", 'web_search="disabled"']
     try:
         probe = subprocess.run(
-            [codex, "exec", "--help"], capture_output=True, text=True, timeout=20, check=False,
+            [codex, "features", "list"], capture_output=True, text=True, timeout=20, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return []
-    text = f"{probe.stdout}\n{probe.stderr}"
-    flags: list[str] = []
-    if "--disable" in text:
-        for name in DISABLE_FEATURES:
-            if name in text:
-                flags.extend(["--disable", name])
-    if "web_search" in text and "-c" in text:
-        flags.extend(["-c", 'web_search="disabled"'])
+        return flags
+    names = set(re.findall(r"[A-Za-z][A-Za-z0-9_]*", f"{probe.stdout}\n{probe.stderr}"))
+    for name in DISABLE_FEATURES:
+        if name in names:
+            flags.extend(["--disable", name])
     return flags
 
 
@@ -247,42 +290,55 @@ def _display_env(display: int, authority: str) -> dict[str, str]:
     }
 
 
+def _proc_text(pid: int, name: str) -> str:
+    try:
+        raw = (Path("/proc") / str(pid) / name).read_bytes()
+    except OSError:
+        return ""
+    return raw.replace(b"\0", b" ").decode("latin1", "replace")
+
+
+def _owned_test_firefox(pid: int, display: int) -> bool:
+    """Firefox on this exact DISPLAY whose command line uses a conveyor profile.
+
+    A production PID constant is not a guard. Another display's Firefox,
+    and a Firefox without the test profile, are left alone.
+    """
+    proc = Path("/proc") / str(pid)
+    try:
+        raw = (proc / "environ").read_bytes()
+        comm = (proc / "comm").read_text(encoding="utf-8").strip()
+        exe = os.path.basename(os.readlink(proc / "exe"))
+    except OSError:
+        return False
+    env: dict[str, str] = {}
+    for item in raw.split(b"\0"):
+        if b"=" not in item:
+            continue
+        key, value = item.split(b"=", 1)
+        env[key.decode("latin1", "replace")] = value.decode("latin1", "replace")
+    if env.get("DISPLAY") != f":{display}":
+        return False
+    if comm not in {"firefox", "firefox-esr", "firefox-bin"} and exe not in {"firefox", "firefox-esr", "firefox-bin"}:
+        return False
+    command = _proc_text(pid, "cmdline")
+    return "--profile" in command and "conveyor-" in command
+
+
 def _firefox_pids(display: int) -> list[int]:
-    found: list[int] = []
     proc = Path("/proc")
     if not proc.is_dir():
-        return found
+        return []
+    found: list[int] = []
     for entry in proc.iterdir():
-        if not entry.name.isdigit():
-            continue
-        pid = int(entry.name)
-        if pid in PROTECTED_FIREFOX_PIDS:
-            continue
-        try:
-            raw = (entry / "environ").read_bytes()
-            comm = (entry / "comm").read_text(encoding="utf-8").strip()
-            exe = os.readlink(entry / "exe")
-        except OSError:
-            continue
-        env: dict[str, str] = {}
-        for item in raw.split(b"\0"):
-            if b"=" not in item:
-                continue
-            key, value = item.split(b"=", 1)
-            env[key.decode("latin1", "replace")] = value.decode("latin1", "replace")
-        if env.get("DISPLAY") != f":{display}":
-            continue
-        base = os.path.basename(exe)
-        if comm in {"firefox", "firefox-esr", "firefox-bin"} or base in {"firefox", "firefox-esr", "firefox-bin"}:
-            found.append(pid)
+        if entry.name.isdigit() and _owned_test_firefox(int(entry.name), display):
+            found.append(int(entry.name))
     return found
 
 
 def _close_own_firefox(display: int) -> list[int]:
     closed = []
     for pid in _firefox_pids(display):
-        if pid in PROTECTED_FIREFOX_PIDS:
-            continue
         try:
             os.kill(pid, signal.SIGTERM)
             closed.append(pid)
@@ -298,30 +354,60 @@ def _run_x(env: dict[str, str], *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def _foreground_evidence(env: dict[str, str]) -> dict:
+    """Active window pid and process name. Titles are not copied here."""
+    active = _run_x(env, "getactivewindow")
+    wid = (active.stdout or "").strip()
+    evidence: dict = {"rc": active.returncode}
+    if active.returncode != 0 or not wid.isdigit():
+        return evidence
+    evidence["window_id"] = int(wid)
+    pid = _run_x(env, "getwindowpid", wid)
+    text = (pid.stdout or "").strip()
+    if pid.returncode == 0 and text.isdigit():
+        evidence["pid"] = int(text)
+        evidence["comm"] = _proc_text(int(text), "comm").strip()
+    return evidence
+
+
 def _setup_scenario(name: str, display: int, authority: str, page: str) -> dict:
-    """Verifier-side desktop state. Recorded separately from the task."""
+    """Verifier-side desktop state. Recorded separately from the task.
+
+    Open, minimized, launcher, and otherpage all go through
+    ``LinuxBrowserController.ensure`` on this private display. A raw
+    Firefox command would use the default profile and can cross displays.
+    """
+    from desktop_linux_browser import LinuxBrowserController
+
     env = _display_env(display, authority)
-    record: dict = {"scenario": name, "phase": "setup", "commands": []}
+    record: dict = {"scenario": name, "phase": "setup", "commands": [], "setup_ok": False}
     if name == "closed":
         record["closed_pids"] = _close_own_firefox(display)
+        record["remaining_owned_pids"] = _firefox_pids(display)
+        record["setup_ok"] = not record["remaining_owned_pids"]
         return record
-    if name in {"open", "minimized", "otherpage"} and not _firefox_pids(display):
-        binary = shutil.which("firefox") or "/usr/bin/firefox"
-        proc = subprocess.Popen(
-            [binary, "--no-remote", "--new-window", "about:blank"],
-            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True,
-        )
-        record["commands"].append({"setup_launch_pid": proc.pid, "argv0": binary})
-        time.sleep(2)
+    if name not in {"open", "minimized", "launcher", "otherpage"}:
+        record["setup_error"] = "unknown_scenario"
+        return record
+    ensured = LinuxBrowserController(env).ensure("Firefox")
+    record["ensure"] = {
+        key: ensured.get(key) for key in ("ok", "error", "pid", "window_id", "name")
+    }
+    if not ensured.get("ok"):
+        record["setup_error"] = str(ensured.get("error") or "ensure_failed")
+        return record
+    wid = str(int(ensured["window_id"]))
+    record["verified_window_id"] = int(wid)
+    if name == "open":
+        evidence = _foreground_evidence(env)
+        record["foreground"] = evidence
+        record["setup_ok"] = evidence.get("window_id") == int(wid) and evidence.get("pid") == int(ensured["pid"])
+        return record
     if name == "minimized":
-        listed = _run_x(env, "search", "--class", "firefox")
-        record["commands"].append({"xdotool": "search", "rc": listed.returncode})
-        for wid in (listed.stdout or "").split():
-            if wid.isdigit():
-                minimized = _run_x(env, "windowminimize", wid)
-                record["commands"].append({"xdotool": "windowminimize", "rc": minimized.returncode})
-                break
+        minimized = _run_x(env, "windowminimize", wid)
+        record["commands"].append({"xdotool": "windowminimize", "window_id": int(wid), "rc": minimized.returncode})
+        record["setup_ok"] = minimized.returncode == 0
+        return record
     if name == "launcher":
         proc = subprocess.Popen(
             ["xfce4-appfinder", "--disable-server"],
@@ -329,14 +415,33 @@ def _setup_scenario(name: str, display: int, authority: str, page: str) -> dict:
             stderr=subprocess.DEVNULL, start_new_session=True,
         )
         record["commands"].append({"setup_launch": "xfce4-appfinder", "pid": proc.pid})
-    if name == "otherpage":
-        typed = _run_x(env, "key", "ctrl+l")
-        record["commands"].append({"xdotool": "key", "rc": typed.returncode})
-        entered = _run_x(env, "type", "--", page)
-        record["commands"].append({"xdotool": "type", "rc": entered.returncode})
-        submitted = _run_x(env, "key", "Return")
-        record["commands"].append({"xdotool": "key", "rc": submitted.returncode})
-        time.sleep(1)
+        evidence = {}
+        for _ in range(10):
+            evidence = _foreground_evidence(env)
+            comm = str(evidence.get("comm") or "")
+            if "appfinder" in comm:
+                break
+            time.sleep(0.3)
+        record["foreground"] = evidence
+        record["setup_ok"] = "appfinder" in str(evidence.get("comm") or "")
+        if not record["setup_ok"]:
+            record["setup_error"] = "launcher_not_foreground"
+        return record
+    typed = _run_x(env, "key", "--window", wid, "ctrl+l")
+    record["commands"].append({"xdotool": "key", "window_id": int(wid), "rc": typed.returncode})
+    entered = _run_x(env, "type", "--window", wid, "--", page)
+    record["commands"].append({"xdotool": "type", "window_id": int(wid), "rc": entered.returncode})
+    submitted = _run_x(env, "key", "--window", wid, "Return")
+    record["commands"].append({"xdotool": "key", "window_id": int(wid), "rc": submitted.returncode})
+    time.sleep(1)
+    evidence = _foreground_evidence(env)
+    record["foreground"] = evidence
+    record["setup_ok"] = (
+        typed.returncode == 0 and entered.returncode == 0 and submitted.returncode == 0
+        and evidence.get("pid") == int(ensured["pid"])
+    )
+    if not record["setup_ok"]:
+        record["setup_error"] = "otherpage_not_established"
     return record
 
 
@@ -376,27 +481,36 @@ def _goal(case: str, round_index: int) -> str:
         return "Open Firefox and leave its window in the foreground. Use the GUI only."
     if case == "weather":
         return (
-            "Using only the on-screen browser, open a real weather webpage and read the "
-            "current conditions for Montreal. Leave the browser window open. "
-            "Do not use a shell, an API, or a web search tool."
+            "Using only the on-screen browser, open a real weather webpage and read "
+            "today's weather for Montreal, Quebec. The done summary must include the "
+            "place, today's temperature, the condition, precipitation when the page "
+            "shows it, and the source shown on the page. Do not use a shell, an API, "
+            "or a web search tool. If the page fails to load, report that load error "
+            "instead of inventing a forecast."
         )
     if case == "stability":
         url = f"{FIXTURE_ORIGIN}/run-{round_index:02d}.html"
     else:
         url = f"{FIXTURE_ORIGIN}/index.html"
     return (
-        f"Open {url} in Firefox. Read the visible page title and the Expected code shown on the page. "
-        "Report both in the done summary. Use the GUI only."
+        f"Open {url} in Firefox. Read the page title and the code shown in the page body. "
+        "Report both in the done summary. Use the GUI only. A window title alone is not the code."
     )
 
 
 def _code_for(case: str, round_index: int, expected: dict) -> str | None:
+    """Read the body code from the filename key. Missing codes are refused.
+
+    The HTML title is the constant ``Conveyor E2E Test``. The code is only
+    in the page body, so the key is ``index.html`` or ``run-NN.html``.
+    """
     if case == "startup" or case == "weather":
         return None
-    if case == "stability":
-        runs = expected.get("runs") if isinstance(expected.get("runs"), dict) else {}
-        return str(runs.get(f"{round_index:02d}") or runs.get(str(round_index)) or "") or None
-    return str(expected.get("index") or "") or None
+    key = f"run-{round_index:02d}.html" if case == "stability" else "index.html"
+    value = expected.get(key) if isinstance(expected, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        _refuse(f"missing code for {key}")
+    return value.strip()
 
 
 def _redact_trajectory(trajectory: list) -> list[dict]:
@@ -407,8 +521,8 @@ def _redact_trajectory(trajectory: list) -> list[dict]:
         kept.append({
             key: entry.get(key)
             for key in (
-                "action_type", "result_ok", "error", "screenshot_id", "screenshot_hash",
-                "pid", "window_id", "active_app", "duration_ms",
+                "action_type", "action_redacted", "result_ok", "error", "screenshot_id",
+                "screenshot_hash", "pid", "window_id", "active_app", "duration_ms",
             )
             if key in entry
         })
@@ -479,12 +593,15 @@ def _save_screenshot(settings, screenshot_id: str, dest: Path) -> str | None:
 
 
 def _classify(row: dict) -> str:
+    if row.get("setup_ok") is False:
+        return "setup_not_established"
     if row.get("gui_forbidden"):
         return "gui_tool_use"
+    # An unreviewed weather summary is not a known false completion.
+    if row.get("case") == "weather" and row.get("status") == "done":
+        return "weather_needs_review"
     if row.get("status") == "done" and not row.get("success"):
         return "false_completion"
-    if row.get("case") == "weather" and row.get("structural_ok") and not row.get("success"):
-        return "weather_needs_review"
     if not row.get("browser_foreground"):
         return "browser_not_foreground"
     if not row.get("fresh_image"):
@@ -504,8 +621,18 @@ async def _one(settings, *, case: str, round_index: int, scenario: str, display:
 
     goal = _goal(case, round_index)
     code = _code_for(case, round_index, expected)
+    if code and code in goal:
+        _refuse("expected code leaked into the goal")
     other = f"{FIXTURE_ORIGIN}/run-{((round_index % 20) + 1):02d}.html"
     setup = _setup_scenario(scenario, display, authority, other)
+    if not setup.get("setup_ok"):
+        return {
+            "case": case, "round": round_index, "scenario": scenario, "setup": setup,
+            "setup_ok": False, "status": "error", "success": False,
+            "failure_class": "setup_not_established", "structural_ok": False,
+            "summary_correct": False, "browser_foreground": False, "fresh_image": False,
+            "gui_forbidden": 0, "steps": 0, "duration_seconds": 0,
+        }
     before_pids = set(_firefox_pids(display))
     log_before = 0
     if log_path.is_file():
@@ -542,9 +669,13 @@ async def _one(settings, *, case: str, round_index: int, scenario: str, display:
     fresh = bool(observes) and observes[-1].get("screenshot_id") == screenshot_id and bool(observes[-1].get("screenshot_hash") or copied)
     app = str(observes[-1].get("active_app") or "") if observes else ""
     foreground = app == "Firefox" or (focus.get("pid") in after_pids and bool(focus.get("window_id")))
-    title = str(focus.get("window_title") or "")
+    observed_title = str(focus.get("window_title") or "")
     forbidden = _forbidden_count(log_path, log_before)
-    code_ok = True if code is None else (code in summary and code in title and code not in goal)
+    # The code lives in the page body. Requiring it in the window title
+    # fails a valid page whose title is the constant fixture title.
+    code_ok = True if code is None else (
+        code in summary and PAGE_TITLE in summary and PAGE_TITLE in observed_title and code not in goal
+    )
     structural = (
         result.get("status") == "done" and foreground and fresh and forbidden == 0 and bool(screenshot_id)
     )
@@ -552,7 +683,7 @@ async def _one(settings, *, case: str, round_index: int, scenario: str, display:
         success = False
         correct = None
     elif case == "startup":
-        success = structural and "Firefox" in (title + app)
+        success = structural and app == "Firefox"
         correct = success
     else:
         success = structural and code_ok and code is not None
@@ -562,7 +693,7 @@ async def _one(settings, *, case: str, round_index: int, scenario: str, display:
         "round": round_index,
         "scenario": scenario,
         "setup": setup,
-        "goal": goal,
+        "setup_ok": True,
         "task_id": task_id,
         "status": result.get("status"),
         "blocked_reason": result.get("blocked_reason"),
@@ -583,30 +714,74 @@ async def _one(settings, *, case: str, round_index: int, scenario: str, display:
         "structural_ok": structural,
         "success": success,
         "requires_supervisor_screenshot_review": case == "weather",
+        "observed_title": observed_title,
+        "summary_sanitized": _sanitized_summary(summary) if case in {"local", "weather"} else None,
     }
     row["failure_class"] = _classify(row)
     return row
 
 
+def _sanitized_summary(text: str) -> str:
+    """Done-summary readback. No prompts and no raw tool arguments."""
+    return " ".join(str(text or "").split())[:500]
+
+
+def _repeat_count(rows: list[dict]) -> int | str:
+    """Repeated identical redacted actions that left the same observe hash.
+
+    Typed text is stored as ``text_len`` only, which cannot tell two URLs
+    apart. Without a safe hash already on the trail, the count is not measured.
+    """
+    total = 0
+    for row in rows:
+        seen: dict[str, int] = {}
+        trail = row.get("trajectory") or []
+        for index, entry in enumerate(trail):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("action_type") not in {"click", "type", "hotkey", "scroll"}:
+                continue
+            redacted = entry.get("action_redacted")
+            if entry.get("action_type") == "type":
+                if not isinstance(redacted, dict) or not redacted.get("text_sha256"):
+                    return "NOT_MEASURED"
+            post = None
+            for nxt in trail[index + 1:]:
+                if isinstance(nxt, dict) and nxt.get("action_type") == "observe":
+                    post = nxt.get("screenshot_hash")
+                    break
+            key = json.dumps({"action": redacted, "hash": post}, sort_keys=True, default=str)
+            seen[key] = seen.get(key, 0) + 1
+        total += sum(count - 1 for count in seen.values() if count > 1)
+    return total
+
+
 def _metrics(rows: list[dict]) -> dict:
-    scored = [row for row in rows if row.get("case") != "weather"]
-    pool = scored or rows
+    # Only the stability rounds are the success statistic. Startup, local,
+    # and weather are separate single checks.
+    pool = [row for row in rows if row.get("case") == "stability"]
     successes = [row for row in pool if row.get("success")]
-    launches = [row for row in rows if "closed" == row.get("scenario")]
+    launches = [row for row in rows if row.get("scenario") == "closed"]
     launch_ok = [row for row in launches if row.get("browser_foreground")]
-    recoveries = [row for row in rows if row.get("scenario") in {"minimized", "launcher", "otherpage"}]
-    recovery_ok = [row for row in recoveries if row.get("success") or row.get("structural_ok")]
+    recoveries = [
+        row for row in rows
+        if row.get("scenario") in {"minimized", "launcher", "otherpage"}
+        and row.get("case") in {"local", "stability"}
+    ]
+    recovery_ok = [row for row in recoveries if row.get("success") is True]
     false_done = [row for row in rows if row.get("failure_class") == "false_completion"]
-    steps = [row.get("steps") or 0 for row in rows]
-    seconds = [row.get("duration_seconds") or 0 for row in rows]
+    steps = [row.get("steps") or 0 for row in pool or rows]
+    seconds = [row.get("duration_seconds") or 0 for row in pool or rows]
     return {
-        "success_percent": round(100.0 * len(successes) / max(1, len(pool)), 1),
+        "success_percent": round(100.0 * len(successes) / len(pool), 1) if pool else None,
+        "stability_rounds": len(pool),
+        "total_rounds": len(rows),
         "avg_steps": round(sum(steps) / max(1, len(steps)), 2),
         "avg_seconds": round(sum(seconds) / max(1, len(seconds)), 2),
         "launch_success_percent": round(100.0 * len(launch_ok) / max(1, len(launches)), 1),
-        "recovery_success_percent": round(100.0 * len(recovery_ok) / max(1, len(recoveries)), 1),
+        "recovery_success_percent": round(100.0 * len(recovery_ok) / max(1, len(recoveries)), 1) if recoveries else None,
         "false_completion": len(false_done),
-        "repeats": len(rows),
+        "repeats": _repeat_count(rows),
         "failure_classes": sorted({str(row.get("failure_class")) for row in rows}),
     }
 
@@ -615,39 +790,55 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Real isolated X11 browser loop")
     parser.add_argument("--root", required=True)
     parser.add_argument("--cases", required=True)
-    parser.add_argument("--rounds", type=int, default=20)
+    parser.add_argument("--rounds", type=int, default=None)
     parser.add_argument("--manifest", required=True)
     args = parser.parse_args()
-    if args.rounds < 1 or args.rounds > 20:
+    if args.rounds is not None and (args.rounds < 1 or args.rounds > 20):
         _refuse("rounds must be 1..20")
     root = _check_root(Path(args.root))
     display, authority = _load_manifest(Path(args.manifest), root)
     cases = _parse_cases(args.cases)
     expected = _expected(root)
-    artifact = root / "e2e"
+    run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    artifact = root / "e2e" / run_id
     artifact.mkdir(parents=True, exist_ok=True)
     log_path = artifact / "codex-event-types.jsonl"
     wrapper = _write_wrapper(root, log_path)
     settings = _settings(root, wrapper)
     _agent, chat_id = _assign_display(settings, display)
     rows: list[dict] = []
+
+    def publish() -> None:
+        report = {"run_id": run_id, "metrics": _metrics(rows), "runs": rows}
+        (artifact / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+
     for case in cases:
-        for round_index in range(1, args.rounds + 1):
+        # Stability is the 20-round statistic. The other cases run once
+        # unless --rounds was set explicitly.
+        count = args.rounds if args.rounds is not None else (20 if case == "stability" else 1)
+        for round_index in range(1, count + 1):
             scenario = SCENARIOS[(round_index - 1) % len(SCENARIOS)]
-            row = asyncio.run(_one(
-                settings, case=case, round_index=round_index, scenario=scenario,
-                display=display, authority=authority, chat_id=chat_id, expected=expected,
-                artifact=artifact, log_path=log_path,
-            ))
+            try:
+                row = asyncio.run(_one(
+                    settings, case=case, round_index=round_index, scenario=scenario,
+                    display=display, authority=authority, chat_id=chat_id, expected=expected,
+                    artifact=artifact, log_path=log_path,
+                ))
+            except Exception as exc:
+                row = {
+                    "case": case, "round": round_index, "scenario": scenario,
+                    "status": "error", "success": False, "failure_class": "incomplete",
+                    "error_type": type(exc).__name__, "setup_ok": None,
+                }
             rows.append(row)
+            publish()
             print(json.dumps({
                 "case": case, "round": round_index, "scenario": scenario,
                 "status": row.get("status"), "success": row.get("success"),
-                "failure_class": row.get("failure_class"),
+                "failure_class": row.get("failure_class"), "run_id": run_id,
             }))
-    report = {"metrics": _metrics(rows), "runs": rows}
-    (artifact / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print(json.dumps(report["metrics"]))
+    publish()
+    print(json.dumps(_metrics(rows)))
 
 
 if __name__ == "__main__":

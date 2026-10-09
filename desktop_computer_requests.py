@@ -70,6 +70,8 @@ RESULT_ALLOWED_FIELDS = frozenset({
     "element_hints",
     # Short window list so the planner can focus an app it cannot see as pixels.
     "windows",
+    # Coarse page state. Never a raw window title.
+    "browser_page_state",
 })
 
 RESULT_FORBIDDEN_FIELDS = frozenset({
@@ -91,6 +93,43 @@ RESULT_FORBIDDEN_FIELDS = frozenset({
 })
 
 DEFAULT_ARM_TTL_MINUTES = 30
+
+# Derived by the trusted backend from an ephemeral title, then the title is
+# discarded. A loaded state is not proof of page content.
+BROWSER_PAGE_STATES = frozenset({"loaded", "blank", "error", "loading", "unknown"})
+
+_BLANK_TITLES = frozenset({
+    "mozilla firefox", "firefox", "google chrome", "chrome", "chromium",
+    "chromium web browser", "new tab", "newtab",
+})
+_BLANK_TOKENS = (
+    "about:blank", "about:newtab", "about:home", "new tab", "moz-extension",
+)
+_LOADING_TOKENS = ("loading", "正在加载", "正在连接")
+_ERROR_TOKENS = (
+    "problem loading", "server not found", "neterror", "unable to connect",
+    "having trouble finding", "privacy error", "your connection is not private",
+    "无法访问", "无法连接", "该网页无法",
+)
+
+
+def browser_page_state_from_title(title: object) -> str:
+    """Map one ephemeral window title to a coarse page state.
+
+    The title is not returned and must not be stored. An empty title is
+    ``unknown``: absence is not a blank page and not a loaded page.
+    """
+    text = str(title or "").strip()
+    lowered = text.lower()
+    if not text:
+        return "unknown"
+    if any(token in lowered for token in _LOADING_TOKENS):
+        return "loading"
+    if any(token in lowered for token in _ERROR_TOKENS):
+        return "error"
+    if lowered in _BLANK_TITLES or any(token in lowered for token in _BLANK_TOKENS):
+        return "blank"
+    return "loaded"
 
 
 def computer_requests_path(settings: Settings) -> Path:
@@ -1189,6 +1228,11 @@ def validate_computer_result(result: object) -> dict | None:
                 cleaned[field] = int(value)
             except (TypeError, ValueError):
                 continue
+            continue
+        if field == "browser_page_state":
+            if value not in BROWSER_PAGE_STATES:
+                return None
+            cleaned[field] = value
             continue
         if field == "element_hints":
             hints = _clean_element_hints(value)

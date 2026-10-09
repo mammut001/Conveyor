@@ -217,6 +217,56 @@ class LinuxBrowserTest(unittest.TestCase):
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
     @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
     @mock.patch("desktop_linux_browser.subprocess.Popen")
+    def test_snap_navigator_window_is_focused_helper_and_dialog_are_not(self, popen, _which):
+        """Empirical Snap strings from a normal Firefox window on the VPS."""
+        from desktop_linux_browser import wm_class_matches, xprop_browser_target
+
+        real = (
+            'WM_CLASS(STRING) = "Navigator", "firefox_firefox"\n'
+            "WM_STATE(WM_STATE):\n"
+            "\t\twindow state: Normal\n"
+            "\t\ticon window: 0x0\n"
+            "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_NORMAL\n"
+        )
+        helper = 'WM_CLASS(STRING) = "firefox_firefox", "Firefox_firefox"\n'
+        dialog = (
+            'WM_CLASS(STRING) = "Firefox", "firefox_firefox"\n'
+            "WM_STATE(WM_STATE):\n"
+            "\t\twindow state: Normal\n"
+            "\t\ticon window: 0x0\n"
+            "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_DIALOG\n"
+        )
+        self.assertTrue(wm_class_matches("Firefox", "Navigator", "firefox_firefox"))
+        self.assertFalse(wm_class_matches("Firefox", "firefox_firefox", "Firefox_firefox"))
+        self.assertTrue(xprop_browser_target(real, "Firefox"))
+        self.assertFalse(xprop_browser_target(helper, "Firefox"))
+        self.assertFalse(xprop_browser_target(dialog, "Firefox"))
+        activated = []
+        controller = self._controller({
+            "getdisplaygeometry": "100 100",
+            "search": "10\n11\n12",
+            "xprop": {"10": helper, "11": dialog, "12": real},
+            "getwindowpid": "214271",
+            "windowmap": "",
+            "windowactivate": "",
+            "getactivewindow": "12",
+        })
+        real_run = controller._run
+
+        def run(*argv):
+            if len(argv) > 1 and argv[1] == "windowactivate":
+                activated.append(argv[-1])
+            return real_run(*argv)
+
+        controller._run = run
+        result = controller.ensure("Firefox")
+        self.assertEqual(result, {"ok": True, "name": "Firefox", "pid": 214271, "window_id": 12})
+        self.assertEqual(activated, ["12"])
+        popen.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
+    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("desktop_linux_browser.subprocess.Popen")
     def test_minimized_snap_firefox_is_mapped(self, popen, _which):
         controller = self._controller({
             "getdisplaygeometry": "100 100",

@@ -488,37 +488,33 @@ class LocalCuaTransport(CuaTransport):
             return res
         if hints:
             res.update(hints)
-        self._attach_window_title(res)
+        self._attach_browser_page_state(res)
         return res
 
-    def _attach_window_title(self, res: dict) -> None:
-        """Copy the focused window title from the window list, or X11.
+    def _attach_browser_page_state(self, res: dict) -> None:
+        """Record a coarse page state and drop any raw window title.
 
-        Only the row that matches the observation's pid or window id is
-        used. A missing row leaves the title absent. The title is not logged.
+        The title is read only to classify blank, error, loading, or loaded.
+        It is not logged and is not left on the result.
         """
-        if res.get("window_title"):
-            title = res.get("window_title")
-            if isinstance(title, str):
-                res["window_title"] = title.strip()[:120]
-            return
-        windows = res.get("windows")
-        matched = None
-        if isinstance(windows, list):
-            matched = _match_listed_window(windows, res.get("pid"), res.get("window_id"))
-        title = ""
-        if isinstance(matched, dict):
-            raw = matched.get("title")
-            if isinstance(raw, str):
-                title = raw.strip()[:120]
-        if not title and sys.platform.startswith("linux"):
-            try:
-                from desktop_linux_browser import LinuxBrowserController
-                title = LinuxBrowserController().active_window_title()
-            except Exception:
-                title = ""
-        if title:
-            res["window_title"] = title[:120]
+        from desktop_computer_requests import browser_page_state_from_title
+
+        title = res.pop("window_title", None)
+        if not isinstance(title, str) or not title.strip():
+            title = ""
+            windows = res.get("windows")
+            matched = None
+            if isinstance(windows, list):
+                matched = _match_listed_window(windows, res.get("pid"), res.get("window_id"))
+            if isinstance(matched, dict) and isinstance(matched.get("title"), str):
+                title = matched["title"].strip()[:120]
+            if not title and sys.platform.startswith("linux"):
+                try:
+                    from desktop_linux_browser import LinuxBrowserController
+                    title = LinuxBrowserController().active_window_title()
+                except Exception:
+                    title = ""
+        res["browser_page_state"] = browser_page_state_from_title(str(title or "")[:120])
 
     def _collect_ax_hints(self, action: dict | None = None) -> dict[str, Any]:
         """Pick a target app window and return pid/window_id/element_hints.
@@ -1499,7 +1495,7 @@ class CuaDriver:
             "effect", "path", "verified", "error", "node_id", "created_at",
             "keys_len", "text_len", "click_method", "active_app",
             "pid", "window_id", "ax_app", "element_hints", "windows",
-            "window_title",
+            "browser_page_state",
         }
         return {k: v for k, v in result.items() if k in allowed}
 

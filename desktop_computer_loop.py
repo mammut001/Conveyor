@@ -48,6 +48,8 @@ from desktop_computer_requests import (
     get_computer_task,
     is_action_allowed,
     normalize_action,
+    BROWSER_PAGE_STATES,
+    browser_page_state_from_title,
     redact_computer_action,
     set_task_status,
     task_scope,
@@ -121,12 +123,6 @@ def _focus_identity(observation: dict) -> tuple:
     return (observation.get("active_app"), pid_i, wid_i)
 
 
-_DEFAULT_BROWSER_TITLES = frozenset({
-    "mozilla firefox", "firefox", "google chrome", "chrome", "chromium",
-    "chromium web browser", "new tab",
-})
-
-
 def _reported_window_title(observation: dict) -> str:
     """Title the backend already reported, or the matching window's title.
 
@@ -166,28 +162,25 @@ def _reported_window_title(observation: dict) -> str:
     return ""
 
 
-def _page_title_blocks_done(title: object) -> bool:
-    """Blank, default, and browser error pages are not a completed webpage.
+def _windows_have_title(observation: dict) -> bool:
+    windows = observation.get("windows")
+    if not isinstance(windows, list):
+        return False
+    return any(isinstance(row, dict) and isinstance(row.get("title"), str) and row.get("title").strip() for row in windows)
 
-    A missing title is not evidence that a page loaded. This reads a title
-    the desktop backend already exposed. It does not interpret the
-    screenshot (no weather/OCR check).
+
+def _fresh_browser_page_state(result: dict) -> str:
+    """State for this result only. A raw title is not kept.
+
+    Legacy Mac results omit ``browser_page_state`` and put a short title on
+    the matching window row. That title is classified and discarded.
     """
-    text = str(title or "").strip().lower()
-    if not text or text in _DEFAULT_BROWSER_TITLES:
-        return True
-    tokens = (
-        "about:blank", "about:newtab", "about:home", "new tab", "moz-extension",
-        "loading", "正在加载", "正在连接",
-        "problem loading", "server not found", "neterror", "unable to connect",
-        "having trouble finding", "无法访问", "无法连接", "该网页无法",
-    )
-    return any(token in text for token in tokens)
-
-
-def _title_is_loading(title: object) -> bool:
-    text = str(title or "").strip().lower()
-    return any(token in text for token in ("loading", "正在加载", "正在连接"))
+    raw = result.get("browser_page_state")
+    if isinstance(raw, str) and raw in BROWSER_PAGE_STATES:
+        return raw
+    if not _reported_window_title(result) and "window_title" not in result and not _windows_have_title(result):
+        return "unknown"
+    return browser_page_state_from_title(_reported_window_title(result))
 
 
 class _VisualProgress:
@@ -227,7 +220,7 @@ class _VisualProgress:
             return "ignore"
         identity, before, focus = self.pending
         self.pending = None
-        if _title_is_loading(result.get("window_title")) or result.get("effect") == "loading":
+        if _fresh_browser_page_state(result) == "loading" or result.get("effect") == "loading":
             return "ignore"
         after = result.get("sha256")
         if not isinstance(before, str) or not isinstance(after, str):
@@ -258,9 +251,8 @@ class _VisualProgress:
         """True when the one recovery observe is still the stalled image."""
         self.recover_next = False
         after = result.get("sha256") if isinstance(result, dict) else None
-        if self.stalled_hash and after == self.stalled_hash and not _title_is_loading(
-            (result or {}).get("window_title") if isinstance(result, dict) else None
-        ):
+        loading = isinstance(result, dict) and _fresh_browser_page_state(result) == "loading"
+        if self.stalled_hash and after == self.stalled_hash and not loading:
             return True
         self.reset()
         return False
@@ -721,11 +713,14 @@ async def run_computer_loop(
                 for k in ("pid", "window_id", "element_hints", "ax_app"):
                     if merged.get(k) is None and observation.get(k) is not None:
                         merged[k] = observation.get(k)
+                merged.pop("window_title", None)
+                if result.get("screenshot_id"):
+                    # Bind this screenshot only. A previous loaded state does
+                    # not carry onto a later capture that has no state of its own.
+                    merged["browser_page_state"] = _fresh_browser_page_state(result)
+                else:
+                    merged.pop("browser_page_state", None)
                 observation = merged
-                if not observation.get("window_title"):
-                    derived = _reported_window_title(observation)
-                    if derived:
-                        observation["window_title"] = derived
             steps_used += 1
             if act != "observe":
                 followup_observe = True
@@ -834,8 +829,12 @@ def _reject_done(
     )
     if not fresh or not _browser_foreground_observed(observation):
         return "unverified_browser_window" if not _browser_foreground_observed(observation) else "unverified_done"
-    if goal_needs_loaded_page(goal) and _page_title_blocks_done(_reported_window_title(observation)):
-        return "unverified_browser_window"
+    if goal_needs_loaded_page(goal):
+        # Loaded is required. A title is not content proof, and unknown,
+        # blank, error, and loading all fail this gate.
+        state = observation.get("browser_page_state")
+        if state not in BROWSER_PAGE_STATES or state != "loaded":
+            return "unverified_browser_window"
     return None
 
 
