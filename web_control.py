@@ -58,8 +58,13 @@ class WebControl:
         finally:
             connection.close()
 
-    def list_jobs(self, limit: int = 100, session_id: str | None = None) -> list[dict[str, Any]]:
-        jobs = self.queue.list_jobs(limit, session_id=session_id)
+    def list_jobs(
+        self, limit: int = 100, session_id: str | None = None, *,
+        channel: str | None = None, operator_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        jobs = self.queue.list_jobs(
+            limit, session_id=session_id, channel=channel, operator_id=operator_id,
+        )
         latest = get_event_store(self.settings).latest_for_jobs(item["id"] for item in jobs)
         for item in jobs:
             event = latest.get(item["id"])
@@ -187,11 +192,11 @@ class WebControl:
         transcript = get_transcript_store(self.settings).get_session(session_id)
         if transcript is not None:
             source_chat_id = str(transcript.get("source_chat_id") or "")
-            jobs = self.list_jobs(200, session_id=source_chat_id)
-            jobs = [job for job in jobs if (
-                job.get("channel") == transcript.get("channel")
-                and job.get("operator_id") == transcript.get("operator_id")
-            )]
+            jobs = self.list_jobs(
+                200, session_id=source_chat_id,
+                channel=str(transcript.get("channel") or ""),
+                operator_id=str(transcript.get("operator_id") or ""),
+            )
             transcript["last_activity"] = transcript.get("updated_at") or transcript.get("created_at")
             transcript["jobs"] = jobs
             transcript["job_count"] = len(jobs)
