@@ -20,7 +20,7 @@ BROWSERS = {
     "Google Chrome": (("google-chrome", "google-chrome-stable"), r"google-chrome|Google-chrome"),
 }
 ALIASES = {
-    "firefox": "Firefox", "navigator": "Firefox",
+    "firefox": "Firefox", "firefox-esr": "Firefox", "navigator": "Firefox",
     "chromium": "Chromium", "chromium-browser": "Chromium",
     "google chrome": "Google Chrome", "google-chrome": "Google Chrome",
     "google-chrome-stable": "Google Chrome",
