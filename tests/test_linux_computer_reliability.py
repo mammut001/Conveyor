@@ -37,9 +37,10 @@ def _cp(*argv: str, out: str = "", rc: int = 0) -> subprocess.CompletedProcess:
 
 class LinuxBrowserTest(unittest.TestCase):
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
+    @mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox")
     @mock.patch("desktop_linux_browser.shutil.which")
     @mock.patch("desktop_linux_browser.subprocess.Popen")
-    def test_existing_browser_is_verified_and_not_relaunched(self, popen, which):
+    def test_existing_browser_is_verified_and_not_relaunched(self, popen, which, _process):
         which.return_value = "/usr/bin/xdotool"
         controller = LinuxBrowserController()
         observed: list[tuple] = []
@@ -88,7 +89,8 @@ class LinuxBrowserTest(unittest.TestCase):
         result = controller.ensure("Firefox")
         self.assertEqual(result["pid"], 999)
         command = popen.call_args.args[0]
-        self.assertEqual(command, ["/usr/bin/firefox", "--new-window", "about:blank"])
+        self.assertEqual(command[:3], ["/usr/bin/firefox", "--no-remote", "--profile"])
+        self.assertEqual(command[-2:], ["--new-window", "about:blank"])
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
         self.assertNotIn("shell", popen.call_args.kwargs)
 
@@ -165,7 +167,7 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp:
             backend = _Desktop([
                 {"result_ok": False, "error": "browser_activate_failed"},
-                {"result_ok": True, "action_type": "observe", "sha256": "new", "screenshot_id": "fake"},
+                {"result_ok": True, "action_type": "observe", "sha256": "new", "screenshot_id": "fake", "active_app": "Firefox"},
             ])
             result = await run_computer_loop(
                 _settings(Path(temp)), "Open Firefox to check weather",
@@ -176,6 +178,23 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["status"], "done")
             self.assertEqual(backend.actions[0].get("target_app"), "Firefox")
             self.assertEqual(backend.actions[1], {"action": "observe"})
+
+    async def test_cannot_report_success_with_application_finder_foreground(self):
+        with tempfile.TemporaryDirectory() as temp:
+            backend = _Desktop([
+                {"result_ok": False, "error": "target_app_not_found"},
+                {"result_ok": True, "action_type": "observe", "sha256": "xfce",
+                 "screenshot_id": "fake", "active_app": "Application Finder"},
+            ])
+            result = await run_computer_loop(
+                _settings(Path(temp)), "Open Firefox and read weather",
+                planner=_Sequence({"action": "done", "summary": "Firefox opened"},
+                                  {"action": "done", "summary": "Firefox opened"}),
+                backend=backend, max_steps=8, max_seconds=30,
+                direct_mode=True, open_with_observe=True,
+            )
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["blocked_reason"], "unverified_browser_window")
 
     async def test_repeated_visual_stall_stops_before_step_cap(self):
         with tempfile.TemporaryDirectory() as temp:
