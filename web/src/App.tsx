@@ -167,6 +167,7 @@ export default function App() {
   const [creatingSession, setCreatingSession] = useState(false)
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([])
   const [selectedSessionDetail, setSelectedSessionDetail] = useState<SessionDetail | null>(null)
+  const [sessionDetailError, setSessionDetailError] = useState('')
   const sessionDetailFetchGen = useRef(0)
   const [events, setEvents] = useState<EventItem[]>([])
   const [approvals, setApprovals] = useState<Approval[]>([])
@@ -405,8 +406,10 @@ export default function App() {
     if (!authenticated || !selectedSessionId) {
       setTranscript([])
       setSelectedSessionDetail(null)
+      setSessionDetailError('')
       return
     }
+    setSessionDetailError('')
     try {
       const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`)
       if (generation !== sessionDetailFetchGen.current) return
@@ -416,6 +419,7 @@ export default function App() {
       if (generation !== sessionDetailFetchGen.current) return
       setTranscript([])
       setSelectedSessionDetail(null)
+      setSessionDetailError('Could not load this session’s history. Retrying automatically.')
     }
   }, [api, authenticated, selectedSessionId])
 
@@ -942,21 +946,25 @@ export default function App() {
             <small>One shared worktree across runs. Apply/Discard closes this chain.</small>
           </div>}
           <div className="session-run-list" role="group" aria-label="Session run history">
-            {(sessionDetail?.runs || []).map(run => (
-              <button key={run.id} type="button"
-                className={`session-run ${run.id === selectedJobId ? 'selected' : ''}`}
-                aria-pressed={run.id === selectedJobId}
-                onClick={() => setSelectedJobId(run.id)}>
-                <span className="session-run-heading">
-                  <strong>{run.prompt_preview || run.id}</strong>
-                  <span className={`status-rail ${run.state}`} />
-                </span>
-                <small>{run.mode} · {stateLabel(run.state)} · {formatTime(run.created_at)}
-                  {run.refinement_turn ? ` · turn ${run.refinement_turn}` : ''}
-                </small>
-              </button>
-            ))}
-            {!sessionDetail?.runs?.length && <Empty text="No runs in this session yet" />}
+            {sessionDetailError
+              ? <p className="screen-request-status failed" role="alert">{sessionDetailError}</p>
+              : <>
+                {(sessionDetail?.runs || []).map(run => (
+                  <button key={run.id} type="button"
+                    className={`session-run ${run.id === selectedJobId ? 'selected' : ''}`}
+                    aria-pressed={run.id === selectedJobId}
+                    onClick={() => setSelectedJobId(run.id)}>
+                    <span className="session-run-heading">
+                      <strong>{run.prompt_preview || run.id}</strong>
+                      <span className={`status-rail ${run.state}`} />
+                    </span>
+                    <small>{run.mode} · {stateLabel(run.state)} · {formatTime(run.created_at)}
+                      {run.refinement_turn ? ` · turn ${run.refinement_turn}` : ''}
+                    </small>
+                  </button>
+                ))}
+                {!sessionDetail?.runs?.length && <Empty text="No runs in this session yet" />}
+              </>}
           </div>
         </ContextSection>
         <ContextSection title="Job">

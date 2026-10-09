@@ -52,7 +52,7 @@ function fixtureMessages(sessionId: string, label: string) {
   ]
 }
 
-async function installWorkbenchApi(page: Page, options: { delayWebDetailOnce?: boolean; mobileUI?: boolean } = {}) {
+async function installWorkbenchApi(page: Page, options: { delayWebDetailOnce?: boolean; mobileUI?: boolean; failWebDetail?: boolean } = {}) {
   const webRuns = [
     fixtureRun('q2', 'Turn two: Focus Mint Demo and rounded Start button', 2),
     fixtureRun('q1', 'Turn one: pale green card and Start button', 1),
@@ -71,6 +71,7 @@ async function installWorkbenchApi(page: Page, options: { delayWebDetailOnce?: b
   let telegramChainActive = true
   let webDetailStarted = false
   let delayedWebDetail = false
+  let failWebDetail = Boolean(options.failWebDetail)
   let approvalSequence = 0
   const approvals: Array<{ id: string; kind: 'job'; job_id: string; action: string; status: string; created_at: string; expires_at: number }> = []
   const decisions: Array<{ job_id: string; action: string }> = []
@@ -111,6 +112,7 @@ async function installWorkbenchApi(page: Page, options: { delayWebDetailOnce?: b
       const id = path.slice('/api/sessions/'.length)
       if (id === webSessionId) {
         webDetailStarted = true
+        if (failWebDetail) return json({ error: 'synthetic temporary failure' }, 500)
         if (options.delayWebDetailOnce && !delayedWebDetail) {
           delayedWebDetail = true
           await new Promise(resolve => setTimeout(resolve, 900))
@@ -162,7 +164,12 @@ async function installWorkbenchApi(page: Page, options: { delayWebDetailOnce?: b
     return json({ error: `unhandled fixture request: ${request.method()} ${path}` }, 404)
   })
 
-  return { decisions, get webDetailStarted() { return webDetailStarted }, get delayedWebDetail() { return delayedWebDetail } }
+  return {
+    decisions,
+    setWebDetailFailure(value: boolean) { failWebDetail = value },
+    get webDetailStarted() { return webDetailStarted },
+    get delayedWebDetail() { return delayedWebDetail },
+  }
 }
 
 async function unlock(page: Page) {
@@ -257,4 +264,19 @@ test('mobile navigation and session drawer remain keyboard reachable', async ({ 
   await options.getByRole('button', { name: /Sessions/ }).click()
   await expect(page.getByRole('dialog', { name: 'Sessions' })).toBeVisible()
   await expect(page.getByRole('button', { name: /Web refinement session/ })).toBeVisible()
+})
+
+test('session history API failures are visible and recover without a false empty state', async ({ page }) => {
+  const fixture = await installWorkbenchApi(page, { failWebDetail: true })
+  await unlock(page)
+
+  const runHistory = page.getByRole('group', { name: 'Session run history' })
+  await expect(runHistory.getByRole('alert')).toContainText('Could not load this session’s history')
+  await expect(page.getByText('No runs in this session yet', { exact: true })).toHaveCount(0)
+  await expect(runHistory.getByRole('button')).toHaveCount(0)
+
+  fixture.setWebDetailFailure(false)
+  await expect(runHistory.getByRole('button')).toHaveCount(2)
+  await expect(runHistory.getByRole('alert')).toHaveCount(0)
+  await expect(page.getByText('Active refinement · turn 2', { exact: true })).toBeVisible()
 })
