@@ -154,12 +154,15 @@ class WebControl:
         # written a structured transcript.
         grouped: dict[str, dict[str, Any]] = {}
         for job in jobs:
-            session_id = str(job.get("chat_id") or "")
+            chat_id = str(job.get("chat_id") or "")
+            session_id = self._session_key(job, source_key="chat_id")
             if not session_id:
                 continue
             session = grouped.setdefault(session_id, {
                 "id": session_id,
                 "channel": job.get("channel"),
+                "operator_id": job.get("operator_id"),
+                "source_chat_id": chat_id,
                 "created_at": job.get("created_at"),
                 "last_activity": job.get("updated_at") or job.get("created_at"),
                 "job_count": 0,
@@ -172,11 +175,11 @@ class WebControl:
                 session["latest_job"] = job
         rows = list(grouped.values())[:limit]
         summaries = RefinementStore(self.settings).active_summaries([
-            key for session in rows if (key := self._session_key(session, source_key="id"))
+            key for session in rows if (key := self._session_key(session))
         ])
         for session in rows:
             session["active_refinement"] = summaries.get(
-                self._session_key(session, source_key="id") or ""
+                self._session_key(session) or ""
             )
         return rows
 
@@ -196,14 +199,20 @@ class WebControl:
         # Legacy transcript-less sessions are only safe to reconstruct when
         # their chat ID belongs to a single channel/operator scope. A raw chat
         # ID can collide across Telegram, Feishu and Web.
-        jobs = self.list_jobs(200, session_id=session_id)
+        # The stable ID is the only cross-channel-safe lookup. A legacy raw
+        # chat ID is accepted only when the queue has one unambiguous identity.
+        recent = self.list_jobs(500)
+        jobs = [
+            job for job in recent
+            if self._session_key(job, source_key="chat_id") == session_id
+        ][:200]
         if not jobs:
-            empty = self._empty_agent_session(session_id)
-            return self._attach_session_workbench(empty, []) if empty else None
-        identities = {self._session_key(item, source_key="chat_id") for item in jobs}
-        if len(identities) != 1 or None in identities:
-            return None
-        jobs = [job for job in jobs if self._session_key(job, source_key="chat_id") in identities]
+            legacy = [job for job in recent if job.get("chat_id") == session_id]
+            identities = {self._session_key(item, source_key="chat_id") for item in legacy}
+            if len(identities) != 1 or None in identities:
+                empty = self._empty_agent_session(session_id) if not legacy else None
+                return self._attach_session_workbench(empty, []) if empty else None
+            jobs = legacy[:200]
         session = {
             "id": session_id,
             "channel": jobs[0].get("channel"),
