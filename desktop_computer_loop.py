@@ -69,6 +69,12 @@ def _with_observed_target(action: dict, observation: dict) -> dict:
     if action.get("action") not in {"type", "hotkey", "scroll"}:
         return action
     if action.get("pid") is not None:
+        if (
+            action.get("window_id") is None
+            and str(action["pid"]) == str(observation.get("pid"))
+            and observation.get("window_id") is not None
+        ):
+            return dict(action, window_id=observation["window_id"])
         return action
     pid = observation.get("pid")
     if pid is None:
@@ -258,6 +264,22 @@ class _VisualProgress:
         return False
 
 
+def _browser_kind(app: object) -> str | None:
+    from desktop_linux_browser import BROWSERS, canonical_browser
+
+    if str(app or "").strip().lower() == "safari":
+        return "Safari"  # Completion compatibility, never a Linux launch capability.
+    browser = canonical_browser(app)
+    return browser if browser in BROWSERS else None
+
+
+def _observed_browser_kind(observation: dict) -> str | None:
+    app = observation.get("active_app")
+    if app and app != "Unknown":
+        return _browser_kind(app)
+    return _browser_kind(observation.get("ax_app"))
+
+
 def _browser_foreground_observed(observation: dict) -> bool:
     """Do not let the model declare a browser task done from XFCE panels.
 
@@ -266,11 +288,7 @@ def _browser_foreground_observed(observation: dict) -> bool:
     """
     if not isinstance(observation, dict):
         return False
-    from desktop_linux_browser import BROWSERS, canonical_browser
-    app = observation.get("active_app")
-    if app and app != "Unknown":
-        return canonical_browser(app) in BROWSERS
-    return canonical_browser(observation.get("ax_app")) in BROWSERS
+    return _observed_browser_kind(observation) is not None
 
 
 class ComputerBackendError(Exception):
@@ -580,6 +598,18 @@ async def run_computer_loop(
                 action.pop("ensure_browser", None)
             action = _with_observed_target(action, observation)
             act = action.get("action")
+
+            if (
+                browser_goal and act in {"type", "hotkey", "scroll"}
+                and not _browser_foreground_observed(observation)
+            ):
+                # A blind plan, or an observation of a launcher, is not a
+                # keyboard target. Resolve the browser before asking again.
+                action = {"action": "observe", "ensure_browser": True}
+                target = infer_target_app(goal)
+                if target:
+                    action["target_app"] = target
+                act = "observe"
 
             if act == "done":
                 # A planner claim is not evidence that Firefox is on screen.
@@ -947,6 +977,9 @@ def _reject_done(
     )
     if not fresh or not _browser_foreground_observed(observation):
         return "unverified_browser_window" if not _browser_foreground_observed(observation) else "unverified_done"
+    requested = _browser_kind(infer_target_app(goal))
+    if requested and _observed_browser_kind(observation) != requested:
+        return "unverified_browser_window"
     if goal_needs_loaded_page(goal):
         # Loaded is required. A title is not content proof, and unknown,
         # blank, error, and loading all fail this gate.

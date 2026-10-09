@@ -1056,5 +1056,62 @@ class TransportTimeoutTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(str(cancelled.exception), "step_cancelled")
 
 
+class BrowserBoundaryTest(unittest.TestCase):
+    def test_linux_nonbrowser_targets_never_reach_the_installed_app_launcher(self):
+        with tempfile.TemporaryDirectory() as temp:
+            transport = LocalCuaTransport("cua-driver", settings=_settings(Path(temp)))
+            with mock.patch("desktop_cua.sys.platform", "linux"), \
+                    mock.patch.object(transport, "_call_tool", side_effect=AssertionError("arbitrary launch")):
+                for target in ("gedit", "Terminal", "Launcher", "Safari", "/tmp/firefox"):
+                    self.assertEqual(transport._prepare_target_app({
+                        "action": "observe", "target_app": target,
+                    }), "target_app_not_found", target)
+                self.assertIsNone(transport._prepare_target_app({
+                    "action": "observe", "target_app": "gedit", "pid": 42,
+                }))
+
+    def test_completion_requires_the_requested_browser_and_preserves_safari(self):
+        import desktop_computer_loop as loop
+
+        for requested in ("Firefox", "Chrome", "Safari"):
+            for active in ("Firefox", "Google Chrome", "Safari"):
+                frame = {"screenshot_id": "fresh", "sha256": "a" * 64,
+                         "active_app": active, "browser_page_state": "loaded"}
+                reason = loop._reject_done(
+                    goal=f"Read the webpage in {requested}", browser_goal=True,
+                    observation=frame, trajectory=[{"action_type": "observe", "result_ok": True,
+                                                    "screenshot_id": "fresh"}],
+                    progress=loop._VisualProgress(),
+                )
+                matches = active == {"Chrome": "Google Chrome"}.get(requested, requested)
+                self.assertEqual(reason is None, matches, (requested, active, reason))
+
+    def test_explicit_observed_pid_keeps_its_window_binding(self):
+        from desktop_computer_loop import _with_observed_target
+
+        observed = {"pid": 42, "window_id": 7}
+        self.assertEqual(_with_observed_target({"action": "type", "pid": 42}, observed)["window_id"], 7)
+        self.assertNotIn("window_id", _with_observed_target({"action": "type", "pid": 99}, observed))
+
+
+class BrowserInitialInputTest(unittest.IsolatedAsyncioTestCase):
+    async def test_blind_browser_keystrokes_are_replaced_with_verified_observation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            frame = {"result_ok": True, "action_type": "observe", "screenshot_id": "fresh",
+                     "sha256": "a" * 64, "active_app": "Firefox", "pid": 42, "window_id": 7,
+                     "browser_page_state": "loaded"}
+            backend = _Desktop([dict(frame)])
+            result = await run_computer_loop(
+                _settings(Path(temp)), "Read the Firefox webpage",
+                planner=_Sequence({"action": "type", "text": "http://127.0.0.1/"},
+                                  {"action": "done", "summary": "read"}),
+                backend=backend, max_steps=5, max_seconds=30, direct_mode=True,
+            )
+            self.assertEqual(result["status"], "done", result)
+            self.assertEqual([a["action"] for a in backend.actions], ["observe"])
+            self.assertIs(backend.actions[0]["ensure_browser"], True)
+            self.assertEqual(backend.actions[0]["target_app"], "Firefox")
+
+
 if __name__ == "__main__":
     unittest.main()

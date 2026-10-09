@@ -462,7 +462,8 @@ class WindowListTest(unittest.TestCase):
             return {"ok": False, "error": "unexpected_tool"}
 
         transport._call_tool = fake_call  # type: ignore[method-assign]
-        error = transport._prepare_target_app({"action": "observe", "target_app": "Calculator"})
+        with patch("desktop_cua.sys.platform", "darwin"):
+            error = transport._prepare_target_app({"action": "observe", "target_app": "Calculator"})
         self.assertIsNone(error)
         self.assertEqual(calls, ["list_apps", "launch_app", "bring_to_front"])
 

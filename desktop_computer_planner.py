@@ -147,7 +147,7 @@ def goal_needs_browser(goal: str) -> bool:
     """
     text = (goal or "").lower()
     return any(word in text for word in (
-        "browser", "firefox", "chromium", "chrome", "webpage", "website",
+        "browser", "firefox", "chromium", "chrome", "safari", "webpage", "website",
         "weather", "浏览器", "网页", "网站", "天气",
     ))
 
@@ -837,10 +837,19 @@ class CodexPlanner(Planner):
                     raw = await self._run_codex(full, image=image, resume=False)
             else:
                 raw = await self._run_codex(full, image=image)
+            action = self._parse_action(raw or "")
+            if action.get("action") == "stop" and action.get("reason") in {
+                "invalid_json_in_planner_output", "no_json_in_planner_output",
+            }:
+                # No desktop action has run. Retry the same observation once,
+                # without quoting or recording the malformed model response.
+                retry = full + "\n上一输出无法解析。只输出一个合法 JSON 动作对象，不要附加其他内容。"
+                raw = await self._run_codex(retry, image=image, resume=False)
+                action = self._parse_action(raw or "")
+            return action
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("CodexPlanner codex run failed: %s", exc)
             return {"action": "stop", "reason": f"planner_error:{type(exc).__name__}"}
-        return self._parse_action(raw or "")
 
     async def _run_codex(
         self,

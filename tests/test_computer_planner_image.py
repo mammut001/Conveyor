@@ -108,6 +108,22 @@ class _Proc:
 
 
 class PlannerImageTest(unittest.IsolatedAsyncioTestCase):
+    async def test_malformed_model_action_gets_one_safe_retry(self):
+        for replies, expected in (
+            (["{broken}", '{"action":"observe"}'], "observe"),
+            (["{broken}", "{still broken}"], "stop"),
+        ):
+            with tempfile.TemporaryDirectory() as temp:
+                planner = CodexPlanner(_settings(Path(temp)))
+                with mock.patch.object(planner, "_run_codex", new=mock.AsyncMock(side_effect=replies)) as run:
+                    action = await planner.next_action(
+                        goal="Read the browser", observation={}, trajectory=[],
+                        steps_used=0, max_steps=16,
+                    )
+                self.assertEqual(action["action"], expected)
+                self.assertEqual(run.await_count, 2)
+                self.assertIs(run.await_args.kwargs["resume"], False)
+
     async def test_model_call_receives_the_saved_screenshot(self) -> None:
         commands: list[tuple] = []
         _Proc.stdin_seen = b""

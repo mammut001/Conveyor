@@ -323,6 +323,10 @@ class LocalCuaTransport(CuaTransport):
             from desktop_linux_browser import LinuxBrowserController, canonical_browser
             target = action.get("target_app")
             named = canonical_browser(target) if target else None
+            if target and named is None:
+                # Existing, policy-approved PIDs may still be inspected. Linux
+                # must never fall through to the macOS installed-app launcher.
+                return None if action.get("pid") is not None else "target_app_not_found"
             # Strings and other model-controlled values are not a launch flag.
             if action.get("ensure_browser") is True or named:
                 try:

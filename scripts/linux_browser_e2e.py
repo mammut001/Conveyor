@@ -493,8 +493,10 @@ def _goal(case: str, round_index: int) -> str:
     else:
         url = f"{FIXTURE_ORIGIN}/index.html"
     return (
-        f"Open {url} in Firefox. Read the page title and the code shown in the page body. "
-        "Report both in the done summary. Use the GUI only. A window title alone is not the code."
+        f"Open {url} in Firefox. Read the current browser tab's document title "
+        "(not the large H1 heading inside the page) and the Expected code shown in the page body. "
+        "Report the exact tab title and code in the done summary. Use the GUI only. "
+        "Read the latest settled screenshot; a window title alone is not the code."
     )
 
 
@@ -687,11 +689,14 @@ async def _one(settings, *, case: str, round_index: int, scenario: str, display:
             "gui_forbidden": 0, "steps": 0, "duration_seconds": 0,
         }
     before_pids = set(_firefox_pids(display))
+    # A public weather site can require city selection and consent screens;
+    # the controlled one-page fixture keeps its original, smaller budget.
+    max_steps = 32 if case == "weather" else 16
     log_before = 0
     if log_path.is_file():
         log_before = len(log_path.read_text(encoding="utf-8", errors="replace").splitlines())
     created = create_computer_task(
-        settings, goal, direct_mode=True, max_steps=16, max_seconds=240,
+        settings, goal, direct_mode=True, max_steps=max_steps, max_seconds=240,
         operator_id="linux-e2e", chat_id=chat_id, channel="web",
     )
     if not created.get("ok"):
@@ -706,7 +711,7 @@ async def _one(settings, *, case: str, round_index: int, scenario: str, display:
     planner = _MeasuredPlanner(settings, screen_coordinates=True, sandbox="read-only")
     started = time.monotonic()
     result = await run_computer_loop(
-        settings, goal, planner=planner, backend=backend, max_steps=16, max_seconds=240,
+        settings, goal, planner=planner, backend=backend, max_steps=max_steps, max_seconds=240,
         direct_mode=True, task_id=task_id, chat_id=chat_id, channel="web",
         operator_id="linux-e2e", open_with_observe=True,
     )

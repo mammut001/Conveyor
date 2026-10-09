@@ -100,7 +100,7 @@ BROWSER_PAGE_STATES = frozenset({"loaded", "blank", "error", "loading", "unknown
 
 _BLANK_TITLES = frozenset({
     "mozilla firefox", "firefox", "google chrome", "chrome", "chromium",
-    "chromium web browser", "new tab", "newtab",
+    "chromium web browser", "new tab", "newtab", "safari", "start page",
 })
 _BLANK_TOKENS = (
     "about:blank", "about:newtab", "about:home", "new tab", "moz-extension",
