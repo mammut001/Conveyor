@@ -126,6 +126,19 @@ def infer_target_app(goal: str) -> str | None:
     return None
 
 
+def goal_needs_browser(goal: str) -> bool:
+    """Recognize desktop goals whose first useful surface is a browser.
+
+    Only used for a fixed browser bootstrap, not for URL inference, shell
+    commands, or changing the user's selected desktop.
+    """
+    text = (goal or "").lower()
+    return any(word in text for word in (
+        "browser", "firefox", "chromium", "chrome", "webpage", "website",
+        "weather", "浏览器", "网页", "网站", "天气",
+    ))
+
+
 def extract_single_digit_click_goal(goal: str) -> str | None:
     """If goal asks to click exactly one digit 0-9, return that digit, else None."""
     g = (goal or "").strip()
@@ -521,7 +534,7 @@ def _obs_summary(observation: dict) -> str:
     for key in (
         "pid", "window_id", "element_index", "element_token",
         "elements", "element_hints", "windows", "action_hints", "ax_hints",
-        "click_method",
+        "click_method", "effect",
     ):
         val = observation.get(key)
         if val is None or val == "" or val == []:
@@ -545,7 +558,7 @@ def _trajectory_summary(trajectory: list[dict]) -> str:
     if not trajectory:
         return "(none)"
     lines = []
-    for entry in trajectory[-8:]:
+    for entry in trajectory[-10:]:
         if not isinstance(entry, dict):
             continue
         act = entry.get("action_type") or entry.get("action") or "?"
@@ -558,6 +571,9 @@ def _trajectory_summary(trajectory: list[dict]) -> str:
             red = entry.get("action_redacted") or {}
             if isinstance(red, dict) and red.get("element_index") is not None:
                 extra = f" element_index={red.get('element_index')}"
+        effect = entry.get("effect")
+        if effect == "no_visible_change":
+            extra += " visual_state=unchanged"
         err = entry.get("error")
         if isinstance(err, str) and err.strip():
             extra += f" error={err.strip()[:64]}"
