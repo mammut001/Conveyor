@@ -613,10 +613,63 @@ def _classify(row: dict) -> str:
     return str(row.get("status") or "failed")
 
 
+class _MeasuredPlanner:
+    """Count repeated mutations in memory. The model action is returned unchanged.
+
+    This is a transparent CodexPlanner subclass. The identity tuple is not
+    written to the trail, the report, or a log.
+    """
+
+    def __init__(self, settings, **kwargs) -> None:
+        from desktop_computer_planner import CodexPlanner
+
+        class _Planner(CodexPlanner):
+            def __init__(self) -> None:
+                super().__init__(settings, **kwargs)
+                self._seen: dict[tuple, int] = {}
+
+            async def next_action(self, **call):
+                action = await super().next_action(**call)
+                self._note(action, call.get("observation") or {})
+                return action
+
+            def _note(self, action: dict, observation: dict) -> None:
+                act = str((action or {}).get("action") or "")
+                if act not in {"click", "type", "hotkey", "scroll"}:
+                    return
+                if not isinstance(observation, dict):
+                    return
+                if observation.get("browser_page_state") == "loading":
+                    return
+                from desktop_computer_loop import _focus_identity, _mutation_identity
+
+                key = (
+                    _mutation_identity(action),
+                    observation.get("sha256"),
+                    _focus_identity(observation),
+                )
+                self._seen[key] = self._seen.get(key, 0) + 1
+
+            @property
+            def repeated_unchanged_operations(self) -> int:
+                return sum(count - 1 for count in self._seen.values() if count > 1)
+
+        self._planner = _Planner()
+
+    def __getattr__(self, name: str):
+        return getattr(self._planner, name)
+
+    async def next_action(self, **kwargs):
+        return await self._planner.next_action(**kwargs)
+
+    @property
+    def repeated_unchanged_operations(self) -> int:
+        return self._planner.repeated_unchanged_operations
+
+
 async def _one(settings, *, case: str, round_index: int, scenario: str, display: int,
                authority: str, chat_id: str, expected: dict, artifact: Path, log_path: Path) -> dict:
     from desktop_computer_loop import build_backend, run_computer_loop
-    from desktop_computer_planner import CodexPlanner
     from desktop_computer_requests import create_computer_task, get_computer_task
 
     goal = _goal(case, round_index)
@@ -650,7 +703,7 @@ async def _one(settings, *, case: str, round_index: int, scenario: str, display:
     desktop_env = getattr(getattr(backend, "desktop", None), "env", {})
     if desktop_env.get("XAUTHORITY") != authority or desktop_env.get("DISPLAY") != f":{display}":
         _refuse("backend desktop is not the private display")
-    planner = CodexPlanner(settings, screen_coordinates=True, sandbox="read-only")
+    planner = _MeasuredPlanner(settings, screen_coordinates=True, sandbox="read-only")
     started = time.monotonic()
     result = await run_computer_loop(
         settings, goal, planner=planner, backend=backend, max_steps=16, max_seconds=240,
@@ -706,6 +759,7 @@ async def _one(settings, *, case: str, round_index: int, scenario: str, display:
         "window_focus_id": focus.get("window_id"),
         "duration_seconds": duration,
         "steps": result.get("steps_used"),
+        "repeated_unchanged_operations": planner.repeated_unchanged_operations,
         "owned_launch_count": len(after_pids - before_pids),
         "event_types": _event_types(log_path, log_before),
         "gui_forbidden": forbidden,
@@ -727,33 +781,21 @@ def _sanitized_summary(text: str) -> str:
 
 
 def _repeat_count(rows: list[dict]) -> int | str:
-    """Repeated identical redacted actions that left the same observe hash.
+    """Sum per-round counts. Zero is a measurement, not a missing probe.
 
-    Typed text is stored as ``text_len`` only, which cannot tell two URLs
-    apart. Without a safe hash already on the trail, the count is not measured.
+    The count is identical mutating model actions against the same pre-action
+    screenshot and focus. It is an indicator, not proof the GUI failed.
+    Rows that never ran the measuring planner stay out of a zero report.
     """
-    total = 0
-    for row in rows:
-        seen: dict[str, int] = {}
-        trail = row.get("trajectory") or []
-        for index, entry in enumerate(trail):
-            if not isinstance(entry, dict):
-                continue
-            if entry.get("action_type") not in {"click", "type", "hotkey", "scroll"}:
-                continue
-            redacted = entry.get("action_redacted")
-            if entry.get("action_type") == "type":
-                if not isinstance(redacted, dict) or not redacted.get("text_sha256"):
-                    return "NOT_MEASURED"
-            post = None
-            for nxt in trail[index + 1:]:
-                if isinstance(nxt, dict) and nxt.get("action_type") == "observe":
-                    post = nxt.get("screenshot_hash")
-                    break
-            key = json.dumps({"action": redacted, "hash": post}, sort_keys=True, default=str)
-            seen[key] = seen.get(key, 0) + 1
-        total += sum(count - 1 for count in seen.values() if count > 1)
-    return total
+    executed = [row for row in rows if row.get("task_id")]
+    measured = [
+        row.get("repeated_unchanged_operations")
+        for row in executed
+        if isinstance(row.get("repeated_unchanged_operations"), int)
+    ]
+    if len(measured) != len(executed):
+        return "NOT_MEASURED"
+    return sum(measured)
 
 
 def _metrics(rows: list[dict]) -> dict:
@@ -782,6 +824,11 @@ def _metrics(rows: list[dict]) -> dict:
         "recovery_success_percent": round(100.0 * len(recovery_ok) / max(1, len(recoveries)), 1) if recoveries else None,
         "false_completion": len(false_done),
         "repeats": _repeat_count(rows),
+        "repeats_definition": (
+            "identical click/type/hotkey/scroll model actions retried against the same "
+            "pre-action screenshot and focus; wait/observe/loading excluded; "
+            "indicator, not proof of a GUI failure"
+        ),
         "failure_classes": sorted({str(row.get("failure_class")) for row in rows}),
     }
 

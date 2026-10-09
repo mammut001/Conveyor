@@ -316,7 +316,7 @@ class LoopTests(Case):
         backend._prepared = True  # the browser wait is covered separately
         return asyncio.run(run_computer_loop(
             self.settings, task["goal"], planner=_Sequence(actions), backend=backend,
-            max_steps=8, max_seconds=30, direct_mode=True, task_id=task["task_id"],
+            max_steps=12, max_seconds=30, direct_mode=True, task_id=task["task_id"],
         ))
 
     def test_a_task_runs_end_to_end_on_the_agents_desktop(self) -> None:
@@ -427,18 +427,19 @@ class LoopTests(Case):
         }
         calls: list[tuple] = []
 
-        def run(*argv, **kwargs):
-            command = argv[0] if len(argv) == 1 and isinstance(argv[0], (list, tuple)) else argv
-            if command and command[0] == "import":
-                return self.x.run(list(command), **kwargs)
-            calls.append(tuple(command))
-            key = command[1] if command and command[0] != "xprop" else "xprop"
-            if command and command[0] == "xprop":
+        def run(command, **kwargs):
+            # subprocess.run receives one command sequence, not unpacked args.
+            argv = tuple(command)
+            if argv and argv[0] == "import":
+                return self.x.run(list(argv), **kwargs)
+            calls.append(argv)
+            key = argv[1] if argv and argv[0] != "xprop" else "xprop"
+            if argv and argv[0] == "xprop":
                 key = "xprop"
-            elif len(command) > 1:
-                key = command[1]
+            elif len(argv) > 1:
+                key = argv[1]
             text = scripted.get(key, "")
-            return subprocess.CompletedProcess(command, 0, stdout=text if isinstance(text, str) else "", stderr="")
+            return subprocess.CompletedProcess(argv, 0, stdout=text if isinstance(text, str) else "", stderr="")
 
         desktop = self.desktop()
         auth = self.root / "Xauthority"

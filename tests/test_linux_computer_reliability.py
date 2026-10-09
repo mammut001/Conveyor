@@ -5,6 +5,7 @@ import asyncio
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -567,7 +568,19 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("hello", str(result))
 
     async def test_loading_title_is_not_a_stall_or_a_finished_page(self):
-        with tempfile.TemporaryDirectory() as temp:
+        import desktop_computer_loop as loop
+
+        clock = {"now": 0.0}
+
+        def monotonic():
+            return clock["now"]
+
+        async def sleep(seconds):
+            clock["now"] += float(seconds)
+
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(loop, "_monotonic", monotonic), \
+                mock.patch.object(loop, "_sleep", sleep):
             frame = {
                 "result_ok": True, "sha256": "same", "screenshot_id": "fake",
                 "active_app": "Firefox", "window_title": "Loading…",
@@ -585,11 +598,12 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
                                   {"action": "click", "x": 1, "y": 1},
                                   {"action": "done", "summary": "weather"},
                                   {"action": "done", "summary": "weather"}),
-                backend=backend, max_steps=12, max_seconds=30, direct_mode=True,
+                backend=backend, max_steps=40, max_seconds=30, direct_mode=True,
                 open_with_observe=True,
             )
             self.assertEqual(result["status"], "error")
             self.assertNotEqual(result["blocked_reason"], "no_visual_progress")
+            self.assertNotEqual(result["status"], "done")
 
     async def test_about_blank_and_network_error_are_not_success(self):
         titles = (
@@ -733,6 +747,134 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(backend.actions[0]["action"], "observe")
             self.assertNotIn("target_app", backend.actions[0])
             self.assertEqual(result["status"], "done")
+
+    async def test_browser_submit_settles_before_done_and_skips_non_browser(self):
+        import desktop_computer_loop as loop
+
+        clock = {"now": 5000.0}
+
+        def monotonic():
+            return clock["now"]
+
+        async def sleep(seconds):
+            clock["now"] += float(seconds)
+
+        class Backend:
+            def __init__(self, app: str) -> None:
+                self.app = app
+                self.actions: list[dict] = []
+
+            async def execute_step(self, settings, task_id, step_id, action):
+                self.actions.append(dict(action))
+                if action.get("action") != "observe":
+                    return {"result_ok": True, "action_type": action.get("action")}
+                entered = any(
+                    item.get("action") == "hotkey" and item.get("keys") == ["enter"]
+                    for item in self.actions
+                )
+                fresh = entered and clock["now"] >= 5001.3
+                sha = "new" if fresh else "old"
+                return {
+                    "result_ok": True, "action_type": "observe", "sha256": sha,
+                    "screenshot_id": sha, "active_app": self.app,
+                    "browser_page_state": "loaded", "pid": 5, "window_id": 9,
+                }
+
+        calls: list[tuple] = []
+
+        class Planner:
+            def __init__(self, backend) -> None:
+                self.backend = backend
+                self.sent_enter = False
+
+            async def next_action(self, **kwargs):
+                obs = kwargs.get("observation") or {}
+                calls.append((clock["now"], obs.get("sha256"), obs.get("active_app")))
+                if self.backend.app == "Calculator":
+                    if not any(item.get("action") == "click" for item in self.backend.actions):
+                        return {"action": "click", "x": 1, "y": 1}
+                    return {"action": "done", "summary": "pressed"}
+                if not self.sent_enter:
+                    self.sent_enter = True
+                    return {"action": "hotkey", "keys": ["enter"]}
+                return {"action": "done", "summary": "settled-new"}
+
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(loop, "_monotonic", monotonic), \
+                mock.patch.object(loop, "_sleep", sleep):
+            backend = Backend("Firefox")
+            started = time.monotonic()
+            result = await run_computer_loop(
+                _settings(Path(temp)), "Open the webpage",
+                planner=Planner(backend), backend=backend, max_steps=16, max_seconds=30,
+                direct_mode=True, open_with_observe=True,
+            )
+            elapsed = time.monotonic() - started
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["summary"], "settled-new")
+        self.assertLess(elapsed, 1.0)
+        after = [item for item in calls if item[0] >= 5001.0]
+        self.assertTrue(after)
+        self.assertTrue(all(item[1] == "new" for item in after))
+        observes = [item for item in backend.actions if item.get("action") == "observe"]
+        self.assertGreaterEqual(sum(1 for _ in observes), 3)
+        new_obs = [
+            item for item in backend.actions
+            if item.get("action") == "observe"
+        ]
+        enter_at = next(i for i, item in enumerate(backend.actions) if item.get("keys") == ["enter"])
+        trailed = backend.actions[enter_at + 1:]
+        self.assertTrue(all(item.get("action") == "observe" for item in trailed))
+        self.assertGreaterEqual(len(trailed), 3)
+        self.assertNotIn("http://", str(result))
+
+        clock["now"] = 8000.0
+        calls.clear()
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(loop, "_monotonic", monotonic), \
+                mock.patch.object(loop, "_sleep", sleep):
+            calc = Backend("Calculator")
+            before = clock["now"]
+            result = await run_computer_loop(
+                _settings(Path(temp)), "Press the button",
+                planner=Planner(calc), backend=calc, max_steps=8, max_seconds=30,
+                direct_mode=True, open_with_observe=True,
+            )
+            self.assertEqual(result["status"], "done")
+            self.assertEqual(clock["now"], before)
+            self.assertEqual(
+                [item.get("action") for item in calc.actions],
+                ["observe", "click", "observe"],
+            )
+
+        clock["now"] = 9000.0
+        focus_calls: list[float] = []
+
+        class Keys:
+            def __init__(self) -> None:
+                self.n = 0
+
+            async def next_action(self, **_kwargs):
+                focus_calls.append(clock["now"])
+                self.n += 1
+                if self.n == 1:
+                    return {"action": "hotkey", "keys": ["ctrl", "l"]}
+                if self.n == 2:
+                    return {"action": "type", "text": "http://127.0.0.1/run-02.html"}
+                return {"action": "done", "summary": "typed"}
+
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(loop, "_monotonic", monotonic), \
+                mock.patch.object(loop, "_sleep", sleep):
+            page = Backend("Firefox")
+            result = await run_computer_loop(
+                _settings(Path(temp)), "Open the webpage",
+                planner=Keys(), backend=page, max_steps=10, max_seconds=30,
+                direct_mode=True, open_with_observe=True,
+            )
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(focus_calls[1] - focus_calls[0], 0.0)
+        self.assertNotIn("run-02.html", str(result))
 
 
 class IdentityTest(unittest.TestCase):

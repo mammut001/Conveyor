@@ -432,6 +432,8 @@ async def run_computer_loop(
     last_failed_signature: tuple | None = None
     repeated_failures = 0
     progress = _VisualProgress()
+    nav: _NavigationSettle | None = None
+    nav_unsettled = False
     browser_goal = goal_needs_browser(goal) and not is_observe_only_goal(goal)
     takeover_store = HumanTakeoverStore(settings)
     # The lease that pauses this task is the one for the desktop it acts on.
@@ -466,12 +468,37 @@ async def run_computer_loop(
                 # handoff. The old plan was made against a pre-human screen.
                 followup_observe = True
                 progress.reset()
+                # The human may have changed the page. Drop the in-flight
+                # navigation samples and look at the desktop again.
+                nav = None
+                nav_unsettled = False
                 # The human may have changed the desktop. Consecutive
                 # pre-takeover failures are not evidence about the new screen.
                 repeated_failures = 0
                 last_failed_signature = None
 
-            if followup_observe or fallback_observe or progress.recover_next:
+            if nav is not None and nav.active:
+                now = _monotonic()
+                if time.monotonic() - start > max_seconds:
+                    set_task_status(settings, task_id, "stopped", blocked_reason="max_seconds reached")
+                    break
+                if now >= nav.deadline:
+                    nav.active = False
+                    nav_unsettled = True
+                    goto_execute = False
+                elif now < nav.next_sample_at:
+                    await _sleep(min(0.25, nav.next_sample_at - now))
+                    continue
+                else:
+                    action = {"action": "observe"}
+                    # No planner call and no extra key while the submission paints.
+                    goto_execute = True
+            else:
+                goto_execute = False
+
+            if goto_execute:
+                pass
+            elif followup_observe or fallback_observe or progress.recover_next:
                 # A failed targeted observation must be followed by a plain
                 # screenshot: never re-inject the same broken target_app.
                 # One verified browser refocus is a different recovery from
@@ -565,6 +592,7 @@ async def run_computer_loop(
                     observation=observation,
                     trajectory=trajectory,
                     progress=progress,
+                    navigation_pending=bool(nav is not None and nav.active) or nav_unsettled,
                 )
                 if reason == "no_visual_progress":
                     set_task_status(settings, task_id, "stopped", blocked_reason=reason)
@@ -653,7 +681,17 @@ async def run_computer_loop(
             duration_ms = int((time.monotonic() - step_start) * 1000)
             success = bool(result.get("result_ok", True)) if isinstance(result, dict) else False
             error_code = str((result or {}).get("error") or "") if isinstance(result, dict) else "invalid_result"
-            if act == "observe" and success and isinstance(result, dict):
+            settle_outcome = None
+            if (
+                nav is not None and nav.active and act == "observe" and success
+                and isinstance(result, dict)
+            ):
+                settle_outcome = nav.sample(result, _monotonic())
+                if settle_outcome == "settled":
+                    nav_unsettled = False
+            # Samples taken while a navigation is still painting are not stalls.
+            # A loading title is not a stable sample and is not a stall either.
+            if act == "observe" and success and isinstance(result, dict) and settle_outcome not in {"sampling", "loading"}:
                 if recovering:
                     if progress.note_recovery_observe(result):
                         result["effect"] = "no_visible_change"
@@ -667,6 +705,9 @@ async def run_computer_loop(
                         result["effect"] = "no_visible_change"
             elif act in _MUTATING_ACTIONS and success:
                 progress.note_mutation(action, before_visual_hash, observation)
+                if _is_browser_navigation(action, observation):
+                    nav = _NavigationSettle(_monotonic())
+                    nav_unsettled = False
             # A successful step does not clear repeated_failures. An observe
             # inserted between two failed attempts is not a new plan, and a
             # later success of a different action is not proof the failing
@@ -724,10 +765,12 @@ async def run_computer_loop(
             steps_used += 1
             if act != "observe":
                 followup_observe = True
+            if nav is not None and nav.active:
+                followup_observe = False
             if repeated_failures >= 3:
                 set_task_status(settings, task_id, "error", blocked_reason="repeated_action_failure")
                 break
-            if act == "observe" and success and isinstance(result, dict):
+            if act == "observe" and success and isinstance(result, dict) and settle_outcome not in {"sampling", "loading"}:
                 if (recovering and result.get("effect") == "no_visible_change") or (
                     progress.same_unchanged >= 2 and progress.recovery_used and not progress.recover_next
                 ):
@@ -787,6 +830,77 @@ async def run_computer_loop(
 
 
 _MUTATING_ACTIONS = frozenset({"click", "type", "hotkey", "scroll"})
+# After Enter or a browser click returns, Firefox can still be painting the
+# previous document. These bound the wait; they are not a content proof.
+_NAV_PAINT_SECONDS = 1.0
+_NAV_SAMPLE_SECONDS = 0.3
+_NAV_TIMEOUT_SECONDS = 5.0
+
+
+def _monotonic() -> float:
+    """Loop clock. Tests replace this without touching asyncio's clock."""
+    return time.monotonic()
+
+
+async def _sleep(seconds: float) -> None:
+    """Loop wait. Tests replace this without replacing asyncio.sleep."""
+    await asyncio.sleep(seconds)
+
+
+def _is_browser_navigation(action: dict, observation: dict) -> bool:
+    """True for a browser Enter/Return or click. Address-bar keys do not count.
+
+    Calculator and other non-browser fronts are unchanged. The check uses
+    the pre-action observation, not a new screenshot.
+    """
+    if not isinstance(action, dict) or not _browser_foreground_observed(observation):
+        return False
+    act = str(action.get("action") or "")
+    if act == "click":
+        return True
+    if act != "hotkey":
+        return False
+    keys = action.get("keys")
+    if not isinstance(keys, list) or len(keys) != 1:
+        return False
+    return str(keys[0]).strip().lower() in {"enter", "return"}
+
+
+class _NavigationSettle:
+    """Fresh observes until the GUI stops changing, or the deadline passes.
+
+    Stability is an indicator. It does not prove the page body is correct.
+    """
+
+    def __init__(self, now: float) -> None:
+        self.deadline = now + _NAV_TIMEOUT_SECONDS
+        self.next_sample_at = now + _NAV_PAINT_SECONDS
+        self.last: tuple | None = None
+        self.matches = 0
+        self.active = True
+
+    def sample(self, result: dict, now: float) -> str:
+        self.next_sample_at = now + _NAV_SAMPLE_SECONDS
+        state = _fresh_browser_page_state(result)
+        if state == "loading" or result.get("effect") == "loading":
+            self.last = None
+            self.matches = 0
+            return "loading"
+        digest = result.get("sha256")
+        if not isinstance(digest, str) or not digest:
+            self.last = None
+            self.matches = 0
+            return "sampling"
+        sig = (digest, _focus_identity(result), state)
+        if sig == self.last:
+            self.matches += 1
+        else:
+            self.last = sig
+            self.matches = 1
+        if self.matches >= 2:
+            self.active = False
+            return "settled"
+        return "sampling"
 
 
 def _failure_signature(action: dict, error_code: str) -> tuple:
@@ -805,8 +919,12 @@ def _reject_done(
     observation: dict,
     trajectory: list[dict],
     progress: _VisualProgress,
+    navigation_pending: bool = False,
 ) -> str | None:
     """Return a reason to refuse a planner ``done``, or None to accept it."""
+    if navigation_pending:
+        # A loaded title captured before the next document paints is not done.
+        return "navigation_unsettled"
     if progress.same_unchanged >= 2 and progress.recovery_used:
         return "no_visual_progress"
     if not isinstance(observation, dict) or not observation.get("screenshot_id"):
