@@ -57,3 +57,43 @@ The next step is functional rather than cosmetic:
 - allow deep links to a session, job, and changed file.
 
 This avoids turning the Web Workbench into a separate execution model: Telegram, Feishu, and Web continue to share the same queue, session identity, worktrees, approvals, and audit trail.
+
+## Phase 2a — session-native refinement history (this PR)
+
+The queue and worktree lifecycle were already implemented. This phase makes
+the existing control-plane state authoritative in the Web Workbench without
+introducing another background agent, sandbox, or Apply/Discard path.
+
+- `GET /api/sessions` includes a small `active_refinement` summary per
+  visible session. The lookup is batched against the existing SQLite
+  `session_worktrees` table and includes **no absolute worktree paths**.
+- `GET /api/sessions/<id>` includes the same current summary and recent
+  `runs` (up to 200). A run's ID, state, mode, timestamps and redacted prompt
+  preview are safe for display; logs and raw prompts are not returned by this
+  navigation projection. Session identity includes channel, operator and chat,
+  never the chat ID alone. Legacy ambiguous raw IDs are refused.
+- The Web Workbench's Runs inspector switches the selected runtime job while
+  keeping the session transcript and active refinement context. Its Changes
+  inspector resolves cumulative files/diff and Apply/Discard through the
+  **latest** queue job for the active chain, even when a historical run is open.
+- Once Apply/Discard closes the SQLite chain, the active badge disappears
+  regardless of old job metadata or the selected run.
+- Session polling invalidates stale fetch responses and explicitly clears
+  old session details on selection. API authentication and scoped approval
+  checks are unchanged.
+
+### Boundaries
+
+This is session-native visibility and history, **not** autonomous multi-step
+planning. The existing queue still schedules each explicit refinement turn.
+It does not auto-run failed checks, auto-apply changes or bypass operator
+approvals. Long histories are capped at 200 recent runs; full pagination,
+per-file diff navigation, deep links, and keyboard shortcuts remain follow-ups.
+
+### Smoke review
+
+Create two Web refinement turns in one session, then create an unrelated
+Telegram session with the same source chat ID. Open the Web session, select
+turn 1 in Runs and confirm the active chain still shows turn 2 and its
+cumulative Changes. Apply or Discard after approval; confirm the badge closes,
+history remains, and the other session never appears in the run list.

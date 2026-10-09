@@ -609,14 +609,28 @@ class JobQueue:
         finally:
             conn.close()
 
-    def list_jobs(self, limit: int = 100, *, session_id: str | None = None) -> list[dict[str, Any]]:
+    def list_jobs(
+        self, limit: int = 100, *, session_id: str | None = None,
+        channel: str | None = None, operator_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List runs within the requested identity before applying LIMIT.
+
+        session_id is the legacy source chat ID. Scope filters ensure another
+        channel with the same upstream ID cannot crowd out this session.
+        """
         conn = self._get_conn()
         try:
             sql = "SELECT * FROM queued_jobs"
+            where: list[str] = []
             params: list[Any] = []
-            if session_id is not None:
-                sql += " WHERE chat_id = ?"
-                params.append(session_id)
+            for column, value in (
+                ("chat_id", session_id), ("channel", channel), ("operator_id", operator_id),
+            ):
+                if value is not None:
+                    where.append(f"{column} = ?")
+                    params.append(value)
+            if where:
+                sql += " WHERE " + " AND ".join(where)
             sql += " ORDER BY created_at DESC LIMIT ?"
             params.append(min(max(1, int(limit)), 500))
             rows = conn.execute(sql, params).fetchall()

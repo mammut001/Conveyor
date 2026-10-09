@@ -367,10 +367,9 @@ class RefinementStore:
         finally:
             conn.close()
 
-    def session_summary(self, session_id: str) -> dict[str, Any] | None:
-        active = self.active(session_id)
-        if active is None:
-            return None
+    @staticmethod
+    def _public_summary(active: dict[str, Any]) -> dict[str, Any]:
+        """UI-safe fields only: never expose a host filesystem worktree path."""
         return {
             "chain_id": active["id"],
             "state": active["state"],
@@ -380,6 +379,38 @@ class RefinementStore:
             "latest_runtime_job_id": active["latest_runtime_job_id"],
             "updated_at": active["updated_at"],
         }
+
+    def session_summary(self, session_id: str) -> dict[str, Any] | None:
+        active = self.active(session_id)
+        return self._public_summary(active) if active else None
+
+    def active_summaries(self, session_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Read the visible sessions' authoritative active chains in one query.
+
+        The control plane polls sessions frequently. One bounded read avoids
+        opening and migrating SQLite once per session on every refresh.
+        """
+        keys = list(dict.fromkeys(value for value in session_ids if isinstance(value, str) and value))
+        if not keys:
+            return {}
+        result: dict[str, dict[str, Any]] = {}
+        conn = self._connect()
+        try:
+            # SQLite installations with a 999-variable limit are supported.
+            for offset in range(0, len(keys), 400):
+                batch = keys[offset:offset + 400]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(
+                    f"SELECT * FROM session_worktrees WHERE state = 'active' "
+                    f"AND session_id IN ({placeholders})",
+                    batch,
+                ).fetchall()
+                for row in rows:
+                    record = dict(row)
+                    result[record["session_id"]] = self._public_summary(record)
+            return result
+        finally:
+            conn.close()
 
 
 _EXPLANATION_RE = re.compile(
