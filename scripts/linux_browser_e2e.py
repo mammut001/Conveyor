@@ -483,7 +483,8 @@ def _goal(case: str, round_index: int) -> str:
         return (
             "Using only the on-screen browser, open a real weather webpage and read "
             "today's weather for Montreal, Quebec. The done summary must include the "
-            "place, today's temperature, the condition, precipitation when the page "
+            "place, the current observed temperature and condition (read Current Conditions, "
+            "not tomorrow's forecast), the observation's local date/time, precipitation when the page "
             "shows it, and the source shown on the page. Do not use a shell, an API, "
             "or a web search tool. If the page fails to load, report that load error "
             "instead of inventing a forecast."

@@ -920,6 +920,11 @@ class _BrowserSubmission:
             "do not press enter", "don't press enter", "不要提交", "不要按回车", "不按回车",
         ))
         self.enabled = goal_needs_loaded_page(goal) and not draft_only
+        # A URL can be ordinary form text. Only the address-focus sequence
+        # proves navigation in a goal that explicitly asks to fill a field.
+        self.url_entry = not any(word in text for word in (
+            "form", "input field", "text field", "表单", "输入框",
+        ))
         self.address_focus: tuple | None = None
         self.pending_focus: tuple | None = None
 
@@ -951,7 +956,7 @@ class _BrowserSubmission:
                 self.address_focus = None
         elif act == "type":
             text = str(action.get("text") or "").strip().lower()
-            if self.address_focus == focus or text.startswith(("http://", "https://")):
+            if self.address_focus == focus or (self.url_entry and text.startswith(("http://", "https://"))):
                 self.pending_focus = focus
         elif act == "click":
             # Clicking might dismiss the suggestions; it does not prove that

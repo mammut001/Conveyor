@@ -1174,6 +1174,13 @@ class BrowserSubmissionTest(unittest.IsolatedAsyncioTestCase):
         gate.note_success({"action": "type", "text": "Montreal weather"}, frame)
         self.assertTrue(gate.pending)
         self.assertNotIn("Montreal", repr(vars(gate)))
+        form = _BrowserSubmission("Fill the website URL input field in Firefox")
+        form.note_success({"action": "type", "text": "https://example.org"}, frame)
+        self.assertFalse(form.pending)
+        form.note_success({"action": "hotkey", "keys": ["ctrl", "l"]}, frame)
+        form.note_success({"action": "type", "text": "https://example.org"}, frame)
+        self.assertTrue(form.pending)
+
 
 
 class LateNavigationTest(unittest.IsolatedAsyncioTestCase):
