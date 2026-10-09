@@ -302,6 +302,9 @@ export default function App() {
   }, [sessionsDrawerOpen, contextDrawerOpen])
 
   const selectSession = useCallback((sessionId: string, jobId?: string) => {
+    sessionDetailFetchGen.current += 1
+    setSelectedSessionDetail(null)
+    setTranscript([])
     setCreatingSession(false)
     setSelectedSessionId(sessionId)
     if (sessionId) sessionStorage.setItem('conveyor-selected-session', sessionId)
@@ -541,7 +544,7 @@ export default function App() {
         .catch(() => {})
     }
     return () => { stopped = true }
-  }, [api, authenticated, changesJobId, selectedSessionId])
+  }, [api, authenticated, changesJobId, changedFilesJob?.updated_at, selectedSessionId])
   const liveAssistantText = useMemo(() => {
     if (!selectedJob || terminalJobState(selectedJob.state)) return ''
     return events
