@@ -65,7 +65,7 @@ class LinuxBrowserController:
         ids = [line.strip() for line in result.stdout.splitlines()]
         return [wid for wid in ids if re.fullmatch(r"\d{1,12}", wid)]
 
-    def _focus(self, window: str) -> int | None:
+    def _focus(self, window: str, browser: str) -> int | None:
         if self._run("xdotool", "windowactivate", "--sync", window).returncode:
             return None
         active = self._run("xdotool", "getactivewindow")
@@ -75,7 +75,11 @@ class LinuxBrowserController:
         if pid.returncode or not pid.stdout.strip().isdigit():
             return None
         value = int(pid.stdout.strip())
-        return value if value > 0 else None
+        # WM_CLASS alone is controlled by the window owner. Check the real
+        # process too, or an unrelated launcher window could be trusted.
+        if value <= 0 or canonical_browser(linux_process_app(value)) != browser:
+            return None
+        return value
 
     def active_app(self) -> str:
         result = self._run("xdotool", "getactivewindow", "getwindowclassname")
@@ -106,6 +110,12 @@ class LinuxBrowserController:
         allowed = {canonical_app(a).lower() for a in allowed_apps}
         blocked = {canonical_app(a).lower() for a in blocked_apps}
         candidates = list(BROWSERS) if browser == "Browser" else [browser]
+        # Generic "current browser" should keep the current browser first.
+        if browser == "Browser":
+            active = canonical_browser(self.active_app())
+            if active in candidates:
+                candidates.remove(active)
+                candidates.insert(0, active)
         candidates = [
             item for item in candidates if item.lower() not in blocked
             and (not allowed or item.lower() in allowed)
@@ -119,20 +129,36 @@ class LinuxBrowserController:
         for item in candidates:
             for wid in self._window_ids(item):
                 seen_window = True
-                pid = self._focus(wid)
+                pid = self._focus(wid, item)
                 if pid:
                     return {"ok": True, "name": item, "pid": pid, "window_id": int(wid)}
         if seen_window:
             return {"ok": False, "error": "browser_activate_failed"}
 
-        selected = next(((b, self._binary(b)) for b in candidates if self._binary(b)), None)
+        selected = None
+        for candidate in candidates:
+            binary = self._binary(candidate)
+            if binary:
+                selected = (candidate, binary)
+                break
         if selected is None:
             return {"ok": False, "error": "browser_binary_missing"}
         item, binary = selected
+        # A dedicated profile prevents Firefox redirecting to a browser
+        # already running on a different DISPLAY for the same Linux user.
+        if item == "Firefox" and binary.startswith("/snap/"):
+            profile = Path.home() / "snap" / "firefox" / "common" / "conveyor-host-browser"
+        else:
+            profile = Path.home() / ".local" / "share" / "conveyor" / "host-browser" / item.replace(" ", "-").lower()
         try:
+            profile.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if item == "Firefox":
+                command = [binary, "--no-remote", "--profile", str(profile), "--new-window", "about:blank"]
+            else:
+                command = [binary, f"--user-data-dir={profile}", "--new-window", "about:blank"]
             # Never a shell or a model-supplied command/URL.
             subprocess.Popen(
-                [binary, "--new-window", "about:blank"],
+                command,
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, start_new_session=True,
             )
