@@ -504,7 +504,9 @@ async def run_computer_loop(
                     break
                 if now >= nav.deadline:
                     nav.active = False
-                    nav_unsettled = True
+                    nav_unsettled = not nav.loaded_after_deadline(now)
+                    if not nav_unsettled:
+                        progress.note_observe(observation)
                     goto_execute = False
                 elif now < nav.next_sample_at:
                     await _sleep(min(0.25, nav.next_sample_at - now))
@@ -976,10 +978,32 @@ class _NavigationSettle:
         self.last: tuple | None = None
         self.matches = 0
         self.active = True
+        self.loaded_focus: tuple | None = None
+        self.loaded_samples = 0
+        self.last_sample_at = now
+
+    def loaded_after_deadline(self, now: float) -> bool:
+        # Ads and clocks can change every frame on a ready page. Pixels
+        # alone must not turn that into failure. Only after the full paint
+        # budget, accept repeated fresh loaded observations of the same
+        # verified browser. This permits fresh visual review, not proof of semantic correctness.
+        return (now >= self.deadline and self.loaded_samples >= 2
+                and now - self.last_sample_at <= 1.0)
 
     def sample(self, result: dict, now: float) -> str:
         self.next_sample_at = now + _NAV_SAMPLE_SECONDS
+        self.last_sample_at = now
         state = _fresh_browser_page_state(result)
+        focus = _focus_identity(result)
+        if (state == "loaded" and result.get("effect") != "loading"
+                and _browser_foreground_observed(result)
+                and isinstance(result.get("sha256"), str) and result["sha256"]
+                and isinstance(result.get("screenshot_id"), str) and result["screenshot_id"]):
+            self.loaded_samples = self.loaded_samples + 1 if focus == self.loaded_focus else 1
+            self.loaded_focus = focus
+        else:
+            self.loaded_samples = 0
+            self.loaded_focus = None
         if state == "loading" or result.get("effect") == "loading":
             self.last = None
             self.matches = 0

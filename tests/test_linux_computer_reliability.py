@@ -1216,3 +1216,56 @@ class LateNavigationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "done")
         self.assertGreaterEqual(clock["now"], 106.3)
         self.assertEqual(actions.count("hotkey"), 1)
+
+
+class DynamicPageReadinessTest(unittest.IsolatedAsyncioTestCase):
+    async def test_changing_loaded_frames_wait_full_budget_but_do_not_fail(self):
+        import desktop_computer_loop as loop
+        clock = {"now": 100.0}
+        async def sleep(seconds): clock["now"] += seconds
+        calls = []
+        class Backend:
+            async def execute_step(self, settings, task_id, step_id, action):
+                calls.append(action["action"])
+                if action["action"] != "observe": return {"result_ok": True}
+                return {"result_ok": True, "screenshot_id": str(clock["now"]),
+                        "sha256": str(clock["now"]), "active_app": "Firefox", "pid": 4,
+                        "window_id": 8, "browser_page_state": "loaded"}
+        class Planner:
+            def __init__(self): self.submitted = False
+            async def next_action(self, **kwargs):
+                if not self.submitted:
+                    self.submitted = True
+                    return {"action": "hotkey", "keys": ["enter"]}
+                return {"action": "done", "summary": "read current page"}
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(loop, "_monotonic", lambda: clock["now"]), \
+                mock.patch.object(loop, "_sleep", sleep):
+            result = await run_computer_loop(
+                _settings(Path(temp)), "Read the weather webpage in Firefox",
+                planner=Planner(), backend=Backend(), max_steps=32, max_seconds=30,
+                direct_mode=True, open_with_observe=True,
+            )
+        self.assertEqual(result["status"], "done", result)
+        self.assertGreaterEqual(clock["now"], 105.0)
+        self.assertEqual(calls.count("hotkey"), 1)
+
+    def test_dynamic_readiness_rejects_loading_missing_images_and_changed_focus(self):
+        import desktop_computer_loop as loop
+        ready = {"screenshot_id": "fresh", "sha256": "a", "active_app": "Firefox",
+                 "pid": 4, "window_id": 8, "browser_page_state": "loaded"}
+        for bad in (dict(ready, browser_page_state="loading"),
+                    dict(ready, browser_page_state="error"), dict(ready, effect="loading"),
+                    dict(ready, screenshot_id=""),
+                    dict(ready, sha256={"bad": "digest"}),
+                    dict(ready, active_app="Terminal"), dict(ready, window_id=9)):
+            gate = loop._NavigationSettle(100.0)
+            gate.sample(ready, 104.5)
+            gate.sample(bad, 104.9)
+            self.assertFalse(gate.loaded_after_deadline(105.0), bad)
+        gate = loop._NavigationSettle(100.0)
+        gate.sample(ready, 104.5)
+        gate.sample(dict(ready, sha256="b"), 104.9)
+        self.assertFalse(gate.loaded_after_deadline(104.99))
+        self.assertTrue(gate.loaded_after_deadline(105.0))
+        self.assertFalse(gate.loaded_after_deadline(106.0))
