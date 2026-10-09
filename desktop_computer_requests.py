@@ -323,7 +323,7 @@ def normalize_action(action: object) -> dict:
         "pid", "window_id", "element_index", "element_token",
         "delivery_mode", "scope", "button",
         "_target_label", "label",
-        "target_app",
+        "target_app", "ensure_browser",
         "_mock_active_app", "_mock_target_app",
         "_mock_element_hints", "_mock_pid", "_mock_window_id", "_mock_ax_app",
     ):
