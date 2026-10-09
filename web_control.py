@@ -16,7 +16,8 @@ from agent_events import emit_event, get_event_store
 from handlers.job_queue import JobQueue
 from redaction import redact_text, truncate
 from runtime_control import COMMAND_CANCEL, get_runtime_control
-from transcript_store import get_transcript_store
+from transcript_store import get_transcript_store, session_identity
+from refinement_store import RefinementStore
 from provider_config import get_provider_config, save_provider_config
 
 
@@ -86,6 +87,41 @@ class WebControl:
             item["runtime"] = runtime
         return item
 
+    @staticmethod
+    def _session_key(item: dict[str, Any], *, source_key: str = "source_chat_id") -> str | None:
+        channel = str(item.get("channel") or "")
+        operator = str(item.get("operator_id") or "")
+        chat = str(item.get(source_key) or "")
+        if not channel or not operator or not chat:
+            return None
+        return session_identity(channel, chat, operator)
+
+    @staticmethod
+    def _run_view(job: dict[str, Any]) -> dict[str, Any]:
+        """Stable run navigation payload, without logs, paths or raw prompts."""
+        metadata = job.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        return {
+            "id": job["id"],
+            "state": job.get("state"),
+            "mode": job.get("mode"),
+            "created_at": job.get("created_at"),
+            "updated_at": job.get("updated_at"),
+            "finished_at": job.get("finished_at"),
+            "prompt_preview": job.get("prompt_preview"),
+            "refinement_intent": bool(job.get("refinement_intent")),
+            "refinement_turn": metadata.get("refinement_turn"),
+        }
+
+    def _attach_session_workbench(self, session: dict[str, Any], jobs: list[dict[str, Any]]) -> dict[str, Any]:
+        """Session-native state remains correct while older runs are selected."""
+        key = self._session_key(session)
+        session["active_refinement"] = RefinementStore(self.settings).session_summary(key) if key else None
+        session["runs"] = [self._run_view(item) for item in jobs]
+        session["latest_job"] = jobs[0] if jobs else None
+        return session
+
     def list_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
         transcript_sessions = get_transcript_store(self.settings).list_sessions(limit)
         jobs = self.queue.list_jobs(500)
@@ -99,6 +135,10 @@ class WebControl:
                 )
                 if all(key) and key not in latest_by_session:
                     latest_by_session[key] = job
+            chain_by_session = RefinementStore(self.settings).active_summaries([
+                key for session in transcript_sessions
+                if (key := self._session_key(session))
+            ])
             for session in transcript_sessions:
                 session["last_activity"] = session.get("updated_at") or session.get("created_at")
                 key = (
@@ -107,6 +147,7 @@ class WebControl:
                     str(session.get("source_chat_id") or ""),
                 )
                 session["latest_job"] = latest_by_session.get(key)
+                session["active_refinement"] = chain_by_session.get(self._session_key(session) or "")
             return transcript_sessions
 
         # Backward-compatible projection for installations that have not yet
@@ -129,7 +170,15 @@ class WebControl:
             session["job_count"] += 1
             if session["latest_job"] is None:
                 session["latest_job"] = job
-        return list(grouped.values())[:limit]
+        rows = list(grouped.values())[:limit]
+        summaries = RefinementStore(self.settings).active_summaries([
+            key for session in rows if (key := self._session_key(session, source_key="id"))
+        ])
+        for session in rows:
+            session["active_refinement"] = summaries.get(
+                self._session_key(session, source_key="id") or ""
+            )
+        return rows
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         transcript = get_transcript_store(self.settings).get_session(session_id)
@@ -143,19 +192,30 @@ class WebControl:
             transcript["last_activity"] = transcript.get("updated_at") or transcript.get("created_at")
             transcript["jobs"] = jobs
             transcript["job_count"] = len(jobs)
-            return transcript
+            return self._attach_session_workbench(transcript, jobs)
+        # Legacy transcript-less sessions are only safe to reconstruct when
+        # their chat ID belongs to a single channel/operator scope. A raw chat
+        # ID can collide across Telegram, Feishu and Web.
         jobs = self.list_jobs(200, session_id=session_id)
         if not jobs:
-            return self._empty_agent_session(session_id)
-        return {
+            empty = self._empty_agent_session(session_id)
+            return self._attach_session_workbench(empty, []) if empty else None
+        identities = {self._session_key(item, source_key="chat_id") for item in jobs}
+        if len(identities) != 1 or None in identities:
+            return None
+        jobs = [job for job in jobs if self._session_key(job, source_key="chat_id") in identities]
+        session = {
             "id": session_id,
             "channel": jobs[0].get("channel"),
+            "operator_id": jobs[0].get("operator_id"),
+            "source_chat_id": jobs[0].get("chat_id"),
             "created_at": jobs[-1].get("created_at"),
             "last_activity": jobs[0].get("updated_at") or jobs[0].get("created_at"),
             "jobs": jobs,
             "messages": [],
             "job_count": len(jobs),
         }
+        return self._attach_session_workbench(session, jobs)
 
     def _empty_agent_session(self, session_id: str) -> dict[str, Any] | None:
         """An agent's conversation exists from the moment the agent does."""
