@@ -30,6 +30,7 @@ from config import Settings
 from desktop_computer_planner import (
     infer_target_app,
     goal_needs_browser,
+    goal_needs_loaded_page,
     is_observe_only_goal,
     maybe_followup_label_action,
     maybe_observe_only_action,
@@ -75,6 +76,148 @@ def _with_observed_target(action: dict, observation: dict) -> dict:
     if bound.get("window_id") is None and observation.get("window_id") is not None:
         bound["window_id"] = observation["window_id"]
     return bound
+
+
+def _mutation_identity(action: dict) -> tuple:
+    """Identity of one mutating action. Text is hashed so it is not stored."""
+    import hashlib
+    act = str(action.get("action") or "")
+    if act == "click":
+        payload: tuple = (action.get("x"), action.get("y"), action.get("button") or "left")
+    elif act == "type":
+        raw = str(action.get("text") or "").encode("utf-8")
+        payload = (hashlib.sha256(raw).hexdigest()[:16], len(raw))
+    elif act == "hotkey":
+        payload = tuple(str(k) for k in (action.get("keys") or []))
+    elif act == "scroll":
+        payload = (action.get("dx"), action.get("dy"))
+    else:
+        payload = ()
+
+    def _num(value: object) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    return (act, payload, _num(action.get("pid")), _num(action.get("window_id")))
+
+
+def _focus_identity(observation: dict) -> tuple:
+    if not isinstance(observation, dict):
+        return (None, None, None)
+    pid = observation.get("pid")
+    wid = observation.get("window_id")
+    try:
+        pid_i = int(pid) if pid is not None else None
+    except (TypeError, ValueError):
+        pid_i = None
+    try:
+        wid_i = int(wid) if wid is not None else None
+    except (TypeError, ValueError):
+        wid_i = None
+    return (observation.get("active_app"), pid_i, wid_i)
+
+
+def _page_title_blocks_done(title: object) -> bool:
+    """Blank and browser error pages are not a completed webpage goal.
+
+    This reads a title the desktop backend already exposed. It does not
+    interpret the screenshot (no weather/OCR check).
+    """
+    text = str(title or "").strip().lower()
+    if not text:
+        return False
+    tokens = (
+        "about:blank", "about:newtab", "about:home", "new tab", "moz-extension",
+        "loading", "正在加载", "正在连接",
+        "problem loading", "server not found", "neterror", "unable to connect",
+        "having trouble finding", "无法访问", "无法连接", "该网页无法",
+    )
+    return any(token in text for token in tokens)
+
+
+def _title_is_loading(title: object) -> bool:
+    text = str(title or "").strip().lower()
+    return any(token in text for token in ("loading", "正在加载", "正在连接"))
+
+
+class _VisualProgress:
+    """Stall only when the same mutation is still on the same window and pixels.
+
+    A matching PNG by itself is not failure: independent desktops can keep
+    serving one fixture image while clicks, typing and hotkeys do different
+    work. Waits and loading titles are not stalls.
+    """
+
+    def __init__(self) -> None:
+        self.pending: tuple | None = None
+        self.last_identity: tuple | None = None
+        self.same_unchanged = 0
+        self.recovery_used = False
+        self.recover_next = False
+        self.stalled_hash: str | None = None
+
+    def reset(self) -> None:
+        self.pending = None
+        self.last_identity = None
+        self.same_unchanged = 0
+        self.recovery_used = False
+        self.recover_next = False
+        self.stalled_hash = None
+
+    def note_mutation(self, action: dict, before_hash: object, observation: dict) -> None:
+        if str(action.get("action") or "") not in _MUTATING_ACTIONS:
+            return
+        before = before_hash if isinstance(before_hash, str) and before_hash else None
+        self.pending = (_mutation_identity(action), before, _focus_identity(observation))
+
+    def note_observe(self, result: dict) -> str:
+        if self.recover_next:
+            return "recovery"
+        if self.pending is None:
+            return "ignore"
+        identity, before, focus = self.pending
+        self.pending = None
+        if _title_is_loading(result.get("window_title")) or result.get("effect") == "loading":
+            return "ignore"
+        after = result.get("sha256")
+        if not isinstance(before, str) or not isinstance(after, str):
+            return "ignore"
+        if after != before or _focus_identity(result) != focus:
+            self.last_identity = None
+            self.same_unchanged = 0
+            self.recovery_used = False
+            self.stalled_hash = None
+            return "progress"
+        if identity == self.last_identity:
+            self.same_unchanged += 1
+        else:
+            self.last_identity = identity
+            self.same_unchanged = 1
+            self.recovery_used = False
+            self.stalled_hash = None
+        if self.same_unchanged >= 2 and not self.recovery_used:
+            self.recovery_used = True
+            self.stalled_hash = after
+            self.recover_next = True
+            return "needs_recovery"
+        if self.same_unchanged >= 2 and self.recovery_used:
+            return "stall"
+        return "unchanged"
+
+    def note_recovery_observe(self, result: dict) -> bool:
+        """True when the one recovery observe is still the stalled image."""
+        self.recover_next = False
+        after = result.get("sha256") if isinstance(result, dict) else None
+        if self.stalled_hash and after == self.stalled_hash and not _title_is_loading(
+            (result or {}).get("window_title") if isinstance(result, dict) else None
+        ):
+            return True
+        self.reset()
+        return False
 
 
 def _browser_foreground_observed(observation: dict) -> bool:
@@ -248,10 +391,9 @@ async def run_computer_loop(
     followup_observe = False
     fallback_observe = False
     target_app_suppressed = False
-    last_failed_signature: tuple[str, str, str] | None = None
+    last_failed_signature: tuple | None = None
     repeated_failures = 0
-    pending_visual_hash: str | None = None
-    no_visual_change_count = 0
+    progress = _VisualProgress()
     browser_goal = goal_needs_browser(goal) and not is_observe_only_goal(goal)
     takeover_store = HumanTakeoverStore(settings)
     # The lease that pauses this task is the one for the desktop it acts on.
@@ -285,13 +427,20 @@ async def run_computer_loop(
                 # Discard any planner result and refresh the desktop after a
                 # handoff. The old plan was made against a pre-human screen.
                 followup_observe = True
-                pending_visual_hash = None
-                no_visual_change_count = 0
+                progress.reset()
+                # The human may have changed the desktop. Consecutive
+                # pre-takeover failures are not evidence about the new screen.
+                repeated_failures = 0
+                last_failed_signature = None
 
-            if followup_observe or fallback_observe:
+            if followup_observe or fallback_observe or progress.recover_next:
                 # A failed targeted observation must be followed by a plain
                 # screenshot: never re-inject the same broken target_app.
+                # One verified browser refocus is a different recovery from
+                # repeating the click that did not change the screen.
                 action = {"action": "observe"}
+                if progress.recover_next and browser_goal and not fallback_observe:
+                    action["ensure_browser"] = True
                 followup_observe = False
                 fallback_observe = False
             else:
@@ -362,18 +511,28 @@ async def run_computer_loop(
                 ):
                     action["target_app"] = target_app
             action = normalize_action(action)
+            if action.get("ensure_browser") is not True or not browser_goal or is_observe_only_goal(goal):
+                action.pop("ensure_browser", None)
             action = _with_observed_target(action, observation)
             act = action.get("action")
 
             if act == "done":
                 # A planner claim is not evidence that Firefox is on screen.
-                # The browser gate is deliberately weaker than page-content
-                # verification; it catches the XFCE launcher false success.
-                missing_browser = browser_goal and not _browser_foreground_observed(observation)
-                unverified = _latest_mutation_failed(trajectory) or bool(no_visual_change_count)
-                if unverified or missing_browser:
+                # The browser gate checks a fresh observation and, when the
+                # desktop supplied a title, a blank or error page. It does
+                # not read the screenshot.
+                reason = _reject_done(
+                    goal=goal,
+                    browser_goal=browser_goal,
+                    observation=observation,
+                    trajectory=trajectory,
+                    progress=progress,
+                )
+                if reason == "no_visual_progress":
+                    set_task_status(settings, task_id, "stopped", blocked_reason=reason)
+                    break
+                if reason:
                     false_done += 1
-                    reason = "unverified_browser_window" if missing_browser else "unverified_done"
                     trajectory.append({
                         "action_type": "done",
                         "result_ok": False,
@@ -424,6 +583,7 @@ async def run_computer_loop(
             # Compare the actual post-action screenshot, not just the tool's
             # success return code. PNG hashes are retained only as metadata.
             before_visual_hash = observation.get("sha256") if isinstance(observation, dict) else None
+            recovering = progress.recover_next and act == "observe"
             step_start = time.monotonic()
             try:
                 result = await backend.execute_step(settings, task_id, step_id, action)
@@ -448,19 +608,27 @@ async def run_computer_loop(
             duration_ms = int((time.monotonic() - step_start) * 1000)
             success = bool(result.get("result_ok", True)) if isinstance(result, dict) else False
             error_code = str((result or {}).get("error") or "") if isinstance(result, dict) else "invalid_result"
-            if act == "observe" and success and pending_visual_hash is not None:
-                if (result or {}).get("sha256") == pending_visual_hash:
-                    no_visual_change_count += 1
-                    result["effect"] = "no_visible_change"
+            if act == "observe" and success and isinstance(result, dict):
+                if recovering:
+                    if progress.note_recovery_observe(result):
+                        result["effect"] = "no_visible_change"
+                    else:
+                        result["effect"] = "visible_change"
                 else:
-                    no_visual_change_count = 0
-                    result["effect"] = "visible_change"
-                pending_visual_hash = None
-            elif act in {"click", "type", "hotkey", "scroll"} and success:
-                pending_visual_hash = before_visual_hash if isinstance(before_visual_hash, str) else None
+                    effect = progress.note_observe(result)
+                    if effect == "progress":
+                        result["effect"] = "visible_change"
+                    elif effect in {"unchanged", "needs_recovery", "stall"}:
+                        result["effect"] = "no_visible_change"
+            elif act in _MUTATING_ACTIONS and success:
+                progress.note_mutation(action, before_visual_hash, observation)
+            # A successful step does not clear repeated_failures. An observe
+            # inserted between two failed attempts is not a new plan, and a
+            # later success of a different action is not proof the failing
+            # attempt started working.
 
             if not success:
-                signature = (str(act), error_code, str(action.get("target_app") or ""))
+                signature = _failure_signature(action, error_code)
                 repeated_failures = repeated_failures + 1 if signature == last_failed_signature else 1
                 last_failed_signature = signature
                 if (
@@ -507,9 +675,12 @@ async def run_computer_loop(
             if repeated_failures >= 3:
                 set_task_status(settings, task_id, "error", blocked_reason="repeated_action_failure")
                 break
-            if no_visual_change_count >= 2:
-                set_task_status(settings, task_id, "stopped", blocked_reason="no_visual_progress")
-                break
+            if act == "observe" and success and isinstance(result, dict):
+                if (recovering and result.get("effect") == "no_visible_change") or (
+                    progress.same_unchanged >= 2 and progress.recovery_used and not progress.recover_next
+                ):
+                    set_task_status(settings, task_id, "stopped", blocked_reason="no_visual_progress")
+                    break
 
             # Post-step app gate: blocklist always; allowlist only for
             # mutating actions. Bare observe often reports frontmost=Codex
@@ -564,6 +735,51 @@ async def run_computer_loop(
 
 
 _MUTATING_ACTIONS = frozenset({"click", "type", "hotkey", "scroll"})
+
+
+def _failure_signature(action: dict, error_code: str) -> tuple:
+    """Group retries of the same attempt.
+
+    Target-app text is omitted: a forced bare observe strips a broken
+    target, and that must not look like a brand-new failure.
+    """
+    return (str(action.get("action") or ""), error_code, _mutation_identity(action)[1])
+
+
+def _reject_done(
+    *,
+    goal: str,
+    browser_goal: bool,
+    observation: dict,
+    trajectory: list[dict],
+    progress: _VisualProgress,
+) -> str | None:
+    """Return a reason to refuse a planner ``done``, or None to accept it."""
+    if progress.same_unchanged >= 2 and progress.recovery_used:
+        return "no_visual_progress"
+    if not isinstance(observation, dict) or not observation.get("screenshot_id"):
+        return "unverified_done"
+    if not observation.get("sha256"):
+        return "unverified_done"
+    if progress.pending is not None:
+        return "unverified_done"
+    if _latest_mutation_failed(trajectory):
+        return "unverified_done"
+    if not browser_goal:
+        return None
+    last = trajectory[-1] if trajectory else None
+    fresh = (
+        isinstance(last, dict)
+        and last.get("action_type") == "observe"
+        and last.get("result_ok", True)
+        and last.get("screenshot_id")
+        and last.get("screenshot_id") == observation.get("screenshot_id")
+    )
+    if not fresh or not _browser_foreground_observed(observation):
+        return "unverified_browser_window" if not _browser_foreground_observed(observation) else "unverified_done"
+    if goal_needs_loaded_page(goal) and _page_title_blocks_done(observation.get("window_title")):
+        return "unverified_browser_window"
+    return None
 
 
 def _latest_mutation_failed(trajectory: list[dict]) -> bool:

@@ -323,12 +323,16 @@ def normalize_action(action: object) -> dict:
         "pid", "window_id", "element_index", "element_token",
         "delivery_mode", "scope", "button",
         "_target_label", "label",
-        "target_app", "ensure_browser",
+        "target_app",
         "_mock_active_app", "_mock_target_app",
         "_mock_element_hints", "_mock_pid", "_mock_window_id", "_mock_ax_app",
     ):
         if key in action:
             norm[key] = action[key]
+    # A model string here would be an instruction to launch something. Only
+    # the loop's own boolean preflight is accepted.
+    if action.get("ensure_browser") is True:
+        norm["ensure_browser"] = True
     return norm
 
 

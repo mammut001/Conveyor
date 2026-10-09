@@ -1,6 +1,7 @@
 """Regression tests for the shared Linux browser control path."""
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import tempfile
@@ -35,86 +36,225 @@ def _cp(*argv: str, out: str = "", rc: int = 0) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(argv, rc, out, "")
 
 
+def _scripted_run(script):
+    """Return an xdotool stub. `script` maps the subcommand to stdout."""
+
+    def run(*argv):
+        key = argv[1]
+        if key not in script:
+            return _cp(*argv, rc=1)
+        value = script[key]
+        if isinstance(value, list):
+            value = value.pop(0) if value else ""
+        if value is None:
+            return _cp(*argv, rc=1)
+        return _cp(*argv, out=value if value.endswith("\n") or value == "" else value + "\n")
+
+    return run
+
+
 class LinuxBrowserTest(unittest.TestCase):
-    @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
-    @mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox")
-    @mock.patch("desktop_linux_browser.shutil.which")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
-    def test_existing_browser_is_verified_and_not_relaunched(self, popen, which, _process):
-        which.return_value = "/usr/bin/xdotool"
+    def _controller(self, script, process="Firefox"):
         controller = LinuxBrowserController()
-        observed: list[tuple] = []
+        controller._run = _scripted_run(script)
+        self._process = mock.patch(
+            "desktop_linux_browser.linux_process_app", return_value=process,
+        )
+        self._process.start()
+        self.addCleanup(self._process.stop)
+        return controller
+
+    @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
+    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    def test_existing_browser_is_verified_and_not_relaunched(self, popen, _which):
+        observed = []
+        controller = self._controller({
+            "getdisplaygeometry": "100 100",
+            "search": "4242",
+            "getwindowclassname": "Navigator",
+            "getwindowpid": "123",
+            "windowmap": "",
+            "windowactivate": "",
+            "getactivewindow": "4242",
+        })
+        real_run = controller._run
 
         def run(*argv):
             observed.append(argv)
-            if argv[1] == "search":
-                return _cp(*argv, out="4242\n")
-            if argv[1] == "windowactivate":
-                return _cp(*argv)
-            if argv[1] == "getactivewindow":
-                return _cp(*argv, out="4242\n")
-            if argv[1] == "getwindowpid":
-                return _cp(*argv, out="123\n")
-            return _cp(*argv, rc=1)
+            return real_run(*argv)
 
         controller._run = run
         result = controller.ensure("Firefox")
         self.assertEqual(result, {"ok": True, "name": "Firefox", "pid": 123, "window_id": 4242})
         popen.assert_not_called()
-        self.assertTrue(any(cmd[1] == "windowactivate" for cmd in observed))
+        search = next(cmd for cmd in observed if cmd[1] == "search")
+        self.assertNotIn("--onlyvisible", search)
+        self.assertIn("windowmap", [cmd[1] for cmd in observed])
+        self.assertLess(
+            [cmd[1] for cmd in observed].index("getwindowclassname"),
+            [cmd[1] for cmd in observed].index("windowactivate"),
+        )
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
     @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
     @mock.patch("desktop_linux_browser.subprocess.Popen")
     def test_focus_failure_does_not_launch_duplicate(self, popen, _which):
-        controller = LinuxBrowserController()
-        def run(*argv):
-            if argv[1] == "search":
-                return _cp(*argv, out="4242\n")
-            if argv[1] == "getactivewindow":
-                return _cp(*argv, out="5555\n")
-            return _cp(*argv)
-        controller._run = run
+        controller = self._controller({
+            "getdisplaygeometry": "100 100",
+            "search": "4242",
+            "getwindowclassname": "Navigator",
+            "getwindowpid": "123",
+            "windowmap": "",
+            "windowactivate": "",
+            "getactivewindow": "5555",
+        })
         self.assertEqual(controller.ensure("Firefox")["error"], "browser_activate_failed")
         popen.assert_not_called()
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/firefox")
+    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    def test_spoofed_class_is_not_focused_or_launched(self, popen, _which):
+        controller = self._controller({
+            "getdisplaygeometry": "100 100",
+            "search": "4242",
+            "getwindowclassname": "Navigator",
+            "getwindowpid": "9",
+            "windowmap": "",
+            "windowactivate": "",
+            "getactivewindow": "4242",
+        }, process="bash")
+        calls = []
+        real = controller._run
+
+        def run(*argv):
+            calls.append(argv)
+            return real(*argv)
+
+        controller._run = run
+        self.assertEqual(controller.ensure("Firefox")["error"], "browser_activate_failed")
+        popen.assert_not_called()
+        self.assertFalse(any(cmd[1] == "windowactivate" for cmd in calls))
+
+    @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
+    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("desktop_linux_browser._trusted_browser_binary", return_value="/usr/bin/firefox")
     @mock.patch("desktop_linux_browser.subprocess.Popen")
     @mock.patch("desktop_linux_browser.time.sleep")
-    def test_missing_browser_launches_fixed_binary_and_verifies_mapping(self, sleeper, popen, _which):
+    def test_launch_loop_uses_real_focus_after_delayed_mapping(self, sleeper, popen, _binary, _which):
+        searches = {"n": 0}
+
+        def run(*argv):
+            if argv[1] == "getdisplaygeometry":
+                return _cp(*argv, out="100 100\n")
+            if argv[1] == "search":
+                searches["n"] += 1
+                if searches["n"] < 3:
+                    return _cp(*argv, out="")
+                return _cp(*argv, out="500\n")
+            if argv[1] == "getwindowclassname":
+                return _cp(*argv, out="Navigator\n")
+            if argv[1] == "getwindowpid":
+                return _cp(*argv, out="55\n")
+            if argv[1] in {"windowmap", "windowactivate"}:
+                return _cp(*argv)
+            if argv[1] == "getactivewindow":
+                return _cp(*argv, out="500\n")
+            return _cp(*argv, rc=1)
+
         controller = LinuxBrowserController()
-        controller._window_ids = mock.Mock(side_effect=[[], ["500"]])
-        controller._focus = mock.Mock(return_value=999)
-        result = controller.ensure("Firefox")
-        self.assertEqual(result["pid"], 999)
+        controller._run = run
+        home = Path(tempfile.mkdtemp())
+        with mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox"), \
+                mock.patch("desktop_linux_browser.Path.home", return_value=home):
+            result = controller.ensure("Firefox", timeout=5)
+        self.assertEqual(result, {"ok": True, "name": "Firefox", "pid": 55, "window_id": 500})
         command = popen.call_args.args[0]
-        self.assertEqual(command[:3], ["/usr/bin/firefox", "--no-remote", "--profile"])
+        self.assertEqual(command[0], "/usr/bin/firefox")
+        self.assertEqual(command[1:3], ["--no-remote", "--profile"])
+        self.assertIn("_99", command[3])
         self.assertEqual(command[-2:], ["--new-window", "about:blank"])
-        self.assertTrue(popen.call_args.kwargs["start_new_session"])
         self.assertNotIn("shell", popen.call_args.kwargs)
+        self.assertGreaterEqual(searches["n"], 3)
+        sleeper.assert_called()
+
+    @mock.patch.dict(os.environ, {"DISPLAY": ":99", "XAUTHORITY": "/no/such/xauth"})
+    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    def test_unreachable_display_does_not_launch(self, popen, _which):
+        controller = LinuxBrowserController()
+        controller._run = mock.Mock(side_effect=AssertionError("xdotool"))
+        self.assertEqual(controller.ensure("Firefox")["error"], "browser_display_unreachable")
+        popen.assert_not_called()
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
     @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
     @mock.patch("desktop_linux_browser.subprocess.Popen")
     def test_allowlist_and_blocklist_fail_closed(self, popen, _which):
         controller = LinuxBrowserController()
+        controller._run = mock.Mock(side_effect=AssertionError("focused a blocked browser"))
         self.assertEqual(controller.ensure("Firefox", allowed_apps=("Calculator",))["error"], "browser_disallowed")
         self.assertEqual(controller.ensure("Firefox", blocked_apps=("Firefox",))["error"], "browser_disallowed")
+        self.assertEqual(controller.ensure("chrome", blocked_apps=("Google Chrome",))["error"], "browser_disallowed")
         self.assertEqual(controller.ensure("Not-A-Real-App")["error"], "browser_not_supported")
         popen.assert_not_called()
+        controller._run.assert_not_called()
 
     @mock.patch("desktop_cua.sys.platform", "linux")
     @mock.patch("desktop_linux_browser.LinuxBrowserController.ensure")
     def test_cua_uses_x11_mapping_not_driver_exact_name(self, ensure):
-        ensure.return_value = {"ok": True, "pid": 777, "name": "Firefox"}
+        ensure.return_value = {"ok": True, "pid": 777, "name": "Firefox", "window_id": 42}
         with tempfile.TemporaryDirectory() as temp:
             driver = LocalCuaTransport("cua-driver mcp", settings=_settings(Path(temp)))
             driver._call_tool = mock.Mock(side_effect=AssertionError("no list_apps"))
             action = {"action": "observe", "target_app": "Firefox"}
             self.assertIsNone(driver._prepare_target_app(action))
             self.assertEqual(action["pid"], 777)
+            self.assertEqual(action["window_id"], 42)
             driver._call_tool.assert_not_called()
+
+    @mock.patch("desktop_cua.sys.platform", "linux")
+    @mock.patch("desktop_linux_browser.LinuxBrowserController.ensure")
+    def test_contradictory_pid_is_not_retargeted(self, ensure):
+        ensure.return_value = {"ok": False, "error": "target_identity_conflict"}
+        with tempfile.TemporaryDirectory() as temp:
+            driver = LocalCuaTransport("cua-driver mcp", settings=_settings(Path(temp)))
+            action = {"action": "observe", "target_app": "Firefox", "pid": 1, "window_id": 2}
+            self.assertEqual(driver._prepare_target_app(action), "target_identity_conflict")
+            self.assertEqual(ensure.call_args.kwargs["expected_pid"], 1)
+            self.assertEqual(ensure.call_args.kwargs["expected_window"], 2)
+            self.assertEqual(action["pid"], 1)
+
+    @mock.patch("desktop_cua.sys.platform", "linux")
+    @mock.patch("desktop_linux_browser.LinuxBrowserController.ensure")
+    def test_model_ensure_browser_string_does_not_launch(self, ensure):
+        with tempfile.TemporaryDirectory() as temp:
+            driver = LocalCuaTransport("cua-driver mcp", settings=_settings(Path(temp)))
+            action = {"action": "observe", "ensure_browser": "firefox; touch /tmp/x"}
+            self.assertIsNone(driver._prepare_target_app(action))
+            ensure.assert_not_called()
+
+    @mock.patch("desktop_cua.sys.platform", "linux")
+    @mock.patch("desktop_linux_browser.LinuxBrowserController.keyboard_target_ready", return_value=False)
+    def test_linux_type_refuses_when_focus_moved(self, _ready):
+        with tempfile.TemporaryDirectory() as temp:
+            driver = LocalCuaTransport("cua-driver mcp", settings=_settings(Path(temp)))
+            driver._call_tool = mock.Mock(side_effect=AssertionError("typed into the wrong window"))
+            result = driver._type_text({"action": "type", "text": "hi", "pid": 4, "window_id": 8}, "n")
+            self.assertEqual(result["error"], "keyboard_target_not_foreground")
+            driver._call_tool.assert_not_called()
+
+    @mock.patch("desktop_cua.sys.platform", "darwin")
+    @mock.patch("desktop_linux_browser.LinuxBrowserController.keyboard_target_ready",
+                side_effect=AssertionError("mac checks x11 focus"))
+    def test_mac_type_keeps_background_pid_delivery(self, _ready):
+        with tempfile.TemporaryDirectory() as temp:
+            driver = LocalCuaTransport("cua-driver mcp", settings=_settings(Path(temp)))
+            driver._call_tool = mock.Mock(return_value={"ok": True, "data": {}})
+            result = driver._type_text({"action": "type", "text": "hi", "pid": 4}, "n")
+            self.assertTrue(result["result_ok"])
+            self.assertEqual(driver._call_tool.call_args.args[0], "type_text")
 
     @mock.patch("desktop_cua.sys.platform", "linux")
     @mock.patch("desktop_linux_browser.LinuxBrowserController.ensure")
@@ -215,6 +355,233 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["status"], "stopped")
             self.assertEqual(result["blocked_reason"], "no_visual_progress")
             self.assertLess(result["steps_used"], 20)
+            self.assertTrue(any(item.get("ensure_browser") for item in backend.actions[1:]))
+
+    async def test_different_actions_with_the_same_image_continue(self):
+        with tempfile.TemporaryDirectory() as temp:
+            same = {"result_ok": True, "sha256": "same", "screenshot_id": "fake", "active_app": "TextEdit"}
+            backend = _Desktop([
+                dict(same, action_type="observe"),
+                {"result_ok": True, "action_type": "hotkey"},
+                dict(same, action_type="observe"),
+                {"result_ok": True, "action_type": "type"},
+                dict(same, action_type="observe"),
+            ])
+            result = await run_computer_loop(
+                _settings(Path(temp)), "Type a note",
+                planner=_Sequence({"action": "hotkey", "keys": ["ctrl", "l"]},
+                                  {"action": "type", "text": "hello"},
+                                  {"action": "done", "summary": "typed"}),
+                backend=backend, max_steps=12, max_seconds=30, direct_mode=True,
+                open_with_observe=True,
+            )
+            self.assertEqual(result["status"], "done")
+            self.assertNotIn("hello", str(result))
+
+    async def test_loading_title_is_not_a_stall_or_a_finished_page(self):
+        with tempfile.TemporaryDirectory() as temp:
+            frame = {
+                "result_ok": True, "sha256": "same", "screenshot_id": "fake",
+                "active_app": "Firefox", "window_title": "Loading…",
+            }
+            backend = _Desktop([
+                dict(frame, action_type="observe"),
+                {"result_ok": True, "action_type": "click"},
+                dict(frame, action_type="observe"),
+                {"result_ok": True, "action_type": "click"},
+                dict(frame, action_type="observe"),
+            ])
+            result = await run_computer_loop(
+                _settings(Path(temp)), "Check weather in browser",
+                planner=_Sequence({"action": "click", "x": 1, "y": 1},
+                                  {"action": "click", "x": 1, "y": 1},
+                                  {"action": "done", "summary": "weather"},
+                                  {"action": "done", "summary": "weather"}),
+                backend=backend, max_steps=12, max_seconds=30, direct_mode=True,
+                open_with_observe=True,
+            )
+            self.assertEqual(result["status"], "error")
+            self.assertNotEqual(result["blocked_reason"], "no_visual_progress")
+
+    async def test_about_blank_and_network_error_are_not_success(self):
+        for title in ("about:blank — Mozilla Firefox", "Problem loading page"):
+            with tempfile.TemporaryDirectory() as temp:
+                backend = _Desktop([{
+                    "result_ok": True, "action_type": "observe", "sha256": "blank",
+                    "screenshot_id": "fake", "active_app": "Firefox", "window_title": title,
+                }])
+                result = await run_computer_loop(
+                    _settings(Path(temp)), "Check weather in current browser",
+                    planner=_Sequence({"action": "done", "summary": "sunny"},
+                                      {"action": "done", "summary": "sunny"}),
+                    backend=backend, max_steps=6, max_seconds=30, direct_mode=True,
+                    open_with_observe=True,
+                )
+                self.assertEqual(result["status"], "error", title)
+                self.assertEqual(result["blocked_reason"], "unverified_browser_window", title)
+
+    async def test_early_done_without_screenshot_is_refused(self):
+        with tempfile.TemporaryDirectory() as temp:
+            backend = _Desktop([])
+            result = await run_computer_loop(
+                _settings(Path(temp)), "Check weather in browser",
+                planner=_Sequence({"action": "done", "summary": "done"},
+                                  {"action": "done", "summary": "done"}),
+                backend=backend, max_steps=4, max_seconds=30, direct_mode=True,
+            )
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["blocked_reason"], "unverified_done")
+            self.assertEqual(backend.actions, [])
+
+    async def test_observe_only_goal_does_not_launch_a_browser(self):
+        with tempfile.TemporaryDirectory() as temp:
+            backend = _Desktop([{
+                "result_ok": True, "action_type": "observe", "sha256": "s",
+                "screenshot_id": "fake", "active_app": "xfce4-panel",
+            }])
+            result = await run_computer_loop(
+                _settings(Path(temp)), "observe the browser only and do not click",
+                planner=_Sequence({"action": "click", "x": 1, "y": 1}),
+                backend=backend, max_steps=4, max_seconds=30, direct_mode=True,
+                open_with_observe=True,
+            )
+            self.assertEqual(result["status"], "done")
+            self.assertNotIn("ensure_browser", backend.actions[0])
+            self.assertEqual([item["action"] for item in backend.actions], ["observe"])
+
+    async def test_failure_count_survives_observe_and_a_later_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            backend = _Desktop([
+                {"result_ok": False, "error": "click_failed"},
+                {"result_ok": True, "action_type": "observe", "sha256": "a", "screenshot_id": "a"},
+                {"result_ok": False, "error": "click_failed"},
+                {"result_ok": True, "action_type": "observe", "sha256": "b", "screenshot_id": "b"},
+                {"result_ok": True, "action_type": "click"},
+                {"result_ok": True, "action_type": "observe", "sha256": "c", "screenshot_id": "c"},
+                {"result_ok": False, "error": "click_failed"},
+            ])
+            result = await run_computer_loop(
+                _settings(Path(temp)), "Press the button",
+                planner=_Sequence(
+                    {"action": "click", "x": 2, "y": 2},
+                    {"action": "click", "x": 2, "y": 2},
+                    {"action": "click", "x": 2, "y": 2},
+                    {"action": "click", "x": 2, "y": 2},
+                ),
+                backend=backend, max_steps=12, max_seconds=30, direct_mode=True,
+            )
+            self.assertEqual(result["blocked_reason"], "repeated_action_failure")
+
+    async def test_takeover_discards_the_old_plan_and_observes_first(self):
+        from desktop_computer_requests import create_computer_task
+        from human_takeover import HumanTakeoverStore
+
+        with tempfile.TemporaryDirectory() as temp:
+            settings = _settings(Path(temp))
+            created = create_computer_task(
+                settings, "Press the button", direct_mode=True, max_steps=6, max_seconds=30,
+            )
+            leases = HumanTakeoverStore(settings)
+            lease = leases.start(reason="operator_requested", scope="default", ttl_seconds=30)
+            seen = []
+
+            class Planner:
+                async def next_action(self, **_kwargs):
+                    seen.append("plan")
+                    return {"action": "click", "x": 1, "y": 1} if len(seen) == 1 else {"action": "done", "summary": "ok"}
+
+            backend = _Desktop([
+                {"result_ok": True, "action_type": "observe", "sha256": "new", "screenshot_id": "fresh", "active_app": "TextEdit"},
+                {"result_ok": True, "action_type": "click"},
+                {"result_ok": True, "action_type": "observe", "sha256": "newer", "screenshot_id": "fresh2", "active_app": "TextEdit"},
+            ])
+
+            async def scenario():
+                running = asyncio.create_task(run_computer_loop(
+                    settings, "Press the button", planner=Planner(), backend=backend,
+                    max_steps=6, max_seconds=30, direct_mode=True, task_id=created["task_id"],
+                ))
+                await asyncio.sleep(0.4)
+                self.assertEqual(backend.actions, [])
+                self.assertEqual(seen, [])
+                leases.complete(lease["id"])
+                return await asyncio.wait_for(running, timeout=20)
+
+            result = await scenario()
+            self.assertEqual(backend.actions[0]["action"], "observe")
+            self.assertNotIn("target_app", backend.actions[0])
+            self.assertEqual(result["status"], "done")
+
+
+class IdentityTest(unittest.TestCase):
+    def test_process_names_are_exact_and_truncation_is_bounded(self):
+        from desktop_linux_browser import app_from_process_names
+
+        self.assertEqual(app_from_process_names("firefox", "firefox"), "Firefox")
+        self.assertEqual(app_from_process_names(None, "google-chrome-s"), "Google Chrome")
+        self.assertEqual(app_from_process_names("chrome-helper", None), "Unknown")
+        self.assertEqual(app_from_process_names("notfirefox", "notfirefox"), "Unknown")
+        self.assertEqual(app_from_process_names("chromium", None), "Chromium")
+        self.assertEqual(app_from_process_names(None, "chrome"), "Google Chrome")
+
+    def test_untrusted_path_is_not_a_browser_binary(self):
+        from desktop_linux_browser import _path_is_trusted
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "firefox"
+            path.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+            path.chmod(0o755)
+            self.assertFalse(_path_is_trusted(str(path)))
+
+    @mock.patch.dict(os.environ, {"DISPLAY": ":98"})
+    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("desktop_linux_browser._trusted_browser_binary", return_value="/usr/bin/firefox")
+    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    @mock.patch("desktop_linux_browser.time.sleep")
+    def test_profiles_are_per_display_and_snap_aware(self, _sleep, popen, _binary, _which):
+        from desktop_linux_browser import _is_snap_firefox
+
+        wrapper = Path(tempfile.mkdtemp()) / "firefox"
+        wrapper.write_text("#!/bin/sh\nexec /snap/bin/firefox \"$@\"\n", encoding="utf-8")
+        self.assertTrue(_is_snap_firefox(str(wrapper)))
+        controller = LinuxBrowserController()
+        controller._run = _scripted_run({"getdisplaygeometry": "10 10", "search": ""})
+        home = Path(tempfile.mkdtemp())
+        with mock.patch("desktop_linux_browser._trusted_browser_binary", return_value=str(wrapper)), \
+                mock.patch("desktop_linux_browser.Path.home", return_value=home):
+            controller.ensure("Firefox", timeout=1)
+        profile = popen.call_args.args[0][3]
+        self.assertIn("/snap/firefox/common/", profile)
+        self.assertIn("_98", profile)
+
+
+class TransportTimeoutTest(unittest.IsolatedAsyncioTestCase):
+    async def test_pending_step_times_out_and_cancel_is_reported(self):
+        from dataclasses import replace
+        from desktop_computer_loop import ComputerBackendError, HttpComputerBackend
+        from desktop_computer_requests import (
+            cancel_pending_computer_step,
+            create_computer_step,
+            create_computer_task,
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            settings = replace(_settings(Path(temp)), conveyor_computer_max_seconds=0)
+            created = create_computer_task(
+                settings, "Look", direct_mode=True, max_steps=2, max_seconds=10,
+            )
+            step = create_computer_step(settings, created["task_id"], {"action": "observe"})
+            backend = HttpComputerBackend(settings, poll_interval=0.01)
+            with self.assertRaises(ComputerBackendError) as caught:
+                await backend.execute_step(settings, created["task_id"], step["step_id"], {"action": "observe"})
+            self.assertEqual(str(caught.exception), "step_timeout")
+            step2 = create_computer_step(settings, created["task_id"], {"action": "observe"})
+            self.assertTrue(cancel_pending_computer_step(
+                settings, created["task_id"], step2["step_id"], reason="operator_stop",
+            ))
+            with self.assertRaises(ComputerBackendError) as cancelled:
+                await backend.execute_step(settings, created["task_id"], step2["step_id"], {"action": "observe"})
+            self.assertIn("cancelled", str(cancelled.exception))
 
 
 if __name__ == "__main__":

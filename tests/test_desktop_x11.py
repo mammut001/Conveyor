@@ -316,6 +316,30 @@ class LoopTests(Case):
         self.assertEqual(result["status"], "done")
         self.assertEqual(self.x.xdotool, [["mousemove", "5", "5", "click", "1"]])
 
+    def test_agent_desktop_does_not_use_the_host_browser_controller(self) -> None:
+        created = create_computer_task(
+            self.settings, "open firefox and read the page", direct_mode=True,
+            max_steps=6, max_seconds=30, operator_id="web-console", chat_id=self.chat, channel="web",
+        )
+        self.assertTrue(created["ok"], created)
+        task = created["task"]
+        with mock.patch(
+            "desktop_linux_browser.LinuxBrowserController.ensure",
+            side_effect=AssertionError("host browser controller"),
+        ):
+            result = self.run_loop([
+                {"action": "observe"},
+                {"action": "done", "summary": "opened"},
+            ], task)
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["summary"], "opened")
+
+    def test_type_stops_when_the_bound_window_is_not_foreground(self) -> None:
+        desktop = self.desktop()
+        result = desktop.execute({"action": "type", "text": "secret", "window_id": 999, "pid": 5})
+        self.assertEqual(result["error"], "keyboard_target_not_foreground")
+        self.assertFalse(any(call[:1] == ["type"] for call in self.x.xdotool))
+
     def test_blocked_keywords_still_stop_the_task(self) -> None:
         task = self.task()
         result = self.run_loop([{"action": "type", "text": "my password is hunter2"}], task)

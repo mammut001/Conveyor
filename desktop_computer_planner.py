@@ -126,6 +126,19 @@ def infer_target_app(goal: str) -> str | None:
     return None
 
 
+def goal_needs_loaded_page(goal: str) -> bool:
+    """True when success requires leaving the browser's initial blank page.
+
+    The loop only uses this with a window title the desktop already reported.
+    It does not read pixels or decide whether a forecast is correct.
+    """
+    text = (goal or "").lower()
+    return any(word in text for word in (
+        "webpage", "website", "weather", "http://", "https://",
+        "网页", "网站", "天气",
+    ))
+
+
 def goal_needs_browser(goal: str) -> bool:
     """Recognize desktop goals whose first useful surface is a browser.
 

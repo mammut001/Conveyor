@@ -322,15 +322,27 @@ class LocalCuaTransport(CuaTransport):
         if sys.platform.startswith("linux"):
             from desktop_linux_browser import LinuxBrowserController, canonical_browser
             target = action.get("target_app")
-            if action.get("ensure_browser") or canonical_browser(target):
+            named = canonical_browser(target) if target else None
+            # Strings and other model-controlled values are not a launch flag.
+            if action.get("ensure_browser") is True or named:
+                try:
+                    expected_pid = int(action["pid"]) if action.get("pid") is not None else None
+                    expected_window = int(action["window_id"]) if action.get("window_id") is not None else None
+                except (TypeError, ValueError):
+                    return "target_identity_conflict"
                 browser = LinuxBrowserController().ensure(
-                    str(target or "Browser"),
+                    str(named or "Browser"),
                     allowed_apps=tuple(getattr(self.settings, "conveyor_computer_allowed_apps", ()) or ()),
                     blocked_apps=tuple(getattr(self.settings, "conveyor_computer_blocked_apps", ()) or ()),
+                    expected_pid=expected_pid,
+                    expected_window=expected_window,
                 )
                 if not browser.get("ok"):
                     return str(browser.get("error") or "browser_unavailable")
+                # Verified pair only. ensure() refuses a contradictory pid
+                # or window instead of focusing a different one.
                 action["pid"] = int(browser["pid"])
+                action["window_id"] = int(browser["window_id"])
                 return None
         if not action.get("target_app"):
             return None
@@ -925,7 +937,26 @@ class LocalCuaTransport(CuaTransport):
         logger.info("Click method used: %s", used_method)
         return result
 
+    def _linux_keyboard_blocked(self, action: dict) -> str | None:
+        """On Linux, refuse keys unless the verified window is still in front.
+
+        macOS keeps AX delivery to a background pid; that path is unchanged.
+        """
+        if not sys.platform.startswith("linux"):
+            return None
+        if not isinstance(action, dict):
+            return None
+        if action.get("pid") is None and action.get("window_id") is None:
+            return None
+        from desktop_linux_browser import LinuxBrowserController
+        if LinuxBrowserController().keyboard_target_ready(action.get("pid"), action.get("window_id")):
+            return None
+        return "keyboard_target_not_foreground"
+
     def _type_text(self, action: dict, node_id: str) -> dict:
+        blocked = self._linux_keyboard_blocked(action)
+        if blocked:
+            return {"result_ok": False, "error": blocked, "action_type": "type", "node_id": node_id}
         pid = action.get("pid")
         if pid is None:
             return {
@@ -943,6 +974,9 @@ class LocalCuaTransport(CuaTransport):
         return result
 
     def _hotkey(self, action: dict, node_id: str) -> dict:
+        blocked = self._linux_keyboard_blocked(action)
+        if blocked:
+            return {"result_ok": False, "error": blocked, "action_type": "hotkey", "node_id": node_id}
         pid = action.get("pid")
         if pid is None:
             return {

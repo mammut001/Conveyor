@@ -175,7 +175,29 @@ class X11Desktop:
         self._xdotool("mousemove", x, y, "click", button)
         return {"click_method": "xtest"}
 
+    def _require_keyboard_target(self, action: dict) -> None:
+        """If the loop bound a window, type only while that window is in front.
+
+        Agent desktops have no separate browser-controller fallback; this
+        uses the same DISPLAY as the rest of the step.
+        """
+        pid = action.get("pid")
+        wid = action.get("window_id")
+        if pid is None and wid is None:
+            return
+        active = self._run("xdotool", "getactivewindow", timeout=5)
+        current = (active.stdout or "").strip()
+        if active.returncode != 0 or not current.isdigit():
+            raise X11Error("keyboard_target_not_foreground")
+        if wid is not None and int(wid) != int(current):
+            raise X11Error("keyboard_target_not_foreground")
+        if pid is not None:
+            got = self._run("xdotool", "getwindowpid", current, timeout=5)
+            if (got.stdout or "").strip() != str(int(pid)):
+                raise X11Error("keyboard_target_not_foreground")
+
     def type_text(self, action: dict) -> dict:
+        self._require_keyboard_target(action)
         text = action.get("text")
         if not isinstance(text, str) or not text:
             raise X11Error("type_needs_text")
@@ -185,6 +207,7 @@ class X11Desktop:
         return {"text_len": len(text)}
 
     def hotkey(self, action: dict) -> dict:
+        self._require_keyboard_target(action)
         keys = action.get("keys")
         self._xdotool("key", "--clearmodifiers", hotkey_argument(keys))
         return {"keys_len": len(keys)}

@@ -53,4 +53,23 @@ desktop runs inside it, including browsers that start through a setuid helper
 and keep their profile in the home directory.
 
 Agents with their own desktop are unaffected; those are kept by
-`conveyor-agent-desktops.service` (see [agents.md](agents.md)).
+`conveyor-agent-desktops.service` (see [agents.md](agents.md)). An agent task
+never falls back to this host display: `X11ComputerBackend` is selected from
+the task, and its browser bootstrap is the existing per-agent `want_browser`
+flag. The host path (`LinuxBrowserController`) is separate.
+
+## Host browser launch
+
+Computer use on this display may focus or start a browser. That launcher is
+not a shell and not a model-supplied command.
+
+- Policy (allow and block lists, including aliases such as `chrome` → Google Chrome) is applied before any focus or launch.
+- An existing window is used even when it is minimized. Its WM_CLASS and the owning process must both match a known browser before it is mapped or activated. Focus is accepted only when that process is the foreground window.
+- Process identity prefers `/proc/<pid>/exe`. `comm` is only 15 bytes, so a truncated name counts only when it is a unique prefix of one known basename. Substring matches are rejected.
+- The executable must be root-owned, not group- or world-writable, and live under a system directory (`/usr/bin`, `/usr/lib`, `/snap/bin`, `/opt/google/chrome`, `/opt/chromium`). `PATH` is not searched.
+- Firefox's profile directory includes the DISPLAY. A `/usr/bin/firefox` script that hands off to snap uses `~/snap/firefox/common/` so the snap can write it. Other browsers use `~/.local/share/conveyor/host-browser/<display>/`.
+- If `DISPLAY` is unset, or `XAUTHORITY` is missing, or the X server does not answer `getdisplaygeometry`, the controller returns an error and does not start a browser.
+- Typing and hotkeys on Linux are sent only while the verified window is still mapped and foreground. macOS still delivers keys to the AX pid in the background.
+- A repeated click that leaves the same window and the same pixels gets one different recovery (a plain observation, or one verified browser focus). If that is still stuck, the task stops. A different action with the same image is not a stall. A missing screenshot, a stale pre-action screenshot, an `about:blank` title, or a browser error-page title cannot be reported as a finished webpage. The loop does not read the image to decide whether the page content is correct.
+
+On a machine with Xvfb and xdotool, `python -m unittest tests.test_linux_browser_x11_integration` checks the controller against a private X server. The test starts its own Xvfb and does not attach to the host display.
