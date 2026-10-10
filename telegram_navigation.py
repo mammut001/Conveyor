@@ -65,7 +65,7 @@ def workers_screen(settings: Any, queue: Any, operator_id: str, chat_id: str) ->
     queued = sum(job.get("state") == "queued" for job in jobs)
     lines = [
         "👷 Workers · Conveyor",
-        f"当前 Telegram 聊天（最近最多 {len(jobs)} 条任务）：运行中 {running} · 排队中 {queued}",
+        f"当前 Telegram 聊天最近 {len(jobs)} 条任务中：运行中 {running} · 排队中 {queued}",
     ]
     buttons: list[tuple[tuple[str, str], ...]] = []
     agents = _agent_rows(settings)
