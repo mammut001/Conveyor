@@ -101,12 +101,56 @@ class AtomicApplyTests(unittest.TestCase):
     def test_partial_copy_cleaned_even_if_copy2_writes_then_errors(self):
         self._write_patch()
         def partial_copy(_source, target):
-            Path(target).write_bytes(b"partial")
+            target.write(b"partial")
             raise OSError("simulated disk full")
-        with patch("runner.worktree.shutil.copy2", side_effect=partial_copy):
+        with patch("runner.worktree.shutil.copyfileobj", side_effect=partial_copy):
             result = asyncio.run(self.runner.apply_job("q2", self.worktree))
         self.assertIn("Rollback", result)
         self._assert_rolled_back()
+
+    def test_exclusive_create_never_overwrites_racing_target(self):
+        self._write_patch()
+        # A competing writer installs the target immediately before "xb".
+        target = self.repo / "docs" / "NEW.txt"
+        target.parent.mkdir(exist_ok=True)
+        original_open = Path.open
+
+        def racing_open(path, mode="r", *args, **kwargs):
+            if str(path) == str(target) and mode == "xb":
+                target.write_bytes(b"user file created during apply")
+            return original_open(path, mode, *args, **kwargs)
+
+        with patch.object(Path, "open", autospec=True, side_effect=racing_open):
+            result = asyncio.run(self.runner.apply_job("q-race", self.worktree))
+        self.assertIn("Apply failed", result)
+        self.assertEqual(target.read_bytes(), b"user file created during apply")
+        self.assertEqual((self.repo / "README.md").read_text(), "base\\n")
+        self.assertIsNotNone(self.store.active(self.session))
+
+    def test_finalization_failure_rolls_back_both_file_types(self):
+        self._write_patch()
+        from refinement_store import RefinementMutation
+        with patch.object(RefinementMutation, "close", side_effect=OSError("SQLite finalization failed")):
+            result = asyncio.run(self.runner.apply_job("q-finalize", self.worktree))
+        self.assertIn("Rollback", result)
+        self._assert_rolled_back()
+
+    def test_failed_reverse_patch_reports_manual_review(self):
+        self._write_patch()
+        async def fail_reversal(*args, **kwargs):
+            if args and args[0] == "git":
+                return None
+        # Force the copier to fail; then intercept only git apply --reverse.
+        original_exec = asyncio.create_subprocess_exec
+        async def intercept(*args, **kwargs):
+            if args[:2] == ("git", "apply") and "--reverse" in args:
+                raise OSError("simulated rollback failure")
+            return await original_exec(*args, **kwargs)
+        with patch.object(Runner, "_copy_validated_untracked_files", side_effect=OSError("disk full")), \\
+             patch("runner.operators.jobs.asyncio.create_subprocess_exec", side_effect=intercept):
+            result = asyncio.run(self.runner.apply_job("q-reverse", self.worktree))
+        self.assertIn("manual review", result)
+        self.assertIsNotNone(self.store.active(self.session))
 
     def test_untracked_path_symlink_parent_blocked(self):
         outside = Path(self.temp.name) / "outside"
