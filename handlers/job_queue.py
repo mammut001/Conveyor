@@ -422,6 +422,15 @@ class JobQueue:
             conn = self._get_conn()
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                # A deployment may be holding the dequeue fence after an idle
+                # snapshot. Refuse new work rather than queueing it indefinitely:
+                # the startup callbacks do not automatically drain those rows
+                # when the fence is released.
+                if conn.execute(
+                    "SELECT 1 FROM queue_metadata WHERE key = 'deploy_fence' LIMIT 1"
+                ).fetchone():
+                    conn.rollback()
+                    return False, "服务正在升级，暂不接收新任务，请稍后重试。", None
                 count = int(conn.execute(
                     "SELECT COUNT(*) FROM queued_jobs WHERE state = 'queued'"
                 ).fetchone()[0])
