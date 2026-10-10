@@ -137,17 +137,16 @@ class AtomicApplyTests(unittest.TestCase):
 
     def test_failed_reverse_patch_reports_manual_review(self):
         self._write_patch()
-        async def fail_reversal(*args, **kwargs):
-            if args and args[0] == "git":
-                return None
         # Force the copier to fail; then intercept only git apply --reverse.
         original_exec = asyncio.create_subprocess_exec
         async def intercept(*args, **kwargs):
             if args[:2] == ("git", "apply") and "--reverse" in args:
                 raise OSError("simulated rollback failure")
             return await original_exec(*args, **kwargs)
-        with patch.object(Runner, "_copy_validated_untracked_files", side_effect=OSError("disk full")), \\
-             patch("runner.operators.jobs.asyncio.create_subprocess_exec", side_effect=intercept):
+        with (
+            patch.object(Runner, "_copy_validated_untracked_files", side_effect=OSError("disk full")),
+            patch("runner.operators.jobs.asyncio.create_subprocess_exec", side_effect=intercept),
+        ):
             result = asyncio.run(self.runner.apply_job("q-reverse", self.worktree))
         self.assertIn("manual review", result)
         self.assertIsNotNone(self.store.active(self.session))
