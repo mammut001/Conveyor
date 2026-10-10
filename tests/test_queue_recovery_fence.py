@@ -119,7 +119,10 @@ class QueueRecoveryFenceTests(unittest.TestCase):
         deploy = (root / "scripts/deploy_vps.sh").read_text()
         self.assertIn("VPS_SSH_KNOWN_HOSTS", workflow)
         self.assertIn("StrictHostKeyChecking=yes", workflow)
-        self.assertNotIn("ssh-keyscan", workflow.split("      - name: Install pinned VPS SSH host key")[0])
+        self.assertFalse(any(
+            line.strip().startswith("ssh-keyscan ")
+            for line in workflow.splitlines()
+        ))
         self.assertIn("grep -Fq 'deploy_db freeze'", workflow)
         self.assertIn("grep -Fq 'deploy_fence'", workflow)
         self.assertIn("FENCE_STATE_FILE", deploy)
