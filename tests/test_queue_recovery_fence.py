@@ -113,6 +113,20 @@ class QueueRecoveryFenceTests(unittest.TestCase):
         job = self._enqueue()
         self.assertEqual(asyncio.run(second.dequeue(require_idle=True)).id, job.id)
 
+    def test_live_deploy_script_and_workflow_fail_closed_on_legacy(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/deploy.yml").read_text()
+        deploy = (root / "scripts/deploy_vps.sh").read_text()
+        self.assertIn("VPS_SSH_KNOWN_HOSTS", workflow)
+        self.assertIn("StrictHostKeyChecking=yes", workflow)
+        self.assertNotIn("ssh-keyscan", workflow.split("      - name: Install pinned VPS SSH host key")[0])
+        self.assertIn("grep -Fq 'deploy_db freeze'", workflow)
+        self.assertIn("grep -Fq 'deploy_fence'", workflow)
+        self.assertIn("FENCE_STATE_FILE", deploy)
+        self.assertIn("--exclude=.deploy-fence-token", deploy)
+        self.assertIn('chmod 600 "${FENCE_STATE_FILE}"', deploy)
+        self.assertIn('deploy_db thaw "${FENCE_TOKEN}"', deploy)
+
     def test_fence_rejects_any_outstanding_queue_or_running_job(self):
         self._enqueue()
         with self.assertRaisesRegex(RuntimeError, "not idle"):
