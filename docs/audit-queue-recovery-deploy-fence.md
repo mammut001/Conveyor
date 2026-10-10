@@ -3,13 +3,13 @@
 # Queue ownership and deploy drain
 
 - Every dequeued job stores its owning process PID and Linux boot/start-tick identity in the queue database.
-- On startup, recover **only** running jobs whose owner is verifiably dead. A live Telegram/Feishu/Web owner is never interrupted merely because another service started.
+- On startup, preserve any job owned by a live Telegram/Feishu/Web process. For a dead/recycled parent PID **on the same boot**, preserve RUNNING because a Codex child process may have survived; require operator reconciliation. Only jobs from a provably different boot are auto-interrupted.
 - Missing legacy process ownership or unreadable /proc is **UNKNOWN** and remains running. The operator must stop services, inspect the job and reconcile legacy rows manually. Automatic interruption of unknown jobs is intentionally forbidden.
 - Deploy fence is a compare-and-set token in `queue_metadata`, created with `BEGIN IMMEDIATE` only when queued and running counts are zero. Both enqueue and dequeue transactions check that same key; jobs submitted during deployment receive a retry message rather than being stranded in a queue with no wakeup after thaw.
 - `deploy_vps.sh` holds the fence across source cutover, smoke and restarts, then thaws on success or failure. The owner token is saved as a mode-0600 `.deploy-fence-token` recovery file until thaw succeeds; it survives cutover cleanup. Never print the token in logs.
 - **First deployment limitation:** The live version must already have the new dequeue fence and `deploy_db freeze` support. When upgrading from an older release, automated deployment intentionally fails before cutover. First migrate during an explicit controlled maintenance window with all workers stopped, and inspect the queue. Do not bypass the check on a running installation.
 - On systems without Linux /proc, ownership is unknown: no speculative auto-recovery. macOS remains safe but needs explicit job reconciliation after a crash.
-- CI smoke simulates a live owner, verified dead owner and cross-process freeze. Live multi-service VPS rollout remains NOT RUN.
+- CI smoke simulates a live owner, confirmed reboot, unverified same-boot orphan risk and cross-process freeze. Live multi-service VPS rollout remains NOT RUN.
 
 Test: `python -m unittest tests.test_queue_recovery_fence -v`, `make smoke`, GitHub Backend CI.
 
