@@ -91,11 +91,18 @@ class QueueRecoveryFenceTests(unittest.TestCase):
         path = self.first._db_path()
         token = "a" * 32
         deploy_fence(path, token)
-        # New work may be queued during deployment but cannot start.
-        job = self._enqueue()
+        # New work must fail explicitly rather than waiting forever after
+        # restart (there is no automatic post-thaw dequeue trigger).
+        msg = InboundMessage(channel="telegram", operator_id="op", chat_id="chat",
+                             message_id=None, text="job-during-deploy")
+        accepted, message, queued = asyncio.run(
+            self.first.enqueue("run", "job-during-deploy", msg, NullPort(), self.runner)
+        )
+        self.assertFalse(accepted)
+        self.assertIsNone(queued)
+        self.assertIn("升级", message)
         second = JobQueue()
         second.configure(self.settings, self.runner, recover=True)
-        self.assertFalse(second.can_start(job.id))
         self.assertIsNone(asyncio.run(second.dequeue(require_idle=True)))
         with self.assertRaisesRegex(RuntimeError, "another deployment"):
             deploy_fence(path, "b" * 32)
@@ -103,6 +110,7 @@ class QueueRecoveryFenceTests(unittest.TestCase):
             deploy_fence(path, "b" * 32, release=True)
         self.assertIsNone(asyncio.run(self.first.dequeue(require_idle=False)))
         deploy_fence(path, token, release=True)
+        job = self._enqueue()
         self.assertEqual(asyncio.run(second.dequeue(require_idle=True)).id, job.id)
 
     def test_fence_rejects_any_outstanding_queue_or_running_job(self):
