@@ -135,6 +135,13 @@ class AtomicApplyTests(unittest.TestCase):
         self.assertIn("Rollback", result)
         self._assert_rolled_back()
 
+    def test_cancelled_apply_compensates_and_propagates(self):
+        self._write_patch()
+        with patch.object(Runner, "_copy_validated_untracked_files", side_effect=asyncio.CancelledError()):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(self.runner.apply_job("q-cancelled", self.worktree))
+        self._assert_rolled_back()
+
     def test_failed_reverse_patch_reports_manual_review(self):
         self._write_patch()
         # Force the copier to fail; then intercept only git apply --reverse.
