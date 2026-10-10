@@ -32,6 +32,7 @@ from handlers.onboarding import (
 from handlers.tools.runner import cancel_pending, execute_confirmed, parse_tool_callback
 from logging_setup import configure_logging
 from runner import CodexRunner
+from telegram_navigation import callback_action, legacy_action, navigation_screen
 
 
 configure_logging(
@@ -479,12 +480,83 @@ async def deep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await dispatch(inbound, make_outbound(update), settings, runner)
 
 
+def _navigation_markup(screen):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(text, callback_data=data) for text, data in row]
+        for row in screen.buttons
+    ])
+
+
+async def _show_navigation(update: Update, action: str, *, edit: bool = False) -> None:
+    """Navigation is read-only and never changes the active execution lane."""
+    inbound = inbound_from_update(update)
+    if inbound.chat_type != "p2p":
+        if not edit:
+            await _reply(update, "Workers / 会话导航只在私聊中提供。")
+        elif update.callback_query:
+            await update.callback_query.answer("请在私聊使用", show_alert=True)
+        return
+    from handlers.job_queue import get_job_queue
+    screen = navigation_screen(
+        action, settings, get_job_queue(), inbound.operator_id, inbound.chat_id,
+    )
+    if screen is None:
+        if edit and update.callback_query:
+            await update.callback_query.answer("条目已失效，请重新打开列表。", show_alert=True)
+        else:
+            await _reply(update, "该条目已失效，请重新打开 /workers 或 /sessions。")
+        return
+    markup = _navigation_markup(screen)
+    if edit and update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        try:
+            await query.edit_message_text(screen.text, reply_markup=markup)
+        except Exception:
+            # Old cards may be no longer editable; show a fresh one.
+            await _reply(update, screen.text, reply_markup=markup)
+        return
+    await _reply(update, screen.text, reply_markup=markup)
+
+
+async def workers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await _guard(update):
+        await _show_navigation(update, "workers")
+
+
+async def sessions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await _guard(update):
+        await _show_navigation(update, "sessions")
+
+
+async def navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None:
+        return
+    if not await _guard(update):
+        await query.answer("Unauthorized.", show_alert=True)
+        return
+    action = callback_action(query.data or "")
+    if action is None:
+        await query.answer("无效操作", show_alert=True)
+        return
+    await _show_navigation(update, action, edit=True)
+
+
 async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Groups: act only when @mentioned or replied to (Grok-style), so
     # ordinary group conversation is neither answered nor rejected.
     if not is_addressed_to_bot(inbound_from_update(update)):
         return
     if not await _guard(update):
+        return
+    # Legacy Telegram reply keyboards send ordinary text, not callbacks.
+    # Consume only these exact labels before onboarding or LLM routing.
+    # This works with already-sent reply keyboards without recreating them.
+    inbound = inbound_from_update(update)
+    menu_action = legacy_action(inbound.text) if inbound.chat_type == "p2p" else None
+    if menu_action:
+        await _show_navigation(update, menu_action)
         return
     # Onboarding-C: first-run nudge. If the user types ANY message
     # before running /onboard, surface the prompt instead of
@@ -639,6 +711,9 @@ async def post_init(application: Application) -> None:
     await application.bot.set_my_commands(
         [
             ("fix", "改文件：/fix <需求>"),
+            ("workers", "查看 Workers 和任务状态"),
+            ("sessions", "查看当前会话和历史任务"),
+            ("switch", "打开会话导航（只读）"),
             ("jobs", "看最近任务"),
             ("last", "看最近结果"),
             ("diff", "看最近改动"),
@@ -706,6 +781,9 @@ def main() -> None:
         .build()
     )
     application.add_handler(CommandHandler("start", start_cmd))
+    application.add_handler(CommandHandler("workers", workers_cmd))
+    application.add_handler(CommandHandler("sessions", sessions_cmd))
+    application.add_handler(CommandHandler("switch", sessions_cmd))
     application.add_handler(CommandHandler("run", run_cmd))
     application.add_handler(CommandHandler("fix", fix_cmd))
     application.add_handler(CommandHandler("status", status_cmd))
@@ -758,6 +836,7 @@ def main() -> None:
         )
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
+    application.add_handler(CallbackQueryHandler(navigation_callback, pattern=r"^tgn:"))
     application.add_handler(CallbackQueryHandler(tool_callback, pattern=r"^tool:"))
     application.add_handler(CallbackQueryHandler(relay_callback, pattern=r"^relay:"))
     application.add_handler(CallbackQueryHandler(deep_callback, pattern=r"^deep$"))
