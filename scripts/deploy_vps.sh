@@ -199,7 +199,7 @@ CANDIDATE=""
 # release this specific fence after verifying there is no active deployment.
 [[ ! -e "${FENCE_STATE_FILE}" ]] || die "Stale deployment fence recovery file at ${FENCE_STATE_FILE}; inspect before retrying."
 FENCE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
-( umask 077; printf '%s\\n' "${FENCE_TOKEN}" > "${FENCE_STATE_FILE}" )
+( umask 077; printf '%s\n' "${FENCE_TOKEN}" > "${FENCE_STATE_FILE}" )
 chmod 600 "${FENCE_STATE_FILE}"
 if ! deploy_db freeze "${FENCE_TOKEN}"; then
   rm -f "${FENCE_STATE_FILE}"

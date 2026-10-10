@@ -54,6 +54,8 @@ class QueueRecoveryFenceTests(unittest.TestCase):
         self.assertEqual(asyncio.run(second.get_job(job.id)).state, QueueJobState.RUNNING)
 
     def test_recover_only_verifiably_dead_owner(self):
+        if _process_identity(os.getpid()) is None:
+            self.skipTest("Linux /proc owner identity unavailable")
         job = self._enqueue()
         asyncio.run(self.first.dequeue(require_idle=True))
         conn = self.first._get_conn()
@@ -80,12 +82,18 @@ class QueueRecoveryFenceTests(unittest.TestCase):
         second.configure(self.settings, self.runner, recover=True)
         self.assertEqual(asyncio.run(second.get_job(job.id)).state, QueueJobState.RUNNING)
 
-    def test_recycled_pid_is_dead_not_owned(self):
+    def test_recycled_pid_on_same_boot_stays_unverified(self):
         identity = _process_identity(os.getpid())
         if identity is None:
             self.skipTest("Linux /proc owner identity unavailable")
-        self.assertFalse(_owner_alive(os.getpid(), "different-boot:9876"))
+        boot_id = identity.partition(":")[0]
+        self.assertIsNone(_owner_alive(os.getpid(), f"{boot_id}:recycled-start-ticks"))
         self.assertIsNone(_owner_alive(None, None))
+
+    def test_boot_id_change_proves_recorded_owner_stopped(self):
+        if _process_identity(os.getpid()) is None:
+            self.skipTest("Linux /proc owner identity unavailable")
+        self.assertFalse(_owner_alive(os.getpid(), "different-boot:9876"))
 
     def test_same_boot_orphan_risk_remains_running_until_manual_reconciliation(self):
         boot_id = Path("/proc/sys/kernel/random/boot_id")
@@ -138,6 +146,7 @@ class QueueRecoveryFenceTests(unittest.TestCase):
         deploy = (root / "scripts/deploy_vps.sh").read_text()
         self.assertIn("VPS_SSH_KNOWN_HOSTS", workflow)
         self.assertIn("StrictHostKeyChecking=yes", workflow)
+        self.assertIn("printf '%s\\n' \"${VPS_SSH_KNOWN_HOSTS}\"", workflow)
         self.assertFalse(any(
             line.strip().startswith("ssh-keyscan ")
             for line in workflow.splitlines()
@@ -147,6 +156,7 @@ class QueueRecoveryFenceTests(unittest.TestCase):
         self.assertIn("FENCE_STATE_FILE", deploy)
         self.assertIn("--exclude=.deploy-fence-token", deploy)
         self.assertIn('chmod 600 "${FENCE_STATE_FILE}"', deploy)
+        self.assertIn("printf '%s\\n' \"${FENCE_TOKEN}\"", deploy)
         self.assertIn('deploy_db thaw "${FENCE_TOKEN}"', deploy)
 
     def test_fence_rejects_any_outstanding_queue_or_running_job(self):

@@ -76,7 +76,7 @@ jobs:
           test -n "${VPS_SSH_KNOWN_HOSTS}" || { echo "::error::VPS_SSH_KNOWN_HOSTS must be configured"; exit 1; }
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          printf '%s\\n' "${VPS_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          printf '%s\n' "${VPS_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
       - name: Deploy via SSH (git-based)
