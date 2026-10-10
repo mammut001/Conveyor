@@ -145,6 +145,9 @@ class QueueRecoveryFenceTests(unittest.TestCase):
         workflow = (root / ".github/workflows/deploy.yml").read_text()
         deploy = (root / "scripts/deploy_vps.sh").read_text()
         self.assertIn("VPS_SSH_KNOWN_HOSTS", workflow)
+        self.assertIn("  workflow_dispatch:", workflow)
+        self.assertNotIn("  workflow_run:", workflow)
+        self.assertIn("if: github.event_name == 'workflow_dispatch'", workflow)
         self.assertIn("StrictHostKeyChecking=yes", workflow)
         self.assertIn("printf '%s\\n' \"${VPS_SSH_KNOWN_HOSTS}\"", workflow)
         self.assertFalse(any(
