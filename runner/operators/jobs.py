@@ -289,6 +289,7 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
                     return f"Refused to apply job {job_id}: preflight patch failed: {detail}"
 
             patch_applied = False
+            copied_paths: list[str] = []
             try:
                 if patch.strip():
                     code, detail = await _apply_patch()
@@ -305,6 +306,7 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
                 copied = await self._copy_validated_untracked_files(
                     worktree_path, list(validated_untracked)
                 )
+                copied_paths = list(validated_untracked)
                 status_summary = await self._git(
                     ["status", "--short"], cwd=apply_root, check=False
                 )
@@ -320,8 +322,21 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
                     f"Workspace status:\n{safe_summary}"
                 )
             except Exception as exc:
-                # Untracked copier removes its partial targets before raising.
-                # Undo the tracked patch *only*, rather than git reset --hard:
+                # The copier handles partial-copy failures itself. If a later
+                # step (e.g. DB close) fails, remove only completed files that
+                # still match what we copied; never delete concurrent edits.
+                untracked_rollback_ok = True
+                for relative in copied_paths:
+                    target = apply_root / relative
+                    source = worktree_path / relative
+                    try:
+                        if target.is_file() and not target.is_symlink() and target.read_bytes() == source.read_bytes():
+                            target.unlink()
+                        else:
+                            untracked_rollback_ok = False
+                    except OSError:
+                        untracked_rollback_ok = False
+                # Undo tracked patch *only*, rather than git reset --hard:
                 # the latter could overwrite concurrent user changes.
                 rollback = "no tracked patch to revert"
                 if patch_applied:
@@ -330,9 +345,10 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
                         rollback = "tracked diff reversed" if code == 0 else f"FAILED ({detail})"
                     except Exception as rollback_error:
                         rollback = f"FAILED ({type(rollback_error).__name__})"
-                if rollback.startswith("FAILED"):
+                if rollback.startswith("FAILED") or not untracked_rollback_ok:
                     return (
-                        f"Apply failed for {job_id}; TRACKED ROLLBACK {rollback}. "
+                        f"Apply failed for {job_id}; tracked rollback: {rollback}; "
+                        f"untracked cleanup: {'ok' if untracked_rollback_ok else 'FAILED'}. "
                         "Main workspace requires manual review before retrying."
                     )
                 return (
