@@ -1834,7 +1834,7 @@ async def _help(msg, port, _runner, _settings, _arg):
     text += "/status /last /diff /apply /discard /cancel\n"
     text += "/jobs [n] /memory [date] [cat] /journal [n]\n"
     if getattr(msg, "channel", None) == "telegram":
-        text += "/workers — Workers/Agent 状态；/sessions /switch — 会话任务历史导航（只读）\\n"
+        text += "/workers — Workers/Agent 状态；/sessions /switch — 会话任务历史导航（只读）\n"
     text += "/health [full] [json] [nosecurity] /doctor /diag [since] /audit [stale-min]\n"
     text += "/security [since] /ratelimit [n] /metrics [n] /log [sel] /meta [sel]\n"
     text += "/smoke /editcheck /maintain [keep] /clean [keep] /run /fix\n"
