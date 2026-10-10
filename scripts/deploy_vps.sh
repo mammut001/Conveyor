@@ -25,6 +25,7 @@ CANDIDATE=""
 ROLLBACK_ATTEMPTED=false
 FENCE_TOKEN=""
 FENCE_HELD=false
+FENCE_STATE_FILE="${DEPLOY_PATH}/.deploy-fence-token"
 
 log() { echo "${LOG_PREFIX} $*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
@@ -40,9 +41,10 @@ finish_deploy() {
   if [[ "${FENCE_HELD}" == "true" ]]; then
     # Refuse silent failure: unresolved fence blocks future job dispatch.
     if ! deploy_db thaw "${FENCE_TOKEN}"; then
-      log "CRITICAL: failed to release deploy fence; manual repair required." >&2
+      log "CRITICAL: failed to release deploy fence. Token saved in ${FENCE_STATE_FILE}; manual inspection required." >&2
       exit 1
     fi
+    rm -f "${FENCE_STATE_FILE}"
   fi
   clean_candidate
   exit "${exit_code}"
@@ -56,6 +58,7 @@ clean_live_checkout() {
     --exclude=.deploy-status.json \
     --exclude=.deploy.lock \
     --exclude=.deploy-backups \
+    --exclude=.deploy-fence-token \
     --quiet
 }
 
@@ -191,8 +194,15 @@ CANDIDATE=""
 # from a legacy version requires a controlled maintenance migration rather
 # than an unsafe unattended cutover of an uncooperative running service.
 # BEGIN IMMEDIATE in freeze and dequeue serializes checking idle and starts.
+# Save the owner token before acquiring a durable DB fence; SIGKILL or
+# host reboot skips shell traps, but the operator must still be able to
+# release this specific fence after verifying there is no active deployment.
+[[ ! -e "${FENCE_STATE_FILE}" ]] || die "Stale deployment fence recovery file at ${FENCE_STATE_FILE}; inspect before retrying."
 FENCE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+( umask 077; printf '%s\\n' "${FENCE_TOKEN}" > "${FENCE_STATE_FILE}" )
+chmod 600 "${FENCE_STATE_FILE}"
 if ! deploy_db freeze "${FENCE_TOKEN}"; then
+  rm -f "${FENCE_STATE_FILE}"
   die "Atomic queue fence unavailable. If the installed version predates fencing, perform controlled first migration; live files were not changed."
 fi
 FENCE_HELD=true
@@ -347,6 +357,7 @@ if ! deploy_db thaw "${FENCE_TOKEN}"; then
   die "Cannot release queue fence; manual inspection required."
 fi
 FENCE_HELD=false
+rm -f "${FENCE_STATE_FILE}"
 log "Atomic queue fence released."
 
 log "Service status:"
