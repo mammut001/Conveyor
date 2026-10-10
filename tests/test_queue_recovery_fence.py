@@ -88,10 +88,11 @@ class QueueRecoveryFenceTests(unittest.TestCase):
         self.assertIsNone(_owner_alive(None, None))
 
     def test_atomic_deploy_fence_serializes_dequeue(self):
-        job = self._enqueue()
         path = self.first._db_path()
         token = "a" * 32
         deploy_fence(path, token)
+        # New work may be queued during deployment but cannot start.
+        job = self._enqueue()
         second = JobQueue()
         second.configure(self.settings, self.runner, recover=True)
         self.assertFalse(second.can_start(job.id))
