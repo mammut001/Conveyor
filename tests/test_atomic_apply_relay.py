@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -110,14 +112,22 @@ class AtomicApplyTests(unittest.TestCase):
 
     def test_exclusive_create_never_overwrites_racing_target(self):
         self._write_patch()
-        # A competing writer installs the target immediately before "xb".
+        # A real competing process installs the target immediately before "xb".
         target = self.repo / "docs" / "NEW.txt"
         target.parent.mkdir(exist_ok=True)
         original_open = Path.open
 
         def racing_open(path, mode="r", *args, **kwargs):
-            if str(path) == str(target) and mode == "xb":
-                target.write_bytes(b"user file created during apply")
+            if path.resolve() == target.resolve() and mode == "xb":
+                subprocess.run(
+                    [
+                        sys.executable, "-c",
+                        "import pathlib, sys; pathlib.Path(sys.argv[1]).write_bytes(b'user file created during apply')",
+                        str(target),
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
             return original_open(path, mode, *args, **kwargs)
 
         with patch.object(Path, "open", autospec=True, side_effect=racing_open):
@@ -130,7 +140,19 @@ class AtomicApplyTests(unittest.TestCase):
     def test_finalization_failure_rolls_back_both_file_types(self):
         self._write_patch()
         from refinement_store import RefinementMutation
-        with patch.object(RefinementMutation, "close", side_effect=OSError("SQLite finalization failed")):
+
+        original_close = RefinementMutation.close
+
+        def deny_sqlite_commit(mutation, *, state, reason):
+            def authorizer(action, arg1, _arg2, _database, _trigger):
+                if action == sqlite3.SQLITE_TRANSACTION and arg1 == "COMMIT":
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            mutation.conn.set_authorizer(authorizer)
+            return original_close(mutation, state=state, reason=reason)
+
+        with patch.object(RefinementMutation, "close", deny_sqlite_commit):
             result = asyncio.run(self.runner.apply_job("q-finalize", self.worktree))
         self.assertIn("Rollback", result)
         self._assert_rolled_back()
@@ -206,6 +228,31 @@ class RelayFailClosedTests(unittest.TestCase):
             asyncio.run(execute_confirmed(self.msg, self.port, self.settings, pending.token))
             execute.assert_awaited_once()
         self.assertIsNone(get_pending(pending.token))
+
+    def test_unopenable_sqlite_path_refuses_execution(self):
+        pending = create_pending("notes.add", "hello", "op", "chat", "telegram")
+        self.settings.approval_relay_db.mkdir()
+        with patch("handlers.tools.runner.run_tool", new_callable=AsyncMock) as execute:
+            asyncio.run(execute_confirmed(self.msg, self.port, self.settings, pending.token))
+            execute.assert_not_awaited()
+        self.assertIsNotNone(get_pending(pending.token))
+        self.assertIn("不可验证", self.port.replies[-1])
+
+    def test_duplicate_confirmation_runs_dangerous_tool_at_most_once(self):
+        pending = create_pending("notes.add", "hello", "op", "chat", "telegram")
+        self.assertTrue(approval_relay.publish(self.settings, pending, summary="note"))
+        self.assertEqual(
+            approval_relay.decide(
+                self.settings, pending.token, True, via="telegram", decided_by="op"
+            ),
+            "won",
+        )
+        with patch("handlers.tools.runner.run_tool", new_callable=AsyncMock, return_value="ok") as execute:
+            asyncio.run(execute_confirmed(self.msg, self.port, self.settings, pending.token))
+            asyncio.run(execute_confirmed(self.msg, self.port, self.settings, pending.token))
+            execute.assert_awaited_once()
+        self.assertIsNone(get_pending(pending.token))
+        self.assertEqual(approval_relay.get_relay_row(self.settings, pending.token)["status"], "done")
 
     def test_expired_relay_row_refuses_even_if_local_action_pending(self):
         pending = create_pending("notes.add", "hello", "op", "chat", "telegram")
