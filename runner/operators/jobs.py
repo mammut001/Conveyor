@@ -300,10 +300,13 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
             copied_paths: list[str] = []
             try:
                 if patch.strip():
+                    # Mark the patch as *possibly* applied before awaiting its
+                    # subprocess. Cancellation can arrive after git has already
+                    # written files but before communicate() returns.
+                    patch_applied = True
                     code, detail = await _apply_patch()
                     if code != 0:
-                        return f"Could not apply tracked diff for {job_id}: {detail}"
-                    patch_applied = True
+                        raise RuntimeError(f"git apply failed after patch start: {detail}")
 
                 recheck_result = collect_untracked_files(worktree_path)
                 if not recheck_result.ok:
