@@ -82,11 +82,12 @@ class AtomicApplyTests(unittest.TestCase):
 
     def _write_patch(self):
         (self.worktree / "README.md").write_text("changed\n")
-        (self.worktree / "NEW.txt").write_text("new file\n")
+        (self.worktree / "docs").mkdir(exist_ok=True)
+        (self.worktree / "docs" / "NEW.txt").write_text("new file\n")
 
     def _assert_rolled_back(self):
         self.assertEqual((self.repo / "README.md").read_text(), "base\n")
-        self.assertFalse((self.repo / "NEW.txt").exists())
+        self.assertFalse((self.repo / "docs" / "NEW.txt").exists())
         self.assertEqual(subprocess.check_output(["git", "status", "--porcelain"], cwd=self.repo).strip(), b"")
         self.assertIsNotNone(self.store.active(self.session))
 
@@ -110,11 +111,11 @@ class AtomicApplyTests(unittest.TestCase):
     def test_untracked_path_symlink_parent_blocked(self):
         outside = Path(self.temp.name) / "outside"
         outside.mkdir()
-        (outside / "secret.txt").write_text("secret")
-        (self.worktree / "shortcut").symlink_to(outside, target_is_directory=True)
+        (outside / "note.txt").write_text("note")
+        (self.worktree / "docs").symlink_to(outside, target_is_directory=True)
         with self.assertRaisesRegex(RuntimeError, "outside worktree"):
-            asyncio.run(self.runner._copy_validated_untracked_files(self.worktree, ["shortcut/secret.txt"]))
-        self.assertEqual((outside / "secret.txt").read_text(), "secret")
+            asyncio.run(self.runner._copy_validated_untracked_files(self.worktree, ["docs/note.txt"]))
+        self.assertEqual((outside / "note.txt").read_text(), "note")
 
 
 class RelayFailClosedTests(unittest.TestCase):
