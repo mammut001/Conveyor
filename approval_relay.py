@@ -883,9 +883,9 @@ def claim_local(settings: Any, token: str, approve: bool) -> str:
                     UPDATE relay_approvals
                     SET status = ?, decided_via = 'origin', decided_by = 'origin',
                         decided_at = ?, claimed_at = ?
-                    WHERE token = ? AND status = 'pending'
+                    WHERE token = ? AND status = 'pending' AND expires_at > ?
                     """,
-                    (want, now, now, token),
+                    (want, now, now, token, now),
                 )
                 if cur.rowcount == 1:
                     won = True
@@ -893,19 +893,27 @@ def claim_local(settings: Any, token: str, approve: bool) -> str:
                 else:
                     won = False
                     row = conn.execute(
-                        "SELECT status FROM relay_approvals WHERE token = ?", (token,)
+                        "SELECT status, expires_at FROM relay_approvals WHERE token = ?", (token,)
                     ).fetchone()
-                    current = row["status"] if row else None
+                    current = (
+                        "expired" if row and row["status"] == "pending" and row["expires_at"] <= now
+                        else row["status"] if row else None
+                    )
         finally:
             conn.close()
         if won:
             return "ok"
-        if current is None or current == want:
+        # A missing relay record is *not* permission to run a dangerous tool.
+        # It can mean publish failed, the database is corrupted, or a replica
+        # cannot see a decision. Preserve the local pending action for retry.
+        if current is None:
+            return "unavailable"
+        if current == want:
             return "ok"
         return str(current)
     except Exception:
-        logger.debug("claim_local failed for token %s; allowing local action", token, exc_info=True)
-        return "ok"
+        logger.exception("claim_local failed for token %s; action blocked", token)
+        return "unavailable"
 
 
 def claim_decisions_for_instance(

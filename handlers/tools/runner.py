@@ -476,10 +476,15 @@ async def _relay_gate(
         import approval_relay
         verdict = approval_relay.claim_local(settings, action.token, approve)
     except Exception:
-        logger.debug("approval relay gate failed; allowing local action", exc_info=True)
-        return True
+        logger.exception("approval relay gate unavailable; blocking local action")
+        verdict = "unavailable"
     if verdict == "ok":
         return True
+    if verdict == "unavailable":
+        # Keep the local action pending so a recovered relay can decide it.
+        # In particular, never bypass a shared approval DB outage.
+        await port.reply(msg, "审批状态暂时不可验证，操作已阻止。请稍后重试。")
+        return False
     pop_pending(action.token)
     label = {
         "approved": "已批准",

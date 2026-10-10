@@ -333,35 +333,62 @@ async def _copy_validated_untracked_files(
     policy = ApplyPolicy(self.settings, workspace_root=root)
     max_untracked_bytes = policy.max_untracked_bytes
     copied = 0
-    for relative in relative_paths:
-        if relative == MEMORY_FILENAME or relative.startswith(MEMORY_FILENAME + "/"):
-            continue
-        reason = policy.validate_path(relative, kind="untracked", worktree_path=worktree_path)
-        if reason is not None:
-            raise RuntimeError(
-                f"Refusing to copy untracked file that failed policy: {relative}"
-            )
-        source = worktree_path / relative
-        if not source.exists():
-            raise RuntimeError(f"Refusing to copy untracked file that is missing: {relative}")
-        if source.is_symlink():
-            raise RuntimeError(f"Refusing to copy symlink untracked file: {relative}")
-        if source.is_dir():
-            raise RuntimeError(f"Refusing to copy directory untracked file: {relative}")
-        try:
-            size = source.stat().st_size
-        except OSError as exc:
-            raise RuntimeError(f"Cannot stat untracked file: {relative}") from exc
-        if size > max_untracked_bytes:
-            raise RuntimeError(f"Refusing to copy oversized untracked file: {relative}")
-        target = root / relative
-        if target.exists():
-            raise RuntimeError(f"Refusing to overwrite existing untracked target: {relative}")
-        if target.is_symlink():
-            raise RuntimeError(f"Refusing to overwrite existing symlink target: {relative}")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
-        copied += 1
+    created_targets: list[Path] = []
+    try:
+        for relative in relative_paths:
+            if relative == MEMORY_FILENAME or relative.startswith(MEMORY_FILENAME + "/"):
+                continue
+            reason = policy.validate_path(relative, kind="untracked", worktree_path=worktree_path)
+            if reason is not None:
+                raise RuntimeError(
+                    f"Refusing to copy untracked file that failed policy: {relative}"
+                )
+            source = worktree_path / relative
+            if not source.exists():
+                raise RuntimeError(f"Refusing to copy untracked file that is missing: {relative}")
+            if source.is_symlink():
+                raise RuntimeError(f"Refusing to copy symlink untracked file: {relative}")
+            if source.is_dir():
+                raise RuntimeError(f"Refusing to copy directory untracked file: {relative}")
+            try:
+                size = source.stat().st_size
+            except OSError as exc:
+                raise RuntimeError(f"Cannot stat untracked file: {relative}") from exc
+            if size > max_untracked_bytes:
+                raise RuntimeError(f"Refusing to copy oversized untracked file: {relative}")
+            target = root / relative
+            if target.exists():
+                raise RuntimeError(f"Refusing to overwrite existing untracked target: {relative}")
+            if target.is_symlink():
+                raise RuntimeError(f"Refusing to overwrite existing symlink target: {relative}")
+            # Reject symlink ancestors on BOTH ends, not just the leaf.
+            # Otherwise a/foo.txt can escape through a -> /outside.
+            target_root = root.resolve()
+            if target.parent.resolve() != target_root and target_root not in target.parent.resolve().parents:
+                raise RuntimeError(f"Refusing target outside workspace: {relative}")
+            source_root = worktree_path.resolve()
+            if source.parent.resolve() != source_root and source_root not in source.parent.resolve().parents:
+                raise RuntimeError(f"Refusing source outside worktree: {relative}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # "xb" uses O_CREAT | O_EXCL: even when another process creates
+            # the leaf between validation and copy, never overwrite it.
+            # Record ownership only after *our* exclusive create succeeds.
+            with source.open("rb") as source_file:
+                with target.open("xb") as target_file:
+                    created_targets.append(target)
+                    shutil.copyfileobj(source_file, target_file)
+                    target_file.flush()
+                    os.fchmod(target_file.fileno(), source.stat().st_mode & 0o777)
+            copied += 1
+    except Exception:
+        # Copy failure may happen after creating a partial destination.
+        # We own only the newly-created files recorded above.
+        for created in reversed(created_targets):
+            try:
+                created.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
     return copied
 
 

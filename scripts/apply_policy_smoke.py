@@ -273,9 +273,10 @@ async def test_apply_policy_hardening() -> list[CheckResult]:
              res = await runner.apply_last_job()
              
              ok_refused_toctou = (
-                 f"Refused to apply job {job_id}: untracked files changed during apply. "
-                 "Please rerun /diff and /apply."
-             ) in res
+                 f"Apply failed for {job_id}" in res
+                 and "Rollback: no tracked patch to revert" in res
+                 and "Refinement remains open" in res
+             )
              
         results.append(CheckResult(
             "apply_refuses_if_untracked_files_change_during_apply",
