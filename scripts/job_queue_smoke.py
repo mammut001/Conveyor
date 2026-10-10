@@ -470,20 +470,22 @@ def _check_queue_persistence_and_recovery():
             queue2 = JobQueue(max_length=5)
             queue2.configure(settings, runner)
             
-            # The running job should now be interrupted
+            # A second live process must never interrupt an owned RUNNING job.
             async def check_recovered_job():
                 return await queue2.get_job(job_id)
             recovered = asyncio.run(check_recovered_job())
-            if recovered is None:
-                return CheckResult("queue: persistence and recovery", False, "recovered job not found")
-            if recovered.state != QueueJobState.INTERRUPTED:
-                return CheckResult("queue: persistence and recovery", False, f"recovered job state {recovered.state} != INTERRUPTED")
-                
-            # Paused state should survive
+            if recovered is None or recovered.state != QueueJobState.RUNNING:
+                return CheckResult("queue: persistence and recovery", False, "live owner's running job was interrupted")
+            # Simulate the owning process exiting; only then reclaim the job.
+            from unittest.mock import patch
+            with patch("handlers.job_queue._owner_alive", return_value=False):
+                queue2.recover_and_load()
+            recovered = asyncio.run(check_recovered_job())
+            if recovered is None or recovered.state != QueueJobState.INTERRUPTED:
+                return CheckResult("queue: persistence and recovery", False, "verified dead owner not recovered")
             if not queue2.is_paused:
                 return CheckResult("queue: persistence and recovery", False, "paused state did not survive restart")
-                
-            return CheckResult("queue: persistence and recovery", True, "job state recovered to interrupted, paused state survived")
+            return CheckResult("queue: persistence and recovery", True, "live owner preserved; dead owner recovered; pause survived")
         finally:
             if orig_env is not None:
                 os.environ["CODEX_MEMORY_ROOT"] = orig_env
