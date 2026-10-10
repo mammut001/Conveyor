@@ -23,6 +23,8 @@ GIT_REF="${GITHUB_REF_NAME:-}"
 RUN_ID="${GITHUB_RUN_ID:-}"
 CANDIDATE=""
 ROLLBACK_ATTEMPTED=false
+FENCE_TOKEN=""
+FENCE_HELD=false
 
 log() { echo "${LOG_PREFIX} $*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
@@ -32,7 +34,20 @@ clean_candidate() {
     git -C "${DEPLOY_PATH}" worktree remove --force "${CANDIDATE}" >/dev/null 2>&1 || rm -rf "${CANDIDATE}" || true
   fi
 }
-trap clean_candidate EXIT
+finish_deploy() {
+  local exit_code=$?
+  trap - EXIT
+  if [[ "${FENCE_HELD}" == "true" ]]; then
+    # Refuse silent failure: unresolved fence blocks future job dispatch.
+    if ! deploy_db thaw "${FENCE_TOKEN}"; then
+      log "CRITICAL: failed to release deploy fence; manual repair required." >&2
+      exit 1
+    fi
+  fi
+  clean_candidate
+  exit "${exit_code}"
+}
+trap finish_deploy EXIT
 
 clean_live_checkout() {
   git clean -fd \
@@ -120,8 +135,8 @@ deploy_db() {
 if ! DB_PATH="$(deploy_db path)"; then
   die "Cannot inspect the queue database as ${SERVICE_USER}. Add to sudoers: $(id -un) ALL=(${SERVICE_USER}) NOPASSWD: ${DEPLOY_PATH}/.venv/bin/python ${DEPLOY_PATH}/scripts/deploy_db.py *"
 fi
-read -r QUEUED_COUNT RUNNING_COUNT < <(deploy_db idle) \
-  || die "Could not read queue state from ${DB_PATH}"
+IDLE_COUNTS="$(deploy_db idle)" || die "Could not read queue state from ${DB_PATH}"
+read -r QUEUED_COUNT RUNNING_COUNT <<< "${IDLE_COUNTS}"
 [[ "${QUEUED_COUNT}" == "0" && "${RUNNING_COUNT}" == "0" ]] \
   || die "Queue is not idle (queued=${QUEUED_COUNT}, running=${RUNNING_COUNT}); retry after jobs finish"
 log "Queue idle: queued=0 running=0"
@@ -171,6 +186,17 @@ write_smoke_fixture "${CANDIDATE}"
 log "Candidate validation passed."
 clean_candidate
 CANDIDATE=""
+
+# Existing live queue and helper must both support fencing. The first upgrade
+# from a legacy version requires a controlled maintenance migration rather
+# than an unsafe unattended cutover of an uncooperative running service.
+# BEGIN IMMEDIATE in freeze and dequeue serializes checking idle and starts.
+FENCE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+if ! deploy_db freeze "${FENCE_TOKEN}"; then
+  die "Atomic queue fence unavailable. If the installed version predates fencing, perform controlled first migration; live files were not changed."
+fi
+FENCE_HELD=true
+log "Atomic queue drain held until deployment completes."
 
 # Capture only services that are currently active; deployment must not enable
 # or revive unrelated/pre-existing disabled services.
@@ -314,6 +340,14 @@ cat > "${STATUS_FILE}" <<STATUS_JSON
 }
 STATUS_JSON
 log "Wrote ${STATUS_FILE}"
+
+# Release after service health and post-cutover verification. New messages
+# accepted while fenced remain QUEUED and are dispatched after thaw.
+if ! deploy_db thaw "${FENCE_TOKEN}"; then
+  die "Cannot release queue fence; manual inspection required."
+fi
+FENCE_HELD=false
+log "Atomic queue fence released."
 
 log "Service status:"
 for svc in "${SERVICES[@]}"; do
