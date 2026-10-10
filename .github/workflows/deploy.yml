@@ -1,29 +1,16 @@
-# .github/workflows/deploy.yml — deploy validated main revisions to the VPS.
+# .github/workflows/deploy.yml — production deployment (maintenance mode).
 #
-# Automatic deployment is triggered only after the `CI` workflow completes
-# successfully for `main`. A manual workflow_dispatch remains available for an
-# operator-controlled redeploy of the current main revision.
+# Automatic deploys are intentionally PAUSED until the first fence-aware VPS
+# migration has been completed and the production SSH host key pinned.
+# Re-enable workflow_run in a reviewed PR *after* the controlled migration.
+# Manual workflow_dispatch remains available for the maintenance operator.
 #
-# Required GitHub secrets:
-#   VPS_HOST       — VPS hostname or IP
-#   VPS_USER       — SSH user (prefer a dedicated deploy user)
-#   VPS_SSH_KEY    — private key for the deploy user
-#
-# Optional secrets:
-#   VPS_PORT       — SSH port (default 22)
-#   CONVEYOR_DEPLOY_PATH — repo root on VPS (default /opt/conveyor)
-#
-# Security:
-#   - No secrets are hardcoded; all come from GitHub Actions secrets.
-#   - The deploy script never prints .env.
-#   - known_hosts is populated from the VPS fingerprint to prevent MITM.
+# Required GitHub secrets: VPS_HOST, VPS_USER, VPS_SSH_KEY, VPS_SSH_KNOWN_HOSTS.
+# Optional secrets: VPS_PORT, CONVEYOR_DEPLOY_PATH.
 
 name: Deploy to VPS
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -35,10 +22,8 @@ concurrency:
 
 jobs:
   deploy:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main')
+    # Safety hold: must not run from CI-success events until first migration.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -67,10 +52,17 @@ jobs:
           known_hosts: unnecessary
           if_key_exists: replace
 
-      - name: Add VPS to known_hosts
+      # Pin the host key via a trusted, out-of-band fingerprint. ssh-keyscan
+      # alone verifies nothing about the identity of the server.
+      - name: Install pinned VPS SSH host key
+        env:
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
         run: |
+          test -n "${VPS_SSH_KNOWN_HOSTS}" || { echo "::error::VPS_SSH_KNOWN_HOSTS must be configured"; exit 1; }
           mkdir -p ~/.ssh
-          ssh-keyscan -p ${{ secrets.VPS_PORT || 22 }} -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 700 ~/.ssh
+          printf '%s\n' "${VPS_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Deploy via SSH (git-based)
         env:
@@ -80,7 +72,15 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           DEPLOY_SOURCE: github-actions
         run: |
-          ssh -p ${{ secrets.VPS_PORT || 22 }} \
+          # The *old installed* deploy script is what runs during an automatic
+          # upgrade. Explicitly reject legacy unfenced releases before doing
+          # anything, otherwise a first auto-upgrade bypasses the new guard.
+          ssh -o StrictHostKeyChecking=yes -p ${{ secrets.VPS_PORT || 22 }} \
+              ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+              "test -f ${DEPLOY_PATH}/scripts/deploy_db.py && grep -Fq 'deploy_db freeze' ${DEPLOY_PATH}/scripts/deploy_vps.sh && grep -Fq 'deploy_fence' ${DEPLOY_PATH}/handlers/job_queue.py && grep -Fq 'elif command in (\"freeze\", \"thaw\"):' ${DEPLOY_PATH}/scripts/deploy_db.py" \
+              || { echo "::error::Live VPS release lacks atomic fencing; perform controlled first migration"; exit 1; }
+
+          ssh -o StrictHostKeyChecking=yes -p ${{ secrets.VPS_PORT || 22 }} \
               ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
               "GITHUB_SHA=${DEPLOY_SHA} GITHUB_REF_NAME=${DEPLOY_REF} GITHUB_RUN_ID=${GITHUB_RUN_ID} DEPLOY_SOURCE=${DEPLOY_SOURCE} CONVEYOR_DEPLOY_PATH=${DEPLOY_PATH} bash ${DEPLOY_PATH}/scripts/deploy_vps.sh"
 

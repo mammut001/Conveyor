@@ -1,0 +1,177 @@
+"""DB-owner-safe startup recovery and atomic drain handshake."""
+from __future__ import annotations
+
+import asyncio
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from channel.types import InboundMessage
+from handlers.job_queue import JobQueue, QueueJobState, _owner_alive, _process_identity
+from scripts.deploy_db import deploy_fence
+
+
+class NullPort:
+    async def reply(self, *_args):
+        return None
+
+
+class QueueRecoveryFenceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.settings = SimpleNamespace(codex_memory_root=Path(self.temp.name),
+                                        conveyor_max_pending_jobs=20,
+                                        conveyor_event_retention_per_job=100)
+        self.runner = SimpleNamespace(current_job=None)
+        self.first = JobQueue()
+        self.first.configure(self.settings, self.runner, recover=False)
+
+    def _enqueue(self, text="job"):
+        msg = InboundMessage(channel="telegram", operator_id="op", chat_id="chat",
+                             message_id=None, text=text)
+        result = asyncio.run(self.first.enqueue("run", text, msg, NullPort(), self.runner))
+        self.assertTrue(result[0])
+        return result[2]
+
+    def test_other_process_start_keeps_live_owner(self):
+        job = self._enqueue()
+        asyncio.run(self.first.dequeue(require_idle=True))
+        conn = self.first._get_conn()
+        try:
+            row = conn.execute("SELECT owner_pid, owner_identity FROM queued_jobs WHERE id=?", (job.id,)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["owner_pid"], os.getpid())
+        if _process_identity(os.getpid()) is None:
+            self.skipTest("Linux /proc owner identity unavailable")
+        self.assertTrue(_owner_alive(row["owner_pid"], row["owner_identity"]))
+        second = JobQueue()
+        second.configure(self.settings, self.runner, recover=True)
+        self.assertEqual(asyncio.run(second.get_job(job.id)).state, QueueJobState.RUNNING)
+
+    def test_recover_only_verifiably_dead_owner(self):
+        if _process_identity(os.getpid()) is None:
+            self.skipTest("Linux /proc owner identity unavailable")
+        job = self._enqueue()
+        asyncio.run(self.first.dequeue(require_idle=True))
+        conn = self.first._get_conn()
+        try:
+            with conn:
+                conn.execute("UPDATE queued_jobs SET owner_pid=?, owner_identity=? WHERE id=?",
+                             (999999999, "dead-boot:123", job.id))
+        finally:
+            conn.close()
+        second = JobQueue()
+        second.configure(self.settings, self.runner, recover=True)
+        self.assertEqual(asyncio.run(second.get_job(job.id)).state, QueueJobState.INTERRUPTED)
+
+    def test_unknown_legacy_owner_never_interrupted(self):
+        job = self._enqueue()
+        asyncio.run(self.first.dequeue(require_idle=True))
+        conn = self.first._get_conn()
+        try:
+            with conn:
+                conn.execute("UPDATE queued_jobs SET owner_pid=NULL, owner_identity=NULL WHERE id=?", (job.id,))
+        finally:
+            conn.close()
+        second = JobQueue()
+        second.configure(self.settings, self.runner, recover=True)
+        self.assertEqual(asyncio.run(second.get_job(job.id)).state, QueueJobState.RUNNING)
+
+    def test_recycled_pid_on_same_boot_stays_unverified(self):
+        identity = _process_identity(os.getpid())
+        if identity is None:
+            self.skipTest("Linux /proc owner identity unavailable")
+        boot_id = identity.partition(":")[0]
+        self.assertIsNone(_owner_alive(os.getpid(), f"{boot_id}:recycled-start-ticks"))
+        self.assertIsNone(_owner_alive(None, None))
+
+    def test_boot_id_change_proves_recorded_owner_stopped(self):
+        if _process_identity(os.getpid()) is None:
+            self.skipTest("Linux /proc owner identity unavailable")
+        self.assertFalse(_owner_alive(os.getpid(), "different-boot:9876"))
+
+    def test_same_boot_orphan_risk_remains_running_until_manual_reconciliation(self):
+        boot_id = Path("/proc/sys/kernel/random/boot_id")
+        if not boot_id.exists():
+            self.skipTest("Linux boot identity not available")
+        job = self._enqueue("owner crashed; child process may survive")
+        asyncio.run(self.first.dequeue(require_idle=True))
+        conn = self.first._get_conn()
+        try:
+            with conn:
+                conn.execute(
+                    "UPDATE queued_jobs SET owner_pid=?, owner_identity=? WHERE id=?",
+                    (999999999, boot_id.read_text().strip() + ":99", job.id),
+                )
+        finally:
+            conn.close()
+        second = JobQueue()
+        second.configure(self.settings, self.runner, recover=True)
+        self.assertEqual(asyncio.run(second.get_job(job.id)).state, QueueJobState.RUNNING)
+
+    def test_atomic_deploy_fence_serializes_dequeue(self):
+        path = self.first._db_path()
+        token = "a" * 32
+        deploy_fence(path, token)
+        # New work must fail explicitly rather than waiting forever after
+        # restart (there is no automatic post-thaw dequeue trigger).
+        msg = InboundMessage(channel="telegram", operator_id="op", chat_id="chat",
+                             message_id=None, text="job-during-deploy")
+        accepted, message, queued = asyncio.run(
+            self.first.enqueue("run", "job-during-deploy", msg, NullPort(), self.runner)
+        )
+        self.assertFalse(accepted)
+        self.assertIsNone(queued)
+        self.assertIn("升级", message)
+        second = JobQueue()
+        second.configure(self.settings, self.runner, recover=True)
+        self.assertIsNone(asyncio.run(second.dequeue(require_idle=True)))
+        with self.assertRaisesRegex(RuntimeError, "another deployment"):
+            deploy_fence(path, "b" * 32)
+        with self.assertRaisesRegex(RuntimeError, "token mismatch"):
+            deploy_fence(path, "b" * 32, release=True)
+        self.assertIsNone(asyncio.run(self.first.dequeue(require_idle=False)))
+        deploy_fence(path, token, release=True)
+        job = self._enqueue()
+        self.assertEqual(asyncio.run(second.dequeue(require_idle=True)).id, job.id)
+
+    def test_live_deploy_script_and_workflow_fail_closed_on_legacy(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/deploy.yml").read_text()
+        deploy = (root / "scripts/deploy_vps.sh").read_text()
+        self.assertIn("VPS_SSH_KNOWN_HOSTS", workflow)
+        self.assertIn("  workflow_dispatch:", workflow)
+        self.assertNotIn("  workflow_run:", workflow)
+        self.assertIn("if: github.event_name == 'workflow_dispatch'", workflow)
+        self.assertIn("StrictHostKeyChecking=yes", workflow)
+        self.assertIn("printf '%s\\n' \"${VPS_SSH_KNOWN_HOSTS}\"", workflow)
+        self.assertFalse(any(
+            line.strip().startswith("ssh-keyscan ")
+            for line in workflow.splitlines()
+        ))
+        self.assertIn("grep -Fq 'deploy_db freeze'", workflow)
+        self.assertIn("grep -Fq 'deploy_fence'", workflow)
+        self.assertIn("FENCE_STATE_FILE", deploy)
+        self.assertIn("--exclude=.deploy-fence-token", deploy)
+        self.assertIn('chmod 600 "${FENCE_STATE_FILE}"', deploy)
+        self.assertIn("printf '%s\\n' \"${FENCE_TOKEN}\"", deploy)
+        self.assertIn('deploy_db thaw "${FENCE_TOKEN}"', deploy)
+
+    def test_fence_rejects_any_outstanding_queue_or_running_job(self):
+        self._enqueue()
+        with self.assertRaisesRegex(RuntimeError, "not idle"):
+            deploy_fence(self.first._db_path(), "c" * 32)
+        conn = self.first._get_conn()
+        try:
+            self.assertIsNone(conn.execute("SELECT value FROM queue_metadata WHERE key='deploy_fence'").fetchone())
+        finally:
+            conn.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

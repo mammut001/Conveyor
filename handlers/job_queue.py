@@ -34,6 +34,42 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_QUEUE_LENGTH = 10
 
 
+def _process_identity(pid: int) -> str | None:
+    """Linux boot ID + process start ticks: immune to a recycled PID.
+
+    An unreadable /proc on non-Linux hosts is UNKNOWN rather than dead;
+    recovery must never interrupt work whose owner cannot be verified.
+    """
+    try:
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        raw = Path(f"/proc/{pid}/stat").read_text()
+        fields = raw[raw.rfind(") ") + 2:].split()
+        return f"{boot_id}:{fields[19]}" if boot_id and len(fields) > 19 else None
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _owner_alive(pid: int | None, identity: str | None) -> bool | None:
+    """Return True/False/None (not verifiable) for an owned queue job."""
+    if not pid or not identity:
+        return None
+    current = _process_identity(pid)
+    if current == identity:
+        return True
+    # A dead/recycled owner PID on the SAME boot does NOT prove its Codex
+    # subprocesses exited: orphaned children may still mutate worktrees or
+    # host files. Preserve RUNNING until an operator verifies/reconciles it.
+    # A different boot ID *does* prove every old process has stopped.
+    try:
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return None
+    recorded_boot = identity.partition(":")[0]
+    if boot_id and recorded_boot and boot_id != recorded_boot:
+        return False
+    return None
+
+
 class QueueJobState(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -131,6 +167,10 @@ class JobQueue:
         """Whether this queued job is the one that would start right now."""
         conn = self._get_conn()
         try:
+            if conn.execute(
+                "SELECT 1 FROM queue_metadata WHERE key = 'deploy_fence' LIMIT 1"
+            ).fetchone():
+                return False
             row = self._startable_row(conn, self._parallel_limit())
             return row is not None and str(row["id"]) == str(queue_job_id)
         finally:
@@ -270,6 +310,11 @@ class JobQueue:
             if "lane" not in columns:
                 # Jobs in one lane never overlap; different lanes may (job_lanes.py).
                 conn.execute("ALTER TABLE queued_jobs ADD COLUMN lane TEXT NOT NULL DEFAULT 'default'")
+            for column, column_type in (
+                ("owner_pid", "INTEGER"), ("owner_identity", "TEXT"),
+            ):
+                if column not in columns:
+                    conn.execute(f"ALTER TABLE queued_jobs ADD COLUMN {column} {column_type}")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_queued_jobs_session_state "
                 "ON queued_jobs(session_id, state, created_at)"
@@ -281,11 +326,20 @@ class JobQueue:
         try:
             with conn:
                 if mark_interrupted:
-                    conn.execute(
-                        "UPDATE queued_jobs SET state = 'interrupted', finished_at = ?, position = 0 "
-                        "WHERE state = 'running'",
-                        (now_str,),
-                    )
+                    # A Telegram/Feishu/Web process shares the same DB. Only
+                    # reclaim jobs whose recorded OS owner is verifiably dead.
+                    # Legacy/unknown owners remain running (manual recovery),
+                    # rather than killing another live process's queue lease.
+                    for row in conn.execute(
+                        "SELECT id, owner_pid, owner_identity FROM queued_jobs WHERE state = 'running'"
+                    ).fetchall():
+                        if _owner_alive(row["owner_pid"], row["owner_identity"]) is False:
+                            conn.execute(
+                                "UPDATE queued_jobs SET state = 'interrupted', "
+                                "finished_at = ?, updated_at = ?, position = 0 "
+                                "WHERE id = ? AND state = 'running'",
+                                (now_str, now_str, row["id"]),
+                            )
                 row = conn.execute(
                     "SELECT value FROM queue_metadata WHERE key = 'paused'"
                 ).fetchone()
@@ -375,6 +429,15 @@ class JobQueue:
             conn = self._get_conn()
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                # A deployment may be holding the dequeue fence after an idle
+                # snapshot. Refuse new work rather than queueing it indefinitely:
+                # the startup callbacks do not automatically drain those rows
+                # when the fence is released.
+                if conn.execute(
+                    "SELECT 1 FROM queue_metadata WHERE key = 'deploy_fence' LIMIT 1"
+                ).fetchone():
+                    conn.rollback()
+                    return False, "服务正在升级，暂不接收新任务，请稍后重试。", None
                 count = int(conn.execute(
                     "SELECT COUNT(*) FROM queued_jobs WHERE state = 'queued'"
                 ).fetchone()[0])
@@ -452,12 +515,18 @@ class JobQueue:
 
     async def dequeue(self, *, require_idle: bool = False) -> QueuedJob | None:
         async with self._lock:
-            if self._paused:
-                return None
             conn = self._get_conn()
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
+                    paused = conn.execute(
+                        "SELECT value FROM queue_metadata WHERE key = 'paused'"
+                    ).fetchone()
+                    if (paused and paused[0] == "true") or conn.execute(
+                        "SELECT 1 FROM queue_metadata WHERE key = 'deploy_fence' LIMIT 1"
+                    ).fetchone():
+                        conn.rollback()
+                        return None
                     if require_idle:
                         row = self._startable_row(conn, self._parallel_limit())
                     else:
@@ -470,10 +539,12 @@ class JobQueue:
                         return None
                     job_id = row["id"]
                     now_str = datetime.now(timezone.utc).isoformat()
+                    # Record the *claimer* process, not the Codex child PID.
+                    # Startup recovery compares this identity to /proc.
                     conn.execute(
                         "UPDATE queued_jobs SET state = 'running', started_at = ?, updated_at = ?, "
-                        "position = 0 WHERE id = ?",
-                        (now_str, now_str, job_id),
+                        "position = 0, owner_pid = ?, owner_identity = ? WHERE id = ?",
+                        (now_str, now_str, os.getpid(), _process_identity(os.getpid()), job_id),
                     )
                     self._recalculate_positions(conn)
                     updated_row = conn.execute(

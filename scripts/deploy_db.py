@@ -14,6 +14,7 @@ Stdlib only, so it also works before the virtualenv is synced.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -78,6 +79,50 @@ def stream_backup(path: Path) -> None:
         sys.stdout.buffer.flush()
 
 
+def deploy_fence(path: Path, token: str, *, release: bool = False) -> None:
+    """Atomically stop dequeue at the database boundary while the repo updates.
+
+    The fence is owned by a random deploy token, not by a mutable paused flag.
+    A second deploy cannot steal it or unfreeze someone else\'s deployment.
+    """
+    if not re.fullmatch(r"[a-f0-9]{32}", token):
+        raise SystemExit("invalid deploy fence token")
+    if not path.exists():
+        raise SystemExit("queue DB is missing; cannot guarantee deployment drain")
+    conn = sqlite3.connect(str(path), timeout=15)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = conn.execute(
+                "SELECT value FROM queue_metadata WHERE key = \'deploy_fence\'"
+            ).fetchone()
+            if release:
+                if existing is None or existing[0] != token:
+                    raise RuntimeError("deploy fence token mismatch or already released")
+                conn.execute(
+                    "DELETE FROM queue_metadata WHERE key = \'deploy_fence\' AND value = ?", (token,)
+                )
+            else:
+                if existing is not None:
+                    raise RuntimeError("another deployment holds the queue fence")
+                queued, running = (
+                    int(conn.execute("SELECT COUNT(*) FROM queued_jobs WHERE state=?", (state,)).fetchone()[0])
+                    for state in ("queued", "running")
+                )
+                if queued or running:
+                    raise RuntimeError(f"queue is not idle (queued={queued}, running={running})")
+                conn.execute(
+                    "INSERT INTO queue_metadata (key, value) VALUES (\'deploy_fence\', ?)", (token,)
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    finally:
+        conn.close()
+    print("thawed" if release else "fenced")
+
+
 def main() -> None:
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     path = db_path()
@@ -88,8 +133,12 @@ def main() -> None:
         print(f"{queued} {running}")
     elif command == "backup":
         stream_backup(path)
+    elif command in ("freeze", "thaw"):
+        if len(sys.argv) != 3:
+            raise SystemExit("freeze/thaw requires a token")
+        deploy_fence(path, sys.argv[2], release=(command == "thaw"))
     else:
-        raise SystemExit("usage: deploy_db.py path|idle|backup")
+        raise SystemExit("usage: deploy_db.py path|idle|backup|freeze TOKEN|thaw TOKEN")
 
 
 if __name__ == "__main__":
