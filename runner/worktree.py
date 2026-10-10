@@ -370,8 +370,15 @@ async def _copy_validated_untracked_files(
             if source.parent.resolve() != source_root and source_root not in source.parent.resolve().parents:
                 raise RuntimeError(f"Refusing source outside worktree: {relative}")
             target.parent.mkdir(parents=True, exist_ok=True)
-            created_targets.append(target)
-            shutil.copy2(source, target)
+            # "xb" uses O_CREAT | O_EXCL: even when another process creates
+            # the leaf between validation and copy, never overwrite it.
+            # Record ownership only after *our* exclusive create succeeds.
+            with source.open("rb") as source_file:
+                with target.open("xb") as target_file:
+                    created_targets.append(target)
+                    shutil.copyfileobj(source_file, target_file)
+                    target_file.flush()
+                    os.fchmod(target_file.fileno(), source.stat().st_mode & 0o777)
             copied += 1
     except Exception:
         # Copy failure may happen after creating a partial destination.
