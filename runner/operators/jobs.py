@@ -273,7 +273,15 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
                     cwd=apply_root, stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 )
-                stdout, stderr = await proc.communicate(patch.encode("utf-8"))
+                try:
+                    stdout, stderr = await proc.communicate(patch.encode("utf-8"))
+                except asyncio.CancelledError:
+                    # Do not leave the git child mutating files after this task
+                    # has been cancelled and started compensating.
+                    if proc.returncode is None:
+                        proc.kill()
+                    await proc.wait()
+                    raise
                 return proc.returncode, truncate(
                     (stderr or stdout).decode("utf-8", errors="replace").strip(), 1200
                 )
@@ -321,7 +329,9 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
                     f"Applied {job_id}. Copied {copied} new files. Review main repo before committing.\n\n"
                     f"Workspace status:\n{safe_summary}"
                 )
-            except Exception as exc:
+            except (Exception, asyncio.CancelledError) as exc:
+                # CancelledError is not a normal Exception on Python 3.11.
+                # Compensate before propagating cancellation.
                 # The copier handles partial-copy failures itself. If a later
                 # step (e.g. DB close) fails, remove only completed files that
                 # still match what we copied; never delete concurrent edits.
@@ -345,6 +355,14 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
                         rollback = "tracked diff reversed" if code == 0 else f"FAILED ({detail})"
                     except Exception as rollback_error:
                         rollback = f"FAILED ({type(rollback_error).__name__})"
+                if isinstance(exc, asyncio.CancelledError):
+                    if rollback.startswith("FAILED") or not untracked_rollback_ok:
+                        import logging
+                        logging.getLogger(__name__).critical(
+                            "Apply cancelled with incomplete rollback for job %s; tracked=%s untracked_ok=%s",
+                            job_id, rollback, untracked_rollback_ok,
+                        )
+                    raise
                 if rollback.startswith("FAILED") or not untracked_rollback_ok:
                     return (
                         f"Apply failed for {job_id}; tracked rollback: {rollback}; "
