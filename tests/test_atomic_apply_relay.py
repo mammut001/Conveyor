@@ -124,7 +124,7 @@ class AtomicApplyTests(unittest.TestCase):
             result = asyncio.run(self.runner.apply_job("q-race", self.worktree))
         self.assertIn("Apply failed", result)
         self.assertEqual(target.read_bytes(), b"user file created during apply")
-        self.assertEqual((self.repo / "README.md").read_text(), "base\\n")
+        self.assertEqual((self.repo / "README.md").read_text(), "base\n")
         self.assertIsNotNone(self.store.active(self.session))
 
     def test_finalization_failure_rolls_back_both_file_types(self):
