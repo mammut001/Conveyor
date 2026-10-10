@@ -71,6 +71,14 @@ class TelegramNavigationTests(unittest.TestCase):
         self.assertTrue(all(call[1:] == ("100", "telegram", "42") for call in queue.calls))
         self.assertIn(("🔄 查看会话和任务", "tgn:sessions"), screen.buttons[-1])
 
+    def test_workers_counts_are_explicitly_scoped_to_recent_jobs(self):
+        # Older running jobs must not be misrepresented as global zero.
+        recent = [_job(f"old-{i}", "100") for i in range(40)]
+        older_running = _job("older-running", "100", state="running")
+        screen = workers_screen(self.settings, FakeQueue(recent + [older_running]), "42", "100")
+        self.assertIn("最近 40 条任务中", screen.text)
+        self.assertIn("运行中 0", screen.text)
+
     def test_sessions_list_and_job_detail_revalidate_identity(self):
         queue = FakeQueue([
             _job("mine-1", "100", state="completed"),
