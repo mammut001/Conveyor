@@ -54,11 +54,18 @@ def _owner_alive(pid: int | None, identity: str | None) -> bool | None:
     if not pid or not identity:
         return None
     current = _process_identity(pid)
-    if current is not None:
-        return current == identity
-    # On Linux, a missing /proc/<pid> after verifying the proc filesystem
-    # means the owner exited. Permission errors / unsupported OS remain unknown.
-    if Path("/proc/self/stat").exists() and not Path(f"/proc/{pid}").exists():
+    if current == identity:
+        return True
+    # A dead/recycled owner PID on the SAME boot does NOT prove its Codex
+    # subprocesses exited: orphaned children may still mutate worktrees or
+    # host files. Preserve RUNNING until an operator verifies/reconciles it.
+    # A different boot ID *does* prove every old process has stopped.
+    try:
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return None
+    recorded_boot = identity.partition(":")[0]
+    if boot_id and recorded_boot and boot_id != recorded_boot:
         return False
     return None
 
