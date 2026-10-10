@@ -87,6 +87,25 @@ class QueueRecoveryFenceTests(unittest.TestCase):
         self.assertFalse(_owner_alive(os.getpid(), "different-boot:9876"))
         self.assertIsNone(_owner_alive(None, None))
 
+    def test_same_boot_orphan_risk_remains_running_until_manual_reconciliation(self):
+        boot_id = Path("/proc/sys/kernel/random/boot_id")
+        if not boot_id.exists():
+            self.skipTest("Linux boot identity not available")
+        job = self._enqueue("owner crashed; child process may survive")
+        asyncio.run(self.first.dequeue(require_idle=True))
+        conn = self.first._get_conn()
+        try:
+            with conn:
+                conn.execute(
+                    "UPDATE queued_jobs SET owner_pid=?, owner_identity=? WHERE id=?",
+                    (999999999, boot_id.read_text().strip() + ":99", job.id),
+                )
+        finally:
+            conn.close()
+        second = JobQueue()
+        second.configure(self.settings, self.runner, recover=True)
+        self.assertEqual(asyncio.run(second.get_job(job.id)).state, QueueJobState.RUNNING)
+
     def test_atomic_deploy_fence_serializes_dequeue(self):
         path = self.first._db_path()
         token = "a" * 32
