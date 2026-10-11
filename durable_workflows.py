@@ -84,10 +84,23 @@ class WorkflowStore:
         root = Path(settings.codex_memory_root) / "state"
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.path = root / "workflows.sqlite3"
-        existed = self.path.exists()
+        # Create the database at 0600 *before* SQLite creates WAL/SHM sidecars.
+        # Refuse symlinks and pre-existing insecure files, rather than chmodding
+        # an arbitrary operator path after opening it.
+        try:
+            fd = os.open(
+                self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+        except FileExistsError:
+            pass
+        else:
+            os.close(fd)
+        if self.path.is_symlink() or (self.path.stat().st_mode & 0o077):
+            raise ValueError("workflow database path must be a private regular file")
+        if not self.path.is_file():
+            raise ValueError("workflow database path is not a regular file")
         self._initialize()
-        if not existed:
-            os.chmod(self.path, 0o600)
 
     def _db(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.path), timeout=10, isolation_level=None)
