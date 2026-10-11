@@ -23,6 +23,13 @@ const labels: Record<string, string> = {
   resume: 'Resume', cancel: 'Cancel workflow',
 }
 
+// getRandomValues also works on HTTP private-LAN clients where randomUUID may not.
+function requestId(): string {
+  const bytes = new Uint8Array(16)
+  window.crypto.getRandomValues(bytes)
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
 function nextStep(item: Workflow): Step | undefined {
   return item.steps.find(step => step.state !== 'completed')
 }
@@ -80,7 +87,7 @@ export function WorkflowPanel({ token }: Props) {
     setError('')
     try {
       const item = await request<Workflow>('/api/workflows', 'POST', {
-        title: planTitle, steps, request_id: crypto.randomUUID(),
+        title: planTitle, steps, request_id: requestId(),
       })
       await refresh()
       setSelectedId(item.id)
@@ -122,7 +129,7 @@ export function WorkflowPanel({ token }: Props) {
     setError('')
     try {
       await request<Workflow>(`/api/workflows/${encodeURIComponent(current.id)}/action`, 'POST', {
-        action, expected_revision: current.revision, request_id: crypto.randomUUID(),
+        action, expected_revision: current.revision, request_id: requestId(),
       })
       await refresh()
     } catch (err) {
