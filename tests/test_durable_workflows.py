@@ -40,6 +40,22 @@ class WorkflowTests(unittest.TestCase):
             WorkflowStore(disabled)
         self.assertFalse((self.root / "disabled").exists())
 
+    def test_store_rejects_unsafe_existing_database(self):
+        bad = self.root / "unsafe"
+        (bad / "state").mkdir(parents=True)
+        db_file = bad / "state" / "workflows.sqlite3"
+        db_file.write_bytes(b"")
+        db_file.chmod(0o644)
+        with self.assertRaises(ValueError):
+            WorkflowStore(SimpleNamespace(codex_memory_root=bad, workflows_enabled=True))
+        db_file.unlink()
+        source = self.root / "external.sqlite3"
+        source.write_bytes(b"do not modify")
+        db_file.symlink_to(source)
+        with self.assertRaises(ValueError):
+            WorkflowStore(SimpleNamespace(codex_memory_root=bad, workflows_enabled=True))
+        self.assertEqual(source.read_bytes(), b"do not modify")
+
     def test_create_persists_and_is_readable_across_instances(self):
         item = self.create()
         self.assertEqual(item["revision"], 0)
