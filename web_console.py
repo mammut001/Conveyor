@@ -393,7 +393,21 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         parts = self._segments(path)
         try:
-            if path == "/api/system/status":
+            if path == "/api/workflows" or (len(parts) == 3 and parts[:2] == ["api", "workflows"]):
+                settings = self.server.control.settings
+                if not getattr(settings, "workflows_enabled", False):
+                    self._json(HTTPStatus.CONFLICT, {"error": "workflows are disabled"})
+                    return
+                from durable_workflows import WorkflowNotFound, WorkflowStore
+                store = WorkflowStore(settings)
+                if path == "/api/workflows":
+                    self._json(HTTPStatus.OK, {"items": store.list()})
+                else:
+                    try:
+                        self._json(HTTPStatus.OK, store.get(parts[2]))
+                    except WorkflowNotFound:
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            elif path == "/api/system/status":
                 self._json(HTTPStatus.OK, self.server.control.system_status())
             elif path == "/api/config/provider":
                 self._json(HTTPStatus.OK, self.server.control.provider_config())
@@ -795,6 +809,37 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if body is None:
             return
         try:
+            if parsed.path == "/api/workflows" or (
+                len(parts) == 4 and parts[:2] == ["api", "workflows"] and parts[3] == "action"
+            ):
+                settings = self.server.control.settings
+                if not getattr(settings, "workflows_enabled", False):
+                    self._json(HTTPStatus.CONFLICT, {"error": "workflows are disabled"})
+                    return
+                from durable_workflows import WorkflowConflict, WorkflowNotFound, WorkflowStore
+                store = WorkflowStore(settings)
+                try:
+                    if parsed.path == "/api/workflows":
+                        result = store.create(
+                            title=body.get("title"), steps=body.get("steps"),
+                            request_id=body.get("request_id"),
+                        )
+                        self._json(HTTPStatus.CREATED, result)
+                    else:
+                        result = store.transition(
+                            parts[2], action=body.get("action"),
+                            expected_revision=body.get("expected_revision"),
+                            request_id=body.get("request_id"),
+                        )
+                        self._json(HTTPStatus.OK, result)
+                except WorkflowNotFound:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                except WorkflowConflict as exc:
+                    self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                except ValueError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+
             if parsed.path == "/api/memory":
                 settings = self._memory_settings()
                 if settings is None:
