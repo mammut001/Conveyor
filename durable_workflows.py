@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
+from typing import Iterator
 import os
 import re
 import secrets
@@ -94,8 +96,17 @@ class WorkflowStore:
         connection.execute("PRAGMA busy_timeout=10000")
         return connection
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        db = self._db()
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
     def _initialize(self) -> None:
-        with self._db() as db:
+        with self._connection() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS workflows (
@@ -138,7 +149,7 @@ class WorkflowStore:
     def create(self, *, title: str, steps: list[dict[str, str]], request_id: str) -> dict[str, Any]:
         rid = _key(request_id)
         title, normalized, digest = _plan(title, steps)
-        with self._db() as db:
+        with self._connection() as db:
             db.execute("BEGIN IMMEDIATE")
             prev = db.execute(
                 "SELECT id,plan_hash FROM workflows WHERE create_request_id=?", (rid,),
@@ -167,12 +178,12 @@ class WorkflowStore:
     def get(self, workflow_id: str) -> dict[str, Any]:
         if not isinstance(workflow_id, str) or not _ID_RE.fullmatch(workflow_id):
             raise WorkflowNotFound()
-        with self._db() as db:
+        with self._connection() as db:
             return self._view(db, workflow_id)
 
     def list(self, limit: int = 30) -> list[dict[str, Any]]:
         count = min(max(int(limit), 1), 50)
-        with self._db() as db:
+        with self._connection() as db:
             ids = db.execute(
                 "SELECT id FROM workflows ORDER BY updated_at DESC LIMIT ?", (count,),
             ).fetchall()
@@ -188,7 +199,7 @@ class WorkflowStore:
             raise ValueError("expected_revision must be a nonnegative integer")
         if not isinstance(workflow_id, str) or not _ID_RE.fullmatch(workflow_id):
             raise WorkflowNotFound()
-        with self._db() as db:
+        with self._connection() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT state,revision FROM workflows WHERE id=?", (workflow_id,)).fetchone()
             if row is None:
