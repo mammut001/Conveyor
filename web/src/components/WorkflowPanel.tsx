@@ -55,7 +55,7 @@ export function WorkflowPanel({ token }: Props) {
     })
     const json = await response.json().catch(() => ({})) as { error?: string }
     if (!response.ok) throw new Error(json.error || `Workflow request failed (${response.status})`)
-    return json as T
+    return json as unknown as T
   }, [token])
 
   const refresh = useCallback(async () => {
