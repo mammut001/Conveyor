@@ -117,7 +117,7 @@ class WorkflowTests(unittest.TestCase):
         item = self.transition(item, "begin", "try1-start")
         item = self.transition(item, "fail", "try1-fail")
         self.assertEqual(item["state"], "failed")
-        item = self.transition(item, "retry", "retry01")
+        item = self.transition(item, "retry", "retry-req01")
         item = self.transition(item, "cancel", "cancel01")
         self.assertEqual(item["state"], "cancelled")
         with self.assertRaises(WorkflowConflict):
