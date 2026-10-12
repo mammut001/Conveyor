@@ -124,7 +124,9 @@ def fetch_single_https_response(host: str, port: int, ip: str,
             raise TimeoutError("fetch_deadline_exceeded")
         return SingleHopResponse(response.status, headers, b"".join(chunks))
     except (OSError, http.client.HTTPException) as exc:
-        if expired.is_set():
+        # A socket timeout can win the race against the watchdog: return the
+        # same fixed deadline code instead of a platform-specific SSL error.
+        if expired.is_set() or time.monotonic() >= deadline:
             raise TimeoutError("fetch_deadline_exceeded") from exc
         raise
     finally:
