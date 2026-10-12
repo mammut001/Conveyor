@@ -26,6 +26,7 @@ async function installWorkflowApi(page: Page) {
     })
     if (path === '/api/sessions') return json({ sessions: [] })
     if (path === '/api/jobs') return json({ jobs: [] })
+    if (path === '/api/approvals') return json({ approvals: [] })
     if (path === '/api/nodes') return json({ nodes: [] })
     if (path === '/api/agents') return json({ enabled: false, agents: [] })
     if (path === '/api/computer/status') return json({ armed: false, arm_remaining_seconds: 0, screenshots: [] })
