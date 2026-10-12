@@ -10,8 +10,11 @@ DANGER = re.compile(
     r"cancel[-_/ ]?subscription|"
     r"付款|支付|结账|登录|账户删除|删除账户)", re.I)
 DESTRUCTIVE_ACTION = re.compile(
-    r"\b(?:delete|remove|deactivate|erase|unsubscribe|terminate|reset account)\b|"
+    r"\b(?:delete|remove|deactivate|erase|unsubscribe|terminate|reset|wipe|purge)\b|"
     r"删除|注销|退订", re.I)
+SENSITIVE_ACTION = re.compile(
+    r"\b(?:pay|charge|buy|donate|refund|purchase|checkout|authenticate|oauth|sso)\b|"
+    r"支付|付款|结账", re.I)
 
 
 def sensitive_form(url: str, form: dict) -> bool:
@@ -22,6 +25,6 @@ def sensitive_form(url: str, form: dict) -> bool:
         value = form.get(key, "")
         if not isinstance(value, str):
             return True
-        if DANGER.search(value) or (key != "target" and DESTRUCTIVE_ACTION.search(value)):
+        if DANGER.search(value) or DESTRUCTIVE_ACTION.search(value) or SENSITIVE_ACTION.search(value):
             return True
     return False
