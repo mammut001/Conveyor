@@ -99,7 +99,7 @@ class BrowserAgentTests(unittest.IsolatedAsyncioTestCase):
         self.port = FakePort()
         self.cfg = ChatConfig(base_url="http://unused", api_key="fake", model="fake")
 
-    def test_flags_require_both_and_no_network_allowlist_override(self):
+    async def test_flags_require_both_and_no_network_allowlist_override(self):
         for flags in ({}, {"CONVEYOR_REAL_BROWSER": "1"},
                       {"CONVEYOR_BROWSER_EXTERNAL_READONLY": "1"}):
             with patch.dict(os.environ, flags, clear=True):
@@ -110,9 +110,8 @@ class BrowserAgentTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("browser__read_webpage", names)
         with patch.dict(os.environ, {}, clear=True):
             # A direct call must still fail closed even if invoked outside chat.
-            import asyncio
-            result = asyncio.run(read_webpage_adapter(self.settings, URL,
-                                                      operator_id="operator-1"))
+            result = await read_webpage_adapter(self.settings, URL,
+                                                operator_id="operator-1")
             self.assertFalse(result.ok)
             self.assertIn("disabled", result.text)
 
