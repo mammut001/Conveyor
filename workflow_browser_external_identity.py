@@ -14,6 +14,7 @@ class ExternalPolicyDenied(RuntimeError):
 def canonical_host(host: str) -> str:
     if (not isinstance(host, str) or not host.isascii()
             or not HOST_RE.fullmatch(host) or host != host.lower()
+            or host == "localhost" or host.endswith(".localhost")
             or host.rsplit(".", 1)[-1].isdigit()):
         raise ExternalPolicyDenied("host_denied")
     try:
