@@ -17,8 +17,10 @@ from workflow_browser_g3_store import digest
 
 DANGER = re.compile(
     r"(checkout|purchase|payment|credit.card|billing|cvv|pay now|place order|shopping cart|"
-    r"log[ -]?in|sign[ -]?in|sign[ -]?up|password|account delet|"
-    r"close account|delete account|cancel subscription|"
+    r"log[-_/ ]?in|sign[-_/ ]?in|sign[-_/ ]?up|password|"
+    r"account[-_/ ]*(?:delet|clos|remov|deactiv)|"
+    r"(?:delet|clos|remov|deactiv)[-_/ ]*(?:my[-_/ ]*)?account|"
+    r"cancel[-_/ ]?subscription|"
     r"付款|支付|结账|登录|账户删除|删除账户)",re.I)
 SENSITIVE = re.compile(
     r"(password|passwd|secret|token|csrf|auth|session|cookie|"
@@ -56,11 +58,28 @@ FORM_JS = r"""(forms, args) => {
    if(name) found.add(name);
    const editable=type!=='hidden' && type!=='submit' && tag!=='button' && !c.disabled;
    if(editable) {
-     const s=getComputedStyle(c), rect=c.getBoundingClientRect();
-     const x=rect.left+rect.width/2,y=rect.top+rect.height/2;
-     if(s.visibility!=='visible'||s.display==='none'||Number(s.opacity)<.1 ||
-        rect.width<4||rect.height<4||x<0||y<0||x>=innerWidth||y>=innerHeight ||
-        !(c===document.elementFromPoint(x,y)||c.contains(document.elementFromPoint(x,y))))
+     const rect=c.getBoundingClientRect();
+     let opacity=1, clipped=false;
+     for(let el=c;el&&el.nodeType===1;el=el.parentElement) {
+       const st=getComputedStyle(el);
+       opacity*=Number(st.opacity);
+       if(st.display==='none'||st.visibility!=='visible'||st.clipPath!=='none')
+         clipped=true;
+       if(el!==c && (['hidden','clip','scroll','auto'].includes(st.overflowX) ||
+                     ['hidden','clip','scroll','auto'].includes(st.overflowY))) {
+         const pr=el.getBoundingClientRect();
+         if(rect.left<pr.left||rect.right>pr.right||rect.top<pr.top||rect.bottom>pr.bottom)
+           clipped=true;
+       }
+     }
+     const points=[[.5,.5],[.2,.2],[.8,.2],[.2,.8],[.8,.8]];
+     const hits=points.every(([u,v])=>{
+       const x=rect.left+rect.width*u,y=rect.top+rect.height*v;
+       if(x<0||y<0||x>=innerWidth||y>=innerHeight) return false;
+       const hit=document.elementFromPoint(x,y);
+       return hit===c||c.contains(hit);
+     });
+     if(clipped||opacity<.1||rect.width<4||rect.height<4||!hits)
        return {error:'g3_invisible_control_denied'};
    }
    if(Object.prototype.hasOwnProperty.call(changed,name)) {
