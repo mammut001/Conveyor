@@ -89,6 +89,10 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
     """Single policy used for both schema exposure and execution."""
     if spec is None or name.startswith("desktop."):
         return False
+    if name == "browser.prepare_submit":
+        from workflow_browser_g3 import enabled as g3_enabled
+        if not g3_enabled():
+            return False
     if name == "browser.browse_site":
         from workflow_browser_g2 import enabled as g2_enabled
         if not g2_enabled():
