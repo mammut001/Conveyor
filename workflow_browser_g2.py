@@ -10,6 +10,7 @@ import time
 from urllib.parse import urlsplit, parse_qsl, urlencode
 from workflow_browser_external import ExternalReadOnlyBrowser, UntrustedPageText
 from workflow_browser_external_identity import ExternalPolicyDenied, canonical_url
+from workflow_browser_g2_visible_text import VISIBLE_LINK_TEXT_JS
 
 MAX_ACTIONS = 8
 FIELD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,39}\Z")
@@ -109,9 +110,11 @@ LINKS_JS = r"""(nodes) => nodes.map((a,i) => {
    const hit=document.elementFromPoint(x0+(x1-x0)*u,y0+(y1-y0)*v);
    return hit && hit.closest('a')===a;
  });
- return {index:i,text:(a.innerText||'').trim().slice(0,100),
+ return {index:i,text:visibleLinkText(a),
    href:a.href,rel:a.rel,ok:!clipped && opacity>=.1 && goodSize && hits};
 }).filter(a=>a.ok && a.text)"""
+# Only rendered text is used for display and exact follow_link matching.
+LINKS_JS = "(nodes) => { " + VISIBLE_LINK_TEXT_JS + "; return (" + LINKS_JS + ")(nodes); }"
 FORMS_JS = r"""(nodes) => nodes.map((f,index)=>{
  const controls=[...f.querySelectorAll('input,textarea,select,button')];
  const matches=controls.filter(c=>c.tagName==='INPUT' && c.type==='search');

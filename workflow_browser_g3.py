@@ -14,6 +14,7 @@ from workflow_browser_g2 import G2Browser, enabled as g2_enabled
 from workflow_browser_external_identity import ExternalPolicyDenied, canonical_url
 from personal_tools.browser_read import _requested_url
 from workflow_browser_g3_store import digest
+from browser_g3_form_policy import sensitive_form
 
 DANGER = re.compile(
     r"(checkout|purchase|payment|credit.card|billing|cvv|pay now|place order|shopping cart|"
@@ -108,7 +109,14 @@ FORM_JS = r"""(forms, args) => {
     (f.getAttribute('accept-charset')||'').toLowerCase().replace(/[-_]/g,'')!==''
     && (f.getAttribute('accept-charset')||'').toLowerCase().replace(/[-_]/g,'')!=='utf8')
    return {error:'g3_form_encoding_denied'};
- return {method,target,controls:out,fields:pairs,attrs};
+ const scope=f.closest('section,article') || f.parentElement;
+ const headings=[...(scope ? scope.querySelectorAll('h1,h2,h3,h4,legend') : [])];
+ const preceding=headings.filter(h => Boolean(h.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING));
+ const heading=(f.querySelector('legend')?.innerText ||
+   preceding[preceding.length-1]?.innerText || '').trim().slice(0,160);
+ const submit_label=[...f.querySelectorAll('button,input[type="submit"]')]
+   .map(c => (c.innerText || c.value || '').trim()).join(' ').slice(0,160);
+ return {method,target,controls:out,fields:pairs,attrs,heading,submit_label};
 }"""
 
 def enabled():
@@ -155,13 +163,12 @@ class G3Browser(G2Browser):
             raise ExternalPolicyDenied("session_already_used")
         await self._visit(url)
         await self._guard()
-        body=await self._page.locator("body").inner_text(timeout=2000)
-        if DANGER.search(url+" "+body[:8192]):
-            raise ExternalPolicyDenied("g3_sensitive_page_denied")
         result=await self._page.locator("form").evaluate_all(FORM_JS,[index,fields])
         if not isinstance(result,dict) or "error" in result:
             raise ExternalPolicyDenied(result.get("error","g3_snapshot_denied")
                                        if isinstance(result,dict) else "g3_snapshot_denied")
+        if sensitive_form(url, result):
+            raise ExternalPolicyDenied("g3_sensitive_page_denied")
         target=result["target"]; method=result["method"]
         # Never allow query, fragment, other scheme/origin or non-canonical target.
         host,port,path,origin=_requested_url(target)
