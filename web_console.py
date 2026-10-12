@@ -162,6 +162,18 @@ class WebConsoleServer(ThreadingHTTPServer):
         self._active_routine_runs: set[int] = set()
         self._hook_last_accepted: dict[str, float] = {}
         self._rate_limit_lock = threading.Lock()
+        # Lazily initialize workflow schemas once per server, not on each UI poll.
+        # Individual store operations still open per-request SQLite connections.
+        self._workflow_store_lock = threading.Lock()
+        self._workflow_store: Any | None = None
+
+    def workflow_store(self) -> Any:
+        with self._workflow_store_lock:
+            if self._workflow_store is None:
+                from durable_workflows import WorkflowStore
+                self._workflow_store = WorkflowStore(self.control.settings)
+            return self._workflow_store
+
 
     def screen_for(self, agent_id: str) -> LiveScreen | None:
         """The screen an agent's Computer tab shows; None for an unknown agent.
@@ -398,8 +410,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if not getattr(settings, "workflows_enabled", False):
                     self._json(HTTPStatus.CONFLICT, {"error": "workflows are disabled"})
                     return
-                from durable_workflows import WorkflowNotFound, WorkflowStore
-                store = WorkflowStore(settings)
+                from durable_workflows import WorkflowNotFound
+                store = self.server.workflow_store()
                 if path == "/api/workflows":
                     self._json(HTTPStatus.OK, {"items": store.list()})
                 else:
@@ -816,8 +828,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if not getattr(settings, "workflows_enabled", False):
                     self._json(HTTPStatus.CONFLICT, {"error": "workflows are disabled"})
                     return
-                from durable_workflows import WorkflowConflict, WorkflowNotFound, WorkflowStore
-                store = WorkflowStore(settings)
+                from durable_workflows import WorkflowConflict, WorkflowNotFound
+                store = self.server.workflow_store()
                 try:
                     if parsed.path == "/api/workflows":
                         result = store.create(
