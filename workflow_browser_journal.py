@@ -46,6 +46,13 @@ class BrowserAttemptJournal:
                     after_page TEXT NOT NULL,
                     PRIMARY KEY (plan_id, ordinal)
                 );
+                CREATE TABLE IF NOT EXISTS browser_workflow_bindings (
+                    plan_id TEXT PRIMARY KEY,
+                    workflow_id TEXT NOT NULL,
+                    step_ordinal INTEGER NOT NULL,
+                    plan_digest TEXT NOT NULL,
+                    UNIQUE(workflow_id, step_ordinal)
+                );
             """)
 
     @contextmanager
@@ -58,6 +65,25 @@ class BrowserAttemptJournal:
                 yield db
         finally:
             db.close()
+
+    def bind_workflow(self, plan_id: str, workflow_id: str,
+                      step_ordinal: int, plan_digest: str) -> None:
+        """Permanently bind an immutable plan to one workflow/step in SQLite."""
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT plan_id,workflow_id,step_ordinal,plan_digest FROM browser_workflow_bindings "
+                "WHERE plan_id=? OR (workflow_id=? AND step_ordinal=?)",
+                (plan_id, workflow_id, step_ordinal),
+            ).fetchone()
+            if row is not None:
+                if tuple(row) != (plan_id, workflow_id, step_ordinal, plan_digest):
+                    raise JournalConflict("plan is already bound to a different checkpoint")
+                return
+            db.execute(
+                "INSERT INTO browser_workflow_bindings VALUES (?,?,?,?)",
+                (plan_id, workflow_id, step_ordinal, plan_digest),
+            )
 
     def state(self, plan_id: str, ordinal: int) -> dict | None:
         with self._db() as db:
