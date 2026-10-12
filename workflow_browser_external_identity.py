@@ -48,7 +48,12 @@ def resolve_public_ipv4(host: str, port: int) -> str:
         ips = {ipaddress.ip_address(a[4][0]) for a in addresses}
     except (OSError, ValueError, IndexError) as exc:
         raise ExternalPolicyDenied("dns_resolution_denied") from exc
-    if not ips or not all(ip.is_global for ip in ips):
+    if not ips or not all(
+            ip.is_global and not ip.is_multicast and not ip.is_reserved
+            and not ip.is_unspecified and not ip.is_loopback
+            and not ip.is_link_local and not ip.is_private
+            and ip != ipaddress.IPv4Address("255.255.255.255")
+            for ip in ips):
         raise ExternalPolicyDenied("dns_private_address_denied")
     ipv4 = sorted(str(ip) for ip in ips if isinstance(ip, ipaddress.IPv4Address))
     if not ipv4:
