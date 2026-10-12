@@ -43,7 +43,7 @@ class Handler(BaseHTTPRequestHandler):
             self.server.gets.append(self.path)
             body=self.server.html
         self.send_response(200)
-        self.send_header("Content-Type","text/html")
+        self.send_header("Content-Type","text/html; charset=utf-8")
         self.send_header("Content-Length",str(len(body.encode())))
         self.end_headers()
         self.wfile.write(body.encode())
