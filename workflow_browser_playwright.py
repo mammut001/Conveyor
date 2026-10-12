@@ -6,6 +6,7 @@ checked-in fixture bytes. Never expose this port to arbitrary workflow input.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -14,6 +15,7 @@ from workflow_browser_contract import BrowserAction
 
 FIXTURE_ROOT = Path(__file__).resolve().parent / "tests" / "fixtures" / "browser_portal"
 ALLOWED_FILES = frozenset({"welcome.html", "details.html", "review.html"})
+_LOG = logging.getLogger(__name__)
 
 
 class BrowserPolicyError(Exception):
@@ -58,6 +60,7 @@ class LocalPlaywrightBrowser:
         self._context = None
         self._tab = None
         self._violated = False
+        self._denial_reason: str | None = None
         self.invocations = 0
 
     def __enter__(self) -> "LocalPlaywrightBrowser":
@@ -72,7 +75,24 @@ class LocalPlaywrightBrowser:
                 accept_downloads=False, service_workers="block",
                 permissions=[], java_script_enabled=True,
             )
+            # Install interception before creating ANY page, including WebSockets.
+            # Old Playwright versions cannot enforce this policy and fail closed.
+            if not hasattr(self._context, "route_web_socket"):
+                raise BrowserPolicyError("websocket_routing_unavailable")
             self._context.route("**/*", self._route)
+            self._context.route_web_socket("**/*", self._deny_websocket)
+            self._context.add_init_script("""
+                (() => {
+                  const original = Element.prototype.attachShadow;
+                  Element.prototype.attachShadow = function(init) {
+                    if (!init || init.mode !== 'open') {
+                      window.__conveyorClosedShadowAttempt = true;
+                      throw new Error('shadow_mode_denied');
+                    }
+                    return original.call(this, init);
+                  };
+                })();
+            """)
             self._tab = self._context.new_page()
             self._tab.on("popup", self._reject_popup)
             self._tab.on("download", self._reject_download)
@@ -98,13 +118,25 @@ class LocalPlaywrightBrowser:
                     self._pw.stop()
         self._context = self._browser = self._pw = self._tab = None
 
-    def _reject_popup(self, page) -> None:
+    def _mark_denial(self, code: str) -> None:
+        """Only fixed policy codes are emitted, never URL/DOM/form content."""
         self._violated = True
+        if self._denial_reason is None:
+            self._denial_reason = code
+            _LOG.warning("local browser policy denied action: %s", code)
+
+    def _reject_popup(self, page) -> None:
+        self._mark_denial("popup_denied")
         page.close()
 
     def _reject_download(self, download) -> None:
-        self._violated = True
+        self._mark_denial("download_denied")
         download.cancel()
+
+    def _deny_websocket(self, websocket) -> None:
+        # No connect() means the handshake is never forwarded to a server.
+        self._mark_denial("websocket_denied")
+        websocket.close(code=1008)
 
     def _file_for_url(self, url: str) -> Path:
         try:
@@ -129,26 +161,68 @@ class LocalPlaywrightBrowser:
             if response.status != 200 or hashlib.sha256(response.body()).digest() != hashlib.sha256(expected).digest():
                 raise BrowserPolicyError("fixture_content_mismatch")
             route.fulfill(status=200, body=expected, content_type="text/html")
-        except Exception:
-            self._violated = True
+        except BrowserPolicyError as exc:
+            self._mark_denial(str(exc))
             route.abort()
+        except Exception:
+            self._mark_denial("request_filter_error")
+            route.abort()
+
+    def _inspect_dom(self) -> str | None:
+        """Walk light DOM and all observable open shadow roots.
+
+        Closed roots cannot be audited; attachShadow is guarded at page init
+        and unknown custom-element hosts are rejected conservatively.
+        """
+        return self._tab.evaluate("""() => {
+            if (window.__conveyorClosedShadowAttempt)
+                return 'closed_shadow_denied';
+            const walk = (root) => {
+                for (const el of root.querySelectorAll('*')) {
+                    if (el.hasAttribute('contenteditable') || el.isContentEditable)
+                        return 'sensitive_or_submit_dom_denied';
+                    if (el instanceof HTMLInputElement) {
+                        if (['password', 'file', 'submit', 'image'].includes(el.type))
+                            return 'sensitive_or_submit_dom_denied';
+                    }
+                    if (el instanceof HTMLButtonElement && el.type === 'submit')
+                        return 'sensitive_or_submit_dom_denied';
+                    if (el instanceof HTMLFormElement && el.hasAttribute('action'))
+                        return 'sensitive_or_submit_dom_denied';
+                    const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+                    if (ac.split(/\\s+/).some(token => token.startsWith('cc-') ||
+                        ['current-password', 'new-password', 'one-time-code'].includes(token)))
+                        return 'sensitive_autocomplete_denied';
+                    if (el.localName.includes('-') && !el.shadowRoot)
+                        return 'uninspectable_shadow_host';
+                    if (el.shadowRoot) {
+                        const result = walk(el.shadowRoot);
+                        if (result) return result;
+                    }
+                }
+                return null;
+            };
+            return walk(document);
+        }""")
 
     def _check(self) -> None:
         if not real_browser_enabled():
             raise BrowserPolicyError("real_browser_disabled")
-        if self._violated or self._tab is None or len(self._tab.frames) != 1:
+        if self._violated:
+            raise BrowserPolicyError(self._denial_reason or "browser_policy_violation")
+        if self._tab is None or len(self._tab.frames) != 1:
+            self._mark_denial("browser_policy_violation")
             raise BrowserPolicyError("browser_policy_violation")
         if self._tab.url != "about:blank":
-            self._file_for_url(self._tab.url)
-            # Defence in depth: DOM changes must never expose credentials,
-            # upload controls or a final-submit surface.
-            forbidden = self._tab.locator(
-                'input[type="password"], input[type="file"], '
-                'input[type="submit"], button[type="submit"], '
-                '[contenteditable="true"], form[action]'
-            )
-            if forbidden.count():
-                raise BrowserPolicyError("sensitive_or_submit_dom_denied")
+            try:
+                self._file_for_url(self._tab.url)
+            except BrowserPolicyError as exc:
+                self._mark_denial(str(exc))
+                raise
+            denied = self._inspect_dom()
+            if denied is not None:
+                self._mark_denial(denied)
+                raise BrowserPolicyError(denied)
 
     @property
     def page(self) -> str:
