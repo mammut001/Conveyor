@@ -46,6 +46,7 @@ class PolicyTests(unittest.TestCase):
             "https://approved.fixture.test/../secret",
             "https://approved.fixture.test//safe",
             "https://äpproved.fixture.test/",
+            "https://preview.localhost/", "https://foo.bar.localhost/",
         ):
             with self.subTest(url=value), self.assertRaises(ExternalPolicyDenied):
                 canonical_url(value)
@@ -108,9 +109,16 @@ class PolicyTests(unittest.TestCase):
             for flags in ({}, {"CONVEYOR_REAL_BROWSER": "1"},
                           {"CONVEYOR_BROWSER_EXTERNAL_READONLY": "1"}):
                 with patch.dict(os.environ, flags, clear=True):
-                    with self.assertRaisesRegex(ExternalPolicyDenied, "disabled"):
-                        ExternalReadOnlyBrowser(
-                            task="job", ledger=ledger, audit=EgressAudit(db))
+                    with patch.object(EgressAudit, "record") as audit_record:
+                        # Disabled must reject before dereferencing optional audit
+                        # or touching approval/egress storage.
+                        with self.assertRaisesRegex(ExternalPolicyDenied, "disabled"):
+                            ExternalReadOnlyBrowser(
+                                task="job", ledger=ledger, audit=None)
+                        with self.assertRaisesRegex(ExternalPolicyDenied, "disabled"):
+                            ExternalReadOnlyBrowser(
+                                task="job", ledger=ledger, audit=EgressAudit(db))
+                        audit_record.assert_not_called()
 
 
     def test_default_kill_file_uses_private_approval_directory(self):
@@ -129,6 +137,45 @@ class PolicyTests(unittest.TestCase):
                              Path(directory) / "browser-external.kill")
             self.assertEqual(browser.kill_file.parent.stat().st_mode & 0o077, 0)
             self.assertNotEqual(browser.kill_file.parent, Path("/tmp"))
+
+
+
+class StartupDenialAuditTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_approval_is_audited_without_host(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"CONVEYOR_REAL_BROWSER": "1",
+                         "CONVEYOR_BROWSER_EXTERNAL_READONLY": "1"}, clear=True
+        ):
+            path = str(Path(directory) / "audit.db")
+            ledger, audit = ApprovalLedger(path), EgressAudit(path)
+            with self.assertRaisesRegex(ExternalPolicyDenied, "approval_missing"):
+                ExternalReadOnlyBrowser(task="missing", ledger=ledger, audit=audit)
+            with sqlite3.connect(path) as conn:
+                record = conn.execute(
+                    "SELECT domain, outcome, reason FROM browser_external_egress"
+                ).fetchone()
+            self.assertEqual(record, ("unknown", "denied", "approval_missing"))
+
+    async def test_dns_refusal_is_audited_before_browser_launch(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"CONVEYOR_REAL_BROWSER": "1",
+                         "CONVEYOR_BROWSER_EXTERNAL_READONLY": "1"}, clear=True
+        ):
+            path = str(Path(directory) / "audit.db")
+            ledger, audit = ApprovalLedger(path), EgressAudit(path)
+            ledger.approve(
+                task="dns_refusal", host=HOST, approver="operator",
+                expires_at=time.time() + 300, safe_paths=("/safe",))
+            with patch("workflow_browser_external.resolve_public_ipv4",
+                       side_effect=ExternalPolicyDenied("dns_private_address_denied")):
+                browser = ExternalReadOnlyBrowser(task="dns_refusal", ledger=ledger, audit=audit)
+                with self.assertRaisesRegex(ExternalPolicyDenied, "dns_private_address_denied"):
+                    await browser.__aenter__()
+            with sqlite3.connect(path) as conn:
+                record = conn.execute(
+                    "SELECT domain, outcome, reason FROM browser_external_egress"
+                ).fetchone()
+            self.assertEqual(record, (HOST, "denied", "dns_private_address_denied"))
 
 
 class _ConnectionCounter(socketserver.BaseRequestHandler):
@@ -207,7 +254,9 @@ class OfflineChromiumTests(unittest.IsolatedAsyncioTestCase):
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         # Trust only this test cert for the separate pinned HTTPS transport.
         # Chromium itself still uses the original fixture test override.
-        os.environ["SSL_CERT_FILE"] = str(cert)
+        self.ssl_cert_env = patch.dict(os.environ, {"SSL_CERT_FILE": str(cert)})
+        self.ssl_cert_env.start()
+        self.addCleanup(self.ssl_cert_env.stop)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         self.server.requests = []
         self.server.redirects = {

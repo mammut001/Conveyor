@@ -31,11 +31,18 @@ class ExternalReadOnlyBrowser:
 
     def __init__(self, *, task: str, ledger: ApprovalLedger,
                  audit: EgressAudit, kill_file: str | Path | None = None):
+        # A disabled feature must fail before accessing the approval ledger
+        # or egress audit (the caller may not have initialized either).
         if os.getenv("CONVEYOR_REAL_BROWSER") != "1" or \
                 os.getenv("CONVEYOR_BROWSER_EXTERNAL_READONLY") != "1":
             raise ExternalPolicyDenied("external_browser_disabled")
         self.task, self.ledger, self.audit = task, ledger, audit
-        self.site = ledger.require(task)
+        try:
+            self.site = ledger.require(task)
+        except ExternalPolicyDenied as exc:
+            # No approved hostname exists yet: use a fixed placeholder.
+            self.audit.record(task, "unknown", "GET", "denied", str(exc))
+            raise
         # Approval database directory is privately owned (0700).
         # No shared predictable kill file under /tmp by default.
         self.kill_file = Path(
@@ -69,12 +76,16 @@ class ExternalReadOnlyBrowser:
                     storage_state={"cookies": [], "origins": []})
 
     async def __aenter__(self):
-        self._ensure_live()
-        # Blocking DNS lookup only once, before Chromium is started.
-        pinned_ip = await asyncio.to_thread(
-            resolve_public_ipv4, self.site.host, self.site.port)
-        self._ensure_live()
-        self._pinned_ip = pinned_ip
+        try:
+            self._ensure_live()
+            # Blocking DNS lookup only once, before Chromium is started.
+            pinned_ip = await asyncio.to_thread(
+                resolve_public_ipv4, self.site.host, self.site.port)
+            self._ensure_live()
+            self._pinned_ip = pinned_ip
+        except ExternalPolicyDenied as exc:
+            self._audit("GET", "denied", str(exc))
+            raise
         from playwright.async_api import async_playwright
         try:
             self._pw = await async_playwright().start()

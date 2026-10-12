@@ -1,9 +1,7 @@
-"""One-hop HTTPS transport with literal public-IP pinning and strict TLS SNI.
+"""Single-hop HTTPS transport: pinned public IP, strict response framing, 20s deadline.
 
-Chromium's host-resolver-rules do not apply to Playwright Route.fetch(), which
-uses its own request stack and could independently re-resolve/rebind the host.
-For G1 we fetch a single response over an explicitly pinned TCP socket then
-fulfill the browser route only after inspecting it. Redirects are NEVER followed.
+No redirects, cookies, decompression, or follow-up connections. Hostname
+remains the TLS SNI and certificate verification name, not the pinned IP.
 """
 from __future__ import annotations
 
@@ -11,6 +9,12 @@ from dataclasses import dataclass
 import http.client
 import socket
 import ssl
+import threading
+import time
+
+
+MAX_BODY = 1024 * 1024
+FETCH_DEADLINE_SECONDS = 20
 
 
 @dataclass(frozen=True)
@@ -25,7 +29,6 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         super().__init__(hostname, port=port, timeout=8,
                          context=ssl.create_default_context())
         self._pinned_ip = ip
-        # The hostname remains unchanged for certificate validation and SNI.
         self._create_connection = self._dial_pinned_ip
 
     def _dial_pinned_ip(self, _address, timeout, source_address=None):
@@ -34,25 +37,104 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
             source_address=source_address)
 
 
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("fetch_deadline_exceeded")
+    return min(8.0, remaining)
+
+
 def fetch_single_https_response(host: str, port: int, ip: str,
                                 path: str, method: str = "GET") -> SingleHopResponse:
-    """Only a single reviewed path; no cookies, auth, redirects or disk state."""
+    """One bounded TLS exchange, rejecting ambiguous framing before fulfillment."""
     if method not in ("GET", "HEAD"):
         raise ValueError("unsafe_http_method")
+    deadline = time.monotonic() + FETCH_DEADLINE_SECONDS
     conn = _PinnedHTTPSConnection(host, port, ip)
+    expired = threading.Event()
+    # HTTPResponse may take ownership of its socket after getresponse(),
+    # clearing conn.sock even though the response is still reading from it.
+    # Hold a separate reference so the watchdog can forcibly terminate it.
+    active_socket = [None]
+
+    def stop_socket() -> None:
+        expired.set()
+        sock = active_socket[0] or conn.sock
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            finally:
+                sock.close()
+
+    watchdog = threading.Timer(FETCH_DEADLINE_SECONDS, stop_socket)
+    watchdog.daemon = True
+    watchdog.start()
     try:
         authority = host if port == 443 else f"{host}:{port}"
+        conn.timeout = _remaining(deadline)
         conn.request(method, path, headers={
             "Host": authority, "Accept": "text/html, text/plain;q=0.9",
-            "Connection": "close",
+            "Accept-Encoding": "identity", "Connection": "close",
         })
+        if conn.sock:
+            active_socket[0] = conn.sock
+            conn.sock.settimeout(_remaining(deadline))
         response = conn.getresponse()
         headers = tuple((name.lower(), value) for name, value
                         in response.getheaders())
-        # Always bound the response size, including untrusted oversized bodies.
-        body = response.read(1024 * 1024 + 1)
-        if len(body) > 1024 * 1024:
-            raise ValueError("oversized_response")
-        return SingleHopResponse(response.status, headers, body)
+        encoding = [v.strip().lower() for k, v in headers if k == "content-encoding"]
+        if encoding and encoding != ["identity"]:
+            raise ValueError("encoded_response_denied")
+        declared = [v.strip() for k, v in headers if k == "content-length"]
+        if len(declared) > 1:
+            raise ValueError("ambiguous_content_length")
+        content_length = None
+        if declared:
+            if not declared[0].isascii() or not declared[0].isdigit():
+                raise ValueError("invalid_content_length")
+            content_length = int(declared[0])
+            if content_length > MAX_BODY:
+                raise ValueError("oversized_response")
+            if any(k == "transfer-encoding" for k, _ in headers):
+                raise ValueError("ambiguous_framing")
+        chunks = []
+        size = 0
+        if method != "HEAD":
+            while True:
+                # read1 performs at most one underlying socket read. Unlike
+                # read(n), it does not wait for all n bytes: each slow-drip
+                # byte returns to us for a monotonic deadline check.
+                _remaining(deadline)
+                # getresponse() may close conn.sock for HTTP/1.0 or
+                # Connection: close while response.fp still owns the stream.
+                # Never touch the saved socket here: it can be closed even
+                # though response.read1() is valid. The socket timeout was
+                # set before getresponse; watchdog bounds blocking reads.
+                chunk = response.read1(min(4096, MAX_BODY + 1 - size))
+                _remaining(deadline)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_BODY:
+                    raise ValueError("oversized_response")
+                chunks.append(chunk)
+            if content_length is not None and size != content_length:
+                raise ValueError("content_length_mismatch")
+        _remaining(deadline)
+        if expired.is_set():
+            raise TimeoutError("fetch_deadline_exceeded")
+        return SingleHopResponse(response.status, headers, b"".join(chunks))
+    except (OSError, http.client.HTTPException) as exc:
+        # Normalize socket/SSL read timeouts even if the 8-second socket
+        # limit wins the race against the overall monotonic deadline.
+        if (isinstance(exc, (TimeoutError, socket.timeout))
+                or (isinstance(exc, ssl.SSLError)
+                    and "timed out" in str(exc).lower())
+                or expired.is_set() or time.monotonic() >= deadline):
+            raise TimeoutError("fetch_deadline_exceeded") from exc
+        raise
     finally:
+        watchdog.cancel()
         conn.close()

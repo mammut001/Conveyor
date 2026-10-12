@@ -189,6 +189,8 @@ def _test_registry() -> CheckResult:
             "skill.list",
             "skill.load",
             "skill.create",
+            # G1 external browsing (opt-in)
+            "browser.read_webpage",
             # Always-On Teammate & Sentry
             "teammate",
             "teammate.status",
