@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Local mock review</title>
+<link rel="icon" href="data:,"></head>
+<body data-fixture-page="review">
+<h1 data-marker="mock_review">Read-only review (no submit)</h1>
+<p>Purpose: <span data-result-field="purpose"></span></p>
+<p>Funding: <span data-result-field="funding"></span></p>
+<script>
+for (const name of ["purpose", "funding"]) {
+  document.querySelector('[data-result-field="' + name + '"]').textContent =
+    sessionStorage.getItem(name) || "";
+}
+</script>
+</body></html>

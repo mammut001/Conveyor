@@ -1,225 +1,182 @@
-# P0: Browser Executor Bridge — architecture and safe fixture contract
+# P0: Durable Workflow x local-only Playwright Browser Executor
 
-Status: **Ready / mocked execution only**. This PR is independent of, and
-will need integration with, [PR #107](https://github.com/mammut001/Conveyor/pull/107).
-It must not be deployed as a production browser executor.
+Status: **Opt-in local fixture only — NOT a production browser executor**.
+Built on Durable WorkflowStore (#107) and the mock browser bridge (#108).
+No WebRuntime provider registration, production browser automation, or automatic
+deployment has been added. The original in-memory FixtureBrowser remains the
+default and runs without Playwright installed.
 
-**Limits:** Execution is mock-only via the in-memory `FixtureBrowser`; no real
-browser provider (Playwright/CDP) is connected. Only the `visitor600_mock`
-fixture is allowed. External sites, file uploads, sensitive data, and final
-submits are disabled.
+## Capabilities and hard limits
 
-## Why this is separate from Durable Workflows
+- `workflow_browser_contract.py` continues to accept **only** the immutable
+  `visitor600_mock` action plan: `open`, `click`, `fill`,
+  `assert_field` and `assert_text`; no raw URLs, selectors, JavaScript,
+  uploads, payments, final submit, credentials or free-form instructions.
+  Synthetic fields are exactly `purpose` and `funding` with bounded ASCII
+  values; the only click control is the navigation-only `next` link.
+- `workflow_browser_bridge.py` provides `execute_fixture_plan` (mock-only)
+  and `execute_workflow_browser_plan` (explicitly bound to a running
+  WorkflowStore browser step). No automatic workflow `begin` or human approval.
+- `workflow_browser_playwright.py` adds `LocalPlaywrightBrowser`, with the
+  same `page`, `apply`, `readback` and `field_matches` port as the mock.
+  It can be constructed **only with `CONVEYOR_REAL_BROWSER=1`**;
+  the flag is also checked before each action. Importing the repo or running
+  mock/unit suites requires no Playwright installation (lazy import).
+- Real network traffic is restricted to `http://127.0.0.1:PORT` or
+  `http://localhost:PORT` with an explicit port and *exactly* the three
+  checked-in HTML files under `tests/fixtures/browser_portal/`. All requests
+  are intercepted, require GET, reject redirects, and compare the response
+  body SHA-256 with the corresponding bundled fixture file before allowing it
+  to render. A random local HTTP service, an altered page, any other path or
+  external site is rejected. Requests are not sent to external origins;
+  blocked attempts poison the context. No background third-party resources,
+  service workers, downloads or popups are permitted.
+- WebSocket handshakes are intercepted using Playwright context
+  `route_web_socket` (requires Playwright >=1.48) and always closed without
+  connecting. Missing WebSocket interception support fails initialization.
+  Denied network requests preserve only fixed reason codes in warning logs
+  and the SQLite journal's `denial_reason` column (including migration of
+  older action journals), never the attempted URL, DOM or private inputs.
+- DOM checks also deny implicit form submit buttons, image submits,
+  `contenteditable`, credential/payment/OTP autocomplete hints, and password
+  controls in open shadow roots. Closed shadow attachment is blocked at document
+  initialization; unknown custom-element shadow hosts are refused.
+- Browser DOM readback validates the expected page marker and, for synthetic
+  text inputs, the *actual DOM value* (also on the read-only review page).
+  Only an attested link to the next local fixture page may be clicked.
+  Sensitive input types, contenteditable, file inputs and submit controls
+  are refused even when detected in the DOM. No real credentials or applicant
+  information should be entered or stored in this fixture.
 
-Conveyor currently has:
+**This is real Chromium DOM interaction, but only with a bundled toy portal,
+not an external browser provider or a general-purpose browser agent.**
 
-- `personal_tools.web_runtime.WebRuntime`: Search / Fetch are implemented,
-  Browser / Agent are **unconfigured provider slots**.
-- `desktop_computer_loop.py` + `desktop_x11.py`: GUI observation/click/type
-  through existing Computer Use, respecting Human Takeover leases.
-- `human_takeover.py`: exclusive waiting/human-active lease per desktop scope.
-- PR #107: an opt-in persistent checklist and CAS state machine, **not** an
-  executor. Its `confirm_human` is ledger confirmation, not payment approval.
+## Enabling the isolated fixture runner
 
-The missing piece is a typed, reviewable, replay-aware bridge between a
-workflow's **declared action** and a browser provider's **observed effect**.
+Optional development-only installation:
 
-Do not simply turn a workflow label into a free-form browser instruction.
-
-## Current implementation
-
-This PR provides three independent Python modules:
-
-- `workflow_browser_contract.py`: parse a small immutable, allowlisted
-  `visitor600_mock` plan into typed actions and a canonical SHA-256 digest.
-- `workflow_browser_bridge.py`: executes only `FixtureBrowser` (in-memory;
-  **no networking, no Playwright/CDP, no X11, no browser launch**) and checks
-  read-back after each operation.
-- `workflow_browser_journal.py`: private SQLite two-phase action journal,
-  `dispatched` -> `verified`. A `dispatched` action left by a crash is
-  **uncertain** and will not be replayed automatically.
-
-This is executable architecture, **not** an enabled Web endpoint or
-`WebRuntime` provider. No configuration setting enables it against a real
-browser. No production services are modified.
-
-## Minimal deterministic fixture
-
-The only allowed fixture ID is `visitor600_mock`, with pages:
-
-```text
-idle --open/welcome--> welcome --click/next--> details --click/next--> review
-                                              |
-                                              +-- fill purpose/funding
-                                              +-- assert_field read-back
+```bash
+python -m pip install playwright
+python -m playwright install chromium
 ```
 
-Allowed operations are `open`, `click`, `fill`, `assert_field`,
-`assert_text`. Allowed fields are synthetic `purpose` and `funding`,
-with short ASCII placeholder values. `click` can only target the known
-`next` navigation control. There is **no submit, file upload, payment,
-script evaluation, arbitrary selector, URL, login, credential or network
-request capability**.
-
-Example fixture plan (synthetic data only):
+Serve **only the bundled** `tests/fixtures/browser_portal` folder bound to
+127.0.0.1 on a randomly assigned free port (the integration test does this).
+Then launch a private Playwright context and use the approved local origin:
 
 ```python
-from workflow_browser_bridge import FixtureBrowser, execute_fixture_plan
-from workflow_browser_journal import BrowserAttemptJournal
+import os
 from pathlib import Path
+from types import SimpleNamespace
+from durable_workflows import WorkflowStore
+from workflow_browser_bridge import execute_workflow_browser_plan
+from workflow_browser_journal import BrowserAttemptJournal
+from workflow_browser_playwright import LocalPlaywrightBrowser
 
-plan = {
-    "plan_id": "mock_visitor600_001",
-    "fixture": "visitor600_mock",
-    "actions": [
-        {"kind": "open", "on_page": "idle", "target": "welcome",
-         "expect_page": "welcome"},
-        {"kind": "click", "on_page": "welcome", "target": "next",
-         "expect_page": "details"},
-        {"kind": "fill", "on_page": "details", "target": "purpose",
-         "expect_page": "details", "value": "tourism"},
-        {"kind": "assert_field", "on_page": "details", "target": "purpose",
-         "expect_page": "details", "value": "tourism"},
-        {"kind": "click", "on_page": "details", "target": "next",
-         "expect_page": "review"},
-        {"kind": "assert_text", "on_page": "review", "target": "mock_review",
-         "expect_page": "review"},
-    ],
-}
-browser = FixtureBrowser()
-journal = BrowserAttemptJournal(Path("/tmp/private-test-workflow-0700/attempts.sqlite3"))
-result = execute_fixture_plan(plan, browser=browser, journal=journal)
-assert result.status == "verified"
+os.environ["CONVEYOR_REAL_BROWSER"] = "1"
+# origin must be the loopback host/port of the running bundled fixture server.
+origin = "http://127.0.0.1:PORT"
+store = WorkflowStore(SimpleNamespace(
+    codex_memory_root=Path("/private/workflow-sandbox"),
+    workflows_enabled=True,
+))
+# Operator creates a browser-only workflow and explicitly calls
+# store.transition(..., action="begin", expected_revision=0, ...).
+# The caller supplies that workflow id and a contract-valid visitor600_mock
+# plan; see tests/test_workflow_browser_playwright.py for an executable example.
+with LocalPlaywrightBrowser(origin=origin) as browser:
+    result = execute_workflow_browser_plan(
+        plan, browser=browser,
+        journal=BrowserAttemptJournal(
+            Path("/private/workflow-sandbox/browser/action-journal.sqlite3")),
+        workflow_store=store, workflow_id=workflow_id,
+    )
 ```
 
-The journal contains **only** plan/action digest and index, safe enum names,
-pre/post page IDs and status. No form values, raw DOM, screenshots, passwords,
-headers or cookies are stored in the journal. Private journal dir is 0700,
-database is 0600, and dangerous symlink/public-path use is refused.
+This example is intentionally schematic: replace `PORT`, `plan` and
+`workflow_id` with local fixture test values, not live site/account data.
+Use `TemporaryDirectory` for testing and keep storage private (0700 parent,
+0600 SQLite DB). The regular workflow ledger feature flag is separately
+required: `workflows_enabled=True` in the programmatic example; the Web
+setting `CONVEYOR_WORKFLOWS_ENABLED` remains default-off.
 
-## Execution and crash semantics
+## Journal / workflow crash recovery
 
 ```text
-validate immutable plan
-  |
-  v
-check current observed page
-  |
-  v
-BEGIN IMMEDIATE: reserve (plan_id, ordinal) as dispatched
-  |
-  v
-fixture driver applies one typed action
-  |
-  v
-read back page and field/assertion
-  |
-  v
-BEGIN IMMEDIATE: mark verified
-  |
-  v
-next action
+operator: WorkflowStore.create + begin (browser step must be running)
+       |
+       v
+bind plan ID + digest to workflow ID and step ordinal (SQLite)
+       |
+       v
+check WorkflowStore active, not paused/human-owned
+       |
+       v
+journal.dispatch (plan ID, ordinal, digest): dispatched
+       |
+       v
+allowlisted Playwright action --> actual page/field DOM readback
+       |
+       v
+journal.verify: verified  --> next action
+       |
+       v
+after every action verified: WorkflowStore.complete (CAS revision)
 ```
 
-If a process dies between dispatch and verification, the page **might** have
-changed. On restart, execution stops with `reconciliation_required`, even if
-the current page looks right. Never assume a click / payment / upload is
-idempotent because a Python request ID is.
+- Journal stores **only** enum action type, page identifiers, plan digest,
+  dispatch/verification status and immutable workflow/step binding, never
+  fields, URL text, screenshots, cookies, raw DOM or secrets.
+- Verified journal actions form the authoritative contiguous replay prefix.
+  Re-opening the journal and workflow store after a crash resumes *from the
+  prefix* only when the **same active browser context** still shows the
+  expected page and synthetic fields. Verified actions are not re-clicked.
+  When the browser context was lost or DOM drifted, return
+  `reconciliation_required`: no automatic back-navigation or restore.
+- A `dispatched` but unverified action is *uncertain*. Even if it looks
+  successful, do not replay or auto-mark verified. Human review is required.
+  A crash after final journal verification but before WorkflowStore CAS
+  completion safely reuses the verified journal prefix and advances the
+  ledger when the live DOM still verifies.
+- If a `request_human` workflow checkpoint has been set,
+  `waiting_for_human` **blocks further automation**. `confirm_human`
+  moves a running browser step to `needs_reverification` rather than
+  completing it. Explicit `resume_verified` is required before any remaining
+  work resumes. State is rechecked before and after every action; a concurrent
+  takeover between dispatch and verification leaves an uncertain journal
+  entry, never silently skips the step.
+- WorkflowStore and the browser action journal remain **separate databases,
+  not one atomic transaction**. This design errs on requiring operator
+  reconciliation over guessing whether an external side effect happened.
+  Do not use it for production browser activity.
 
-Verified actions are skipped on same-session replay, provided the latest
-checkpoint's observable page/field still matches. If a browser context
-is lost, return `page_state_drifted` and require reconciliation, **not**
-automatic navigation through already-executed steps.
-
-This is safer than retry-on-exception, but it is not yet a complete recovery
-system: operators cannot mark an uncertain action reconciled through this PR,
-and journal/workflow state are not yet one atomic unit.
-
-## Production architecture to implement next (separate reviewed PR)
-
-```text
-Web Workbench: planned step, operator scope + user consent
-      |
-      v
-PR #107 WorkflowStore: CAS revision + current step + immutable plan ID
-      |
-      v
-Browser Executor Bridge: validate typed bounded action
-      |
-      +--> Policy: domain/URL egress, data classification, allowed actions,
-      |            per-agent session + site ownership
-      +--> Lease: verify correct HumanTakeoverStore scope and GUI exclusivity
-      +--> Journal: prepare -> dispatch -> observe -> reconcile/verify
-      |
-      +--> BrowserPort: Playwright/CDP isolated context (preferred)
-      |          or scoped X11 Computer Use fallback
-      |
-      v
-Observed page/DOM read-back + evidence digest (no PII)
-      |
-      v
-WorkflowStore commits checkpoint only after verified result
-```
-
-Required invariants before permitting *any* real portal action:
-
-1. **No free-form labels as commands.** A schema-approved action plan must be
-   created and reviewed separately from natural-language prompts.
-2. **Explicit real-website origin policy.** Validate scheme, host, redirects,
-   DNS/rebinding/SSRF, navigation/frame boundaries and downloads *at the
-   transport layer*, not only at initial URL entry. This mock PR has no URLs.
-3. **Sensitive input is human-owned.** Passwords, MFA, CAPTCHA, credit cards,
-   final legal declarations and submission must remain behind explicit
-   handoff/approval. Suspend screenshots and automated actions during takeover.
-4. **Resume after handoff without skipping work.** A human interruption in the
-   middle of a browser step must resume/reconcile its remaining substeps
-   rather than marking the whole workflow step complete (see review on #107).
-5. **Separate irreversible-action consent.** A ledger's `confirm_human` is
-   not authorization for upload, payment, sending, or final submit. Require
-   an independent approval transaction and verified receipt / server state.
-6. **At-least-once recovery is unsafe for side effects.** Keep the persistent
-   dispatch-before-act journal; uncertain outcomes require read-only
-   reconciliation, never blind retry.
-7. **Secure document vault before real applicants.** No PII in checklist
-   labels, journal, LLM logs, screenshots, unencrypted browser artifacts or
-   arbitrary worktrees; per-owner ACL, retention and delete policy required.
-8. **Bound resource use.** Per-page and total timeouts, action limits, rate
-   limits, stop/cancel propagation and exclusive browser context ownership.
-9. **Test the original X11 policy too.** Do not duplicate or weaken app
-   allowlists, `takeover_blocks_automation`, task claim fencing, or
-   `WebRuntime` provider capability gating.
-
-## Dependency and staging order
-
-1. Merge/review PR #107 **after** its local and isolated VPS tests; first
-   correct the mid-step human-resume and ambiguous frontend retry semantics.
-2. Merge this PR independently (it adds only unused mock modules/tests/docs)
-   after CI and architecture review. Neither PR automatically enables a live
-   browser executor or should trigger VPS deployment.
-3. Integrate typed plan IDs and the journal with PR #107's CAS database and
-   explicit operator identity, with a mock HTTP/UI journey.
-4. Introduce a *separate opt-in* Playwright/CDP fixture adapter constrained
-   to a private test site and real browser read-back; retain the mock runner
-   as a no-network test.
-5. Add scoped X11 fallback + Human Takeover resumed cursor and a secure document
-   workspace. Real ImmiAccount remains out of scope until explicit review.
-
-## Test command
+## Tests
 
 ```bash
 python -m unittest tests.test_workflow_browser_bridge -v
-python -m unittest discover -s tests -v
-make smoke
+python -m unittest tests.test_workflow_browser_playwright -v
+python -m unittest tests.test_durable_workflows -v
+# Also pytest-compatible if pytest is installed:
+pytest -q tests/test_workflow_browser_playwright.py
 ```
 
-## Test intent
+Without Playwright installed, all mock/workflow tests run, and the real
+Chromium tests are skipped in local unit-only mode. If the Python package is
+installed but the Chromium executable is missing, local integration cases also
+skip. The dedicated GitHub Actions `Local fixture Chromium (required)` job
+installs Playwright and Chromium with OS dependencies and sets both
+`CONVEYOR_REAL_BROWSER=1` and `CONVEYOR_REQUIRE_REAL_BROWSER=1`, turning
+missing Python Playwright or Chromium into a failing check instead of a skip.
+The real tests start a `ThreadingHTTPServer` bound to 127.0.0.1 on an
+ephemeral port, serve only the bundled static fixture, and verify live DOM
+readback, journal states, crash uncertainty and network/field denial.
 
-The fixture tests verify successful multistep navigation, readback, immutable
-plan hash binding, all-complete replay without reissuing actions, interrupted
-click ambiguity, restart from a committed prefix, page drift on lost context,
-SQLite filesystem permissions, and rejection of real URLs, credential fields,
-script execution, upload, payment and submit actions.
+## Production gates that remain out of scope
 
-**Success means the architecture is ready for an explicitly gated fixture
-Playwright adapter. It does NOT mean Conveyor can safely fill or submit a real
-visa application.**
+This PR is **not** suitable for actual web portals, immigration applications,
+credentials, MFA or payments. Before proposing any real-site adapter: separate
+review for origin/DNS/SSRF and redirect defenses; explicit user/site consent
+and credential vault; Human Takeover lease exclusivity; real-site evidence
+and reconciliation; sandboxing and isolation; persistent browser session
+ownership; deadlines/rate-limits; irreversible-action approval; independent
+final submit verification; and X11/WebRuntime privilege boundaries.

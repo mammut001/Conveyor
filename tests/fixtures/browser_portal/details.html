@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Local mock details</title>
+<link rel="icon" href="data:,"></head>
+<body data-fixture-page="details">
+<h1>Fixture details — synthetic values only</h1>
+<label>Purpose <input type="text" name="purpose" autocomplete="off" maxlength="32"></label>
+<label>Funding <input type="text" name="funding" autocomplete="off" maxlength="32"></label>
+<a href="/review.html" data-action="next">Continue to read-only review</a>
+<script>
+for (const name of ["purpose", "funding"]) {
+  const el = document.querySelector('input[name="' + name + '"]');
+  el.value = sessionStorage.getItem(name) || "";
+  el.addEventListener("input", () => sessionStorage.setItem(name, el.value));
+}
+</script>
+</body></html>
