@@ -112,6 +112,12 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
 
+    def do_POST(self):
+        with self.server.lock:
+            self.server.requests.append(("POST " + self.path, None, None))
+        self.send_response(405)
+        self.end_headers()
+
     def do_GET(self):
         with self.server.lock:
             self.server.requests.append((self.path, self.headers.get("Cookie"),
