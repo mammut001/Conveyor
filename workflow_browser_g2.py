@@ -150,7 +150,12 @@ class G2Browser(ExternalReadOnlyBrowser):
             nodes = [tree["root"]]
             while nodes:
                 node = nodes.pop()
-                if node.get("shadowRoots") or node.get("contentDocument"):
+                # Native <input>/<details> contain browser-owned user-agent
+                # shadow trees. Reject *author* roots (open or closed), not UA.
+                shadows = node.get("shadowRoots", [])
+                if node.get("contentDocument") or any(
+                        root.get("shadowRootType") != "user-agent"
+                        for root in shadows):
                     raise ExternalPolicyDenied("g2_hidden_realm_denied")
                 attrs = node.get("attributes", [])
                 if len(attrs) % 2:
