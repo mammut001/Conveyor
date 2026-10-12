@@ -35,9 +35,11 @@ class ExternalReadOnlyBrowser:
             raise ExternalPolicyDenied("external_browser_disabled")
         self.task, self.ledger, self.audit = task, ledger, audit
         self.site = ledger.require(task)
-        self.kill_file = Path(kill_file or os.getenv(
-            "CONVEYOR_BROWSER_EXTERNAL_KILL_FILE",
-            "/tmp/conveyor-browser-external.kill"))
+        # Approval database directory is privately owned (0700).
+        # No shared predictable kill file under /tmp by default.
+        self.kill_file = Path(
+            kill_file or os.getenv("CONVEYOR_BROWSER_EXTERNAL_KILL_FILE")
+            or (ledger.path.parent / "browser-external.kill"))
         self._pw = self._browser = self._context = self._page = None
         self._watcher = None
         self._violation = None
@@ -93,7 +95,6 @@ class ExternalReadOnlyBrowser:
             self._page = await self._context.new_page()
             self._page.on("popup", lambda page: self._poison("popup_denied"))
             self._page.on("download", lambda dl: self._poison("download_denied"))
-            self._page.on("response", self._response)
             self._watcher = asyncio.create_task(self._watch_revocation())
             self._ensure_live()
             return self
@@ -138,10 +139,28 @@ class ExternalReadOnlyBrowser:
             self._requests += 1
             if self._requests > 4:
                 raise ExternalPolicyDenied("request_budget_denied")
-            # Must commit the audit row BEFORE allowing any network operation.
+            # Never hand Chromium a 3xx it could follow before interception.
+            # Audit the outbound request BEFORE doing any network operation.
             self._audit(method, "allowed", "approved_readonly")
             self._ensure_live()
-            await route.continue_()
+            response = await route.fetch(max_redirects=0, timeout=8000)
+            self._ensure_live()
+            response_headers = await response.all_headers()
+            if 300 <= response.status < 400:
+                raise ExternalPolicyDenied("redirect_denied")
+            if "set-cookie" in response_headers:
+                raise ExternalPolicyDenied("cookies_denied")
+            if "attachment" in response_headers.get("content-disposition", "").lower():
+                raise ExternalPolicyDenied("download_denied")
+            if response.status in (401, 407):
+                raise ExternalPolicyDenied("auth_denied")
+            if response.status != 200:
+                raise ExternalPolicyDenied("navigation_denied")
+            if not response_headers.get("content-type", "").lower().startswith(
+                    ("text/html", "text/plain")):
+                raise ExternalPolicyDenied("nontext_response_denied")
+            self._ensure_live()
+            await route.fulfill(response=response)
             return
         except ExternalPolicyDenied as exc:
             reason = str(exc)
@@ -166,27 +185,6 @@ class ExternalReadOnlyBrowser:
         except Exception:
             self._poison("audit_storage_unavailable")
         # No connect_to_server() means no WebSocket handshake.
-
-    async def _response(self, response):
-        headers = await response.all_headers()
-        if 300 <= response.status < 400:
-            reason = "redirect_denied"
-        elif "set-cookie" in headers:
-            reason = "cookies_denied"
-        elif "attachment" in headers.get("content-disposition", "").lower():
-            reason = "download_denied"
-        elif response.status == 401 or response.status == 407:
-            reason = "auth_denied"
-        elif not headers.get("content-type", "").lower().startswith(
-                ("text/html", "text/plain")):
-            reason = "nontext_response_denied"
-        else:
-            return
-        self._poison(reason)
-        try:
-            self._audit(response.request.method, "denied", reason)
-        except Exception:
-            self._poison("audit_storage_unavailable")
 
     async def _watch_revocation(self):
         while not self._closed:
