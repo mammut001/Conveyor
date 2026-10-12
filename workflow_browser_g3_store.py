@@ -38,7 +38,9 @@ def save(settings, *, operator_id, url, form_ref, fields, preview, screenshot):
         raise ExternalPolicyDenied("g3_screenshot_too_large")
     with closing(_conn(settings)) as conn:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute("""INSERT INTO browser_g3_submits VALUES
+        conn.execute("""INSERT INTO browser_g3_submits
+            (token,operator_key,source_url,form_ref,fields_json,preview_json,
+             preview_hash,screenshot,created_at,expires_at,state) VALUES
             (?,?,?,?,?,?,?,?,?,?,?)""", (
             token, _operator_key(operator_id), url, form_ref,
             json.dumps(fields, sort_keys=True), json.dumps(preview, sort_keys=True),
