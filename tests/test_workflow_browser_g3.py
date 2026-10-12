@@ -182,7 +182,8 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
     async def test_telegram_origin_receives_screenshot_and_actionable_card(self):
         from unittest.mock import AsyncMock
         self.settings.approval_relay_enabled=True
-        with patch("browser_g3_telegram.send_preview",return_value=True) as image, \
+        with patch.dict(os.environ,{"CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT":"1"}), \
+             patch("browser_g3_telegram.send_preview",return_value=True) as image, \
              patch("approval_relay.publish",return_value=True), \
              patch("browser_g3_notifications.origin_telegram",new_callable=AsyncMock,
                    return_value=True) as card:
@@ -192,6 +193,28 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         image.assert_called_once()
         card.assert_awaited_once()
         self.assertEqual(self.server.posts,[])
+
+    async def test_footer_sign_in_link_does_not_block_public_feedback(self):
+        self.server.html=FORM.replace("</body>",
+            '<footer><a href="/login">Sign in</a></footer></body>')
+        pending=await self.prepare()
+        token=json.loads(pending.arg)["token"]
+        self.assertIsNotNone(review(self.settings,token))
+        self.assertEqual(self.server.posts,[])
+
+    async def test_kill_switch_refuses_before_dispatch(self):
+        from browser_g3_kill import path
+        pending=await self.prepare()
+        token=json.loads(pending.arg)["token"]
+        kill_file=path(self.settings)
+        kill_file.touch()
+        try:
+            outcome=await approve_and_submit(self.settings,pending.arg,operator_id="person")
+            self.assertIn("kill",outcome.lower())
+            self.assertEqual(state(self.settings,token),"pending")
+            self.assertEqual(self.server.posts,[])
+        finally:
+            kill_file.unlink()
 
     async def test_opacity_hidden_ancestor_and_clipped_fields_denied(self):
         for html in (FORM.replace("<label>Topic", '<label style="opacity:0">Topic'),
