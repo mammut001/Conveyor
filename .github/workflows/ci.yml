@@ -114,4 +114,4 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Run real Chromium fixture integration tests (no skips)
-        run: python -m pytest tests/test_workflow_browser_playwright.py::LocalFixturePlaywrightTests tests/test_workflow_browser_guards.py -q -v --timeout=20 --timeout-method=thread
+        run: python -m pytest tests/test_workflow_browser_playwright.py::LocalFixturePlaywrightTests tests/test_workflow_browser_guards.py tests/test_workflow_browser_external.py -q -v --timeout=20 --timeout-method=thread
