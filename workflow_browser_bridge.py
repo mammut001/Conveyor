@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from workflow_browser_contract import BrowserAction, BrowserPlan, parse_plan
-from workflow_browser_journal import BrowserAttemptJournal, JournalConflict
+from workflow_browser_journal import BrowserAttemptJournal, DENIAL_CODES, JournalConflict
 
 
 class FixtureOperationError(Exception):
@@ -163,11 +163,25 @@ def _execute_plan(raw_plan: Any, *, browser: Any, journal: BrowserAttemptJournal
         try:
             browser.apply(op)
             if not browser.readback(op):
-                return BridgeResult("reconciliation_required", completed, index, "readback_failed")
+                reason = getattr(browser, "_denial_reason", None)
+                if reason in DENIAL_CODES:
+                    journal.record_denial(plan.plan_id, index, plan.plan_digest, reason)
+                else:
+                    reason = "readback_failed"
+                return BridgeResult("reconciliation_required", completed, index, reason)
             if guard is not None and guard():
                 return BridgeResult("reconciliation_required", completed, index, "human_or_workflow_interruption")
             journal.verify(plan.plan_id, index, plan.plan_digest)
-        except Exception:
+        except Exception as exc:
+            # Only known fixed codes may cross the audit boundary. Unknown
+            # driver errors still require reconciliation without leaking text.
+            reason = getattr(browser, "_denial_reason", None)
+            if reason not in DENIAL_CODES:
+                from workflow_browser_playwright import BrowserPolicyError
+                reason = str(exc) if isinstance(exc, BrowserPolicyError) else None
+            if reason in DENIAL_CODES:
+                journal.record_denial(plan.plan_id, index, plan.plan_digest, reason)
+                return BridgeResult("reconciliation_required", completed, index, reason)
             return BridgeResult("reconciliation_required", completed, index, "outcome_unknown")
         completed += 1
     return BridgeResult("verified", completed, None, "fixture_checks_passed")
@@ -237,10 +251,9 @@ def execute_workflow_browser_plan(
     if denied:
         return BridgeResult("blocked", result.completed, None, denied)
 
-    current = workflow_store.get(workflow_id)
     try:
         workflow_store.transition(
-            workflow_id, action="complete", expected_revision=current["revision"],
+            workflow_id, action="complete", expected_revision=start_revision,
             request_id="browser-complete-" + plan.plan_digest[:32],
         )
     except WorkflowConflict:
