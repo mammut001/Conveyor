@@ -268,8 +268,11 @@ async def _invoke_tool(
         from personal_tools.long_term_memory import GROUP_REFUSAL
         await port.reply(msg, GROUP_REFUSAL)
         return
-    if tool_name == "browser.read_webpage":
-        from personal_tools.browser_read import approval_required
+    if tool_name in ("browser.read_webpage", "browser.browse_site"):
+        if tool_name == "browser.browse_site":
+            from personal_tools.browser_interact import approval_required
+        else:
+            from personal_tools.browser_read import approval_required
         try:
             needs_approval = approval_required(settings, arg, msg.operator_id)
         except Exception:
@@ -391,7 +394,7 @@ async def _request_confirmation(
         chat_id=msg.chat_id,
         channel=msg.channel,
     )
-    danger_label = ("external network access" if tool_name == "browser.read_webpage"
+    danger_label = ("external network access" if tool_name in ("browser.read_webpage", "browser.browse_site")
                     else _danger_label(tool_name, settings))
     source = "routine" if msg.chat_id.startswith("routine-") else "chat"
     try:
@@ -542,7 +545,11 @@ async def execute_confirmed(
         action="confirmed",
     )
     try:
-        if action.tool_name == "browser.read_webpage":
+        if action.tool_name == "browser.browse_site":
+            from personal_tools.browser_interact import approve_and_browse
+            result = await approve_and_browse(settings, action.arg,
+                                              operator_id=action.operator_id)
+        elif action.tool_name == "browser.read_webpage":
             from personal_tools.browser_read import approve_and_read
             result = await approve_and_read(settings, action.arg,
                                             operator_id=action.operator_id)
