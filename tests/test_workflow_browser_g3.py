@@ -130,6 +130,9 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.server.posts,[])
         token=json.loads(pending.arg)["token"]
         detail=review(self.settings,token)
+        from browser_g3_approval_gate import matches
+        self.assertTrue(matches(self.settings,pending.arg,detail["hash"]))
+        self.assertFalse(matches(self.settings,pending.arg,"0"*64))
         self.assertEqual(detail["preview"]["target"],self.url+"/submit")
         self.assertIn(["campaign","alpha"],detail["preview"]["fields"])
         self.assertIn(["topic","hello"],detail["preview"]["fields"])
@@ -176,6 +179,20 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state(self.settings,token),"needs_reconciliation")
         self.assertEqual(len(self.server.posts),1)
         self.assertIn("expired_or_used",await approve_and_submit(self.settings,pending.arg,operator_id="person"))
+    async def test_telegram_origin_receives_screenshot_and_actionable_card(self):
+        from unittest.mock import AsyncMock
+        self.settings.approval_relay_enabled=True
+        with patch("browser_g3_telegram.send_preview",return_value=True) as image, \
+             patch("approval_relay.publish",return_value=True), \
+             patch("browser_g3_notifications.origin_telegram",new_callable=AsyncMock,
+                   return_value=True) as card:
+            result=await prepare(self.settings,self.arg,operator_id="person",
+                                 channel="telegram",chat_id="telegram-chat")
+        self.assertTrue(result.ok,str(result))
+        image.assert_called_once()
+        card.assert_awaited_once()
+        self.assertEqual(self.server.posts,[])
+
     async def test_opacity_hidden_ancestor_and_clipped_fields_denied(self):
         for html in (FORM.replace("<label>Topic", '<label style="opacity:0">Topic'),
                      FORM.replace("<label>Topic", '<label style="overflow:hidden;width:1px;height:1px;display:block">Topic')):
