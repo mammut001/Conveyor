@@ -7,7 +7,7 @@ function visibleLinkText(anchor) {
   let count = 0, node;
   while ((node = walk.nextNode()) && count++ < 200) {
     const raw = node.nodeValue || '';
-    if (!raw.trim()) { if (chunks.length) chunks.push(raw); continue; }
+    if (!raw) continue; // Whitespace nodes must pass the same visibility checks.
     let visible = true, opacity = 1;
     for (let el = node.parentElement; el && el.nodeType === 1; el = el.parentElement) {
       const style = getComputedStyle(el);
