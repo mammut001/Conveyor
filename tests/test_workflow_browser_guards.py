@@ -13,6 +13,7 @@ from workflow_browser_guards import (
     EXTRA_INIT_SCRIPT, inspect_cdp_dom, inspect_page_via_cdp,
 )
 from workflow_browser_contract import parse_plan
+from workflow_browser_journal import DENIAL_CODES
 from workflow_browser_playwright import (
     BrowserPolicyError, FIXTURE_ROOT, LocalPlaywrightBrowser,
 )
@@ -27,6 +28,10 @@ class CdpGuardUnitTests(unittest.TestCase):
         self.assertIn("__conveyorUnsafeDOMReason", EXTRA_INIT_SCRIPT)
         self.assertIn("worker_denied", EXTRA_INIT_SCRIPT)
         self.assertIn("document_write_denied", EXTRA_INIT_SCRIPT)
+
+    def test_new_denial_codes_are_journal_allowlisted(self):
+        self.assertTrue({"worker_denied", "document_write_denied",
+                         "cdp_dom_unavailable"}.issubset(DENIAL_CODES))
 
     def test_closed_shadow_root_sensitive_input_is_seen(self):
         root = {
@@ -138,7 +143,9 @@ class ChromiumGuardTests(unittest.TestCase):
         try:
             self.browser.__enter__()
         except Exception as exc:
-            if "Executable doesn't exist" in str(exc) and not required:
+            if "Executable doesn't exist" in str(exc):
+                if required:
+                    self.fail("Chromium executable missing in required-real-browser CI")
                 self.skipTest("Chromium executable not installed")
             raise
         self.addCleanup(self.browser.close)
@@ -190,16 +197,29 @@ class ChromiumGuardTests(unittest.TestCase):
         self._expect_sticky_denial("worker_denied")
 
     def test_service_worker_registration_denied_when_api_available(self):
-        available = self.browser._tab.evaluate("""() => {
-            if (!navigator.serviceWorker) return false;
-            try { navigator.serviceWorker.register('/sw.js'); }
+        # Playwright's service_workers="block" may install an own-property
+        # no-op register on navigator.serviceWorker, hiding the prototype
+        # override in EXTRA_INIT_SCRIPT. Assert the security invariant:
+        # no successful registration and no service worker in this context.
+        state = self.browser._tab.evaluate("""async () => {
+            if (!navigator.serviceWorker) return {available: false, count: 0};
+            try { await navigator.serviceWorker.register('/sw.js'); }
             catch (error) {}
-            return true;
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            return {available: true, count: registrations.length};
         }""")
-        if available:
+        self.assertEqual(state["count"], 0, "Service worker registered despite policy")
+        self.assertEqual(self.browser._context.service_workers, [],
+                         "Browser context started a service worker")
+        # If our script intercepted the call, its sticky worker denial must
+        # still be enforced. With Playwright's no-op override, no registration
+        # is the required outcome, without depending on the marker.
+        reason = self.browser._tab.evaluate(
+            "() => window.__conveyorUnsafeDOMReason || null"
+        )
+        if reason is not None:
+            self.assertEqual(reason, "worker_denied")
             self._expect_sticky_denial("worker_denied")
-        else:
-            self.skipTest("navigator.serviceWorker unavailable (context blocks service workers)")
 
     def test_document_write_cannot_create_declarative_closed_password_root(self):
         self.browser._tab.evaluate("""() => {
