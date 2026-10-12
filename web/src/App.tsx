@@ -7,6 +7,7 @@ import { SkillsPanel } from './components/SkillsPanel'
 import { WorkflowPanel } from './components/WorkflowPanel'
 import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
+import { BrowserApprovalsPanel } from './components/BrowserApprovalsPanel'
 import { TeammatePanel } from './components/TeammatePanel'
 import { LiveScreenPanel } from './components/LiveScreenPanel'
 import { AgentLibrary } from './components/AgentLibrary'
@@ -185,7 +186,7 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'skills' | 'workflows' | 'connectors' | 'teammate'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : window.location.hash === '#connectors' || window.location.pathname === '/connectors' ? 'connectors' : window.location.hash === '#teammate' || window.location.pathname === '/teammate' ? 'teammate' : 'tasks'))
+  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'browser' | 'skills' | 'workflows' | 'connectors' | 'teammate'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : window.location.hash === '#connectors' || window.location.pathname === '/connectors' ? 'connectors' : window.location.hash === '#teammate' || window.location.pathname === '/teammate' ? 'teammate' : 'tasks'))
   const [inboxUnread, setInboxUnread] = useState(0)
   const [approvalInboxCount, setApprovalInboxCount] = useState(0)
   const [chatDraft, setChatDraft] = useState('')
@@ -726,10 +727,10 @@ export default function App() {
         <div className="stream-header">
           <div>
             <p className="eyebrow">
-              {view === 'chat' ? (selectedAgent ? 'AGENT' : 'DIRECT CHAT TIER') : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'workflows' ? 'DURABLE WORKFLOWS' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · CODEX EXECUTION'}
+              {view === 'chat' ? (selectedAgent ? 'AGENT' : 'DIRECT CHAT TIER') : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'browser' ? 'EXTERNAL BROWSER MANAGEMENT' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'workflows' ? 'DURABLE WORKFLOWS' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · CODEX EXECUTION'}
             </p>
             <h2>
-              {view === 'chat' ? (selectedAgent?.name || 'Chat') : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'skills' ? 'Skills' : view === 'workflows' ? 'Workflows' : view === 'connectors' ? 'Connectors' : view === 'teammate' ? 'Teammate' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
+              {view === 'chat' ? (selectedAgent?.name || 'Chat') : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'browser' ? 'Browser sites' : view === 'skills' ? 'Skills' : view === 'workflows' ? 'Workflows' : view === 'connectors' ? 'Connectors' : view === 'teammate' ? 'Teammate' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -747,6 +748,7 @@ export default function App() {
                   Approvals{approvalInboxCount > 0 ? ` (${approvalInboxCount})` : ''}
                 </button>
               )}
+              <button type="button" className={view === 'browser' ? 'active' : ''} onClick={() => setView('browser')}>Browser sites</button>
               {(Boolean(system?.features?.skills) || view === 'skills') && (
                 <button type="button" className={view === 'skills' ? 'active' : ''} onClick={() => setView('skills')}>Skills</button>
               )}
@@ -772,6 +774,8 @@ export default function App() {
             }}
             onPendingCountChange={setApprovalInboxCountFresh}
           />
+        ) : view === 'browser' ? (
+          <BrowserApprovalsPanel token={token} />
         ) : view === 'skills' ? (
           <SkillsPanel
             token={token}
@@ -1097,6 +1101,8 @@ export default function App() {
                 <span>🧩 Durable Workflows</span>
               </button>
             )}
+            <button type="button" className={'mobile-sheet-item ' + (view === 'browser' ? 'active' : '')}
+              onClick={() => { setView('browser'); setMoreSheetOpen(false) }}>🌐 Browser sites</button>
             {(Boolean(system?.features?.mcp) || view === 'connectors') && (
               <button
                 type="button"
