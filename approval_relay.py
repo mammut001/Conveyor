@@ -764,6 +764,10 @@ def decide(
                     expired_now = False
                     outcome = ""
                 if outcome != "expired":
+                    if approve and row["tool_name"].startswith("browser."):
+                        from browser_g3_kill import refusal
+                        if refusal(settings, row["tool_name"]):
+                            return "kill_switch_on"
                     cur = conn.execute(
                         """
                         UPDATE relay_approvals
