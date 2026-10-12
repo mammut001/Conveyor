@@ -393,7 +393,7 @@ export function WorkflowPanel({ token }: Props) {
             })}
           </ol>
 
-          {step && (
+          {step && !['completed', 'cancelled'].includes(current.state) && (
             <div className={`workflow-next workflow-next--${current.state}`}>
               <span className="workflow-eyebrow">
                 {current.state === 'needs_reverification' ? 'REVIEW BEFORE CONTINUING'
@@ -423,6 +423,13 @@ export function WorkflowPanel({ token }: Props) {
             <div className="workflow-finished" role="status">
               <strong>All checklist steps completed</strong>
               <p>This confirms your recorded steps, not an external submission or successful visa application.</p>
+            </div>
+          )}
+
+          {current.state === 'cancelled' && (
+            <div className="workflow-finished workflow-finished--cancelled" role="status">
+              <strong>Workflow cancelled</strong>
+              <p>Recorded progress is preserved. Cancellation does not reverse any work outside Conveyor.</p>
             </div>
           )}
 
