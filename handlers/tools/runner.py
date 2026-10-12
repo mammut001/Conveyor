@@ -268,6 +268,16 @@ async def _invoke_tool(
         from personal_tools.long_term_memory import GROUP_REFUSAL
         await port.reply(msg, GROUP_REFUSAL)
         return
+    if tool_name == "browser.read_webpage":
+        from personal_tools.browser_read import approval_required
+        try:
+            needs_approval = approval_required(settings, arg, msg.operator_id)
+        except Exception:
+            await port.reply(msg, "browser denied: invalid_or_unavailable")
+            return
+        if needs_approval:
+            await _request_confirmation(msg, port, settings, tool_name, arg)
+            return
     if _requires_confirmation(tool_name, settings):
         await _request_confirmation(msg, port, settings, tool_name, arg)
         return
@@ -530,14 +540,19 @@ async def execute_confirmed(
         action="confirmed",
     )
     try:
-        result = await run_tool(
-            settings,
-            action.tool_name,
-            action.arg,
-            operator_id=action.operator_id,
-            channel=action.channel,
-            chat_id=action.chat_id,
-        )
+        if action.tool_name == "browser.read_webpage":
+            from personal_tools.browser_read import approve_and_read
+            result = await approve_and_read(settings, action.arg,
+                                            operator_id=action.operator_id)
+        else:
+            result = await run_tool(
+                settings,
+                action.tool_name,
+                action.arg,
+                operator_id=action.operator_id,
+                channel=action.channel,
+                chat_id=action.chat_id,
+            )
     except Exception as exc:
         audit_tool_event(
             settings,
