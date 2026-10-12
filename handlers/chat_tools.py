@@ -158,6 +158,12 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
 
         danger_str = spec.danger.value if hasattr(spec.danger, "value") else str(spec.danger)
         desc = f"{spec.summary} [{danger_str}]"
+        if name == "browser.browse_site":
+            desc += (' Pass arg as JSON OBJECT STRING, not plain URL. Example: '
+                     '{"url":"https://public.example.org/start",'
+                     '"actions":[{"type":"follow_link","text":"Next"},'
+                     '{"type":"search_get","path":"/search","field":"q",'
+                     '"query":"public records"}]}. Each action type and GET query target needs operator approval.')
         schema = {
             "type": "function",
             "function": {
@@ -168,10 +174,12 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
                     "properties": {
                         "arg": {
                             "type": "string",
-                            "description": "Free-text argument for the tool, same as the chat command argument; empty if none",
+                            "description": ("JSON object encoded as a string containing url and actions; "
+                                            "never raw selectors or JS" if name == "browser.browse_site"
+                                            else "Free-text argument for the tool; empty if none"),
                         },
                     },
-                    "required": [],
+                    "required": ["arg"] if name == "browser.browse_site" else [],
                 },
             },
         }
