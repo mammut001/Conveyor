@@ -94,7 +94,7 @@ jobs:
   real-browser:
     name: Local fixture Chromium (required)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
       CONVEYOR_REAL_BROWSER: "1"
       CONVEYOR_REQUIRE_REAL_BROWSER: "1"
@@ -108,10 +108,10 @@ jobs:
           python-version: '3.11'
 
       - name: Install Python dependencies and Playwright
-        run: python -m pip install -r requirements.txt "playwright>=1.48,<2"
+        run: python -m pip install -r requirements.txt "playwright>=1.48,<2" pytest pytest-timeout
 
       - name: Install real Chromium and OS dependencies
         run: python -m playwright install --with-deps chromium
 
       - name: Run real Chromium fixture integration tests (no skips)
-        run: python -m unittest tests.test_workflow_browser_playwright.LocalFixturePlaywrightTests -v
+        run: python -m pytest tests/test_workflow_browser_playwright.py::LocalFixturePlaywrightTests -q -v --timeout=20 --timeout-method=thread
