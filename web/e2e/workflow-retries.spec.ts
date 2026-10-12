@@ -21,8 +21,12 @@ async function installWorkflowApi(page: Page) {
 
     if (path === '/api/health') return json({ ok: true })
     if (path === '/api/system/status') return json({
-      uptime_seconds: 120, queue: { depth: 0, paused: false, states: {} },
-      channels: {}, nodes: [], features: { workflows: true, mobile_ui: true },
+      uptime_seconds: 120, load_average: [0.1, 0.1, 0.1], cpu_count: 2,
+      memory: { total: null, available: null },
+      disk: { total: 1024, used: 0, free: 1024 },
+      queue: { depth: 0, paused: false, states: {} },
+      channels: { telegram: { configured: false }, feishu: { configured: false } },
+      nodes: [], features: { workflows: true, mobile_ui: true },
     })
     if (path === '/api/sessions') return json({ sessions: [] })
     if (path === '/api/jobs') return json({ jobs: [] })
