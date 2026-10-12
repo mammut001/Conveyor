@@ -133,7 +133,7 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail["preview"]["target"],self.url+"/submit")
         self.assertIn(["campaign","alpha"],detail["preview"]["fields"])
         self.assertIn(["topic","hello"],detail["preview"]["fields"])
-        self.assertTrue(detail["screenshot"].startswith(b"\\x89PNG"))
+        self.assertTrue(detail["screenshot"].startswith(b"\x89PNG"))
         out=await decide_tool_approval(pending,True,self.settings)
         self.assertEqual(len(self.server.posts),1,str(out))
         self.assertEqual(self.server.posts[0],
