@@ -16,6 +16,7 @@ from workflow_browser_external_identity import (
 )
 from workflow_browser_egress import EgressAudit, EgressAuditUnavailable
 from workflow_browser_guards import EXTRA_INIT_SCRIPT
+from workflow_browser_external_fetch import fetch_single_https_response
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class ExternalReadOnlyBrowser:
         self._watcher = None
         self._violation = None
         self._active_url = None
+        self._pinned_ip = None
         self._requests = 0
         self._closed = False
 
@@ -72,6 +74,7 @@ class ExternalReadOnlyBrowser:
         pinned_ip = await asyncio.to_thread(
             resolve_public_ipv4, self.site.host, self.site.port)
         self._ensure_live()
+        self._pinned_ip = pinned_ip
         from playwright.async_api import async_playwright
         try:
             self._pw = await async_playwright().start()
@@ -139,13 +142,19 @@ class ExternalReadOnlyBrowser:
             self._requests += 1
             if self._requests > 4:
                 raise ExternalPolicyDenied("request_budget_denied")
-            # Never hand Chromium a 3xx it could follow before interception.
-            # Audit the outbound request BEFORE doing any network operation.
+            # One-hop HTTPS fetch, not route.continue_(): Chromium must not
+            # observe a 3xx and follow its destination unfiltered.
+            # Route.fetch(max_redirects=0) does not honor Chromium's DNS pin,
+            # so this uses a single pinned TCP connection with hostname TLS
+            # verification, then checks the response before fulfillment.
             self._audit(method, "allowed", "approved_readonly")
             self._ensure_live()
-            response = await route.fetch(max_redirects=0, timeout=8000)
+            _, _, path = canonical_url(request.url)
+            response = await asyncio.to_thread(
+                fetch_single_https_response, self.site.host, self.site.port,
+                self._pinned_ip, path, method)
             self._ensure_live()
-            response_headers = await response.all_headers()
+            response_headers = dict(response.headers)
             if 300 <= response.status < 400:
                 raise ExternalPolicyDenied("redirect_denied")
             if "set-cookie" in response_headers:
@@ -160,7 +169,10 @@ class ExternalReadOnlyBrowser:
                     ("text/html", "text/plain")):
                 raise ExternalPolicyDenied("nontext_response_denied")
             self._ensure_live()
-            await route.fulfill(response=response)
+            await route.fulfill(
+                status=200, body=response.body,
+                headers={"Content-Type": response_headers["content-type"],
+                         "Cache-Control": "no-store"})
             return
         except ExternalPolicyDenied as exc:
             reason = str(exc)
