@@ -139,7 +139,7 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.server.posts[0],
                          ("/submit","campaign=alpha&topic=hello&region=b&agree=yes"))
         self.assertEqual(state(self.settings,token),"done")
-        self.assertIn("reused",await approve_and_submit(self.settings,pending.arg,operator_id="person"))
+        self.assertIn("expired_or_used",await approve_and_submit(self.settings,pending.arg,operator_id="person"))
     async def test_hidden_value_or_target_swap_never_posts(self):
         for variant in ("value","action"):
             self.server.html=FORM
@@ -175,7 +175,7 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("needs_reconciliation",outcome)
         self.assertEqual(state(self.settings,token),"needs_reconciliation")
         self.assertEqual(len(self.server.posts),1)
-        self.assertIn("reused",await approve_and_submit(self.settings,pending.arg,operator_id="person"))
+        self.assertIn("expired_or_used",await approve_and_submit(self.settings,pending.arg,operator_id="person"))
     async def test_opacity_hidden_ancestor_and_clipped_fields_denied(self):
         for html in (FORM.replace("<label>Topic", '<label style="opacity:0">Topic'),
                      FORM.replace("<label>Topic", '<label style="overflow:hidden;width:1px;height:1px;display:block">Topic')):
