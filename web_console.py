@@ -162,6 +162,18 @@ class WebConsoleServer(ThreadingHTTPServer):
         self._active_routine_runs: set[int] = set()
         self._hook_last_accepted: dict[str, float] = {}
         self._rate_limit_lock = threading.Lock()
+        # Lazily initialize workflow schemas once per server, not on each UI poll.
+        # Individual store operations still open per-request SQLite connections.
+        self._workflow_store_lock = threading.Lock()
+        self._workflow_store: Any | None = None
+
+    def workflow_store(self) -> Any:
+        with self._workflow_store_lock:
+            if self._workflow_store is None:
+                from durable_workflows import WorkflowStore
+                self._workflow_store = WorkflowStore(self.control.settings)
+            return self._workflow_store
+
 
     def screen_for(self, agent_id: str) -> LiveScreen | None:
         """The screen an agent's Computer tab shows; None for an unknown agent.
@@ -393,7 +405,21 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         parts = self._segments(path)
         try:
-            if path == "/api/system/status":
+            if path == "/api/workflows" or (len(parts) == 3 and parts[:2] == ["api", "workflows"]):
+                settings = self.server.control.settings
+                if not getattr(settings, "workflows_enabled", False):
+                    self._json(HTTPStatus.CONFLICT, {"error": "workflows are disabled"})
+                    return
+                from durable_workflows import WorkflowNotFound
+                store = self.server.workflow_store()
+                if path == "/api/workflows":
+                    self._json(HTTPStatus.OK, {"items": store.list()})
+                else:
+                    try:
+                        self._json(HTTPStatus.OK, store.get(parts[2]))
+                    except WorkflowNotFound:
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            elif path == "/api/system/status":
                 self._json(HTTPStatus.OK, self.server.control.system_status())
             elif path == "/api/config/provider":
                 self._json(HTTPStatus.OK, self.server.control.provider_config())
@@ -795,6 +821,37 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if body is None:
             return
         try:
+            if parsed.path == "/api/workflows" or (
+                len(parts) == 4 and parts[:2] == ["api", "workflows"] and parts[3] == "action"
+            ):
+                settings = self.server.control.settings
+                if not getattr(settings, "workflows_enabled", False):
+                    self._json(HTTPStatus.CONFLICT, {"error": "workflows are disabled"})
+                    return
+                from durable_workflows import WorkflowConflict, WorkflowNotFound
+                store = self.server.workflow_store()
+                try:
+                    if parsed.path == "/api/workflows":
+                        result = store.create(
+                            title=body.get("title"), steps=body.get("steps"),
+                            request_id=body.get("request_id"),
+                        )
+                        self._json(HTTPStatus.CREATED, result)
+                    else:
+                        result = store.transition(
+                            parts[2], action=body.get("action"),
+                            expected_revision=body.get("expected_revision"),
+                            request_id=body.get("request_id"),
+                        )
+                        self._json(HTTPStatus.OK, result)
+                except WorkflowNotFound:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                except WorkflowConflict as exc:
+                    self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                except ValueError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+
             if parsed.path == "/api/memory":
                 settings = self._memory_settings()
                 if settings is None:

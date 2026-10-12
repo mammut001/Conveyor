@@ -4,6 +4,7 @@ import { FormattedText } from './components/FormattedText'
 import { InboxPanel } from './components/InboxPanel'
 import { MemoryPanel } from './components/MemoryPanel'
 import { SkillsPanel } from './components/SkillsPanel'
+import { WorkflowPanel } from './components/WorkflowPanel'
 import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
 import { TeammatePanel } from './components/TeammatePanel'
@@ -75,6 +76,7 @@ type SystemStatus = {
     webhooks?: boolean
     approval_inbox?: boolean
     skills?: boolean
+    workflows?: boolean
     provider_key_scoping?: boolean
     mobile_ui?: boolean
     mcp?: boolean
@@ -183,7 +185,7 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'skills' | 'connectors' | 'teammate'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : window.location.hash === '#connectors' || window.location.pathname === '/connectors' ? 'connectors' : window.location.hash === '#teammate' || window.location.pathname === '/teammate' ? 'teammate' : 'tasks'))
+  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'skills' | 'workflows' | 'connectors' | 'teammate'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : window.location.hash === '#connectors' || window.location.pathname === '/connectors' ? 'connectors' : window.location.hash === '#teammate' || window.location.pathname === '/teammate' ? 'teammate' : 'tasks'))
   const [inboxUnread, setInboxUnread] = useState(0)
   const [approvalInboxCount, setApprovalInboxCount] = useState(0)
   const [chatDraft, setChatDraft] = useState('')
@@ -724,10 +726,10 @@ export default function App() {
         <div className="stream-header">
           <div>
             <p className="eyebrow">
-              {view === 'chat' ? (selectedAgent ? 'AGENT' : 'DIRECT CHAT TIER') : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · CODEX EXECUTION'}
+              {view === 'chat' ? (selectedAgent ? 'AGENT' : 'DIRECT CHAT TIER') : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'workflows' ? 'DURABLE WORKFLOWS' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · CODEX EXECUTION'}
             </p>
             <h2>
-              {view === 'chat' ? (selectedAgent?.name || 'Chat') : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'skills' ? 'Skills' : view === 'connectors' ? 'Connectors' : view === 'teammate' ? 'Teammate' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
+              {view === 'chat' ? (selectedAgent?.name || 'Chat') : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'skills' ? 'Skills' : view === 'workflows' ? 'Workflows' : view === 'connectors' ? 'Connectors' : view === 'teammate' ? 'Teammate' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -747,6 +749,9 @@ export default function App() {
               )}
               {(Boolean(system?.features?.skills) || view === 'skills') && (
                 <button type="button" className={view === 'skills' ? 'active' : ''} onClick={() => setView('skills')}>Skills</button>
+              )}
+              {(Boolean(system?.features?.workflows) || view === 'workflows') && (
+                <button type="button" className={view === 'workflows' ? 'active' : ''} onClick={() => setView('workflows')}>Workflows</button>
               )}
               {(Boolean(system?.features?.mcp) || view === 'connectors') && (
                 <button type="button" className={view === 'connectors' ? 'active' : ''} onClick={() => setView('connectors')}>Connectors</button>
@@ -775,6 +780,8 @@ export default function App() {
               setView('chat')
             }}
           />
+        ) : view === 'workflows' ? (
+          <WorkflowPanel token={token} />
         ) : view === 'connectors' ? (
           <ConnectorsPanel token={token} />
         ) : view === 'memory' ? (
@@ -1082,6 +1089,12 @@ export default function App() {
                 onClick={() => { setView('memory'); setMoreSheetOpen(false); }}
               >
                 <span>🧠 Long-term Memory</span>
+              </button>
+            )}
+            {(Boolean(system?.features?.workflows) || view === 'workflows') && (
+              <button type="button" className={`mobile-sheet-item ${view === 'workflows' ? 'active' : ''}`}
+                onClick={() => { setView('workflows'); setMoreSheetOpen(false); }}>
+                <span>🧩 Durable Workflows</span>
               </button>
             )}
             {(Boolean(system?.features?.mcp) || view === 'connectors') && (

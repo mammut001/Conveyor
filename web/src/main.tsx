@@ -6,6 +6,7 @@ import './styles.css'
 import './v2.css'
 import './primary.css'
 import './takeover.css'
+import './workflows.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
