@@ -370,28 +370,6 @@ export function WorkflowPanel({ token }: Props) {
             </div>
           </div>
 
-          <ol className="workflow-steps" aria-label="Workflow steps">
-            {current.steps.map(entry => {
-              const isActive = step?.ordinal === entry.ordinal && !['completed', 'cancelled'].includes(current.state)
-              return (
-                <li key={entry.ordinal}
-                  className={`workflow-step workflow-step--${entry.state}${isActive ? ' workflow-step--current' : ''}`}
-                  aria-current={isActive ? 'step' : undefined}>
-                  <span className="workflow-step-index" aria-hidden="true">
-                    {entry.state === 'completed' ? '✓' : String(entry.ordinal + 1).padStart(2, '0')}
-                  </span>
-                  <div className="workflow-step-content">
-                    <span className="workflow-step-kind">{kindLabels[entry.kind]}</span>
-                    <strong>{entry.label}</strong>
-                    {entry.attempts > 0 && <small>{entry.attempts} {entry.attempts === 1 ? 'attempt' : 'attempts'}</small>}
-                  </div>
-                  <span className={`workflow-step-state workflow-step-state--${entry.state}`}>
-                    {readableState(entry.state)}
-                  </span>
-                </li>
-              )
-            })}
-          </ol>
 
           {step && !['completed', 'cancelled'].includes(current.state) && (
             <div className={`workflow-next workflow-next--${current.state}`}>
@@ -459,6 +437,34 @@ export function WorkflowPanel({ token }: Props) {
               )}
             </div>
           )}
+          <div className="workflow-step-history">
+            <div className="workflow-history-heading">
+              <strong>Step timeline</strong>
+              <span>Ordered checkpoints</span>
+            </div>
+          <ol className="workflow-steps" aria-label="Workflow steps">
+            {current.steps.map(entry => {
+              const isActive = step?.ordinal === entry.ordinal && !['completed', 'cancelled'].includes(current.state)
+              return (
+                <li key={entry.ordinal}
+                  className={`workflow-step workflow-step--${entry.state}${isActive ? ' workflow-step--current' : ''}`}
+                  aria-current={isActive ? 'step' : undefined}>
+                  <span className="workflow-step-index" aria-hidden="true">
+                    {entry.state === 'completed' ? '✓' : String(entry.ordinal + 1).padStart(2, '0')}
+                  </span>
+                  <div className="workflow-step-content">
+                    <span className="workflow-step-kind">{kindLabels[entry.kind]}</span>
+                    <strong>{entry.label}</strong>
+                    {entry.attempts > 0 && <small>{entry.attempts} {entry.attempts === 1 ? 'attempt' : 'attempts'}</small>}
+                  </div>
+                  <span className={`workflow-step-state workflow-step-state--${entry.state}`}>
+                    {readableState(entry.state)}
+                  </span>
+                </li>
+              )
+            })}
+          </ol>
+          </div>
         </section>
       )}
     </div>
