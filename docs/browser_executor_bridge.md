@@ -31,6 +31,16 @@ default and runs without Playwright installed.
   external site is rejected. Requests are not sent to external origins;
   blocked attempts poison the context. No background third-party resources,
   service workers, downloads or popups are permitted.
+- WebSocket handshakes are intercepted using Playwright context
+  `route_web_socket` (requires Playwright >=1.48) and always closed without
+  connecting. Missing WebSocket interception support fails initialization.
+  Denied network requests preserve only fixed reason codes in warning logs
+  and the SQLite journal's `denial_reason` column (including migration of
+  older action journals), never the attempted URL, DOM or private inputs.
+- DOM checks also deny implicit form submit buttons, image submits,
+  `contenteditable`, credential/payment/OTP autocomplete hints, and password
+  controls in open shadow roots. Closed shadow attachment is blocked at document
+  initialization; unknown custom-element shadow hosts are refused.
 - Browser DOM readback validates the expected page marker and, for synthetic
   text inputs, the *actual DOM value* (also on the read-only review page).
   Only an attested link to the next local fixture page may be clicked.
@@ -151,8 +161,12 @@ pytest -q tests/test_workflow_browser_playwright.py
 ```
 
 Without Playwright installed, all mock/workflow tests run, and the real
-Chromium tests are skipped. If the Python package is installed but the
-Chromium executable is missing, Chromium integration cases also skip.
+Chromium tests are skipped in local unit-only mode. If the Python package is
+installed but the Chromium executable is missing, local integration cases also
+skip. The dedicated GitHub Actions `Local fixture Chromium (required)` job
+installs Playwright and Chromium with OS dependencies and sets both
+`CONVEYOR_REAL_BROWSER=1` and `CONVEYOR_REQUIRE_REAL_BROWSER=1`, turning
+missing Python Playwright or Chromium into a failing check instead of a skip.
 The real tests start a `ThreadingHTTPServer` bound to 127.0.0.1 on an
 ephemeral port, serve only the bundled static fixture, and verify live DOM
 readback, journal states, crash uncertainty and network/field denial.
