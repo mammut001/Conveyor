@@ -24,6 +24,16 @@ class BridgeResult:
     reason: str  # fixed reason code, never source text or private values
 
 
+def _record_denial_safely(journal: BrowserAttemptJournal, plan: BrowserPlan,
+                          ordinal: int, reason: str) -> bool:
+    """An unavailable audit DB must not escape as an unhandled driver failure."""
+    try:
+        journal.record_denial(plan.plan_id, ordinal, plan.plan_digest, reason)
+        return True
+    except Exception:
+        return False
+
+
 class FixtureBrowser:
     """In-memory, no-IO pretend portal; not a network/browser automation driver."""
 
@@ -165,7 +175,9 @@ def _execute_plan(raw_plan: Any, *, browser: Any, journal: BrowserAttemptJournal
             if not browser.readback(op):
                 reason = getattr(browser, "_denial_reason", None)
                 if reason in DENIAL_CODES:
-                    journal.record_denial(plan.plan_id, index, plan.plan_digest, reason)
+                    if not _record_denial_safely(journal, plan, index, reason):
+                        return BridgeResult("reconciliation_required", completed, index,
+                                            "journal_record_failed")
                 else:
                     reason = "readback_failed"
                 return BridgeResult("reconciliation_required", completed, index, reason)
@@ -180,7 +192,9 @@ def _execute_plan(raw_plan: Any, *, browser: Any, journal: BrowserAttemptJournal
                 from workflow_browser_playwright import BrowserPolicyError
                 reason = str(exc) if isinstance(exc, BrowserPolicyError) else None
             if reason in DENIAL_CODES:
-                journal.record_denial(plan.plan_id, index, plan.plan_digest, reason)
+                if not _record_denial_safely(journal, plan, index, reason):
+                    return BridgeResult("reconciliation_required", completed, index,
+                                        "journal_record_failed")
                 return BridgeResult("reconciliation_required", completed, index, reason)
             return BridgeResult("reconciliation_required", completed, index, "outcome_unknown")
         completed += 1
