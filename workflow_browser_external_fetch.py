@@ -52,14 +52,21 @@ def fetch_single_https_response(host: str, port: int, ip: str,
     deadline = time.monotonic() + FETCH_DEADLINE_SECONDS
     conn = _PinnedHTTPSConnection(host, port, ip)
     expired = threading.Event()
+    # HTTPResponse may take ownership of its socket after getresponse(),
+    # clearing conn.sock even though the response is still reading from it.
+    # Hold a separate reference so the watchdog can forcibly terminate it.
+    active_socket = [None]
 
     def stop_socket() -> None:
         expired.set()
-        try:
-            if conn.sock:
-                conn.sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
+        sock = active_socket[0] or conn.sock
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            finally:
+                sock.close()
 
     watchdog = threading.Timer(FETCH_DEADLINE_SECONDS, stop_socket)
     watchdog.daemon = True
@@ -72,6 +79,7 @@ def fetch_single_https_response(host: str, port: int, ip: str,
             "Accept-Encoding": "identity", "Connection": "close",
         })
         if conn.sock:
+            active_socket[0] = conn.sock
             conn.sock.settimeout(_remaining(deadline))
         response = conn.getresponse()
         headers = tuple((name.lower(), value) for name, value
@@ -95,9 +103,14 @@ def fetch_single_https_response(host: str, port: int, ip: str,
         size = 0
         if method != "HEAD":
             while True:
-                if conn.sock:
-                    conn.sock.settimeout(_remaining(deadline))
-                chunk = response.read(min(65536, MAX_BODY + 1 - size))
+                # read1 performs at most one underlying socket read. Unlike
+                # read(n), it does not wait for all n bytes: each slow-drip
+                # byte returns to us for a monotonic deadline check.
+                remaining = _remaining(deadline)
+                if active_socket[0]:
+                    active_socket[0].settimeout(remaining)
+                chunk = response.read1(min(4096, MAX_BODY + 1 - size))
+                _remaining(deadline)
                 if not chunk:
                     break
                 size += len(chunk)
@@ -106,6 +119,7 @@ def fetch_single_https_response(host: str, port: int, ip: str,
                 chunks.append(chunk)
             if content_length is not None and size != content_length:
                 raise ValueError("content_length_mismatch")
+        _remaining(deadline)
         if expired.is_set():
             raise TimeoutError("fetch_deadline_exceeded")
         return SingleHopResponse(response.status, headers, b"".join(chunks))
