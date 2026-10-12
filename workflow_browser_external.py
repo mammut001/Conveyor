@@ -167,7 +167,7 @@ class ExternalReadOnlyBrowser:
         # No connect_to_server() means no WebSocket handshake.
 
     async def _response(self, response):
-        headers = response.headers
+        headers = await response.all_headers()
         if 300 <= response.status < 400:
             reason = "redirect_denied"
         elif "set-cookie" in headers:
