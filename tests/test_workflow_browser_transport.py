@@ -2,6 +2,14 @@
 from __future__ import annotations
 
 import io
+import os
+from pathlib import Path
+import queue
+import socketserver
+import ssl
+import subprocess
+import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -16,6 +24,9 @@ class FakeSocket:
     def shutdown(self, _how):
         pass
 
+    def close(self):
+        pass
+
 
 class FakeResponse:
     status = 200
@@ -28,7 +39,7 @@ class FakeResponse:
     def getheaders(self):
         return self.headers
 
-    def read(self, count):
+    def read1(self, count):
         if self.pause:
             time.sleep(self.pause)
         return self.buf.read(count)
@@ -104,6 +115,72 @@ class FetchPolicyTests(unittest.TestCase):
     def test_head_is_safe_and_never_reads_body(self):
         result = self.fetch([("Content-Length", "42")], b"ignored", method="HEAD")
         self.assertEqual(result.body, b"")
+
+
+class SlowDripTLSTests(unittest.TestCase):
+    def test_real_tls_bytewise_drip_expires_without_leaking_worker(self):
+        """Send one byte every 0.5s over real TLS, but stop in <= deadline+2s."""
+        from workflow_browser_external_fetch import FETCH_DEADLINE_SECONDS
+        class DripHandler(socketserver.BaseRequestHandler):
+            def handle(self):
+                try:
+                    with server_context.wrap_socket(self.request, server_side=True) as tls:
+                        tls.settimeout(5)
+                        incoming = tls.makefile("rb")
+                        while incoming.readline() not in (b"\\r\\n", b"\\n", b""):
+                            pass
+                        tls.sendall(
+                            b"HTTP/1.1 200 OK\\r\\n"
+                            b"Content-Type: text/plain\\r\\n"
+                            b"Content-Length: 100\\r\\n"
+                            b"Connection: close\\r\\n\\r\\n"
+                        )
+                        for _ in range(100):
+                            tls.sendall(b"x")
+                            time.sleep(0.5)
+                except (OSError, ssl.SSLError):
+                    pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cert, key = Path(tmp) / "cert.pem", Path(tmp) / "key.pem"
+            subprocess.run([
+                "openssl", "req", "-x509", "-nodes", "-newkey", "rsa:2048",
+                "-days", "1", "-keyout", str(key), "-out", str(cert),
+                "-subj", "/CN=approved.fixture.test",
+                "-addext", "subjectAltName=DNS:approved.fixture.test",
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            server_context.load_cert_chain(str(cert), str(key))
+            with socketserver.ThreadingTCPServer(("127.0.0.1", 0), DripHandler) as server:
+                server.daemon_threads = True
+                server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+                server_thread.start()
+                deadline = 1.6
+                result = queue.Queue()
+                def run_fetch():
+                    try:
+                        fetch_single_https_response(
+                            "approved.fixture.test", server.server_address[1],
+                            "127.0.0.1", "/slow-drip")
+                    except BaseException as exc:
+                        result.put(exc)
+                    else:
+                        result.put(None)
+                with patch.dict(os.environ, {"SSL_CERT_FILE": str(cert)}), patch(
+                    "workflow_browser_external_fetch.FETCH_DEADLINE_SECONDS", deadline
+                ):
+                    worker = threading.Thread(target=run_fetch, daemon=True)
+                    start = time.monotonic()
+                    worker.start()
+                    worker.join(deadline + 2)
+                    elapsed = time.monotonic() - start
+                    self.assertFalse(worker.is_alive(), "TLS slow-drip leaked a worker thread")
+                    self.assertLess(elapsed, deadline + 2)
+                    failure = result.get_nowait()
+                    self.assertIsInstance(failure, TimeoutError)
+                    self.assertIn("fetch_deadline_exceeded", str(failure))
+                server.shutdown()
+                server_thread.join(timeout=2)
 
 
 if __name__ == "__main__":
