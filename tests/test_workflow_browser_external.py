@@ -113,6 +113,24 @@ class PolicyTests(unittest.TestCase):
                             task="job", ledger=ledger, audit=EgressAudit(db))
 
 
+    def test_default_kill_file_uses_private_approval_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = str(Path(directory) / "ledger.db")
+            ledger = ApprovalLedger(db)
+            ledger.approve(task="job", host=HOST, approver="operator",
+                           expires_at=time.time() + 60, safe_paths=("/",))
+            with patch.dict(os.environ, {
+                "CONVEYOR_REAL_BROWSER": "1",
+                "CONVEYOR_BROWSER_EXTERNAL_READONLY": "1",
+            }, clear=True):
+                browser = ExternalReadOnlyBrowser(
+                    task="job", ledger=ledger, audit=EgressAudit(db))
+            self.assertEqual(browser.kill_file,
+                             Path(directory) / "browser-external.kill")
+            self.assertEqual(browser.kill_file.parent.stat().st_mode & 0o077, 0)
+            self.assertNotEqual(browser.kill_file.parent, Path("/tmp"))
+
+
 class _ConnectionCounter(socketserver.BaseRequestHandler):
     def handle(self):
         # Count accepted TCP sockets, including attempted TLS handshakes.
