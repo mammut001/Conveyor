@@ -153,6 +153,38 @@ class BrowserManagementTests(unittest.TestCase):
         self.assertTrue(self.request("GET","/api/browser/approvals")[1]["kill_switch"])
         self.assertFalse(self.request("POST","/api/browser/kill",{"enabled":False})[1]["kill_switch"])
 
+    def test_nondefault_kill_path_listing_and_restricted_mutation(self):
+        custom=Path(self.temp.name)/"custom-browser.kill"
+        with patch.dict(os.environ,{"CONVEYOR_BROWSER_EXTERNAL_KILL_FILE":str(custom)}):
+            status_code, result=self.request("GET","/api/browser/approvals")
+            self.assertEqual(status_code,200,result)
+            self.assertFalse(result["kill_switch"])
+            custom.touch()
+            status_code, result=self.request("GET","/api/browser/approvals")
+            self.assertEqual(status_code,200,result)
+            self.assertTrue(result["kill_switch"])
+            code, result=self.request("POST","/api/browser/kill",{"enabled":False})
+            self.assertEqual(code,409,result)
+            self.assertTrue(custom.exists())
+
+    def test_kill_rejects_pending_browser_approval_with_clear_conflict(self):
+        from handlers.tools.confirm import create_pending, get_pending
+        pending=create_pending("browser.g3_dispatch",
+            json.dumps({"token":"a"*32,"hash":"b"*64}),
+            operator_id="operator",chat_id="test",channel="web")
+        try:
+            self.assertEqual(self.request("POST","/api/browser/kill",{"enabled":True})[0],200)
+            code, response=self.request("POST",
+                "/api/approval-inbox/"+pending.token+"/approve",
+                {"expected_hash":"b"*64})
+            self.assertEqual(code,409,response)
+            self.assertIn("kill switch",response["error"])
+            self.assertIsNotNone(get_pending(pending.token))
+        finally:
+            from handlers.tools.confirm import clear_all_pending
+            clear_all_pending()
+            self.request("POST","/api/browser/kill",{"enabled":False})
+
     def test_inflight_g2_path_revalidation_fails_after_revoke(self):
         from personal_tools.browser_approval_scope import grant_confirmed, path_is_live
         from browser_approvals_admin import approvals, revoke
