@@ -31,11 +31,13 @@ class ExternalReadOnlyBrowser:
 
     def __init__(self, *, task: str, ledger: ApprovalLedger,
                  audit: EgressAudit, kill_file: str | Path | None = None):
+        # A disabled feature must fail before accessing the approval ledger
+        # or egress audit (the caller may not have initialized either).
+        if os.getenv("CONVEYOR_REAL_BROWSER") != "1" or \
+                os.getenv("CONVEYOR_BROWSER_EXTERNAL_READONLY") != "1":
+            raise ExternalPolicyDenied("external_browser_disabled")
         self.task, self.ledger, self.audit = task, ledger, audit
         try:
-            if os.getenv("CONVEYOR_REAL_BROWSER") != "1" or \
-                    os.getenv("CONVEYOR_BROWSER_EXTERNAL_READONLY") != "1":
-                raise ExternalPolicyDenied("external_browser_disabled")
             self.site = ledger.require(task)
         except ExternalPolicyDenied as exc:
             # No approved hostname exists yet: use a fixed placeholder.
