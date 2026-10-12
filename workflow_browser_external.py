@@ -131,12 +131,18 @@ class ExternalReadOnlyBrowser:
             outcome, reason,
         )
 
+    def _verify_url(self, url: str, method: str) -> None:
+        self.site.check_url(url, method)
+
+    def _request_path(self, url: str) -> str:
+        return canonical_url(url)[2]
+
     async def _route(self, route):
         request = route.request
         method = request.method
         try:
             self._ensure_live()
-            self.site.check_url(request.url, method)
+            self._verify_url(request.url, method)
             if (request.redirected_from is not None or
                     self._active_url != request.url):
                 raise ExternalPolicyDenied("redirect_denied")
@@ -151,7 +157,7 @@ class ExternalReadOnlyBrowser:
                         "x-api-key", "referer"))):
                 raise ExternalPolicyDenied("credentials_denied")
             self._requests += 1
-            if self._requests > 4:
+            if self._requests > getattr(self, "_requests_limit", 4):
                 raise ExternalPolicyDenied("request_budget_denied")
             # One-hop HTTPS fetch, not route.continue_(): Chromium must not
             # observe a 3xx and follow its destination unfiltered.
@@ -160,7 +166,7 @@ class ExternalReadOnlyBrowser:
             # verification, then checks the response before fulfillment.
             self._audit(method, "allowed", "approved_readonly")
             self._ensure_live()
-            _, _, path = canonical_url(request.url)
+            path = self._request_path(request.url)
             response = await asyncio.to_thread(
                 fetch_single_https_response, self.site.host, self.site.port,
                 self._pinned_ip, path, method)
