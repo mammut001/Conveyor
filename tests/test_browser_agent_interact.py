@@ -78,7 +78,11 @@ class G2PolicyTests(unittest.TestCase):
                 conn.execute("INSERT INTO browser_agent_grants VALUES(?,?,?,?)",
                     (_operator_key("operator"),URL,time.time()+300,time.time()))
                 conn.commit()
+            self.assertTrue(approval_required(self.settings,self.arg,"operator"))
+            from personal_tools.browser_approval_scope import grant_confirmed
+            grant_confirmed(self.settings,"operator",URL,[{"type":"scroll","pixels":100}])
             self.assertFalse(approval_required(self.settings,self.arg,"operator"))
+            self.assertTrue(approval_required(self.settings,json.dumps({"url":URL,"actions":[{"type":"follow_link","text":"Next"}]}),"operator"))
             self.assertTrue(approval_required(self.settings,self.arg,"other"))
             self.assertEqual(_approved_paths(self.settings,"operator",URL),
                              ("/approved",))
