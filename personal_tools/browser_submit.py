@@ -153,5 +153,15 @@ async def approve_and_submit(settings,arg,*,operator_id):
         return f"G3 submit completed (HTTP {status}); one request only; preview {expected_hash}"
     except ExternalPolicyDenied as exc:
         return f"browser denied: {exc}"
-    except Exception:
-        return "browser submit uncertain: needs_reconciliation; do not retry"
+    except Exception as exc:
+        from workflow_browser_g3_store import state
+        try:
+            current = state(settings, token)
+        except Exception:
+            current = "unavailable"
+        # Do not mislabel a pre-dispatch failure as an uncertain remote commit.
+        if current in ("dispatched", "needs_reconciliation"):
+            return ("browser submit uncertain: needs_reconciliation; do not retry; "
+                    f"diagnostic={type(exc).__name__}")
+        return (f"browser denied: g3_verification_unavailable; "
+                f"diagnostic={type(exc).__name__}; state={current}")
