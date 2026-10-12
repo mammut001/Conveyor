@@ -190,7 +190,9 @@ export function ApprovalInboxPanel({
     setBusyMap((prev) => ({ ...prev, [item.id]: true }));
     setInlineErrors((prev) => ({ ...prev, [item.id]: '' }));
     try {
-      const bodyPayload = item.kind === 'tool' ? { expected_arg: item.arg } : {};
+      const bodyPayload = item.tool_name === 'browser.g3_dispatch'
+        ? { expected_arg: item.kind === 'tool' ? item.arg : undefined, expected_hash: item.g3_hash }
+        : item.kind === 'tool' ? { expected_arg: item.arg } : {};
       const res = await fetch(`/api/approval-inbox/${encodeURIComponent(item.id)}/approve`, {
         method: 'POST',
         headers: {
