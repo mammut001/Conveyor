@@ -5,6 +5,7 @@ import io
 import os
 from pathlib import Path
 import queue
+import socket
 import socketserver
 import ssl
 import subprocess
@@ -112,12 +113,69 @@ class FetchPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(TimeoutError, "fetch_deadline_exceeded"):
                 self.fetch([], b"hello", pause=0.15)
 
+    def test_socket_read_timeout_uses_fixed_deadline_code(self):
+        FakeConnection.response = FakeResponse([], b"")
+        with patch.object(FakeResponse, "read1",
+                          side_effect=socket.timeout("The read operation timed out")):
+            with self.assertRaisesRegex(TimeoutError, "fetch_deadline_exceeded"):
+                fetch_single_https_response("approved.example.org", 443,
+                                            "8.8.8.8", "/reviewed")
+
     def test_head_is_safe_and_never_reads_body(self):
         result = self.fetch([("Content-Length", "42")], b"ignored", method="HEAD")
         self.assertEqual(result.body, b"")
 
 
 class SlowDripTLSTests(unittest.TestCase):
+    def test_real_tls_http10_and_http11_connection_close_succeed(self):
+        """http.client closes conn.sock on these responses but body is still readable."""
+        body = b"read works"
+        with tempfile.TemporaryDirectory() as tmp:
+            cert, key = Path(tmp) / "cert.pem", Path(tmp) / "key.pem"
+            subprocess.run([
+                "openssl", "req", "-x509", "-nodes", "-newkey", "rsa:2048",
+                "-days", "1", "-keyout", str(key), "-out", str(cert),
+                "-subj", "/CN=approved.fixture.test",
+                "-addext", "subjectAltName=DNS:approved.fixture.test",
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(str(cert), str(key))
+            for version, headers in (
+                ("HTTP/1.0", b""),
+                ("HTTP/1.1", b"Content-Length: 10\\r\\nConnection: close\\r\\n"),
+            ):
+                with self.subTest(version=version):
+                    class ResponseHandler(socketserver.BaseRequestHandler):
+                        def handle(self):
+                            with context.wrap_socket(self.request, server_side=True) as tls:
+                                tls.settimeout(3)
+                                incoming = tls.makefile("rb")
+                                while incoming.readline() not in (b"\\r\\n", b"\\n", b""):
+                                    pass
+                                tls.sendall(
+                                    (version + " 200 OK\\r\\n").encode("ascii")
+                                    + b"Content-Type: text/plain\\r\\n"
+                                    + headers + b"\\r\\n" + body
+                                )
+
+                    with socketserver.ThreadingTCPServer(
+                        ("127.0.0.1", 0), ResponseHandler
+                    ) as server:
+                        server.daemon_threads = True
+                        thread = threading.Thread(
+                            target=server.serve_forever, daemon=True)
+                        thread.start()
+                        try:
+                            with patch.dict(os.environ, {"SSL_CERT_FILE": str(cert)}):
+                                result = fetch_single_https_response(
+                                    "approved.fixture.test", server.server_address[1],
+                                    "127.0.0.1", "/read")
+                            self.assertEqual(result.status, 200)
+                            self.assertEqual(result.body, body)
+                        finally:
+                            server.shutdown()
+                            thread.join(timeout=2)
+
     def test_real_tls_bytewise_drip_expires_without_leaking_worker(self):
         """Send one byte every 0.5s over real TLS, but stop in <= deadline+2s."""
         class DripHandler(socketserver.BaseRequestHandler):
