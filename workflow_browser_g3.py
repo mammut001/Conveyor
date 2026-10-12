@@ -99,7 +99,13 @@ FORM_JS = r"""(forms, args) => {
    }
    let val=type==='checkbox'?(c.checked?c.value:null):c.value;
    if(typeof val==='string' && val.length>256) return {error:'g3_field_too_long'};
-   out.push({tag,type,name,value:val,disabled:!!c.disabled});
+   const labels=Array.from(c.labels||[], l=>(l.innerText||l.textContent||'').slice(0,256));
+   const aria_labelledby=(c.getAttribute('aria-labelledby')||'').split(/\s+/).filter(Boolean)
+     .map(id=>(document.getElementById(id)?.textContent||'').slice(0,256)).join(' ').slice(0,512);
+   out.push({tag,type,name,value:val,disabled:!!c.disabled,labels,
+     aria_label:(c.getAttribute('aria-label')||'').slice(0,256),aria_labelledby,
+     placeholder:(c.getAttribute('placeholder')||'').slice(0,256),
+     title:(c.getAttribute('title')||'').slice(0,256)});
    if(name && !c.disabled && type!=='submit' && tag!=='button' &&
       !(type==='checkbox' && !c.checked)) pairs.push([name,val]);
  }
@@ -115,8 +121,15 @@ FORM_JS = r"""(forms, args) => {
  const heading=(f.querySelector('legend')?.innerText ||
    preceding[preceding.length-1]?.innerText || '').trim().slice(0,160);
  const submit_label=[...f.querySelectorAll('button,input[type="submit"]')]
-   .map(c => (c.innerText || c.value || '').trim()).join(' ').slice(0,160);
- return {method,target,controls:out,fields:pairs,attrs,heading,submit_label};
+   .flatMap(c => [c.innerText||c.value||'',c.getAttribute('aria-label')||'',
+                  c.getAttribute('title')||'']).join(' ').trim().slice(0,512);
+ const page_headings=[...document.querySelectorAll('h1,h2,h3')]
+   .filter(h=>!h.closest('nav,footer') &&
+     Boolean(h.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING));
+ const page_heading=(page_headings[page_headings.length-1]?.innerText||'').slice(0,256);
+ const document_title=(document.title||'').slice(0,256);
+ return {method,target,controls:out,fields:pairs,attrs,heading,
+         page_heading,document_title,submit_label};
 }"""
 
 def enabled():
