@@ -112,6 +112,22 @@ class HardeningTests(unittest.TestCase):
             self.assertTrue(sensitive_form("https://demo.example/form",form))
         self.assertTrue(sensitive_form("https://demo.example/login",safe))
 
+    def test_unicode_normalization_and_sensitive_control_labels(self):
+        base = {"target":"https://demo.example/send","heading":"Public feedback",
+                "submit_label":"Send","controls":[]}
+        self.assertFalse(sensitive_form("https://demo.example/form", base))
+        for label in ("Sign\u200b in", "Log\u00adin", "ｐａｙ now",
+                      "One-time code", "card number", "security code", "Email"):
+            with self.subTest(label=label):
+                self.assertTrue(sensitive_form("https://demo.example/form",
+                    {**base,"controls":[{"labels":[label]}]}))
+        for label in ("Sign\u200b in","Log\u00adin","ｐａｙ now","Close your account"):
+            with self.subTest(submit=label):
+                self.assertTrue(sensitive_form("https://demo.example/form",
+                    {**base,"submit_label":label}))
+        self.assertFalse(sensitive_form("https://demo.example/form",
+            {**base,"controls":[{"labels":["Topic"],"placeholder":"Message"}]}))
+
     def test_kill_refuses_approvals_and_custom_file_read(self):
         custom=Path(self.temp.name)/"external.kill"
         with patch.dict(os.environ, {"CONVEYOR_BROWSER_EXTERNAL_KILL_FILE":str(custom)}):
