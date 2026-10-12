@@ -136,3 +136,33 @@ test('lost action response persists pending ID across reload and never advances 
   expect(fixture.seenActionKeys).toHaveLength(2)
   expect(fixture.seenActionKeys[0]).toBe(fixture.seenActionKeys[1])
 })
+
+
+test('workflow studio keeps checklist prominent and secondary actions discoverable on mobile', async ({ page }) => {
+  await installWorkflowApi(page)
+  await openWorkflows(page)
+  await page.getByRole('button', { name: 'Create safe visa demo' }).click()
+  await expect(page.getByRole('alert')).toBeVisible()
+  await page.getByRole('button', { name: 'Create safe visa demo' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Australia Visitor 600 — simulated workflow' })).toBeVisible()
+  await expect(page.getByText('0 of 5 steps')).toBeVisible()
+  await expect(page.locator('#workflow-create-form')).toHaveCount(0)
+  await expect(page.getByRole('progressbar', { name: 'Completed steps' })).toHaveAttribute('aria-valuenow', '0')
+  await expect(page.locator('.workflow-step--current')).toHaveCount(1)
+  await expect(page.locator('.workflow-step--current')).toContainText('Ready')
+
+  await page.getByRole('button', { name: '+ New workflow' }).click()
+  await expect(page.getByRole('heading', { name: 'Create a workflow' })).toBeVisible()
+  await page.getByRole('button', { name: 'Close editor' }).first().click()
+  await expect(page.locator('#workflow-create-form')).toHaveCount(0)
+
+  await page.locator('.workflow-more-actions summary').click()
+  await expect(page.getByRole('button', { name: 'Cancel workflow' })).toBeVisible()
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.getByRole('heading', { name: 'Australia Visitor 600 — simulated workflow' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Mark work started' })).toBeVisible()
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+})
