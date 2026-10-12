@@ -89,6 +89,10 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
     """Single policy used for both schema exposure and execution."""
     if spec is None or name.startswith("desktop."):
         return False
+    if name == "browser.read_webpage":
+        from personal_tools.browser_read import enabled
+        if not enabled():
+            return False
     if name == "agents.parallel":
         from config import is_subagents_enabled
         from handlers.subagents import is_in_subagent
@@ -336,6 +340,19 @@ async def run_tool_loop(
                 )
 
             if danger == DangerLevel.READ:
+                if real_tool_name == "browser.read_webpage":
+                    from personal_tools.browser_read import approval_required
+                    try:
+                        needs_approval = approval_required(settings, arg, msg.operator_id)
+                    except Exception:
+                        messages.append({"role": "tool", "tool_call_id": tool_call_id,
+                                         "content": "browser denied: invalid_or_unavailable"})
+                        continue
+                    if needs_approval:
+                        tools_called.append(real_tool_name)
+                        await _request_confirmation(msg, port, settings, real_tool_name, arg)
+                        return ToolLoopResult(text="awaiting approval", tools_called=tools_called,
+                                              confirmation_requested=True, messages=messages)
                 logger.info("Chat tier tool call executed: %s", real_tool_name)
                 tools_called.append(real_tool_name)
                 if real_tool_name == "agents.parallel":
