@@ -13,6 +13,9 @@ class FakeSocket:
     def settimeout(self, _timeout):
         pass
 
+    def shutdown(self, _how):
+        pass
+
 
 class FakeResponse:
     status = 200
