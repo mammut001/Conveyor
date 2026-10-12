@@ -347,6 +347,12 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
             danger = personal_tool_danger(action.tool_name)
         if action.tool_name in ("browser.read_webpage", "browser.browse_site"):
             danger = "external network access"
+        if action.tool_name == "browser.browse_site":
+            from personal_tools.browser_approval_scope import summary as g2_scope_summary
+            try:
+                summary = g2_scope_summary(action.arg)
+            except Exception:
+                summary = "G2 browser scope unavailable — reject and retry"
 
         source = "chat"
         routine_id: int | None = None
