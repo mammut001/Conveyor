@@ -33,11 +33,11 @@ async def main():
 asyncio.run(main())
 ```
 
-ApprovalLedger.revoke(task) revokes immediately. CONVEYOR_BROWSER_EXTERNAL_KILL_FILE is a file-existence kill switch, default /tmp/conveyor-browser-external.kill; creating the file closes an active session and forbids new navigation. Turning off either environment flag in the running process also fails closed. Reuse is prevented: one read and one newly launched browser/context per task. No shared profile or stored credentials.
+ApprovalLedger.revoke(task) revokes immediately. CONVEYOR_BROWSER_EXTERNAL_KILL_FILE is a file-existence kill switch, default in the private approval SQLite directory as browser-external.kill; creating the file closes an active session and forbids new navigation. Turning off either environment flag in the running process also fails closed. Reuse is prevented: one read and one newly launched browser/context per task. No shared profile or stored credentials.
 
 SQLite parent directories must be private (0700); DB files are 0600. The redacted egress journal includes only timestamp, task, approved domain, HTTP method, outcome and fixed denial code. No URL paths, query values, cookie/token values, payloads or page content are stored. An unavailable audit prevents any outbound request.
 
-All request paths and methods must be explicitly reviewed as read-only. JavaScript, service workers, subresources, popups, WebSockets, download acceptance, and author-provided cookies are blocked. Chromium resolves the hostname to an IP once before launch, rejects non-global addresses, and pins the chosen public IPv4 using host-resolver-rules. HTTPS certificates remain validated; redirects and navigation away from the approved URL are denied.
+All request paths and methods must be explicitly reviewed as read-only. JavaScript, service workers, subresources, popups, WebSockets, download acceptance, and author-provided cookies are blocked. Chromium resolves the hostname to an IP once before launch, rejects non-global addresses, and pins the chosen public IPv4 using host-resolver-rules. Multicast, reserved, unspecified, broadcast, and loopback addresses are rejected. HTTPS certificates remain validated; all 3xx responses are rejected before being fulfilled to Chromium, using route.fetch(max_redirects=0) and route.fulfill. Set-Cookie and attachment headers are checked before fulfillment, so Chromium cannot follow redirects before interception.
 
 ## Offline tests and outstanding release gates
 
