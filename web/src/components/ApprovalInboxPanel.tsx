@@ -14,6 +14,9 @@ export type ApprovalInboxItem = {
   draft?: Record<string, string> | null;
   editable: boolean;
   redacted?: boolean;
+  g3_preview?: { url: string; target: string; method: string; fields: [string, string][]; screenshot_sha256: string };
+  g3_hash?: string;
+  g3_screenshot?: string;
   created_at: string | number;
   expires_at?: string | number;
   session_id?: string;
@@ -179,6 +182,11 @@ export function ApprovalInboxPanel({
   }, [fetchItems]);
 
   const handleApproveAsIs = async (item: ApprovalInboxItem) => {
+    if (item.tool_name === 'browser.g3_dispatch' &&
+        (!item.g3_preview || !item.g3_hash || !item.g3_screenshot)) {
+      setInlineErrors(prev => ({ ...prev, [item.id]: 'G3 preview unavailable; reject' }));
+      return;
+    }
     setBusyMap((prev) => ({ ...prev, [item.id]: true }));
     setInlineErrors((prev) => ({ ...prev, [item.id]: '' }));
     try {
@@ -451,6 +459,28 @@ export function ApprovalInboxPanel({
               </div>
             )}
 
+            {item.tool_name === 'browser.g3_dispatch' && (
+              <div style={{ padding: 12, border: '2px solid #c2410c', borderRadius: 8 }}>
+                <strong>Independent human confirmation required (expires in 5 minutes)</strong>
+                {!item.g3_preview || !item.g3_hash || !item.g3_screenshot ? (
+                  <p>Preview unavailable. Reject this approval and prepare again.</p>
+                ) : (
+                  <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+                    <div><strong>Action:</strong> {item.g3_preview.method} {item.g3_preview.target}</div>
+                    <div><strong>Source:</strong> {item.g3_preview.url}</div>
+                    <div><strong>Exactly transmitted fields:</strong></div>
+                    <table><tbody>
+                      {item.g3_preview.fields.map(([name, value], i) => (
+                        <tr key={i}><th scope="row" style={{ textAlign: 'left', paddingRight: 12 }}>{name}</th><td>{value}</td></tr>
+                      ))}
+                    </tbody></table>
+                    <div style={{ overflowWrap: 'anywhere' }}><strong>SHA-256:</strong> {item.g3_hash}</div>
+                    <img src={item.g3_screenshot} alt="G3 review screenshot captured before human approval"
+                         style={{ maxWidth: '100%', maxHeight: 400, objectFit: 'contain' }} />
+                  </div>
+                )}
+              </div>
+            )}
             {/* Main content: Read-only draft OR Edit Form OR Raw Arg */}
             {!isEditing ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
