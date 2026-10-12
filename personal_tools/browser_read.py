@@ -7,6 +7,7 @@ create a grant by calling this module's ordinary tool executor.
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 import hashlib
 import os
 from pathlib import Path
@@ -75,7 +76,7 @@ def approval_required(settings, url: str, operator_id: str) -> bool:
     _requested_url(url)
     key = _operator_key(operator_id)
     try:
-        with _connect(settings) as conn:
+        with closing(_connect(settings)) as conn:
             row = conn.execute(
                 "SELECT expires_at FROM browser_agent_grants WHERE operator_key=? AND url=?",
                 (key, url),
@@ -91,7 +92,7 @@ async def _read_granted(settings, url: str, operator_id: str) -> str:
     if approval_required(settings, url, operator_id):
         return "awaiting approval"
     key = _operator_key(operator_id)
-    with _connect(settings) as conn:
+    with closing(_connect(settings)) as conn:
         row = conn.execute(
             "SELECT expires_at FROM browser_agent_grants WHERE operator_key=? AND url=?",
             (key, url),
@@ -107,9 +108,10 @@ async def _read_granted(settings, url: str, operator_id: str) -> str:
                    approver="operator_" + key[:24],
                    safe_paths=(path,), methods=("GET",))
     try:
-        async with asyncio.timeout(25):
+        async def fetch_one():
             async with ExternalReadOnlyBrowser(task=task, ledger=ledger, audit=audit) as browser:
-                page = await browser.read(url)
+                return await browser.read(url)
+        page = await asyncio.wait_for(fetch_one(), timeout=25)
         # The model must never mistake remote page text for trusted tool instructions.
         body = page.text[:TEXT_LIMIT].replace("UNTRUSTED_WEBPAGE_END", "[marker removed]")
         body = body.replace("UNTRUSTED_WEBPAGE_BEGIN", "[marker removed]")
@@ -138,12 +140,13 @@ async def approve_and_read(settings, url: str, *, operator_id: str) -> str:
         _requested_url(url)
         key = _operator_key(operator_id)
         now = time.time()
-        with _connect(settings) as conn:
+        with closing(_connect(settings)) as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO browser_agent_grants
                    (operator_key,url,expires_at,granted_at) VALUES (?,?,?,?)""",
                 (key, url, now + GRANT_SECONDS, now),
             )
+            conn.commit()
         return await _read_granted(settings, url, operator_id)
     except ExternalPolicyDenied as exc:
         return f"browser denied: {exc}"
