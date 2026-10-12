@@ -1161,6 +1161,11 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                         return
                     if is_approve:
+                        if pending.tool_name == "browser.g3_dispatch":
+                            from browser_g3_approval_gate import matches as g3_matches
+                            if not g3_matches(settings, pending.arg, body.get("expected_hash")):
+                                self._json(HTTPStatus.CONFLICT, {"error": "G3 preview hash expired or changed; reload"})
+                                return
                         draft = body.get("draft") if isinstance(body, dict) else None
                         expected_arg = body.get("expected_arg") if isinstance(body, dict) else None
                         # Optimistic check against what the operator saw. The list shows the
@@ -1200,6 +1205,12 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     import approval_relay
                     relay_row = approval_relay.get_relay_row(settings, approval_id)
                     if relay_row is not None:
+                        if is_approve and relay_row.get("tool_name") == "browser.g3_dispatch":
+                            from browser_g3_approval_gate import matches as g3_matches
+                            if not g3_matches(settings, relay_row.get("arg_preview") or "",
+                                              body.get("expected_hash")):
+                                self._json(HTTPStatus.CONFLICT, {"error": "G3 preview hash expired or changed; reload"})
+                                return
                         if isinstance(body, dict) and "draft" in body and body.get("draft") is not None:
                             self._json(HTTPStatus.BAD_REQUEST, {"error": "relay items cannot be edited from web console"})
                             return

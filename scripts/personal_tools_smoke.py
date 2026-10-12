@@ -192,6 +192,7 @@ def _test_registry() -> CheckResult:
             # G1 external browsing (opt-in)
             "browser.read_webpage",
             "browser.browse_site",
+            "browser.prepare_submit",
             # Always-On Teammate & Sentry
             "teammate",
             "teammate.status",

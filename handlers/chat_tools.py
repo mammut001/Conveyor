@@ -89,6 +89,10 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
     """Single policy used for both schema exposure and execution."""
     if spec is None or name.startswith("desktop."):
         return False
+    if name == "browser.prepare_submit":
+        from workflow_browser_g3 import enabled as g3_enabled
+        if not g3_enabled():
+            return False
     if name == "browser.browse_site":
         from workflow_browser_g2 import enabled as g2_enabled
         if not g2_enabled():
@@ -164,6 +168,11 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
                      '"actions":[{"type":"follow_link","text":"Next"},'
                      '{"type":"search_get","path":"/search","field":"q",'
                      '"query":"public records"}]}. Each action type and GET query target needs operator approval.')
+        if name == "browser.prepare_submit":
+            desc += (' Pass arg as JSON OBJECT STRING: '
+                     '{"url":"https://public.example.org/form",'
+                     '"form_ref":0,"fields":{"topic":"public request","agree":true}}. '
+                     'Only prepares a human-reviewed preview, never submits.')
         schema = {
             "type": "function",
             "function": {
@@ -176,10 +185,11 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
                             "type": "string",
                             "description": ("JSON object encoded as a string containing url and actions; "
                                             "never raw selectors or JS" if name == "browser.browse_site"
+                                            else "JSON string with url, form_ref integer and fields mapping" if name == "browser.prepare_submit"
                                             else "Free-text argument for the tool; empty if none"),
                         },
                     },
-                    "required": ["arg"] if name == "browser.browse_site" else [],
+                    "required": ["arg"] if name in ("browser.browse_site", "browser.prepare_submit") else [],
                 },
             },
         }

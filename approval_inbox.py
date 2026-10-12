@@ -414,6 +414,24 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
         if is_redacted:
             item["redacted"] = True
 
+        if action.tool_name == "browser.g3_dispatch":
+            try:
+                import base64
+                import json
+                from workflow_browser_g3_store import review
+                ref = json.loads(action.arg)["token"]
+                detail = review(settings, ref)
+                if detail:
+                    item["g3_preview"] = detail["preview"]
+                    item["g3_hash"] = detail["hash"]
+                    item["g3_screenshot"] = ("data:image/png;base64," +
+                                          base64.b64encode(detail["screenshot"]).decode("ascii"))
+                    item["summary"] = ("G3 fresh human confirmation — " +
+                                       detail["preview"]["method"] + " " +
+                                       detail["preview"]["target"])
+                    item["danger"] = "write"
+            except Exception:
+                item["summary"] = "G3 preview unavailable — do not approve"
         items.append(item)
 
     # 2. Pending job approvals from control.list_approvals()
@@ -442,7 +460,7 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
             local_tokens = {action.token for action in list_pending()}
             foreign_rows = approval_relay.list_foreign_pending(settings, local_tokens=local_tokens)
             for row in foreign_rows:
-                items.append({
+                item = {
                     "id": row["token"],
                     "kind": "relay",
                     "source": row.get("origin_channel") or "relay",
@@ -455,7 +473,25 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
                     "created_at": row.get("created_at"),
                     "expires_at": row.get("expires_at"),
                     "origin_channel": row.get("origin_channel") or "",
-                })
+                }
+                if item["tool_name"] == "browser.g3_dispatch":
+                    try:
+                        import base64
+                        import json
+                        from workflow_browser_g3_store import review
+                        token = json.loads(row.get("arg_preview") or "{}")["token"]
+                        detail = review(settings, token)
+                        if detail:
+                            item["g3_preview"] = detail["preview"]
+                            item["g3_hash"] = detail["hash"]
+                            item["g3_screenshot"] = ("data:image/png;base64," +
+                                                  base64.b64encode(detail["screenshot"]).decode("ascii"))
+                            item["summary"] = ("G3 human review — " +
+                                               detail["preview"]["method"] + " " +
+                                               detail["preview"]["target"])
+                    except Exception:
+                        item["summary"] = "G3 preview unavailable — reject"
+                items.append(item)
         except Exception:
             logger.exception("Failed to fetch foreign relay approvals in list_items")
 
