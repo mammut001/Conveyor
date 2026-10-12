@@ -125,13 +125,14 @@ FORMS_JS = r"""(nodes) => nodes.map((f,index)=>{
 
 class G2Browser(ExternalReadOnlyBrowser):
     def __init__(self, *, query_paths=frozenset(), grant_check=None,
-                 query_check=None, **kwargs):
+                 query_check=None, path_check=None, **kwargs):
         if not enabled():
             raise ExternalPolicyDenied("g2_disabled")
         super().__init__(**kwargs)
         self.query_paths = frozenset(query_paths)
         self._grant_check = grant_check
         self._query_check = query_check
+        self._path_check = path_check
         self._requests_limit = MAX_ACTIONS + 2
         self._started = None
 
@@ -147,7 +148,10 @@ class G2Browser(ExternalReadOnlyBrowser):
     def _verify_url(self, url, method):
         parsed = parse_query_url(url)
         if parsed is None:
-            return super()._verify_url(url, method)
+            super()._verify_url(url, method)
+            if self._path_check is not None and not self._path_check(url):
+                raise ExternalPolicyDenied("g2_path_approval_revoked")
+            return
         base, field, _ = parsed
         if method != "GET":
             raise ExternalPolicyDenied("unsafe_http_method")
