@@ -176,7 +176,7 @@ class G2ChromiumTests(unittest.IsolatedAsyncioTestCase):
         async with self.browser() as b:
             with self.assertRaises(ExternalPolicyDenied):
                 await b.browse(self.url+"/postform",
-                    validate_actions([{"type":"search_get","query":"hello"}]))
+                    validate_actions([{"type":"search_get","path":"/submit","field":"q","query":"hello"}]))
         self.assertEqual(self.server.requests,["/postform"])
 
     async def test_dom_swap_between_checks_does_not_follow(self):
