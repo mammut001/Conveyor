@@ -20,7 +20,7 @@ from workflow_browser_contract import parse_plan
 from workflow_browser_journal import BrowserAttemptJournal, JournalConflict
 from workflow_browser_playwright import (
     BrowserPolicyError, FIXTURE_ROOT, LocalPlaywrightBrowser,
-    validate_fixture_origin,
+    assert_safe_fixture_markup, validate_fixture_origin,
 )
 
 
@@ -166,6 +166,29 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertTrue(all(row["status"] == "verified"
                             for row in self.journal.summaries(plan()["plan_id"])))
 
+    def test_denial_journal_failure_from_exception_requires_reconciliation(self):
+        self.transition("begin", "start-browser001")
+        browser = FixtureBrowser()
+        from workflow_browser_playwright import BrowserPolicyError
+        browser.apply = lambda _op: (_ for _ in ()).throw(BrowserPolicyError("origin_denied"))
+        with patch.object(self.journal, "record_denial", side_effect=OSError("audit db failed")):
+            result = self.execute(browser)
+        self.assertEqual((result.status, result.reason),
+                         ("reconciliation_required", "journal_record_failed"))
+        self.assertEqual(self.journal.state(plan()["plan_id"], 0)["status"], "dispatched")
+        self.assertEqual(self.store.get(self.id)["state"], "active")
+
+    def test_denial_journal_failure_from_readback_requires_reconciliation(self):
+        self.transition("begin", "start-browser001")
+        browser = FixtureBrowser()
+        browser._denial_reason = "origin_denied"
+        browser.readback = lambda _op: False
+        with patch.object(self.journal, "record_denial", side_effect=OSError("audit db failed")):
+            result = self.execute(browser)
+        self.assertEqual((result.status, result.reason),
+                         ("reconciliation_required", "journal_record_failed"))
+        self.assertEqual(self.journal.state(plan()["plan_id"], 0)["status"], "dispatched")
+
     def test_takeover_during_action_leaves_uncertain_journal(self):
         self.transition("begin", "start-browser001")
         browser = FixtureBrowser()
@@ -204,6 +227,20 @@ class BrowserGateTests(unittest.TestCase):
                 validate_fixture_origin(origin)
         self.assertEqual(validate_fixture_origin("http://localhost:9090"),
                          "http://localhost:9090")
+
+
+class MarkupPolicyTests(unittest.TestCase):
+    def test_initial_html_declarative_closed_and_open_shadows_denied(self):
+        for mode in ("closed", "open", "CLOSED"):
+            html = (f'<div><template shadowrootmode="{mode}">'
+                    '<input type="password"></template></div>')
+            with self.subTest(mode=mode), self.assertRaisesRegex(
+                    BrowserPolicyError, "declarative_shadow_denied"):
+                assert_safe_fixture_markup(html.encode("utf-8"))
+
+    def test_normal_checked_in_fixture_html_allowed(self):
+        for filename in ("welcome.html", "details.html", "review.html"):
+            assert_safe_fixture_markup((FIXTURE_ROOT / filename).read_bytes())
 
 
 class LocalFixturePlaywrightTests(unittest.TestCase):
@@ -403,15 +440,77 @@ class LocalFixturePlaywrightTests(unittest.TestCase):
             document.body.append(document.createElement('unknown-portal-field'));
         }""", "uninspectable_shadow_host")
 
+    def test_declarative_shadow_template_in_live_dom_denied(self):
+        self._assert_dom_denied("""() => {
+            const template = document.createElement('template');
+            template.setAttribute('shadowrootmode', 'closed');
+            template.innerHTML = '<input type="password">';
+            document.body.append(template);
+        }""", "declarative_shadow_denied")
+
+    def test_element_set_html_unsafe_denied(self):
+        self.browser.apply(parse_plan(plan()).actions[0])
+        supported = self.browser._tab.evaluate("""() => {
+            if (typeof Element.prototype.setHTMLUnsafe !== 'function') return false;
+            const host = document.createElement('div');
+            document.body.append(host);
+            try {
+                host.setHTMLUnsafe('<template shadowrootmode="closed"><input type="password"></template>');
+            } catch (error) {}
+            return true;
+        }""")
+        if supported:
+            with self.assertRaisesRegex(BrowserPolicyError, "unsafe_html_api_denied"):
+                self.browser._check()
+
+    def test_document_parse_html_unsafe_denied(self):
+        self.browser.apply(parse_plan(plan()).actions[0])
+        supported = self.browser._tab.evaluate("""() => {
+            if (typeof Document.parseHTMLUnsafe !== 'function') return false;
+            try {
+                Document.parseHTMLUnsafe('<template shadowrootmode="closed"><input type="password"></template>');
+            } catch (error) {}
+            return true;
+        }""")
+        if supported:
+            with self.assertRaisesRegex(BrowserPolicyError, "unsafe_html_api_denied"):
+                self.browser._check()
+
+    def test_shadow_root_set_html_unsafe_denied(self):
+        self.browser.apply(parse_plan(plan()).actions[0])
+        supported = self.browser._tab.evaluate("""() => {
+            if (typeof ShadowRoot.prototype.setHTMLUnsafe !== 'function') return false;
+            const host = document.createElement('div');
+            document.body.append(host);
+            const root = host.attachShadow({mode: 'open'});
+            try {
+                root.setHTMLUnsafe('<template shadowrootmode="closed"><input type="password"></template>');
+            } catch (error) {}
+            return true;
+        }""")
+        if supported:
+            with self.assertRaisesRegex(BrowserPolicyError, "unsafe_html_api_denied"):
+                self.browser._check()
+
+    def test_webrtc_connection_is_refused(self):
+        self.browser.apply(parse_plan(plan()).actions[0])
+        self.browser._tab.evaluate("""() => {
+            try { new RTCPeerConnection({iceServers: [{urls: 'stun:stun.example.test'}]}); }
+            catch (error) {}
+        }""")
+        with self.assertRaisesRegex(BrowserPolicyError, "webrtc_denied"):
+            self.browser._check()
+        self.assertIn("webrtc_denied", self.browser._denial_reason)
+
     def test_websocket_is_blocked_before_connect(self):
         self.browser.apply(parse_plan(plan()).actions[0])
-        self.browser._tab.evaluate("""() => new Promise(resolve => {
-            const socket = new WebSocket('wss://example.com/private');
-            const done = () => resolve(true);
-            socket.addEventListener('close', done, {once: true});
-            socket.addEventListener('error', done, {once: true});
-            setTimeout(() => resolve(false), 2000);
-        })""")
+        # IMPORTANT: never await close/error: an intercepted WebSocket is
+        # intentionally never connected or closed synchronously in its route.
+        self.browser._tab.evaluate("""() => {
+            window.fixtureSocket = new WebSocket('ws://127.0.0.1:1/socket');
+            return window.fixtureSocket.readyState;
+        }""")
+        self.browser._tab.wait_for_timeout(100)
         self.assertEqual(self.browser._denial_reason, "websocket_denied")
         with self.assertRaisesRegex(BrowserPolicyError, "websocket_denied"):
             self.browser._check()
