@@ -12,6 +12,20 @@ import sqlite3
 from typing import Iterator
 
 
+# Deliberately fixed codes; never persist raw exception text, URL or DOM.
+DENIAL_CODES = frozenset({
+    "origin_denied", "unsafe_http_method", "fixture_content_mismatch",
+    "request_filter_error", "websocket_denied", "websocket_routing_unavailable",
+    "popup_denied", "download_denied", "closed_shadow_denied",
+    "uninspectable_shadow_host", "sensitive_or_submit_dom_denied",
+    "sensitive_autocomplete_denied", "browser_policy_violation",
+    "real_browser_disabled", "page_not_allowlisted", "fixture_marker_mismatch",
+    "unsafe_field", "sensitive_field_denied", "target_denied",
+    "unsafe_navigation_control", "action_denied", "field_assertion_failed",
+    "marker_denied", "page_precondition_failed",
+})
+
+
 class JournalConflict(Exception):
     pass
 
@@ -44,6 +58,7 @@ class BrowserAttemptJournal:
                     status TEXT NOT NULL CHECK (status IN ('dispatched','verified')),
                     before_page TEXT NOT NULL,
                     after_page TEXT NOT NULL,
+                    denial_reason TEXT,
                     PRIMARY KEY (plan_id, ordinal)
                 );
                 CREATE TABLE IF NOT EXISTS browser_workflow_bindings (
@@ -54,6 +69,10 @@ class BrowserAttemptJournal:
                     UNIQUE(workflow_id, step_ordinal)
                 );
             """)
+            # Backward-compatible migration of journals created by PR #108.
+            cols = {row["name"] for row in db.execute("PRAGMA table_info(browser_action_attempts)")}
+            if "denial_reason" not in cols:
+                db.execute("ALTER TABLE browser_action_attempts ADD COLUMN denial_reason TEXT")
 
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
@@ -88,7 +107,7 @@ class BrowserAttemptJournal:
     def state(self, plan_id: str, ordinal: int) -> dict | None:
         with self._db() as db:
             row = db.execute(
-                "SELECT plan_digest,kind,status,before_page,after_page "
+                "SELECT plan_digest,kind,status,before_page,after_page,denial_reason "
                 "FROM browser_action_attempts WHERE plan_id=? AND ordinal=?",
                 (plan_id, ordinal),
             ).fetchone()
@@ -111,10 +130,25 @@ class BrowserAttemptJournal:
                     raise JournalConflict("attempt bound to a different immutable action plan")
                 return str(row["status"])
             db.execute(
-                "INSERT INTO browser_action_attempts VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO browser_action_attempts "
+                "(plan_id,ordinal,plan_digest,kind,status,before_page,after_page) "
+                "VALUES (?,?,?,?,?,?,?)",
                 (plan_id, ordinal, digest, kind, "dispatched", before, after),
             )
             return "dispatched_new"
+
+    def record_denial(self, plan_id: str, ordinal: int, digest: str, reason: str) -> None:
+        """Bind the first safe filter reason to an uncertain dispatched action."""
+        if reason not in DENIAL_CODES:
+            raise ValueError("unsupported denial reason")
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "UPDATE browser_action_attempts SET denial_reason=? "
+                "WHERE plan_id=? AND ordinal=? AND plan_digest=? "
+                "AND status='dispatched' AND denial_reason IS NULL",
+                (reason, plan_id, ordinal, digest),
+            )
 
     def verify(self, plan_id: str, ordinal: int, digest: str) -> None:
         with self._db() as db:
@@ -130,7 +164,7 @@ class BrowserAttemptJournal:
     def summaries(self, plan_id: str) -> list[dict]:
         with self._db() as db:
             rows = db.execute(
-                "SELECT ordinal,kind,status,before_page,after_page "
+                "SELECT ordinal,kind,status,before_page,after_page,denial_reason "
                 "FROM browser_action_attempts WHERE plan_id=? ORDER BY ordinal", (plan_id,),
             ).fetchall()
             return [dict(row) for row in rows]
