@@ -194,6 +194,63 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         card.assert_awaited_once()
         self.assertEqual(self.server.posts,[])
 
+    async def assert_sensitive_fixture(self, html):
+        self.server.html=html
+        result=await prepare(self.settings,self.arg,operator_id="person",
+                             channel="web",chat_id="chat")
+        self.assertFalse(result.ok, str(result))
+        self.assertIn("g3_sensitive_page_denied", str(result), str(result))
+        self.assertEqual(self.server.posts,[])
+
+    async def test_detached_heading_and_document_title_blocked(self):
+        detached=(FORM.replace("<h1>Public feedback</h1>",
+                   "<h1>Checkout — Payment</h1><div>")
+                  .replace("</form>","</form></div>")
+                  .replace(">Send</button>",">Continue</button>"))
+        await self.assert_sensitive_fixture(detached)
+        await self.assert_sensitive_fixture(FORM.replace(
+            "<html>", "<html><head><title>Checkout — Payment</title></head>"))
+        await self.assert_sensitive_fixture(FORM.replace(
+            "Public feedback", "Close your account"))
+
+    async def test_form_labels_and_accessibility_hints_blocked(self):
+        cases=[
+            FORM.replace("Public feedback","Welcome back").replace(
+                '<button type="submit">', '<label>Password <input type="text" name="f2"></label><button type="submit">'),
+            FORM.replace("<label>Topic", "<label>Email"),
+            FORM.replace('<button type="submit">', '<input type="text" name="f2" placeholder="Card number"><button type="submit">'),
+            FORM.replace('<button type="submit">', '<input type="text" name="f2" title="One-time code"><button type="submit">'),
+            FORM.replace('<button type="submit">', '<input type="text" name="f2" aria-label="Security code"><button type="submit">'),
+            FORM.replace('<button type="submit">', '<span id="card-caption">CVV</span><input type="text" name="f2" aria-labelledby="card-caption"><button type="submit">'),
+        ]
+        for html in cases:
+            with self.subTest(html=html[-170:]):
+                await self.assert_sensitive_fixture(html)
+
+    async def test_icon_submit_aria_and_title_blocked(self):
+        for button in (
+            '<button type="submit" aria-label="Pay now">➜</button>',
+            '<button type="submit" title="Close your account">Continue</button>',
+            '<button type="submit" aria-label="Security code">➜</button>',
+        ):
+            with self.subTest(button=button):
+                await self.assert_sensitive_fixture(FORM.replace(
+                    '<button type="submit">Send</button>',button))
+
+    async def test_unicode_obfuscations_blocked(self):
+        cases=(
+            FORM.replace("Public feedback","Sign\u200b in"),
+            FORM.replace("Public feedback","Log\u00adin"),
+            FORM.replace("Public feedback","ｐａｙ now"),
+            FORM.replace('<button type="submit">Send</button>',
+                         '<button type="submit" aria-label="ｐａｙ now">➜</button>'),
+            FORM.replace('<button type="submit">Send</button>',
+                         '<button type="submit" title="Sign\u200b in">➜</button>'),
+        )
+        for html in cases:
+            with self.subTest(html=html[-170:]):
+                await self.assert_sensitive_fixture(html)
+
     async def test_footer_sign_in_link_does_not_block_public_feedback(self):
         self.server.html=FORM.replace("</body>",
             '<footer><a href="/login">Sign in</a></footer></body>')
