@@ -391,7 +391,8 @@ async def _request_confirmation(
         chat_id=msg.chat_id,
         channel=msg.channel,
     )
-    danger_label = _danger_label(tool_name, settings)
+    danger_label = ("external network access" if tool_name == "browser.read_webpage"
+                    else _danger_label(tool_name, settings))
     source = "routine" if msg.chat_id.startswith("routine-") else "chat"
     try:
         import approval_relay
@@ -418,6 +419,7 @@ async def _request_confirmation(
         f"⚠️ 危险操作需确认\n\n"
         f"工具: {tool_name}\n"
         f"说明: {summary}\n"
+        f"风险: {danger_label}\n"
     )
     if arg.strip():
         if tool_name == "service_restart":
