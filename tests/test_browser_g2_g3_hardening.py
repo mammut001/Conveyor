@@ -94,6 +94,8 @@ class HardeningTests(unittest.TestCase):
             dict(safe, submit_label="Delete my account"),
             dict(safe, target="https://demo.example/checkout"),
             dict(safe, submit_label="Pay now"),
+            dict(safe, submit_label="Pay"),
+            dict(safe, target="https://demo.example/delete"),
         ):
             self.assertTrue(sensitive_form("https://demo.example/form",form))
         self.assertTrue(sensitive_form("https://demo.example/login",safe))
