@@ -132,6 +132,45 @@ class PolicyTests(unittest.TestCase):
             self.assertNotEqual(browser.kill_file.parent, Path("/tmp"))
 
 
+
+class StartupDenialAuditTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_approval_is_audited_without_host(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"CONVEYOR_REAL_BROWSER": "1",
+                         "CONVEYOR_BROWSER_EXTERNAL_READONLY": "1"}, clear=True
+        ):
+            path = str(Path(directory) / "audit.db")
+            ledger, audit = ApprovalLedger(path), EgressAudit(path)
+            with self.assertRaisesRegex(ExternalPolicyDenied, "approval_missing"):
+                ExternalReadOnlyBrowser(task="missing", ledger=ledger, audit=audit)
+            with sqlite3.connect(path) as conn:
+                record = conn.execute(
+                    "SELECT domain, outcome, reason FROM browser_external_egress"
+                ).fetchone()
+            self.assertEqual(record, ("unknown", "denied", "approval_missing"))
+
+    async def test_dns_refusal_is_audited_before_browser_launch(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"CONVEYOR_REAL_BROWSER": "1",
+                         "CONVEYOR_BROWSER_EXTERNAL_READONLY": "1"}, clear=True
+        ):
+            path = str(Path(directory) / "audit.db")
+            ledger, audit = ApprovalLedger(path), EgressAudit(path)
+            ledger.approve(
+                task="dns_refusal", host=HOST, approver="operator",
+                expires_at=time.time() + 300, safe_paths=("/safe",))
+            with patch("workflow_browser_external.resolve_public_ipv4",
+                       side_effect=ExternalPolicyDenied("dns_private_address_denied")):
+                browser = ExternalReadOnlyBrowser(task="dns_refusal", ledger=ledger, audit=audit)
+                with self.assertRaisesRegex(ExternalPolicyDenied, "dns_private_address_denied"):
+                    await browser.__aenter__()
+            with sqlite3.connect(path) as conn:
+                record = conn.execute(
+                    "SELECT domain, outcome, reason FROM browser_external_egress"
+                ).fetchone()
+            self.assertEqual(record, (HOST, "denied", "dns_private_address_denied"))
+
+
 class _ConnectionCounter(socketserver.BaseRequestHandler):
     def handle(self):
         # Count accepted TCP sockets, including attempted TLS handshakes.
