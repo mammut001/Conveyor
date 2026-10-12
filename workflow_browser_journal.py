@@ -15,6 +15,8 @@ from typing import Iterator
 # Deliberately fixed codes; never persist raw exception text, URL or DOM.
 DENIAL_CODES = frozenset({
     "origin_denied", "unsafe_http_method", "fixture_content_mismatch",
+    "declarative_shadow_denied", "unsafe_fixture_markup",
+    "unsafe_html_api_denied", "webrtc_denied",
     "request_filter_error", "websocket_denied", "websocket_routing_unavailable",
     "popup_denied", "download_denied", "closed_shadow_denied",
     "uninspectable_shadow_host", "sensitive_or_submit_dom_denied",
