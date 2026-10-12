@@ -552,7 +552,11 @@ async def execute_confirmed(
         action="confirmed",
     )
     try:
-        if action.tool_name == "browser.browse_site":
+        if action.tool_name == "browser.g3_dispatch":
+            from personal_tools.browser_submit import approve_and_submit
+            result = await approve_and_submit(settings, action.arg,
+                                              operator_id=action.operator_id)
+        elif action.tool_name == "browser.browse_site":
             from personal_tools.browser_interact import approve_and_browse
             result = await approve_and_browse(settings, action.arg,
                                               operator_id=action.operator_id)
