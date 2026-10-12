@@ -57,6 +57,10 @@ async def prepare(settings,arg,*,operator_id,channel="web",chat_id="",**_kwargs)
         _ensure()
         if not operator_id or not channel or not chat_id:
             raise ExternalPolicyDenied("g3_operator_context_missing")
+        if channel not in ("web", "telegram"):
+            raise ExternalPolicyDenied("g3_review_channel_unsupported")
+        if channel == "telegram" and not getattr(settings, "approval_relay_enabled", False):
+            raise ExternalPolicyDenied("g3_relay_required")
         url,index,fields=validate_request(arg)
         b,l,t=_context(settings,operator_id,url)
         try:
@@ -71,6 +75,16 @@ async def prepare(settings,arg,*,operator_id,channel="web",chat_id="",**_kwargs)
         if channel == "telegram":
             from browser_g3_telegram import send_preview
             if not await asyncio.to_thread(send_preview, settings, chat_id,
+                    json.dumps({"token":token,"hash":hashval})):
+                advance(settings,token,"pending","denied")
+                raise ExternalPolicyDenied("g3_telegram_preview_unavailable")
+        # The relay may notify Telegram for a Web-origin request; send the
+        # screenshot to the configured allowed operator before any button.
+        channels = getattr(settings,"approval_relay_channels",()) or ()
+        telegram_target = getattr(settings,"telegram_allowed_user_id",None)
+        if channel == "web" and "telegram" in channels and telegram_target and getattr(settings,"telegram_bot_token",None):
+            from browser_g3_telegram import send_preview
+            if not await asyncio.to_thread(send_preview, settings, str(telegram_target),
                     json.dumps({"token":token,"hash":hashval})):
                 advance(settings,token,"pending","denied")
                 raise ExternalPolicyDenied("g3_telegram_preview_unavailable")
@@ -96,13 +110,16 @@ async def prepare(settings,arg,*,operator_id,channel="web",chat_id="",**_kwargs)
             raise
         except Exception as exc:
             raise ExternalPolicyDenied("g3_relay_unavailable") from exc
-        # Local web console inbox works with relay off. Telegram requires a
-        # working relay for outbound approval notice and remote decisions.
-        if channel!="web" and not getattr(settings,"approval_relay_enabled",False):
-            from handlers.tools.confirm import pop_pending
-            pop_pending(pending.token)
-            advance(settings,token,"pending","denied")
-            raise ExternalPolicyDenied("g3_relay_required")
+        # Relay only notifies OTHER channels; send Telegram-origin requests
+        # an actionable card in their own chat after DB publication.
+        if channel == "telegram":
+            from browser_g3_notifications import origin_telegram
+            if not await origin_telegram(settings,pending,visible):
+                from handlers.tools.confirm import pop_pending
+                pop_pending(pending.token)
+                approval_relay.mark_local(settings,pending.token,"cancelled")
+                advance(settings,token,"pending","denied")
+                raise ExternalPolicyDenied("g3_telegram_card_unavailable")
         return ToolResult(True, f"awaiting human G3 preview approval: {hashval}; "
                           f"expires in 5 minutes; no submit dispatched")
     except ExternalPolicyDenied as exc:
