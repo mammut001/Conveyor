@@ -105,7 +105,45 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(WorkflowConflict):
             self.transition(item, "complete", "bypass-mfa")
         item = self.transition(item, "confirm_human", "mfa-confirmed")
+        self.assertEqual(item["state"], "needs_reverification")
+        self.assertEqual(item["steps"][0]["state"], "needs_reverification")
+        self.assertEqual(item["steps"][0]["attempts"], 1)
+        with self.assertRaises(WorkflowConflict):
+            self.transition(item, "complete", "skip-unfinished-work")
+        with self.assertRaises(WorkflowConflict):
+            self.transition(item, "begin", "restart-unsafe-browser")
+        # A new store simulates process restart and restores the exact checkpoint.
+        restored = WorkflowStore(self.settings).get(item["id"])
+        self.assertEqual(restored["state"], "needs_reverification")
+        restored = self.transition(restored, "pause", "review-pause01")
+        restored = self.transition(restored, "resume", "review-resume01")
+        self.assertEqual(restored["state"], "needs_reverification")
+        restored = self.transition(restored, "resume_verified", "manual-recheck01")
+        self.assertEqual(restored["steps"][0]["state"], "running")
+        self.assertEqual(restored["steps"][0]["attempts"], 1)
+        item = self.transition(restored, "complete", "browser-remaining-work")
         self.assertEqual(item["state"], "completed")
+
+    def test_midstep_handoff_does_not_skip_following_work(self):
+        steps = [
+            {"kind": "browser", "label": "Fill multiple mock portal pages"},
+            {"kind": "work", "label": "Review synthetic draft fields"},
+            {"kind": "submission", "label": "Human-only simulated submission review"},
+        ]
+        item = self.create(request_id="create-resume1234", steps=steps)
+        item = self.transition(item, "begin", "mock-start-browser")
+        item = self.transition(item, "request_human", "mock-mfa-required")
+        item = self.transition(item, "confirm_human", "mock-mfa-finished")
+        self.assertEqual(item["steps"][0]["state"], "needs_reverification")
+        self.assertEqual(item["steps"][1]["state"], "pending")
+        self.assertEqual(item["steps"][2]["state"], "pending")
+        with self.assertRaises(WorkflowConflict):
+            self.transition(item, "complete", "premature-complete01")
+        item = self.transition(item, "resume_verified", "verify-remaining01")
+        self.assertEqual(item["steps"][0]["state"], "running")
+        item = self.transition(item, "complete", "finish-browser-pages")
+        self.assertEqual(item["steps"][1]["state"], "ready")
+        self.assertEqual(item["steps"][2]["state"], "pending")
 
     def test_pause_resume_retry_and_terminal_cancel(self):
         item = self.create(steps=[{"kind": "work", "label": "Prepare sample draft"}])
