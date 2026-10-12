@@ -207,6 +207,8 @@
 .workflow-finished { margin: 6px 23px 18px; border: 1px solid #d7e9dd; border-radius: 13px; padding: 15px 17px; color: #277554; background: #f3faf5; }
 .workflow-finished strong { display: block; font-size: 13px; }
 .workflow-finished p { margin: 4px 0 0; color: #517962; font-size: 12px; }
+.workflow-finished--cancelled { border-color: #e2e4e8; color: #60656d; background: #f7f8fa; }
+.workflow-finished--cancelled p { color: #727780; }
 .workflow-controls { padding: 15px 23px 19px; border-top: 1px solid #eeeff1; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 .workflow-main-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .workflow-more-actions { position: relative; }
