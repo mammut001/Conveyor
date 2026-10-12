@@ -19,7 +19,7 @@ DANGER = re.compile(
     r"(checkout|purchase|payment|credit.card|billing|cvv|pay now|place order|shopping cart|"
     r"log[-_/ ]?in|sign[-_/ ]?in|sign[-_/ ]?up|password|"
     r"account[-_/ ]*(?:delet|clos|remov|deactiv)|"
-    r"(?:delet|clos|remov|deactiv)[-_/ ]*(?:my[-_/ ]*)?account|"
+    r"(?:delete|deletion|remove|removal|close|deactivate)[-_/ ]*(?:my[-_/ ]*)?account|"
     r"cancel[-_/ ]?subscription|"
     r"付款|支付|结账|登录|账户删除|删除账户)",re.I)
 SENSITIVE = re.compile(
