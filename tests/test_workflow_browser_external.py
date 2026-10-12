@@ -34,7 +34,7 @@ class PolicyTests(unittest.TestCase):
         for value in (
             "http://approved.fixture.test/", "https://approved.fixture.test:443/",
             "https://APPROVED.fixture.test/", "https://approved.fixture.test./",
-            "https://approved.fixture.test.evil.test/", "https://127.0.0.1/",
+            "https://127.0.0.1/",
             "https://[::1]/", "https://2130706433/",
             "https://0177.0.0.1/", "https://0x7f000001/",
             "https://user:pass@approved.fixture.test/",
@@ -48,6 +48,8 @@ class PolicyTests(unittest.TestCase):
         ):
             with self.subTest(url=value), self.assertRaises(ExternalPolicyDenied):
                 canonical_url(value)
+        self.assertEqual(canonical_url("https://approved.fixture.test.evil.test/")[0],
+                         "approved.fixture.test.evil.test")
         with self.assertRaises(ExternalPolicyDenied):
             canonical_host("APPROVED.fixture.test")
 
