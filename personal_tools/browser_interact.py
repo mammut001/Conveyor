@@ -118,11 +118,13 @@ async def _browse_granted(settings, arg, operator_id):
                    approver="operator_" + _operator_key(operator_id)[:24],
                    safe_paths=paths, methods=("GET",))
     try:
-        from personal_tools.browser_approval_scope import assert_live, query_is_live
+        from personal_tools.browser_approval_scope import (
+            assert_live, query_is_live, path_is_live)
         async def run():
             async with G2Browser(task=task, ledger=ledger,
                                  audit=audit, query_paths=query_paths,
                                  grant_check=lambda: assert_live(settings,operator_id,url,actions),
+                                 path_check=lambda target: path_is_live(settings,operator_id,target),
                                  query_check=lambda target,field: query_is_live(settings,operator_id,target,field)) as browser:
                 return await browser.browse(url, actions)
         page = await asyncio.wait_for(run(), timeout=30)
