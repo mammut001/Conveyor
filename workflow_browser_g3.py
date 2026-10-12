@@ -70,7 +70,7 @@ FORM_JS = r"""(forms, args) => {
      if(type==='checkbox') {
        if(typeof val!=='boolean') return {error:'g3_invalid_field_value'};
        c.checked=val;
-     } else if(typeof val==='string' && val.length<=120 && !/[\\r\\n\\0]/.test(val)) {
+     } else if(typeof val==='string' && val.length<=120 && !/[\r\n\0]/.test(val)) {
        if(tag==='select' && ![...c.options].some(o=>o.value===val && !o.disabled))
          return {error:'g3_invalid_select_value'};
        c.value=val;
@@ -85,7 +85,7 @@ FORM_JS = r"""(forms, args) => {
  }
  for(const key of Object.keys(changed)) if(!found.has(key)) return {error:'g3_unknown_field'};
  const method=f.method.toUpperCase(), target=f.action;
- if(!['GET','POST'].includes(method) || !/^application\\/x-www-form-urlencoded/i.test(f.enctype) ||
+ if(!['GET','POST'].includes(method) || !/^application\/x-www-form-urlencoded/i.test(f.enctype) ||
     (f.getAttribute('accept-charset')||'').toLowerCase().replace(/[-_]/g,'')!==''
     && (f.getAttribute('accept-charset')||'').toLowerCase().replace(/[-_]/g,'')!=='utf8')
    return {error:'g3_form_encoding_denied'};
