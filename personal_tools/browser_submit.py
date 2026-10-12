@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import json
+import os
 import secrets
 import sqlite3
 import time
@@ -72,7 +73,7 @@ async def prepare(settings,arg,*,operator_id,channel="web",chat_id="",**_kwargs)
         _path_live(settings,operator_id,preview["target"])
         token,hashval=save(settings,operator_id=operator_id,url=url,
                            form_ref=index,fields=fields,preview=preview,screenshot=screen)
-        if channel == "telegram":
+        if channel == "telegram" and os.getenv("CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT") == "1":
             from browser_g3_telegram import send_preview
             if not await asyncio.to_thread(send_preview, settings, chat_id,
                     json.dumps({"token":token,"hash":hashval})):
@@ -82,7 +83,7 @@ async def prepare(settings,arg,*,operator_id,channel="web",chat_id="",**_kwargs)
         # screenshot to the configured allowed operator before any button.
         channels = getattr(settings,"approval_relay_channels",()) or ()
         telegram_target = getattr(settings,"telegram_allowed_user_id",None)
-        if channel == "web" and "telegram" in channels and telegram_target and getattr(settings,"telegram_bot_token",None):
+        if (channel == "web" and "telegram" in channels and telegram_target and getattr(settings,"telegram_bot_token",None) and os.getenv("CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT") == "1"):
             from browser_g3_telegram import send_preview
             if not await asyncio.to_thread(send_preview, settings, str(telegram_target),
                     json.dumps({"token":token,"hash":hashval})):
