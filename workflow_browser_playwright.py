@@ -6,6 +6,7 @@ checked-in fixture bytes. Never expose this port to arbitrary workflow input.
 from __future__ import annotations
 
 import hashlib
+from html.parser import HTMLParser
 import logging
 import os
 from pathlib import Path
@@ -16,6 +17,31 @@ from workflow_browser_contract import BrowserAction
 FIXTURE_ROOT = Path(__file__).resolve().parent / "tests" / "fixtures" / "browser_portal"
 ALLOWED_FILES = frozenset({"welcome.html", "details.html", "review.html"})
 _LOG = logging.getLogger(__name__)
+
+
+class _FixtureMarkupScanner(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.denied = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "template" and any(key == "shadowrootmode" for key, _ in attrs):
+            self.denied = True
+
+    handle_startendtag = handle_starttag
+
+
+def assert_safe_fixture_markup(content: bytes) -> None:
+    """Refuse declarative shadow roots before an attested response is rendered."""
+    scanner = _FixtureMarkupScanner()
+    try:
+        scanner.feed(content.decode("utf-8", errors="strict"))
+        scanner.close()
+    except (UnicodeError, ValueError) as exc:
+        raise BrowserPolicyError("unsafe_fixture_markup") from exc
+    if scanner.denied:
+        raise BrowserPolicyError("declarative_shadow_denied")
+
 
 
 class BrowserPolicyError(Exception):
@@ -70,7 +96,10 @@ class LocalPlaywrightBrowser:
         from playwright.sync_api import sync_playwright
         try:
             self._pw = sync_playwright().start()
-            self._browser = self._pw.chromium.launch(headless=True)
+            self._browser = self._pw.chromium.launch(
+                headless=True,
+                args=["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"],
+            )
             self._context = self._browser.new_context(
                 accept_downloads=False, service_workers="block",
                 permissions=[], java_script_enabled=True,
@@ -83,14 +112,36 @@ class LocalPlaywrightBrowser:
             self._context.route_web_socket("**/*", self._deny_websocket)
             self._context.add_init_script("""
                 (() => {
+                  // Deny APIs that can create uninspectable closed shadow roots.
+                  const deny = (reason) => {
+                    window.__conveyorUnsafeDOMReason = reason;
+                    throw new Error(reason);
+                  };
                   const original = Element.prototype.attachShadow;
                   Element.prototype.attachShadow = function(init) {
-                    if (!init || init.mode !== 'open') {
-                      window.__conveyorClosedShadowAttempt = true;
-                      throw new Error('shadow_mode_denied');
-                    }
+                    if (!init || init.mode !== 'open')
+                      return deny('closed_shadow_denied');
                     return original.call(this, init);
                   };
+                  const blockUnsafeHTML = function() {
+                    return deny('unsafe_html_api_denied');
+                  };
+                  if (typeof Element.prototype.setHTMLUnsafe === 'function')
+                    Element.prototype.setHTMLUnsafe = blockUnsafeHTML;
+                  if (typeof ShadowRoot.prototype.setHTMLUnsafe === 'function')
+                    ShadowRoot.prototype.setHTMLUnsafe = blockUnsafeHTML;
+                  if (typeof Document.parseHTMLUnsafe === 'function')
+                    Document.parseHTMLUnsafe = blockUnsafeHTML;
+                  // Chromium's launch flag blocks non-proxied WebRTC UDP.
+                  // Refuse WebRTC entirely in this mock-only fixture.
+                  for (const name of ['RTCPeerConnection', 'webkitRTCPeerConnection']) {
+                    if (name in window)
+                      Object.defineProperty(window, name, {
+                        configurable: false, writable: false, value: function() {
+                          return deny('webrtc_denied');
+                        }
+                      });
+                  }
                 })();
             """)
             self._tab = self._context.new_page()
@@ -134,9 +185,9 @@ class LocalPlaywrightBrowser:
         download.cancel()
 
     def _deny_websocket(self, websocket) -> None:
-        # No connect() means the handshake is never forwarded to a server.
+        # Do not call close() in the route callback: re-entering the sync
+        # Playwright driver deadlocks. No connect_to_server() = no handshake.
         self._mark_denial("websocket_denied")
-        websocket.close(code=1008)
 
     def _file_for_url(self, url: str) -> Path:
         try:
@@ -157,6 +208,7 @@ class LocalPlaywrightBrowser:
             if route.request.method != "GET":
                 raise BrowserPolicyError("unsafe_http_method")
             # Fetch only from the vetted local origin, with redirects disabled.
+            assert_safe_fixture_markup(expected)
             response = route.fetch(max_redirects=0, timeout=5000)
             if response.status != 200 or hashlib.sha256(response.body()).digest() != hashlib.sha256(expected).digest():
                 raise BrowserPolicyError("fixture_content_mismatch")
@@ -175,10 +227,12 @@ class LocalPlaywrightBrowser:
         and unknown custom-element hosts are rejected conservatively.
         """
         return self._tab.evaluate("""() => {
-            if (window.__conveyorClosedShadowAttempt)
-                return 'closed_shadow_denied';
+            if (window.__conveyorUnsafeDOMReason)
+                return window.__conveyorUnsafeDOMReason;
             const walk = (root) => {
                 for (const el of root.querySelectorAll('*')) {
+                    if (el.localName === 'template' && el.hasAttribute('shadowrootmode'))
+                        return 'declarative_shadow_denied';
                     if (el.hasAttribute('contenteditable') || el.isContentEditable)
                         return 'sensitive_or_submit_dom_denied';
                     if (el instanceof HTMLInputElement) {
