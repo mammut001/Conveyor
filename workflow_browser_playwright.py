@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from workflow_browser_contract import BrowserAction
+from workflow_browser_guards import EXTRA_INIT_SCRIPT, inspect_page_via_cdp
 
 FIXTURE_ROOT = Path(__file__).resolve().parent / "tests" / "fixtures" / "browser_portal"
 ALLOWED_FILES = frozenset({"welcome.html", "details.html", "review.html"})
@@ -144,6 +145,7 @@ class LocalPlaywrightBrowser:
                   }
                 })();
             """)
+            self._context.add_init_script(EXTRA_INIT_SCRIPT)
             self._tab = self._context.new_page()
             self._tab.on("popup", self._reject_popup)
             self._tab.on("download", self._reject_download)
@@ -274,6 +276,8 @@ class LocalPlaywrightBrowser:
                 self._mark_denial(str(exc))
                 raise
             denied = self._inspect_dom()
+            if denied is None:
+                denied = inspect_page_via_cdp(self._tab)
             if denied is not None:
                 self._mark_denial(denied)
                 raise BrowserPolicyError(denied)
