@@ -24,7 +24,7 @@ KINDS = frozenset({"work", "browser", "documents", "human", "submission"})
 HUMAN_KINDS = frozenset({"human", "submission"})
 ACTIONS = frozenset({
     "begin", "complete", "fail", "retry", "request_human", "confirm_human",
-    "pause", "resume", "cancel",
+    "pause", "resume", "resume_verified", "cancel",
 })
 MAX_STEPS = 40
 MAX_ATTEMPTS = 5
@@ -254,11 +254,22 @@ class WorkflowStore:
             elif action == "resume":
                 if state != "paused":
                     raise WorkflowConflict("workflow is not paused")
-                new_state = "failed" if step_state == "failed" else "active"
+                new_state = (
+                    "failed" if step_state == "failed"
+                    else "needs_reverification" if step_state == "needs_reverification"
+                    else "active"
+                )
             else:
                 if state == "paused":
                     raise WorkflowConflict("workflow is paused")
-                if action == "begin":
+                if action == "resume_verified":
+                    # A human took over *part* of a normal running step.
+                    # Confirming the handoff alone cannot complete the step;
+                    # operator must explicitly recheck the remaining work.
+                    if step_state != "needs_reverification" or state != "needs_reverification":
+                        raise WorkflowConflict("no interrupted step awaiting reverification")
+                    new_step, new_state = "running", "active"
+                elif action == "begin":
                     if step_state != "ready" or step_kind in HUMAN_KINDS or attempts >= MAX_ATTEMPTS:
                         raise WorkflowConflict("step cannot begin")
                     new_step = "running"
@@ -283,7 +294,14 @@ class WorkflowStore:
                 elif action == "confirm_human":
                     if step_state != "waiting_for_human":
                         raise WorkflowConflict("no human checkpoint pending")
-                    new_step = "completed"
+                    if step_kind in HUMAN_KINDS:
+                        # Human-only checklist item: operator confirmation
+                        # completes just this checkpoint, not a real submission.
+                        new_step = "completed"
+                    else:
+                        # Handoff interrupted a running browser/work/documents
+                        # step: DO NOT silently skip unfinished work after MFA.
+                        new_step, new_state = "needs_reverification", "needs_reverification"
                 if new_step == "completed":
                     following = db.execute(
                         "SELECT ordinal,kind FROM workflow_steps "
