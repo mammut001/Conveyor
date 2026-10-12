@@ -62,12 +62,16 @@ def parse_plan(raw: Any) -> BrowserPlan:
         expected_keys = {"kind", "on_page", "target", "expect_page"}
         if kind in ("fill", "assert_field"):
             expected_keys.add("value")
-        if set(op) != expected_keys or kind not in OPERATIONS:
+        if not isinstance(kind, str) or set(op) != expected_keys or kind not in OPERATIONS:
             raise InvalidBrowserPlan("unexpected action keys or kind")
         current = op["on_page"]
         after = op["expect_page"]
         target = op["target"]
-        if current not in PAGES or after not in PAGES or not isinstance(target, str):
+        # Type-check before frozenset membership: an unhashable list/dict
+        # must fail as InvalidBrowserPlan, not an unexpected TypeError.
+        if (not isinstance(current, str) or not isinstance(after, str)
+                or not isinstance(target, str)
+                or current not in PAGES or after not in PAGES):
             raise InvalidBrowserPlan("invalid page or target")
         value = op.get("value", "")
         if kind == "open":
