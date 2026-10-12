@@ -121,6 +121,16 @@ def assert_live(settings, operator_id, url, actions):
         raise ExternalPolicyDenied("g2_operator_grant_revoked")
 
 
+def path_is_live(settings, operator_id, url):
+    """Revalidate every destination GET before G2 requests the network."""
+    _requested_url(url)
+    key = _operator_key(operator_id)
+    with closing(_connect(settings)) as conn:
+        row = conn.execute("""SELECT expires_at FROM browser_agent_grants
+            WHERE operator_key=? AND url=?""", (key, url)).fetchone()
+    return row is not None and row[0] > time.time()
+
+
 def query_is_live(settings, operator_id, url, field):
     key = _operator_key(operator_id)
     with closing(_connect(settings)) as conn:
