@@ -30,7 +30,8 @@ def validate_actions(actions):
         "paginate": ({"type"},),
         "expand": ({"type", "index"},),
         "scroll": ({"type", "pixels"},),
-        "search_get": ({"type", "query"}, {"type", "query", "index"}),
+        "search_get": ({"type", "query", "path", "field"},
+                       {"type", "query", "index", "path", "field"}),
     }
     for action in actions:
         if not isinstance(action, dict) or action.get("type") not in specs:
@@ -46,6 +47,14 @@ def validate_actions(actions):
         if "pixels" in action and (type(action["pixels"]) is not int
                                    or not 1 <= action["pixels"] <= 1500):
             raise ExternalPolicyDenied("g2_schema_denied")
+        if "path" in action:
+            from workflow_browser_external_identity import PATH_RE
+            if (not isinstance(action["path"], str) or
+                    not PATH_RE.fullmatch(action["path"]) or
+                    "//" in action["path"] or ".." in action["path"].split("/") or
+                    not isinstance(action.get("field"), str) or
+                    not FIELD_RE.fullmatch(action["field"])):
+                raise ExternalPolicyDenied("g2_search_scope_denied")
         if "query" in action and (not isinstance(action["query"], str)
                                   or not QUERY_RE.fullmatch(action["query"])):
             raise ExternalPolicyDenied("g2_query_denied")
@@ -77,13 +86,31 @@ def parse_query_url(url):
 # All JavaScript below is static, provided by trusted code, never by a webpage
 # or model. It reads only link metadata, not form field values or credentials.
 LINKS_JS = r"""(nodes) => nodes.map((a,i) => {
- const r=a.getBoundingClientRect(), s=getComputedStyle(a);
- const x=r.left+r.width/2, y=r.top+r.height/2;
- const hit=document.elementFromPoint(x,y);
- return {index:i, text:(a.innerText||'').trim().slice(0,100), href:a.href,
- rel:a.rel, ok:r.width>0 && r.height>0 && x>=0 && y>=0 &&
- x<innerWidth && y<innerHeight && s.visibility==='visible' &&
- s.display!=='none' && hit && hit.closest('a')===a};
+ const r=a.getBoundingClientRect();
+ let clipped=false, opacity=1;
+ let left=0, top=0, right=innerWidth, bottom=innerHeight;
+ for(let p=a; p && p.nodeType===1; p=p.parentElement) {
+   const s=getComputedStyle(p);
+   opacity*=Number(s.opacity);
+   if(s.display==='none' || s.visibility!=='visible' ||
+      s.clipPath!=='none' || s.clip!=='auto' || s.transformStyle==='preserve-3d') clipped=true;
+   if(['hidden','clip','scroll','auto'].includes(s.overflowX) ||
+      ['hidden','clip','scroll','auto'].includes(s.overflowY)) {
+     const b=p.getBoundingClientRect();
+     left=Math.max(left,b.left); top=Math.max(top,b.top);
+     right=Math.min(right,b.right); bottom=Math.min(bottom,b.bottom);
+   }
+ }
+ const x0=Math.max(r.left,left), y0=Math.max(r.top,top);
+ const x1=Math.min(r.right,right), y1=Math.min(r.bottom,bottom);
+ const goodSize=r.width>=4 && r.height>=4 && x1-x0>=4 && y1-y0>=4;
+ const points=[[.5,.5],[.2,.2],[.8,.2],[.2,.8],[.8,.8]];
+ const hits=goodSize && points.every(([u,v])=>{
+   const hit=document.elementFromPoint(x0+(x1-x0)*u,y0+(y1-y0)*v);
+   return hit && hit.closest('a')===a;
+ });
+ return {index:i,text:(a.innerText||'').trim().slice(0,100),
+   href:a.href,rel:a.rel,ok:!clipped && opacity>=.1 && goodSize && hits};
 }).filter(a=>a.ok && a.text)"""
 FORMS_JS = r"""(nodes) => nodes.map((f,index)=>{
  const controls=[...f.querySelectorAll('input,textarea,select,button')];
@@ -97,11 +124,15 @@ FORMS_JS = r"""(nodes) => nodes.map((f,index)=>{
 
 
 class G2Browser(ExternalReadOnlyBrowser):
-    def __init__(self, *, query_paths=frozenset(), **kwargs):
+    def __init__(self, *, query_paths=frozenset(), grant_check=None,
+                 query_check=None, path_check=None, **kwargs):
         if not enabled():
             raise ExternalPolicyDenied("g2_disabled")
         super().__init__(**kwargs)
         self.query_paths = frozenset(query_paths)
+        self._grant_check = grant_check
+        self._query_check = query_check
+        self._path_check = path_check
         self._requests_limit = MAX_ACTIONS + 2
         self._started = None
 
@@ -109,18 +140,25 @@ class G2Browser(ExternalReadOnlyBrowser):
         super()._ensure_live()
         if not enabled():
             raise ExternalPolicyDenied("g2_disabled")
+        if self._grant_check is not None:
+            self._grant_check()
         if self._started and time.monotonic() - self._started > 25:
             raise ExternalPolicyDenied("g2_time_budget_denied")
 
     def _verify_url(self, url, method):
         parsed = parse_query_url(url)
         if parsed is None:
-            return super()._verify_url(url, method)
+            super()._verify_url(url, method)
+            if self._path_check is not None and not self._path_check(url):
+                raise ExternalPolicyDenied("g2_path_approval_revoked")
+            return
         base, field, _ = parsed
         if method != "GET":
             raise ExternalPolicyDenied("unsafe_http_method")
         self.site.check_url(base, method)
-        if (base, field) not in self.query_paths:
+        if ((base, field) not in self.query_paths or
+                (self._query_check is not None and
+                 not self._query_check(base, field))):
             raise ExternalPolicyDenied("g2_query_approval_missing")
 
     def _request_path(self, url):
@@ -247,6 +285,9 @@ class G2Browser(ExternalReadOnlyBrowser):
                         raise ExternalPolicyDenied("g2_dom_race_denied")
                     form = forms[i]
                     canonical_url(form["action"])
+                    if (form["action"] != self.site.origin + a["path"] or
+                            form["field"] != a["field"]):
+                        raise ExternalPolicyDenied("g2_form_scope_mismatch")
                     if not FIELD_RE.fullmatch(form["field"]):
                         raise ExternalPolicyDenied("g2_form_denied")
                     dest = form["action"] + "?" + urlencode([(form["field"], a["query"])])

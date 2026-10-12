@@ -387,6 +387,13 @@ async def _request_confirmation(
         from personal_tools.registry import get_personal_tool
         pspec = get_personal_tool(tool_name)
         summary = pspec.summary if pspec else tool_name
+    if tool_name == "browser.browse_site":
+        from personal_tools.browser_approval_scope import summary as browser_summary
+        try:
+            summary = browser_summary(arg)
+        except Exception:
+            await port.reply(msg, "browser denied: invalid_or_unavailable")
+            return
     pending = create_pending(
         tool_name=tool_name,
         arg=arg,

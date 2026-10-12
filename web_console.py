@@ -405,6 +405,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         parts = self._segments(path)
         try:
+            if path.startswith("/api/browser/"):
+                import browser_approvals_admin
+                if browser_approvals_admin.get(self, path, query):
+                    return
             if path == "/api/workflows" or (len(parts) == 3 and parts[:2] == ["api", "workflows"]):
                 settings = self.server.control.settings
                 if not getattr(settings, "workflows_enabled", False):
@@ -821,6 +825,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if body is None:
             return
         try:
+            if parsed.path == "/api/browser/kill":
+                import browser_approvals_admin
+                if browser_approvals_admin.post(self, parsed.path, body):
+                    return
             if parsed.path == "/api/workflows" or (
                 len(parts) == 4 and parts[:2] == ["api", "workflows"] and parts[3] == "action"
             ):
@@ -1381,6 +1389,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         self._drain_body()
         parts = self._segments(parsed.path)
         try:
+            if parsed.path.startswith("/api/browser/"):
+                import browser_approvals_admin
+                if browser_approvals_admin.delete(self, parsed.path):
+                    return
             if len(parts) == 3 and parts[:2] == ["api", "agents"]:
                 if not self._agents_on():
                     return
