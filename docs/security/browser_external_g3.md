@@ -31,7 +31,9 @@ and checkbox. Named hidden and prefilled values are *included in the exact
 reviewed outgoing values* but never editable by the agent. Duplicate names,
 special encodings, named submit buttons, injected associated controls, hidden
 editor controls, credential/OTP/credit-card/file fields, complex realms, and
-suspicious checkout/login/delete URLs and page text are refused.
+suspicious checkout/login/delete forms are refused using the selected form's
+action path, fields, submit label, nearby heading and source URL (rather than
+unrelated footer text; a generic "sign in" footer link alone is not a login form).
 
 The preview stores, in a private 0600 SQLite DB, the source and target HTTPS
 URLs, GET/POST method, every outgoing name/value pair, control and form
@@ -47,6 +49,11 @@ Approval Inbox and optional Telegram/Feishu relay; expiry is **five minutes**.
 The Web inbox displays all outgoing values, method, target, preview hash and
 screenshot. Relay messages include the method, exact target, values and hash,
 and direct operators to the authenticated Web inbox to see the screenshot.
+When `CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT=1` is explicitly enabled
+(**default OFF**), the preview PNG is uploaded to **api.telegram.org** via
+Telegram `sendPhoto`, leaving the self-hosted server. Without this opt-in,
+Telegram approval messages can still be sent, but the screenshot remains
+available only in the authenticated Web Inbox.
 The approval token contains only the opaque preview ID and expected hash,
 not the form values. The internal `browser.g3_dispatch` is *not* a registered
 agent tool. Approval requires an operator decision through the authenticated
@@ -58,15 +65,23 @@ reapplies the same requested non-sensitive edits, and compares the complete
 new snapshot (including previously hidden fields, action URL and screenshot)
 against the originally approved hash. Mismatch, expiry, revoked G1 grant,
 disabled flag and kill switch all refuse dispatch. The normal G1 Chromium
-request filter stays GET-only; the final one-hop GET/POST uses a **separate,
-trusted, pinned-IP TLS** operation to the previously approved exact path. There
+request filter stays GET-only; the final one-hop submit allows **GET or POST**
+using a **separate, trusted, pinned-IP TLS** operation. The source URL and
+form-action URL each require prior approval of the **exact HTTPS host, port and
+path**. The form action must contain no arbitrary query string; for GET, its
+query parameters are generated **only from the field names and values bound to
+the approved preview SHA-256 hash**. For POST the exact same approved fields
+are encoded into the request body. There
 is no native browser click, page script or redirect following.
 
 The SQLite record transitions `pending → verifying → dispatched → done`,
 with `dispatched` committed **before** any outbound submit bytes are sent.
 Only one claimant wins. Any failure after dispatch yields
 `needs_reconciliation` and may have committed remotely. There is **no retry**
-or automatic replay, including after process crash. The operator must check the
+or automatic replay, including after process crash. On startup or listing,
+orphaned `dispatched` records are converted to `needs_reconciliation` and
+shown as **read-only Web Approval Inbox alerts**, with no approve/retry action.
+Same-process in-flight dispatches remain distinguishable. The operator must check the
 remote site independently before any new submission attempt. G3 egress logs
 record fixed metadata only; they do not contain field values or response bodies.
 
