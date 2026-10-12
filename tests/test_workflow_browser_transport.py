@@ -142,7 +142,7 @@ class SlowDripTLSTests(unittest.TestCase):
             context.load_cert_chain(str(cert), str(key))
             for version, headers in (
                 ("HTTP/1.0", b""),
-                ("HTTP/1.1", b"Content-Length: 10\\r\\nConnection: close\\r\\n"),
+                ("HTTP/1.1", b"Content-Length: 10\r\nConnection: close\r\n"),
             ):
                 with self.subTest(version=version):
                     class ResponseHandler(socketserver.BaseRequestHandler):
@@ -150,12 +150,12 @@ class SlowDripTLSTests(unittest.TestCase):
                             with context.wrap_socket(self.request, server_side=True) as tls:
                                 tls.settimeout(3)
                                 incoming = tls.makefile("rb")
-                                while incoming.readline() not in (b"\\r\\n", b"\\n", b""):
+                                while incoming.readline() not in (b"\r\n", b"\n", b""):
                                     pass
                                 tls.sendall(
-                                    (version + " 200 OK\\r\\n").encode("ascii")
-                                    + b"Content-Type: text/plain\\r\\n"
-                                    + headers + b"\\r\\n" + body
+                                    (version + " 200 OK\r\n").encode("ascii")
+                                    + b"Content-Type: text/plain\r\n"
+                                    + headers + b"\r\n" + body
                                 )
 
                     with socketserver.ThreadingTCPServer(
