@@ -207,7 +207,9 @@ class OfflineChromiumTests(unittest.IsolatedAsyncioTestCase):
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         # Trust only this test cert for the separate pinned HTTPS transport.
         # Chromium itself still uses the original fixture test override.
-        os.environ["SSL_CERT_FILE"] = str(cert)
+        self.ssl_cert_env = patch.dict(os.environ, {"SSL_CERT_FILE": str(cert)})
+        self.ssl_cert_env.start()
+        self.addCleanup(self.ssl_cert_env.stop)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         self.server.requests = []
         self.server.redirects = {
