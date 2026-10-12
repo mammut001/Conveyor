@@ -16,13 +16,13 @@ from personal_tools.browser_read import _requested_url
 from workflow_browser_g3_store import digest
 
 DANGER = re.compile(
-    r"(checkout|purchase|payment|pay now|place order|shopping cart|"
+    r"(checkout|purchase|payment|credit.card|billing|cvv|pay now|place order|shopping cart|"
     r"log[ -]?in|sign[ -]?in|sign[ -]?up|password|account delet|"
     r"close account|delete account|cancel subscription|"
     r"付款|支付|结账|登录|账户删除|删除账户)",re.I)
 SENSITIVE = re.compile(
     r"(password|passwd|secret|token|csrf|auth|session|cookie|"
-    r"credit|debit|card|cvv|cvc|iban|routing|bank|ssn|"
+    r"cc-|credit|debit|card|cvv|cvc|iban|routing|bank|ssn|"
     r"one.time|otp|2fa|mfa|email|phone|account)",re.I)
 FORM_JS = r"""(forms, args) => {
  const [index, changed] = args;
@@ -50,7 +50,7 @@ FORM_JS = r"""(forms, args) => {
    if ((type==='submit'||tag==='button') && name)
        return {error:'g3_named_submit_denied'};
    if (name && (!/^[A-Za-z][A-Za-z0-9_-]{0,39}$/.test(name) ||
-       /password|passwd|secret|token|csrf|auth|session|cookie|credit|debit|card|cvv|cvc|iban|routing|bank|ssn|one.time|otp|2fa|mfa|email|phone|account/i.test(name)))
+       /password|passwd|secret|token|csrf|auth|session|cookie|cc-|credit|debit|card|cvv|cvc|iban|routing|bank|ssn|one.time|otp|2fa|mfa|email|phone|account/i.test(name)))
        return {error:'g3_sensitive_field_denied'};
    if (name && found.has(name)) return {error:'g3_duplicate_field_denied'};
    if(name) found.add(name);
