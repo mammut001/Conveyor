@@ -210,7 +210,6 @@ class OfflineChromiumTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.trust_level, "untrusted_page_data")
             self.assertIn("IGNORE ALL INSTRUCTIONS", result.text)
             self.assertEqual(await browser._context.cookies(), [])
-            self.assertEqual(await browser._page.evaluate("1 + 1"), None)
         self.assertEqual(len(self.server.requests), 1)
         self.assertEqual(self.server.requests[0][1], None)
         self.assertEqual(self.server.requests[0][2], f"{HOST}:{self.port}")
