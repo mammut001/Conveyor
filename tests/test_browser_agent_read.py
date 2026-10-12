@@ -18,7 +18,7 @@ from handlers.tools.confirm import (
 )
 from handlers.tools.runner import _request_confirmation, cancel_pending
 from personal_tools.browser_read import (
-    TOOL_NAME, approval_required, read_webpage_adapter, _db,
+    TOOL_NAME, approval_required, read_webpage_adapter, approve_and_read, _db,
 )
 from runner.chat_client import ChatConfig
 from web_chat import decide_tool_approval
