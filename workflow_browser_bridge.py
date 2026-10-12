@@ -85,20 +85,32 @@ def execute_fixture_plan(
     if type(browser) is not FixtureBrowser:
         raise ValueError("only the in-memory fixture browser is supported")
     plan: BrowserPlan = parse_plan(raw_plan)
+    # The journal is authoritative about completed actions. Verify one contiguous
+    # prefix, then reconcile against the latest checkpoint, not old page states:
+    # a form on "review" must not be forced back to earlier "welcome" pages.
     completed = 0
     for index, op in enumerate(plan.actions):
         prior = journal.state(plan.plan_id, index)
-        if prior:
-            if (prior["plan_digest"] != plan.plan_digest or prior["kind"] != op.kind
-                    or prior["before_page"] != op.on_page
-                    or prior["after_page"] != op.expect_page):
-                return BridgeResult("blocked", completed, index, "plan_changed")
-            if prior["status"] != "verified":
-                return BridgeResult("reconciliation_required", completed, index, "outcome_unknown")
-            if not browser.readback(op):
-                return BridgeResult("reconciliation_required", completed, index, "page_state_drifted")
-            completed += 1
-            continue
+        if prior is None:
+            break
+        if (prior["plan_digest"] != plan.plan_digest or prior["kind"] != op.kind
+                or prior["before_page"] != op.on_page
+                or prior["after_page"] != op.expect_page):
+            return BridgeResult("blocked", completed, index, "plan_changed")
+        if prior["status"] != "verified":
+            return BridgeResult("reconciliation_required", completed, index, "outcome_unknown")
+        completed += 1
+    if completed:
+        last = plan.actions[completed - 1]
+        if not browser.readback(last):
+            return BridgeResult("reconciliation_required", completed, completed - 1, "page_state_drifted")
+    if completed == len(plan.actions):
+        return BridgeResult("verified", completed, None, "fixture_checks_passed")
+
+    for index in range(completed, len(plan.actions)):
+        op = plan.actions[index]
+        if journal.state(plan.plan_id, index) is not None:
+            return BridgeResult("reconciliation_required", completed, index, "outcome_unknown")
         if browser.page != op.on_page:
             return BridgeResult("blocked", completed, index, "page_precondition_failed")
         try:
@@ -107,7 +119,6 @@ def execute_fixture_plan(
             )
         except JournalConflict:
             return BridgeResult("blocked", completed, index, "plan_changed")
-        # Other worker may have reserved exactly the same action before us.
         if claim != "dispatched_new":
             return BridgeResult("reconciliation_required", completed, index, "outcome_unknown")
         try:
