@@ -35,12 +35,14 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 
 
 def fetch_single_https_response(host: str, port: int, ip: str,
-                                path: str) -> SingleHopResponse:
+                                path: str, method: str = "GET") -> SingleHopResponse:
     """Only a single reviewed path; no cookies, auth, redirects or disk state."""
+    if method not in ("GET", "HEAD"):
+        raise ValueError("unsafe_http_method")
     conn = _PinnedHTTPSConnection(host, port, ip)
     try:
         authority = host if port == 443 else f"{host}:{port}"
-        conn.request("GET", path, headers={
+        conn.request(method, path, headers={
             "Host": authority, "Accept": "text/html, text/plain;q=0.9",
             "Connection": "close",
         })
