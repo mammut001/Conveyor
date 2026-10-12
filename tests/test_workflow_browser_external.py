@@ -46,6 +46,7 @@ class PolicyTests(unittest.TestCase):
             "https://approved.fixture.test/../secret",
             "https://approved.fixture.test//safe",
             "https://äpproved.fixture.test/",
+            "https://preview.localhost/", "https://foo.bar.localhost/",
         ):
             with self.subTest(url=value), self.assertRaises(ExternalPolicyDenied):
                 canonical_url(value)
