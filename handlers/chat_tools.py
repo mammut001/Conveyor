@@ -168,6 +168,11 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
                      '"actions":[{"type":"follow_link","text":"Next"},'
                      '{"type":"search_get","path":"/search","field":"q",'
                      '"query":"public records"}]}. Each action type and GET query target needs operator approval.')
+        if name == "browser.prepare_submit":
+            desc += (' Pass arg as JSON OBJECT STRING: '
+                     '{"url":"https://public.example.org/form",'
+                     '"form_ref":0,"fields":{"topic":"public request","agree":true}}. '
+                     'Only prepares a human-reviewed preview, never submits.')
         schema = {
             "type": "function",
             "function": {
@@ -180,10 +185,11 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
                             "type": "string",
                             "description": ("JSON object encoded as a string containing url and actions; "
                                             "never raw selectors or JS" if name == "browser.browse_site"
+                                            else "JSON string with url, form_ref integer and fields mapping" if name == "browser.prepare_submit"
                                             else "Free-text argument for the tool; empty if none"),
                         },
                     },
-                    "required": ["arg"] if name == "browser.browse_site" else [],
+                    "required": ["arg"] if name in ("browser.browse_site", "browser.prepare_submit") else [],
                 },
             },
         }
