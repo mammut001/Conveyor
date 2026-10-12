@@ -120,20 +120,19 @@ class FetchPolicyTests(unittest.TestCase):
 class SlowDripTLSTests(unittest.TestCase):
     def test_real_tls_bytewise_drip_expires_without_leaking_worker(self):
         """Send one byte every 0.5s over real TLS, but stop in <= deadline+2s."""
-        from workflow_browser_external_fetch import FETCH_DEADLINE_SECONDS
         class DripHandler(socketserver.BaseRequestHandler):
             def handle(self):
                 try:
                     with server_context.wrap_socket(self.request, server_side=True) as tls:
                         tls.settimeout(5)
                         incoming = tls.makefile("rb")
-                        while incoming.readline() not in (b"\\r\\n", b"\\n", b""):
+                        while incoming.readline() not in (b"\r\n", b"\n", b""):
                             pass
                         tls.sendall(
-                            b"HTTP/1.1 200 OK\\r\\n"
-                            b"Content-Type: text/plain\\r\\n"
-                            b"Content-Length: 100\\r\\n"
-                            b"Connection: close\\r\\n\\r\\n"
+                            b"HTTP/1.1 200 OK\r\n"
+                            b"Content-Type: text/plain\r\n"
+                            b"Content-Length: 100\r\n"
+                            b"Connection: close\r\n\r\n"
                         )
                         for _ in range(100):
                             tls.sendall(b"x")
