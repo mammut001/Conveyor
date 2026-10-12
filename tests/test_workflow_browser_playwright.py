@@ -144,6 +144,28 @@ class BrowserWorkflowTests(unittest.TestCase):
             self.journal.bind_workflow(parsed.plan_id, "f" * 32, 0,
                                        parsed.plan_digest)
 
+    def test_completion_rejects_takeover_between_guard_and_cas(self):
+        self.transition("begin", "start-browser001")
+        browser = FixtureBrowser()
+        original = self.store.transition
+
+        def takeover_before_completion(workflow_id, *, action, expected_revision,
+                                       request_id):
+            if action == "complete":
+                original(workflow_id, action="request_human",
+                         expected_revision=expected_revision,
+                         request_id="takeover-gap-001")
+            return original(workflow_id, action=action,
+                            expected_revision=expected_revision, request_id=request_id)
+
+        with patch.object(self.store, "transition", side_effect=takeover_before_completion):
+            result = self.execute(browser)
+        self.assertEqual(result.status, "reconciliation_required")
+        self.assertEqual(result.reason, "workflow_revision_changed")
+        self.assertEqual(self.store.get(self.id)["state"], "waiting_for_human")
+        self.assertTrue(all(row["status"] == "verified"
+                            for row in self.journal.summaries(plan()["plan_id"])))
+
     def test_takeover_during_action_leaves_uncertain_journal(self):
         self.transition("begin", "start-browser001")
         browser = FixtureBrowser()
@@ -187,6 +209,8 @@ class BrowserGateTests(unittest.TestCase):
 class LocalFixturePlaywrightTests(unittest.TestCase):
     def setUp(self):
         if importlib.util.find_spec("playwright") is None:
+            if os.environ.get("CONVEYOR_REQUIRE_REAL_BROWSER") == "1":
+                self.fail("Playwright is required by this CI job")
             self.skipTest("Playwright not installed (optional browser test)")
         class QuietHandler(SimpleHTTPRequestHandler):
             def log_message(self, *_args):
@@ -225,6 +249,8 @@ class LocalFixturePlaywrightTests(unittest.TestCase):
         except Exception as exc:
             # Missing Chromium binary is optional in unit-only environments.
             if "Executable doesn't exist" in str(exc):
+                if os.environ.get("CONVEYOR_REQUIRE_REAL_BROWSER") == "1":
+                    self.fail("Chromium is required by this CI job")
                 self.skipTest("Playwright Chromium browser binary not installed")
             raise
         self.addCleanup(self.browser.close)
@@ -259,21 +285,21 @@ class LocalFixturePlaywrightTests(unittest.TestCase):
             self.browser._tab.goto(self.origin + "/private", timeout=5000)
         self.assertTrue(self.browser._violated)
 
-    def test_attested_content_blocks_altered_site_and_redirect(self):
+    def _run_impostor_case(self, *, redirect):
+        # Reuse setUp's Playwright session and browser context. Starting a
+        # second sync_playwright().start() on this thread is an API error.
         class Impostor(BaseHTTPRequestHandler):
-            redirect = False
-
             def log_message(self, *_args):
                 pass
 
             def do_GET(self):
-                if self.redirect:
+                if redirect:
                     self.send_response(302)
                     self.send_header("Location", "https://example.com/escape")
                 else:
                     self.send_response(200)
                 self.end_headers()
-                if not self.redirect:
+                if not redirect:
                     self.wfile.write(b"<html>Not the bundled portal</html>")
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Impostor)
@@ -282,13 +308,113 @@ class LocalFixturePlaywrightTests(unittest.TestCase):
         self.addCleanup(thread.join, 2)
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        origin = f"http://127.0.0.1:{server.server_port}"
-        for redirect in (False, True):
-            Impostor.redirect = redirect
-            with LocalPlaywrightBrowser(origin=origin) as impostor_browser:
-                with self.assertRaises(Exception):
-                    impostor_browser.apply(parse_plan(plan()).actions[0])
-                self.assertTrue(impostor_browser._violated)
+        self.browser.origin = f"http://127.0.0.1:{server.server_port}"
+        with self.assertLogs("workflow_browser_playwright", level="WARNING") as messages:
+            result = self.run_plan()
+        self.assertEqual(result.status, "reconciliation_required")
+        self.assertEqual(result.reason, "fixture_content_mismatch")
+        self.assertTrue(self.browser._violated)
+        self.assertEqual(self.browser._denial_reason, "fixture_content_mismatch")
+        self.assertTrue(any("fixture_content_mismatch" in m for m in messages.output))
+        row = self.journal.state(plan()["plan_id"], 0)
+        self.assertEqual(row["status"], "dispatched")
+        self.assertEqual(row["denial_reason"], "fixture_content_mismatch")
+
+    def test_attested_content_blocks_altered_site(self):
+        self._run_impostor_case(redirect=False)
+
+    def test_attested_content_blocks_redirect(self):
+        self._run_impostor_case(redirect=True)
+
+    def _assert_dom_denied(self, inject, reason):
+        self.browser.apply(parse_plan(plan()).actions[0])
+        self.browser._tab.evaluate(inject)
+        with self.assertRaisesRegex(BrowserPolicyError, reason):
+            self.browser._check()
+        self.assertTrue(self.browser._violated)
+        self.assertEqual(self.browser._denial_reason, reason)
+
+    def test_form_button_without_type_defaults_to_submit(self):
+        self._assert_dom_denied("""() => {
+            const form = document.createElement('form');
+            form.innerHTML = '<button>Implicit submit</button>';
+            document.body.append(form);
+        }""", "sensitive_or_submit_dom_denied")
+
+    def test_image_submit_input_denied(self):
+        self._assert_dom_denied("""() => {
+            const el = document.createElement('input');
+            el.type = 'image';
+            document.body.append(el);
+        }""", "sensitive_or_submit_dom_denied")
+
+    def test_contenteditable_denied(self):
+        self._assert_dom_denied("""() => {
+            const el = document.createElement('div');
+            el.setAttribute('contenteditable', '');
+            document.body.append(el);
+        }""", "sensitive_or_submit_dom_denied")
+
+    def test_autocomplete_credit_card_prefix_denied(self):
+        self._assert_dom_denied("""() => {
+            const el = document.createElement('input');
+            el.setAttribute('autocomplete', 'shipping cc-number');
+            document.body.append(el);
+        }""", "sensitive_autocomplete_denied")
+
+    def test_autocomplete_current_password_denied(self):
+        self._assert_dom_denied("""() => {
+            const el = document.createElement('input');
+            el.autocomplete = 'current-password';
+            document.body.append(el);
+        }""", "sensitive_autocomplete_denied")
+
+    def test_autocomplete_new_password_denied(self):
+        self._assert_dom_denied("""() => {
+            const el = document.createElement('input');
+            el.autocomplete = 'new-password';
+            document.body.append(el);
+        }""", "sensitive_autocomplete_denied")
+
+    def test_autocomplete_otp_denied(self):
+        self._assert_dom_denied("""() => {
+            const el = document.createElement('input');
+            el.autocomplete = 'one-time-code';
+            document.body.append(el);
+        }""", "sensitive_autocomplete_denied")
+
+    def test_open_shadow_root_password_denied(self):
+        self._assert_dom_denied("""() => {
+            const host = document.createElement('div');
+            document.body.append(host);
+            const root = host.attachShadow({mode: 'open'});
+            root.innerHTML = '<input type="password">';
+        }""", "sensitive_or_submit_dom_denied")
+
+    def test_closed_shadow_attempt_denied(self):
+        self._assert_dom_denied("""() => {
+            const host = document.createElement('div');
+            document.body.append(host);
+            try { host.attachShadow({mode: 'closed'}); } catch (error) {}
+        }""", "closed_shadow_denied")
+
+    def test_opaque_custom_element_denied(self):
+        self._assert_dom_denied("""() => {
+            document.body.append(document.createElement('unknown-portal-field'));
+        }""", "uninspectable_shadow_host")
+
+    def test_websocket_is_blocked_before_connect(self):
+        self.browser.apply(parse_plan(plan()).actions[0])
+        self.browser._tab.evaluate("""() => new Promise(resolve => {
+            const socket = new WebSocket('wss://example.com/private');
+            const done = () => resolve(true);
+            socket.addEventListener('close', done, {once: true});
+            socket.addEventListener('error', done, {once: true});
+            setTimeout(() => resolve(false), 2000);
+        })""")
+        self.assertEqual(self.browser._denial_reason, "websocket_denied")
+        with self.assertRaisesRegex(BrowserPolicyError, "websocket_denied"):
+            self.browser._check()
 
     def test_crash_between_dom_readback_and_verify_is_not_replayed(self):
         with patch.object(self.journal, "verify", side_effect=RuntimeError("power loss")):
