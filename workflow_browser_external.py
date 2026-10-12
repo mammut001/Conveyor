@@ -77,6 +77,7 @@ class ExternalReadOnlyBrowser:
                 headless=True, args=[
                     "--disable-background-networking",
                     "--disable-default-apps",
+                    "--disable-quic",
                     "--disable-extensions",
                     "--no-proxy-server",
                     "--disable-features=DnsOverHttps",
