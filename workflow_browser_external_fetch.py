@@ -106,9 +106,12 @@ def fetch_single_https_response(host: str, port: int, ip: str,
                 # read1 performs at most one underlying socket read. Unlike
                 # read(n), it does not wait for all n bytes: each slow-drip
                 # byte returns to us for a monotonic deadline check.
-                remaining = _remaining(deadline)
-                if active_socket[0]:
-                    active_socket[0].settimeout(remaining)
+                _remaining(deadline)
+                # getresponse() may close conn.sock for HTTP/1.0 or
+                # Connection: close while response.fp still owns the stream.
+                # Never touch the saved socket here: it can be closed even
+                # though response.read1() is valid. The socket timeout was
+                # set before getresponse; watchdog bounds blocking reads.
                 chunk = response.read1(min(4096, MAX_BODY + 1 - size))
                 _remaining(deadline)
                 if not chunk:
@@ -124,9 +127,12 @@ def fetch_single_https_response(host: str, port: int, ip: str,
             raise TimeoutError("fetch_deadline_exceeded")
         return SingleHopResponse(response.status, headers, b"".join(chunks))
     except (OSError, http.client.HTTPException) as exc:
-        # A socket timeout can win the race against the watchdog: return the
-        # same fixed deadline code instead of a platform-specific SSL error.
-        if expired.is_set() or time.monotonic() >= deadline:
+        # Normalize socket/SSL read timeouts even if the 8-second socket
+        # limit wins the race against the overall monotonic deadline.
+        if (isinstance(exc, (TimeoutError, socket.timeout))
+                or (isinstance(exc, ssl.SSLError)
+                    and "timed out" in str(exc).lower())
+                or expired.is_set() or time.monotonic() >= deadline):
             raise TimeoutError("fetch_deadline_exceeded") from exc
         raise
     finally:
