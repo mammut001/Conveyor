@@ -104,6 +104,15 @@ def execute_fixture_plan(
         last = plan.actions[completed - 1]
         if not browser.readback(last):
             return BridgeResult("reconciliation_required", completed, completed - 1, "page_state_drifted")
+        # The most recent action may just assert the review page exists.
+        # Replaying a verified prefix must also re-check the values filled
+        # earlier, not report success while a prior form field drifted.
+        latest_fields: dict[str, str] = {}
+        for previous in plan.actions[:completed]:
+            if previous.kind in ("fill", "assert_field"):
+                latest_fields[previous.target] = previous.value
+        if any(browser.fields.get(key) != value for key, value in latest_fields.items()):
+            return BridgeResult("reconciliation_required", completed, completed - 1, "field_state_drifted")
     if completed == len(plan.actions):
         return BridgeResult("verified", completed, None, "fixture_checks_passed")
 
