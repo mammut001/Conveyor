@@ -68,6 +68,12 @@ async def prepare(settings,arg,*,operator_id,channel="web",chat_id="",**_kwargs)
         _path_live(settings,operator_id,preview["target"])
         token,hashval=save(settings,operator_id=operator_id,url=url,
                            form_ref=index,fields=fields,preview=preview,screenshot=screen)
+        if channel == "telegram":
+            from browser_g3_telegram import send_preview
+            if not await asyncio.to_thread(send_preview, settings, chat_id,
+                    json.dumps({"token":token,"hash":hashval})):
+                advance(settings,token,"pending","denied")
+                raise ExternalPolicyDenied("g3_telegram_preview_unavailable")
         pending=create_pending(CONFIRMED_NAME,
                  json.dumps({"token":token,"hash":hashval},sort_keys=True),
                  operator_id=operator_id,chat_id=chat_id,channel=channel)
