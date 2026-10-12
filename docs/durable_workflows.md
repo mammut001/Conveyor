@@ -38,8 +38,14 @@ transition increments revision **atomically** in SQLite. No step can skip an
 incomplete predecessor. For non-human steps: `begin` -> `running`,
 `complete` -> `completed`; `fail` -> `failed`, `retry` -> `ready`
 (up to 5 attempts). During `running`, `request_human` changes the step
-to `waiting_for_human`. Only `confirm_human` can advance that checkpoint.
-Pause/resume and cancel are explicit; completed and cancelled workflows
+to `waiting_for_human`. For a dedicated `human` / `submission` step,
+`confirm_human` completes only that checklist checkpoint. For a mid-step
+handoff during `work`, `documents` or `browser`, confirmation instead
+sets `needs_reverification` and preserves the **same unfinished step**.
+The operator must explicitly choose `resume_verified` to return to
+`running` and then separately complete the remaining work; the user
+confirmation is NOT independent browser evidence or an external approval.
+Pause/resume preserves `needs_reverification`. Cancelled/completed workflows
 are terminal. The state engine does not invoke external tools.
 
 **Human checkpoint confirmation is not payment authorization, a visa
@@ -63,6 +69,13 @@ integration must have a *separate* capability gate and external verification.
   in this release because no external action executor exists.
 - An idempotent replay returns the *original action snapshot*; fetch GET to
   see the latest workflow state after concurrent changes.
+- The Web UI retains a pending create request ID across an ambiguous failure,
+  storing only its length/checksum fingerprint and ID in sessionStorage (never
+  the plaintext plan labels). Retrying the **same** plan sends the same ID.
+- If an action response disappears after server commit, the Web UI preserves
+  the exact workflow ID, action, expected revision, and request ID across a
+  page reload and **blocks other step operations** until the pending request
+  is retried/reconciled. This does not execute any external side effect.
 
 ## Authenticated Web endpoints
 
@@ -101,7 +114,7 @@ Authorization: Bearer <web-console-token>
 ```
 
 Actions: `begin`, `complete`, `fail`, `retry`,
-`request_human`, `confirm_human`, `pause`, `resume`, `cancel`.
+`request_human`, `confirm_human`, `resume_verified`, `pause`, `resume`, `cancel`.
 `confirm_human` requires the step to be `waiting_for_human`. The Web UI
 asks for an explicit confirmation before marking a human checkpoint done.
 
