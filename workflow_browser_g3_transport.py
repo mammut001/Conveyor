@@ -13,7 +13,8 @@ from workflow_browser_external_fetch import _PinnedHTTPSConnection
 def send_once(host, port, ip, path, method, pairs):
     if method not in ("GET","POST") or not path.startswith("/") or "#" in path or "?" in path:
         raise ValueError("g3_unsafe_request")
-    body=urlencode(pairs).encode("ascii")
+    # JSON round-trips form pairs as lists; urllib.urlencode requires tuples.
+    body=urlencode([(name, value) for name, value in pairs]).encode("ascii")
     if len(body)>8192:
         raise ValueError("g3_payload_too_large")
     authority=host if port==443 else f"{host}:{port}"
