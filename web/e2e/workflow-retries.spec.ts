@@ -122,6 +122,7 @@ test('lost action response persists pending ID across reload and never advances 
   expect(fixture.workflows[0].revision).toBe(1)
 
   await page.reload()
+  await page.getByRole('button', { name: 'Workflows', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Retry exactly the same request' })).toBeVisible()
   await page.getByRole('button', { name: 'Retry exactly the same request' }).click()
   await expect(page.getByRole('button', { name: 'Mark step complete' })).toBeVisible()
