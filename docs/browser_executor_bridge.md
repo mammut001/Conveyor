@@ -1,8 +1,13 @@
 # P0: Browser Executor Bridge — architecture and safe fixture contract
 
-Status: **Draft / mocked execution only**. This PR is independent of, and
+Status: **Ready / mocked execution only**. This PR is independent of, and
 will need integration with, [PR #107](https://github.com/mammut001/Conveyor/pull/107).
 It must not be deployed as a production browser executor.
+
+**Limits:** Execution is mock-only via the in-memory `FixtureBrowser`; no real
+browser provider (Playwright/CDP) is connected. Only the `visitor600_mock`
+fixture is allowed. External sites, file uploads, sensitive data, and final
+submits are disabled.
 
 ## Why this is separate from Durable Workflows
 

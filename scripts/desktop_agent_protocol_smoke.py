@@ -2,8 +2,11 @@
 """desktop_agent_protocol_smoke.py — integration test suite for P5.1 desktop agent protocol."""
 from __future__ import annotations
 
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 import time
 import json
 import urllib.request
@@ -20,7 +23,9 @@ sys.path.insert(0, str(REPO))
 os.environ["TELEGRAM_BOT_TOKEN"] = "test-token"
 os.environ["TELEGRAM_ALLOWED_USER_ID"] = "1"
 os.environ["CODEX_WORKSPACE_ROOT"] = "/tmp/test_nodes_workspace"
-os.environ["CODEX_MEMORY_ROOT"] = "/tmp/test_nodes_memory"
+_smoke_memory_root = tempfile.mkdtemp(prefix="conveyor-smoke-mem-")
+os.environ["CODEX_MEMORY_ROOT"] = _smoke_memory_root
+atexit.register(shutil.rmtree, _smoke_memory_root, ignore_errors=True)
 os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
 os.environ["CONVEYOR_DESKTOP_AGENT_TOKEN"] = "my-secret-token"
 os.environ["CONVEYOR_DESKTOP_NODE_ID"] = "macbook-payton"

@@ -28,8 +28,11 @@ Run: .venv/bin/python scripts/nodes_smoke.py
 """
 from __future__ import annotations
 
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -40,7 +43,10 @@ sys.path.insert(0, str(REPO))
 # at all; we still set them defensively for the executor tests.
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
 os.environ.setdefault("CODEX_WORKSPACE_ROOT", "/tmp/test_nodes_workspace")
-os.environ.setdefault("CODEX_MEMORY_ROOT", "/tmp/test_nodes_memory")
+if "CODEX_MEMORY_ROOT" not in os.environ:
+    _smoke_memory_root = tempfile.mkdtemp(prefix="conveyor-smoke-mem-")
+    os.environ["CODEX_MEMORY_ROOT"] = _smoke_memory_root
+    atexit.register(shutil.rmtree, _smoke_memory_root, ignore_errors=True)
 os.environ.setdefault("TELEGRAM_ALLOWED_USER_ID", "1")
 
 from scripts.harness_common import CheckResult, print_results  # noqa: E402
