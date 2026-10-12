@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import stat
+import concurrent.futures
 import tempfile
 import unittest
 from pathlib import Path
@@ -146,6 +147,39 @@ class BridgeTests(unittest.TestCase):
         bad["actions"][3]["selector"] = "button[type=submit]"
         with self.assertRaises(InvalidBrowserPlan):
             parse_plan(bad)
+
+    def test_type_invalid_actions_are_rejected_by_contract(self):
+        for key, value in (
+            ("kind", []), ("kind", {"x": 1}),
+            ("on_page", []), ("on_page", {"page": "idle"}),
+            ("expect_page", []), ("expect_page", {"page": "welcome"}),
+            ("target", []), ("target", {"selector": "welcome"}),
+        ):
+            candidate = sample_plan()
+            candidate["actions"][0][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(InvalidBrowserPlan):
+                parse_plan(candidate)
+
+    def test_completed_review_does_not_hide_drifted_form_field(self):
+        first = execute_fixture_plan(self.plan, browser=self.browser, journal=self.journal)
+        self.assertEqual(first.status, "verified")
+        count = self.browser.invocations
+        self.browser.fields["purpose"] = "tampered"
+        replay = execute_fixture_plan(self.plan, browser=self.browser, journal=self.journal)
+        self.assertEqual((replay.status, replay.reason), ("reconciliation_required", "field_state_drifted"))
+        self.assertEqual(self.browser.invocations, count)
+
+    def test_concurrent_dispatch_reserves_an_action_exactly_once(self):
+        parsed = parse_plan(self.plan)
+        op = parsed.actions[0]
+        def reserve(_i):
+            return self.journal.dispatch(parsed.plan_id, 0, parsed.plan_digest,
+                                         op.kind, op.on_page, op.expect_page)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            results = list(pool.map(reserve, range(6)))
+        self.assertEqual(results.count("dispatched_new"), 1)
+        self.assertEqual(results.count("dispatched"), 5)
+        self.assertEqual(self.journal.state(parsed.plan_id, 0)["status"], "dispatched")
 
     def test_reject_invalid_or_insecure_journal_paths(self):
         existing = self.path / "public.sqlite3"
