@@ -132,6 +132,9 @@ async def approve_and_submit(settings,arg,*,operator_id):
     """Only handlers.tools.runner.execute_confirmed calls this from human approval."""
     try:
         _ensure()
+        from browser_g3_kill import refusal
+        if refusal(settings, CONFIRMED_NAME):
+            raise ExternalPolicyDenied("external_kill_switch")
         payload=json.loads(arg)
         if not isinstance(payload,dict) or set(payload)!={"token","hash"}:
             raise ExternalPolicyDenied("g3_confirmation_denied")
