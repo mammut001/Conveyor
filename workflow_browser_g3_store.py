@@ -9,7 +9,7 @@ from contextlib import closing
 
 from personal_tools.browser_read import _db, _operator_key
 from workflow_browser_external_identity import ExternalPolicyDenied
-from workflow_browser_g3_recovery import INSTANCE, recover
+from workflow_browser_g3_recovery import owner, recover
 
 TTL = 300
 
@@ -85,7 +85,7 @@ def advance(settings, token, old, new):
         count=conn.execute("""UPDATE browser_g3_submits
                 SET state=?, dispatch_owner=CASE WHEN ?='dispatched'
                     THEN ? ELSE dispatch_owner END
-                WHERE token=? AND state=?""",(new,new,INSTANCE,token,old)).rowcount
+                WHERE token=? AND state=?""",(new,new,owner(),token,old)).rowcount
         if count!=1:
             conn.rollback()
             raise ExternalPolicyDenied("g3_state_conflict")
