@@ -89,6 +89,10 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
     """Single policy used for both schema exposure and execution."""
     if spec is None or name.startswith("desktop."):
         return False
+    if name == "browser.browse_site":
+        from workflow_browser_g2 import enabled as g2_enabled
+        if not g2_enabled():
+            return False
     if name == "browser.read_webpage":
         from personal_tools.browser_read import enabled
         if not enabled():
@@ -340,8 +344,11 @@ async def run_tool_loop(
                 )
 
             if danger == DangerLevel.READ:
-                if real_tool_name == "browser.read_webpage":
-                    from personal_tools.browser_read import approval_required
+                if real_tool_name in ("browser.read_webpage", "browser.browse_site"):
+                    if real_tool_name == "browser.browse_site":
+                        from personal_tools.browser_interact import approval_required
+                    else:
+                        from personal_tools.browser_read import approval_required
                     try:
                         needs_approval = approval_required(settings, arg, msg.operator_id)
                     except Exception:

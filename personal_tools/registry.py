@@ -22,6 +22,7 @@ from personal_tools import setup as setup_tools
 from personal_tools import project_io as project_io_tools
 from personal_tools import web_fetch as web_fetch_tools
 from personal_tools import browser_read as browser_read_tools
+from personal_tools import browser_interact as browser_interact_tools
 from personal_tools import web_search as web_search_tools
 from personal_tools import research as research_tools
 from personal_tools import file_search as file_search_tools
@@ -524,6 +525,12 @@ def register_personal_tools() -> None:
         "Read one exact HTTPS URL as UNTRUSTED text; operator approval required first",
         DangerLevel.READ,
         browser_read_tools.read_webpage_adapter,
+    )
+    _register(
+        "browser.browse_site",
+        "G2 typed approved-site browsing: JSON {url,actions}; operator approval required",
+        DangerLevel.READ,
+        browser_interact_tools.browse_site_adapter,
     )
     # Web Fetch (P4.1 Phase A)
     _register(

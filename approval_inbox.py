@@ -345,7 +345,7 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
             pspec = get_personal_tool(action.tool_name)
             summary = pspec.summary if pspec else action.tool_name
             danger = personal_tool_danger(action.tool_name)
-        if action.tool_name == "browser.read_webpage":
+        if action.tool_name in ("browser.read_webpage", "browser.browse_site"):
             danger = "external network access"
 
         source = "chat"
