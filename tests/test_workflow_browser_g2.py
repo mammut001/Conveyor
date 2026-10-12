@@ -31,6 +31,9 @@ PAGES = {
  "/second": "<html><body>Second page</body></html>",
  "/search?q=public+records": "<html><body>Search results</body></html>",
  "/swap": "<html><body><a href='/second'>Swap</a></body></html>",
+ "/hidden-opacity": "<html><body><a href='/second' style='opacity:0.05'>Invisible</a></body></html>",
+ "/tiny": "<html><body><a href='/second' style='display:block;width:2px;height:2px'>Tiny</a></body></html>",
+ "/clipped": "<html><body><div style='overflow:hidden;width:1px;height:1px'><a href='/second'>Clipped</a></div></body></html>",
  "/overlay": """<html><body>
   <a href="/second" style="position:absolute;top:20px;left:20px">Covered</a>
   <div style="position:absolute;top:0;left:0;width:500px;height:400px;
@@ -115,7 +118,8 @@ class G2ChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.approve(task="fixture",host=HOST,port=self.server.server_port,
             approver="operator",expires_at=time.time()+120,
             safe_paths=("/safe","/second","/search","/swap","/overlay",
-                        "/realm","/password","/postform"))
+                        "/realm","/password","/postform",
+                        "/hidden-opacity","/tiny","/clipped"))
         pinned = patch("workflow_browser_external.resolve_public_ipv4",
                        return_value="127.0.0.1")
         pinned.start()
@@ -139,7 +143,8 @@ class G2ChromiumTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_denied_origins_paths_and_clickjacking(self):
         for path, link in (("/safe","External"),("/safe","Unapproved"),
-                           ("/overlay","Covered")):
+                           ("/overlay","Covered"),("/hidden-opacity","Invisible"),
+                           ("/tiny","Tiny"),("/clipped","Clipped")):
             self.server.requests.clear()
             async with self.browser() as b:
                 with self.assertRaises(ExternalPolicyDenied):
@@ -151,12 +156,12 @@ class G2ChromiumTests(unittest.IsolatedAsyncioTestCase):
         async with self.browser() as b:
             with self.assertRaises(ExternalPolicyDenied):
                 await b.browse(self.url+"/safe",
-                    validate_actions([{"type":"search_get","query":"public records"}]))
+                    validate_actions([{"type":"search_get","path":"/search","field":"q","query":"public records"}]))
         self.assertEqual(self.server.requests,["/safe"])
         self.server.requests.clear()
         async with self.browser(frozenset({(self.url+"/search","q")})) as b:
             result = await b.browse(self.url+"/safe",
-                validate_actions([{"type":"search_get","query":"public records"}]))
+                validate_actions([{"type":"search_get","path":"/search","field":"q","query":"public records"}]))
         self.assertIn("Search results",result.text)
         self.assertEqual(self.server.requests,["/safe","/search?q=public+records"])
 
