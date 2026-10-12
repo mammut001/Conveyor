@@ -153,6 +153,31 @@ class BrowserManagementTests(unittest.TestCase):
         self.assertTrue(self.request("GET","/api/browser/approvals")[1]["kill_switch"])
         self.assertFalse(self.request("POST","/api/browser/kill",{"enabled":False})[1]["kill_switch"])
 
+    def test_inflight_g2_path_revalidation_fails_after_revoke(self):
+        from personal_tools.browser_approval_scope import grant_confirmed, path_is_live
+        from browser_approvals_admin import approvals, revoke
+        from workflow_browser_external_approvals import ApprovalLedger
+        from workflow_browser_g2 import G2Browser
+        from workflow_browser_external_identity import ExternalPolicyDenied
+        grant_confirmed(self.settings,"operator-x",URL,[])
+        key = _operator_key("operator-x")
+        with _connect(self.settings) as conn:
+            conn.execute("INSERT OR REPLACE INTO browser_agent_grants VALUES(?,?,?,?)",
+                         (key,SEARCH,time.time()+300,time.time()))
+            conn.commit()
+        ledger=ApprovalLedger(_db(self.settings))
+        ledger.approve(task="revoke_probe",host="approved.example.org",
+            approver="operator",expires_at=time.time()+60,
+            safe_paths=("/start","/search"))
+        browser=G2Browser(task="revoke_probe",ledger=ledger,audit=EgressAudit(_db(self.settings)),
+            path_check=lambda target:path_is_live(self.settings,"operator-x",target))
+        browser._verify_url(SEARCH,"GET")
+        target=next(x for x in approvals(self.settings)
+                    if x["kind"]=="path" and x["path"]=="/search")
+        self.assertTrue(revoke(self.settings,target["id"]))
+        with self.assertRaisesRegex(ExternalPolicyDenied,"g2_path_approval_revoked"):
+            browser._verify_url(SEARCH,"GET")
+
     def test_expired_entries_do_not_appear(self):
         from personal_tools.browser_approval_scope import grant_confirmed
         grant_confirmed(self.settings,"operator-x",URL,[])
