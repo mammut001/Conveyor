@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
 import socket
+import socketserver
 import sqlite3
 import ssl
 import subprocess
@@ -58,7 +59,11 @@ class PolicyTests(unittest.TestCase):
             return (socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 443))
         for addresses in ([result("127.0.0.1")], [result("169.254.169.254")],
                           [result("10.0.0.2")],
-                          [result("8.8.8.8"), result("192.168.1.5")]):
+                          [result("8.8.8.8"), result("192.168.1.5")],
+                          [result("224.0.0.1")], [result("239.255.1.1")],
+                          [result("240.0.0.1")], [result("0.0.0.0")],
+                          [result("255.255.255.255")],
+                          [result("8.8.8.8"), result("224.0.0.1")]):
             with self.subTest(addresses=addresses), patch(
                 "workflow_browser_external_identity.socket.getaddrinfo",
                 return_value=addresses
@@ -108,6 +113,13 @@ class PolicyTests(unittest.TestCase):
                             task="job", ledger=ledger, audit=EgressAudit(db))
 
 
+class _ConnectionCounter(socketserver.BaseRequestHandler):
+    def handle(self):
+        # Count accepted TCP sockets, including attempted TLS handshakes.
+        with self.server.lock:
+            self.server.accepted += 1
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -122,9 +134,9 @@ class _Handler(BaseHTTPRequestHandler):
         with self.server.lock:
             self.server.requests.append((self.path, self.headers.get("Cookie"),
                                          self.headers.get("Host")))
-        if self.path == "/redirect":
+        if self.path in self.server.redirects:
             self.send_response(302)
-            self.send_header("Location", "https://unapproved.fixture.test/")
+            self.send_header("Location", self.server.redirects[self.path])
             self.end_headers()
             return
         if self.path == "/slow":
@@ -134,6 +146,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         if self.path == "/cookie":
             self.send_header("Set-Cookie", "session=NEVER_STORE; Secure")
+        if self.path == "/attachment":
+            self.send_header("Content-Disposition", "attachment; filename=private.txt")
         self.end_headers()
         try:
             self.wfile.write(
@@ -175,6 +189,9 @@ class OfflineChromiumTests(unittest.IsolatedAsyncioTestCase):
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         self.server.requests = []
+        self.server.redirects = {
+            "/redirect": "https://unapproved.fixture.test/",
+        }
         self.server.lock = threading.Lock()
         self.server.slow_seen = threading.Event()
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -193,7 +210,9 @@ class OfflineChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.approve(
             task="offline_test", host=HOST, port=self.port,
             approver="fixture_operator", expires_at=time.time() + 120,
-            safe_paths=("/safe", "/redirect", "/slow", "/cookie"))
+            safe_paths=("/safe", "/redirect", "/slow", "/cookie",
+                        "/attachment", "/redirect-path", "/redirect-http",
+                        "/redirect-https"))
         # Test-only stubs: production rejects loopback DNS and bad TLS. The
         # real Chromium still connects over HTTPS via --host-resolver-rules.
         self.pinned = patch("workflow_browser_external.resolve_public_ipv4",
@@ -284,6 +303,56 @@ class OfflineChromiumTests(unittest.IsolatedAsyncioTestCase):
                 await browser.read(self.url + "/redirect")
         self.assertEqual([item[0] for item in self.server.requests], ["/redirect"])
         self.assertTrue(any(row[4] == "redirect_denied" for row in self.rows()))
+
+    async def test_three_redirect_variants_never_connect_to_destinations(self):
+        # A separate real TCP listener catches both accidental plaintext HTTP
+        # and HTTPS/TLS connects; even the TCP accept count must stay zero.
+        def listener():
+            server = socketserver.ThreadingTCPServer(
+                ("127.0.0.1", 0), _ConnectionCounter)
+            server.daemon_threads = True
+            server.lock = threading.Lock()
+            server.accepted = 0
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(thread.join, 3)
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            return server
+
+        http_sink = listener()
+        https_sink = listener()
+        redirect_cases = (
+            ("/redirect-path", self.url + "/logout-side-effect"),
+            ("/redirect-http", f"http://{HOST}:{http_sink.server_address[1]}/leak"),
+            ("/redirect-https", f"https://{HOST}:{https_sink.server_address[1]}/leak"),
+        )
+        self.server.redirects.update(dict(redirect_cases))
+        for source, _target in redirect_cases:
+            with self.subTest(redirect=source):
+                async with ExternalReadOnlyBrowser(
+                        task="offline_test", ledger=self.ledger,
+                        audit=self.audit) as browser:
+                    with self.assertRaisesRegex(ExternalPolicyDenied, "redirect_denied"):
+                        await browser.read(self.url + source)
+        await asyncio.sleep(0.2)
+        self.assertEqual([item[0] for item in self.server.requests],
+                         [item[0] for item in redirect_cases])
+        with http_sink.lock:
+            self.assertEqual(http_sink.accepted, 0,
+                             "HTTP redirect opened an unapproved socket")
+        with https_sink.lock:
+            self.assertEqual(https_sink.accepted, 0,
+                             "HTTPS redirect opened an unapproved TLS connection")
+        self.assertEqual(sum(row[4] == "redirect_denied" for row in self.rows()), 3)
+
+    async def test_download_headers_are_denied_before_fulfill(self):
+        async with ExternalReadOnlyBrowser(
+                task="offline_test", ledger=self.ledger,
+                audit=self.audit) as browser:
+            with self.assertRaisesRegex(ExternalPolicyDenied, "download_denied"):
+                await browser.read(self.url + "/attachment")
+        self.assertTrue(any(row[4] == "download_denied" for row in self.rows()))
 
     async def test_cookie_response_is_rejected(self):
         async with ExternalReadOnlyBrowser(
