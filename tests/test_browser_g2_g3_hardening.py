@@ -85,6 +85,18 @@ class HardeningTests(unittest.TestCase):
             conn.execute("UPDATE browser_g3_submits SET state='dispatched',dispatch_owner=NULL WHERE token=?", (token,))
         self.assertEqual(state(self.settings, token), "needs_reconciliation")
 
+    def test_live_sibling_process_is_not_falsely_reconciled(self):
+        token, _ = self.sample()
+        with _conn(self.settings) as conn:
+            conn.execute("""UPDATE browser_g3_submits
+                SET state='dispatched',dispatch_owner='123456789-other'
+                WHERE token=?""", (token,))
+        with patch("workflow_browser_g3_recovery.os.kill", return_value=None) as probe:
+            self.assertEqual(state(self.settings, token), "dispatched")
+            probe.assert_called()
+        with patch("workflow_browser_g3_recovery.os.kill", side_effect=ProcessLookupError):
+            self.assertEqual(state(self.settings, token), "needs_reconciliation")
+
     def test_form_classifier_ignores_unrelated_footer(self):
         safe = {"target":"https://demo.example/feedback", "heading":"Public feedback",
                 "submit_label":"Send"}
