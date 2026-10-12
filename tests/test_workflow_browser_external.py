@@ -109,9 +109,16 @@ class PolicyTests(unittest.TestCase):
             for flags in ({}, {"CONVEYOR_REAL_BROWSER": "1"},
                           {"CONVEYOR_BROWSER_EXTERNAL_READONLY": "1"}):
                 with patch.dict(os.environ, flags, clear=True):
-                    with self.assertRaisesRegex(ExternalPolicyDenied, "disabled"):
-                        ExternalReadOnlyBrowser(
-                            task="job", ledger=ledger, audit=EgressAudit(db))
+                    with patch.object(EgressAudit, "record") as audit_record:
+                        # Disabled must reject before dereferencing optional audit
+                        # or touching approval/egress storage.
+                        with self.assertRaisesRegex(ExternalPolicyDenied, "disabled"):
+                            ExternalReadOnlyBrowser(
+                                task="job", ledger=ledger, audit=None)
+                        with self.assertRaisesRegex(ExternalPolicyDenied, "disabled"):
+                            ExternalReadOnlyBrowser(
+                                task="job", ledger=ledger, audit=EgressAudit(db))
+                        audit_record.assert_not_called()
 
 
     def test_default_kill_file_uses_private_approval_directory(self):
