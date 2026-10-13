@@ -204,6 +204,8 @@ export default function App() {
   const [contextDrawerOpen, setContextDrawerOpen] = useState(false)
 
   useEffect(() => {
+    // Preserve mobile UI's legacy manifest even with CONVEYOR_PWA disabled.
+    // PWA adds installability without gating the existing mobile manifest.
     if (system?.features?.mobile_ui || (authenticated && system?.features?.pwa)) {
       let link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
       if (!link) {
