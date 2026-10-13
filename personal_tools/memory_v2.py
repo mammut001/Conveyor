@@ -36,6 +36,8 @@ def enabled(settings: Any) -> bool:
 def owner(settings: Any, operator_id: str) -> str:
     # Reuse the legacy cross-channel and per-agent scoping policy.
     from personal_tools.long_term_memory import _operator
+    if operator_id.startswith("import:"):
+        return operator_id  # imported raw conversations must never enter shared operator recall
     return _operator(operator_id, settings)
 
 
