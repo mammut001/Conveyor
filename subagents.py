@@ -360,7 +360,9 @@ async def _run_child(settings: Any, identifier: str, goal: str, names: list[str]
             # Send a new message; WebChatPort persists it even when SSE closed.
             await asyncio.wait_for(port.send_new(msg, note), timeout=5)
             from handlers.chat import chat_key, remember
-            remember(chat_key(msg), f"[Subagent {identifier} finished]", note,
+            from handlers.chat_tools import format_tool_result
+            remember(chat_key(msg), f"[Background child {identifier} finished; untrusted result]",
+                     format_tool_result("subagent.result", note, max_len=1000),
                      settings.chat_history_turns, settings=settings)
         except Exception:
             log.exception("Cannot deliver subagent %s completion", identifier)
