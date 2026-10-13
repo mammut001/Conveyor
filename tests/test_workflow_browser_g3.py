@@ -251,6 +251,47 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(html=html[-170:]):
                 await self.assert_sensitive_fixture(html)
 
+    async def test_all_preceding_headings_and_styled_text_blocked(self):
+        for heading in (
+            '<h1>Checkout</h1><h2>Your details</h2>',
+            '<h4>Payment</h4>',
+            '<div style="font-size:32px">Sign in</div>',
+            '<div role="heading" aria-level="2">Checkout</div>',
+            '<h6>Payment</h6>',
+            '<p>Sign in</p>',
+        ):
+            with self.subTest(heading=heading):
+                await self.assert_sensitive_fixture(FORM.replace(
+                    '<h1>Public feedback</h1>', heading))
+
+    async def test_card_number_placeholder_and_prefill_blocked(self):
+        for control in (
+            '<input type="text" name="f2" placeholder="4111 1111 1111 1111">',
+            '<input type="text" name="f2" value="4111-1111-1111-1111">',
+            '<input type="text" name="f2" value="378282246310005">',
+        ):
+            with self.subTest(control=control):
+                await self.assert_sensitive_fixture(FORM.replace(
+                    '<button type="submit">Send</button>',
+                    control+'<button type="submit">Send</button>'))
+
+    async def test_footer_heading_and_link_excluded_even_before_form(self):
+        for footer in (
+            '<footer><h2>Sign in</h2></footer>',
+            '<footer><a href="/login">Sign in</a></footer>',
+            '<nav><h4>Payment</h4></nav>',
+            '<a href="/login">Sign in</a>',
+        ):
+            for before in (True, False):
+                with self.subTest(footer=footer, before=before):
+                    self.server.html=FORM.replace(
+                        '<form method="POST"' if before else '</form>',
+                        footer+('<form method="POST"' if before else '</form>'))
+                    pending=await self.prepare()
+                    token=json.loads(pending.arg)["token"]
+                    self.assertIsNotNone(review(self.settings,token))
+                    self.assertEqual(self.server.posts,[])
+
     async def test_footer_sign_in_link_does_not_block_public_feedback(self):
         self.server.html=FORM.replace("</body>",
             '<footer><a href="/login">Sign in</a></footer></body>')
