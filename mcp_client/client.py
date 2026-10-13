@@ -83,7 +83,8 @@ def format_tool_call_result(result: dict[str, Any], max_chars: int) -> str:
 
     # Byte limit applies even to multibyte UTF-8 text; never send > 64 KiB to the model.
     if len(redacted) > max_chars:
-        redacted = redacted[:max_chars] + "\n[truncated]"
+        excess = len(redacted) - max_chars
+        redacted = redacted[:max_chars] + f"\n[truncated {excess} chars]"
     encoded = redacted.encode("utf-8")
     if len(encoded) > 65536:
         redacted = encoded[:65520].decode("utf-8", errors="ignore") + "\n[truncated]"
