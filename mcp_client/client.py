@@ -158,7 +158,7 @@ class StdioSession:
                 start_new_session=True,
             )
         except Exception as exc:
-            raise MCPClientError(f"Failed to spawn MCP server {self.server.name}: {exc}") from exc
+            raise MCPClientError(f"Failed to spawn MCP server {self.server.name}: {type(exc).__name__}") from exc
 
         self.stderr_task = asyncio.create_task(self._drain_stderr())
         return self
@@ -200,9 +200,8 @@ class StdioSession:
             except (ValueError, asyncio.LimitOverrunError) as exc:
                 raise MCPClientError("Message line exceeded maximum of 1 MB") from exc
             if not line_bytes:
-                err_tail = self.get_stderr_snippet()
-                extra = f" (stderr: {err_tail})" if err_tail else ""
-                raise MCPClientError(f"MCP server closed stdout unexpectedly{extra}")
+                # Server stderr is untrusted and could contain env values or credentials.
+                raise MCPClientError("MCP server closed stdout unexpectedly")
 
             if len(line_bytes) > MAX_LINE_BYTES:
                 raise MCPClientError("Message line exceeded maximum of 1 MB")
@@ -245,8 +244,8 @@ class StdioSession:
             if msg.get("id") == req_id:
                 if "error" in msg:
                     err_info = msg["error"]
-                    err_msg = err_info.get("message") if isinstance(err_info, dict) else str(err_info)
-                    raise MCPClientError(f"MCP error: {err_msg}")
+                    code = err_info.get("code") if isinstance(err_info, dict) else None
+                    raise MCPClientError(f"MCP JSON-RPC error code {code if type(code) is int else 'unknown'}")
                 return msg.get("result", {})
 
     async def initialize(self) -> dict[str, Any]:
@@ -375,8 +374,8 @@ class HttpSession:
                                 if isinstance(parsed, dict) and parsed.get("id") == msg.get("id"):
                                     if "error" in parsed:
                                         err = parsed["error"]
-                                        err_msg = err.get("message") if isinstance(err, dict) else str(err)
-                                        raise MCPClientError(f"MCP error: {err_msg}")
+                                        code = err.get("code") if isinstance(err, dict) else None
+                                        raise MCPClientError(f"MCP JSON-RPC error code {code if type(code) is int else 'unknown'}")
                                     return parsed.get("result", {})
                             except json.JSONDecodeError:
                                 continue
@@ -390,8 +389,8 @@ class HttpSession:
                 if isinstance(parsed, dict) and parsed.get("id") == msg.get("id"):
                     if "error" in parsed:
                         err = parsed["error"]
-                        err_msg = err.get("message") if isinstance(err, dict) else str(err)
-                        raise MCPClientError(f"MCP error: {err_msg}")
+                        code = err.get("code") if isinstance(err, dict) else None
+                        raise MCPClientError(f"MCP JSON-RPC error code {code if type(code) is int else 'unknown'}")
                     return parsed.get("result", {})
 
                 raise MCPClientError(f"Unexpected response structure: {body_text[:100]}")
@@ -404,7 +403,7 @@ class HttpSession:
                 return None
             raise MCPClientError(f"HTTP error {exc.code}: {exc.reason}") from exc
         except Exception as exc:
-            raise MCPClientError(f"HTTP connection failed: {type(exc).__name__}: {redact_text(str(exc))[:200]}") from exc
+            raise MCPClientError(f"HTTP connection failed: {type(exc).__name__}") from exc
 
     def _delete_sync(self) -> None:
         if not self.server.url or not self.session_id:
