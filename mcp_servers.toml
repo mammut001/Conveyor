@@ -1,0 +1,13 @@
+# Example only. Set CONVEYOR_MCP_CONFIG to a copy of this file.
+# No servers or tools are configured by default.
+[servers]
+
+# [servers.notes]
+# transport = "stdio"
+# command = "/usr/bin/python3"
+# args = ["/opt/mcp/notes_server.py"]
+# allow_tools = ["search", "append"]
+#
+# [servers.notes.tool_levels]
+# search = "READ"
+# append = "WRITE"
