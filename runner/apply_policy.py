@@ -284,6 +284,7 @@ def collect_tracked_changed_files(worktree_path: Path) -> CollectResult:
         res = subprocess.run(
             ["git", "diff", "--name-only", "HEAD", "--", ".", ":(exclude)MEMORY.md"],
             cwd=str(worktree_path),
+            env=__import__("subprocess_env").utility_env(),
             capture_output=True,
             text=True,
             check=True,
@@ -312,6 +313,7 @@ def collect_untracked_files(worktree_path: Path) -> CollectResult:
         res = subprocess.run(
             ["git", "ls-files", "--others", "--exclude-standard", "-z"],
             cwd=str(worktree_path),
+            env=__import__("subprocess_env").utility_env(),
             capture_output=True,
             text=True,
             check=True,
