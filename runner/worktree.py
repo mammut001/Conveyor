@@ -417,6 +417,7 @@ async def _git(self, args: list[str], cwd: Path, check: bool = True) -> str:
         cwd=cwd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=__import__("subprocess_env").utility_env(self.settings),
     )
     stdout, stderr = await process.communicate()
     out = stdout.decode("utf-8", errors="replace")
