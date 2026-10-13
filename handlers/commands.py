@@ -1051,7 +1051,7 @@ async def _web_fetch(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /web_fetch <url>")
         return
-    await port.reply(msg, await run_tool(settings, "web.fetch", arg))
+    await _invoke_tool(msg, port, settings, "web.fetch", arg)
 
 
 async def _web_text(msg, port, _runner, settings, arg):
@@ -1059,7 +1059,7 @@ async def _web_text(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /web_text <url>")
         return
-    await port.reply(msg, await run_tool(settings, "web.text", arg))
+    await _invoke_tool(msg, port, settings, "web.text", arg)
 
 
 async def _web_headers(msg, port, _runner, settings, arg):
@@ -1067,7 +1067,7 @@ async def _web_headers(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /web_headers <url>")
         return
-    await port.reply(msg, await run_tool(settings, "web.headers", arg))
+    await _invoke_tool(msg, port, settings, "web.headers", arg)
 
 
 async def _web_search(msg, port, _runner, settings, arg):
@@ -1075,7 +1075,7 @@ async def _web_search(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /web_search <查询词>")
         return
-    await port.reply(msg, await run_tool(settings, "web.search", arg))
+    await _invoke_tool(msg, port, settings, "web.search", arg)
 
 
 async def _research(msg, port, runner, settings, arg):
