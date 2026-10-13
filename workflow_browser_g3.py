@@ -115,21 +115,41 @@ FORM_JS = r"""(forms, args) => {
     (f.getAttribute('accept-charset')||'').toLowerCase().replace(/[-_]/g,'')!==''
     && (f.getAttribute('accept-charset')||'').toLowerCase().replace(/[-_]/g,'')!=='utf8')
    return {error:'g3_form_encoding_denied'};
- const scope=f.closest('section,article') || f.parentElement;
- const headings=[...(scope ? scope.querySelectorAll('h1,h2,h3,h4,legend') : [])];
- const preceding=headings.filter(h => Boolean(h.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING));
- const heading=(f.querySelector('legend')?.innerText ||
-   preceding[preceding.length-1]?.innerText || '').trim().slice(0,160);
+ // Every visible text node before the selected form, not just the last heading.
+ // Exclude nav/footer/anchor content (including a footer heading before the form).
+ const preceding=[], walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+ let node, contextSize=0;
+ while ((node=walker.nextNode())) {
+   if (!(node.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+   const parent=node.parentElement;
+   if (!parent || parent.closest('nav,footer,a,script,style,noscript,template,[hidden],[aria-hidden="true"]'))
+     continue;
+   const value=(node.nodeValue||'').trim();
+   if (!value) continue;
+   let visible=true,opacity=1;
+   for(let el=parent;el;el=el.parentElement) {
+     const st=getComputedStyle(el);
+     if(st.display==='none'||st.visibility!=='visible'||st.clipPath!=='none') {
+       visible=false;break;
+     }
+     opacity*=Number(st.opacity);
+   }
+   if(!visible||opacity<.1) continue;
+   const range=document.createRange();
+   range.selectNodeContents(node);
+   if(![...range.getClientRects()].some(r=>r.width>0&&r.height>0)) continue;
+   contextSize+=value.length;
+   if(contextSize>32768) return {error:'g3_context_budget_denied'};
+   preceding.push(value);
+ }
+ const preceding_text=preceding.join(' ');
+ const heading=(f.querySelector('legend')?.innerText||'').trim().slice(0,160);
  const submit_label=[...f.querySelectorAll('button,input[type="submit"]')]
    .flatMap(c => [c.innerText||c.value||'',c.getAttribute('aria-label')||'',
                   c.getAttribute('title')||'']).join(' ').trim().slice(0,512);
- const page_headings=[...document.querySelectorAll('h1,h2,h3')]
-   .filter(h=>!h.closest('nav,footer') &&
-     Boolean(h.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING));
- const page_heading=(page_headings[page_headings.length-1]?.innerText||'').slice(0,256);
  const document_title=(document.title||'').slice(0,256);
  return {method,target,controls:out,fields:pairs,attrs,heading,
-         page_heading,document_title,submit_label};
+         preceding_text,document_title,submit_label};
 }"""
 
 def enabled():
