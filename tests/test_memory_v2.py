@@ -72,6 +72,94 @@ class MemoryV2Tests(unittest.TestCase):
                 pass
         self.assertEqual(mem.forget_fact(self.settings, "operator", str(r["id"]))[1], "missing")
 
+    def _assert_erased_from_disk(self, marker: str) -> None:
+        root = self.settings.codex_memory_root
+        dbpath = root / "long_term_memory.db"
+        # SQLite secure_delete + optimize must leave no original text in the
+        # main database or the WAL/SHM sidecars, not only the query result.
+        for path in (dbpath, Path(str(dbpath) + "-wal"), Path(str(dbpath) + "-shm")):
+            if path.exists():
+                self.assertNotIn(marker.encode("utf-8"), path.read_bytes(), str(path))
+        with mem.connect(self.settings) as db:
+            try:
+                blocks = db.execute("SELECT block FROM memory_v2_fts_data").fetchall()
+            except sqlite3.OperationalError:
+                return  # FTS5 is optional
+            for (block,) in blocks:
+                self.assertNotIn(marker.encode("utf-8"), block)
+
+    def test_forget_physically_erases_content_and_fts_shadow(self):
+        marker = "veryuniqueforgetsecretxyzabc"
+        record = mem.remember_fact(self.settings, "operator", marker)
+        self.assertEqual(mem.forget_fact(self.settings, "operator", str(record["id"]))[1], "deleted")
+        self._assert_erased_from_disk(marker)
+        self.assertEqual(mem.search_facts(self.settings, "operator", marker), [])
+
+    def test_edit_physically_erases_replaced_text(self):
+        old = "veryuniqueeditsecretxyzabc"
+        record = mem.remember_fact(self.settings, "operator", old)
+        updated = mem.update_fact(self.settings, "operator", record["id"], "new value retained")
+        self.assertEqual(updated["text"], "new value retained")
+        self._assert_erased_from_disk(old)
+        self.assertEqual(mem.search_facts(self.settings, "operator", old), [])
+
+    def test_forget_approval_binds_id_and_text_and_does_not_reuse_ids(self):
+        first = mem.remember_fact(self.settings, "operator", "original fact")
+        token = mem.prepare_forget(self.settings, "operator", str(first["id"]))
+        self.assertTrue(token.startswith(f'#{first["id"]}@'))
+        self.assertEqual(len(token.partition("@")[2]), 64)
+        self.assertFalse(asyncio.run(bridge.memory_forget(
+            self.settings, str(first["id"]), operator_id="operator", channel="web"
+        )).ok)  # an unbound tool execution cannot bypass confirmation
+        mem.update_fact(self.settings, "operator", first["id"], "edited after approval")
+        response = asyncio.run(bridge.memory_forget(
+            self.settings, token, operator_id="operator", channel="web"
+        ))
+        self.assertFalse(response.ok)
+        self.assertIn("changed", response.text)
+        self.assertEqual(mem.list_facts(self.settings, "operator")[0]["text"], "edited after approval")
+        fresh = mem.prepare_forget(self.settings, "operator", str(first["id"]))
+        self.assertTrue(asyncio.run(bridge.memory_forget(
+            self.settings, fresh, operator_id="operator", channel="web"
+        )).ok)
+        second = mem.remember_fact(self.settings, "operator", "new fact")
+        self.assertGreater(second["id"], first["id"])
+        self.assertFalse(asyncio.run(bridge.memory_forget(
+            self.settings, token, operator_id="operator", channel="web"
+        )).ok)
+        self.assertEqual(mem.list_facts(self.settings, "operator")[0]["text"], "new fact")
+
+    def test_migrate_existing_v2_ids_and_fts_without_reuse(self):
+        dbpath = self.settings.codex_memory_root / "long_term_memory.db"
+        with sqlite3.connect(dbpath) as db:
+            db.execute("""CREATE TABLE memory_v2_entries(
+                id INTEGER PRIMARY KEY, operator_id TEXT NOT NULL,
+                agent_scope TEXT NOT NULL DEFAULT '',
+                tier TEXT NOT NULL CHECK(tier IN ('profile','facts','log')),
+                text TEXT NOT NULL, source TEXT NOT NULL,
+                source_channel TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL, updated_at REAL NOT NULL,
+                expires_at REAL, import_key TEXT UNIQUE)""")
+            db.execute("""INSERT INTO memory_v2_entries
+                (id,operator_id,tier,text,source,created_at,updated_at)
+                VALUES(42,'owner','facts','preserved legacy record','manual',1,1)""")
+            try:
+                db.execute("""CREATE VIRTUAL TABLE memory_v2_fts USING fts5(
+                    text, content='memory_v2_entries', content_rowid='id')""")
+                db.execute("INSERT INTO memory_v2_fts(rowid,text) VALUES(42,'preserved legacy record')")
+            except sqlite3.OperationalError:
+                pass
+        with mem.connect(self.settings) as db:
+            schema = db.execute(
+                "SELECT sql FROM sqlite_master WHERE name='memory_v2_entries'"
+            ).fetchone()[0]
+            self.assertIn("AUTOINCREMENT", schema.upper())
+        matches = mem.search_facts(self.settings, "operator", "preserved")
+        self.assertEqual(matches[0]["id"], 42)
+        self.assertEqual(mem.forget_fact(self.settings, "operator", "42")[1], "deleted")
+        new = mem.remember_fact(self.settings, "operator", "after migrated deletion")
+        self.assertGreater(new["id"], 42)
+
     def test_chinese_and_like_fallback(self):
         mem.remember_fact(self.settings, "operator", "我的猫叫团子", tier="facts")
         self.assertTrue(mem.search_facts(self.settings, "operator", "猫叫"))
