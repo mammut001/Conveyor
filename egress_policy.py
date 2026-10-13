@@ -34,6 +34,10 @@ def forbidden(addr):
     if (addr.is_loopback or addr.is_link_local or addr.is_unspecified or
             addr.is_multicast):
         return True
+    # NAT64 local-use /48 embeds IPv4 at more than one RFC 6052 position;
+    # refuse the entire translation range rather than trust the low 32 bits.
+    if isinstance(addr, ipaddress.IPv6Address) and addr in _NAT64_LOCAL:
+        return True
     embedded = embedded_ipv4(addr)
     return embedded is not None and forbidden(embedded)
 
