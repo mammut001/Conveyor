@@ -327,11 +327,11 @@ export default function App() {
       ...init,
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(init?.headers || {}) },
     })
-    if (response.status === 401) { forgetToken(); void leavePwa(token).catch(() => undefined); setAuthenticated(false); throw new Error('Token rejected') }
+    if (response.status === 401) { forgetToken(); if (system?.features?.pwa) void leavePwa(token).catch(() => undefined); setAuthenticated(false); throw new Error('Token rejected') }
     const body = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(body.error || body.message || `Request failed (${response.status})`)
     return body as T
-  }, [token])
+  }, [token, system?.features?.pwa])
 
   const archiveSession = useCallback(async (sessionId: string) => {
     try {
@@ -666,7 +666,8 @@ export default function App() {
     await refresh()
   }
   function lock() {
-    void leavePwa(token).catch(() => undefined)
+    // With PWA disabled, locking retains exactly the legacy console behaviour.
+    if (system?.features?.pwa) void leavePwa(token).catch(() => undefined)
     forgetToken(); sessionStorage.removeItem('conveyor-token')
     setToken(''); setAuthenticated(false); setRememberToken(false)
   }
