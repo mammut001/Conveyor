@@ -44,6 +44,8 @@ def _requires_confirmation(tool_name: str, settings: Settings | None = None) -> 
     # stop a natural-language request from reaching the desktop.
     if tool_name == "computer.task":
         return False
+    if tool_name == "github.create_issue" and getattr(settings, "draft_cards_enabled", False):
+        return True
     if tool_name.startswith("mcp."):
         from mcp_client import get_mcp_tool_spec
         spec = get_mcp_tool_spec(settings, tool_name)
