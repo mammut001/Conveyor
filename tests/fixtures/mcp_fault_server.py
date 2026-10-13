@@ -25,7 +25,7 @@ for line in sys.stdin:
                 f.write("crashed")
             sys.exit(17)
     if method == "tools/list" and MODE == "malformed":
-        sys.stdout.write("this is not json\\n")
+        sys.stdout.write("this is not json\n")
         sys.stdout.flush()
         sys.exit(0)
     if method == "tools/call" and req.get("params", {}).get("name") == "hang":
@@ -43,5 +43,5 @@ for line in sys.stdin:
         )}]}
     else:
         continue
-    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req.get("id"), "result": result}) + "\\n")
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req.get("id"), "result": result}) + "\n")
     sys.stdout.flush()
