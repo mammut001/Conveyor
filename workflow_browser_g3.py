@@ -124,7 +124,7 @@ FORM_JS = r"""(forms, args) => {
    return {error:'g3_form_encoding_denied'};
  // Scan all rendered text, before AND after the form; links are not exempt.
  // Exclude navigation/footer and hidden or non-rendered content only.
- const visible=[], walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+ const textParts=[], walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
  let node, contextSize=0;
  while ((node=walker.nextNode())) {
    const parent=node.parentElement;
@@ -146,9 +146,9 @@ FORM_JS = r"""(forms, args) => {
    if(![...range.getClientRects()].some(r=>r.width>0&&r.height>0)) continue;
    contextSize+=value.length;
    if(contextSize>32768) return {error:'g3_context_budget_denied'};
-   visible.push(value);
+   textParts.push(value);
  }
- const page_text=visible.join(' ');
+ const page_text=textParts.join(' ');
  const heading=(f.querySelector('legend')?.innerText||'').trim().slice(0,160);
  const submit_label=[...f.querySelectorAll('button,input[type="submit"]')]
    .flatMap(c => [c.innerText||c.value||'',c.getAttribute('aria-label')||'',
