@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import logging
@@ -33,7 +34,8 @@ def _resolve_config_path(settings: Settings) -> Path:
     if getattr(settings, "mcp_config_path", None):
         return Path(settings.mcp_config_path).expanduser().resolve()
     mem = getattr(settings, "codex_memory_root", Path("~/.codex"))
-    return (Path(mem).expanduser().resolve() / "mcp_servers.json")
+    root = Path(mem).expanduser().resolve()
+    return root / ("mcp_servers.toml" if (root / "mcp_servers.toml").exists() else "mcp_servers.json")
 
 
 def _is_tool_read_only(server: ServerConfig, tool_name: str, annotations: dict[str, Any]) -> bool:
@@ -43,6 +45,12 @@ def _is_tool_read_only(server: ServerConfig, tool_name: str, annotations: dict[s
         if annotations.get("readOnlyHint") is True and not annotations.get("destructiveHint"):
             return True
     return False
+
+
+def _tool_danger(server: ServerConfig, tool_name: str, annotations: dict[str, Any]) -> DangerLevel:
+    if server.strict_env:
+        return DangerLevel(server.tool_levels.get(tool_name, "WRITE").lower())
+    return DangerLevel.READ if _is_tool_read_only(server, tool_name, annotations) else DangerLevel.WRITE
 
 
 def _tool_to_func_name(server_name: str, tool_name: str) -> str:
@@ -75,8 +83,8 @@ class MCPManager:
         annotations = raw_tool.get("annotations", {}) if isinstance(raw_tool.get("annotations"), dict) else {}
         input_schema = raw_tool.get("inputSchema", {}) if isinstance(raw_tool.get("inputSchema"), dict) else {}
 
-        read_only = _is_tool_read_only(server, name, annotations)
-        danger = DangerLevel.READ if read_only else DangerLevel.WRITE
+        danger = _tool_danger(server, name, annotations)
+        read_only = danger == DangerLevel.READ
 
         clean_desc = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", desc).strip()
         summary = f"[MCP {server.name}] {clean_desc}".strip() if clean_desc else f"[MCP {server.name}] {name}"
@@ -335,23 +343,12 @@ class MCPManager:
             return None
 
         cached = self._cache.get(server_name)
-        if not cached:
-            # Fall back to synthesising a basic spec if server is valid & allowlisted
-            read_only = tool_name in server.read_only_tools
-            danger = DangerLevel.READ if read_only else DangerLevel.WRITE
-            return MCPToolSpec(
-                name=full_tool_name,
-                server_name=server_name,
-                tool_name=tool_name,
-                summary=f"[MCP {server_name}] {tool_name}",
-                danger=danger,
-                input_schema={"type": "object", "properties": {}},
-                read_only=read_only,
-            )
-
+        if not cached or cached.status != "ok":
+            return None  # no speculative tools before successful tools/list
         for t in cached.tools:
             if t.tool_name == tool_name:
-                return t
+                danger = _tool_danger(server, tool_name, t.annotations)
+                return replace(t, danger=danger, read_only=danger == DangerLevel.READ)
 
         return None
 
@@ -377,6 +374,7 @@ class MCPManager:
                 continue
 
             for tool in cached.tools:
+                tool = replace(tool, danger=_tool_danger(server, tool.tool_name, tool.annotations))
                 # Check allowlist
                 if "*" not in server.allow_tools and tool.tool_name not in server.allow_tools:
                     continue
