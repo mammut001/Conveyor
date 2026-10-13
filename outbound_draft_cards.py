@@ -208,6 +208,8 @@ def register(settings: Any, pending: Any) -> bool:
 
 
 def is_draft_token(settings: Any, token: str) -> bool:
+    if not _path(settings).exists():
+        return False
     with _connection(settings) as conn:
         return conn.execute("SELECT 1 FROM outbound_drafts WHERE token=?", (token,)).fetchone() is not None
 
