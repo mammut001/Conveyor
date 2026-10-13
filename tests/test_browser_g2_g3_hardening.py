@@ -168,16 +168,24 @@ class HardeningTests(unittest.TestCase):
 
     def test_telegram_screenshot_requires_explicit_opt_in(self):
         from browser_g3_telegram import send_preview
-        token, digest = self.sample()
-        arg=json.dumps({"token":token,"hash":digest})
-        with patch.dict(os.environ, {"CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT":"0"}), \
+        # The transport opt-in is independent of SQLite, token expiry, and
+        # environment flags set by other test jobs.
+        token, digest = "a" * 32, "b" * 64
+        arg = json.dumps({"token": token, "hash": digest})
+        preview = {"hash": digest, "screenshot": b"\x89PNG small test"}
+        with patch.dict(os.environ, {"CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT": "0"}, clear=True), \
+             patch("browser_g3_telegram.review", return_value=preview) as review_preview, \
              patch("urllib.request.urlopen") as urlopen:
-            self.assertFalse(send_preview(self.settings,"123",arg))
+            self.assertFalse(send_preview(self.settings, "123", arg))
+            review_preview.assert_not_called()
             urlopen.assert_not_called()
-        with patch.dict(os.environ, {"CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT":"1"}), \
+        with patch.dict(os.environ, {"CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT": "1"}, clear=True), \
+             patch("browser_g3_telegram.review", return_value=preview) as review_preview, \
              patch("urllib.request.urlopen", return_value=io.BytesIO(b'{"ok":true}')) as urlopen:
-            self.assertTrue(send_preview(self.settings,"123",arg))
-            self.assertIn(b"\x89PNG", urlopen.call_args.args[0].data)
+            self.assertTrue(send_preview(self.settings, "123", arg))
+            review_preview.assert_called_once_with(self.settings, token)
+            urlopen.assert_called_once()
+            self.assertIn(b"\x89PNG small test", urlopen.call_args.args[0].data)
 
 
 class RenderedLinkTextTests(unittest.IsolatedAsyncioTestCase):
