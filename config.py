@@ -267,6 +267,11 @@ class Settings:
     subagents_timeout_seconds: int = 90
     subagents_max_steps: int = 3
     subagents_max_output_chars: int = 2500
+    background_subagents_enabled: bool = False
+    background_subagents_max: int = 3
+    background_subagents_steps: int = 3
+    background_subagents_tokens: int = 1800
+    background_subagents_timeout: int = 90
     # Always-On Teammate & Proactive Sentry
     teammate_enabled: bool = True
     sentry_interval_seconds: int = 300
@@ -739,6 +744,11 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "subagents_timeout_seconds": max(10, min(300, _int_env("CONVEYOR_SUBAGENTS_TIMEOUT_SECONDS", 90))),
         "subagents_max_steps": max(0, min(6, _int_env("CONVEYOR_SUBAGENTS_MAX_STEPS", 3))),
         "subagents_max_output_chars": max(500, min(8000, _int_env("CONVEYOR_SUBAGENTS_MAX_OUTPUT_CHARS", 2500))),
+        "background_subagents_enabled": os.getenv("CONVEYOR_SUBAGENTS", "0").strip().lower() in ("1", "true", "yes", "on"),
+        "background_subagents_max": max(1, min(32, _int_env("CONVEYOR_SUBAGENTS_MAX", 3))),
+        "background_subagents_steps": max(1, min(10, _int_env("CONVEYOR_SUBAGENTS_MAX_STEPS", 3))),
+        "background_subagents_tokens": max(128, min(16000, _int_env("CONVEYOR_SUBAGENTS_MAX_TOKENS", 1800))),
+        "background_subagents_timeout": max(1, min(600, _int_env("CONVEYOR_SUBAGENTS_TIMEOUT_SECONDS", 90))),
         "teammate_enabled": os.getenv(
             "CONVEYOR_TEAMMATE_ENABLED", "true"
         ).strip().lower() in ("true", "1", "yes", "on"),
