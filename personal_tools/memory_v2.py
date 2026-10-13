@@ -7,6 +7,7 @@ key (including agent:<id>) and expiry.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import logging
@@ -42,7 +43,7 @@ def owner(settings: Any, operator_id: str) -> str:
 
 
 @contextmanager
-def connect(settings: Any):
+def connect(settings: Any, *, retry_pending: bool = True):
     root = Path(settings.codex_memory_root)
     root.mkdir(parents=True, exist_ok=True)
     path = root / "long_term_memory.db"
@@ -68,6 +69,9 @@ def connect(settings: Any):
         import_key TEXT UNIQUE
     )""")
     _migrate_autoincrement(db)
+    db.execute("""CREATE TABLE IF NOT EXISTS memory_v2_purge_pending (
+        id INTEGER PRIMARY KEY CHECK(id=1), generation INTEGER NOT NULL
+    )""")
     db.execute("""CREATE INDEX IF NOT EXISTS memory_v2_owner
                   ON memory_v2_entries(operator_id, tier, created_at)""")
     db.execute("""CREATE INDEX IF NOT EXISTS memory_v2_expiry
@@ -90,6 +94,11 @@ def connect(settings: Any):
         # SQLite may be compiled without FTS5. All search paths retain LIKE.
         log.debug("SQLite FTS5 unavailable; falling back to LIKE")
     db.commit()
+    if retry_pending:
+        try:
+            _compact_after_change(db, attempts=1)
+        except sqlite3.Error:
+            log.warning("memory v2 pending purge retry failed; will retry later", exc_info=True)
     try:
         yield db
     finally:
@@ -133,14 +142,71 @@ def _migrate_autoincrement(db: sqlite3.Connection) -> None:
         raise
 
 
-def _compact_after_change(db: sqlite3.Connection) -> None:
-    """Remove FTS tombstones, scrub freed pages and truncate WAL on every write."""
-    if db.execute("SELECT 1 FROM sqlite_master WHERE name='memory_v2_fts'").fetchone():
-        db.execute("INSERT INTO memory_v2_fts(memory_v2_fts) VALUES('optimize')")
-        db.commit()
-    busy, _, _ = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-    if busy:
-        raise sqlite3.OperationalError("memory purge incomplete: WAL checkpoint busy")
+def _mark_purge_pending(db: sqlite3.Connection) -> None:
+    """Mark the deletion in the same transaction as the sensitive text change."""
+    db.execute("""INSERT INTO memory_v2_purge_pending(id,generation) VALUES(1,1)
+                  ON CONFLICT(id) DO UPDATE SET generation=generation+1""")
+
+
+def _compact_after_change(db: sqlite3.Connection, *, attempts: int = 5) -> bool:
+    """Finish pending secure wiping when readers no longer pin WAL frames.
+
+    Returns False when an active reader blocks a checkpoint; the committed
+    marker remains for a subsequent connection or periodic tick.
+    """
+    pending = db.execute("SELECT generation FROM memory_v2_purge_pending WHERE id=1").fetchone()
+    if pending is None:
+        return True
+    try:
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='memory_v2_fts'").fetchone():
+            db.execute("INSERT INTO memory_v2_fts(memory_v2_fts) VALUES('optimize')")
+            db.commit()
+    except sqlite3.OperationalError as exc:
+        db.rollback()
+        if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+            return False
+        raise
+    # ~1 second total checkpoint busy waiting, plus bounded short backoff.
+    db.execute("PRAGMA busy_timeout=150")
+    try:
+        for i in range(attempts):
+            busy, _, _ = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if not busy:
+                # A concurrent deletion increments generation; never clear
+                # another writer's marker based on an earlier checkpoint.
+                db.execute("DELETE FROM memory_v2_purge_pending WHERE id=1 AND generation=?",
+                           (pending["generation"],))
+                db.commit()
+                return True
+            if i + 1 < attempts:
+                time.sleep(0.075 * (i + 1))
+        return False
+    finally:
+        db.execute("PRAGMA busy_timeout=10000")
+
+
+def retry_pending_purge(settings: Any) -> bool:
+    """Explicit retry hook for the web console's periodic tick."""
+    if not enabled(settings) or not (Path(settings.codex_memory_root) / "long_term_memory.db").exists():
+        return True
+    with connect(settings, retry_pending=False) as db:
+        return _compact_after_change(db)
+
+
+def start_purge_worker(loop: asyncio.AbstractEventLoop, settings: Any) -> asyncio.Task | None:
+    """Retry a persisted pending purge every 60 seconds (flagged v2 only)."""
+    if not enabled(settings):
+        return None
+
+    async def worker() -> None:
+        while True:
+            try:
+                await asyncio.to_thread(retry_pending_purge, settings)
+            except (OSError, sqlite3.Error):
+                log.warning("memory v2 periodic purge retry failed", exc_info=True)
+            await asyncio.sleep(60)
+
+    return loop.create_task(worker())
 
 
 def deletion_fingerprint(text: str) -> str:
@@ -260,9 +326,9 @@ def forget_fact(settings: Any, operator_id: str, arg: str) -> tuple[list[dict[st
         if match.group(2) is not None and deletion_fingerprint(row["text"]) != match.group(2):
             return [], "changed"  # stale approval: never delete replacement text
         db.execute("DELETE FROM memory_v2_entries WHERE id=?", (row["id"],))
+        _mark_purge_pending(db)
         db.commit()
-        _compact_after_change(db)
-        return [_row(row)], "deleted"
+        return [_row(row)], ("deleted" if _compact_after_change(db) else "purge_pending")
 
 
 def search_facts(
@@ -395,6 +461,7 @@ def update_fact(settings: Any, operator_id: str, ident: int, text: str) -> dict[
         if value != row["text"]:
             db.execute("UPDATE memory_v2_entries SET text=?,updated_at=? WHERE id=?",
                        (value, time.time(), ident))
+            _mark_purge_pending(db)
             db.commit()
             _compact_after_change(db)
         return _row(db.execute("SELECT * FROM memory_v2_entries WHERE id=?", (ident,)).fetchone())
