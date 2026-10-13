@@ -83,7 +83,7 @@ async def _test_diagnose_server_calls_codex_with_facts() -> CheckResult:
         port = FakeOutbound()
         captured: dict[str, str] = {}
 
-        async def fake_collected(_settings, items):
+        async def fake_collected(_settings, items, **_context):
             names = [n for n, _ in items]
             return f"FAKE_FACTS tools={','.join(names)}"
 
@@ -107,7 +107,7 @@ async def _test_diagnose_quick_fewer_tools() -> CheckResult:
     try:
         collected: list[tuple[tuple[str, str], ...]] = []
 
-        async def fake_collected(_settings, items):
+        async def fake_collected(_settings, items, **_context):
             collected.append(items)
             return "FACTS"
 

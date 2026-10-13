@@ -71,8 +71,8 @@ class TestSubprocessIsolation(unittest.TestCase):
         self.assertNotIn("AWS_ACCESS_KEY_ID", child)
 
     def test_flag_off_preserves_legacy_subprocess_inheritance(self):
-        settings = SimpleNamespace(env_isolation=False)
-        with patch.dict(os.environ, {"CONVEYOR_ENV_ISOLATION": "1"}):
+        settings = SimpleNamespace(env_isolation=False, egress_proxy_enabled=False)
+        with patch.dict(os.environ, {"CONVEYOR_ENV_ISOLATION": "1", "CONVEYOR_EGRESS_PROXY": "0"}):
             self.assertIsNone(subprocess_env.utility_env(settings))
         self.assertFalse(subprocess_env.enabled(settings))
 

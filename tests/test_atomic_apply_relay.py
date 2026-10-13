@@ -192,6 +192,9 @@ class AtomicApplyTests(unittest.TestCase):
 
 class RelayFailClosedTests(unittest.TestCase):
     def setUp(self):
+        egress_env = patch.dict(os.environ, {"CONVEYOR_EGRESS_PROXY": "0"})
+        egress_env.start()
+        self.addCleanup(egress_env.stop)
         clear_all_pending()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

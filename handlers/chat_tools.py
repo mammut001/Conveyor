@@ -382,8 +382,11 @@ async def run_tool_loop(
                     })
                     continue
                 arg = screened.arg
-            if danger in (DangerLevel.WRITE_SAFE, DangerLevel.WRITE, DangerLevel.DESTRUCTIVE):
-                # Non-READ tools must NOT execute automatically
+            import egress_taint
+            if (danger in (DangerLevel.WRITE_SAFE, DangerLevel.WRITE, DangerLevel.DESTRUCTIVE)
+                    or egress_taint.requires_approval(settings, real_tool_name,
+                        operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)):
+                # Non-READ tools and tainted outbound sends must NOT execute automatically
                 logger.info("Chat tier tool call requested confirmation: %s", real_tool_name)
                 tools_called.append(real_tool_name)
                 await _request_confirmation(msg, port, settings, real_tool_name, arg)

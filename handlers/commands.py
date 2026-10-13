@@ -612,12 +612,12 @@ async def _reminders(msg, port, _runner, settings, arg):
 
 async def _gmail_status(msg, port, _runner, settings, _arg):
     from handlers.tools.runner import run_tool
-    await port.reply(msg, await run_tool(settings, "gmail.status"))
+    await port.reply(msg, await run_tool(settings, "gmail.status", operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _gmail_recent(msg, port, _runner, settings, arg):
     from handlers.tools.runner import run_tool
-    await port.reply(msg, await run_tool(settings, "gmail.recent", arg))
+    await port.reply(msg, await run_tool(settings, "gmail.recent", arg, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _gmail_search(msg, port, _runner, settings, arg):
@@ -625,7 +625,7 @@ async def _gmail_search(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /gmail_search <关键词>")
         return
-    await port.reply(msg, await run_tool(settings, "gmail.search", arg))
+    await port.reply(msg, await run_tool(settings, "gmail.search", arg, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _gmail_read(msg, port, _runner, settings, arg):
@@ -633,7 +633,7 @@ async def _gmail_read(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /gmail_read <邮件ID>")
         return
-    await port.reply(msg, await run_tool(settings, "gmail.read", arg))
+    await port.reply(msg, await run_tool(settings, "gmail.read", arg, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _email_send(msg, port, _runner, settings, arg):
@@ -686,7 +686,8 @@ async def _calendar_search(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /calendar_search <关键词>")
         return
-    await port.reply(msg, await run_tool(settings, "calendar.search", arg))
+    await port.reply(msg, await run_tool(settings, "calendar.search", arg, operator_id=msg.operator_id,
+                                      channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _calendar_freebusy(msg, port, _runner, settings, arg):
@@ -710,7 +711,8 @@ async def _contacts_search(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /contacts_search <关键词>")
         return
-    await port.reply(msg, await run_tool(settings, "contacts.search", arg))
+    await port.reply(msg, await run_tool(settings, "contacts.search", arg, operator_id=msg.operator_id,
+                                      channel=msg.channel, chat_id=msg.chat_id))
 
 
 # GitHub commands (P3.6)
@@ -996,7 +998,8 @@ async def _files_search(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /files_search <查询词>")
         return
-    await port.reply(msg, await run_tool(settings, "files.search", arg))
+    await port.reply(msg, await run_tool(settings, "files.search", arg, operator_id=msg.operator_id,
+                                      channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _files_read(msg, port, _runner, settings, arg):
@@ -1048,7 +1051,7 @@ async def _web_fetch(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /web_fetch <url>")
         return
-    await port.reply(msg, await run_tool(settings, "web.fetch", arg))
+    await _invoke_tool(msg, port, settings, "web.fetch", arg)
 
 
 async def _web_text(msg, port, _runner, settings, arg):
@@ -1056,7 +1059,7 @@ async def _web_text(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /web_text <url>")
         return
-    await port.reply(msg, await run_tool(settings, "web.text", arg))
+    await _invoke_tool(msg, port, settings, "web.text", arg)
 
 
 async def _web_headers(msg, port, _runner, settings, arg):
@@ -1064,7 +1067,7 @@ async def _web_headers(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /web_headers <url>")
         return
-    await port.reply(msg, await run_tool(settings, "web.headers", arg))
+    await _invoke_tool(msg, port, settings, "web.headers", arg)
 
 
 async def _web_search(msg, port, _runner, settings, arg):
@@ -1072,7 +1075,7 @@ async def _web_search(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /web_search <查询词>")
         return
-    await port.reply(msg, await run_tool(settings, "web.search", arg))
+    await _invoke_tool(msg, port, settings, "web.search", arg)
 
 
 async def _research(msg, port, runner, settings, arg):
