@@ -365,6 +365,8 @@ class WebControl:
             self.settings, "approval.required", job_id,
             {"approval_id": approval_id, "action": action, "expires_in_seconds": 300},
         )
+        from web_push import queue_notification
+        queue_notification(self.settings, approval_id)
         return {"id": approval_id, "job_id": job_id, "action": action, "status": "pending", "event_id": event.event_id}
 
     def list_approvals(self) -> list[dict[str, Any]]:
@@ -716,6 +718,7 @@ class WebControl:
                 "workflows": bool(getattr(self.settings, "workflows_enabled", False)),
                 "provider_key_scoping": bool(getattr(self.settings, "child_env_scope_provider_keys", False)),
                 "mobile_ui": bool(getattr(self.settings, "web_mobile_ui", False)),
+                "pwa": bool(getattr(self.settings, "pwa_enabled", False)),
                 "mcp": bool(getattr(self.settings, "mcp_enabled", False)),
                 "approval_relay": bool(getattr(self.settings, "approval_relay_enabled", False)),
                 "subagents": bool(getattr(self.settings, "subagents_enabled", False))
