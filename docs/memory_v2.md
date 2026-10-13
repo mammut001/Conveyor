@@ -27,7 +27,7 @@ cannot read/write memory unless explicitly opted in.
   writing fails instead of discarding/demoting facts.
 - facts: individual statements with created_at, updated_at, source,
   source_channel, agent_scope, optional expires_at (Unix timestamp), and a
-  unique ID. Search is scoped by owner and excludes expired records.
+  non-reused ID. Search is scoped by owner and excludes expired records.
 - log: up to 4000 characters per entry, ordered by date. The existing
   scripts/compress_day.py appends a dated snapshot of v2 log entries to the
   same JOURNAL archive as MEMORY.md. Rows remain in SQLite until explicitly
@@ -49,10 +49,23 @@ Tools reuse the existing PERSONAL_TOOL_REGISTRY and approval cards:
 - memory.remember accepts a JSON object with text and tier (profile, facts,
   log). Defaults to facts for legacy plain-text invocations. This is WRITE and
   **requires human approval**; no WRITE_SAFE special case is granted.
+  Model-rephrased requests (or text derived from pages, chat tools and other
+  untrusted content) are saved with source=untrusted and **cannot** become
+  profile entries through the chat tool. Use the Web Console Memory page to
+  edit/create profile facts, or issue an explicit verbatim `remember ...`
+  command whose text exactly matches the saved fact.
 - memory.search(query) and memory.list are READ.
-- memory.forget(#id) is WRITE with approval, and physically deletes the
-  scoped row. FTS5 triggers delete its index row. Unlike legacy forget,
-  fuzzy/ambiguous deletion is not supported in v2.
+- memory.forget(#id) is WRITE with approval. At approval creation the action
+  is bound to `#id@sha256(text)` and checked again upon execution; stale
+  approvals cannot delete edited/replaced records. IDs use SQLite
+  `INTEGER PRIMARY KEY AUTOINCREMENT` (existing v2 tables migrate in place,
+  preserving IDs). Fuzzy/ambiguous deletion is not supported in v2.
+  `PRAGMA secure_delete=ON` is used on every v2 connection; after deletion
+  (or replacing text), the FTS5 index is optimized and WAL checkpointed with
+  TRUNCATE to scrub FTS shadow content and on-disk WAL copies. Deletion
+  reports an error if the WAL checkpoint cannot finish, rather than
+  promising disk sanitization. Backups and separately archived JOURNAL /
+  MEMORY.md copies are outside the SQLite purge scope.
 
 A chat turn receives the bounded profile, up to k query-matching facts, and
 the newest two daily log entries. Search uses SQLite FTS5 with a LIKE fallback
