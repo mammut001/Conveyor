@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import ipaddress
 import json
 import os
+import re
 from pathlib import Path
 import select
 import socket
@@ -38,7 +39,7 @@ def _canonical(host):
     except ValueError:
         pass
     name = host.rstrip(".").encode("idna").decode("ascii").lower()
-    if not name or any(not label or len(label) > 63 for label in name.split(".")):
+    if not name or any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in name.split(".")):
         raise ValueError("invalid_host")
     return name
 
@@ -95,6 +96,7 @@ class _Handler(socketserver.StreamRequestHandler):
                   "host": str(host)[:253].replace("\n", ""),
                   "port": port, "decision": "allow" if ip else "deny",
                   "reason": reason}
+        self._logged = True
         server = self.server
         with server.log_lock:
             server.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -205,7 +207,9 @@ class _Handler(socketserver.StreamRequestHandler):
                 host, port = parsed.hostname, parsed.port or 80
                 host_headers = [line.split(b":", 1)[1].strip().decode("ascii")
                                 for line in headers if line.lower().startswith(b"host:")]
-                if len(host_headers) != 1 or _canonical(urlsplit("//" + host_headers[0]).hostname) != _canonical(host):
+                if (len(host_headers) != 1 or
+                        _canonical(urlsplit("//" + host_headers[0]).hostname) != _canonical(host) or
+                        (urlsplit("//" + host_headers[0]).port or 80) != port):
                     raise ValueError("host_mismatch")
             host = _canonical(host)
             ip, reason = destination(host, port, self.server.rules)
