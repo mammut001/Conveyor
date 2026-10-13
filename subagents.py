@@ -216,6 +216,10 @@ async def spawn(settings: Any, *, goal: str, tools_subset: list[str], msg: Any,
                                            [parent_tools[t] for t in tools_subset], msg, port, config))
         _RUNNING[identifier] = (loop, task, owner)
         task.add_done_callback(lambda _t, i=identifier: _forget(i))
+        parent_task = asyncio.current_task()
+        if parent_task is not None:
+            parent_task.add_done_callback(
+                lambda finished, i=identifier: cancel(settings, i) if finished.cancelled() else None)
     return {"id": identifier, "status": "queued"}
 
 
@@ -314,8 +318,19 @@ async def _run_child(settings: Any, identifier: str, goal: str, names: list[str]
                                      "content":format_tool_result(name, response, max_len=1800)})
             return "Step budget exhausted"
 
-        summary = await asyncio.wait_for(perform(), timeout=timeout)
-        if summary.startswith("Approval requested"):
+        current_task = asyncio.current_task()
+        async def watch_kill_switch() -> None:
+            while True:
+                await asyncio.sleep(0.2)
+                if not enabled(settings):
+                    current_task.cancel()
+                    return
+        watcher = asyncio.create_task(watch_kill_switch())
+        try:
+            summary = await asyncio.wait_for(perform(), timeout=timeout)
+        finally:
+            watcher.cancel()
+        if summary.startswith(("Approval requested", "Approval Inbox")):
             outcome = "approval_required"
     except asyncio.TimeoutError:
         outcome, summary = "timed_out", "Child reached its wall-clock timeout"
@@ -339,7 +354,7 @@ async def _run_child(settings: Any, identifier: str, goal: str, names: list[str]
         try:
             note = f"🧩 Subagent {identifier[:8]} ({outcome}): {summary[:900]}"
             # Send a new message; WebChatPort persists it even when SSE closed.
-            await port.send_new(msg, note)
+            await asyncio.wait_for(port.send_new(msg, note), timeout=5)
             from handlers.chat import chat_key, remember
             remember(chat_key(msg), f"[Subagent {identifier} finished]", note,
                      settings.chat_history_turns, settings=settings)
