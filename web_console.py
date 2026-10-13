@@ -1165,7 +1165,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 is_approve = (parts[3] == "approve")
                 from handlers.tools.confirm import get_pending
                 import outbound_draft_cards as cards
-                if cards.is_draft_token(self.server.control.settings, approval_id):
+                if getattr(self.server.control, "settings", None) is not None and cards.is_draft_token(self.server.control.settings, approval_id):
                     self._json(HTTPStatus.CONFLICT, {"error": "Use outbound draft Send / Deny endpoint"})
                     return
                 pending = get_pending(approval_id)
@@ -1221,7 +1221,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
 
                 from handlers.tools.confirm import get_pending
                 import outbound_draft_cards as cards
-                if cards.is_draft_token(self.server.control.settings, approval_id):
+                if getattr(self.server.control, "settings", None) is not None and cards.is_draft_token(self.server.control.settings, approval_id):
                     self._json(HTTPStatus.CONFLICT, {"error": "Use outbound draft Send / Deny endpoint"})
                     return
                 pending = get_pending(approval_id)
