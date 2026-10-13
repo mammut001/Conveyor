@@ -330,8 +330,11 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
 
     items: list[dict[str, Any]] = []
 
+    import outbound_draft_cards as cards
     # 1. Pending tool actions on web channel
     for action in list_pending(channel="web"):
+        if cards.enabled(settings) and cards.is_draft_token(settings, action.token):
+            continue
         spec = get_tool(action.tool_name)
         if spec is not None:
             summary = spec.summary
@@ -462,6 +465,8 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
             local_tokens = {action.token for action in list_pending()}
             foreign_rows = approval_relay.list_foreign_pending(settings, local_tokens=local_tokens)
             for row in foreign_rows:
+                if cards.enabled(settings) and cards.is_draft_token(settings, row["token"]):
+                    continue
                 item = {
                     "id": row["token"],
                     "kind": "relay",
@@ -498,6 +503,8 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
                 items.append(item)
         except Exception:
             logger.exception("Failed to fetch foreign relay approvals in list_items")
+
+    items.extend(cards.list_items(settings))
 
     # 4. Surface uncertain G3 outcomes as read-only incidents, never approvals.
     try:

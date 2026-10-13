@@ -235,6 +235,10 @@ class Settings:
     long_term_memory_shared: bool = True
     long_term_memory_groups: bool = False
     approval_inbox_enabled: bool = False
+    draft_cards_enabled: bool = False
+    draft_cards_ttl_seconds: int = 86_400
+    outbound_allowlist: str = ""
+    draft_cards_web_url: str = ""
     skills_enabled: bool = False
     workflows_enabled: bool = False
     child_env_scope_provider_keys: bool = False
@@ -671,6 +675,10 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "approval_inbox_enabled": os.getenv(
             "CONVEYOR_APPROVAL_INBOX_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
+        "draft_cards_enabled": os.getenv("CONVEYOR_DRAFT_CARDS", "false").strip().lower() in ("true", "1", "yes", "on"),
+        "draft_cards_ttl_seconds": max(300, min(7 * 86400, _int_env("CONVEYOR_DRAFT_TTL_SECONDS", 86400))),
+        "outbound_allowlist": os.getenv("CONVEYOR_OUTBOUND_ALLOWLIST", "").strip(),
+        "draft_cards_web_url": os.getenv("CONVEYOR_DRAFT_CARDS_WEB_URL", "").strip(),
         "skills_enabled": os.getenv(
             "CONVEYOR_SKILLS_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
