@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 type Secret = { name: string; set: boolean; updated_at: string | null };
 
@@ -27,7 +27,7 @@ export function SecretsPanel({ token }: { token: string }) {
 
   useEffect(() => { void load(); }, [load]);
 
-  async function save(event: React.FormEvent<HTMLFormElement>) {
+  async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!/^[A-Z][A-Z0-9_]{1,63}$/.test(name) || !value) {
       setError('Use a valid uppercase environment variable name and nonempty value.');
