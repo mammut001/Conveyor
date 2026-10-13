@@ -37,6 +37,9 @@ def func_to_tool_name(func_name: str) -> str:
 
 
 def _get_tool_spec(name: str, settings: Settings | None = None) -> Any | None:
+    if name.startswith("subagent."):
+        import subagents
+        return subagents.specs(settings).get(name)
     if name == "agents.parallel":
         from handlers.subagents import get_subagent_tool_spec
         return get_subagent_tool_spec(settings)
@@ -233,6 +236,9 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
                     },
                 })
 
+    if settings is not None:
+        import subagents
+        schemas.extend(subagents.schemas(settings))
     return schemas
 
 
@@ -305,7 +311,7 @@ async def run_tool_loop(
             func_name = fn_info.get("name") or ""
             real_tool_name = func_to_tool_name(func_name)
 
-            if real_tool_name.startswith("mcp.") or real_tool_name == "agents.parallel":
+            if real_tool_name.startswith(("mcp.", "subagent.")) or real_tool_name == "agents.parallel":
                 raw_arg_val = fn_info.get("arguments")
                 arg_dict = None
                 if isinstance(raw_arg_val, dict):
@@ -416,7 +422,11 @@ async def run_tool_loop(
                                               confirmation_requested=True, messages=messages)
                 logger.info("Chat tier tool call executed: %s", real_tool_name)
                 tools_called.append(real_tool_name)
-                if real_tool_name == "agents.parallel":
+                if real_tool_name.startswith("subagent."):
+                    import subagents
+                    raw_res = await subagents.dispatch(settings, real_tool_name, arg,
+                                                       msg=msg, port=port, config=config)
+                elif real_tool_name == "agents.parallel":
                     raw_res = await run_tool(
                         settings,
                         real_tool_name,
