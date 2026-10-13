@@ -169,13 +169,36 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
         with (patch("subagents.complete_chat", new=AsyncMock(side_effect=lambda *_a, **_k: next(calls))),
               patch.object(chat_tools, "_get_tool_spec", return_value=spec),
               patch.object(chat_tools, "is_exposed", return_value=True),
-              patch("handlers.tools.runner.run_tool", side_effect=fake_run),
-              patch.object(egress_taint, "enabled", return_value=True)):
+              patch("handlers.tools.runner.run_tool", side_effect=fake_run)):
             task = await self.spawn(subset=["gmail.recent"], tools={"gmail.recent": self.read_schema})
             record = await self.wait_done(task["id"])
             self.assertEqual(record["status"], "completed")
             self.assertTrue(egress_taint.is_tainted(
                 self.settings, operator_id="user", channel="telegram", chat_id="chat"))
+
+    async def test_inherits_parent_taint_and_routes_network_read_to_approval(self):
+        from handlers import chat_tools
+        import egress_taint
+        self.settings.approval_inbox_enabled = True
+        egress_taint.mark_read(self.settings, "gmail.recent",
+                              operator_id="user", channel="telegram", chat_id="chat")
+        self.assertTrue(egress_taint.is_tainted(
+            self.settings, operator_id="user", channel="telegram", chat_id="chat"))
+        spec = ToolSpec("web.fetch", "Network read", DangerLevel.READ, executor=None)
+        model_calls = [{"content":"", "tool_calls":[{"id":"c", "function":{
+            "name":"web__fetch", "arguments":'{"arg":"https://example.com"}'}}]}]
+        schema = {"type":"function", "function":{"name":"web__fetch",
+                  "parameters":{"type":"object", "properties":{"arg":{"type":"string"}}}}}
+        with (patch("subagents.complete_chat", new=AsyncMock(side_effect=model_calls)),
+              patch.object(chat_tools, "_get_tool_spec", return_value=spec),
+              patch.object(chat_tools, "is_exposed", return_value=True),
+              patch("handlers.tools.runner._request_confirmation", new_callable=AsyncMock) as confirm,
+              patch("handlers.tools.runner.run_tool", new_callable=AsyncMock) as execute):
+            child = await self.spawn(subset=["web.fetch"], tools={"web.fetch": schema})
+            value = await self.wait_done(child["id"])
+            self.assertEqual(value["status"], "approval_required")
+            confirm.assert_awaited_once()
+            execute.assert_not_awaited()
 
     async def test_write_routes_to_existing_approval_never_executes(self):
         from handlers import chat_tools
