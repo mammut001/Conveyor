@@ -1,82 +1,115 @@
 # Event-triggered routines
 
-This feature extends the existing routine webhook receiver, database, and approval flow.
-It is disabled by default.
+This default-off feature extends the existing routine webhook receiver, SQLite
+database, untrusted event wrapper and approval flow. Enable
+`CONVEYOR_ROUTINES_ENABLED=true` and `CONVEYOR_HOOKS_ENABLED=1`.
+The old `CONVEYOR_WEBHOOKS_ENABLED` path is retained for existing users.
 
-Enable CONVEYOR_ROUTINES_ENABLED=true and CONVEYOR_HOOKS_ENABLED=1. The
-legacy CONVEYOR_WEBHOOKS_ENABLED remains supported for backward compatibility.
+## Authentication modes are fixed when hooks are created
 
-## Bearer-authorized Web Console management
+Create one hook per routine through the bearer-authenticated Web Console API:
 
-- GET /api/hooks: list routine associations, IDs, status and filters (no secrets).
-- POST /api/hooks: create or rotate a per-routine hook. Example JSON:
-  {"routine_id":1,"filter":{"event":"pull_request","actions":["opened"]}}
-- POST /api/hooks/<hook_id>/rotate: invalidate old ID/secret and issue new ones.
-- POST /api/hooks/<hook_id>/pause or /resume: disable or enable delivery.
-- DELETE /api/hooks/<hook_id>: delete credentials.
-- Existing /api/routines/<routine_id>/hook management is retained.
+- `POST /api/hooks`: `{"routine_id":1,"mode":"generic","filter":{}}`
+- GitHub example: `{"routine_id":1,"mode":"github","filter":{"event":"pull_request","actions":["opened"]}}`
+- `GET /api/hooks`: list ID, associated routine, `mode`, status and filters; never the secret.
+- `POST /api/hooks/<hook_id>/rotate`: new hook ID/secret; **preserves mode and filters**.
+- `POST /api/hooks/<hook_id>/pause` / `resume`: pause or resume the hook.
+- `DELETE /api/hooks/<hook_id>`: delete the hook.
 
-Only one hook exists per routine, following the existing SQLite schema. The
-random secret is returned once on create/rotate and then persisted in the
-existing routines.db (chmod 0600), which the receiver needs for HMAC verification.
-Secrets never appear in lists. Store creation responses securely.
+Mode defaults to `generic`, including hooks migrated from the earlier
+policy table. It cannot be chosen by inbound headers, and mixing GitHub and
+Conveyor authentication headers is rejected with **401** regardless of HMAC
+validity. To change modes, create a new hook with the desired mode (this
+rotates the per-routine hook ID and secret). Filters can use `event`,
+`actions` (exact names), and `branch` (exact `refs/heads/main`,
+push events only).
 
-Chat and Telegram can access hook.list (READ) and hook.manage (WRITE, with
-human confirmation). Usage: add <routine_id> [| JSON filter], rotate <hook_id>,
-pause <hook_id>, resume <hook_id>, delete <hook_id>. A one-time secret shown
-in chat is sensitive and may persist in its transcript.
+Conveyor generates a distinct random 32-byte URL-safe secret for each hook.
+**The HMAC secret is stored in plaintext in the existing 0600 SQLite
+`routines.db` file** because verification requires the key. It is
+not hashed. Secrets are returned only by authenticated creation/rotation
+responses and never in lists, audit logs or webhook responses.
 
-Filters accept event, actions (exact list), and branch (push only, full
-refs/heads/main style). Example GitHub issues opened:
-{"event":"issues","actions":["opened"]}. Push main:
-{"event":"push","branch":"refs/heads/main"}. An empty filter allows all.
+Chat and Telegram with chat tools enabled offer `hook.list` (READ)
+and `hook.manage` (WRITE, requiring the normal human approval).
+Usage: `add <routine_id> [github] [| JSON filter]`,
+`rotate <hook_id>`, `pause <hook_id>`, `resume <hook_id>`,
+`delete <hook_id>`. Chat replies **never contain secret values**;
+after a chat-created or chat-rotated hook, retrieve the credential through
+`GET /api/hooks/<hook_id>/secret` with the Web Console bearer token.
+That endpoint reveals the secret **exactly once**, then returns 404. It does
+not reveal secrets created through normal API responses (which already
+displayed the credential once). Never enter credentials into a model prompt.
 
-## Signed POST /hooks/<hook_id>
+## Generic mode: timestamp + delivery-bound signature
 
-Accepts only Content-Type: application/json, maximum 256 KiB, and an object
-JSON body. Required headers are:
+Send `POST /hooks/<hook_id>` with `Content-Type: application/json`,
+`X-Conveyor-Timestamp` (Unix seconds within 300 seconds of server),
+`X-Conveyor-Delivery` (unique 1-200 character ID, ASCII letters,
+digits, `._:-`), optional `X-Conveyor-Event`, and
+`X-Conveyor-Signature` with the exact form `sha256=<hex>`.
 
-- X-Conveyor-Signature: sha256=<hex HMAC-SHA256(secret, raw body)>
-- X-Conveyor-Timestamp: integer Unix seconds within 5 minutes
-- X-Conveyor-Delivery: unique nonce (1-200 ASCII letters/digits/._:-)
-- X-Conveyor-Event: optional event name (default webhook)
+The HMAC-SHA256 **message bytes** are precisely:
 
-GitHub-style signatures and events use X-Hub-Signature-256,
-X-GitHub-Delivery and X-GitHub-Event instead. The timestamp header is still
-mandatory. Native GitHub webhook deliveries do NOT contain this header.
-A trusted forwarding relay must add X-Conveyor-Timestamp for a fresh delivery
-without changing the signed raw body, or re-sign as a Conveyor event. Direct,
-unmodified GitHub deliveries are rejected.
+    f'{timestamp}.{delivery_id}.'.encode('ascii') + raw_body
 
-Example:
+The timestamp and delivery ID must be the exact strings sent in the
+headers. Only the raw JSON *bytes* follow the prefix; do not parse or
+re-serialize them when signing. A copied body/signature cannot be re-used
+with a new timestamp or nonce.
+
+Complete Python + curl signing example (set `SECRET` and
+`HOOK_ID` using the one-time Web Console response):
 
     BODY='{"action":"opened","number":42}'
     TS=$(date +%s)
-    NONCE=$(python3 -c 'import uuid; print(uuid.uuid4())')
-    SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}')
+    DELIVERY=$(python3 -c 'import uuid; print(uuid.uuid4())')
+    SIG=$(BODY="$BODY" TS="$TS" DELIVERY="$DELIVERY" SECRET="$SECRET" python3 - <<'PY'
+    import hashlib, hmac, os
+    body = os.environ["BODY"].encode("utf-8")
+    prefix = f'{os.environ["TS"]}.{os.environ["DELIVERY"]}.'.encode("ascii")
+    print(hmac.new(os.environ["SECRET"].encode("utf-8"),
+                   prefix + body, hashlib.sha256).hexdigest())
+    PY
+    )
     curl -X POST "https://example.org/hooks/$HOOK_ID" \
-      -H "Content-Type: application/json" \
-      -H "X-Conveyor-Event: issues" \
+      -H 'Content-Type: application/json' \
+      -H 'X-Conveyor-Event: issues' \
       -H "X-Conveyor-Timestamp: $TS" \
-      -H "X-Conveyor-Delivery: $NONCE" \
-      -H "X-Conveyor-Signature: sha256=$SIG" --data-binary "$BODY"
+      -H "X-Conveyor-Delivery: $DELIVERY" \
+      -H "X-Conveyor-Signature: sha256=$SIG" \
+      --data-binary "$BODY"
 
-Bounded bodies are fully consumed before 400/401 responses; requests above
-the size cap are closed after 413 rather than drained without limit. Replay
-IDs are durably reserved atomically in SQLite for seven days (409 on repeat).
-Accepted events are limited to 30 per hook and 120 globally per rolling minute,
-and at most one in-flight run per routine (429 and Retry-After on busy).
+## GitHub mode: native webhook compatible
 
-The routine executes via the original run_single_routine webhook mode,
-not a privileged new pathway. Payload is redacted, truncated to 4,000 chars
-and wrapped as UNTRUSTED event data. No long-term memory is injected, and
-all WRITE actions retain their existing human approval requirements.
+Set `mode: "github"` when creating the hook, then configure
+GitHub's repository Webhook with JSON content type, the hook URL, and its
+generated secret. GitHub sends `X-Hub-Signature-256: sha256=<hex>`
+(HMAC-SHA256 over the **raw body only**), `X-GitHub-Delivery` (required
+unique ID) and `X-GitHub-Event`. **No Conveyor timestamp is
+required or accepted in GitHub mode**. Real GitHub webhook requests work
+directly with no relay. Duplicated delivery IDs for the same hook are
+rejected with 409. Example filters:
 
-HTTP codes: disabled/unknown 404; bad HMAC or missing/stale timestamp 401;
-replayed delivery 409;
-paused 409; malformed JSON 400; invalid content type 415; body too large 413;
-rate limit 429; accepted/filtered 202. Audit records only hook-ID prefix,
-status and sanitized event, never body or secret.
+- `{"event":"issues","actions":["opened"]}`
+- `{"event":"pull_request","actions":["opened"]}`
+- `{"event":"push","branch":"refs/heads/main"}`
 
-Expose the public /hooks/ route behind HTTPS, keeping /api management routes
-private and bearer-token protected.
+## Safety
+
+- JSON objects only, maximum 256 KiB. Bounded bodies are drained fully
+  before 400/401 responses; oversized bodies close without unbounded reading.
+- Accepted delivery IDs are reserved transactionally in SQLite for seven
+  days; duplicate is 409, including during a busy routine.
+- Replay and per-hook/global rolling-minute quotas (30 / 120) are checked
+  **before** routine-busy rejection. A busy 429 does not consume a nonce.
+- Accepted events invoke the **existing** routine runner and approval inbox.
+  Event payloads are redacted, truncated to 4,000 characters, and wrapped as
+  untrusted. WRITE tools cannot bypass human confirmation.
+- The endpoint returns 404 for disabled/unknown hooks, 401 for bad signatures
+  or wrong mode (plus missing/stale generic timestamps), 400 for malformed
+  JSON, 415 for non-JSON content type, 409 for paused/replayed, 413 for
+  oversized bodies, 429 for throttling and 202 for accepted/filtered events.
+- Audit lines contain only hook ID prefix, status and sanitized event.
+  Never expose the bearer-authenticated `/api` routes publicly.
+  Expose only `/hooks/` behind an HTTPS reverse proxy.
