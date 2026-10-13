@@ -1,7 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
 async function openConsole(page: Page, pwa: boolean) {
-  await page.addInitScript(() => sessionStorage.setItem('conveyor-token', 'fake-token'))
   await page.route('**/api/**', async (route: Route) => {
     const path = new URL(route.request().url()).pathname
     let data: unknown = {}
@@ -22,6 +21,11 @@ async function openConsole(page: Page, pwa: boolean) {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) })
   })
   await page.goto('/')
+  const unlock = page.getByLabel('Console token')
+  if (await unlock.isVisible()) {
+    await unlock.fill('pwa-test-token-0123456789abcdef0123456789abcdef')
+    await page.getByRole('button', { name: 'Unlock console' }).click()
+  }
   await expect(page.locator('main.app-shell')).toBeVisible()
 }
 
