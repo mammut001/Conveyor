@@ -30,7 +30,9 @@ def _db(settings: Any) -> sqlite3.Connection:
 def private_read(tool: str) -> bool:
     """Conservatively mark attempts to read personal data, even on tool failure."""
     name = tool.lower()
-    return (name.startswith(("memory.", "gmail.", "inbox.", "secrets.", "secret."))
+    return (name.startswith(("memory.", "gmail.", "inbox.", "secrets.", "secret.",
+                             "notes.", "calendar.", "contacts.", "files.", "file.",
+                             "project.", "mcp."))
             or name in ("email.inbox", "email.read", "email.search",
                         "email.recent", "file.search_private",
                         "calendar.search", "contacts.search", "notes.search",
@@ -42,7 +44,7 @@ def outbound(settings: Any, tool: str) -> bool:
     from outbound_draft_cards import is_outbound
     name = tool.lower()
     network_read = (name in ("web.fetch", "web.text", "web.headers", "web.search")
-                    or name.startswith(("browser.", "research.")))
+                    or name.startswith(("browser.", "research.", "mcp.")))
     return is_outbound(settings, tool) or network_read
 
 
