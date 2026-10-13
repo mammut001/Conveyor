@@ -25,7 +25,7 @@ Web Console via an Internet-facing reverse proxy or Tailscale Funnel.
 3. Build and deploy the frontend (**cd web && npm ci && npm run build**) and
    restart the Web Console. Open the HTTPS tailnet URL and authenticate with
    the bearer token. Use your browser's **Install app / Add to Home Screen**
-   option. The manifest and worker are both **404** when the flag is off.
+   option. The service worker is **404** when the flag is off; the manifest and icons remain available.
 4. To enable Web Push, generate an **application-server VAPID key pair** using
    your push tooling (for example, **python -m py_vapid --gen**). Configure the
    base64url public key as **CONVEYOR_VAPID_PUBLIC_KEY** and the PEM or
@@ -40,7 +40,9 @@ Web Console via an Internet-facing reverse proxy or Tailscale Funnel.
   Endpoint/crypto keys are stored in a mode-0600 SQLite database under
   **codex_memory_root/state/web_push.sqlite3**, keyed by the configured
   operator identity. The client cannot choose the operator. Up to 10 device
-  subscriptions are retained per operator.
+  subscriptions are retained per operator. Push endpoints are allowlisted to
+  Google, Mozilla, Apple and Windows services, with public DNS checks at send
+  time; use network egress restrictions to also mitigate DNS rebinding.
 - The push service receives only a generic title and an opaque **id**.
   No email body, draft fields, chat text, prompt, credentials, API token,
   message preview, or approval decision is included. A notification contains
@@ -57,15 +59,15 @@ Web Console via an Internet-facing reverse proxy or Tailscale Funnel.
   communicate with its platform push delivery service even over a private
   tailnet. Messages use the Web Push encryption mechanism, but the delivery
   metadata (such as endpoint and timing) belongs to that service.
-- When **CONVEYOR_PWA=0**, new subscriptions, notifications, manifest,
-  worker, and icons are disabled; ordinary Web Console features remain.
-  Clearing existing client workers on the next authenticated page load is
-  best effort. Revoke old devices if a device is lost; rotate the Web Console
+- When **CONVEYOR_PWA=0**, new subscriptions, notifications and the
+  service worker are disabled. The manifest and icons remain available as on
+  main; ordinary Web Console features remain.
+  Use **Lock** to unregister an installed PWA worker and clear its caches. Revoke old devices if a device is lost; rotate the Web Console
   bearer token if its storage may be compromised.
 
 ## Smoke / tests
 
 Run **python scripts/pwa_smoke.py** for offline authenticated route, feature
 flag, private payload, and service-worker guard tests. Web E2E includes a
-feature-on/off manifest-link test (Vite preview serves frontend static files
-directly; backend tests assert the actual flag-gated HTTP response).
+feature-on/off manifest-link test, including legacy mobile UI. Backend
+HTTP tests assert the worker is flag-gated but the manifest remains served.
