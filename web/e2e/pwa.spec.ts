@@ -25,6 +25,11 @@ async function openConsole(page: Page, pwa: boolean, mobileUI = false) {
     else if (path === '/api/approval-inbox') data = { items: [] }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) })
   })
+  // A prior scenario can leave an authenticated token in this same page.
+  // Lock explicitly before navigating so we never fill a transient form
+  // that React is about to replace during token restoration.
+  const lock = page.getByRole('button', { name: 'Lock', exact: true })
+  if (await lock.isVisible()) await lock.click()
   await page.goto('/')
   const unlock = page.getByLabel('Console token')
   if (await unlock.isVisible()) {
