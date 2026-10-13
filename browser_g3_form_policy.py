@@ -1,4 +1,4 @@
-"""Fail-closed G3 form-scoped classification; ignore unrelated footer/nav links."""
+"""Fail-closed G3 form classifier for visible page text and form controls."""
 from __future__ import annotations
 
 import re
@@ -46,16 +46,16 @@ def _dangerous(value: str, *, field: bool = False) -> bool:
 
 
 def sensitive_form(url: str, form: dict) -> bool:
-    """Classify selected-form metadata and preceding visible page text.
+    """Classify selected form metadata and all visible page text.
 
-    Footer, navigation and unrelated anchor text are excluded by the DOM collector.
+    The DOM collector omits only navigation, footer, and hidden content.
     Malformed metadata is refused instead of silently exempted.
     """
     if not isinstance(form, dict) or not isinstance(url, str):
         return True
     if _dangerous(url):
         return True
-    for key in ("target", "heading", "page_heading", "preceding_text", "document_title", "submit_label"):
+    for key in ("target", "heading", "page_heading", "preceding_text", "page_text", "document_title", "submit_label"):
         value = form.get(key, "")
         if not isinstance(value, str) or _dangerous(value):
             return True
