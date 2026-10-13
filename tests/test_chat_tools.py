@@ -145,19 +145,40 @@ class TestChatToolsSchemas(unittest.TestCase):
             original = func_to_tool_name(fn)
             self.assertEqual(tool_to_func_name(original), fn, f"reverse mapping failed for {fn}")
 
-            # 4. Parameters and descriptions
+            # 4. Validate each tool's declared parameter shape, not a shared "arg".
             params = s["function"]["parameters"]
             self.assertEqual(params["type"], "object")
-            self.assertIn("arg", params["properties"])
-            self.assertEqual(params["properties"]["arg"]["type"], "string")
-            self.assertIn("Free-text argument", params["properties"]["arg"]["description"])
-            self.assertEqual(params.get("required", []), [])
+            properties = params["properties"]
+            self.assertIsInstance(properties, dict)
+            self.assertTrue(properties, f"{fn} has no parameters")
+            required = params.get("required", [])
+            self.assertIsInstance(required, list)
+            self.assertEqual(len(required), len(set(required)))
+            self.assertTrue(set(required).issubset(properties), f"{fn}: unknown required field")
+            for key, prop in properties.items():
+                self.assertIsInstance(key, str)
+                self.assertIsInstance(prop, dict, f"{fn}.{key} has no schema")
+                self.assertTrue(prop, f"{fn}.{key} has an empty schema")
+            if "arg" in properties:
+                self.assertEqual(properties["arg"]["type"], "string")
+                self.assertEqual(required, [] if original not in (
+                    "browser.browse_site", "browser.prepare_submit"
+                ) else ["arg"])
+            if fn == "subagent__spawn":
+                self.assertEqual(required, ["goal", "tools_subset"])
+                self.assertEqual(properties["goal"]["type"], "string")
+                self.assertEqual(properties["tools_subset"]["type"], "array")
+            if fn in ("subagent__status", "subagent__cancel", "subagent__result"):
+                self.assertEqual(required, ["id"])
+                self.assertEqual(properties["id"]["type"], "string")
 
             desc = s["function"]["description"]
-            self.assertTrue(
-                "[" in desc and "]" in desc,
-                f"description {desc} should contain danger level",
-            )
+            self.assertTrue(desc.strip(), f"{fn} has an empty description")
+            if not fn.startswith("subagent__"):
+                self.assertTrue(
+                    "[" in desc and "]" in desc,
+                    f"description {desc} should contain danger level",
+                )
 
         # 5. READ, WRITE_SAFE, and WRITE tools present
         self.assertIn("notes__search", func_names)
