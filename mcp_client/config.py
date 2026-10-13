@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from mcp_client.types import ServerConfig
+from mcp_client.toml_support import parse_toml, normalize_toml_server, strict_server
 
 logger = logging.getLogger("conveyor.mcp.config")
 
@@ -350,7 +351,7 @@ def validate_server(name: str, raw: dict, index: int) -> ServerConfig:
 
 
 def load_mcp_servers(config_path: Path) -> tuple[dict[str, ServerConfig], str | None]:
-    """Load and validate MCP servers from the JSON configuration file.
+    """Load and validate MCP servers from JSON or TOML configuration.
 
     Returns (servers_dict, file_error).
     If file is missing: returns ({}, None).
@@ -361,9 +362,10 @@ def load_mcp_servers(config_path: Path) -> tuple[dict[str, ServerConfig], str | 
 
     try:
         raw_text = config_path.read_text(encoding="utf-8")
-        data = json.loads(raw_text)
+        is_toml = config_path.suffix.lower() == ".toml"
+        data = parse_toml(raw_text) if is_toml else json.loads(raw_text)
     except Exception as exc:
-        err_msg = f"Failed to parse MCP config JSON file: {exc}"
+        err_msg = "Invalid MCP TOML syntax" if config_path.suffix.lower() == ".toml" else f"Failed to parse MCP config JSON file: {exc}"
         logger.error(err_msg)
         return {}, err_msg
 
@@ -380,8 +382,15 @@ def load_mcp_servers(config_path: Path) -> tuple[dict[str, ServerConfig], str | 
 
     servers: dict[str, ServerConfig] = {}
     for idx, (name, raw_cfg) in enumerate(raw_servers.items()):
+        levels: dict[str, str] = {}
+        if config_path.suffix.lower() == ".toml":
+            try:
+                raw_cfg, levels = normalize_toml_server(str(name), raw_cfg)
+            except ValueError as exc:
+                servers[str(name)] = ServerConfig(name=str(name), transport=str(raw_cfg.get("transport", "stdio")), validation_error=str(exc))
+                continue
         cfg = validate_server(str(name), raw_cfg, idx)
-        servers[cfg.name] = cfg
+        servers[cfg.name] = strict_server(cfg, levels) if config_path.suffix.lower() == ".toml" else cfg
 
     return servers, None
 
