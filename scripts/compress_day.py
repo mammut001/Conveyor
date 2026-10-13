@@ -136,6 +136,11 @@ async def _archive_day(settings: Settings, day: datetime, now: datetime) -> str:
     # "unfiled" on any failure (so this never raises on a network blip).
     runner = CodexRunner(settings)
     archive_content, moved = await runner.reclassify_unfiled(content)
+    if getattr(settings, "memory_v2_enabled", False):
+        # Reuse the existing MEMORY.md -> JOURNAL archive, without deleting
+        # structured log rows (search/forget still work after archival).
+        from personal_tools.memory_v2 import archive_for_day
+        archive_content += archive_for_day(settings, day.strftime("%Y-%m-%d"))
 
     journal_dir = settings.codex_memory_root / "JOURNAL"
     journal_dir.mkdir(parents=True, exist_ok=True)

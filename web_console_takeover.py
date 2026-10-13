@@ -176,6 +176,9 @@ def main() -> None:
     thread.start()
     import routines
     routines.start_routines_worker(loop, settings, runner)
+    if getattr(settings, "memory_v2_enabled", False):
+        from personal_tools.memory_v2 import start_purge_worker
+        start_purge_worker(loop, settings)
     import approval_relay
     relay_consumer = approval_relay.start_relay_worker(loop, settings, channel="web")
     logger.info(

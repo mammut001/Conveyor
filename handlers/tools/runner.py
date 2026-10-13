@@ -377,6 +377,15 @@ async def _request_confirmation(
         from personal_tools.long_term_memory import GROUP_REFUSAL
         await port.reply(msg, GROUP_REFUSAL)
         return
+    if tool_name == "memory.forget" and getattr(settings, "memory_v2_enabled", False):
+        from personal_tools.long_term_memory import owner_for_chat
+        from personal_tools.memory_v2 import prepare_forget
+        try:
+            who = owner_for_chat(settings, msg.operator_id, msg.channel, msg.chat_id)
+            arg = prepare_forget(settings, who, arg)
+        except ValueError as exc:
+            await port.reply(msg, str(exc))
+            return
     spec = get_tool(tool_name)
     if spec is not None:
         summary = spec.summary

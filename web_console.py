@@ -364,8 +364,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if settings is None:
             from config import load_runtime_settings
             settings = load_runtime_settings()
-        if not getattr(settings, "long_term_memory_enabled", False):
-            self._json(HTTPStatus.CONFLICT, {"error": "long-term memory is disabled (set CONVEYOR_LONG_TERM_MEMORY=true)"})
+        if not (getattr(settings, "long_term_memory_enabled", False) or getattr(settings, "memory_v2_enabled", False)):
+            self._json(HTTPStatus.CONFLICT, {"error": "memory is disabled (set CONVEYOR_MEMORY_V2=1 or CONVEYOR_LONG_TERM_MEMORY=true)"})
             return None
         return settings
 
@@ -480,9 +480,12 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if settings is None:
                     return
                 from personal_tools import long_term_memory as ltm
+                if getattr(settings, "memory_v2_enabled", False):
+                    from personal_tools import memory_v2 as ltm
                 kind = (query.get("kind") or [""])[0].strip() or None
-                if kind not in (None, "profile", "log"):
-                    self._json(HTTPStatus.BAD_REQUEST, {"error": "kind must be profile or log"})
+                kinds = (None, "profile", "facts", "log") if getattr(settings, "memory_v2_enabled", False) else (None, "profile", "log")
+                if kind not in kinds:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid memory tier"})
                     return
                 q = (query.get("q") or [""])[0].strip()
                 try:
@@ -890,6 +893,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if settings is None:
                     return
                 from personal_tools import long_term_memory as ltm
+                if getattr(settings, "memory_v2_enabled", False):
+                    from personal_tools import memory_v2 as ltm
                 raw_text = body.get("text", body.get("content"))
                 if not isinstance(raw_text, str):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "text is required"})
@@ -899,7 +904,13 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     owner = self._memory_owner(settings, str(body.get("agent") or ""))
                     if owner is None:
                         return
-                    row = ltm.remember_fact(settings, owner, raw_text, source_channel="web")
+                    if getattr(settings, "memory_v2_enabled", False):
+                        tier = body.get("tier", "facts")
+                        if not isinstance(tier, str):
+                            raise ValueError("tier must be a string")
+                        row = ltm.remember_fact(settings, owner, raw_text, tier=tier, source="manual", source_channel="web")
+                    else:
+                        row = ltm.remember_fact(settings, owner, raw_text, source_channel="web")
                 except ValueError as exc:
                     self._json(HTTPStatus.OK, {"ok": False, "refused": True, "error": str(exc)})
                     return
@@ -1378,6 +1389,30 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         parts = self._segments(parsed.path)
         try:
+            if len(parts) == 3 and parts[:2] == ["api", "memory"]:
+                settings = self._memory_settings()
+                if settings is None:
+                    return
+                if not getattr(settings, "memory_v2_enabled", False):
+                    self._json(HTTPStatus.CONFLICT, {"error": "memory editing requires CONVEYOR_MEMORY_V2=1"})
+                    return
+                if not parts[2].isdigit() or not isinstance(body.get("text"), str):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "numeric memory id and text are required"})
+                    return
+                from personal_tools import memory_v2
+                owner = self._memory_owner(settings, str((parse_qs(parsed.query).get("agent") or [""])[0]))
+                if owner is None:
+                    return
+                try:
+                    row = memory_v2.update_fact(settings, owner, int(parts[2]), body["text"])
+                except ValueError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+                if row is None:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "memory not found"})
+                    return
+                self._json(HTTPStatus.OK, {"ok": True, **memory_v2.api_item(settings, row)})
+                return
             if len(parts) == 3 and parts[:2] == ["api", "agents"]:
                 if not self._agents_on():
                     return
@@ -1488,11 +1523,14 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 owner = self._memory_owner(settings, str((parse_qs(parsed.query).get("agent") or [""])[0]))
                 if owner is None:
                     return
+                if getattr(settings, "memory_v2_enabled", False):
+                    from personal_tools import memory_v2 as ltm
                 gone, status = ltm.forget_fact(settings, owner, f"#{parts[2]}")
-                if status != "deleted":
+                if status not in ("deleted", "purge_pending"):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "memory not found"})
                     return
-                self._json(HTTPStatus.OK, {"ok": True, "deleted": ltm.api_item(settings, gone[0])})
+                self._json(HTTPStatus.OK, {"ok": True, "deleted": ltm.api_item(settings, gone[0]),
+                                           "purge_pending": status == "purge_pending"})
                 return
 
             if parsed.path.startswith("/api/routines"):
@@ -1846,6 +1884,9 @@ def main() -> None:
 
     import routines
     routines.start_routines_worker(loop, settings, runner)
+    if getattr(settings, "memory_v2_enabled", False):
+        from personal_tools.memory_v2 import start_purge_worker
+        start_purge_worker(loop, settings)
     import approval_relay
     relay_consumer = approval_relay.start_relay_worker(loop, settings, channel="web")
     try:

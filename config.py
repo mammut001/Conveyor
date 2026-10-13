@@ -229,6 +229,9 @@ class Settings:
     routines_feishu_chat_id: str | None = None
     routines_approval_ttl_seconds: int = 86_400
     long_term_memory_enabled: bool = False
+    memory_v2_enabled: bool = False
+    memory_v2_recall_k: int = 5
+    memory_v2_token_cap: int = 1000
     long_term_memory_shared: bool = True
     long_term_memory_groups: bool = False
     approval_inbox_enabled: bool = False
@@ -649,6 +652,10 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "routines_approval_ttl_seconds": max(
             300, min(7 * 86_400, _int_env("CONVEYOR_ROUTINES_APPROVAL_TTL_SECONDS", 86_400))
         ),
+        # Structured v2 is independently opted in; legacy flag behavior remains unchanged.
+        "memory_v2_enabled": os.getenv("CONVEYOR_MEMORY_V2", "false").lower() in ("1", "true", "yes", "on"),
+        "memory_v2_recall_k": max(0, min(20, _int_env("CONVEYOR_MEMORY_V2_RECALL_K", 5))),
+        "memory_v2_token_cap": max(128, min(4000, _int_env("CONVEYOR_MEMORY_V2_TOKEN_CAP", 1000))),
         # Durable cross-chat memory. Off: tools hidden, prompts unchanged.
         "long_term_memory_enabled": os.getenv(
             "CONVEYOR_LONG_TERM_MEMORY", "false"

@@ -76,7 +76,7 @@ class Screened:
 
 
 def enabled(settings: Any) -> bool:
-    return bool(getattr(settings, "long_term_memory_enabled", False))
+    return bool(getattr(settings, "long_term_memory_enabled", False) or getattr(settings, "memory_v2_enabled", False))
 
 
 def _root(settings: Any) -> Path:
@@ -535,6 +535,9 @@ def prompt_block(settings: Any, operator_id: str, question: str = "") -> str:
     Profile + newest log rows, plus up to RELEVANT_INJECT_COUNT older log rows that
     match the current question (so an old fact can still be recalled).
     """
+    if getattr(settings, "memory_v2_enabled", False):
+        from personal_tools.memory_v2 import prompt_block as v2_prompt
+        return v2_prompt(settings, operator_id, question)
     if not enabled(settings):
         return ""
     try:
@@ -605,6 +608,9 @@ async def memory_remember(
     channel: str = "",
     chat_id: str = "",
 ) -> ToolResult:
+    if getattr(settings, "memory_v2_enabled", False):
+        from personal_tools import memory_v2_bridge
+        return await memory_v2_bridge.memory_remember(settings, arg, operator_id=operator_id, channel=channel, chat_id=chat_id)
     if not enabled(settings):
         return _disabled()
     operator_id = owner_for_chat(settings, operator_id, channel, chat_id)
@@ -624,6 +630,9 @@ async def memory_forget(
     channel: str = "",
     chat_id: str = "",
 ) -> ToolResult:
+    if getattr(settings, "memory_v2_enabled", False):
+        from personal_tools import memory_v2_bridge
+        return await memory_v2_bridge.memory_forget(settings, arg, operator_id=operator_id, channel=channel, chat_id=chat_id)
     if not enabled(settings):
         return _disabled()
     operator_id = owner_for_chat(settings, operator_id, channel, chat_id)
@@ -651,6 +660,9 @@ async def memory_list(
     channel: str = "",
     chat_id: str = "",
 ) -> ToolResult:
+    if getattr(settings, "memory_v2_enabled", False):
+        from personal_tools import memory_v2_bridge
+        return await memory_v2_bridge.memory_list(settings, arg, operator_id=operator_id, channel=channel, chat_id=chat_id)
     if not enabled(settings):
         return _disabled()
     operator_id = owner_for_chat(settings, operator_id, channel, chat_id)
@@ -677,6 +689,9 @@ async def memory_search(
     channel: str = "",
     chat_id: str = "",
 ) -> ToolResult:
+    if getattr(settings, "memory_v2_enabled", False):
+        from personal_tools import memory_v2_bridge
+        return await memory_v2_bridge.memory_search(settings, arg, operator_id=operator_id, channel=channel, chat_id=chat_id)
     if not enabled(settings):
         return _disabled()
     operator_id = owner_for_chat(settings, operator_id, channel, chat_id)
