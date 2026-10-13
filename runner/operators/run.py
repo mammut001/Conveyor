@@ -308,7 +308,7 @@ async def _run_job(self, job: Job, on_progress: ProgressCallback) -> None:
             self.current_job = None
 
 
-def job_child_env(self, job: Job) -> dict[str, str]:
+def job_child_env(self, job: Job, *, claude: bool = False) -> dict[str, str]:
     """Environment of the agent process that works on one job.
 
     The process must only know its own worktree as "the workspace". With the
@@ -317,7 +317,12 @@ def job_child_env(self, job: Job) -> dict[str, str]:
     the worktree, /diff and /apply — and, for an agent with its own project
     folder, in the wrong repository altogether.
     """
-    env = self._child_env()
+    if getattr(self.settings, "env_isolation", False):
+        from subprocess_env import agent_env
+        env = agent_env(self.settings, claude=claude,
+                        overrides={"CODEX_TELEGRAM_JOB": "1", "CODEX_RUNNER_HOME": str(RUNNER_HOME)})
+    else:
+        env = self._child_env()
     if job.worktree_path is not None:
         env["CODEX_WORKSPACE_ROOT"] = str(job.worktree_path)
     return env
