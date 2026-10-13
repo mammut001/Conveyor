@@ -301,6 +301,9 @@ async def _editcheck(msg, port, _runner, _settings, _arg):
 
 async def _memory(msg, port, runner, _settings, arg):
     """Optional positional args: [date] [category] (any order)."""
+    from handlers.memory_v2_commands import handle
+    if await handle(msg, port, _settings, arg):
+        return
     date_str: str | None = None
     category: str | None = None
     for raw in (arg.split() if arg else []):
