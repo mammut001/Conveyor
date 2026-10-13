@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -94,6 +95,60 @@ class MemoryV2Tests(unittest.TestCase):
         self.assertEqual(mem.forget_fact(self.settings, "operator", str(record["id"]))[1], "deleted")
         self._assert_erased_from_disk(marker)
         self.assertEqual(mem.search_facts(self.settings, "operator", marker), [])
+
+    def test_active_reader_defers_purge_and_next_connect_finishes_wipe(self):
+        marker = "unforgettablereaderblockingxyzabc"
+        row = mem.remember_fact(self.settings, "operator", marker)
+        token = mem.prepare_forget(self.settings, "operator", str(row["id"]))
+        dbpath = self.settings.codex_memory_root / "long_term_memory.db"
+        reader = sqlite3.connect(str(dbpath))
+        try:
+            reader.execute("BEGIN")
+            self.assertEqual(reader.execute(
+                "SELECT text FROM memory_v2_entries WHERE id=?", (row["id"],)
+            ).fetchone()[0], marker)
+            started = time.monotonic()
+            result = asyncio.run(bridge.memory_forget(
+                self.settings, token, operator_id="operator", channel="web"
+            ))
+            self.assertTrue(result.ok)
+            self.assertIn("安全擦除待完成", result.text)
+            self.assertLess(time.monotonic() - started, 5.0)
+            with sqlite3.connect(str(dbpath), timeout=1) as inspector:
+                self.assertIsNone(inspector.execute(
+                    "SELECT id FROM memory_v2_entries WHERE id=?", (row["id"],)
+                ).fetchone())
+                self.assertIsNotNone(inspector.execute(
+                    "SELECT generation FROM memory_v2_purge_pending WHERE id=1"
+                ).fetchone())
+            self.assertTrue(Path(str(dbpath) + "-wal").exists())
+        finally:
+            reader.close()
+        # A normal subsequent read retries the checkpoint without a reboot.
+        self.assertEqual(mem.list_facts(self.settings, "operator"), [])
+        with sqlite3.connect(str(dbpath)) as db:
+            self.assertIsNone(db.execute(
+                "SELECT 1 FROM memory_v2_purge_pending WHERE id=1"
+            ).fetchone())
+        self._assert_erased_from_disk(marker)
+        self.assertTrue(mem.retry_pending_purge(self.settings))
+
+    def test_periodic_retry_finishes_a_persisted_pending_purge(self):
+        marker = "periodicpendingpurgecheckxyzabc"
+        row = mem.remember_fact(self.settings, "operator", marker)
+        dbpath = self.settings.codex_memory_root / "long_term_memory.db"
+        reader = sqlite3.connect(str(dbpath))
+        try:
+            reader.execute("BEGIN")
+            reader.execute("SELECT text FROM memory_v2_entries WHERE id=?", (row["id"],)).fetchone()
+            deleted, status = mem.forget_fact(self.settings, "operator", str(row["id"]))
+            self.assertEqual(deleted[0]["id"], row["id"])
+            self.assertEqual(status, "purge_pending")
+            self.assertFalse(mem.retry_pending_purge(self.settings))
+        finally:
+            reader.close()
+        self.assertTrue(mem.retry_pending_purge(self.settings))
+        self._assert_erased_from_disk(marker)
 
     def test_edit_physically_erases_replaced_text(self):
         old = "veryuniqueeditsecretxyzabc"
