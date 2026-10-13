@@ -100,6 +100,7 @@ async def _run(argv: list[str], timeout: float = _PER_CMD_TIMEOUT) -> str:
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=__import__("subprocess_env").utility_env(),
         )
     except Exception:
         logger.exception("Failed to spawn %s", argv[0])

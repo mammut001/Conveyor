@@ -402,6 +402,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/") and not self._require_auth():
             return
+        if path == "/api/secrets":
+            from web_secrets_api import dispatch
+            if dispatch(self, "GET", path):
+                return
         if path == "/api/hooks" or path.startswith("/api/hooks/"):
             import event_triggers
             if event_triggers.api_get(self, path):
@@ -841,6 +845,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         body = self._body()
         if body is None:
             return
+        if parsed.path == "/api/secrets":
+            from web_secrets_api import dispatch
+            if dispatch(self, "POST", parsed.path, body):
+                return
         try:
             if parsed.path == "/api/browser/kill":
                 import browser_approvals_admin
@@ -1434,6 +1442,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         self._drain_body()
         parts = self._segments(parsed.path)
         try:
+            if parsed.path.startswith("/api/secrets/"):
+                from web_secrets_api import dispatch
+                if dispatch(self, "DELETE", parsed.path):
+                    return
             if parsed.path.startswith("/api/hooks/"):
                 import event_triggers
                 if event_triggers.api_delete(self, parsed.path):

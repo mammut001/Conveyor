@@ -305,6 +305,7 @@ class WebControl:
         result = subprocess.run(
             ["git", "status", "--short"], cwd=worktree,
             capture_output=True, text=True, timeout=5, check=False,
+            env=__import__("subprocess_env").utility_env(self.settings),
         )
         files = []
         for line in result.stdout.splitlines()[:200]:
@@ -325,6 +326,7 @@ class WebControl:
             result = subprocess.run(
                 ["git", "diff", "--numstat", "HEAD", "--", "."], cwd=worktree,
                 capture_output=True, text=True, timeout=10, check=False,
+                env=__import__("subprocess_env").utility_env(self.settings),
             )
             for line in result.stdout.splitlines()[:500]:
                 parts = line.split("\t", 2)
