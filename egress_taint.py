@@ -30,13 +30,18 @@ def private_read(tool: str) -> bool:
     name = tool.lower()
     return (name.startswith(("memory.", "gmail.", "inbox.", "secrets.", "secret."))
             or name in ("email.inbox", "email.read", "email.search",
-                        "email.recent", "file.search_private"))
+                        "email.recent", "file.search_private",
+                        "calendar.search", "contacts.search", "notes.search",
+                        "files.search"))
 
 
 def outbound(settings: Any, tool: str) -> bool:
     """Reuse the existing draft-card outbound classification."""
     from outbound_draft_cards import is_outbound
-    return is_outbound(settings, tool)
+    name = tool.lower()
+    network_read = (name in ("web.fetch", "web.text", "web.headers", "web.search")
+                    or name.startswith(("browser.", "research.")))
+    return is_outbound(settings, tool) or network_read
 
 
 def mark_read(settings: Any, tool: str, *, operator_id: str = "",
