@@ -19,6 +19,7 @@ import sqlite3
 import time
 import unicodedata
 from typing import Any
+from uuid import uuid4
 
 from redaction import redact_text
 
@@ -335,7 +336,10 @@ def _send_email(settings: Any, draft: dict[str, str]) -> str:
         msg["Cc"] = draft["cc"]
     msg["Subject"] = draft["subject"]
     msg["Date"] = email.utils.formatdate(localtime=False)
-    msg["Message-ID"] = email.utils.make_msgid()
+    from_address = email.utils.parseaddr(msg.get("From", ""))[1]
+    domain = from_address.rsplit("@", 1)[1] if "@" in from_address else "conveyor.invalid"
+    # make_msgid() includes the process ID even when passed idstring and domain.
+    msg["Message-ID"] = f"<{uuid4().hex}@{domain}>"
     msg.set_content(draft["body"])
     recipients = sum((_recipients(draft[k]) for k in ("to", "cc", "bcc")), [])
     with smtplib.SMTP(settings.gmail_smtp_host, settings.gmail_smtp_port, timeout=30) as client:
