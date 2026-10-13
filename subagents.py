@@ -269,6 +269,7 @@ async def _run_child(settings: Any, identifier: str, goal: str, names: list[str]
         ]
 
         async def perform() -> str:
+            tool_calls_used = 0
             for step in range(steps + 1):
                 if not enabled(settings):
                     raise asyncio.CancelledError()
@@ -281,6 +282,9 @@ async def _run_child(settings: Any, identifier: str, goal: str, names: list[str]
                     return str(answer.get("content") or "Step budget exhausted")[:4000]
                 messages.append(answer)
                 for call in calls:
+                    if tool_calls_used >= steps:
+                        return "Child tool-call budget exhausted"
+                    tool_calls_used += 1
                     if not enabled(settings):
                         raise asyncio.CancelledError()
                     fn = (call.get("function") or {})
