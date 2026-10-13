@@ -397,10 +397,19 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._json(HTTPStatus.OK, {"ok": True, "service": "conveyor-web", "schema_version": 1})
             return
-        if path == "/manifest.webmanifest":
-            self._manifest()
-            return
+        if path in ("/manifest.webmanifest", "/sw.js", "/icon.svg", "/icon-192.png", "/icon-512.png"):
+            from web_push import enabled as pwa_enabled
+            if not pwa_enabled(getattr(self.server.control, "settings", None)):
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
+            if path == "/manifest.webmanifest":
+                self._manifest()
+                return
         if path.startswith("/api/") and not self._require_auth():
+            return
+        if path == "/api/push/config":
+            from web_push import api_get
+            api_get(self)
             return
         if path == "/api/subagents":
             import subagents_api
@@ -855,6 +864,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         body = self._body()
         if body is None:
+            return
+        if parsed.path == "/api/push/subscribe":
+            from web_push import api_post
+            api_post(self, body)
             return
         if parts[:2] == ["api", "subagents"]:
             import subagents_api
@@ -1513,6 +1526,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self._drain_body()
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
+        if parsed.path == "/api/push/subscribe":
+            from web_push import api_delete
+            api_delete(self)
+            return
         self._drain_body()
         parts = self._segments(parsed.path)
         try:
@@ -1732,7 +1749,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.NOT_FOUND, {"error": "manifest not found"})
             return
         data = candidate.read_bytes()
-        self._headers(HTTPStatus.OK, "application/manifest+json", len(data))
+        self._headers(HTTPStatus.OK, "application/manifest+json", len(data), extra_headers=[("Cache-Control", "no-store")])
         self.wfile.write(data)
 
     def _static(self, path: str) -> None:
@@ -1748,7 +1765,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         data = candidate.read_bytes()
         content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
-        self._headers(HTTPStatus.OK, f"{content_type}; charset=utf-8" if content_type.startswith("text/") else content_type, len(data))
+        self._headers(HTTPStatus.OK, f"{content_type}; charset=utf-8" if content_type.startswith("text/") else content_type, len(data),
+                      extra_headers=[("Cache-Control", "no-store")] if relative == "sw.js" else None)
         self.wfile.write(data)
 
     def _screen(self, agent_id: str) -> LiveScreen | None:
