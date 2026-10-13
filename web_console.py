@@ -402,6 +402,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/") and not self._require_auth():
             return
+        if path == "/api/egress":
+            from egress_proxy import status
+            self._json(HTTPStatus.OK, status(getattr(self.server.control, "settings", None)))
+            return
         if path == "/api/secrets":
             from web_secrets_api import dispatch
             if dispatch(self, "GET", path):
