@@ -101,9 +101,6 @@ class MCPTomlTests(unittest.IsolatedAsyncioTestCase):
     async def test_write_destructive_approval_and_execution(self):
         saved = self.root / "notes.txt"
         self.write_config('echo = "READ"\nwrite_note = "DESTRUCTIVE"',
-                          extra=f'args = {json.dumps([FIXTURE_SERVER, "--stdio", "--notes", str(saved)])}')
-        # Duplicate args is invalid TOML; rewrite with only one key.
-        self.write_config('echo = "READ"\nwrite_note = "DESTRUCTIVE"',
                           args=[FIXTURE_SERVER, "--stdio", "--notes", str(saved)])
         mgr = MCPManager()
         await mgr.refresh_server(self.settings, "notes")
@@ -111,11 +108,6 @@ class MCPTomlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(is_exposed("mcp.notes.write_note", destructive, self.settings))
         with patch("mcp_client.get_mcp_manager", return_value=mgr):
             self.assertTrue(_requires_confirmation("mcp.notes.write_note", self.settings))
-            result = await run_tool_loop(
-                _msg("write"), FakeOutboundPort(), self.settings,
-                [{"role": "user", "content": "write"}],
-                ChatConfig(base_url="http://fake", api_key="secret", model="m"),
-            ) if False else None
             msg = _msg("save note")
             port = FakeOutboundPort()
             mock_model = AsyncMock(return_value={"role": "assistant", "content": "",
