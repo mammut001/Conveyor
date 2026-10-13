@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
-async function openConsole(page: Page, pwa: boolean) {
+async function openConsole(page: Page, pwa: boolean, mobileUI = false) {
   const observed: string[] = []
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
@@ -14,7 +14,7 @@ async function openConsole(page: Page, pwa: boolean) {
       disk: { total: 1, used: 0, free: 1 },
       queue: { depth: 0, paused: false, states: {} },
       channels: { telegram: { configured: false }, feishu: { configured: false } },
-      nodes: [], features: { pwa, approval_inbox: true },
+      nodes: [], features: { pwa, mobile_ui: mobileUI, approval_inbox: true },
     }
     else if (path === '/api/sessions') data = { sessions: [] }
     else if (path === '/api/jobs') data = { jobs: [] }
@@ -41,11 +41,16 @@ async function openConsole(page: Page, pwa: boolean) {
   }
 }
 
-test('PWA manifest link and notification opt-in appear only with PWA flag', async ({ page }) => {
+test('PWA manifest link preserves mobile mode and push opt-in follows PWA flag', async ({ page }) => {
   await openConsole(page, false)
   await expect(page.locator('link[rel="manifest"]')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /Enable alerts/i })).toHaveCount(0)
-  // Re-load with server feature bit flipped, not a frontend env variable.
+  // Existing mobile UI installs the manifest independently of PWA.
+  await page.unroute('**/api/**')
+  await openConsole(page, false, true)
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', '/manifest.webmanifest')
+  await expect(page.getByRole('button', { name: /Enable alerts/i })).toHaveCount(0)
+  // Re-load with server PWA feature bit flipped, not a frontend env variable.
   await page.unroute('**/api/**')
   await openConsole(page, true)
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', '/manifest.webmanifest')
