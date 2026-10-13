@@ -325,7 +325,8 @@ def job_child_env(self, job: Job, *, claude: bool = False) -> dict[str, str]:
         env = self._child_env()
     if job.worktree_path is not None:
         env["CODEX_WORKSPACE_ROOT"] = str(job.worktree_path)
-    return env
+    from egress_proxy import proxy_env
+    return proxy_env(env, self.settings)
 
 
 async def _run_codex_attempt(self, job: Job, on_progress: ProgressCallback) -> None:
