@@ -221,7 +221,10 @@ def list_items(settings: Any) -> list[dict[str, Any]]:
         conn.execute("UPDATE outbound_drafts SET status='expired', draft='{}' WHERE status='pending' AND expires<=?",
                      (time.time(),))
         rows = conn.execute("SELECT * FROM outbound_drafts WHERE status='pending' ORDER BY created DESC").fetchall()
-    return [{
+        incidents = conn.execute(
+            "SELECT * FROM outbound_drafts WHERE status IN ('sending','needs_reconciliation') ORDER BY created DESC LIMIT 30"
+        ).fetchall()
+    pending_items = [{
         "id": r["token"], "kind": "tool", "source": "chat",
         "tool_name": r["tool"], "summary": "Outbound draft · human Send required",
         "danger": "write", "draft": json.loads(r["draft"]), "draft_hash": r["original_hash"],
@@ -229,6 +232,14 @@ def list_items(settings: Any) -> list[dict[str, Any]]:
         "created_at": r["created"], "expires_at": r["expires"],
         "save_only": False,
     } for r in rows]
+    pending_items.extend({
+        "id": r["token"], "kind": "reconciliation", "source": "chat",
+        "tool_name": r["tool"], "summary": "Outbound status uncertain — inspect destination; do not retry",
+        "danger": "write", "editable": False, "draft": None,
+        "arg": "Sending or outcome uncertain; no automatic retry",
+        "created_at": r["created"], "expires_at": None,
+    } for r in incidents)
+    return pending_items
 
 
 def _claim(settings: Any, token: str, expected_hash: str, edited: Any, decision: str) -> tuple[str, dict[str, str]] | None:
