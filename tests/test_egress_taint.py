@@ -118,5 +118,48 @@ class TaintTests(unittest.TestCase):
         self.assertTrue(egress_taint.is_tainted(self.settings, **self._context("session-b")))
 
 
+    def test_private_search_tools_mark_sessions(self):
+        for tool in ("calendar.search", "contacts.search", "notes.search",
+                     "files.search"):
+            with self.subTest(tool=tool):
+                session = "session-" + tool
+                egress_taint.mark_read(self.settings, tool, **self._context(session))
+                self.assertTrue(egress_taint.is_tainted(
+                    self.settings, **self._context(session)))
+
+    def test_network_reads_are_gated_after_taint(self):
+        egress_taint.mark_read(self.settings, "contacts.search", **self._context())
+        for tool in ("web.fetch", "web.text", "web.headers", "web.search",
+                     "browser.read_webpage", "browser.browse_site",
+                     "research.search", "research.summarize"):
+            with self.subTest(tool=tool):
+                self.assertTrue(egress_taint.requires_approval(
+                    self.settings, tool, **self._context()))
+                self.assertFalse(egress_taint.requires_approval(
+                    self.settings, "notes.list_recent", **self._context()))
+
+    def test_network_read_denied_before_network_executor(self):
+        egress_taint.mark_read(self.settings, "files.search", **self._context())
+        with mock.patch("personal_tools.registry.execute_personal_tool",
+                        new_callable=mock.AsyncMock) as fetch:
+            result = asyncio.run(run_tool(
+                self.settings, "web.fetch", "https://example.org/?secret=private",
+                **self._context()))
+            self.assertIn("approval required", result)
+            fetch.assert_not_awaited()
+
+    def test_network_read_is_routed_to_approval(self):
+        egress_taint.mark_read(self.settings, "calendar.search", **self._context())
+        port = Port()
+        with mock.patch("handlers.tools.runner.run_tool", new_callable=mock.AsyncMock) as execute:
+            asyncio.run(_invoke_tool(
+                self.msg, port, self.settings, "web.fetch",
+                "https://example.org/?secret=private"))
+            execute.assert_not_awaited()
+        pending = get_pending_for_context(**self._context())
+        self.assertIsNotNone(pending)
+        self.assertEqual(pending.tool_name, "web.fetch")
+
+
 if __name__ == "__main__":
     unittest.main()
