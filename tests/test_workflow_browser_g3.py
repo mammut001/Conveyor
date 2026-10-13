@@ -275,6 +275,23 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
                     '<button type="submit">Send</button>',
                     control+'<button type="submit">Send</button>'))
 
+    async def test_original_card_value_still_blocks_when_agent_overwrites(self):
+        # The standard prepare() overwrites topic="before" with "hello".
+        # The original card-shaped value must be classified before mutation.
+        for original in ("4111 1111 1111 1111", "4111-1111-1111-1111",
+                         "378282246310005"):
+            with self.subTest(original=original):
+                await self.assert_sensitive_fixture(FORM.replace(
+                    'name="topic" value="before"',
+                    f'name="topic" value="{original}"'))
+
+    async def test_non_sensitive_prefill_still_allows_normal_form(self):
+        self.server.html=FORM.replace('name="topic" value="before"',
+                                      'name="topic" value="123456789012"')
+        pending=await self.prepare()
+        self.assertIsNotNone(review(self.settings,json.loads(pending.arg)["token"]))
+        self.assertEqual(self.server.posts,[])
+
     async def test_footer_heading_and_link_excluded_even_before_form(self):
         for footer in (
             '<footer><h2>Sign in</h2></footer>',
