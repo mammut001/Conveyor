@@ -9,7 +9,9 @@ from typing import Any
 
 def enabled(settings: Any = None) -> bool:
     from egress_proxy import enabled as proxy_enabled
-    return proxy_enabled(settings)
+    # Background children must share durable parent taint even when the optional
+    # egress proxy itself is not installed/enabled.
+    return proxy_enabled(settings) or bool(getattr(settings, "background_subagents_enabled", False))
 
 
 def _db(settings: Any) -> sqlite3.Connection:
