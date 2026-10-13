@@ -192,9 +192,17 @@ class AtomicApplyTests(unittest.TestCase):
 
 class RelayFailClosedTests(unittest.TestCase):
     def setUp(self):
-        egress_env = patch.dict(os.environ, {"CONVEYOR_EGRESS_PROXY": "0"})
-        egress_env.start()
-        self.addCleanup(egress_env.stop)
+        # No global feature flags (egress, draft cards, isolation, etc.) can
+        # redirect this relay-only test into unrelated background services.
+        isolated_env = patch.dict(os.environ, {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": os.environ.get("HOME", ""),
+            "CONVEYOR_EGRESS_PROXY": "0",
+            "CONVEYOR_DRAFT_CARDS": "0",
+            "CONVEYOR_ENV_ISOLATION": "0",
+        }, clear=True)
+        isolated_env.start()
+        self.addCleanup(isolated_env.stop)
         clear_all_pending()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -210,6 +218,14 @@ class RelayFailClosedTests(unittest.TestCase):
 
     def tearDown(self):
         clear_all_pending()
+        # Checkpoint and close the SQLite handle before TemporaryDirectory
+        # cleanup; tests may have used WAL mode on Windows as well as Linux.
+        if self.settings.approval_relay_db.is_file():
+            conn = sqlite3.connect(self.settings.approval_relay_db, timeout=1)
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            finally:
+                conn.close()
 
     def test_missing_published_row_refuses_execution_and_preserves_action(self):
         pending = create_pending("notes.add", "hello", "op", "chat", "telegram")
