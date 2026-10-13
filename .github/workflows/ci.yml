@@ -52,6 +52,8 @@ jobs:
       - name: Run unit tests with all CONVEYOR feature flags on
         # Only boolean feature switches: never set numeric limits, API keys,
         # hosts or the REQUIRE_REAL_BROWSER CI assertion switch to "1".
+        # Deliberately exclude CONVEYOR_APPLY_ALLOW_HIGH_RISK and
+        # CONVEYOR_COMPUTER_ALLOW_LOGIN_PASSWORDS: they enable risky actions.
         env:
           CONVEYOR_WEB_ENABLED: "1"
           CONVEYOR_CHAT_TOOLS: "1"
@@ -63,6 +65,7 @@ jobs:
           CONVEYOR_COMPUTER_USE_ENABLED: "1"
           CONVEYOR_COMPUTER_DIRECT_ENABLED: "1"
           CONVEYOR_COMPUTER_ALWAYS_DIRECT: "1"
+          CONVEYOR_FEISHU_REQUIRE_ALLOWLIST: "1"
           CONVEYOR_TAKEOVER_ENABLED: "1"
           CONVEYOR_AGENTS_ENABLED: "1"
           CONVEYOR_AGENT_DESKTOPS_ENABLED: "1"
@@ -74,11 +77,13 @@ jobs:
           CONVEYOR_MEMORY_V2: "1"
           CONVEYOR_LONG_TERM_MEMORY: "1"
           CONVEYOR_LONG_TERM_MEMORY_SHARED: "1"
+          CONVEYOR_LONG_TERM_MEMORY_GROUPS: "1"
           CONVEYOR_APPROVAL_INBOX_ENABLED: "1"
           CONVEYOR_DRAFT_CARDS: "1"
           CONVEYOR_SKILLS_ENABLED: "1"
           CONVEYOR_WORKFLOWS_ENABLED: "1"
           CONVEYOR_ENV_ISOLATION: "1"
+          CONVEYOR_CHILD_ENV_SCOPE_PROVIDER_KEYS: "1"
           CONVEYOR_EGRESS_PROXY: "1"
           CONVEYOR_WEB_MOBILE_UI: "1"
           CONVEYOR_MCP_ENABLED: "1"
@@ -87,7 +92,7 @@ jobs:
           CONVEYOR_SUBAGENTS: "1"
           CONVEYOR_TEAMMATE_ENABLED: "1"
           CONVEYOR_REAL_BROWSER: "1"
-          CONVEYOR_BROWSER_EXTERNAL_READ: "1"
+          CONVEYOR_BROWSER_EXTERNAL_READONLY: "1"
           CONVEYOR_BROWSER_EXTERNAL_INTERACT: "1"
           CONVEYOR_BROWSER_EXTERNAL_SUBMIT: "1"
           CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT: "1"
