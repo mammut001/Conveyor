@@ -719,6 +719,9 @@ def publish(
             conn.close()
 
         _dispatch_notification(_notify_publish, settings, action, summary=summary, danger=danger, source=source)
+        from web_push import queue_notification
+        queue_notification(settings, action.token, "draft" if action.tool_name in
+                           ("email.send", "github.comment", "github.create_issue") else "approval")
         return True
     except Exception:
         logger.exception("Failed to publish approval %s to relay", action.token)
