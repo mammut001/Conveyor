@@ -923,7 +923,8 @@ class CodexPlanner(Planner):
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=dict(os.environ),
+                env=(__import__("subprocess_env").agent_env(settings) if getattr(settings, "env_isolation", False)
+                     else dict(os.environ)),
             )
             assert proc.stdin is not None
             proc.stdin.write(prompt.encode("utf-8"))
