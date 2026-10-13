@@ -57,6 +57,11 @@ FORM_JS = r"""(forms, args) => {
        return {error:'g3_sensitive_field_denied'};
    if (name && found.has(name)) return {error:'g3_duplicate_field_denied'};
    if(name) found.add(name);
+   // Classify the original value BEFORE agent edits can overwrite it.
+   // Only emit a boolean, never copy a replaced sensitive value to the preview.
+   const original=(typeof c.value==='string'?c.value:'').normalize('NFKC')
+     .replace(/[\u00ad\u034f\u061c\u180e\u200b-\u200f\u2060-\u206f\ufeff]/g,'');
+   const prefilled_card_number=/(?<![0-9])(?:[0-9][ -]?){12,18}[0-9](?![ -]*[0-9])/.test(original);
    const editable=type!=='hidden' && type!=='submit' && tag!=='button' && !c.disabled;
    if(editable) {
      const rect=c.getBoundingClientRect();
@@ -102,7 +107,7 @@ FORM_JS = r"""(forms, args) => {
    const labels=Array.from(c.labels||[], l=>(l.innerText||l.textContent||'').slice(0,256));
    const aria_labelledby=(c.getAttribute('aria-labelledby')||'').split(/\s+/).filter(Boolean)
      .map(id=>(document.getElementById(id)?.textContent||'').slice(0,256)).join(' ').slice(0,512);
-   out.push({tag,type,name,value:val,disabled:!!c.disabled,labels,
+   out.push({tag,type,name,value:val,disabled:!!c.disabled,labels,prefilled_card_number,
      aria_label:(c.getAttribute('aria-label')||'').slice(0,256),aria_labelledby,
      placeholder:(c.getAttribute('placeholder')||'').slice(0,256),
      title:(c.getAttribute('title')||'').slice(0,256)});
