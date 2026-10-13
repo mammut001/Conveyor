@@ -549,6 +549,9 @@ def _provider_credential_keys(self) -> set[str]:
 
 
 def _child_env(self) -> dict[str, str]:
+    if getattr(self.settings, "env_isolation", False):
+        from subprocess_env import agent_env
+        return agent_env(self.settings, overrides={"CODEX_TELEGRAM_JOB": "1", "CODEX_RUNNER_HOME": str(RUNNER_HOME)})
     from security.secrets import child_env_from
     env = child_env_from(os.environ)
     if getattr(self.settings, "child_env_scope_provider_keys", False):
