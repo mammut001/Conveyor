@@ -756,9 +756,7 @@ export default function App() {
               {(Boolean(system?.features?.workflows) || view === 'workflows') && (
                 <button type="button" className={view === 'workflows' ? 'active' : ''} onClick={() => setView('workflows')}>Workflows</button>
               )}
-              <button type="button" className={'mobile-sheet-item ' + (view === 'secrets' ? 'active' : '')}
-              onClick={() => { setView('secrets'); setMoreSheetOpen(false) }}>🔐 Secrets</button>
-            {(Boolean(system?.features?.mcp) || view === 'connectors') && (
+              {(Boolean(system?.features?.mcp) || view === 'connectors') && (
                 <button type="button" className={view === 'connectors' ? 'active' : ''} onClick={() => setView('connectors')}>Connectors</button>
               )}
               <button type="button" className={view === 'secrets' ? 'active' : ''} onClick={() => setView('secrets')}>Secrets</button>
@@ -1109,6 +1107,8 @@ export default function App() {
             )}
             <button type="button" className={'mobile-sheet-item ' + (view === 'browser' ? 'active' : '')}
               onClick={() => { setView('browser'); setMoreSheetOpen(false) }}>🌐 Browser sites</button>
+            <button type="button" className={'mobile-sheet-item ' + (view === 'secrets' ? 'active' : '')}
+              onClick={() => { setView('secrets'); setMoreSheetOpen(false) }}>🔐 Secrets</button>
             {(Boolean(system?.features?.mcp) || view === 'connectors') && (
               <button
                 type="button"
