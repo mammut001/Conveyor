@@ -10,7 +10,7 @@ from personal_tools.long_term_memory import Screened, owner_for_chat
 from redaction import redact_text
 
 
-def parse_remember(arg: str) -> tuple[str, str]:
+def parse_remember(arg: str) -> tuple[str, str, str]:
     """Supports existing plain-text arg or {text, tier} for v2 calls."""
     value = (arg or "").strip()
     if value.startswith("{"):
@@ -20,17 +20,17 @@ def parse_remember(arg: str) -> tuple[str, str]:
             raise ValueError("invalid memory.remember JSON")
         if not isinstance(obj, dict) or not isinstance(obj.get("text"), str):
             raise ValueError("memory.remember requires a text string")
-        return obj["text"], obj.get("tier", "facts")
-    return value, "facts"
+        return obj["text"], obj.get("tier", "facts"), ("untrusted" if obj.get("source") == "untrusted" else "manual")
+    return value, "facts", "manual"
 
 
 def screen_write_arg(tool_name: str, arg: str) -> Screened:
     if tool_name == "memory.remember":
         try:
-            text, tier = parse_remember(arg)
+            text, tier, source = parse_remember(arg)
             from personal_tools.memory_v2 import _validate
-            safe = _validate(text, tier, "manual")
-            return Screened(json.dumps({"text": safe, "tier": tier}, ensure_ascii=False))
+            safe = _validate(text, tier, source)
+            return Screened(json.dumps({"text": safe, "tier": tier, "source": source}, ensure_ascii=False))
         except ValueError as exc:
             return Screened("", str(exc))
     if tool_name == "memory.forget":
@@ -46,10 +46,10 @@ async def memory_remember(settings: Any, arg: str = "", *, operator_id: str = ""
     if not memory_v2.enabled(settings):
         return ToolResult(False, "memory v2 is disabled")
     try:
-        text, tier = parse_remember(arg)
+        text, tier, source = parse_remember(arg)
         who = owner_for_chat(settings, operator_id, channel, chat_id)
         row = memory_v2.remember_fact(settings, who, text, tier=tier,
-                                      source="manual", source_channel=channel)
+                                      source=source, source_channel=channel)
         return ToolResult(True, f"已记住 #{row['id']}（{row['tier']}）: {row['text']}")
     except ValueError as exc:
         return ToolResult(False, str(exc))
