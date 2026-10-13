@@ -543,6 +543,11 @@ async def navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _show_navigation(update, action, edit=True)
 
 
+async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from voice_telegram import handle_voice
+    await handle_voice(update, context, settings=settings, dispatch_text=_dispatch_text)
+
+
 async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Groups: act only when @mentioned or replied to (Grok-style), so
     # ordinary group conversation is neither answered nor rejected.
@@ -843,6 +848,7 @@ def main() -> None:
     # Catch-all for COMMAND_TABLE entries without explicit CommandHandler above.
     application.add_handler(MessageHandler(filters.COMMAND, generic_command_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_cmd))
+    application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_cmd))
     # Photos / image files (caption = the question; "/fix …" captions work
     # too because dispatch parses the caption like text).
     application.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, text_cmd))

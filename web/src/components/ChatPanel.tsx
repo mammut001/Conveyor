@@ -1,5 +1,6 @@
 import React, { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { FormattedText } from './FormattedText';
+import { VoiceRecorder } from './VoiceRecorder';
 
 export type SubagentProgress = {
   call_id: string;
@@ -264,9 +265,9 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
     }
   };
 
-  const handleSend = async (e?: FormEvent) => {
+  const handleSend = async (e?: FormEvent, audio?: Blob) => {
     if (e) e.preventDefault();
-    const text = input.trim();
+    const text = audio ? '🎤 Transcribing…' : input.trim();
     if (!text || busy) return;
 
     setInput('');
@@ -286,17 +287,20 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
     setMessages(prev => [...prev, userMsg]);
 
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+      const res = await fetch(
+        audio ? `/api/chat/voice?session_id=${encodeURIComponent(sessionId)}` : '/api/chat',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': audio ? audio.type : 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: audio || JSON.stringify({
+            message: text,
+            session_id: sessionId || undefined,
+          }),
         },
-        body: JSON.stringify({
-          message: text,
-          session_id: sessionId || undefined,
-        }),
-      });
+      );
 
       if (res.status === 409) {
         const data = await res.json().catch(() => ({}));
@@ -345,6 +349,8 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
                 if (!agentSessionId) localStorage.setItem('conveyor-chat-session', payload.session_id);
                 if (onSessionChange) onSessionChange(payload.session_id);
               }
+            } else if (eventName === 'heard') {
+              setMessages(prev => prev.map(m => m.id === userMsg.id ? { ...m, text: payload.text } : m));
             } else if (eventName === 'delta') {
               if (payload.text !== undefined) {
                 setStreamingDelta(payload.text);
@@ -597,6 +603,7 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
             }
           }}
         />
+        <VoiceRecorder disabled={busy} onAudio={audio => { void handleSend(undefined, audio); }} onError={setError} />
         <button className="send-button" type="submit" disabled={!input.trim() || busy}>
           {busy ? '…' : 'Send'} <span>↗</span>
         </button>
