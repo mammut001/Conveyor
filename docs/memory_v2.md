@@ -63,9 +63,12 @@ Tools reuse the existing PERSONAL_TOOL_REGISTRY and approval cards:
   `PRAGMA secure_delete=ON` is used on every v2 connection; after deletion
   (or replacing text), the FTS5 index is optimized and WAL checkpointed with
   TRUNCATE to scrub FTS shadow content and on-disk WAL copies. Deletion
-  reports an error if the WAL checkpoint cannot finish, rather than
-  promising disk sanitization. Backups and separately archived JOURNAL /
-  MEMORY.md copies are outside the SQLite purge scope.
+  retries a busy checkpoint five times with bounded backoff. If a reader
+  still pins WAL frames, the deletion succeeds with "purge pending" and a
+  durable SQLite marker; the next v2 connection/write and the Web Console's
+  60-second periodic tick retry FTS optimization and checkpointing. Only
+  a completed checkpoint clears the pending marker. Backups and separately
+  archived JOURNAL / MEMORY.md copies are outside the SQLite purge scope.
 
 A chat turn receives the bounded profile, up to k query-matching facts, and
 the newest two daily log entries. Search uses SQLite FTS5 with a LIKE fallback
