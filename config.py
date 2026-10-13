@@ -225,6 +225,7 @@ class Settings:
     live_screen_display: str = ""
     routines_enabled: bool = False
     webhooks_enabled: bool = False
+    hooks_enabled: bool = False
     routines_feishu_chat_id: str | None = None
     routines_approval_ttl_seconds: int = 86_400
     long_term_memory_enabled: bool = False
@@ -634,6 +635,7 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "webhooks_enabled": os.getenv(
             "CONVEYOR_WEBHOOKS_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
+        "hooks_enabled": os.getenv("CONVEYOR_HOOKS_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on"),
         "routines_feishu_chat_id": os.getenv("CONVEYOR_ROUTINES_FEISHU_CHAT_ID") or None,
         # Routine approvals outlive the 5-minute interactive TTL: clamp 5 min .. 7 days.
         "routines_approval_ttl_seconds": max(

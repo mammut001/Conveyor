@@ -30,6 +30,7 @@ from personal_tools import file_search as file_search_tools
 from personal_tools import kb as kb_tools
 from personal_tools import queue_tools as queue_tools
 from personal_tools import routines as routines_tools
+from personal_tools import hooks as hook_tools
 from personal_tools import long_term_memory as memory_tools
 from personal_tools import skills as skills_tools
 from personal_tools import sentry as sentry_tools
@@ -686,6 +687,11 @@ def register_personal_tools() -> None:
         routines_tools.routine_run,
         keywords=("运行定时任务", "跑routine"),
     )
+
+    _register("hook.list", "List webhook triggers without secrets", DangerLevel.READ, hook_tools.hook_list,
+              keywords=("list hooks", "webhooks"))
+    _register("hook.manage", "Manage hooks: add <routine_id> [| JSON filter], rotate|pause|resume|delete <hook_id>",
+              DangerLevel.WRITE, hook_tools.hook_manage, keywords=("hook add", "hook rotate", "hook pause", "hook delete"))
 
     # Durable long-term memory (flagged off in is_exposed / chat_tools).
     _register(

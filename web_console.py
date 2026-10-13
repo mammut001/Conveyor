@@ -402,6 +402,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/") and not self._require_auth():
             return
+        if path == "/api/hooks":
+            import event_triggers
+            if event_triggers.api_get(self, path):
+                return
         query = parse_qs(parsed.query)
         parts = self._segments(path)
         try:
@@ -810,11 +814,20 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
 
         # Webhook receiver: POST /hooks/<hook_id> (handled before /api/ auth check)
         if len(parts) == 2 and parts[0] == "hooks":
-            self._handle_webhook(parts[1])
+            import event_triggers
+            if event_triggers.enabled(getattr(self.server.control, "settings", None)):
+                event_triggers.receive(self, parts[1])
+            else:
+                self._handle_webhook(parts[1])
             return
 
         if not self._require_auth():
             return
+
+        if parsed.path == "/api/hooks" or parsed.path.startswith("/api/hooks/"):
+            import event_triggers
+            if event_triggers.api_post(self, parsed.path):
+                return
 
         if not parsed.path.startswith("/api/"):
             self._drain_body()
@@ -982,7 +995,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                     return
                 elif len(parts) == 4 and parts[:2] == ["api", "routines"] and parts[3] == "hook":
-                    if not (getattr(settings, "webhooks_enabled", False) and getattr(settings, "routines_enabled", False)):
+                    if not ((getattr(settings, "webhooks_enabled", False) or getattr(settings, "hooks_enabled", False)) and getattr(settings, "routines_enabled", False)):
                         self._json(HTTPStatus.CONFLICT, {"error": "webhooks are disabled (set CONVEYOR_WEBHOOKS_ENABLED=true and CONVEYOR_ROUTINES_ENABLED=true)"})
                         return
                     routine_id_str = parts[2]
@@ -1421,6 +1434,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         self._drain_body()
         parts = self._segments(parsed.path)
         try:
+            if parsed.path.startswith("/api/hooks/"):
+                import event_triggers
+                if event_triggers.api_delete(self, parsed.path):
+                    return
             if parsed.path.startswith("/api/browser/"):
                 import browser_approvals_admin
                 if browser_approvals_admin.delete(self, parsed.path):
@@ -1475,7 +1492,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.CONFLICT, {"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)"})
                     return
                 if len(parts) == 4 and parts[:2] == ["api", "routines"] and parts[3] == "hook":
-                    if not (getattr(settings, "webhooks_enabled", False) and getattr(settings, "routines_enabled", False)):
+                    if not ((getattr(settings, "webhooks_enabled", False) or getattr(settings, "hooks_enabled", False)) and getattr(settings, "routines_enabled", False)):
                         self._json(HTTPStatus.CONFLICT, {"error": "webhooks are disabled (set CONVEYOR_WEBHOOKS_ENABLED=true and CONVEYOR_ROUTINES_ENABLED=true)"})
                         return
                     routine_id_str = parts[2]
