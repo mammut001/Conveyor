@@ -52,9 +52,10 @@ def connect(settings: Any):
     except OSError:
         pass
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA secure_delete=ON")  # wipe freed SQLite pages, including FTS shadow tables
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("""CREATE TABLE IF NOT EXISTS memory_v2_entries (
-        id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         operator_id TEXT NOT NULL,
         agent_scope TEXT NOT NULL DEFAULT '',
         tier TEXT NOT NULL CHECK(tier IN ('profile','facts','log')),
@@ -66,6 +67,7 @@ def connect(settings: Any):
         expires_at REAL,
         import_key TEXT UNIQUE
     )""")
+    _migrate_autoincrement(db)
     db.execute("""CREATE INDEX IF NOT EXISTS memory_v2_owner
                   ON memory_v2_entries(operator_id, tier, created_at)""")
     db.execute("""CREATE INDEX IF NOT EXISTS memory_v2_expiry
@@ -92,6 +94,70 @@ def connect(settings: Any):
         yield db
     finally:
         db.close()
+
+
+def _migrate_autoincrement(db: sqlite3.Connection) -> None:
+    """Preserve existing rowids/FTS mappings while making IDs never reusable."""
+    schema = db.execute("SELECT sql FROM sqlite_master WHERE name='memory_v2_entries'").fetchone()[0]
+    if "AUTOINCREMENT" in schema.upper():
+        return
+    # Old FTS5 indexes use an external content table: rowids are preserved.
+    # The triggers must not fire during the table copy or DROP.
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        for name in ("memory_v2_ai", "memory_v2_ad", "memory_v2_au"):
+            db.execute(f"DROP TRIGGER IF EXISTS {name}")
+        db.execute("""CREATE TABLE memory_v2_next (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            operator_id TEXT NOT NULL,
+            agent_scope TEXT NOT NULL DEFAULT '',
+            tier TEXT NOT NULL CHECK(tier IN ('profile','facts','log')),
+            text TEXT NOT NULL,
+            source TEXT NOT NULL,
+            source_channel TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            expires_at REAL,
+            import_key TEXT UNIQUE
+        )""")
+        db.execute("""INSERT INTO memory_v2_next
+            (id,operator_id,agent_scope,tier,text,source,source_channel,
+             created_at,updated_at,expires_at,import_key)
+            SELECT id,operator_id,agent_scope,tier,text,source,source_channel,
+                   created_at,updated_at,expires_at,import_key FROM memory_v2_entries""")
+        db.execute("DROP TABLE memory_v2_entries")
+        db.execute("ALTER TABLE memory_v2_next RENAME TO memory_v2_entries")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _compact_after_change(db: sqlite3.Connection) -> None:
+    """Remove FTS tombstones, scrub freed pages and truncate WAL on every write."""
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='memory_v2_fts'").fetchone():
+        db.execute("INSERT INTO memory_v2_fts(memory_v2_fts) VALUES('optimize')")
+        db.commit()
+    busy, _, _ = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    if busy:
+        raise sqlite3.OperationalError("memory purge incomplete: WAL checkpoint busy")
+
+
+def deletion_fingerprint(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def prepare_forget(settings: Any, operator_id: str, arg: str) -> str:
+    """Bind pending confirmation to one visible ID and its current contents."""
+    match = _ID.fullmatch(str(arg or "").strip())
+    if not match:
+        raise ValueError("memory.forget requires a numeric #id")
+    with connect(settings) as db:
+        row = db.execute("SELECT text FROM memory_v2_entries WHERE id=? AND operator_id=?",
+                         (int(match.group(1)), owner(settings, operator_id))).fetchone()
+    if row is None:
+        raise ValueError("memory not found; refresh the list")
+    return f"#{int(match.group(1))}@{deletion_fingerprint(row['text'])}"
 
 
 def _row(row: sqlite3.Row) -> dict[str, Any]:
@@ -180,9 +246,10 @@ def list_facts(settings: Any, operator_id: str, *, kind: str | None = None, limi
 
 
 def forget_fact(settings: Any, operator_id: str, arg: str) -> tuple[list[dict[str, Any]], str]:
-    match = _ID.fullmatch(str(arg or "").strip())
+    text_arg = str(arg or "").strip()
+    match = re.fullmatch(r"#?(\d+)(?:@([0-9a-f]{64}))?", text_arg)
     if not match:
-        raise ValueError("memory.forget requires a numeric #id")
+        raise ValueError("memory.forget requires a numeric #id or bound approval")
     with connect(settings) as db:
         row = db.execute(
             "SELECT * FROM memory_v2_entries WHERE id=? AND operator_id=?",
@@ -190,8 +257,11 @@ def forget_fact(settings: Any, operator_id: str, arg: str) -> tuple[list[dict[st
         ).fetchone()
         if row is None:
             return [], "missing"
+        if match.group(2) is not None and deletion_fingerprint(row["text"]) != match.group(2):
+            return [], "changed"  # stale approval: never delete replacement text
         db.execute("DELETE FROM memory_v2_entries WHERE id=?", (row["id"],))
         db.commit()
+        _compact_after_change(db)
         return [_row(row)], "deleted"
 
 
@@ -322,9 +392,11 @@ def update_fact(settings: Any, operator_id: str, ident: int, text: str) -> dict[
             ).fetchone()[0]
             if bytes_other + len(value.encode("utf-8")) > PROFILE_BYTES:
                 raise ValueError("profile exceeds the 2048-byte cap")
-        db.execute("UPDATE memory_v2_entries SET text=?,updated_at=? WHERE id=?",
-                   (value, time.time(), ident))
-        db.commit()
+        if value != row["text"]:
+            db.execute("UPDATE memory_v2_entries SET text=?,updated_at=? WHERE id=?",
+                       (value, time.time(), ident))
+            db.commit()
+            _compact_after_change(db)
         return _row(db.execute("SELECT * FROM memory_v2_entries WHERE id=?", (ident,)).fetchone())
 
 
