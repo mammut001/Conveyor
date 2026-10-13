@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -60,6 +61,8 @@ class OutboundDraftTests(unittest.TestCase):
                 captured.append((mail, to_addrs))
 
         self.patch(cards.smtplib, "SMTP", SMTP)
+        self.patch(socket, "getfqdn", lambda: "private-server-hostname-sentinel.internal")
+        self.patch(cards.os, "getpid", lambda: 8573920461)
         edited = dict(to="new@example.com", cc="copy@example.org",
                       bcc="hidden@example.net", subject="Edited",
                       body="exact body\nline 2 | preserved ")
@@ -74,11 +77,25 @@ class OutboundDraftTests(unittest.TestCase):
         self.assertTrue(email["Date"])
         self.assertTrue(email["Message-ID"].startswith("<"))
         self.assertTrue(email["Message-ID"].endswith(">"))
+        self.assertRegex(str(email["Message-ID"]), r"^<[a-f0-9]{32}@example\\.com>$".replace("\\\\", "\\"))
+        self.assertNotIn("private-server-hostname-sentinel", email["Message-ID"])
+        self.assertNotIn("8573920461", email["Message-ID"])
         self.assertFalse(cards.list_items(self.s))
         with cards._connection(self.s) as db:
             row = db.execute("SELECT draft, sent_hash FROM outbound_drafts").fetchone()
         self.assertEqual(row["draft"], "{}")
         self.assertEqual(row["sent_hash"], cards.fingerprint(edited))
+
+    def test_message_id_fallback_when_sender_address_missing(self):
+        from personal_tools import email_smtp
+        self.patch(email_smtp, "_check_config", lambda *_: None)
+        smtp = mock.MagicMock()
+        self.patch(cards.smtplib, "SMTP", smtp)
+        self.s.gmail_address = ""
+        cards._send_email(self.s, {"to": "recipient@example.com", "cc": "", "bcc": "",
+                                  "subject": "Subject", "body": "Body"})
+        message = smtp.return_value.__enter__.return_value.send_message.call_args.args[0]
+        self.assertRegex(str(message["Message-ID"]), r"^<[a-f0-9]{32}@conveyor\\.invalid>$".replace("\\\\", "\\"))
 
     def test_tampered_hash_and_expired_cannot_send(self):
         item = self.register()
