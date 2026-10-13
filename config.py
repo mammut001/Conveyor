@@ -254,6 +254,9 @@ class Settings:
         if self.env_isolation:
             from subprocess_env import log_startup_check
             log_startup_check(self)
+        if self.background_subagents_enabled and self.chat_tools_enabled:
+            import subagents
+            subagents.reconcile(self)
 
     web_mobile_ui: bool = False
     mcp_enabled: bool = False
