@@ -71,6 +71,9 @@ class OutboundDraftTests(unittest.TestCase):
         self.assertEqual(email.get_content(), "exact body\nline 2 | preserved \n")
         self.assertEqual(envelope, ["new@example.com", "copy@example.org", "hidden@example.net"])
         self.assertNotIn("Bcc", email)
+        self.assertTrue(email["Date"])
+        self.assertTrue(email["Message-ID"].startswith("<"))
+        self.assertTrue(email["Message-ID"].endswith(">"))
         self.assertFalse(cards.list_items(self.s))
         with cards._connection(self.s) as db:
             row = db.execute("SELECT draft, sent_hash FROM outbound_drafts").fetchone()
@@ -148,7 +151,7 @@ class OutboundDraftTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "decided"):
             asyncio.run(cards.submit(self.s, item["id"], expected_hash=item["draft_hash"], draft=item["draft"]))
 
-    def test_comment_edits_change_repository_target_and_body(self):
+    def test_comment_edits_number_and_body_with_original_repo(self):
         item = self.register("github.comment", "12 | Original comment")
         from personal_tools import github_tools
         calls = []
@@ -159,11 +162,118 @@ class OutboundDraftTests(unittest.TestCase):
             return True, {"html_url": "https://github.com/test"}
 
         self.patch(github_tools, "_github_request", fake_request)
-        edited = dict(repo="other/repository", number="123", body="edited text\nexact")
+        edited = dict(repo="owner/repo", number="123", body="edited text\nexact")
         outcome = asyncio.run(cards.submit(self.s, item["id"], expected_hash=item["draft_hash"], draft=edited))
         self.assertEqual(outcome["status"], "sent")
-        self.assertEqual(calls, [("POST", "/repos/other/repository/issues/123/comments",
+        self.assertEqual(calls, [("POST", "/repos/owner/repo/issues/123/comments",
                                   {"body": "edited text\nexact"})])
+
+    def test_issue_card_edited_title_body_exact(self):
+        item = self.register("github.create_issue", "Proposed | agent body")
+        self.assertTrue(item["draft_card"])
+        self.assertFalse(item["repo_editable"])
+        self.assertEqual(item["draft"], {"repo": "owner/repo", "title": "Proposed", "body": "agent body"})
+        from personal_tools import github_tools
+        calls = []
+        self.patch(github_tools, "_check_config", lambda *_: None)
+
+        def fake_request(s, method, endpoint, json_body=None):
+            calls.append((method, endpoint, json_body))
+            return True, {"number": 101}
+
+        self.patch(github_tools, "_github_request", fake_request)
+        edited = dict(repo="owner/repo", title="Edited issue title", body="Edited markdown\n* details")
+        res = asyncio.run(cards.submit(self.s, item["id"], expected_hash=item["draft_hash"], draft=edited))
+        self.assertEqual(res["status"], "sent")
+        self.assertEqual(calls, [("POST", "/repos/owner/repo/issues",
+                                  {"title": "Edited issue title", "body": "Edited markdown\n* details"})])
+        with self.assertRaisesRegex(ValueError, "decided"):
+            asyncio.run(cards.submit(self.s, item["id"], expected_hash=item["draft_hash"], draft=edited))
+
+    def test_issue_allowlist_blocks_card_and_legacy_sender(self):
+        from personal_tools.github_tools import github_create_issue
+        s = settings(self.root, outbound_allowlist="example.com")
+        with self.assertRaisesRegex(ValueError, "ALLOWLIST"):
+            cards.register(s, pending("github.create_issue", "New title | body"))
+        self.assertFalse(cards.list_items(s))
+        self.assertFalse(github_create_issue(s, "New title", "body").ok)
+        allowed = settings(self.root, outbound_allowlist="owner/repo")
+        self.assertTrue(cards.register(allowed, pending("github.create_issue", "New title | body")))
+        self.assertFalse(cards.list_items(allowed)[0]["repo_editable"])
+
+    def test_issue_title_controls_and_caps(self):
+        good = {"repo": "owner/repo", "title": "Legitimate", "body": "content"}
+        for title in ("x" * 201, "", " \t ", "Hello\nBcc:attacker", "bad\x7fdel"):
+            with self.subTest(title=repr(title)):
+                with self.assertRaisesRegex(ValueError, "title"):
+                    cards.validate(self.s, "github.create_issue", {**good, "title": title})
+        with self.assertRaisesRegex(ValueError, "body"):
+            cards.validate(self.s, "github.create_issue", {**good, "body": "z" * 20001})
+
+    def test_repo_change_fails_without_explicit_new_destination(self):
+        item = self.register("github.comment", "12 | Initial")
+        moved = {**item["draft"], "repo": "other/repo"}
+        with self.assertRaisesRegex(ValueError, "fixed"):
+            asyncio.run(cards.submit(self.s, item["id"], expected_hash=item["draft_hash"], draft=moved))
+        self.assertEqual(len(cards.list_items(self.s)), 1)
+
+    def test_repo_change_allowed_only_if_explicitly_listed(self):
+        self.s.outbound_allowlist = "owner/repo,other/repo"
+        item = self.register("github.create_issue", "Original | Body")
+        self.assertTrue(item["repo_editable"])
+        calls = []
+        from personal_tools import github_tools
+        self.patch(github_tools, "_check_config", lambda *_: None)
+
+        def fake_request(s, method, endpoint, json_body=None):
+            calls.append((method, endpoint, json_body))
+            return True, {"number": 3}
+
+        self.patch(github_tools, "_github_request", fake_request)
+        moved = {**item["draft"], "repo": "other/repo", "title": "Changed"}
+        result = asyncio.run(cards.submit(self.s, item["id"], expected_hash=item["draft_hash"], draft=moved))
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(calls, [("POST", "/repos/other/repo/issues",
+                                  {"title": "Changed", "body": "Body"})])
+
+    def test_repo_change_to_unlisted_target_rejected(self):
+        self.s.outbound_allowlist = "owner/repo,other/repo"
+        item = self.register("github.comment", "12 | Body")
+        with self.assertRaisesRegex(ValueError, "ALLOWLIST"):
+            asyncio.run(cards.submit(self.s, item["id"], expected_hash=item["draft_hash"],
+                                     draft={**item["draft"], "repo": "unlisted/repo"}))
+
+    def test_issue_uncertain_result_is_not_retried(self):
+        item = self.register("github.create_issue", "Proposed | Body")
+        calls = []
+
+        def fail(*args):
+            calls.append(True)
+            raise TimeoutError("remote may have created issue")
+
+        self.patch(cards, "_send_issue", fail)
+        result = asyncio.run(cards.submit(self.s, item["id"],
+                                          expected_hash=item["draft_hash"], draft=item["draft"]))
+        self.assertEqual(result["status"], "needs_reconciliation")
+        with self.assertRaisesRegex(ValueError, "decided"):
+            asyncio.run(cards.submit(self.s, item["id"], expected_hash=item["draft_hash"], draft=item["draft"]))
+        self.assertEqual(len(calls), 1)
+
+    def test_issue_requires_confirmation_only_when_flag_enabled(self):
+        from handlers.tools.runner import _requires_confirmation
+        self.assertTrue(_requires_confirmation("github.create_issue", self.s))
+        self.s.draft_cards_enabled = False
+        self.assertFalse(_requires_confirmation("github.create_issue", self.s))
+
+    def test_mcp_explicit_outbound_list(self):
+        import mcp_client
+        spec = SimpleNamespace(danger=SimpleNamespace(value="write"), annotations={})
+        self.patch(mcp_client, "get_mcp_tool_spec", lambda *_: spec)
+        self.s.mcp_outbound_tools = ("mcp__server__send_message",)
+        self.assertTrue(cards.is_outbound(self.s, "mcp.server.send_message"))
+        self.assertFalse(cards.is_outbound(self.s, "mcp.server.other_tool"))
+        spec.danger.value = "read"
+        self.assertFalse(cards.is_outbound(self.s, "mcp.server.send_message"))
 
     def test_default_off_uses_existing_approval_path(self):
         s = settings(self.root, draft_cards_enabled=False)
