@@ -1,8 +1,12 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
 async function openConsole(page: Page, pwa: boolean) {
+  const observed: string[] = []
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
   await page.route('**/api/**', async (route: Route) => {
     const path = new URL(route.request().url()).pathname
+    observed.push(path)
     let data: unknown = {}
     if (path === '/api/system/status') data = {
       uptime_seconds: 10, load_average: [0, 0, 0], cpu_count: 1,
@@ -26,7 +30,14 @@ async function openConsole(page: Page, pwa: boolean) {
     await unlock.fill('pwa-test-token-0123456789abcdef0123456789abcdef')
     await page.getByRole('button', { name: 'Unlock console' }).click()
   }
-  await expect(page.locator('main.app-shell')).toBeVisible()
+  try {
+    await expect(page.locator('main.app-shell')).toBeVisible()
+  } catch (error) {
+    console.log('PWA E2E diagnostics', JSON.stringify({
+      observed, errors, body: (await page.locator('body').innerText()).slice(0, 1200),
+    }))
+    throw error
+  }
 }
 
 test('PWA manifest link and notification opt-in appear only with PWA flag', async ({ page }) => {
