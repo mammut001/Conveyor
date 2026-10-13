@@ -364,7 +364,7 @@ class LinuxBrowserController:
     """
 
     def __init__(self, env: Mapping[str, str] | None = None) -> None:
-        self.env = _env_copy(env)
+        self.env = __import__("subprocess_env").desktop_env(_env_copy(env))
 
     def _run(self, *argv: str) -> subprocess.CompletedProcess:
         try:
