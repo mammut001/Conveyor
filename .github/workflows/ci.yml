@@ -49,6 +49,51 @@ jobs:
       - name: Run unit tests
         run: .venv/bin/python -m unittest discover -s tests -v
 
+      - name: Run unit tests with all CONVEYOR feature flags on
+        # Only boolean feature switches: never set numeric limits, API keys,
+        # hosts or the REQUIRE_REAL_BROWSER CI assertion switch to "1".
+        env:
+          CONVEYOR_WEB_ENABLED: "1"
+          CONVEYOR_CHAT_TOOLS: "1"
+          CONVEYOR_CHAT_VISION: "1"
+          CONVEYOR_DESKTOP_NODE_ENABLED: "1"
+          CONVEYOR_DESKTOP_SCREENSHOT_ALLOW_UPLOAD: "1"
+          CONVEYOR_DESKTOP_UPLOAD_ENABLED: "1"
+          CONVEYOR_DESKTOP_AUTO_THUMBNAIL_ON_OBSERVE: "1"
+          CONVEYOR_COMPUTER_USE_ENABLED: "1"
+          CONVEYOR_COMPUTER_DIRECT_ENABLED: "1"
+          CONVEYOR_COMPUTER_ALWAYS_DIRECT: "1"
+          CONVEYOR_TAKEOVER_ENABLED: "1"
+          CONVEYOR_AGENTS_ENABLED: "1"
+          CONVEYOR_AGENT_DESKTOPS_ENABLED: "1"
+          CONVEYOR_LIVE_SCREEN_ENABLED: "1"
+          CONVEYOR_LIVE_SCREEN_CONTROL: "1"
+          CONVEYOR_ROUTINES_ENABLED: "1"
+          CONVEYOR_WEBHOOKS_ENABLED: "1"
+          CONVEYOR_HOOKS_ENABLED: "1"
+          CONVEYOR_MEMORY_V2: "1"
+          CONVEYOR_LONG_TERM_MEMORY: "1"
+          CONVEYOR_LONG_TERM_MEMORY_SHARED: "1"
+          CONVEYOR_APPROVAL_INBOX_ENABLED: "1"
+          CONVEYOR_DRAFT_CARDS: "1"
+          CONVEYOR_SKILLS_ENABLED: "1"
+          CONVEYOR_WORKFLOWS_ENABLED: "1"
+          CONVEYOR_ENV_ISOLATION: "1"
+          CONVEYOR_EGRESS_PROXY: "1"
+          CONVEYOR_WEB_MOBILE_UI: "1"
+          CONVEYOR_MCP_ENABLED: "1"
+          CONVEYOR_APPROVAL_RELAY_ENABLED: "1"
+          CONVEYOR_SUBAGENTS_ENABLED: "1"
+          CONVEYOR_SUBAGENTS: "1"
+          CONVEYOR_TEAMMATE_ENABLED: "1"
+          CONVEYOR_REAL_BROWSER: "1"
+          CONVEYOR_BROWSER_EXTERNAL_READ: "1"
+          CONVEYOR_BROWSER_EXTERNAL_INTERACT: "1"
+          CONVEYOR_BROWSER_EXTERNAL_SUBMIT: "1"
+          CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT: "1"
+          CONVEYOR_STT_ENABLED: "1"
+        run: .venv/bin/python -m unittest discover -s tests -v
+
       - name: Run smoke suite
         run: make smoke
 
