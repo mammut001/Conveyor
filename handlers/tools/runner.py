@@ -491,6 +491,8 @@ async def _request_confirmation(
         )
     except Exception:
         logger.debug("Failed to publish to approval relay", exc_info=True)
+    from web_push import queue_notification
+    queue_notification(settings, pending.token, "draft" if is_outbound_draft else "approval")
     audit_tool_event(
         settings,
         operator_id=msg.operator_id,
