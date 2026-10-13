@@ -181,7 +181,8 @@ class ProxyTests(unittest.TestCase):
         # Exact entries cannot override local/metadata/IPv4-mapped bans.
         for ip in ("127.0.0.1", "::1", "169.254.169.254",
                    "::ffff:127.0.0.1", "64:ff9b::7f00:1",
-                   "64:ff9b::a9fe:a9fe", "::"):
+                   "64:ff9b::a9fe:a9fe",
+                   "64:ff9b:1:7f00:100::", "::"):
             with self.subTest(ip=ip):
                 def dns(*args, **kwargs):
                     return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", (ip, 443, 0, 0))]
