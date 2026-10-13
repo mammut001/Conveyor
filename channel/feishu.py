@@ -105,6 +105,14 @@ class FeishuOutbound:
             return None
         return bytes(data)
 
+    async def download_audio_resource(
+        self, msg: InboundMessage, file_key: str,
+    ) -> bytes | None:
+        """Use Feishu's authenticated message-resource API (audio type=file)."""
+        return await self._channel.download_resource(
+            file_key, "file", message_id=msg.message_id,
+        )
+
     async def send_card(
         self,
         msg: InboundMessage,
