@@ -246,6 +246,7 @@ class Settings:
     env_isolation: bool = False
     egress_proxy_enabled: bool = False
     egress_allowlist: str = ""
+    egress_allow_private_cidrs: str = ""
     egress_proxy_port: int = 0
     secrets_file: Path | None = None
 
@@ -693,6 +694,7 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "env_isolation": os.getenv("CONVEYOR_ENV_ISOLATION", "false").strip().lower() in ("true", "1", "yes", "on"),
         "egress_proxy_enabled": os.getenv("CONVEYOR_EGRESS_PROXY", "false").strip().lower() in ("true", "1", "yes", "on"),
         "egress_allowlist": os.getenv("CONVEYOR_EGRESS_ALLOWLIST", "").strip(),
+        "egress_allow_private_cidrs": os.getenv("CONVEYOR_EGRESS_ALLOW_PRIVATE_CIDRS", "").strip(),
         "egress_proxy_port": _int_env("CONVEYOR_EGRESS_PROXY_PORT", 0),
         "secrets_file": Path(os.environ["CONVEYOR_SECRETS_FILE"]).expanduser() if os.getenv("CONVEYOR_SECRETS_FILE") else memory_root / "secrets" / "console_secrets.json",
         "child_env_scope_provider_keys": os.getenv(
