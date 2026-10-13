@@ -259,3 +259,11 @@ appear directly in the Web Console Inbox tab.
 - Web takeover still requires the same validated VPS X11/XAUTHORITY and noVNC
   prerequisites as the CLI flow. The Web API does not provision a graphical
   session or weaken VNC authentication.
+
+### Private PWA and Web Push (P3-5)
+
+Set **CONVEYOR_PWA=1** to enable the installable PWA; default is off. All
+approval and draft-card push alerts are generic and require opening the
+authenticated Approval Inbox. Keep access on loopback or private Tailscale
+Serve HTTPS, never on the public Internet. Setup, key management and tests:
+[Private Web Console PWA](pwa.md).
