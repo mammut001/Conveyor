@@ -128,6 +128,25 @@ class HardeningTests(unittest.TestCase):
         self.assertFalse(sensitive_form("https://demo.example/form",
             {**base,"controls":[{"labels":["Topic"],"placeholder":"Message"}]}))
 
+    def test_visible_context_and_card_shaped_field_data(self):
+        safe={"target":"https://demo.example/send","heading":"Public feedback",
+              "preceding_text":"Public feedback","submit_label":"Send","controls":[]}
+        self.assertFalse(sensitive_form("https://demo.example/form", safe))
+        for context in ("Checkout Your details","Payment","Sign in","ｐａｙ"):
+            with self.subTest(context=context):
+                self.assertTrue(sensitive_form("https://demo.example/form",
+                    {**safe,"preceding_text":context}))
+        for key in ("placeholder","value"):
+            for number in ("4111111111111111","4111 1111 1111 1111",
+                           "4111-1111-1111-1111","378282246310005"):
+                with self.subTest(key=key,number=number):
+                    self.assertTrue(sensitive_form("https://demo.example/form",
+                        {**safe,"controls":[{key:number}]}))
+        for number in ("123456789012", "12345678901234567890", "2026-10-12"):
+            with self.subTest(non_card=number):
+                self.assertFalse(sensitive_form("https://demo.example/form",
+                    {**safe,"controls":[{"value":number}]}))
+
     def test_kill_refuses_approvals_and_custom_file_read(self):
         custom=Path(self.temp.name)/"external.kill"
         with patch.dict(os.environ, {"CONVEYOR_BROWSER_EXTERNAL_KILL_FILE":str(custom)}):
