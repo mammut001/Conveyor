@@ -6,6 +6,8 @@ content, action, prompt, draft, VAPID secret, or approval capability is sent.
 from __future__ import annotations
 
 import hashlib
+import http.client
+import ssl
 from contextlib import contextmanager
 import ipaddress
 import json
@@ -107,17 +109,66 @@ def _push_host(endpoint: str) -> str:
     return host
 
 
-def _require_public_dns(endpoint: str) -> None:
-    """Fail closed on any private/non-public DNS answer, including mixed answers.
-
-    Check immediately before each delivery, even for subscriptions persisted by
-    older builds. Network-level egress policy remains recommended against DNS
-    rebinding between this check and the HTTP client's connection.
-    """
+def _require_public_dns(endpoint: str) -> tuple:
+    """Return a checked socket destination; never resolve the hostname again."""
+    from egress_policy import permitted_ip
     host = _push_host(endpoint)
     answers = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-    if not answers or any(not ipaddress.ip_address(entry[4][0]).is_global for entry in answers):
+    if not answers or any(
+        not permitted_ip(ipaddress.ip_address(entry[4][0]), ())[0] for entry in answers
+    ):
         raise ValueError("push destination not public")
+    return answers[0]
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Dial an already validated numeric sockaddr while verifying the DNS name."""
+
+    def __init__(self, hostname: str, checked_address: tuple, timeout: float):
+        super().__init__(hostname, timeout=timeout, context=ssl.create_default_context())
+        self._checked_address = checked_address
+
+    def connect(self) -> None:
+        family, kind, proto, _, sockaddr = self._checked_address
+        raw = socket.socket(family, kind, proto)
+        try:
+            raw.settimeout(self.timeout)
+            raw.connect(sockaddr)  # No DNS lookup; sockaddr came from validation.
+            self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+        except BaseException:
+            raw.close()
+            raise
+
+
+class _PinnedPushSession:
+    """Minimal requests-compatible post() transport for pywebpush.
+
+    Uses http.client to avoid requests/urllib3 performing a second DNS lookup,
+    following redirects, or picking up ambient HTTP proxy settings.
+    """
+
+    def __init__(self, endpoint: str, checked_address: tuple):
+        self.endpoint, self.checked_address = endpoint, checked_address
+
+    def post(self, url: str, *, timeout: float = 5, headers=None, data=None, **kwargs):
+        if url != self.endpoint or kwargs:
+            raise ValueError("unexpected push request")
+        import requests
+        parsed = urlsplit(self.endpoint)
+        conn = _PinnedHTTPSConnection(parsed.hostname, self.checked_address, timeout)
+        try:
+            target = (parsed.path or "/") + (("?" + parsed.query) if parsed.query else "")
+            conn.request("POST", target, body=data, headers=dict(headers or {}))
+            reply = conn.getresponse()
+            response = requests.Response()
+            response.status_code = reply.status
+            response.reason = reply.reason
+            response.headers = requests.structures.CaseInsensitiveDict(reply.getheaders())
+            response.url = self.endpoint
+            response._content = reply.read(2048)
+            return response
+        finally:
+            conn.close()
 
 
 def _valid_subscription(body: object) -> tuple[str, str, str]:
@@ -168,8 +219,9 @@ def unsubscribe(settings: object, sub_id: object) -> None:
         db.execute("DELETE FROM push_subscriptions WHERE id=? AND operator=?", (sub_id, operator(settings)))
 
 
-def _default_sender(subscription: dict, payload: str) -> None:
-    # Optional dependency is only imported when feature is actually used.
+def _default_sender(subscription: dict, payload: str, checked_address: tuple) -> None:
+    # pywebpush uses this supplied session.post; the original hostname is used
+    # for Host, TLS SNI, certificate verification and VAPID audience.
     from pywebpush import webpush
     webpush(
         subscription_info=subscription, data=payload,
@@ -177,6 +229,7 @@ def _default_sender(subscription: dict, payload: str) -> None:
         vapid_claims={"sub": "mailto:push@conveyor.invalid"},
         ttl=120,
         timeout=5,
+        requests_session=_PinnedPushSession(subscription["endpoint"], checked_address),
     )
 
 
@@ -199,8 +252,11 @@ def notify_pending(settings: object, item_id: str, kind: str = "approval", *, se
     for row in rows:
         sub = {"endpoint": row["endpoint"], "keys": {"p256dh": row["p256dh"], "auth": row["auth"]}}
         try:
-            _require_public_dns(sub["endpoint"])
-            (sender or _default_sender)(sub, data)
+            checked_address = _require_public_dns(sub["endpoint"])
+            if sender is None:
+                _default_sender(sub, data, checked_address)
+            else:
+                sender(sub, data)
             sent += 1
         except Exception as exc:
             # No exception text or traceback: transport/library errors may embed
