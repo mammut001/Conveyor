@@ -85,9 +85,12 @@ class ProxyTests(unittest.TestCase):
 
     def test_unlisted_host_denied_without_dns_or_connection(self):
         proxy = self.proxy()
-        with patch.object(egress_proxy.socket, "getaddrinfo",
-                          side_effect=AssertionError("DNS must not run")):
-            self.assertEqual(self.request(proxy, "not-allowed.example")[0], 403)
+        self.assertEqual(self.request(proxy, "not-allowed.example")[0], 403)
+        def unexpected_dns(*args, **kwargs):
+            raise AssertionError("DNS must not run for an unlisted host")
+        self.assertEqual(egress_proxy.destination("not-allowed.example", self.port,
+                         ("localhost",), resolver=unexpected_dns),
+                         (None, "not_allowlisted"))
         self.assertEqual(self.log()[-1]["reason"], "not_allowlisted")
 
     def test_ip_literal_denied_when_not_explicitly_listed(self):
