@@ -112,8 +112,9 @@ def model_grants(settings: Any, *, claude: bool = False) -> set[str]:
         config = get_provider_config(settings)
         name = str(config.get("env_key") or "OPENAI_API_KEY")
         return {name} if allowed_grant(name) else set()
-    except Exception:
-        return {"OPENAI_API_KEY"}
+    except Exception as exc:
+        logger.warning("Cannot identify model credential grant (%s); granting none", type(exc).__name__)
+        return set()
 
 
 def agent_env(settings: Any, source: Mapping[str, str] | None = None,
