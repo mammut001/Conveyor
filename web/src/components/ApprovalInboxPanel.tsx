@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { isStale } from '../approvalFreshness';
+import { OutboundDraftCard } from './OutboundDraftCard';
 
 export type ApprovalInboxItem = {
   id: string;
@@ -12,6 +13,9 @@ export type ApprovalInboxItem = {
   danger?: string; // write | write_safe
   arg?: string;
   draft?: Record<string, string> | null;
+  draft_card?: boolean;
+  draft_hash?: string;
+  save_only?: boolean;
   editable: boolean;
   redacted?: boolean;
   g3_preview?: { url: string; target: string; method: string; fields: [string, string][]; screenshot_sha256: string };
@@ -355,6 +359,14 @@ export function ApprovalInboxPanel({
       )}
 
       {items.map((item) => {
+        if (item.draft_card && item.draft && item.draft_hash) {
+          return <OutboundDraftCard key={item.id} item={item} token={token} onDone={() => {
+            fetchGen.current++;
+            dropItem(item.id);
+            onApprovalDecided?.();
+            void fetchItems();
+          }} />;
+        }
         const isEditing = editingId === item.id;
         const isBusy = Boolean(busyMap[item.id]);
         const changedFields = isEditing ? getChangedFields() : [];
