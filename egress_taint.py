@@ -30,9 +30,7 @@ def _db(settings: Any) -> sqlite3.Connection:
 def private_read(tool: str) -> bool:
     """Conservatively mark attempts to read personal data, even on tool failure."""
     name = tool.lower()
-    return (name.startswith(("memory.", "gmail.", "inbox.", "secrets.", "secret.",
-                             "notes.", "calendar.", "contacts.", "files.", "file.",
-                             "project.", "mcp."))
+    return (name.startswith(("memory.", "gmail.", "inbox.", "secrets.", "secret."))
             or name in ("email.inbox", "email.read", "email.search",
                         "email.recent", "file.search_private",
                         "calendar.search", "contacts.search", "notes.search",
@@ -44,13 +42,18 @@ def outbound(settings: Any, tool: str) -> bool:
     from outbound_draft_cards import is_outbound
     name = tool.lower()
     network_read = (name in ("web.fetch", "web.text", "web.headers", "web.search")
-                    or name.startswith(("browser.", "research.", "mcp.")))
+                    or name.startswith(("browser.", "research."))
+                    or (getattr(settings, "background_subagents_enabled", False)
+                        and name.startswith("mcp.")))
     return is_outbound(settings, tool) or network_read
 
 
 def mark_read(settings: Any, tool: str, *, operator_id: str = "",
               channel: str = "", chat_id: str = "") -> None:
-    if not (enabled(settings) and private_read(tool) and chat_id and channel):
+    child_private = (getattr(settings, "background_subagents_enabled", False)
+                     and tool.lower().startswith(("notes.", "calendar.", "contacts.",
+                                                  "files.", "file.", "project.", "mcp.")))
+    if not (enabled(settings) and (private_read(tool) or child_private) and chat_id and channel):
         return
     with _db(settings) as db:
         db.execute("INSERT OR IGNORE INTO private_reads VALUES (?,?,?)",
