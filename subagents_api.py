@@ -18,12 +18,14 @@ def get(handler, path: str) -> bool:
 
 
 def post(handler, parts: list[str]) -> bool:
-    if len(parts) != 4 or parts[:2] != ["api", "subagents"] or parts[3] not in ("cancel", "kill"):
+    is_kill = len(parts) == 3 and parts == ["api", "subagents", "kill"]
+    is_cancel = len(parts) == 4 and parts[:2] == ["api", "subagents"] and parts[3] == "cancel"
+    if not (is_kill or is_cancel):
         return False
     settings = getattr(handler.server.control, "settings", None)
     if not settings or not subagents.enabled(settings):
         handler._json(HTTPStatus.CONFLICT, {"error": "subagents disabled"})
-    elif parts[2] == "kill":
+    elif is_kill:
         handler._json(HTTPStatus.OK, {"cancelled": subagents.kill_all(settings)})
     elif subagents.cancel(settings, parts[2]):
         handler._json(HTTPStatus.OK, {"cancelled": True})
