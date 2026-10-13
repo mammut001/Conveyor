@@ -275,6 +275,35 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
                     '<button type="submit">Send</button>',
                     control+'<button type="submit">Send</button>'))
 
+    async def test_readonly_controls_never_agent_editable(self):
+        # Read-only fields must remain in the exact preview but cannot be changed.
+        for element in (
+            '<input type="text" name="topic" value="before" readonly>',
+            '<textarea name="topic" readonly>before</textarea>',
+        ):
+            with self.subTest(element=element):
+                self.server.html=FORM.replace(
+                    '<input type="text" name="topic" value="before">',element)
+                result=await prepare(self.settings,self.arg,operator_id="person",
+                                     channel="web",chat_id="chat")
+                self.assertFalse(result.ok,str(result))
+                self.assertIn("g3_uneditable_field_denied",result.text)
+                self.assertEqual(self.server.posts,[])
+        self.server.html=FORM.replace(
+            '<input type="text" name="topic" value="before">',
+            '<input type="text" name="topic" value="before" readonly>')
+        safe=json.dumps({"url":self.url+"/form","form_ref":0,
+                         "fields":{"region":"b","agree":True}})
+        result=await prepare(self.settings,safe,operator_id="person",
+                             channel="web",chat_id="chat")
+        self.assertTrue(result.ok,str(result))
+        pending=get_pending_for_context("person","chat","web")
+        self.assertIsNotNone(pending)
+        token=json.loads(pending.arg)["token"]
+        detail=review(self.settings,token)
+        self.assertIn(["topic","before"],detail["preview"]["fields"])
+        self.assertEqual(self.server.posts,[])
+
     async def test_original_card_value_still_blocks_when_agent_overwrites(self):
         # The standard prepare() overwrites topic="before" with "hello".
         # The original card-shaped value must be classified before mutation.
