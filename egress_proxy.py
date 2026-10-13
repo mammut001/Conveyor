@@ -12,6 +12,7 @@ import select
 import socket
 import socketserver
 import threading
+import time
 from urllib.parse import urlsplit
 
 _LOCK = threading.RLock()
@@ -87,9 +88,41 @@ class _Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
+    def __init__(self, *args, **kwargs):
+        self.slots = threading.BoundedSemaphore(64)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            try:
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\n"
+                                b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
 
 class _Handler(socketserver.StreamRequestHandler):
     timeout = 30
+
+    def _deadline_line(self, max_bytes, deadline):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("header_deadline")
+        self.connection.settimeout(remaining)
+        return self.rfile.readline(max_bytes)
 
     def _decision(self, host, port, ip, reason):
         record = {"time": datetime.now(timezone.utc).isoformat(),
@@ -108,11 +141,11 @@ class _Handler(socketserver.StreamRequestHandler):
         self.wfile.write(f"HTTP/1.1 {code} {message}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".encode())
         self.wfile.flush()
 
-    def _headers(self):
+    def _headers(self, deadline):
         result = []
         total = 0
         for _ in range(100):
-            line = self.rfile.readline(8193)
+            line = self._deadline_line(8193, deadline)
             total += len(line)
             if not line or len(line) > 8192 or total > 32768:
                 raise ValueError("headers_too_large")
@@ -183,14 +216,15 @@ class _Handler(socketserver.StreamRequestHandler):
     def handle(self):
         host, port = "", 0
         try:
-            first = self.rfile.readline(8193)
+            deadline = time.monotonic() + 10
+            first = self._deadline_line(8193, deadline)
             if not first or len(first) > 8192:
                 raise ValueError("invalid_request")
             parts = first.decode("ascii").strip().split(" ")
             if len(parts) != 3 or parts[2] not in ("HTTP/1.0", "HTTP/1.1"):
                 raise ValueError("invalid_request")
             method, target, version = parts
-            headers = self._headers()
+            headers = self._headers(deadline)
             if method.upper() == "CONNECT":
                 if target.count(":") != 1 and not target.startswith("["):
                     raise ValueError("invalid_connect_target")
@@ -212,12 +246,16 @@ class _Handler(socketserver.StreamRequestHandler):
                         (urlsplit("//" + host_headers[0]).port or 80) != port):
                     raise ValueError("host_mismatch")
             host = _canonical(host)
-            ip, reason = destination(host, port, self.server.rules)
+            ip, reason = destination(
+                host, port, self.server.rules, self.server.resolver,
+                cidrs=self.server.cidrs,
+                protected_ports=self.server.protected_ports |
+                {self.server.server_address[1]})
             self._decision(host, port, ip, reason)
             if ip is None:
                 self._error(403, "Forbidden")
                 return
-            with socket.create_connection((ip, port), timeout=10) as remote:
+            with self.server.dialer((ip, port), timeout=10) as remote:
                 remote.settimeout(30)
                 if method.upper() == "CONNECT":
                     self.wfile.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -255,11 +293,19 @@ class _Handler(socketserver.StreamRequestHandler):
 
 
 class EgressProxy:
-    def __init__(self, rules, log_path, port=0):
+    def __init__(self, rules, log_path, port=0, *, cidrs=(),
+                 protected_ports=(), resolver=socket.getaddrinfo,
+                 dialer=socket.create_connection):
         self.rules = tuple(rules)
         self.log_path = Path(log_path)
+        self.cidrs = tuple(cidrs)
+        self.protected_ports = set(protected_ports)
         self.server = _Server(("127.0.0.1", int(port)), _Handler)
         self.server.rules = self.rules
+        self.server.cidrs = self.cidrs
+        self.server.protected_ports = self.protected_ports
+        self.server.resolver = resolver
+        self.server.dialer = dialer
         self.server.log_path = self.log_path
         self.server.log_lock = threading.Lock()
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
