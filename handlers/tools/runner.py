@@ -44,6 +44,8 @@ def _requires_confirmation(tool_name: str, settings: Settings | None = None) -> 
     # stop a natural-language request from reaching the desktop.
     if tool_name == "computer.task":
         return False
+    if tool_name == "github.create_issue" and getattr(settings, "draft_cards_enabled", False):
+        return True
     if tool_name.startswith("mcp."):
         from mcp_client import get_mcp_tool_spec
         spec = get_mcp_tool_spec(settings, tool_name)
@@ -404,6 +406,14 @@ async def _request_confirmation(
         except Exception:
             await port.reply(msg, "browser denied: invalid_or_unavailable")
             return
+    import outbound_draft_cards as cards
+    is_outbound_draft = cards.enabled(settings) and cards.is_outbound(settings, tool_name)
+    if is_outbound_draft:
+        try:
+            cards._parse(settings, tool_name, arg)
+        except ValueError as exc:
+            await port.reply(msg, f"Outbound draft blocked: {exc}")
+            return
     pending = create_pending(
         tool_name=tool_name,
         arg=arg,
@@ -411,6 +421,15 @@ async def _request_confirmation(
         chat_id=msg.chat_id,
         channel=msg.channel,
     )
+    if is_outbound_draft:
+        from handlers.tools.confirm import set_pending_ttl
+        set_pending_ttl(pending.token, cards.expiry_seconds(settings))
+        try:
+            cards.register(settings, pending)
+        except Exception:
+            pop_pending(pending.token)
+            await port.reply(msg, "Unable to save outbound draft; send blocked")
+            return
     danger_label = ("external network access" if tool_name in ("browser.read_webpage", "browser.browse_site")
                     else _danger_label(tool_name, settings))
     source = "routine" if msg.chat_id.startswith("routine-") else "chat"
@@ -441,7 +460,13 @@ async def _request_confirmation(
         f"说明: {summary}\n"
         f"风险: {danger_label}\n"
     )
-    if arg.strip():
+    if is_outbound_draft:
+        from redaction import redact_text
+        draft_preview = cards._parse(settings, tool_name, arg)
+        for field, value in draft_preview.items():
+            text += f"{field}: {redact_text(value)[:500]}\n"
+        text += "Edit in Web Approval Inbox, or approve this exact original draft.\n"
+    elif arg.strip():
         if tool_name == "service_restart":
             text += f"目标单元: {arg.strip()}\n"
         else:
@@ -551,6 +576,15 @@ async def execute_confirmed(
         if reason:
             await port.reply(msg, reason)
             return True
+    import outbound_draft_cards as cards
+    if cards.is_draft_token(settings, token):
+        outcome = await cards.approve_original(settings, token)
+        pop_pending(token)
+        await port.reply(msg, outcome['result'])
+        return True
+    if cards.enabled(settings) and cards.is_outbound(settings, action.tool_name):
+        await port.reply(msg, 'Outbound draft unavailable; send blocked')
+        return True
     if not await _relay_gate(settings, action, msg, port, approve=True):
         return True
     action = pop_pending(token)
@@ -641,6 +675,17 @@ async def cancel_pending(
     if not matches_context(action, msg.operator_id, msg.chat_id, msg.channel):
         _audit_rejected(settings, action, msg)
         await port.reply(msg, "Unauthorized.")
+        return True
+    import outbound_draft_cards as cards
+    if cards.is_draft_token(settings, token):
+        cards.deny(settings, token)
+        pop_pending(token)
+        try:
+            import approval_relay
+            approval_relay.mark_local(settings, token, 'cancelled')
+        except Exception:
+            pass
+        await port.reply(msg, 'Outbound draft denied')
         return True
     if not await _relay_gate(settings, action, msg, port, approve=False):
         return True

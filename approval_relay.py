@@ -266,6 +266,10 @@ class TelegramRelayNotifier:
         if request.arg_preview.strip():
             text += f"参数: {request.arg_preview[:500]}\n"
         text += f"过期时间: {expires_str}\n\n确认执行？"
+        if getattr(self.settings, "draft_cards_enabled", False) and request.tool_name in ("email.send", "github.comment", "github.create_issue"):
+            text += "\n✏️ Edit in Web Approval Inbox"
+            if getattr(self.settings, "draft_cards_web_url", ""):
+                text += ": " + self.settings.draft_cards_web_url
 
         reply_markup = {
             "inline_keyboard": [[
@@ -273,6 +277,10 @@ class TelegramRelayNotifier:
                 {"text": "❌ 拒绝", "callback_data": f"relay:reject:{request.token}"},
             ]]
         }
+        if getattr(self.settings, "draft_cards_enabled", False) and request.tool_name in ("email.send", "github.comment", "github.create_issue"):
+            url = getattr(self.settings, "draft_cards_web_url", "")
+            if url.startswith("https://"):
+                reply_markup["inline_keyboard"].append([{"text": "✏️ Edit in web", "url": url}])
         data = {
             "chat_id": str(request.target),
             "text": truncate(text, 4000),
@@ -351,6 +359,10 @@ class FeishuRelayNotifier:
                 f"**参数**: {request.arg_preview[:500]}\n"
                 f"**过期时间**: {expires_str}"
             )
+            if getattr(self.settings, "draft_cards_enabled", False) and request.tool_name in ("email.send", "github.comment", "github.create_issue"):
+                body_text += "\n✏️ Edit in Web Approval Inbox"
+                if getattr(self.settings, "draft_cards_web_url", ""):
+                    body_text += ": " + self.settings.draft_cards_web_url
             card = {
                 "config": {"wide_screen_mode": True, "update_multi": True},
                 "header": {
@@ -378,6 +390,13 @@ class FeishuRelayNotifier:
                     },
                 ],
             }
+            if getattr(self.settings, "draft_cards_enabled", False) and request.tool_name in ("email.send", "github.comment", "github.create_issue"):
+                url = getattr(self.settings, "draft_cards_web_url", "")
+                if url.startswith("https://"):
+                    card["elements"].append({"tag": "action", "actions": [{
+                        "tag": "button", "text": {"tag": "plain_text", "content": "✏️ Edit in web"},
+                        "type": "default", "url": url,
+                    }]})
             msg_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id"
             msg_payload = json.dumps({
                 "receive_id": request.target,
@@ -553,6 +572,10 @@ def _notify_publish(
     if not channels:
         return
     redacted_arg = truncate(redact_text(action.arg or ""), 500)
+    import outbound_draft_cards as cards
+    if cards.enabled(settings) and cards.is_draft_token(settings, action.token):
+        draft = cards._parse(settings, action.tool_name, action.arg)
+        redacted_arg = truncate(redact_text(" | ".join(f"{k}: {v}" for k, v in draft.items())), 500)
     for ch in channels:
         if ch == action.channel:
             continue

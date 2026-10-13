@@ -1164,6 +1164,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 approval_id = parts[2]
                 is_approve = (parts[3] == "approve")
                 from handlers.tools.confirm import get_pending
+                import outbound_draft_cards as cards
+                if getattr(self.server.control, "settings", None) is not None and cards.is_draft_token(self.server.control.settings, approval_id):
+                    self._json(HTTPStatus.CONFLICT, {"error": "Use outbound draft Send / Deny endpoint"})
+                    return
                 pending = get_pending(approval_id)
                 if pending is not None:
                     if pending.channel != "web":
@@ -1185,6 +1189,25 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     return
                 result = self._await(self.server.control.decide_approval(parts[2], is_approve), timeout=120)
                 self._json(HTTPStatus.OK if result else HTTPStatus.NOT_FOUND, result or {"error": "not found"})
+            elif len(parts) == 4 and parts[:2] == ["api", "approval-inbox"] and parts[3] == "draft":
+                settings = self.server.control.settings
+                if not (getattr(settings, "approval_inbox_enabled", False) and getattr(settings, "draft_cards_enabled", False)):
+                    self._json(HTTPStatus.CONFLICT, {"error": "Draft cards disabled"})
+                    return
+                import outbound_draft_cards as cards
+                try:
+                    outcome = self._await(cards.submit(
+                        settings, parts[2], expected_hash=body.get("expected_hash", ""),
+                        draft=body.get("draft"), decision=body.get("decision", "send"),
+                    ), timeout=120)
+                except KeyError:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "Draft not found"})
+                    return
+                except ValueError as exc:
+                    self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                    return
+                self._json(HTTPStatus.OK, outcome)
+                return
             elif len(parts) == 4 and parts[:2] == ["api", "approval-inbox"] and parts[3] in ("approve", "reject"):
                 approval_id = parts[2]
                 is_approve = (parts[3] == "approve")
@@ -1197,6 +1220,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     return
 
                 from handlers.tools.confirm import get_pending
+                import outbound_draft_cards as cards
+                if getattr(self.server.control, "settings", None) is not None and cards.is_draft_token(self.server.control.settings, approval_id):
+                    self._json(HTTPStatus.CONFLICT, {"error": "Use outbound draft Send / Deny endpoint"})
+                    return
                 pending = get_pending(approval_id)
                 if pending is not None:
                     if pending.channel != "web":
