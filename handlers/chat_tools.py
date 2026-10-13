@@ -352,6 +352,20 @@ async def run_tool_loop(
                 continue
 
             danger = spec.danger
+            if real_tool_name == "memory.remember" and getattr(settings, "memory_v2_enabled", False):
+                # Only a verbatim explicit user request is a trusted manual
+                # fact. Rephrased facts and tool/web-derived text remain untrusted,
+                # even if a page attempts to trick the model into a profile write.
+                from personal_tools.long_term_memory import classify_explicit
+                explicit = classify_explicit(msg.text)
+                try:
+                    requested = json.loads(arg)
+                    requested["source"] = ("manual" if explicit and explicit[0] == "memory.remember"
+                                           and requested.get("text", "").strip() == explicit[1].strip()
+                                           else "untrusted")
+                    arg = json.dumps(requested, ensure_ascii=False)
+                except (ValueError, TypeError, AttributeError):
+                    arg = ""
             if real_tool_name.startswith("memory.") and danger in (
                 DangerLevel.WRITE_SAFE, DangerLevel.WRITE,
             ):
