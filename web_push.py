@@ -12,6 +12,7 @@ import json
 import os
 import queue
 import re
+import socket
 import sqlite3
 import threading
 import time
@@ -75,6 +76,50 @@ def _connection(settings: object):
         conn.close()
 
 
+# Push endpoints are external, so a user-supplied arbitrary URL must never reach
+# pywebpush. Keep this list tight; no generic domains or wildcard parents.
+_PUSH_HOSTS = frozenset((
+    "fcm.googleapis.com", "updates.push.services.mozilla.com", "android.googleapis.com",
+))
+_PUSH_SUFFIXES = (".push.apple.com", ".notify.windows.com")
+
+
+def _push_host(endpoint: str) -> str:
+    if not isinstance(endpoint, str) or not endpoint or len(endpoint) > 2048:
+        raise ValueError("invalid push endpoint")
+    try:
+        parsed = urlsplit(endpoint)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        raise ValueError("invalid push endpoint") from None
+    # netloc comparison disallows userinfo, encoded/non-ASCII hostnames, trailing
+    # dots, upper-case DNS, numeric aliases, IPv6 literals, and noncanonical ports.
+    if (parsed.scheme != "https" or not host or parsed.username or parsed.password
+            or parsed.fragment or port not in (None, 443)
+            or parsed.netloc not in (host, host + ":443")
+            or any(ch.isspace() for ch in endpoint)
+            or not re.fullmatch(r"[a-z0-9.-]+", host)
+            or not (host in _PUSH_HOSTS or any(
+                host.endswith(suffix) and len(host) > len(suffix) for suffix in _PUSH_SUFFIXES
+            ))):
+        raise ValueError("invalid push endpoint")
+    return host
+
+
+def _require_public_dns(endpoint: str) -> None:
+    """Fail closed on any private/non-public DNS answer, including mixed answers.
+
+    Check immediately before each delivery, even for subscriptions persisted by
+    older builds. Network-level egress policy remains recommended against DNS
+    rebinding between this check and the HTTP client's connection.
+    """
+    host = _push_host(endpoint)
+    answers = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    if not answers or any(not ipaddress.ip_address(entry[4][0]).is_global for entry in answers):
+        raise ValueError("push destination not public")
+
+
 def _valid_subscription(body: object) -> tuple[str, str, str]:
     if not isinstance(body, dict):
         raise ValueError("subscription object required")
@@ -85,19 +130,7 @@ def _valid_subscription(body: object) -> tuple[str, str, str]:
     keys = sub.get("keys")
     if not isinstance(endpoint, str) or not isinstance(keys, dict) or len(endpoint) > 2048:
         raise ValueError("invalid subscription")
-    parsed = urlsplit(endpoint)
-    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
-            or parsed.fragment or parsed.port not in (None, 443) or any(ch.isspace() for ch in endpoint)):
-        raise ValueError("invalid push endpoint")
-    host = parsed.hostname.lower().rstrip(".")
-    if host == "localhost" or host.endswith((".localhost", ".local", ".internal", ".test")):
-        raise ValueError("invalid push endpoint")
-    try:
-        ipaddress.ip_address(host)
-        raise ValueError("IP push endpoints are not allowed")
-    except ValueError as exc:
-        if str(exc) == "IP push endpoints are not allowed":
-            raise
+    _push_host(endpoint)
     p256dh, auth = keys.get("p256dh"), keys.get("auth")
     if not all(isinstance(x, str) and 12 <= len(x) <= 256 and re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", x) for x in (p256dh, auth)):
         raise ValueError("invalid subscription keys")
@@ -166,6 +199,7 @@ def notify_pending(settings: object, item_id: str, kind: str = "approval", *, se
     for row in rows:
         sub = {"endpoint": row["endpoint"], "keys": {"p256dh": row["p256dh"], "auth": row["auth"]}}
         try:
+            _require_public_dns(sub["endpoint"])
             (sender or _default_sender)(sub, data)
             sent += 1
         except Exception as exc:
