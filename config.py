@@ -237,6 +237,12 @@ class Settings:
     child_env_scope_provider_keys: bool = False
     env_isolation: bool = False
     secrets_file: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.env_isolation:
+            from subprocess_env import log_startup_check
+            log_startup_check(self)
+
     web_mobile_ui: bool = False
     mcp_enabled: bool = False
     mcp_config_path: Path | None = None
