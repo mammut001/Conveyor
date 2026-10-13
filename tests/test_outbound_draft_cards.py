@@ -77,7 +77,7 @@ class OutboundDraftTests(unittest.TestCase):
         self.assertTrue(email["Date"])
         self.assertTrue(email["Message-ID"].startswith("<"))
         self.assertTrue(email["Message-ID"].endswith(">"))
-        self.assertRegex(str(email["Message-ID"]), r"^<[a-f0-9]{32}@example\\.com>$".replace("\\\\", "\\"))
+        self.assertRegex(str(email["Message-ID"]), r"^<[a-f0-9]{32}@example\.com>$")
         self.assertNotIn("private-server-hostname-sentinel", email["Message-ID"])
         self.assertNotIn("8573920461", email["Message-ID"])
         self.assertFalse(cards.list_items(self.s))
@@ -95,7 +95,7 @@ class OutboundDraftTests(unittest.TestCase):
         cards._send_email(self.s, {"to": "recipient@example.com", "cc": "", "bcc": "",
                                   "subject": "Subject", "body": "Body"})
         message = smtp.return_value.__enter__.return_value.send_message.call_args.args[0]
-        self.assertRegex(str(message["Message-ID"]), r"^<[a-f0-9]{32}@conveyor\\.invalid>$".replace("\\\\", "\\"))
+        self.assertRegex(str(message["Message-ID"]), r"^<[a-f0-9]{32}@conveyor\.invalid>$")
 
     def test_tampered_hash_and_expired_cannot_send(self):
         item = self.register()
