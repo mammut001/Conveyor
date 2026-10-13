@@ -266,7 +266,7 @@ class TelegramRelayNotifier:
         if request.arg_preview.strip():
             text += f"参数: {request.arg_preview[:500]}\n"
         text += f"过期时间: {expires_str}\n\n确认执行？"
-        if getattr(self.settings, "draft_cards_enabled", False) and request.tool_name in ("email.send", "github.comment"):
+        if getattr(self.settings, "draft_cards_enabled", False) and request.tool_name in ("email.send", "github.comment", "github.create_issue"):
             text += "\n✏️ Edit in Web Approval Inbox"
             if getattr(self.settings, "draft_cards_web_url", ""):
                 text += ": " + self.settings.draft_cards_web_url
@@ -277,7 +277,7 @@ class TelegramRelayNotifier:
                 {"text": "❌ 拒绝", "callback_data": f"relay:reject:{request.token}"},
             ]]
         }
-        if getattr(self.settings, "draft_cards_enabled", False) and request.tool_name in ("email.send", "github.comment"):
+        if getattr(self.settings, "draft_cards_enabled", False) and request.tool_name in ("email.send", "github.comment", "github.create_issue"):
             url = getattr(self.settings, "draft_cards_web_url", "")
             if url.startswith("https://"):
                 reply_markup["inline_keyboard"].append([{"text": "✏️ Edit in web", "url": url}])
@@ -359,7 +359,7 @@ class FeishuRelayNotifier:
                 f"**参数**: {request.arg_preview[:500]}\n"
                 f"**过期时间**: {expires_str}"
             )
-            if getattr(self.settings, "draft_cards_enabled", False) and request.tool_name in ("email.send", "github.comment"):
+            if getattr(self.settings, "draft_cards_enabled", False) and request.tool_name in ("email.send", "github.comment", "github.create_issue"):
                 body_text += "\n✏️ Edit in Web Approval Inbox"
                 if getattr(self.settings, "draft_cards_web_url", ""):
                     body_text += ": " + self.settings.draft_cards_web_url
@@ -390,7 +390,7 @@ class FeishuRelayNotifier:
                     },
                 ],
             }
-            if getattr(self.settings, "draft_cards_enabled", False) and request.tool_name in ("email.send", "github.comment"):
+            if getattr(self.settings, "draft_cards_enabled", False) and request.tool_name in ("email.send", "github.comment", "github.create_issue"):
                 url = getattr(self.settings, "draft_cards_web_url", "")
                 if url.startswith("https://"):
                     card["elements"].append({"tag": "action", "actions": [{
