@@ -66,6 +66,13 @@ def send_email(settings: Settings, to: str, subject: str, body: str) -> ToolResu
     if err:
         return ToolResult(ok=False, text=f"⚠️ {err}")
 
+    if getattr(settings, "outbound_allowlist", ""):
+        from outbound_draft_cards import _allowlist, _recipients
+        try:
+            _allowlist(settings, _recipients(to, required=True))
+        except ValueError:
+            return ToolResult(ok=False, text="⚠️ 收件人不在允许列表中")
+
     if not to.strip():
         return ToolResult(ok=False, text="⚠️ 收件人不能为空")
     if not subject.strip():

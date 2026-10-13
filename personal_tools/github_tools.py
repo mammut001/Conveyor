@@ -405,6 +405,8 @@ def github_comment(
     body: str,
 ) -> ToolResult:
     """Comment on an issue or PR. WRITE, requires confirmation."""
+    if getattr(settings, "outbound_allowlist", ""):
+        return ToolResult(ok=False, text="⚠️ Outbound allowlist does not permit GitHub comments")
     err = _check_config(settings)
     if err:
         return ToolResult(ok=False, text=err)
