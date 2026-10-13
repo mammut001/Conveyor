@@ -7,6 +7,8 @@ import unicodedata
 # Normalize before classifying so visually disguised UI words cannot bypass safety.
 _INVISIBLE = re.compile(r"[\u00ad\u034f\u061c\u180e\u200b-\u200f\u2060-\u206f\ufeff]")
 _SPACES = re.compile(r"\s+")
+# A 13–19 digit card-shaped value, with optional space/dash separators.
+_CARD_NUMBER = re.compile(r"(?<![0-9])(?:[0-9][ -]?){12,18}[0-9](?![ -]*[0-9])")
 
 
 def _text(value: str) -> str:
@@ -44,16 +46,16 @@ def _dangerous(value: str, *, field: bool = False) -> bool:
 
 
 def sensitive_form(url: str, form: dict) -> bool:
-    """Classify only selected-form metadata plus document title/preceding headings.
+    """Classify selected-form metadata and preceding visible page text.
 
-    No arbitrary body text, footer, navigation or unrelated anchor text is used.
+    Footer, navigation and unrelated anchor text are excluded by the DOM collector.
     Malformed metadata is refused instead of silently exempted.
     """
     if not isinstance(form, dict) or not isinstance(url, str):
         return True
     if _dangerous(url):
         return True
-    for key in ("target", "heading", "page_heading", "document_title", "submit_label"):
+    for key in ("target", "heading", "page_heading", "preceding_text", "document_title", "submit_label"):
         value = form.get(key, "")
         if not isinstance(value, str) or _dangerous(value):
             return True
@@ -70,5 +72,11 @@ def sensitive_form(url: str, form: dict) -> bool:
         for value in [*labels, *(control.get(k, "") for k in
                                  ("aria_label", "aria_labelledby", "placeholder", "title"))]:
             if not isinstance(value, str) or _dangerous(value, field=True):
+                return True
+        for key in ("placeholder", "value"):
+            value = control.get(key, "")
+            if value is not None and not isinstance(value, str):
+                return True
+            if isinstance(value, str) and _CARD_NUMBER.search(_text(value)):
                 return True
     return False
