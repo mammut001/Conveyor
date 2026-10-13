@@ -15,6 +15,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import event_triggers as hooks
+from personal_tools import hooks as hook_tools
 import routines
 from handlers.job_queue import JobQueue
 from web_console import WebConsoleHandler, WebConsoleServer
@@ -105,9 +106,9 @@ class EventTriggerTests(unittest.TestCase):
             pass
         return status, data, hdr
 
-    def create(self, event_filter=None):
+    def create(self, event_filter=None, mode="generic"):
         routine = routines.create_routine(self.settings, "Event check", "0 8 * * *", "Summarize event")
-        payload = {"routine_id": routine["id"]}
+        payload = {"routine_id": routine["id"], "mode": mode}
         if event_filter is not None:
             payload["filter"] = event_filter
         code, hook, _ = self.request("POST", "/api/hooks", payload, auth=True)
@@ -117,15 +118,20 @@ class EventTriggerTests(unittest.TestCase):
     def signed(self, hook, body, *, delivery="unique-1", timestamp=None, github=None, event=None, signature=None, content_type="application/json"):
         if isinstance(body, dict):
             body = json.dumps(body).encode()
-        digest = hmac.new(hook["secret"].encode(), body, hashlib.sha256).hexdigest()
+        ts = str(int(time.time()) if timestamp is None else timestamp)
+        data_to_sign = body if github else f"{ts}.{delivery}.".encode() + body
+        digest = hmac.new(hook["secret"].encode(), data_to_sign, hashlib.sha256).hexdigest()
         headers = {
             "Content-Type": content_type,
-            "X-Conveyor-Timestamp": str(int(time.time()) if timestamp is None else timestamp),
             ("X-GitHub-Delivery" if github else "X-Conveyor-Delivery"): delivery,
             ("X-Hub-Signature-256" if github else "X-Conveyor-Signature"): signature or "sha256=" + digest,
         }
-        if event:
-            headers["X-GitHub-Event" if github else "X-Conveyor-Event"] = event
+        if github:
+            headers["X-GitHub-Event"] = event or "push"
+        else:
+            headers["X-Conveyor-Timestamp"] = ts
+            if event:
+                headers["X-Conveyor-Event"] = event
         return self.request("POST", hook["path"], body, headers)
 
     def wait_runs(self, count):
@@ -178,14 +184,17 @@ class EventTriggerTests(unittest.TestCase):
         self.assertEqual(self.signed(new_hook, {"x": 1})[0], 404)
 
     def test_github_action_filter(self):
-        _, hook = self.create({"event":"pull_request","actions":["opened"]})
+        _, hook = self.create({"event":"pull_request","actions":["opened"]}, mode="github")
         self.assertEqual(self.signed(hook, {"action":"closed"}, github=True, event="pull_request")[1]["filtered"], True)
         self.assertEqual(self.mock_run.await_count, 0)
         self.assertEqual(self.signed(hook, {"action":"opened"}, github=True, event="pull_request")[0], 202)
         self.wait_runs(1)
+        # Genuine GitHub headers have no Conveyor timestamp, and IDs are durable.
+        self.assertEqual(self.signed(hook, {"action":"opened"}, github=True, event="pull_request")[0], 409)
+        self.assertEqual(self.mock_run.await_count, 1)
 
     def test_github_push_branch_filter(self):
-        _, hook = self.create({"event":"push","branch":"refs/heads/main"})
+        _, hook = self.create({"event":"push","branch":"refs/heads/main"}, mode="github")
         self.assertTrue(self.signed(hook, {"ref":"refs/heads/dev"}, github=True, event="push")[1]["filtered"])
         self.assertEqual(self.signed(hook, {"ref":"refs/heads/main"}, github=True, event="push")[0], 202)
         self.wait_runs(1)
@@ -218,6 +227,106 @@ class EventTriggerTests(unittest.TestCase):
             self.assertEqual(hooks.reserve_delivery(self.settings, first["hook_id"], "one"), "ok")
             self.assertEqual(hooks.reserve_delivery(self.settings, second["hook_id"], "two"), "ok")
             self.assertEqual(hooks.reserve_delivery(self.settings, first["hook_id"], "three"), "rate")
+
+    def test_generic_signature_binds_delivery_and_timestamp(self):
+        _, hook = self.create()
+        raw = b'{"subject":"signed"}'
+        stamp = int(time.time())
+        mac = "sha256=" + hmac.new(
+            hook["secret"].encode(), f"{stamp}.delivery-1.".encode() + raw,
+            hashlib.sha256
+        ).hexdigest()
+        self.assertEqual(self.signed(hook, raw, timestamp=stamp,
+                                     delivery="delivery-1", signature=mac)[0], 202)
+        self.wait_runs(1)
+        # An attacker can copy the body and signature, but cannot rebind it to
+        # fresh timestamp/nonce headers (even while the original is still fresh).
+        self.assertEqual(self.signed(hook, raw, timestamp=stamp+1,
+                                     delivery="delivery-2", signature=mac)[0], 401)
+        self.assertEqual(self.signed(hook, raw, timestamp=stamp,
+                                     delivery="delivery-3", signature=mac)[0], 401)
+        self.assertEqual(self.mock_run.await_count, 1)
+
+    def test_modes_are_fixed_and_cross_mode_headers_rejected(self):
+        _, generic = self.create(mode="generic")
+        _, github = self.create(mode="github")
+        self.assertEqual(hooks.get_hook(self.settings, generic["hook_id"])["mode"], "generic")
+        self.assertEqual(hooks.get_hook(self.settings, github["hook_id"])["mode"], "github")
+        # Both signatures are otherwise correct for their respective headers;
+        # the creation-time hook mode, not the caller's headers, is authoritative.
+        self.assertEqual(self.signed(generic, {"action":"opened"}, github=True, event="issues")[0], 401)
+        self.assertEqual(self.signed(github, {"action":"opened"}, github=False, event="issues")[0], 401)
+        self.assertEqual(self.mock_run.await_count, 0)
+        code, listing, _ = self.request("GET", "/api/hooks", auth=True)
+        self.assertEqual(code, 200)
+        self.assertEqual({entry["mode"] for entry in listing["hooks"]}, {"github", "generic"})
+        code, rotated, _ = self.request("POST", "/api/hooks/" + github["hook_id"] + "/rotate", {}, auth=True)
+        self.assertEqual(code, 201)
+        self.assertEqual(rotated["mode"], "github")
+        self.assertEqual(self.signed(rotated, {"ref":"refs/heads/main"}, github=True, event="push")[0], 202)
+        self.wait_runs(1)
+
+    def test_github_requires_delivery_and_valid_body_hmac(self):
+        _, hook = self.create(mode="github")
+        self.assertEqual(self.signed(hook, {"x":1}, github=True, delivery="")[0], 401)
+        self.assertEqual(self.signed(hook, {"x":1}, github=True,
+                                     signature="sha256=" + "0"*64)[0], 401)
+        self.assertEqual(self.mock_run.await_count, 0)
+
+    def test_chat_tools_never_expose_secrets_and_web_claim_is_once(self):
+        routine = routines.create_routine(self.settings, "Chat Hook", "0 8 * * *", "chat prompt")
+        created = asyncio.run(hook_tools.hook_manage(self.settings, f"add {routine['id']} github"))
+        self.assertTrue(created.ok)
+        entry = hooks.list_hooks(self.settings)[0]
+        self.assertEqual(entry["mode"], "github")
+        secret = hooks.get_hook(self.settings, entry["hook_id"])["secret"]
+        self.assertNotIn(secret, created.text)
+        self.assertIn("available once", created.text)
+        path = f"/api/hooks/{entry['hook_id']}/secret"
+        self.assertEqual(self.request("GET", path)[0], 401)
+        code, result, _ = self.request("GET", path, auth=True)
+        self.assertEqual(code, 200)
+        self.assertEqual(result["secret"], secret)
+        self.assertEqual(self.request("GET", path, auth=True)[0], 404)
+        rotated = asyncio.run(hook_tools.hook_manage(self.settings, f"rotate {entry['hook_id']}"))
+        self.assertTrue(rotated.ok)
+        new = hooks.list_hooks(self.settings)[0]
+        self.assertEqual(new["mode"], "github")
+        self.assertNotIn(hooks.get_hook(self.settings, new["hook_id"])["secret"], rotated.text)
+        self.assertEqual(self.request("GET", f"/api/hooks/{new['hook_id']}/secret", auth=True)[0], 200)
+
+    def test_replay_and_rate_take_priority_over_busy(self):
+        routine, hook = self.create()
+        self.assertEqual(self.signed(hook, {"x":1}, delivery="first")[0], 202)
+        self.wait_runs(1)
+        self.server._active_routine_runs.add(routine["id"])
+        try:
+            code, replay, _ = self.signed(hook, {"x":1}, delivery="first")
+            self.assertEqual((code, replay["error"]), (409, "replayed delivery"))
+            code, busy, _ = self.signed(hook, {"x":1}, delivery="second")
+            self.assertEqual((code, busy["error"]), (429, "routine busy"))
+            # A busy rejection has NOT consumed the delivery ID.
+            self.assertEqual(hooks.delivery_status(self.settings, hook["hook_id"], "second"), "ok")
+            for i in range(29):
+                self.assertEqual(hooks.reserve_delivery(self.settings, hook["hook_id"], f"fill-{i}"), "ok")
+            code, rate, _ = self.signed(hook, {"x":1}, delivery="not-accepted")
+            self.assertEqual((code, rate["error"]), (429, "rate limit"))
+        finally:
+            self.server._active_routine_runs.discard(routine["id"])
+
+    def test_existing_policy_table_migrates_mode(self):
+        _, hook = self.create()
+        conn = hooks._db(self.settings)
+        try:
+            with conn:
+                conn.execute("DROP TABLE routine_hook_policies")
+                conn.execute("CREATE TABLE routine_hook_policies (hook_id TEXT PRIMARY KEY,"
+                             "paused INTEGER NOT NULL DEFAULT 0,"
+                             "event_filter_json TEXT NOT NULL DEFAULT '{}')")
+                conn.execute("INSERT INTO routine_hook_policies VALUES (?,0,'{}')", (hook["hook_id"],))
+        finally:
+            conn.close()
+        self.assertEqual(hooks.get_hook(self.settings, hook["hook_id"])["mode"], "generic")
 
     def test_secret_mode_and_filter_validation(self):
         _, hook = self.create()
