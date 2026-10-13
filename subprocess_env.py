@@ -119,9 +119,13 @@ def model_grants(settings: Any, *, claude: bool = False) -> set[str]:
 def agent_env(settings: Any, source: Mapping[str, str] | None = None,
               *, claude: bool = False, overrides: Mapping[str, str] | None = None) -> dict[str, str]:
     """Codex/Claude child env (call only while opt-in isolation is enabled)."""
+    from console_secrets import path_for
+    secrets_path = getattr(settings, "secrets_file", None)
+    if secrets_path is None and getattr(settings, "codex_memory_root", None) is not None:
+        secrets_path = path_for(settings)
     return build_child_env(
         source, grants=model_grants(settings, claude=claude), overrides=overrides,
-        secrets_file=getattr(settings, "secrets_file", None),
+        secrets_file=secrets_path,
     )
 
 
