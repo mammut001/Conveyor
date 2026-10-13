@@ -233,7 +233,8 @@ def generate_thumbnail(
     for attempt in range(4):
         cmd = ["sips", "-Z", str(dim), str(source_path), "--out", str(dest_path)]
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            res = subprocess.run(cmd, capture_output=True, text=True, check=False,
+                                 env=__import__("subprocess_env").utility_env())
             if res.returncode == 0 and dest_path.is_file():
                 size = dest_path.stat().st_size
                 if size <= max_bytes:
@@ -457,7 +458,8 @@ def poll_upload_once(settings: Settings) -> None:
     height = max_height
     try:
         import subprocess
-        res = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(thumb_path)], capture_output=True, text=True, check=False)
+        res = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(thumb_path)], capture_output=True, text=True, check=False,
+                             env=__import__("subprocess_env").utility_env())
         if res.returncode == 0:
             for line in res.stdout.splitlines():
                 if "pixelWidth:" in line:
