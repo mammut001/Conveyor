@@ -319,7 +319,7 @@ def system_prompt(
     from config import load_operator_profile
 
     # Group chats (or memory flag off): no durable memory in the prompt at all.
-    memory_on = bool(getattr(settings, "long_term_memory_enabled", False)) and memory_allowed
+    memory_on = bool(getattr(settings, "long_term_memory_enabled", False) or getattr(settings, "memory_v2_enabled", False)) and memory_allowed
 
     try:
         live = load_operator_profile(settings.codex_memory_root)
