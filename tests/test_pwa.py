@@ -5,6 +5,7 @@ import asyncio
 import http.client
 import json
 import os
+import socket
 import tempfile
 import threading
 import unittest
@@ -29,6 +30,12 @@ class PushLogicTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.settings = SimpleNamespace(pwa_enabled=True, codex_memory_root=Path(self.temp.name),
                                         operator_name="operator-A")
+        # Offline fake sender tests must not depend on public DNS availability.
+        dns = patch.object(web_push.socket, "getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("142.250.72.202", 443)),
+        ])
+        dns.start()
+        self.addCleanup(dns.stop)
 
     def test_off_is_noop_and_does_not_create_database(self):
         self.settings.pwa_enabled = False
@@ -73,12 +80,67 @@ class PushLogicTests(unittest.TestCase):
     def test_reject_private_push_endpoints_and_invalid_payloads(self):
         for endpoint in ("http://example.com/send", "https://localhost/send",
                          "https://10.0.0.1/send", "https://example.internal/send",
-                         "https://example.com:8080/send", "https://user:pass@example.com/send"):
+                         "https://example.com:8080/send", "https://user:pass@example.com/send",
+                         "https://2130706433/", "https://0x7f000001/", "https://127.1/",
+                         "https://0177.0.0.1/", "https://127.0.0.1.nip.io/",
+                         "https://169.254.169.254.nip.io/", "https://evil.example.com/",
+                         "https://fcm.googleapis.com.evil.example.com/send",
+                         "https://FCM.GOOGLEAPIS.COM/send",
+                         "https://fcm.googleapis.com./send",
+                         "https://fcm.googleapis.com:444/send",
+                         "https://fcm.googleapis.com@127.0.0.1/send"): 
             with self.subTest(endpoint=endpoint), self.assertRaises(ValueError):
                 web_push.subscribe(self.settings, {**SUB, "endpoint": endpoint})
         with self.assertRaises(ValueError):
             web_push.subscribe(self.settings, {"endpoint": SUB["endpoint"], "keys": {}})
         self.assertFalse(web_push._db_path(self.settings).exists())
+
+    def test_allowlisted_push_origins(self):
+        for host in ("fcm.googleapis.com", "updates.push.services.mozilla.com",
+                     "web.push.apple.com", "a.b.push.apple.com",
+                     "db5.notify.windows.com", "android.googleapis.com"):
+            with self.subTest(host=host):
+                endpoint = "https://" + host + "/push/opaque"
+                record = web_push._valid_subscription({**SUB, "endpoint": endpoint})
+                self.assertEqual(record[0], endpoint)
+
+    def test_fail_closed_on_private_or_mixed_dns_at_send(self):
+        web_push.subscribe(self.settings, SUB)
+        deliveries = []
+        for addr in ("127.0.0.1", "169.254.169.254", "10.1.2.3",
+                     "192.168.1.4", "::1", "fd00::1", "0.0.0.0"):
+            with self.subTest(addr=addr):
+                family = socket.AF_INET6 if ":" in addr else socket.AF_INET
+                answer = [(family, socket.SOCK_STREAM, 6, "", (addr, 443))]
+                with patch.object(web_push.socket, "getaddrinfo", return_value=answer):
+                    self.assertEqual(web_push.notify_pending(
+                        self.settings, "review123",
+                        sender=lambda *args: deliveries.append(args)), 0)
+        mixed = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("142.250.72.202", 443)),
+                 (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))]
+        with patch.object(web_push.socket, "getaddrinfo", return_value=mixed):
+            self.assertEqual(web_push.notify_pending(
+                self.settings, "review123",
+                sender=lambda *args: deliveries.append(args)), 0)
+        with patch.object(web_push.socket, "getaddrinfo", side_effect=socket.gaierror("DNS refused")):
+            self.assertEqual(web_push.notify_pending(
+                self.settings, "review123",
+                sender=lambda *args: deliveries.append(args)), 0)
+        self.assertEqual(deliveries, [])
+
+    def test_sender_revalidates_legacy_rows(self):
+        import hashlib
+        web_push.subscribe(self.settings, SUB)
+        endpoint = "https://127.0.0.1.nip.io/secret"
+        with web_push._connection(self.settings) as db:
+            db.execute("INSERT INTO push_subscriptions VALUES (?,?,?,?,?,?)", (
+                hashlib.sha256(endpoint.encode()).hexdigest(), "operator-A",
+                endpoint, "A" * 86, "B" * 22, 0.0,
+            ))
+        deliveries = []
+        self.assertEqual(web_push.notify_pending(self.settings, "review123",
+                         sender=lambda subscription, _: deliveries.append(subscription)), 1)
+        self.assertEqual([d["endpoint"] for d in deliveries], [SUB["endpoint"]])
 
     def test_worker_has_strict_static_only_cache_and_private_deeplink(self):
         text = (Path(__file__).resolve().parents[1] / "web/public/sw.js").read_text()
@@ -150,19 +212,35 @@ class PushHttpTests(unittest.TestCase):
         conn.close()
         return result
 
-    def test_manifest_and_worker_served_only_flag_on(self):
-        for path in ("/manifest.webmanifest", "/sw.js", "/icon.svg"):
-            self.assertEqual(self.request("GET", path)[0], 404, path)
-        self.settings.pwa_enabled = True
-        code, body, headers = self.request("GET", "/manifest.webmanifest")
-        self.assertEqual(code, 200)
-        self.assertEqual(json.loads(body)["name"], "Conveyor")
-        self.assertEqual(headers.get("Cache-Control"), "no-store")
-        code, body, headers = self.request("GET", "/sw.js")
-        self.assertEqual(code, 200)
-        self.assertIn(b"addEventListener('fetch'", body)
-        self.assertEqual(headers.get("Cache-Control"), "no-store")
-        self.assertEqual(self.request("GET", "/icon.svg")[0], 200)
+    def test_manifest_icons_ungated_worker_flagged(self):
+        for active in (False, True):
+            self.settings.pwa_enabled = active
+            with self.subTest(active=active):
+                code, body, headers = self.request("GET", "/manifest.webmanifest")
+                self.assertEqual(code, 200)
+                self.assertEqual(json.loads(body)["name"], "Conveyor")
+                self.assertIn("application/manifest+json", headers["Content-Type"])
+                for path in ("/icon.svg", "/icon-192.png", "/icon-512.png"):
+                    self.assertEqual(self.request("GET", path)[0], 200, path)
+                code, body, headers = self.request("GET", "/sw.js")
+                self.assertEqual(code, 200 if active else 404)
+                if active:
+                    self.assertIn(b"addEventListener('fetch'", body)
+                    self.assertEqual(headers.get("Cache-Control"), "no-store")
+
+    def test_spa_deep_links_and_missing_assets_fallback_with_flag_off_and_on(self):
+        for active in (False, True):
+            self.settings.pwa_enabled = active
+            code, index, headers = self.request("GET", "/")
+            self.assertEqual(code, 200)
+            self.assertIn("text/html", headers["Content-Type"])
+            for path in ("/memory", "/skills", "/approvals", "/favicon.ico",
+                         "/assets/nonexist.js"):
+                with self.subTest(active=active, path=path):
+                    status, data, response_headers = self.request("GET", path)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(data, index)
+                    self.assertIn("text/html", response_headers["Content-Type"])
 
     def test_subscribe_delete_require_bearer_auth_and_flag(self):
         with patch.dict(os.environ, {"CONVEYOR_VAPID_PUBLIC_KEY": "public-test",
