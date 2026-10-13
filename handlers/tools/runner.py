@@ -480,9 +480,10 @@ async def _request_confirmation(
     danger_label = ("external network access" if tool_name in ("browser.read_webpage", "browser.browse_site")
                     else _danger_label(tool_name, settings))
     source = "routine" if msg.chat_id.startswith("routine-") else "chat"
+    published_to_relay = False
     try:
         import approval_relay
-        approval_relay.publish(
+        published_to_relay = approval_relay.publish(
             settings,
             pending,
             summary=summary,
@@ -492,7 +493,8 @@ async def _request_confirmation(
     except Exception:
         logger.debug("Failed to publish to approval relay", exc_info=True)
     from web_push import queue_notification
-    queue_notification(settings, pending.token, "draft" if is_outbound_draft else "approval")
+    if not published_to_relay:
+        queue_notification(settings, pending.token, "draft" if is_outbound_draft else "approval")
     audit_tool_event(
         settings,
         operator_id=msg.operator_id,
