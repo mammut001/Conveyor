@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any
 
 from personal_tools.base import ToolResult
@@ -66,9 +67,27 @@ async def memory_forget(settings: Any, arg: str = "", *, operator_id: str = "",
         rows, status = memory_v2.forget_fact(settings, who, arg)
         if status == "changed":
             return ToolResult(False, "memory changed since approval; please request a new forget")
+        if status == "purge_pending":
+            return ToolResult(True, f"已删除 #{rows[0]['id']}；安全擦除待完成，将自动重试")
         if status != "deleted":
             return ToolResult(False, "memory not found")
         return ToolResult(True, f"已删除 #{rows[0]['id']}")
+    except sqlite3.Error:
+        # Rare I/O/locking errors: distinguish an already committed delete
+        # from an unsuccessful delete before assuring the operator.
+        try:
+            who = owner_for_chat(settings, operator_id, channel, chat_id)
+            ident = int(arg.strip().split("@", 1)[0].lstrip("#"))
+            with memory_v2.connect(settings, retry_pending=False) as db:
+                exists = db.execute(
+                    "SELECT 1 FROM memory_v2_entries WHERE id=? AND operator_id=?",
+                    (ident, memory_v2.owner(settings, who)),
+                ).fetchone()
+            if not exists:
+                return ToolResult(True, "已删除；安全擦除稍后完成，将自动重试")
+        except (sqlite3.Error, ValueError):
+            pass
+        return ToolResult(False, "数据库暂时不可用，删除状态无法确认；请检查记忆列表后重试")
     except ValueError as exc:
         return ToolResult(False, str(exc))
 
