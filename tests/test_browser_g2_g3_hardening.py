@@ -142,6 +142,11 @@ class HardeningTests(unittest.TestCase):
                 with self.subTest(key=key,number=number):
                     self.assertTrue(sensitive_form("https://demo.example/form",
                         {**safe,"controls":[{key:number}]}))
+        # Original value flag stays sensitive even after the replacement is safe.
+        self.assertTrue(sensitive_form("https://demo.example/form",
+            {**safe,"controls":[{"value":"hello","prefilled_card_number":True}]}))
+        self.assertFalse(sensitive_form("https://demo.example/form",
+            {**safe,"controls":[{"value":"hello","prefilled_card_number":False}]}))
         for number in ("123456789012", "12345678901234567890", "2026-10-12"):
             with self.subTest(non_card=number):
                 self.assertFalse(sensitive_form("https://demo.example/form",
