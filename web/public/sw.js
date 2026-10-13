@@ -26,15 +26,18 @@ self.addEventListener('fetch', (event) => {
       request.headers.has('Authorization') || request.headers.has('Cookie') ||
       !(STATIC.test(url.pathname) || ICONS.test(url.pathname))) return
   event.respondWith((async () => {
+    // Cache only a deliberately credential-free fetch: browser-added Cookie
+    // headers may not appear in the service worker request headers.
+    const anonymous = new Request(request, { credentials: 'omit' })
     const cache = await caches.open(CACHE)
-    const cached = await cache.match(request)
+    const cached = await cache.match(anonymous)
     if (cached) return cached
-    const response = await fetch(request)
+    const response = await fetch(anonymous)
     const policy = response.headers.get('Cache-Control') || ''
     const vary = response.headers.get('Vary') || ''
     if (response.ok && response.type === 'basic' && !response.headers.has('Set-Cookie') &&
         !/private|no-store|no-cache/i.test(policy) && !/authorization|cookie|\*/i.test(vary)) {
-      await cache.put(request, response.clone())
+      await cache.put(anonymous, response.clone())
     }
     return response
   })())
