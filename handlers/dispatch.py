@@ -114,12 +114,14 @@ async def dispatch(
         return
 
     if (
-        getattr(settings, "long_term_memory_enabled", False)
+        (getattr(settings, "long_term_memory_enabled", False) or getattr(settings, "memory_v2_enabled", False))
         and getattr(settings, "chat_tools_enabled", False)
     ):
         from personal_tools.long_term_memory import (
             GROUP_REFUSAL, allowed_for, classify_explicit, screen_write_arg,
         )
+        if getattr(settings, "memory_v2_enabled", False):
+            from personal_tools.memory_v2_bridge import screen_write_arg
         explicit = classify_explicit(msg.text)
         if explicit is not None:
             if not allowed_for(settings, msg):
