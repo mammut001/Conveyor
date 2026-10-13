@@ -62,7 +62,9 @@ FORM_JS = r"""(forms, args) => {
    const original=(typeof c.value==='string'?c.value:'').normalize('NFKC')
      .replace(/[\u00ad\u034f\u061c\u180e\u200b-\u200f\u2060-\u206f\ufeff]/g,'');
    const prefilled_card_number=/(?<![0-9])(?:[0-9][ -]?){12,18}[0-9](?![ -]*[0-9])/.test(original);
-   const editable=type!=='hidden' && type!=='submit' && tag!=='button' && !c.disabled;
+   // A readonly text/textarea field is submitted as-is; an agent cannot edit it.
+   const editable=type!=='hidden' && type!=='submit' && tag!=='button' &&
+     !c.disabled && !c.readOnly;
    if(editable) {
      const rect=c.getBoundingClientRect();
      let opacity=1, clipped=false;
