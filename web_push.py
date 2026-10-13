@@ -6,6 +6,7 @@ content, action, prompt, draft, VAPID secret, or approval capability is sent.
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import ipaddress
 import json
 import os
@@ -64,6 +65,16 @@ def _connect(settings: object) -> sqlite3.Connection:
     return conn
 
 
+@contextmanager
+def _connection(settings: object):
+    conn = _connect(settings)
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
 def _valid_subscription(body: object) -> tuple[str, str, str]:
     if not isinstance(body, dict):
         raise ValueError("subscription object required")
@@ -79,7 +90,7 @@ def _valid_subscription(body: object) -> tuple[str, str, str]:
             or parsed.fragment or parsed.port not in (None, 443) or any(ch.isspace() for ch in endpoint)):
         raise ValueError("invalid push endpoint")
     host = parsed.hostname.lower().rstrip(".")
-    if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal", ".test")):
         raise ValueError("invalid push endpoint")
     try:
         ipaddress.ip_address(host)
@@ -98,7 +109,7 @@ def subscribe(settings: object, body: object) -> str:
         raise ValueError("pwa disabled")
     endpoint, p256dh, auth = _valid_subscription(body)
     sub_id = hashlib.sha256(endpoint.encode("utf-8")).hexdigest()
-    with _connect(settings) as db:
+    with _connection(settings) as db:
         db.execute(
             """INSERT INTO push_subscriptions (id,operator,endpoint,p256dh,auth,created)
                VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
@@ -120,7 +131,7 @@ def unsubscribe(settings: object, sub_id: object) -> None:
         return
     if not isinstance(sub_id, str) or not re.fullmatch(r"[0-9a-f]{64}", sub_id):
         raise ValueError("invalid subscription id")
-    with _connect(settings) as db:
+    with _connection(settings) as db:
         db.execute("DELETE FROM push_subscriptions WHERE id=? AND operator=?", (sub_id, operator(settings)))
 
 
@@ -147,7 +158,7 @@ def notify_pending(settings: object, item_id: str, kind: str = "approval", *, se
     path = _db_path(settings)
     if not path.exists():
         return 0
-    with _connect(settings) as db:
+    with _connection(settings) as db:
         rows = db.execute("SELECT id,endpoint,p256dh,auth FROM push_subscriptions WHERE operator=?",
                           (operator(settings),)).fetchall()
     data = json.dumps({"title": "Conveyor needs your review", "id": item_id}, separators=(",", ":"))
@@ -162,7 +173,7 @@ def notify_pending(settings: object, item_id: str, kind: str = "approval", *, se
             # endpoints or key material.
             status = getattr(getattr(exc, "response", None), "status_code", None)
             if status in (404, 410):
-                with _connect(settings) as db:
+                with _connection(settings) as db:
                     db.execute("DELETE FROM push_subscriptions WHERE id=? AND operator=?",
                                (row["id"], operator(settings)))
     return sent
@@ -173,6 +184,9 @@ def _worker() -> None:
         settings, item_id, kind = _QUEUE.get()
         try:
             notify_pending(settings, item_id, kind)
+        except Exception:
+            # Push transport must never interrupt approval processing or print secrets.
+            pass
         finally:
             _QUEUE.task_done()
 
