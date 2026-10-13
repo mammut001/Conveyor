@@ -1758,8 +1758,11 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if STATIC_ROOT.resolve() not in candidate.parents and candidate != STATIC_ROOT.resolve():
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
-        if not candidate.is_file():
-            candidate = STATIC_ROOT / "index.html"
+        if not candidate.is_file() and relative in ("sw.js", "icon.svg", "icon-192.png", "icon-512.png"):
+            candidate = (Path(__file__).resolve().parent / "web" / "public" / relative).resolve()
+        if not candidate.is_file() and relative in ("sw.js", "icon.svg", "icon-192.png", "icon-512.png"):
+            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            return
         if not candidate.is_file():
             self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "frontend not built"})
             return
