@@ -65,6 +65,10 @@ def sensitive_form(url: str, form: dict) -> bool:
     for control in controls:
         if not isinstance(control, dict):
             return True
+        # Original values are checked before replacement. Never store the original
+        # sensitive value in a preview; only a boolean classification is exposed.
+        if control.get("prefilled_card_number", False) is not False:
+            return True
         # c.labels, including labels explicitly linked by for/id, and accessibility hints.
         labels = control.get("labels", [])
         if not isinstance(labels, list):
