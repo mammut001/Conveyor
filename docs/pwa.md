@@ -41,8 +41,12 @@ Web Console via an Internet-facing reverse proxy or Tailscale Funnel.
   **codex_memory_root/state/web_push.sqlite3**, keyed by the configured
   operator identity. The client cannot choose the operator. Up to 10 device
   subscriptions are retained per operator. Push endpoints are allowlisted to
-  Google, Mozilla, Apple and Windows services, with public DNS checks at send
-  time; use network egress restrictions to also mitigate DNS rebinding.
+  Google, Mozilla, Apple and Windows services. At each delivery, all DNS
+  answers must be public. The TLS connection dials the validated numeric IP
+  directly, while HTTP Host, TLS SNI and certificate verification use the
+  original service hostname; no second hostname resolution or redirect follows.
+  This closes DNS-rebinding TOCTOU for push delivery. Network egress isolation
+  remains recommended as defense in depth.
 - The push service receives only a generic title and an opaque **id**.
   No email body, draft fields, chat text, prompt, credentials, API token,
   message preview, or approval decision is included. A notification contains
