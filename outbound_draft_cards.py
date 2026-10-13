@@ -17,6 +17,7 @@ import re
 import smtplib
 import sqlite3
 import time
+import unicodedata
 from typing import Any
 
 from redaction import redact_text
@@ -58,16 +59,18 @@ def _connection(settings: Any) -> sqlite3.Connection:
 
 
 def is_outbound(settings: Any, tool: str) -> bool:
-    if tool in ("email.send", "github.comment"):
+    if tool in ("email.send", "github.comment", "github.create_issue"):
         return True
     if tool.startswith("mcp."):
         try:
             from mcp_client import get_mcp_tool_spec
             spec = get_mcp_tool_spec(settings, tool)
             tags = spec.annotations.get("tags", []) if spec else []
+            configured = getattr(settings, "mcp_outbound_tools", ()) or ()
             return bool(spec and spec.danger.value != "read" and (
                 spec.annotations.get("outbound") is True or
-                (isinstance(tags, list) and "outbound" in tags)
+                (isinstance(tags, list) and "outbound" in tags) or
+                tool.replace(".", "__", 2) in configured
             ))
         except Exception:
             return False
@@ -103,6 +106,19 @@ def _allowlist(settings: Any, recipients: list[str]) -> None:
             raise ValueError("Recipient not in CONVEYOR_OUTBOUND_ALLOWLIST")
 
 
+def _repo_allowed(settings: Any, repo: str) -> bool:
+    """Only an exact owner/repo allowlist entry authorizes a GitHub destination."""
+    raw = str(getattr(settings, "outbound_allowlist", "") or "").strip()
+    return not raw or repo.lower() in (entry.strip().lower() for entry in raw.split(","))
+
+
+def _repo_editable(settings: Any, proposed: str) -> bool:
+    """Allow repo editing only if there is an explicit alternative destination."""
+    raw = str(getattr(settings, "outbound_allowlist", "") or "")
+    return any(REPO.fullmatch(e.strip()) and ".." not in e and
+               e.strip().lower() != proposed.lower() for e in raw.split(","))
+
+
 def _json(payload: dict[str, str]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -126,6 +142,12 @@ def _parse(settings: Any, tool: str, arg: str) -> dict[str, str]:
         if isinstance(payload, dict):
             payload = {**{"cc": "", "bcc": ""}, **payload}
         return validate(settings, tool, payload)
+    if tool == "github.create_issue":
+        parts = arg.split("|", 1)
+        return validate(settings, tool, dict(
+            repo=str(settings.github_default_repo), title=parts[0].strip(),
+            body=parts[1].strip() if len(parts) > 1 else "",
+        ))
     if tool == "github.comment":
         parts = arg.split("|", 1)
         if len(parts) != 2:
@@ -149,6 +171,7 @@ def validate(settings: Any, tool: str, payload: Any) -> dict[str, str]:
     keys = {
         "email.send": {"to", "cc", "bcc", "subject", "body"},
         "github.comment": {"repo", "number", "body"},
+        "github.create_issue": {"repo", "title", "body"},
     }.get(tool, {"payload"} if tool.startswith("mcp.") and is_outbound(settings, tool) else set())
     if set(payload) != keys:
         raise ValueError("Draft fields changed; reload")
@@ -168,15 +191,23 @@ def validate(settings: Any, tool: str, payload: Any) -> dict[str, str]:
         if len(payload["body"]) > MAX_BODY:
             raise ValueError("Email body exceeds 20000 characters")
         _allowlist(settings, to + cc + bcc)
-    elif tool == "github.comment":
+    elif tool in ("github.comment", "github.create_issue"):
         if not REPO.fullmatch(payload["repo"]) or ".." in payload["repo"]:
             raise ValueError("Invalid repo")
-        if not payload["number"].isdigit() or int(payload["number"]) <= 0:
-            raise ValueError("Invalid issue/PR number")
-        if not payload["body"].strip() or len(payload["body"]) > MAX_BODY:
-            raise ValueError("Comment body must be 1-20000 characters")
-        if getattr(settings, "outbound_allowlist", ""):
-            raise ValueError("Outbound allowlist forbids destinations without email recipients")
+        if not _repo_allowed(settings, payload["repo"]):
+            raise ValueError("GitHub repo not in CONVEYOR_OUTBOUND_ALLOWLIST")
+        if len(payload["body"]) > MAX_BODY:
+            raise ValueError("GitHub body exceeds 20000 characters")
+        if tool == "github.comment":
+            if not payload["number"].isdigit() or int(payload["number"]) <= 0:
+                raise ValueError("Invalid issue/PR number")
+            if not payload["body"].strip():
+                raise ValueError("Comment body cannot be empty")
+        else:
+            title = payload["title"]
+            if (not title.strip() or len(title) > 200 or
+                    any(unicodedata.category(char) == "Cc" for char in title)):
+                raise ValueError("Issue title must be 1-200 chars without control characters")
     elif tool.startswith("mcp."):
         try:
             obj = json.loads(payload["payload"])
@@ -231,6 +262,8 @@ def list_items(settings: Any) -> list[dict[str, Any]]:
         "draft_card": True, "editable": True, "arg": "[outbound draft]",
         "created_at": r["created"], "expires_at": r["expires"],
         "save_only": False,
+        "repo_editable": (r["tool"] in ("github.comment", "github.create_issue") and
+                          _repo_editable(settings, json.loads(r["draft"])["repo"])),
     } for r in rows]
     pending_items.extend({
         "id": r["token"], "kind": "reconciliation", "source": "chat",
@@ -261,6 +294,12 @@ def _claim(settings: Any, token: str, expected_hash: str, edited: Any, decision:
         if decision != "send":
             raise ValueError("Save only is not supported for this transport")
         payload = validate(settings, tool, edited)
+        if tool in ("github.comment", "github.create_issue"):
+            original_repo = json.loads(row["draft"])["repo"]
+            if (payload["repo"].lower() != original_repo.lower() and
+                    not (getattr(settings, "outbound_allowlist", "") and
+                         _repo_allowed(settings, payload["repo"]))):
+                raise ValueError("GitHub repo is fixed to the original draft unless explicitly allowlisted")
         sent_hash = fingerprint(payload)
         conn.execute("UPDATE outbound_drafts SET status='sending', draft=?, sent_hash=? WHERE token=?",
                      (_json(payload), sent_hash, token))
@@ -289,21 +328,37 @@ def _send_email(settings: Any, draft: dict[str, str]) -> str:
     error = _check_config(settings)
     if error:
         raise ValueError(error)
-    email = EmailMessage()
-    email["From"] = settings.gmail_address
-    email["To"] = draft["to"]
+    msg = EmailMessage()
+    msg["From"] = settings.gmail_address
+    msg["To"] = draft["to"]
     if draft["cc"]:
-        email["Cc"] = draft["cc"]
-    email["Subject"] = draft["subject"]
-    email.set_content(draft["body"])
+        msg["Cc"] = draft["cc"]
+    msg["Subject"] = draft["subject"]
+    msg["Date"] = email.utils.formatdate(localtime=False)
+    msg["Message-ID"] = email.utils.make_msgid()
+    msg.set_content(draft["body"])
     recipients = sum((_recipients(draft[k]) for k in ("to", "cc", "bcc")), [])
     with smtplib.SMTP(settings.gmail_smtp_host, settings.gmail_smtp_port, timeout=30) as client:
         client.ehlo()
         client.starttls()
         client.ehlo()
         client.login(settings.gmail_address, settings.gmail_app_password)
-        client.send_message(email, to_addrs=recipients)
+        client.send_message(msg, to_addrs=recipients)
     return "Email sent"
+
+
+def _send_issue(settings: Any, draft: dict[str, str]) -> str:
+    from personal_tools.github_tools import _check_config, _github_request
+    err = _check_config(settings)
+    if err:
+        raise ValueError(err)
+    owner, repo = draft["repo"].split("/")
+    ok, data = _github_request(settings, "POST",
+        f"/repos/{owner}/{repo}/issues",
+        json_body={"title": draft["title"], "body": draft["body"]})
+    if not ok:
+        raise RuntimeError("GitHub issue outcome uncertain: " + redact_text(str(data))[:160])
+    return "GitHub issue created"
 
 
 def _send_comment(settings: Any, draft: dict[str, str]) -> str:
@@ -336,6 +391,8 @@ async def submit(settings: Any, token: str, *, expected_hash: str,
             result = await asyncio.to_thread(_send_email, settings, edited)
         elif tool == "github.comment":
             result = await asyncio.to_thread(_send_comment, settings, edited)
+        elif tool == "github.create_issue":
+            result = await asyncio.to_thread(_send_issue, settings, edited)
         else:
             from mcp_client import run_mcp_tool
             result = await run_mcp_tool(settings, tool, edited["payload"])
