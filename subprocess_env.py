@@ -130,7 +130,7 @@ def agent_env(settings: Any, source: Mapping[str, str] | None = None,
     )
 
 
-def utility_env(settings: Any, source: Mapping[str, str] | None = None,
+def utility_env(settings: Any = None, source: Mapping[str, str] | None = None,
                 *, desktop: bool = False) -> dict[str, str] | None:
     """None keeps subprocess's existing inherited environment when flag is off."""
     if not enabled(settings):
