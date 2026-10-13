@@ -289,7 +289,7 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
                   <div style={{ flex: 1, fontSize: '0.9rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{item.text}</div>
                   {data?.counts.facts !== undefined && <button type="button" className="action-btn" onClick={() => { setEditingId(item.id); setEditingText(item.text); }}>Edit</button>}
                 </div>
-              )>
+              )}
             </article>
           ))
         )}
