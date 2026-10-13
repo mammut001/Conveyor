@@ -13,7 +13,8 @@ async function openConsole(page: Page, pwa: boolean) {
       memory: { total: null, available: null },
       disk: { total: 1, used: 0, free: 1 },
       queue: { depth: 0, paused: false, states: {} },
-      channels: {}, nodes: [], features: { pwa },
+      channels: { telegram: { configured: false }, feishu: { configured: false } },
+      nodes: [], features: { pwa },
     }
     else if (path === '/api/sessions') data = { sessions: [] }
     else if (path === '/api/jobs') data = { jobs: [] }
