@@ -686,7 +686,8 @@ async def _calendar_search(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /calendar_search <关键词>")
         return
-    await port.reply(msg, await run_tool(settings, "calendar.search", arg))
+    await port.reply(msg, await run_tool(settings, "calendar.search", arg, operator_id=msg.operator_id,
+                                      channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _calendar_freebusy(msg, port, _runner, settings, arg):
@@ -710,7 +711,8 @@ async def _contacts_search(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /contacts_search <关键词>")
         return
-    await port.reply(msg, await run_tool(settings, "contacts.search", arg))
+    await port.reply(msg, await run_tool(settings, "contacts.search", arg, operator_id=msg.operator_id,
+                                      channel=msg.channel, chat_id=msg.chat_id))
 
 
 # GitHub commands (P3.6)
@@ -996,7 +998,8 @@ async def _files_search(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /files_search <查询词>")
         return
-    await port.reply(msg, await run_tool(settings, "files.search", arg))
+    await port.reply(msg, await run_tool(settings, "files.search", arg, operator_id=msg.operator_id,
+                                      channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _files_read(msg, port, _runner, settings, arg):
