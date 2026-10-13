@@ -208,7 +208,7 @@ class TestWebSecretsApi(unittest.TestCase):
         ):
             self.assertEqual(self.request(method, path, body, auth=False)[0], 401)
         self.assertFalse(self.secrets_path.exists())
-        for name in ("x", "ONE", "BAD-DASH", "A" * 65, "1_INVALID"):
+        for name in ("x", "A", "BAD-DASH", "A" * 65, "1_INVALID"):
             status, result = self.request("POST", "/api/secrets", {"name": name, "value": value})
             self.assertEqual(status, 400)
             self.assertNotIn(value, json.dumps(result))
