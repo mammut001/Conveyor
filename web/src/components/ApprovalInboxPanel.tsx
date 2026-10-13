@@ -130,6 +130,14 @@ export function ApprovalInboxPanel({
   const fetchGen = useRef(0);
   const itemsRef = useRef<ApprovalInboxItem[]>([]);
   useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('approval')
+    if (!id || !items.some(item => item.id === id)) return
+    const timer = window.setTimeout(() => {
+      document.getElementById('pwa-review-' + id)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [items]);
+  useEffect(() => {
     itemsRef.current = items;
   }, [items]);
 
@@ -360,12 +368,12 @@ export function ApprovalInboxPanel({
 
       {items.map((item) => {
         if (item.draft_card && item.draft && item.draft_hash) {
-          return <OutboundDraftCard key={item.id} item={item} token={token} onDone={() => {
+          return <div id={'pwa-review-' + item.id} key={item.id}><OutboundDraftCard item={item} token={token} onDone={() => {
             fetchGen.current++;
             dropItem(item.id);
             onApprovalDecided?.();
             void fetchItems();
-          }} />;
+          }} /></div>;
         }
         const isEditing = editingId === item.id;
         const isBusy = Boolean(busyMap[item.id]);
@@ -376,6 +384,7 @@ export function ApprovalInboxPanel({
         return (
           <article
             key={item.id}
+            id={'pwa-review-' + item.id}
             className="memory-card"
             style={{
               padding: 16,

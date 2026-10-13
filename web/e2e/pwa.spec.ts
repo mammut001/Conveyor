@@ -1,0 +1,73 @@
+import { expect, test, type Page, type Route } from '@playwright/test'
+
+async function openConsole(page: Page, pwa: boolean, mobileUI = false) {
+  const observed: string[] = []
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.route('**/api/**', async (route: Route) => {
+    const path = new URL(route.request().url()).pathname
+    observed.push(path)
+    let data: unknown = {}
+    if (path === '/api/system/status') data = {
+      uptime_seconds: 10, load_average: [0, 0, 0], cpu_count: 1,
+      memory: { total: null, available: null },
+      disk: { total: 1, used: 0, free: 1 },
+      queue: { depth: 0, paused: false, states: {} },
+      channels: { telegram: { configured: false }, feishu: { configured: false } },
+      nodes: [], features: { pwa, mobile_ui: mobileUI, approval_inbox: true },
+    }
+    else if (path === '/api/sessions') data = { sessions: [] }
+    else if (path === '/api/jobs') data = { jobs: [] }
+    else if (path === '/api/approvals') data = { approvals: [] }
+    else if (path === '/api/nodes') data = { nodes: [] }
+    else if (path === '/api/agents') data = { enabled: false, agents: [] }
+    else if (path === '/api/computer/status') data = { armed: false, arm_remaining_seconds: 0, screenshots: [] }
+    else if (path === '/api/approval-inbox') data = { items: [] }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) })
+  })
+  // A prior scenario can leave an authenticated token in this same page.
+  // Lock explicitly before navigating so we never fill a transient form
+  // that React is about to replace during token restoration.
+  const lock = page.getByRole('button', { name: 'Lock', exact: true })
+  if (await lock.isVisible()) await lock.click()
+  await page.goto('/')
+  const unlock = page.getByLabel('Console token')
+  if (await unlock.isVisible()) {
+    await unlock.fill('pwa-test-token-0123456789abcdef0123456789abcdef')
+    await page.getByRole('button', { name: 'Unlock console' }).click()
+  }
+  try {
+    await expect(page.locator('main.app-shell')).toBeVisible()
+  } catch (error) {
+    console.log('PWA E2E diagnostics', JSON.stringify({
+      observed, errors, body: (await page.locator('body').innerText()).slice(0, 1200),
+    }))
+    throw error
+  }
+}
+
+test('PWA manifest link preserves mobile mode and push opt-in follows PWA flag', async ({ page }) => {
+  await openConsole(page, false)
+  await expect(page.locator('link[rel="manifest"]')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /Enable alerts/i })).toHaveCount(0)
+  // Existing mobile UI installs the manifest independently of PWA.
+  await page.unroute('**/api/**')
+  await openConsole(page, false, true)
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', '/manifest.webmanifest')
+  await expect(page.getByRole('button', { name: /Enable alerts/i })).toHaveCount(0)
+  // Re-load with server PWA feature bit flipped, not a frontend env variable.
+  await page.unroute('**/api/**')
+  await openConsole(page, true)
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', '/manifest.webmanifest')
+  await expect(page.getByRole('button', { name: /Enable alerts/i })).toBeVisible()
+  const manifest = await page.request.get('/manifest.webmanifest')
+  expect(manifest.ok()).toBeTruthy()
+  expect((await manifest.json()).name).toBe('Conveyor')
+})
+
+test('notification deep link lands on authenticated approval inbox', async ({ page }) => {
+  await openConsole(page, true)
+  await page.goto('/?approval=approval123#approvals')
+  await expect(page.locator('main.app-shell')).toBeVisible()
+  await expect(page.getByRole('button', { name: /Approvals/i }).first()).toBeVisible()
+})

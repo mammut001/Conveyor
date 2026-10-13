@@ -118,7 +118,7 @@ class WebConsoleManifestAndIconsTests(unittest.TestCase):
         cls.loop = asyncio.new_event_loop()
         cls.loop_thread = threading.Thread(target=cls.loop.run_forever, daemon=True)
         cls.loop_thread.start()
-        settings = _make_settings(web_mobile_ui=True)
+        settings = _make_settings(web_mobile_ui=True, pwa_enabled=False)
         cls.server = WebConsoleServer(
             ("127.0.0.1", 0),
             WebConsoleHandler,

@@ -259,6 +259,7 @@ class Settings:
             subagents.reconcile(self)
 
     web_mobile_ui: bool = False
+    pwa_enabled: bool = False  # P3-5, default off
     mcp_enabled: bool = False
     mcp_config_path: Path | None = None
     approval_relay_enabled: bool = False
@@ -708,6 +709,7 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "child_env_scope_provider_keys": os.getenv(
             "CONVEYOR_CHILD_ENV_SCOPE_PROVIDER_KEYS", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
+        "pwa_enabled": os.getenv("CONVEYOR_PWA", "false").strip().lower() in ("true", "1", "yes", "on"),
         "web_mobile_ui": os.getenv(
             "CONVEYOR_WEB_MOBILE_UI", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),

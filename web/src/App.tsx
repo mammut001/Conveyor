@@ -8,6 +8,8 @@ import { WorkflowPanel } from './components/WorkflowPanel'
 import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { SecretsPanel } from './components/SecretsPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
+import { PwaNotifications } from './components/PwaNotifications'
+import { leavePwa } from './pwa'
 import { BrowserApprovalsPanel } from './components/BrowserApprovalsPanel'
 import { TeammatePanel } from './components/TeammatePanel'
 import { LiveScreenPanel } from './components/LiveScreenPanel'
@@ -81,6 +83,7 @@ type SystemStatus = {
     workflows?: boolean
     provider_key_scoping?: boolean
     mobile_ui?: boolean
+    pwa?: boolean
     mcp?: boolean
     teammate?: boolean
     agents?: boolean
@@ -187,7 +190,7 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'browser' | 'skills' | 'workflows' | 'connectors' | 'secrets' | 'teammate'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : window.location.hash === '#connectors' || window.location.pathname === '/connectors' ? 'connectors' : window.location.hash === '#secrets' || window.location.pathname === '/secrets' ? 'secrets' : window.location.hash === '#teammate' || window.location.pathname === '/teammate' ? 'teammate' : 'tasks'))
+  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'browser' | 'skills' | 'workflows' | 'connectors' | 'secrets' | 'teammate'>(() => (window.location.hash === '#approvals' || window.location.pathname === '/approvals' ? 'approvals' : window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : window.location.hash === '#connectors' || window.location.pathname === '/connectors' ? 'connectors' : window.location.hash === '#secrets' || window.location.pathname === '/secrets' ? 'secrets' : window.location.hash === '#teammate' || window.location.pathname === '/teammate' ? 'teammate' : 'tasks'))
   const [inboxUnread, setInboxUnread] = useState(0)
   const [approvalInboxCount, setApprovalInboxCount] = useState(0)
   const [chatDraft, setChatDraft] = useState('')
@@ -201,7 +204,9 @@ export default function App() {
   const [contextDrawerOpen, setContextDrawerOpen] = useState(false)
 
   useEffect(() => {
-    if (system?.features?.mobile_ui) {
+    // Preserve mobile UI's legacy manifest even with CONVEYOR_PWA disabled.
+    // PWA adds installability without gating the existing mobile manifest.
+    if (system?.features?.mobile_ui || (authenticated && system?.features?.pwa)) {
       let link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
       if (!link) {
         link = document.createElement('link')
@@ -210,10 +215,9 @@ export default function App() {
         document.head.appendChild(link)
       }
     } else {
-      const link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
-      if (link) link.remove()
+      document.querySelector<HTMLLinkElement>('link[rel="manifest"]')?.remove()
     }
-  }, [system?.features?.mobile_ui])
+  }, [authenticated, system?.features?.pwa, system?.features?.mobile_ui])
 
   const sessionsDrawerRef = useRef<HTMLElement>(null)
   const contextDrawerRef = useRef<HTMLElement>(null)
@@ -323,11 +327,11 @@ export default function App() {
       ...init,
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(init?.headers || {}) },
     })
-    if (response.status === 401) { forgetToken(); setAuthenticated(false); throw new Error('Token rejected') }
+    if (response.status === 401) { forgetToken(); if (system?.features?.pwa) void leavePwa(token).catch(() => undefined); setAuthenticated(false); throw new Error('Token rejected') }
     const body = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(body.error || body.message || `Request failed (${response.status})`)
     return body as T
-  }, [token])
+  }, [token, system?.features?.pwa])
 
   const archiveSession = useCallback(async (sessionId: string) => {
     try {
@@ -662,6 +666,8 @@ export default function App() {
     await refresh()
   }
   function lock() {
+    // With PWA disabled, locking retains exactly the legacy console behaviour.
+    if (system?.features?.pwa) void leavePwa(token).catch(() => undefined)
     forgetToken(); sessionStorage.removeItem('conveyor-token')
     setToken(''); setAuthenticated(false); setRememberToken(false)
   }
@@ -679,7 +685,7 @@ export default function App() {
   return <main className={`app-shell ${system?.features?.mobile_ui ? 'mobile-ui' : ''}`}>
     <header className="topbar">
       <div className="brand"><span className="brand-mark small">C</span><div><strong>Conveyor</strong><small>CONTROL CONSOLE</small></div></div>
-      <div className="top-actions"><button className="settings-button" onClick={() => void openSettings()}>⚙ Settings</button><button className="settings-button" onClick={lock} title="Forget the token on this device and lock the console">Lock</button><div className="top-status"><span className="live-dot" /> Online <span className="separator" /> Queue {system?.queue.depth ?? 0}</div></div>
+      <div className="top-actions">{system?.features?.pwa && <PwaNotifications token={token} />}<button className="settings-button" onClick={() => void openSettings()}>⚙ Settings</button><button className="settings-button" onClick={lock} title="Forget the token on this device and lock the console">Lock</button><div className="top-status"><span className="live-dot" /> Online <span className="separator" /> Queue {system?.queue.depth ?? 0}</div></div>
     </header>
     {error && <div className="error-banner global">{error}<button onClick={() => setError('')}>×</button></div>}
     <section className="workspace">

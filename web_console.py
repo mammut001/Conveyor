@@ -400,7 +400,16 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if path == "/manifest.webmanifest":
             self._manifest()
             return
+        if path == "/sw.js":
+            from web_push import enabled as pwa_enabled
+            if not pwa_enabled(getattr(self.server.control, "settings", None)):
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
         if path.startswith("/api/") and not self._require_auth():
+            return
+        if path == "/api/push/config":
+            from web_push import api_get
+            api_get(self)
             return
         if path == "/api/subagents":
             import subagents_api
@@ -855,6 +864,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         body = self._body()
         if body is None:
+            return
+        if parsed.path == "/api/push/subscribe":
+            from web_push import api_post
+            api_post(self, body)
             return
         if parts[:2] == ["api", "subagents"]:
             import subagents_api
@@ -1513,6 +1526,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self._drain_body()
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
+        if parsed.path == "/api/push/subscribe":
+            from web_push import api_delete
+            api_delete(self)
+            return
         self._drain_body()
         parts = self._segments(parsed.path)
         try:
@@ -1741,6 +1758,11 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if STATIC_ROOT.resolve() not in candidate.parents and candidate != STATIC_ROOT.resolve():
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
+        if not candidate.is_file() and relative == "sw.js":
+            candidate = (Path(__file__).resolve().parent / "web" / "public" / "sw.js").resolve()
+            if not candidate.is_file():
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
         if not candidate.is_file():
             candidate = STATIC_ROOT / "index.html"
         if not candidate.is_file():
@@ -1748,7 +1770,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         data = candidate.read_bytes()
         content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
-        self._headers(HTTPStatus.OK, f"{content_type}; charset=utf-8" if content_type.startswith("text/") else content_type, len(data))
+        self._headers(HTTPStatus.OK, f"{content_type}; charset=utf-8" if content_type.startswith("text/") else content_type, len(data),
+                      extra_headers=[("Cache-Control", "no-store")] if relative == "sw.js" else None)
         self.wfile.write(data)
 
     def _screen(self, agent_id: str) -> LiveScreen | None:
