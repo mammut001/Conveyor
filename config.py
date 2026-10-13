@@ -672,7 +672,7 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "mcp_config_path": (
             Path(os.getenv("CONVEYOR_MCP_CONFIG")).expanduser().resolve()
             if os.getenv("CONVEYOR_MCP_CONFIG")
-            else (memory_root / "mcp_servers.json")
+            else (memory_root / ("mcp_servers.toml" if (memory_root / "mcp_servers.toml").exists() else "mcp_servers.json"))
         ),
         "approval_relay_enabled": (
             (os.getenv("CONVEYOR_APPROVAL_RELAY_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on"))

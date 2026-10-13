@@ -35,6 +35,7 @@ _HYBRID_DEFAULT_TOOLS = ("load", "ps", "disk", "service_status")
 
 
 def _requires_confirmation(tool_name: str, settings: Settings | None = None) -> bool:
+    from handlers.tools.registry import DangerLevel
     if tool_name == "agents.parallel":
         return False
     # The desktop task tool has its own gate: blocked keywords refuse the

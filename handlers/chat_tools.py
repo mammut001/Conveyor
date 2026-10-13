@@ -110,7 +110,7 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
     if name.startswith("mcp."):
         if not getattr(settings, "mcp_enabled", False):
             return False
-        return spec.danger in (DangerLevel.READ, DangerLevel.WRITE_SAFE, DangerLevel.WRITE)
+        return spec.danger in (DangerLevel.READ, DangerLevel.WRITE, DangerLevel.DESTRUCTIVE)
     if name.startswith("memory.") and not memory_allowed:
         return False
     if name.startswith("routine.") and not getattr(settings, "routines_enabled", False):
@@ -349,7 +349,7 @@ async def run_tool_loop(
                     })
                     continue
                 arg = screened.arg
-            if danger in (DangerLevel.WRITE_SAFE, DangerLevel.WRITE):
+            if danger in (DangerLevel.WRITE_SAFE, DangerLevel.WRITE, DangerLevel.DESTRUCTIVE):
                 # Non-READ tools must NOT execute automatically
                 logger.info("Chat tier tool call requested confirmation: %s", real_tool_name)
                 tools_called.append(real_tool_name)

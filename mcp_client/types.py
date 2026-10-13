@@ -21,6 +21,8 @@ class ServerConfig:
     headers_from: dict[str, str] = field(default_factory=dict)
     allow_tools: list[str] = field(default_factory=list)
     read_only_tools: list[str] = field(default_factory=list)
+    tool_levels: dict[str, str] = field(default_factory=dict)  # explicit TOML tool risk levels
+    strict_env: bool = False  # TOML subprocess receives ONLY configured variables
     trust_read_only_hint: bool = False
     timeout_seconds: int = 30
     max_output_chars: int = 4000
