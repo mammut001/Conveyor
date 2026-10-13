@@ -1,6 +1,24 @@
 """Opt-in loopback HTTP forward / HTTPS CONNECT proxy. Never inspects TLS bodies."""
 from __future__ import annotations
 
+# This is a forward proxy, not a firewall:
+# * The hostname allowlist is checked before any resolver call.
+# * Only numeric destinations returned by the validator are dialled.
+# * Private addresses are rejected unless their CIDR is explicitly allowed.
+# * Loopback/link-local/unspecified addresses are always refused.
+# * Embedded IPv4 in mapped or NAT64 IPv6 is checked recursively.
+# * Every DNS answer must pass, even for an exact domain entry.
+# * The web console and proxy ports are unavailable as destinations.
+# * HTTP and CONNECT share the same destination policy.
+# * Only decision metadata, never URLs or payloads, is journalled.
+# * Each request has an absolute deadline for parsing headers.
+# * A bounded semaphore limits concurrently active client handlers.
+# * Clients that bypass proxy settings require OS-level egress isolation.
+# * Never use these checks to authorize arbitrary in-process HTTP calls.
+# * The separate egress_taint module handles session-level read/write flow.
+# * Default-off deployments preserve their existing routing behavior.
+
+
 from collections import deque
 from datetime import datetime, timezone
 import ipaddress
@@ -53,35 +71,13 @@ def _match(host, rules):
     return exact, (exact or wildcard)
 
 
-def destination(host, port, rules, resolver=socket.getaddrinfo):
-    """Return (IP, reason). Resolve once and connect ONLY to the validated IP."""
-    try:
-        host = _canonical(host)
-        if not (1 <= int(port) <= 65535):
-            return None, "invalid_port"
-        exact, permitted = _match(host, rules)
-        if not permitted:
-            return None, "not_allowlisted"
-        try:
-            literal = ipaddress.ip_address(host)
-        except ValueError:
-            literal = None
-        if literal is not None:
-            if not literal.is_global and not exact:
-                return None, "private_ip"
-            return str(literal), "explicit_local" if not literal.is_global else "allowlisted"
-        addresses = {str(ipaddress.ip_address(row[4][0])) for row in
-                     resolver(host, int(port), type=socket.SOCK_STREAM)}
-        if not addresses:
-            return None, "dns_empty"
-        # A wildcard never authorizes private DNS answers. Check ALL answers
-        # (not just the one connected to) to avoid rebinding/mixed records.
-        if any(not ipaddress.ip_address(ip).is_global for ip in addresses) and not exact:
-            return None, "private_dns"
-        return sorted(addresses)[0], "explicit_local" if any(
-            not ipaddress.ip_address(ip).is_global for ip in addresses) else "allowlisted"
-    except (OSError, ValueError, UnicodeError, IndexError):
-        return None, "dns_or_host_error"
+def destination(host, port, rules, resolver=socket.getaddrinfo, *,
+                cidrs=(), protected_ports=()):
+    """Validate all DNS answers and pin the numeric destination."""
+    from egress_policy import destination_check
+    return destination_check(host, port, rules, canonical=_canonical, match=_match,
+                             resolver=resolver, cidrs=cidrs,
+                             protected_ports=protected_ports)
 
 
 class _Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
@@ -326,16 +322,23 @@ def ensure_proxy(settings=None):
     global _CURRENT
     if not enabled(settings):
         return None
+    from egress_policy import private_cidrs
     rules = allowlist(settings)
+    cidrs = private_cidrs(settings)
+    web_port = int(getattr(settings, "conveyor_web_port", 8787))
+    protected = {web_port} if web_port > 0 else set()
     root = Path(getattr(settings, "codex_memory_root", os.getenv("CODEX_MEMORY_ROOT", ".")))
     logfile = root / "egress_decisions.jsonl"
     port = int(getattr(settings, "egress_proxy_port", 0))
     with _LOCK:
         if _CURRENT is not None:
-            if _CURRENT.rules == rules and _CURRENT.log_path == logfile:
+            if (_CURRENT.rules == rules and _CURRENT.log_path == logfile
+                    and _CURRENT.cidrs == cidrs
+                    and _CURRENT.protected_ports == protected):
                 return _CURRENT.url
             _CURRENT.close()
-        _CURRENT = EgressProxy(rules, logfile, port)
+        _CURRENT = EgressProxy(rules, logfile, port, cidrs=cidrs,
+                               protected_ports=protected)
         return _CURRENT.url
 
 
@@ -370,5 +373,7 @@ def status(settings=None, limit=40):
                     pass
     except FileNotFoundError:
         pass
+    from egress_policy import private_cidrs
     return {"enabled": enabled(settings), "allowlist": list(rules),
+            "allow_private_cidrs": [str(net) for net in private_cidrs(settings)],
             "recent_denials": list(denied)}
