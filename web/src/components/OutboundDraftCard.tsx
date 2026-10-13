@@ -7,6 +7,7 @@ type Card = {
   draft_hash?: string;
   expires_at?: number | string;
   save_only?: boolean;
+  repo_editable?: boolean;
 };
 
 export function OutboundDraftCard({ item, token, onDone }: {
@@ -56,7 +57,8 @@ export function OutboundDraftCard({ item, token, onDone }: {
             value={value} disabled={busy || expired}
             onChange={e => setDraft(d => ({ ...d, [name]: e.target.value }))} /> :
           <input className="memory-input" style={{ width: '100%' }} value={value}
-            disabled={busy || expired} onChange={e => setDraft(d => ({ ...d, [name]: e.target.value }))} />
+            disabled={busy || expired || (name === 'repo' && !item.repo_editable)}
+            onChange={e => setDraft(d => ({ ...d, [name]: e.target.value }))} />
         }
       </label>
     ))}
