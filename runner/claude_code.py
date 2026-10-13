@@ -104,7 +104,7 @@ class ClaudeCodeBackend(CodexRunner):
         """Run one Claude Code attempt while preserving Conveyor lifecycle APIs."""
         command = self._claude_command(job)
         from runner.operators.run import job_child_env
-        env = job_child_env(self, job)
+        env = job_child_env(self, job, claude=True)
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=job.worktree_path,
