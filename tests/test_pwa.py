@@ -170,7 +170,8 @@ class PushLogicTests(unittest.TestCase):
                           autospec=True, side_effect=request_and_connect), \
              patch.object(web_push._PinnedHTTPSConnection, "getresponse",
                           return_value=reply), \
-             patch.dict(os.environ, {"CONVEYOR_VAPID_PRIVATE_KEY": "test-key"}), \
+             patch.dict(os.environ, {"CONVEYOR_VAPID_PUBLIC_KEY": "public-test",
+                                     "CONVEYOR_VAPID_PRIVATE_KEY": "test-key"}), \
              patch.dict(modules, {"pywebpush": SimpleNamespace(webpush=fake_push)}):
             self.assertEqual(web_push.notify_pending(self.settings, "review123"), 1)
 
