@@ -82,7 +82,12 @@ async def run_tool(
     msg: Any = None,
     config: Any = None,
     placeholder: str | None = None,
+    egress_approved: bool = False,
 ) -> str:
+    import egress_taint
+    if egress_taint.requires_approval(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id) and not egress_approved:
+        return "Outbound blocked: private data was read; approval required"
+    egress_taint.mark_read(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id)
     if tool_name == "agents.parallel":
         from handlers.subagents import execute_parallel_subagents
         return await execute_parallel_subagents(
@@ -284,7 +289,9 @@ async def _invoke_tool(
         if needs_approval:
             await _request_confirmation(msg, port, settings, tool_name, arg)
             return
-    if _requires_confirmation(tool_name, settings):
+    import egress_taint
+    if (_requires_confirmation(tool_name, settings) or
+            egress_taint.requires_approval(settings, tool_name, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)):
         await _request_confirmation(msg, port, settings, tool_name, arg)
         return
     if tool_name == "desktop.observe.request":
@@ -406,6 +413,11 @@ async def _request_confirmation(
         except Exception:
             await port.reply(msg, "browser denied: invalid_or_unavailable")
             return
+    import egress_taint
+    if (egress_taint.requires_approval(settings, tool_name, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)
+            and not (getattr(settings, "approval_inbox_enabled", False) or getattr(settings, "draft_cards_enabled", False))):
+        await port.reply(msg, "Outbound blocked: private-data session requires Approval Inbox or Draft Cards")
+        return
     import outbound_draft_cards as cards
     is_outbound_draft = cards.enabled(settings) and cards.is_outbound(settings, tool_name)
     if is_outbound_draft:
@@ -622,6 +634,7 @@ async def execute_confirmed(
                 operator_id=action.operator_id,
                 channel=action.channel,
                 chat_id=action.chat_id,
+                egress_approved=True,
             )
     except Exception as exc:
         audit_tool_event(
