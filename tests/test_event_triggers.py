@@ -211,6 +211,14 @@ class EventTriggerTests(unittest.TestCase):
         self.assertEqual(hooks.reserve_delivery(self.settings, hook["hook_id"], "id-31"), "rate")
         self.assertEqual(hooks.reserve_delivery(self.settings, hook["hook_id"], "id-new", now=time.time()+61), "ok")
 
+    def test_global_cap_across_multiple_hooks(self):
+        _, first = self.create()
+        _, second = self.create()
+        with patch.object(hooks, "MAX_GLOBAL", 2):
+            self.assertEqual(hooks.reserve_delivery(self.settings, first["hook_id"], "one"), "ok")
+            self.assertEqual(hooks.reserve_delivery(self.settings, second["hook_id"], "two"), "ok")
+            self.assertEqual(hooks.reserve_delivery(self.settings, first["hook_id"], "three"), "rate")
+
     def test_secret_mode_and_filter_validation(self):
         _, hook = self.create()
         self.assertEqual(routines.db_path(self.settings).stat().st_mode & 0o777, 0o600)

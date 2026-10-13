@@ -72,7 +72,8 @@ not a privileged new pathway. Payload is redacted, truncated to 4,000 chars
 and wrapped as UNTRUSTED event data. No long-term memory is injected, and
 all WRITE actions retain their existing human approval requirements.
 
-HTTP codes: disabled/unknown 404; bad HMAC/timestamp 401; stale/replayed 409;
+HTTP codes: disabled/unknown 404; bad HMAC or missing/stale timestamp 401;
+replayed delivery 409;
 paused 409; malformed JSON 400; invalid content type 415; body too large 413;
 rate limit 429; accepted/filtered 202. Audit records only hook-ID prefix,
 status and sanitized event, never body or secret.
