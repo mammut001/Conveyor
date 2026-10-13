@@ -706,7 +706,8 @@ class WebControl:
             },
             "nodes": self.nodes(),
             "features": {
-                "long_term_memory": bool(getattr(self.settings, "long_term_memory_enabled", False)),
+                "long_term_memory": bool(getattr(self.settings, "long_term_memory_enabled", False) or getattr(self.settings, "memory_v2_enabled", False)),
+                "memory_v2": bool(getattr(self.settings, "memory_v2_enabled", False)),
                 "routines": bool(getattr(self.settings, "routines_enabled", False)),
                 "webhooks": bool(getattr(self.settings, "webhooks_enabled", False) or getattr(self.settings, "hooks_enabled", False))
                 and bool(getattr(self.settings, "routines_enabled", False)),
@@ -864,8 +865,10 @@ class WebControl:
                 if item.get("agent_id") == agent_id
             ]
         memory = None
-        if getattr(self.settings, "long_term_memory_enabled", False):
+        if getattr(self.settings, "long_term_memory_enabled", False) or getattr(self.settings, "memory_v2_enabled", False):
             from personal_tools import long_term_memory as ltm
+            if getattr(self.settings, "memory_v2_enabled", False):
+                from personal_tools import memory_v2 as ltm
             owner = ltm.WEB_OPERATOR if agent["is_default"] else ltm.agent_owner(agent_id)
             rows = ltm.list_facts(self.settings, owner)
             memory = {
