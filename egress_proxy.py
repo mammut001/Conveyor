@@ -114,11 +114,25 @@ class _Handler(socketserver.StreamRequestHandler):
     timeout = 30
 
     def _deadline_line(self, max_bytes, deadline):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise ValueError("header_deadline")
-        self.connection.settimeout(remaining)
-        return self.rfile.readline(max_bytes)
+        # Do not use buffered readline here: it restarts the socket timeout
+        # while an attacker trickles bytes within ONE unfinished header line.
+        # Read directly from the socket so each recv has only the remaining
+        # absolute header budget. No rfile buffering has begun yet.
+        line = bytearray()
+        while len(line) < max_bytes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ValueError("header_deadline")
+            self.connection.settimeout(remaining)
+            chunk = self.connection.recv(1)
+            if time.monotonic() >= deadline:
+                raise ValueError("header_deadline")
+            if not chunk:
+                break
+            line.extend(chunk)
+            if chunk == b"\n":
+                break
+        return bytes(line)
 
     def _decision(self, host, port, ip, reason):
         record = {"time": datetime.now(timezone.utc).isoformat(),
