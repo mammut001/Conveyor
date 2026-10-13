@@ -81,10 +81,12 @@ def format_tool_call_result(result: dict[str, Any], max_chars: int) -> str:
 
     redacted = redact_text(combined)
 
+    # Byte limit applies even to multibyte UTF-8 text; never send > 64 KiB to the model.
     if len(redacted) > max_chars:
-        excess = len(redacted) - max_chars
-        redacted = redacted[:max_chars] + f"\n[truncated {excess} chars]"
-
+        redacted = redacted[:max_chars] + "\n[truncated]"
+    encoded = redacted.encode("utf-8")
+    if len(encoded) > 65536:
+        redacted = encoded[:65520].decode("utf-8", errors="ignore") + "\n[truncated]"
     return redacted
 
 
@@ -97,14 +99,16 @@ def build_child_env(server: ServerConfig, memory_root: Path) -> tuple[dict[str, 
     except OSError:
         pass
 
-    env = {
+    # Strict TOML policy does not inherit even PATH, LANG or HOME from the parent.
+    env = {} if server.strict_env else {
         "HOME": str(home_dir),
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
     }
-    if "LANG" in os.environ:
-        env["LANG"] = os.environ["LANG"]
-    if "LC_ALL" in os.environ:
-        env["LC_ALL"] = os.environ["LC_ALL"]
+    if not server.strict_env:
+        if "LANG" in os.environ:
+            env["LANG"] = os.environ["LANG"]
+        if "LC_ALL" in os.environ:
+            env["LC_ALL"] = os.environ["LC_ALL"]
 
     for k, v in server.env.items():
         env[str(k)] = str(v)
