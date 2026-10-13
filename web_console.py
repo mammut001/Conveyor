@@ -402,7 +402,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/") and not self._require_auth():
             return
-        if path == "/api/hooks":
+        if path == "/api/hooks" or path.startswith("/api/hooks/"):
             import event_triggers
             if event_triggers.api_get(self, path):
                 return

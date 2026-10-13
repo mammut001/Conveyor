@@ -31,7 +31,11 @@ def _db(settings):
         CREATE TABLE IF NOT EXISTS routine_hook_policies (
             hook_id TEXT PRIMARY KEY,
             paused INTEGER NOT NULL DEFAULT 0,
-            event_filter_json TEXT NOT NULL DEFAULT '{}'
+            event_filter_json TEXT NOT NULL DEFAULT '{}',
+            mode TEXT NOT NULL DEFAULT 'generic'
+        );
+        CREATE TABLE IF NOT EXISTS routine_hook_secret_claims (
+            hook_id TEXT PRIMARY KEY, created_at REAL NOT NULL
         );
         CREATE TABLE IF NOT EXISTS routine_hook_receipts (
             hook_id TEXT NOT NULL, delivery_id TEXT NOT NULL,
@@ -39,7 +43,17 @@ def _db(settings):
         );
         CREATE INDEX IF NOT EXISTS idx_hook_receipts_time ON routine_hook_receipts(accepted_at);
         """)
+        # Existing installations already have policies without this column.
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(routine_hook_policies)")}
+        if "mode" not in columns:
+            conn.execute("ALTER TABLE routine_hook_policies ADD COLUMN mode TEXT NOT NULL DEFAULT 'generic'")
     return conn
+
+
+def validate_mode(mode):
+    if mode not in ("generic", "github"):
+        raise ValueError("mode must be generic or github")
+    return mode
 
 
 def validate_filter(value):
@@ -73,8 +87,9 @@ def validate_filter(value):
 
 
 def _policy(conn, hook_id):
-    row = conn.execute("SELECT paused,event_filter_json FROM routine_hook_policies WHERE hook_id=?", (hook_id,)).fetchone()
-    return {"paused": bool(row["paused"]), "filter": json.loads(row["event_filter_json"])} if row else {"paused": False, "filter": {}}
+    row = conn.execute("SELECT paused,event_filter_json,mode FROM routine_hook_policies WHERE hook_id=?", (hook_id,)).fetchone()
+    return {"paused": bool(row["paused"]), "filter": json.loads(row["event_filter_json"]),
+            "mode": row["mode"]} if row else {"paused": False, "filter": {}, "mode": "generic"}
 
 
 def get_hook(settings, hook_id):
@@ -104,26 +119,49 @@ def list_hooks(settings):
         conn.close()
 
 
-def create_hook(settings, routine_id, event_filter=None):
+def create_hook(settings, routine_id, event_filter=None, mode="generic", *, claim_in_web=False):
     filt = validate_filter(event_filter)
+    mode = validate_mode(mode)
     # Existing routines store generates random secret and chmods routines.db 0600.
     hook = routines.create_or_rotate_hook(settings, routine_id)
     conn = _db(settings)
     try:
         with conn:
             conn.execute("DELETE FROM routine_hook_policies WHERE hook_id NOT IN (SELECT hook_id FROM routine_hooks)")
-            conn.execute("INSERT OR REPLACE INTO routine_hook_policies(hook_id,paused,event_filter_json) VALUES (?,0,?)",
-                         (hook["hook_id"], json.dumps(filt)))
-        return {**hook, "paused": False, "filter": filt}
+            conn.execute("DELETE FROM routine_hook_secret_claims WHERE hook_id NOT IN (SELECT hook_id FROM routine_hooks)")
+            conn.execute("INSERT OR REPLACE INTO routine_hook_policies(hook_id,paused,event_filter_json,mode) VALUES (?,0,?,?)",
+                         (hook["hook_id"], json.dumps(filt), mode))
+            if claim_in_web:
+                conn.execute("INSERT INTO routine_hook_secret_claims(hook_id,created_at) VALUES (?,?)",
+                             (hook["hook_id"], time.time()))
+        return {**hook, "paused": False, "filter": filt, "mode": mode}
     finally:
         conn.close()
 
 
-def rotate_hook(settings, hook_id):
+def claim_secret_once(settings, hook_id):
+    """Consume a web-only secret claim atomically; never return it to chat."""
+    conn = _db(settings)
+    try:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT h.secret FROM routine_hook_secret_claims c "
+                "JOIN routine_hooks h ON h.hook_id=c.hook_id WHERE c.hook_id=?", (hook_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute("DELETE FROM routine_hook_secret_claims WHERE hook_id=?", (hook_id,))
+            return row["secret"]
+    finally:
+        conn.close()
+
+
+def rotate_hook(settings, hook_id, *, claim_in_web=False):
     old = get_hook(settings, hook_id)
     if not old:
         raise KeyError("hook not found")
-    fresh = create_hook(settings, old["routine_id"], old["filter"])
+    fresh = create_hook(settings, old["routine_id"], old["filter"], old["mode"], claim_in_web=claim_in_web)
     if old["paused"]:
         set_paused(settings, fresh["hook_id"], True)
         fresh["paused"] = True
@@ -150,6 +188,7 @@ def delete_hook(settings, hook_id):
         with conn:
             result = conn.execute("DELETE FROM routine_hooks WHERE hook_id=?", (hook_id,))
             conn.execute("DELETE FROM routine_hook_policies WHERE hook_id=?", (hook_id,))
+            conn.execute("DELETE FROM routine_hook_secret_claims WHERE hook_id=?", (hook_id,))
         return result.rowcount > 0
     finally:
         conn.close()
@@ -180,6 +219,25 @@ def reserve_delivery(settings, hook_id, delivery_id, now=None):
                 return "rate"
             conn.execute("INSERT INTO routine_hook_receipts VALUES (?,?,?)", (hook_id, delivery_id, t))
             return "ok"
+    finally:
+        conn.close()
+
+    
+def delivery_status(settings, hook_id, delivery_id, now=None):
+    """Read-only admission check, before routine-busy (does not burn nonce)."""
+    t = time.time() if now is None else now
+    conn = _db(settings)
+    try:
+        if conn.execute("SELECT 1 FROM routine_hook_receipts WHERE hook_id=? AND delivery_id=?",
+                        (hook_id, delivery_id)).fetchone():
+            return "replay"
+        if conn.execute("SELECT count(*) FROM routine_hook_receipts WHERE hook_id=? AND accepted_at>?",
+                        (hook_id, t - 60)).fetchone()[0] >= MAX_PER_HOOK:
+            return "rate"
+        if conn.execute("SELECT count(*) FROM routine_hook_receipts WHERE accepted_at>?",
+                        (t - 60,)).fetchone()[0] >= MAX_GLOBAL:
+            return "rate"
+        return "ok"
     finally:
         conn.close()
 
@@ -232,22 +290,38 @@ def receive(h, hook_id):
         _error(h, hook_id, 400, "incomplete body")
         return
 
-    github = bool(h.headers.get("X-GitHub-Event"))
-    signature = h.headers.get("X-Hub-Signature-256" if github else "X-Conveyor-Signature", "")
-    if not SIG_PATTERN.fullmatch(signature) or not routines.verify_signature(hook["secret"], body, signature):
-        _error(h, hook_id, 401, "invalid signature")
-        return
-    try:
-        timestamp = int(h.headers.get("X-Conveyor-Timestamp", ""))
-    except (TypeError, ValueError):
-        _error(h, hook_id, 401, "invalid timestamp")
-        return
-    if abs(time.time() - timestamp) > 300:
-        _error(h, hook_id, 401, "stale timestamp")
+    # Mode is stored at creation, never inferred from attacker-supplied headers.
+    github = hook["mode"] == "github"
+    github_headers = ("X-Hub-Signature-256", "X-GitHub-Delivery", "X-GitHub-Event")
+    conveyor_headers = ("X-Conveyor-Signature", "X-Conveyor-Timestamp",
+                        "X-Conveyor-Delivery", "X-Conveyor-Event")
+    forbidden = conveyor_headers if github else github_headers
+    if any(h.headers.get(name) is not None for name in forbidden):
+        _error(h, hook_id, 401, "wrong hook mode")
         return
     delivery_id = h.headers.get("X-GitHub-Delivery" if github else "X-Conveyor-Delivery", "")
     if not ID_PATTERN.fullmatch(delivery_id):
-        _error(h, hook_id, 400, "delivery id required")
+        _error(h, hook_id, 401, "delivery id required")
+        return
+    if github:
+        # Native GitHub sends no timestamp; HMAC authenticates the exact raw body.
+        signature = h.headers.get("X-Hub-Signature-256", "")
+        if not h.headers.get("X-GitHub-Event"):
+            _error(h, hook_id, 401, "GitHub event required")
+            return
+        signed_body = body
+    else:
+        stamp = h.headers.get("X-Conveyor-Timestamp", "")
+        if not re.fullmatch(r"[0-9]{1,16}", stamp):
+            _error(h, hook_id, 401, "invalid timestamp")
+            return
+        if abs(time.time() - int(stamp)) > 300:
+            _error(h, hook_id, 401, "stale timestamp")
+            return
+        signature = h.headers.get("X-Conveyor-Signature", "")
+        signed_body = f"{stamp}.{delivery_id}.".encode("ascii") + body
+    if not SIG_PATTERN.fullmatch(signature) or not routines.verify_signature(hook["secret"], signed_body, signature):
+        _error(h, hook_id, 401, "invalid signature")
         return
     if h.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
         _error(h, hook_id, 415, "application/json required")
@@ -281,6 +355,12 @@ def receive(h, hook_id):
         if active is None:
             active = set()
             h.server._active_routine_runs = active
+        # Check replay and quotas before busy, but reserve the nonce only if accepted.
+        result = delivery_status(settings, hook_id, delivery_id)
+        if result != "ok":
+            status = 409 if result == "replay" else 429
+            _error(h, hook_id, status, "replayed delivery" if result == "replay" else "rate limit", event)
+            return
         if rid in active:
             h._json(429, {"error": "routine busy"}, extra_headers=[("Retry-After", "5")])
             return
@@ -315,12 +395,16 @@ def receive(h, hook_id):
 
 
 def api_get(h, path):
-    if path != "/api/hooks":
+    parts = path.strip("/").split("/")
+    if path != "/api/hooks" and not (len(parts) == 4 and parts[:2] == ["api", "hooks"] and parts[3] == "secret"):
         return False
     if not enabled(_settings(h)):
         h._json(409, {"error": "hooks disabled"})
-    else:
+    elif path == "/api/hooks":
         h._json(200, {"hooks": list_hooks(_settings(h))})
+    else:
+        secret = claim_secret_once(_settings(h), parts[2])
+        h._json(200, {"secret": secret}) if secret is not None else h._json(404, {"error": "secret unavailable"})
     return True
 
 
@@ -339,7 +423,8 @@ def api_post(h, path):
         if path == "/api/hooks":
             if isinstance(body.get("routine_id"), bool):
                 raise ValueError("invalid routine id")
-            item = create_hook(settings, int(body.get("routine_id", 0)), body.get("filter"))
+            item = create_hook(settings, int(body.get("routine_id", 0)),
+                               body.get("filter"), body.get("mode", "generic"))
             h._json(201, item)
         else:
             parts = path.strip("/").split("/")
