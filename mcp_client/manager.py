@@ -159,6 +159,7 @@ class MCPManager:
                     "name": t.tool_name,
                     "exposed": exposed,
                     "read_only": t.read_only,
+                    "danger": t.danger.value,
                     "description": t.description[:200],
                 })
 
@@ -224,6 +225,7 @@ class MCPManager:
                 "name": t.tool_name,
                 "exposed": effective_enabled and ("*" in server.allow_tools or t.tool_name in server.allow_tools),
                 "read_only": t.read_only,
+                "danger": t.danger.value,
                 "description": t.description[:200],
             } for t in specs]
 
@@ -301,6 +303,7 @@ class MCPManager:
             "name": t.tool_name,
             "exposed": effective_enabled and ("*" in server.allow_tools or t.tool_name in server.allow_tools),
             "read_only": t.read_only,
+            "danger": t.danger.value,
             "description": t.description[:200],
         } for t in tools_list]
 

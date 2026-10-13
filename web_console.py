@@ -821,6 +821,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
 
+        if parsed.path == "/api/chat/voice":
+            from voice_web import handle_voice_post
+            handle_voice_post(self)
+            return
         body = self._body()
         if body is None:
             return
@@ -1543,6 +1547,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         settings: Any,
         durable_session_id: str,
         prompt: str,
+        *,
+        heard: str | None = None,
     ) -> None:
         import queue
         from web_chat import WebChatPort, run_web_chat
@@ -1562,6 +1568,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         session_data = json.dumps({"session_id": durable_session_id}, ensure_ascii=False)
         self.wfile.write(f"event: session\ndata: {session_data}\n\n".encode("utf-8"))
         self.wfile.flush()
+        if heard is not None:
+            heard_data = json.dumps({"text": f"🎤 heard: {heard}"}, ensure_ascii=False)
+            self.wfile.write(f"event: heard\ndata: {heard_data}\n\n".encode("utf-8"))
+            self.wfile.flush()
 
         runner = getattr(self.server.control, "runner", None)
         future = asyncio.run_coroutine_threadsafe(
