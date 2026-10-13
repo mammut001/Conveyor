@@ -57,9 +57,15 @@ async def memory_remember(settings: Any, arg: str = "", *, operator_id: str = ""
 
 async def memory_forget(settings: Any, arg: str = "", *, operator_id: str = "",
                         channel: str = "", chat_id: str = "") -> ToolResult:
+    # Confirmations must have been bound to both row ID and text fingerprint.
+    import re
+    if not re.fullmatch(r"#?\d+@[0-9a-f]{64}", (arg or "").strip()):
+        return ToolResult(False, "memory.forget requires a fresh, fingerprint-bound approval")
     try:
         who = owner_for_chat(settings, operator_id, channel, chat_id)
         rows, status = memory_v2.forget_fact(settings, who, arg)
+        if status == "changed":
+            return ToolResult(False, "memory changed since approval; please request a new forget")
         if status != "deleted":
             return ToolResult(False, "memory not found")
         return ToolResult(True, f"已删除 #{rows[0]['id']}")
