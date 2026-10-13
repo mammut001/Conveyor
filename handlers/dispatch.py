@@ -83,8 +83,9 @@ async def dispatch(
             return
         if cmd_name == "chat_clear":
             import subagents
-            subagents.cancel_parent(settings, operator_id=msg.operator_id,
-                                    channel=msg.channel, chat_id=msg.chat_id)
+            if subagents.enabled(settings):
+                subagents.cancel_parent(settings, operator_id=msg.operator_id,
+                                        channel=msg.channel, chat_id=msg.chat_id)
             await handle_chat_clear(msg, port, settings)
             return
         if cmd_name in ("run", "fix"):
