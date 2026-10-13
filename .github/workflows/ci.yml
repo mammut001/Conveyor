@@ -52,6 +52,9 @@ jobs:
       - name: Run smoke suite
         run: make smoke
 
+      - name: PWA security smoke
+        run: .venv/bin/python scripts/pwa_smoke.py
+
   web:
     name: Web
     runs-on: ubuntu-latest
