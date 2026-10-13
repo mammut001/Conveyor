@@ -124,23 +124,28 @@ def agent_env(settings: Any, source: Mapping[str, str] | None = None,
     secrets_path = getattr(settings, "secrets_file", None)
     if secrets_path is None and getattr(settings, "codex_memory_root", None) is not None:
         secrets_path = path_for(settings)
-    return build_child_env(
+    from egress_proxy import proxy_env
+    return proxy_env(build_child_env(
         source, grants=model_grants(settings, claude=claude), overrides=overrides,
         secrets_file=secrets_path,
-    )
+    ), settings)
 
 
 def utility_env(settings: Any = None, source: Mapping[str, str] | None = None,
                 *, desktop: bool = False) -> dict[str, str] | None:
     """None keeps subprocess's existing inherited environment when flag is off."""
-    if not enabled(settings):
+    from egress_proxy import proxy_env, enabled as egress_enabled
+    if not enabled(settings) and not egress_enabled(settings):
         return None
-    return build_child_env(source, extra=DESKTOP if desktop else ())
+    base = build_child_env(source, extra=DESKTOP if desktop else ()) if enabled(settings) else None
+    return proxy_env(base, settings)
 
 
 def desktop_env(source: Mapping[str, str]) -> dict[str, str]:
     """For desktop adapters without Settings, opt in via the same process flag."""
-    return build_child_env(source, extra=DESKTOP) if enabled() else dict(source)
+    from egress_proxy import proxy_env
+    base = build_child_env(source, extra=DESKTOP) if enabled() else dict(source)
+    return proxy_env(base)
 
 
 def log_startup_check(settings: Any, source: Mapping[str, str] | None = None) -> None:
