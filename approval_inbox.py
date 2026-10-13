@@ -421,7 +421,9 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
                 from workflow_browser_g3_store import review
                 ref = json.loads(action.arg)["token"]
                 detail = review(settings, ref)
-                if detail:
+                if not detail:
+                    item["summary"] = "G3 preview unavailable — do not approve"
+                else:
                     item["g3_preview"] = detail["preview"]
                     item["g3_hash"] = detail["hash"]
                     item["g3_screenshot"] = ("data:image/png;base64," +
@@ -481,7 +483,9 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
                         from workflow_browser_g3_store import review
                         token = json.loads(row.get("arg_preview") or "{}")["token"]
                         detail = review(settings, token)
-                        if detail:
+                        if not detail:
+                            item["summary"] = "G3 preview unavailable — do not approve"
+                        else:
                             item["g3_preview"] = detail["preview"]
                             item["g3_hash"] = detail["hash"]
                             item["g3_screenshot"] = ("data:image/png;base64," +
@@ -490,12 +494,19 @@ def list_items(settings: Any, control: Any) -> list[dict[str, Any]]:
                                                detail["preview"]["method"] + " " +
                                                detail["preview"]["target"])
                     except Exception:
-                        item["summary"] = "G3 preview unavailable — reject"
+                        item["summary"] = "G3 preview unavailable — do not approve"
                 items.append(item)
         except Exception:
             logger.exception("Failed to fetch foreign relay approvals in list_items")
 
-    # 4. Sort newest first
+    # 4. Surface uncertain G3 outcomes as read-only incidents, never approvals.
+    try:
+        from browser_g3_reconciliation import inbox_items as g3_uncertain
+        items.extend(g3_uncertain(settings))
+    except Exception:
+        logger.exception("Failed to load G3 reconciliation alerts")
+
+    # 5. Sort newest first
     def _sort_ts(it: dict[str, Any]) -> float:
         ca = it.get("created_at")
         if isinstance(ca, (int, float)):

@@ -124,9 +124,7 @@ def _kill_path(settings):
     root = _db(settings).parent
     configured = os.environ.get("CONVEYOR_BROWSER_EXTERNAL_KILL_FILE")
     target = Path(configured).expanduser().absolute() if configured else root/"browser-external.kill"
-    # Never allow web API to unlink/touch arbitrary operator-configured files.
-    if target != root/"browser-external.kill":
-        raise ExternalPolicyDenied("kill_path_unmanaged")
+    # Reads may inspect a configured kill path. Writes remain managed-only.
     return target
 
 
@@ -141,6 +139,8 @@ def set_kill(settings, enabled):
     if type(enabled) is not bool:
         raise ValueError("enabled must be boolean")
     path = _kill_path(settings)
+    if path != _db(settings).parent/"browser-external.kill":
+        raise ExternalPolicyDenied("kill_path_unmanaged")
     if path.is_symlink():
         raise ExternalPolicyDenied("kill_path_unsafe")
     if enabled:
@@ -165,8 +165,11 @@ def get(handler, path, query):
         return False
     settings = _settings(handler)
     if path == "/api/browser/approvals":
-        handler._json(200,{"approvals":approvals(settings),
-                           "kill_switch":kill_status(settings)})
+        try:
+            handler._json(200,{"approvals":approvals(settings),
+                               "kill_switch":kill_status(settings)})
+        except ExternalPolicyDenied as exc:
+            handler._json(409,{"error":str(exc)})
     elif path == "/api/browser/egress":
         try:
             limit = int((query.get("limit") or ["50"])[0])
@@ -184,7 +187,10 @@ def post(handler, path, body):
     if set(body)!={"enabled"} or type(body["enabled"]) is not bool:
         handler._json(400,{"error":"expected boolean enabled"})
     else:
-        handler._json(200,{"kill_switch":set_kill(_settings(handler),body["enabled"])})
+        try:
+            handler._json(200,{"kill_switch":set_kill(_settings(handler),body["enabled"])})
+        except ExternalPolicyDenied as exc:
+            handler._json(409,{"error":str(exc)})
     return True
 
 

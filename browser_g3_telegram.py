@@ -5,12 +5,15 @@ screenshot can be sent to the same target chat first.
 """
 from __future__ import annotations
 import json
+import os
 import secrets
 import urllib.request
 
 from workflow_browser_g3_store import review
 
 def send_preview(settings, target, arg_preview):
+    if os.getenv('CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT') != '1':
+        return False
     try:
         data=json.loads(arg_preview)
         if not isinstance(data,dict) or set(data)!={"token","hash"}:

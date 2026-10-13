@@ -3,7 +3,7 @@ import { isStale } from '../approvalFreshness';
 
 export type ApprovalInboxItem = {
   id: string;
-  kind: 'tool' | 'job' | 'relay';
+  kind: 'tool' | 'job' | 'relay' | 'reconciliation';
   source: 'chat' | 'routine' | 'webhook' | 'job' | 'telegram' | 'feishu' | string;
   action?: string; // apply | discard for job
   job_id?: string;
@@ -390,7 +390,7 @@ export function ApprovalInboxPanel({
                 </span>
 
                 <strong style={{ fontSize: '0.95rem' }}>
-                  {item.kind === 'tool' || item.kind === 'relay' ? item.tool_name : `Job ${item.action || 'Approval'}`}
+                  {item.kind === 'tool' || item.kind === 'relay' || item.kind === 'reconciliation' ? item.tool_name : `Job ${item.action || 'Approval'}`}
                 </strong>
 
                 {item.summary && (
@@ -463,7 +463,7 @@ export function ApprovalInboxPanel({
 
             {item.tool_name === 'browser.g3_dispatch' && (
               <div style={{ padding: 12, border: '2px solid #c2410c', borderRadius: 8 }}>
-                <strong>Independent human confirmation required (expires in 5 minutes)</strong>
+                <strong>{item.kind === 'reconciliation' ? 'Uncertain submit — manual reconciliation required; never retry' : 'Independent human confirmation required (expires in 5 minutes)'}</strong>
                 {!item.g3_preview || !item.g3_hash || !item.g3_screenshot ? (
                   <p>Preview unavailable. Reject this approval and prepare again.</p>
                 ) : (
@@ -649,8 +649,8 @@ export function ApprovalInboxPanel({
               </div>
             )}
 
-            {/* Action buttons */}
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
+            {/* Reconciliation alerts never have approve/retry controls. */}
+            {item.kind !== 'reconciliation' && <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
               {!isEditing ? (
                 <>
                   <button
@@ -740,7 +740,7 @@ export function ApprovalInboxPanel({
                   </button>
                 </div>
               )}
-            </div>
+            </div>}
           </article>
         );
       })}

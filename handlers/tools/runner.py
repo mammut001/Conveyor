@@ -535,6 +535,12 @@ async def execute_confirmed(
         _audit_rejected(settings, action, msg)
         await port.reply(msg, "Unauthorized.")
         return True
+    if action.tool_name.startswith("browser."):
+        from browser_g3_kill import refusal
+        reason = refusal(settings, action.tool_name)
+        if reason:
+            await port.reply(msg, reason)
+            return True
     if not await _relay_gate(settings, action, msg, port, approve=True):
         return True
     action = pop_pending(token)

@@ -43,7 +43,7 @@ class Handler(BaseHTTPRequestHandler):
             self.server.gets.append(self.path)
             body=self.server.html
         self.send_response(200)
-        self.send_header("Content-Type","text/html")
+        self.send_header("Content-Type","text/html; charset=utf-8")
         self.send_header("Content-Length",str(len(body.encode())))
         self.end_headers()
         self.wfile.write(body.encode())
@@ -182,7 +182,8 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
     async def test_telegram_origin_receives_screenshot_and_actionable_card(self):
         from unittest.mock import AsyncMock
         self.settings.approval_relay_enabled=True
-        with patch("browser_g3_telegram.send_preview",return_value=True) as image, \
+        with patch.dict(os.environ,{"CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT":"1"}), \
+             patch("browser_g3_telegram.send_preview",return_value=True) as image, \
              patch("approval_relay.publish",return_value=True), \
              patch("browser_g3_notifications.origin_telegram",new_callable=AsyncMock,
                    return_value=True) as card:
@@ -192,6 +193,190 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         image.assert_called_once()
         card.assert_awaited_once()
         self.assertEqual(self.server.posts,[])
+
+    async def assert_sensitive_fixture(self, html):
+        self.server.html=html
+        result=await prepare(self.settings,self.arg,operator_id="person",
+                             channel="web",chat_id="chat")
+        self.assertFalse(result.ok, str(result))
+        self.assertIn("g3_sensitive_page_denied", str(result), str(result))
+        self.assertEqual(self.server.posts,[])
+
+    async def test_detached_heading_and_document_title_blocked(self):
+        detached=(FORM.replace("<h1>Public feedback</h1>",
+                   "<h1>Checkout — Payment</h1><div>")
+                  .replace("</form>","</form></div>")
+                  .replace(">Send</button>",">Continue</button>"))
+        await self.assert_sensitive_fixture(detached)
+        await self.assert_sensitive_fixture(FORM.replace(
+            "<html>", "<html><head><title>Checkout — Payment</title></head>"))
+        await self.assert_sensitive_fixture(FORM.replace(
+            "Public feedback", "Close your account"))
+
+    async def test_form_labels_and_accessibility_hints_blocked(self):
+        cases=[
+            FORM.replace("Public feedback","Welcome back").replace(
+                '<button type="submit">', '<label>Password <input type="text" name="f2"></label><button type="submit">'),
+            FORM.replace("<label>Topic", "<label>Email"),
+            FORM.replace('<button type="submit">', '<input type="text" name="f2" placeholder="Card number"><button type="submit">'),
+            FORM.replace('<button type="submit">', '<input type="text" name="f2" title="One-time code"><button type="submit">'),
+            FORM.replace('<button type="submit">', '<input type="text" name="f2" aria-label="Security code"><button type="submit">'),
+            FORM.replace('<button type="submit">', '<span id="card-caption">CVV</span><input type="text" name="f2" aria-labelledby="card-caption"><button type="submit">'),
+        ]
+        for html in cases:
+            with self.subTest(html=html[-170:]):
+                await self.assert_sensitive_fixture(html)
+
+    async def test_icon_submit_aria_and_title_blocked(self):
+        for button in (
+            '<button type="submit" aria-label="Pay now">➜</button>',
+            '<button type="submit" title="Close your account">Continue</button>',
+            '<button type="submit" aria-label="Security code">➜</button>',
+        ):
+            with self.subTest(button=button):
+                await self.assert_sensitive_fixture(FORM.replace(
+                    '<button type="submit">Send</button>',button))
+
+    async def test_unicode_obfuscations_blocked(self):
+        cases=(
+            FORM.replace("Public feedback","Sign\u200b in"),
+            FORM.replace("Public feedback","Log\u00adin"),
+            FORM.replace("Public feedback","ｐａｙ now"),
+            FORM.replace('<button type="submit">Send</button>',
+                         '<button type="submit" aria-label="ｐａｙ now">➜</button>'),
+            FORM.replace('<button type="submit">Send</button>',
+                         '<button type="submit" title="Sign\u200b in">➜</button>'),
+        )
+        for html in cases:
+            with self.subTest(html=html[-170:]):
+                await self.assert_sensitive_fixture(html)
+
+    async def test_all_preceding_headings_and_styled_text_blocked(self):
+        for heading in (
+            '<h1>Checkout</h1><h2>Your details</h2>',
+            '<h4>Payment</h4>',
+            '<div style="font-size:32px">Sign in</div>',
+            '<div role="heading" aria-level="2">Checkout</div>',
+            '<h6>Payment</h6>',
+            '<p>Sign in</p>',
+        ):
+            with self.subTest(heading=heading):
+                await self.assert_sensitive_fixture(FORM.replace(
+                    '<h1>Public feedback</h1>', heading))
+
+    async def test_sensitive_links_and_post_form_copy_blocked(self):
+        cases = (
+            # An <a> inside a heading must not hide its visible checkout label.
+            FORM.replace('<h1>Public feedback</h1>',
+                '<h1><a href="/cart">Checkout</a></h1><h2>Your details</h2>'),
+            # Breadcrumb links outside nav/footer are part of the visible page.
+            FORM.replace('<h1>Public feedback</h1>',
+                '<div><a href="/account">Account</a> › '
+                '<a href="/delete">Delete account</a></div>'),
+            # Text after the selected form is equally relevant.
+            FORM.replace('<h1>Public feedback</h1>', '<h1>Welcome</h1>')
+                .replace('</form>', '</form><p>Sign in to continue</p>'),
+        )
+        for html in cases:
+            with self.subTest(html=html):
+                await self.assert_sensitive_fixture(html)
+
+    async def test_card_number_placeholder_and_prefill_blocked(self):
+        for control in (
+            '<input type="text" name="f2" placeholder="4111 1111 1111 1111">',
+            '<input type="text" name="f2" value="4111-1111-1111-1111">',
+            '<input type="text" name="f2" value="378282246310005">',
+        ):
+            with self.subTest(control=control):
+                await self.assert_sensitive_fixture(FORM.replace(
+                    '<button type="submit">Send</button>',
+                    control+'<button type="submit">Send</button>'))
+
+    async def test_readonly_controls_never_agent_editable(self):
+        # Read-only fields must remain in the exact preview but cannot be changed.
+        for element in (
+            '<input type="text" name="topic" value="before" readonly>',
+            '<textarea name="topic" readonly>before</textarea>',
+        ):
+            with self.subTest(element=element):
+                self.server.html=FORM.replace(
+                    '<input type="text" name="topic" value="before">',element)
+                result=await prepare(self.settings,self.arg,operator_id="person",
+                                     channel="web",chat_id="chat")
+                self.assertFalse(result.ok,str(result))
+                self.assertIn("g3_uneditable_field_denied",result.text)
+                self.assertEqual(self.server.posts,[])
+        self.server.html=FORM.replace(
+            '<input type="text" name="topic" value="before">',
+            '<input type="text" name="topic" value="before" readonly>')
+        safe=json.dumps({"url":self.url+"/form","form_ref":0,
+                         "fields":{"region":"b","agree":True}})
+        result=await prepare(self.settings,safe,operator_id="person",
+                             channel="web",chat_id="chat")
+        self.assertTrue(result.ok,str(result))
+        pending=get_pending_for_context("person","chat","web")
+        self.assertIsNotNone(pending)
+        token=json.loads(pending.arg)["token"]
+        detail=review(self.settings,token)
+        self.assertIn(["topic","before"],detail["preview"]["fields"])
+        self.assertEqual(self.server.posts,[])
+
+    async def test_original_card_value_still_blocks_when_agent_overwrites(self):
+        # The standard prepare() overwrites topic="before" with "hello".
+        # The original card-shaped value must be classified before mutation.
+        for original in ("4111 1111 1111 1111", "4111-1111-1111-1111",
+                         "378282246310005"):
+            with self.subTest(original=original):
+                await self.assert_sensitive_fixture(FORM.replace(
+                    'name="topic" value="before"',
+                    f'name="topic" value="{original}"'))
+
+    async def test_non_sensitive_prefill_still_allows_normal_form(self):
+        self.server.html=FORM.replace('name="topic" value="before"',
+                                      'name="topic" value="123456789012"')
+        pending=await self.prepare()
+        self.assertIsNotNone(review(self.settings,json.loads(pending.arg)["token"]))
+        self.assertEqual(self.server.posts,[])
+
+    async def test_footer_heading_and_link_excluded_even_before_form(self):
+        for footer in (
+            '<footer><h2>Sign in</h2></footer>',
+            '<footer><a href="/login">Sign in</a></footer>',
+            '<nav><h4>Payment</h4></nav>',
+            '<div role="navigation"><a href="/login">Sign in</a></div>',
+            '<div role="contentinfo"><h2>Sign in</h2></div>',
+        ):
+            for before in (True, False):
+                with self.subTest(footer=footer, before=before):
+                    self.server.html=FORM.replace(
+                        '<form method="POST"' if before else '</form>',
+                        footer+('<form method="POST"' if before else '</form>'))
+                    pending=await self.prepare()
+                    token=json.loads(pending.arg)["token"]
+                    self.assertIsNotNone(review(self.settings,token))
+                    self.assertEqual(self.server.posts,[])
+
+    async def test_footer_sign_in_link_does_not_block_public_feedback(self):
+        self.server.html=FORM.replace("</body>",
+            '<footer><a href="/login">Sign in</a></footer></body>')
+        pending=await self.prepare()
+        token=json.loads(pending.arg)["token"]
+        self.assertIsNotNone(review(self.settings,token))
+        self.assertEqual(self.server.posts,[])
+
+    async def test_kill_switch_refuses_before_dispatch(self):
+        from browser_g3_kill import path
+        pending=await self.prepare()
+        token=json.loads(pending.arg)["token"]
+        kill_file=path(self.settings)
+        kill_file.touch()
+        try:
+            outcome=await approve_and_submit(self.settings,pending.arg,operator_id="person")
+            self.assertIn("kill",outcome.lower())
+            self.assertEqual(state(self.settings,token),"pending")
+            self.assertEqual(self.server.posts,[])
+        finally:
+            kill_file.unlink()
 
     async def test_opacity_hidden_ancestor_and_clipped_fields_denied(self):
         for html in (FORM.replace("<label>Topic", '<label style="opacity:0">Topic'),

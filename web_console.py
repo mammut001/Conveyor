@@ -1137,6 +1137,12 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     if settings is None:
                         from config import load_runtime_settings
                         settings = load_runtime_settings()
+                    if is_approve:
+                        from browser_g3_kill import refusal
+                        reason = refusal(settings, pending.tool_name)
+                        if reason:
+                            self._json(HTTPStatus.CONFLICT, {"error": reason})
+                            return
                     from web_chat import decide_tool_approval
                     result = self._await(decide_tool_approval(pending, is_approve, settings), timeout=120)
                     self._json(HTTPStatus.OK, result)
@@ -1161,6 +1167,11 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                         return
                     if is_approve:
+                        from browser_g3_kill import refusal
+                        reason = refusal(settings, pending.tool_name)
+                        if reason:
+                            self._json(HTTPStatus.CONFLICT, {"error": reason})
+                            return
                         if pending.tool_name == "browser.g3_dispatch":
                             from browser_g3_approval_gate import matches as g3_matches
                             if not g3_matches(settings, pending.arg, body.get("expected_hash")):
@@ -1205,6 +1216,12 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     import approval_relay
                     relay_row = approval_relay.get_relay_row(settings, approval_id)
                     if relay_row is not None:
+                        if is_approve:
+                            from browser_g3_kill import refusal
+                            reason = refusal(settings, relay_row.get("tool_name") or "")
+                            if reason:
+                                self._json(HTTPStatus.CONFLICT, {"error": reason})
+                                return
                         if is_approve and relay_row.get("tool_name") == "browser.g3_dispatch":
                             from browser_g3_approval_gate import matches as g3_matches
                             if not g3_matches(settings, relay_row.get("arg_preview") or "",

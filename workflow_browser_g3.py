@@ -14,6 +14,7 @@ from workflow_browser_g2 import G2Browser, enabled as g2_enabled
 from workflow_browser_external_identity import ExternalPolicyDenied, canonical_url
 from personal_tools.browser_read import _requested_url
 from workflow_browser_g3_store import digest
+from browser_g3_form_policy import sensitive_form
 
 DANGER = re.compile(
     r"(checkout|purchase|payment|credit.card|billing|cvv|pay now|place order|shopping cart|"
@@ -56,7 +57,14 @@ FORM_JS = r"""(forms, args) => {
        return {error:'g3_sensitive_field_denied'};
    if (name && found.has(name)) return {error:'g3_duplicate_field_denied'};
    if(name) found.add(name);
-   const editable=type!=='hidden' && type!=='submit' && tag!=='button' && !c.disabled;
+   // Classify the original value BEFORE agent edits can overwrite it.
+   // Only emit a boolean, never copy a replaced sensitive value to the preview.
+   const original=(typeof c.value==='string'?c.value:'').normalize('NFKC')
+     .replace(/[\u00ad\u034f\u061c\u180e\u200b-\u200f\u2060-\u206f\ufeff]/g,'');
+   const prefilled_card_number=/(?<![0-9])(?:[0-9][ -]?){12,18}[0-9](?![ -]*[0-9])/.test(original);
+   // A readonly text/textarea field is submitted as-is; an agent cannot edit it.
+   const editable=type!=='hidden' && type!=='submit' && tag!=='button' &&
+     !c.disabled && !c.readOnly;
    if(editable) {
      const rect=c.getBoundingClientRect();
      let opacity=1, clipped=false;
@@ -98,7 +106,13 @@ FORM_JS = r"""(forms, args) => {
    }
    let val=type==='checkbox'?(c.checked?c.value:null):c.value;
    if(typeof val==='string' && val.length>256) return {error:'g3_field_too_long'};
-   out.push({tag,type,name,value:val,disabled:!!c.disabled});
+   const labels=Array.from(c.labels||[], l=>(l.innerText||l.textContent||'').slice(0,256));
+   const aria_labelledby=(c.getAttribute('aria-labelledby')||'').split(/\s+/).filter(Boolean)
+     .map(id=>(document.getElementById(id)?.textContent||'').slice(0,256)).join(' ').slice(0,512);
+   out.push({tag,type,name,value:val,disabled:!!c.disabled,labels,prefilled_card_number,
+     aria_label:(c.getAttribute('aria-label')||'').slice(0,256),aria_labelledby,
+     placeholder:(c.getAttribute('placeholder')||'').slice(0,256),
+     title:(c.getAttribute('title')||'').slice(0,256)});
    if(name && !c.disabled && type!=='submit' && tag!=='button' &&
       !(type==='checkbox' && !c.checked)) pairs.push([name,val]);
  }
@@ -108,7 +122,40 @@ FORM_JS = r"""(forms, args) => {
     (f.getAttribute('accept-charset')||'').toLowerCase().replace(/[-_]/g,'')!==''
     && (f.getAttribute('accept-charset')||'').toLowerCase().replace(/[-_]/g,'')!=='utf8')
    return {error:'g3_form_encoding_denied'};
- return {method,target,controls:out,fields:pairs,attrs};
+ // Scan all rendered text, before AND after the form; links are not exempt.
+ // Exclude navigation/footer and hidden or non-rendered content only.
+ const textParts=[], walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+ let node, contextSize=0;
+ while ((node=walker.nextNode())) {
+   const parent=node.parentElement;
+   if (!parent || parent.closest('nav,footer,[role="navigation"],[role="contentinfo"],script,style,template,[hidden],[aria-hidden="true"]'))
+     continue;
+   const value=(node.nodeValue||'').trim();
+   if (!value) continue;
+   let visible=true,opacity=1;
+   for(let el=parent;el;el=el.parentElement) {
+     const st=getComputedStyle(el);
+     if(st.display==='none'||st.visibility!=='visible'||st.clipPath!=='none') {
+       visible=false;break;
+     }
+     opacity*=Number(st.opacity);
+   }
+   if(!visible||opacity<.1) continue;
+   const range=document.createRange();
+   range.selectNodeContents(node);
+   if(![...range.getClientRects()].some(r=>r.width>0&&r.height>0)) continue;
+   contextSize+=value.length;
+   if(contextSize>32768) return {error:'g3_context_budget_denied'};
+   textParts.push(value);
+ }
+ const page_text=textParts.join(' ');
+ const heading=(f.querySelector('legend')?.innerText||'').trim().slice(0,160);
+ const submit_label=[...f.querySelectorAll('button,input[type="submit"]')]
+   .flatMap(c => [c.innerText||c.value||'',c.getAttribute('aria-label')||'',
+                  c.getAttribute('title')||'']).join(' ').trim().slice(0,512);
+ const document_title=(document.title||'').slice(0,256);
+ return {method,target,controls:out,fields:pairs,attrs,heading,
+         page_text,document_title,submit_label};
 }"""
 
 def enabled():
@@ -155,13 +202,12 @@ class G3Browser(G2Browser):
             raise ExternalPolicyDenied("session_already_used")
         await self._visit(url)
         await self._guard()
-        body=await self._page.locator("body").inner_text(timeout=2000)
-        if DANGER.search(url+" "+body[:8192]):
-            raise ExternalPolicyDenied("g3_sensitive_page_denied")
         result=await self._page.locator("form").evaluate_all(FORM_JS,[index,fields])
         if not isinstance(result,dict) or "error" in result:
             raise ExternalPolicyDenied(result.get("error","g3_snapshot_denied")
                                        if isinstance(result,dict) else "g3_snapshot_denied")
+        if sensitive_form(url, result):
+            raise ExternalPolicyDenied("g3_sensitive_page_denied")
         target=result["target"]; method=result["method"]
         # Never allow query, fragment, other scheme/origin or non-canonical target.
         host,port,path,origin=_requested_url(target)
