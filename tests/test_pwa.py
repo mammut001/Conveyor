@@ -128,6 +128,60 @@ class PushLogicTests(unittest.TestCase):
                 sender=lambda *args: deliveries.append(args)), 0)
         self.assertEqual(deliveries, [])
 
+    def test_dns_rebinding_is_pinned_to_first_public_address(self):
+        """Second DNS answer is loopback; delivery must never resolve twice."""
+        from unittest.mock import Mock
+        from sys import modules
+
+        web_push.subscribe(self.settings, SUB)
+        public = (socket.AF_INET, socket.SOCK_STREAM, 6, "",
+                  ("142.250.72.202", 443))
+        private = (socket.AF_INET, socket.SOCK_STREAM, 6, "",
+                   ("127.0.0.1", 443))
+        resolver = Mock(side_effect=[[public], [private]])
+        raw_socket = Mock()
+        tls_socket = Mock()
+        tls = Mock()
+        tls.wrap_socket.return_value = tls_socket
+        reply = Mock(status=201, reason="Created")
+        reply.getheaders.return_value = []
+        reply.read.return_value = b""
+        observations = []
+
+        def fake_push(**kwargs):
+            # Exercise the actual transport supplied to pywebpush, rather
+            # than merely asserting a session argument was passed.
+            session = kwargs["requests_session"]
+            observations.append(session.post(
+                kwargs["subscription_info"]["endpoint"], timeout=5,
+                data=b"ciphertext", headers={"Content-Type": "application/octet-stream"},
+            ).status_code)
+
+        def request_and_connect(conn, method, target, body=None, headers=None):
+            self.assertEqual(method, "POST")
+            self.assertEqual(target, "/fcm/send/test-endpoint")
+            self.assertEqual(headers["Content-Type"], "application/octet-stream")
+            conn.connect()
+
+        with patch.object(web_push.socket, "getaddrinfo", resolver), \
+             patch.object(web_push.socket, "socket", return_value=raw_socket), \
+             patch.object(web_push.ssl, "create_default_context", return_value=tls), \
+             patch.object(web_push._PinnedHTTPSConnection, "request",
+                          autospec=True, side_effect=request_and_connect), \
+             patch.object(web_push._PinnedHTTPSConnection, "getresponse",
+                          return_value=reply), \
+             patch.dict(os.environ, {"CONVEYOR_VAPID_PRIVATE_KEY": "test-key"}), \
+             patch.dict(modules, {"pywebpush": SimpleNamespace(webpush=fake_push)}):
+            self.assertEqual(web_push.notify_pending(self.settings, "review123"), 1)
+
+        self.assertEqual(observations, [201])
+        self.assertEqual(resolver.call_count, 1)
+        raw_socket.connect.assert_called_once_with(("142.250.72.202", 443))
+        self.assertNotEqual(raw_socket.connect.call_args.args[0][0], "127.0.0.1")
+        tls.wrap_socket.assert_called_once_with(
+            raw_socket, server_hostname="fcm.googleapis.com")
+        self.assertEqual(tls.wrap_socket.call_count, 1)
+
     def test_sender_revalidates_legacy_rows(self):
         import hashlib
         web_push.subscribe(self.settings, SUB)
