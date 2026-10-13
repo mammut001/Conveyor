@@ -5,6 +5,8 @@ import http.client
 import ipaddress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import select
+import time
 from pathlib import Path
 import socket
 import socketserver
@@ -227,6 +229,64 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(egress_proxy.destination(
             "8.8.8.8", port, ("8.8.8.8",),
             protected_ports={port}), (None, "protected_port"))
+
+    def test_single_header_byte_trickle_has_absolute_deadline(self):
+        """One byte each 0.5s must not keep a header line alive past ~10s."""
+        proxy = self.proxy()
+        addr = ("127.0.0.1", proxy.server.server_address[1])
+        started = time.monotonic()
+        with socket.create_connection(addr, timeout=3) as sock:
+            sock.settimeout(2)
+            sock.sendall(b"GET http://not-allowed.example/ HTTP/1.1\r\n"
+                         b"Host: not-allowed.example\r\nX-Slow: ")
+            while time.monotonic() - started < 11.5:
+                readable, _, _ = select.select([sock], [], [], 0.5)
+                if readable:
+                    answer = sock.recv(4096)
+                    self.assertTrue(not answer or answer.startswith(b"HTTP/1.1 400"),
+                                    repr(answer))
+                    break
+                try:
+                    sock.sendall(b"x")
+                except OSError:
+                    break  # The proxy has closed this timed-out connection.
+            else:
+                self.fail("single-line byte trickle bypassed the 10s header deadline")
+        self.assertLess(time.monotonic() - started, 11.5)
+
+    def test_64_trickling_headers_release_slots_after_deadline(self):
+        """All 64 active handlers must expire; the next request gets 403, not 503."""
+        proxy = self.proxy()
+        server = proxy.server
+        addr = ("127.0.0.1", server.server_address[1])
+        sockets = []
+        started = time.monotonic()
+        try:
+            for _ in range(64):
+                sock = socket.create_connection(addr, timeout=3)
+                sockets.append(sock)
+                sock.sendall(b"GET http://not-allowed.example/ HTTP/1.1\r\n"
+                             b"Host: not-allowed.example\r\nX-Slow: ")
+            until_full = time.monotonic() + 3
+            while server.slots._value != 0 and time.monotonic() < until_full:
+                time.sleep(0.02)
+            self.assertEqual(server.slots._value, 0, "did not occupy all 64 slots")
+
+            # Keep trickling bytes within ONE unfinished header line in every
+            # connection. Each handler must still expire at its original deadline.
+            while time.monotonic() - started < 11:
+                for sock in sockets:
+                    try:
+                        sock.sendall(b"x")
+                    except OSError:
+                        pass
+                time.sleep(0.5)
+
+            # The proxy must process new traffic normally, not report overload.
+            self.assertEqual(self.request(proxy, "not-allowed.example")[0], 403)
+        finally:
+            for sock in sockets:
+                sock.close()
 
     def test_deadline_and_connection_slots_are_bounded(self):
         import time
