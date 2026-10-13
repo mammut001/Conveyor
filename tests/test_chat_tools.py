@@ -159,6 +159,10 @@ class TestChatToolsSchemas(unittest.TestCase):
                 self.assertIsInstance(key, str)
                 self.assertIsInstance(prop, dict, f"{fn}.{key} has no schema")
                 self.assertTrue(prop, f"{fn}.{key} has an empty schema")
+            if not fn.startswith(("subagent__", "mcp__")):
+                self.assertIn("arg", properties, f"{fn} lost its arg parameter")
+                if original not in ("browser.browse_site", "browser.prepare_submit"):
+                    self.assertIn("Free-text argument", properties["arg"]["description"])
             if "arg" in properties:
                 self.assertEqual(properties["arg"]["type"], "string")
                 self.assertEqual(required, [] if original not in (
