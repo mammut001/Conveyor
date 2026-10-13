@@ -1526,10 +1526,11 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if getattr(settings, "memory_v2_enabled", False):
                     from personal_tools import memory_v2 as ltm
                 gone, status = ltm.forget_fact(settings, owner, f"#{parts[2]}")
-                if status != "deleted":
+                if status not in ("deleted", "purge_pending"):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "memory not found"})
                     return
-                self._json(HTTPStatus.OK, {"ok": True, "deleted": ltm.api_item(settings, gone[0])})
+                self._json(HTTPStatus.OK, {"ok": True, "deleted": ltm.api_item(settings, gone[0]),
+                                           "purge_pending": status == "purge_pending"})
                 return
 
             if parsed.path.startswith("/api/routines"):
