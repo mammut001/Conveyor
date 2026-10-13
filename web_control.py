@@ -706,7 +706,7 @@ class WebControl:
             "features": {
                 "long_term_memory": bool(getattr(self.settings, "long_term_memory_enabled", False)),
                 "routines": bool(getattr(self.settings, "routines_enabled", False)),
-                "webhooks": bool(getattr(self.settings, "webhooks_enabled", False))
+                "webhooks": bool(getattr(self.settings, "webhooks_enabled", False) or getattr(self.settings, "hooks_enabled", False))
                 and bool(getattr(self.settings, "routines_enabled", False)),
                 "approval_inbox": bool(getattr(self.settings, "approval_inbox_enabled", False)),
                 "skills": bool(getattr(self.settings, "skills_enabled", False)),

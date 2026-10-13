@@ -180,6 +180,8 @@ def _test_registry() -> CheckResult:
             "routine.resume",
             "routine.delete",
             "routine.run",
+            "hook.list",
+            "hook.manage",
             # P2-3 Long-term memory
             "memory.remember",
             "memory.forget",
@@ -261,6 +263,8 @@ def _test_registry() -> CheckResult:
         routine_resume_level = PERSONAL_TOOL_REGISTRY["routine.resume"].danger
         routine_delete_level = PERSONAL_TOOL_REGISTRY["routine.delete"].danger
         routine_run_level = PERSONAL_TOOL_REGISTRY["routine.run"].danger
+        hook_list_level = PERSONAL_TOOL_REGISTRY["hook.list"].danger
+        hook_manage_level = PERSONAL_TOOL_REGISTRY["hook.manage"].danger
         ok_levels = (
             routine_list_level == DangerLevel.READ
             and routine_create_level == DangerLevel.WRITE
@@ -268,6 +272,8 @@ def _test_registry() -> CheckResult:
             and routine_resume_level == DangerLevel.WRITE_SAFE
             and routine_delete_level == DangerLevel.WRITE
             and routine_run_level == DangerLevel.WRITE
+            and hook_list_level == DangerLevel.READ
+            and hook_manage_level == DangerLevel.WRITE
             and add_level == DangerLevel.WRITE_SAFE
             and create_level == DangerLevel.WRITE_SAFE
             and delete_level == DangerLevel.DESTRUCTIVE
