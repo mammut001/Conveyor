@@ -397,13 +397,13 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._json(HTTPStatus.OK, {"ok": True, "service": "conveyor-web", "schema_version": 1})
             return
-        if path in ("/manifest.webmanifest", "/sw.js", "/icon.svg", "/icon-192.png", "/icon-512.png"):
+        if path == "/manifest.webmanifest":
+            self._manifest()
+            return
+        if path == "/sw.js":
             from web_push import enabled as pwa_enabled
             if not pwa_enabled(getattr(self.server.control, "settings", None)):
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-                return
-            if path == "/manifest.webmanifest":
-                self._manifest()
                 return
         if path.startswith("/api/") and not self._require_auth():
             return
@@ -1749,7 +1749,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.NOT_FOUND, {"error": "manifest not found"})
             return
         data = candidate.read_bytes()
-        self._headers(HTTPStatus.OK, "application/manifest+json", len(data), extra_headers=[("Cache-Control", "no-store")])
+        self._headers(HTTPStatus.OK, "application/manifest+json", len(data))
         self.wfile.write(data)
 
     def _static(self, path: str) -> None:
@@ -1758,11 +1758,13 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if STATIC_ROOT.resolve() not in candidate.parents and candidate != STATIC_ROOT.resolve():
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
-        if not candidate.is_file() and relative in ("sw.js", "icon.svg", "icon-192.png", "icon-512.png"):
-            candidate = (Path(__file__).resolve().parent / "web" / "public" / relative).resolve()
-        if not candidate.is_file() and relative in ("sw.js", "icon.svg", "icon-192.png", "icon-512.png"):
-            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-            return
+        if not candidate.is_file() and relative == "sw.js":
+            candidate = (Path(__file__).resolve().parent / "web" / "public" / "sw.js").resolve()
+            if not candidate.is_file():
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
+        if not candidate.is_file():
+            candidate = STATIC_ROOT / "index.html"
         if not candidate.is_file():
             self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "frontend not built"})
             return
