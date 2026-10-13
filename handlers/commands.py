@@ -612,12 +612,12 @@ async def _reminders(msg, port, _runner, settings, arg):
 
 async def _gmail_status(msg, port, _runner, settings, _arg):
     from handlers.tools.runner import run_tool
-    await port.reply(msg, await run_tool(settings, "gmail.status"))
+    await port.reply(msg, await run_tool(settings, "gmail.status", operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _gmail_recent(msg, port, _runner, settings, arg):
     from handlers.tools.runner import run_tool
-    await port.reply(msg, await run_tool(settings, "gmail.recent", arg))
+    await port.reply(msg, await run_tool(settings, "gmail.recent", arg, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _gmail_search(msg, port, _runner, settings, arg):
@@ -625,7 +625,7 @@ async def _gmail_search(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /gmail_search <关键词>")
         return
-    await port.reply(msg, await run_tool(settings, "gmail.search", arg))
+    await port.reply(msg, await run_tool(settings, "gmail.search", arg, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _gmail_read(msg, port, _runner, settings, arg):
@@ -633,7 +633,7 @@ async def _gmail_read(msg, port, _runner, settings, arg):
     if not arg.strip():
         await port.reply(msg, "用法: /gmail_read <邮件ID>")
         return
-    await port.reply(msg, await run_tool(settings, "gmail.read", arg))
+    await port.reply(msg, await run_tool(settings, "gmail.read", arg, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id))
 
 
 async def _email_send(msg, port, _runner, settings, arg):
