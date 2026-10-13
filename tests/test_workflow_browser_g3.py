@@ -264,6 +264,23 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
                 await self.assert_sensitive_fixture(FORM.replace(
                     '<h1>Public feedback</h1>', heading))
 
+    async def test_sensitive_links_and_post_form_copy_blocked(self):
+        cases = (
+            # An <a> inside a heading must not hide its visible checkout label.
+            FORM.replace('<h1>Public feedback</h1>',
+                '<h1><a href="/cart">Checkout</a></h1><h2>Your details</h2>'),
+            # Breadcrumb links outside nav/footer are part of the visible page.
+            FORM.replace('<h1>Public feedback</h1>',
+                '<div><a href="/account">Account</a> › '
+                '<a href="/delete">Delete account</a></div>'),
+            # Text after the selected form is equally relevant.
+            FORM.replace('<h1>Public feedback</h1>', '<h1>Welcome</h1>')
+                .replace('</form>', '</form><p>Sign in to continue</p>'),
+        )
+        for html in cases:
+            with self.subTest(html=html):
+                await self.assert_sensitive_fixture(html)
+
     async def test_card_number_placeholder_and_prefill_blocked(self):
         for control in (
             '<input type="text" name="f2" placeholder="4111 1111 1111 1111">',
@@ -326,7 +343,8 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
             '<footer><h2>Sign in</h2></footer>',
             '<footer><a href="/login">Sign in</a></footer>',
             '<nav><h4>Payment</h4></nav>',
-            '<a href="/login">Sign in</a>',
+            '<div role="navigation"><a href="/login">Sign in</a></div>',
+            '<div role="contentinfo"><h2>Sign in</h2></div>',
         ):
             for before in (True, False):
                 with self.subTest(footer=footer, before=before):
