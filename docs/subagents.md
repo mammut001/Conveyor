@@ -100,3 +100,32 @@ When `CONVEYOR_SUBAGENTS_ENABLED=true`, the `agents.parallel` tool is exposed to
 - `web.search`, `research.run` and `research.project` are offered (to the parent and therefore to subagents) only when a search backend is configured (`WEB_SEARCH_BACKEND` ≠ `disabled`) **and** they are allowlisted. Without a backend they could only answer "Web 搜索能力未配置", so the model is not offered a dead tool; `web.fetch` / `web.text` still work for known URLs, and subagents are told to state a missing capability in one line instead of guessing.
 - Subagents refuse non-READ tool calls before anything is executed, so environment problems of write paths (e.g. a missing `CODEX_WORKSPACE_ROOT`) can never surface from a subagent.
 - `agents.parallel` lives in the **Chat** tab (`POST /api/chat`, chat tier). The **Tasks** tab (`POST /api/tasks`) is the Codex execution path and never calls it.
+
+
+## Durable background children (independent opt-in)
+
+The existing read-only synchronous `agents.parallel` above is retained unchanged. The **new**
+`subagent.spawn`, `subagent.status`, `subagent.result` and `subagent.cancel` tools
+run child chat loops asynchronously and keep status in `CODEX_MEMORY_ROOT/subagents.db`.
+Enable with `CONVEYOR_CHAT_TOOLS=true`, `CONVEYOR_SUBAGENTS=1` and an existing
+configured chat tier (for example, the DeepSeek OpenAI-compatible endpoint).
+The default is OFF, independently of `CONVEYOR_SUBAGENTS_ENABLED`.
+
+`CONVEYOR_SUBAGENTS_MAX=3` sets a process-wide active-child cap;
+`CONVEYOR_SUBAGENTS_MAX_STEPS=3`, `CONVEYOR_SUBAGENTS_MAX_TOKENS=1800`, and
+`CONVEYOR_SUBAGENTS_TIMEOUT_SECONDS=90` bound each child. Model generation
+tokens are bounded; prompt/input tokens are separately restricted by short goals
+and capped tool outputs. At startup, previously queued/running rows are marked
+`interrupted` rather than restarted. Parent `/cancel` or `/chat_clear` cancels children.
+
+Children receive only an explicitly chosen subset of the parent's exposed tools.
+Their model cannot spawn another child. READs use the parent's durable egress
+taint identity; writes and destructive calls require **Approval Inbox** and
+are never auto-approved. When a child completes, a brief result goes to the
+parent chat through the existing Web, Telegram or Feishu message port.
+
+Authenticated console endpoints: `GET /api/subagents`,
+`POST /api/subagents/{id}/cancel`, `POST /api/subagents/kill`.
+The kill endpoint cancels active children and latches the feature off until restart;
+setting `CONVEYOR_SUBAGENTS=0` also disables it live (checked before each step).
+Smoke: `python scripts/subagents_smoke.py`. Unit tests use a fake chat LLM.

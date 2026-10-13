@@ -82,6 +82,10 @@ async def dispatch(
             await handle_deep(msg, port, runner, settings=settings)
             return
         if cmd_name == "chat_clear":
+            import subagents
+            if subagents.enabled(settings):
+                subagents.cancel_parent(settings, operator_id=msg.operator_id,
+                                        channel=msg.channel, chat_id=msg.chat_id)
             await handle_chat_clear(msg, port, settings)
             return
         if cmd_name in ("run", "fix"):
@@ -96,6 +100,11 @@ async def dispatch(
                 return
             await handle_codex_job(msg, port, runner, mode=mode, prompt=arg)
             return
+        if cmd_name == "cancel":
+            import subagents
+            if subagents.enabled(settings):
+                subagents.cancel_parent(settings, operator_id=msg.operator_id,
+                                        channel=msg.channel, chat_id=msg.chat_id)
         handled = await run_command(cmd_name, msg, port, runner, settings, arg)
         if handled:
             return
