@@ -272,6 +272,7 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
                     "git", "apply", *flags, "-",
                     cwd=apply_root, stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    env=__import__("subprocess_env").utility_env(self.settings),
                 )
                 try:
                     stdout, stderr = await proc.communicate(patch.encode("utf-8"))
