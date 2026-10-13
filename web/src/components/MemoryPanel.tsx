@@ -2,7 +2,8 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 
 export type MemoryItem = {
   id: number;
-  kind: 'profile' | 'log';
+  kind: 'profile' | 'facts' | 'log';
+  source?: string;
   text: string;
   day: string;
   created_at: string;
@@ -12,7 +13,7 @@ export type MemoryItem = {
 
 type MemoryList = {
   items: MemoryItem[];
-  counts: { profile: number; log: number };
+  counts: { profile: number; facts?: number; log: number };
   shared: boolean;
   profile_cap: number;
 };
@@ -24,7 +25,10 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
   const [disabled, setDisabled] = useState(false);
   const disabledRef = useRef(false);
   const [data, setData] = useState<MemoryList | null>(null);
-  const [kind, setKind] = useState<'all' | 'profile' | 'log'>('all');
+  const [kind, setKind] = useState<'all' | 'profile' | 'facts' | 'log'>('all');
+  const [newTier, setNewTier] = useState<'profile' | 'facts' | 'log'>('facts');
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingText, setEditingText] = useState('');
   const [query, setQuery] = useState('');
   const [activeQuery, setActiveQuery] = useState('');
   const [error, setError] = useState('');
@@ -79,7 +83,7 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
       const res = await fetch('/api/memory', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(agentId ? { text, agent: agentId } : { text }),
+        body: JSON.stringify({ text, ...(agentId ? { agent: agentId } : {}), ...(data?.counts.facts !== undefined ? { tier: newTier } : {}) }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -119,12 +123,33 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
     }
   };
 
+  const handleEdit = async (id: number) => {
+    setFormBusy(true);
+    try {
+      const res = await fetch(`/api/memory/${id}${agentId ? `?agent=${encodeURIComponent(agentId)}` : ''}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ text: editingText }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.error || `Edit failed (${res.status})`);
+      }
+      setEditingId(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Edit failed');
+    } finally {
+      setFormBusy(false);
+    }
+  };
+
   if (disabled) {
     return (
       <div className="stream-body" style={{ padding: '24px 20px' }}>
         <div className="job-notice" style={{ maxWidth: 640 }}>
           <strong>Long-term memory is disabled</strong>
-          <span>Set <code>CONVEYOR_LONG_TERM_MEMORY=true</code> on the server to enable durable memory.</span>
+          <span>Set <code>CONVEYOR_MEMORY_V2=1 or CONVEYOR_LONG_TERM_MEMORY=true</code> on the server to enable durable memory.</span>
         </div>
       </div>
     );
@@ -143,7 +168,7 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
       <section className="memory-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600 }}>
-            {agentId && agentName ? `${agentName}'s memory` : 'Long-term memory'} · profile {data?.counts.profile ?? 0}/{data?.profile_cap ?? 8} · log {data?.counts.log ?? 0}
+            {agentId && agentName ? `${agentName}'s memory` : 'Long-term memory'} · profile {data?.counts.profile ?? 0}{data?.counts.facts !== undefined ? ' · facts ' + data.counts.facts : ''} · log {data?.counts.log ?? 0}
           </h3>
           <span className="memory-secondary" style={{ fontSize: '0.75rem' }}>
             {data ? (data.shared ? 'Shared across Web, Telegram and Feishu' : 'Web Console memory only') : ''}
@@ -156,11 +181,14 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
 
       <section className="memory-card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <form onSubmit={handleAdd} style={{ display: 'flex', gap: 8 }}>
+          {data?.counts.facts !== undefined && <select className="memory-input" value={newTier} onChange={(e) => setNewTier(e.target.value as 'profile' | 'facts' | 'log')} aria-label="New memory tier">
+            <option value="profile">Profile</option><option value="facts">Fact</option><option value="log">Daily log</option>
+          </select>}
           <input
             type="text"
             className="memory-input"
             value={newText}
-            maxLength={280}
+            maxLength={newTier === 'log' ? 4000 : 280}
             placeholder="Add one fact (one sentence, max 280 chars)"
             onChange={(e) => setNewText(e.target.value)}
             style={{ flex: 1 }}
@@ -179,9 +207,10 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
           }}
           style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
         >
-          <select className="memory-input" value={kind} onChange={(e) => setKind(e.target.value as 'all' | 'profile' | 'log')} aria-label="Tier">
+          <select className="memory-input" value={kind} onChange={(e) => setKind(e.target.value as 'all' | 'profile' | 'facts' | 'log')} aria-label="Tier">
             <option value="all">All</option>
             <option value="profile">Profile</option>
+            {data?.counts.facts !== undefined && <option value="facts">Facts</option>}
             <option value="log">Log</option>
           </select>
           <input
@@ -224,6 +253,7 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
                     {item.kind}
                   </span>
                   <span>{item.day}</span>
+                  {item.source && <span>source: {item.source}</span>}
                   {item.source_channel && <span>via {item.source_channel}</span>}
                 </div>
                 {confirmId === item.id ? (
@@ -248,7 +278,18 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
                   </button>
                 )}
               </header>
-              <div style={{ fontSize: '0.9rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{item.text}</div>
+              {editingId === item.id ? (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input className="memory-input" style={{ flex: 1 }} value={editingText} onChange={e => setEditingText(e.target.value)} aria-label="Edit memory text" />
+                  <button type="button" className="action-btn" disabled={formBusy} onClick={() => void handleEdit(item.id)}>Save</button>
+                  <button type="button" className="action-btn" onClick={() => setEditingId(null)}>Cancel</button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'start' }}>
+                  <div style={{ flex: 1, fontSize: '0.9rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{item.text}</div>
+                  {data?.counts.facts !== undefined && <button type="button" className="action-btn" onClick={() => { setEditingId(item.id); setEditingText(item.text); }}>Edit</button>}
+                </div>
+              )>
             </article>
           ))
         )}
