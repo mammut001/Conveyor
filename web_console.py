@@ -402,6 +402,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/") and not self._require_auth():
             return
+        if path == "/api/subagents":
+            import subagents_api
+            if subagents_api.get(self, path):
+                return
         if path == "/api/egress":
             from egress_proxy import status
             self._json(HTTPStatus.OK, status(getattr(self.server.control, "settings", None)))
@@ -852,6 +856,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         body = self._body()
         if body is None:
             return
+        if parts[:2] == ["api", "subagents"]:
+            import subagents_api
+            if subagents_api.post(self, parts):
+                return
         if parsed.path == "/api/secrets":
             from web_secrets_api import dispatch
             if dispatch(self, "POST", parsed.path, body):
