@@ -6,7 +6,9 @@ Set:
 
 ```env
 CONVEYOR_EGRESS_PROXY=1
-CONVEYOR_EGRESS_ALLOWLIST=api.openai.com,*.github.com,localhost
+CONVEYOR_EGRESS_ALLOWLIST=api.openai.com,*.github.com
+# Optional: only in a tightly isolated fake-IP DNS sandbox
+# CONVEYOR_EGRESS_ALLOW_PRIVATE_CIDRS=198.18.0.0/15
 # Optional loopback listener port (0 = OS-chosen ephemeral port)
 CONVEYOR_EGRESS_PROXY_PORT=0
 # Required for tainted outbound approval inbox:
@@ -27,11 +29,25 @@ The proxy binds **only to 127.0.0.1** and uses the Python standard library.
 It accepts absolute-form HTTP requests and HTTPS `CONNECT host:port`, checks
 the domain before opening a connection, resolves all DNS answers, and pins the
 connection to the validated numeric address. Non-allowlisted destinations are
-rejected before DNS. Private, loopback, link-local, unspecified, reserved, and
-other non-global DNS results are rejected for wildcard entries. **Only an
-explicit exact allowlist entry** (including an exact IP literal or hostname)
-may connect to a private address, useful for test fixtures; do not add a local
-address in production.
+rejected before DNS. All resolved addresses must be globally routable,
+whether the name matches an exact entry or a wildcard. Non-global addresses
+can only be used when they belong to an **additional explicit CIDR opt-in**,
+`CONVEYOR_EGRESS_ALLOW_PRIVATE_CIDRS`, e.g. `198.18.0.0/15` in fake-IP
+DNS sandboxes. This opt-in is empty by default, validates all CIDR entries,
+and is not suitable for general web browsing.
+
+Regardless of allowlist and CIDR values, the proxy *always* rejects loopback,
+link-local (including metadata `169.254.169.254`), unspecified and multicast
+addresses, as well as their IPv4-mapped and NAT64 IPv6 forms. The configured
+Web Console port and the proxy's actual listening port cannot be forwarded
+to on **any** IP, including local aliases. This port-wide restriction is
+conservative. An exact `localhost` rule is never a bypass. Local echo
+integration tests use an injected fake-IP resolver/dialer and do not weaken
+the production policy.
+
+For resource safety, the proxy enforces a roughly 10-second overall HTTP
+request-line/header-read deadline, a 32 KiB header budget, and a maximum
+of 64 concurrent client connections (excess clients receive HTTP 503).
 
 Each policy decision is written as JSONL to
 `<codex_memory_root>/egress_decisions.jsonl` (mode 0600):
@@ -63,17 +79,26 @@ policy blocking direct egress and permitting only the proxy.
 Session taint markers are stored, with no private content, in
 `<codex_memory_root>/egress_taint.db` (mode 0600), keyed by operator,
 channel, and chat ID. Attempts to read `memory.*`, `gmail.*`, inbox
-or secret tools mark the session (including failed reads, conservatively).
-Taint survives server restarts and remains until an explicit session reset.
-New sessions and different operators are not automatically tainted.
+or secret tools, plus `calendar.search`, `contacts.search`,
+`notes.search`, and `files.search`, mark the session (including failed
+reads, conservatively). Taint survives server restarts and persists until
+an operator explicitly removes the corresponding row from the SQLite store
+during maintenance; **there is currently no user-facing reset command or
+model tool**. New sessions and different operators are not automatically
+tainted. Operators must not delete rows based on untrusted model requests.
 
 Registered outbound sends are classified with the existing
 `outbound_draft_cards.is_outbound` helper: `email.send`,
 `github.comment`, `github.create_issue`, and explicitly declared
 outbound MCP WRITE/DESTRUCTIVE tools. After a private read, a send must go
 through the existing confirmation/Approval Inbox or draft-card path; without
-either approval surface it is refused. The low-level `run_tool` API rejects
-such sends when a context is present and no verified approval is supplied.
+either approval surface it is refused. In a tainted session, in-process
+network READ tools (`web.fetch`, `web.text`, `web.headers`, `web.search`,
+`browser.*`, `research.*`) likewise require the existing approval flow,
+because URLs, search terms, and query strings can exfiltrate private content.
+The low-level `run_tool` API refuses these actions without verified approval
+when supplied a session context; session-aware direct commands and hybrid
+routing also enforce the gate.
 Human-confirmed execution uses the established approval token flow and is
 allowed to proceed exactly once. The default-off switch skips this check
 entirely.
