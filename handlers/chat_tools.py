@@ -117,7 +117,7 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
         return False
     if name.startswith("hook.") and not (getattr(settings, "hooks_enabled", False) and getattr(settings, "routines_enabled", False)):
         return False
-    if name.startswith("memory.") and not getattr(settings, "long_term_memory_enabled", False):
+    if name.startswith("memory.") and not (getattr(settings, "long_term_memory_enabled", False) or getattr(settings, "memory_v2_enabled", False)):
         return False
     if name.startswith("skill.") and not getattr(settings, "skills_enabled", False):
         return False
@@ -195,6 +195,13 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
                 },
             },
         }
+        if name == "memory.remember" and getattr(settings, "memory_v2_enabled", False):
+            schema["function"]["parameters"] = {
+                "type": "object", "properties": {
+                    "text": {"type": "string"},
+                    "tier": {"type": "string", "enum": ["profile", "facts", "log"]},
+                }, "required": ["text", "tier"],
+            }
         schemas.append(schema)
 
     if settings and getattr(settings, "mcp_enabled", False):
@@ -325,6 +332,13 @@ async def run_tool_loop(
                     })
                     continue
                 arg = json.dumps(arg_dict, sort_keys=True, ensure_ascii=False)
+            elif real_tool_name == "memory.remember" and getattr(settings, "memory_v2_enabled", False):
+                raw = fn_info.get("arguments")
+                try:
+                    value = json.loads(raw) if isinstance(raw, str) else raw
+                    arg = json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else ""
+                except (TypeError, ValueError):
+                    arg = ""
             else:
                 arg = _parse_tool_arg(fn_info.get("arguments"))
 
@@ -341,7 +355,10 @@ async def run_tool_loop(
             if real_tool_name.startswith("memory.") and danger in (
                 DangerLevel.WRITE_SAFE, DangerLevel.WRITE,
             ):
-                from personal_tools.long_term_memory import screen_write_arg
+                if getattr(settings, "memory_v2_enabled", False):
+                    from personal_tools.memory_v2_bridge import screen_write_arg
+                else:
+                    from personal_tools.long_term_memory import screen_write_arg
                 screened = screen_write_arg(real_tool_name, arg)
                 if screened.error:
                     messages.append({
