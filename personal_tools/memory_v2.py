@@ -138,6 +138,10 @@ def remember_fact(
             (who, tier, value),
         ).fetchone()
         if row:
+            if import_key and not row["import_key"]:
+                db.execute("UPDATE memory_v2_entries SET import_key=? WHERE id=?", (import_key, row["id"]))
+                db.commit()
+                row = db.execute("SELECT * FROM memory_v2_entries WHERE id=?", (row["id"],)).fetchone()
             return _row(row)
         if tier == "profile":
             used = db.execute(
@@ -295,6 +299,31 @@ def api_list(settings: Any, *, q: str = "", kind: str | None = None, limit: int 
         "counts": {tier: sum(r["tier"] == tier for r in rows) for tier in TIERS},
         "shared": shared(settings), "profile_cap": PROFILE_BYTES,
     }
+
+
+def update_fact(settings: Any, operator_id: str, ident: int, text: str) -> dict[str, Any] | None:
+    """Authorized web edit; preserves provenance, tier and expiry."""
+    with connect(settings) as db:
+        row = db.execute(
+            "SELECT * FROM memory_v2_entries WHERE id=? AND operator_id=?",
+            (ident, owner(settings, operator_id)),
+        ).fetchone()
+        if row is None:
+            return None
+        value = _validate(text, row["tier"], row["source"])
+        if row["tier"] == "profile":
+            bytes_other = db.execute(
+                "SELECT COALESCE(SUM(length(CAST(text AS BLOB))),0) FROM memory_v2_entries "
+                "WHERE operator_id=? AND tier='profile' AND id!=? "
+                "AND (expires_at IS NULL OR expires_at>?)",
+                (row["operator_id"], ident, time.time()),
+            ).fetchone()[0]
+            if bytes_other + len(value.encode("utf-8")) > PROFILE_BYTES:
+                raise ValueError("profile exceeds the 2048-byte cap")
+        db.execute("UPDATE memory_v2_entries SET text=?,updated_at=? WHERE id=?",
+                   (value, time.time(), ident))
+        db.commit()
+        return _row(db.execute("SELECT * FROM memory_v2_entries WHERE id=?", (ident,)).fetchone())
 
 
 def archive_for_day(settings: Any, day: str) -> str:
