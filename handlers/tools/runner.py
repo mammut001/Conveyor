@@ -139,10 +139,13 @@ async def run_tool(
         return f"工具 {tool_name} 执行失败: {type(exc).__name__}"
 
 
-async def run_tools(settings: Settings, tool_names: tuple[str, ...], arg: str = "") -> str:
+async def run_tools(settings: Settings, tool_names: tuple[str, ...], arg: str = "",
+                    *, operator_id: str = "", channel: str = "",
+                    chat_id: str = "") -> str:
     parts: list[str] = []
     for name in tool_names:
-        result = await run_tool(settings, name, arg)
+        result = await run_tool(settings, name, arg,
+                                operator_id=operator_id, channel=channel, chat_id=chat_id)
         parts.append(f"## tool:{name}\n{result}")
     return "\n\n".join(parts)
 
@@ -150,10 +153,12 @@ async def run_tools(settings: Settings, tool_names: tuple[str, ...], arg: str = 
 async def run_tools_collected(
     settings: Settings,
     items: tuple[tuple[str, str], ...],
+    *, operator_id: str = "", channel: str = "", chat_id: str = "",
 ) -> str:
     parts: list[str] = []
     for name, arg in items:
-        result = await run_tool(settings, name, arg)
+        result = await run_tool(settings, name, arg,
+                                operator_id=operator_id, channel=channel, chat_id=chat_id)
         parts.append(f"## tool:{name}\n{result}")
     return "\n\n".join(parts)
 
@@ -174,6 +179,18 @@ def _danger_label(tool_name: str, settings: Settings | None = None) -> str:
     return personal_tool_danger(tool_name)
 
 
+async def _tainted_network_guard(msg, port, settings, items):
+    """Check multi-tool routes before any network-reaching READ is executed."""
+    import egress_taint
+    for name, arg in items:
+        if egress_taint.requires_approval(
+                settings, name, operator_id=msg.operator_id,
+                channel=msg.channel, chat_id=msg.chat_id):
+            await _request_confirmation(msg, port, settings, name, arg)
+            return True
+    return False
+
+
 async def handle_route(
     msg: InboundMessage,
     port: OutboundPort,
@@ -183,7 +200,10 @@ async def handle_route(
 ) -> None:
     """Execute deterministic tool(s) from a route result."""
     if route.tool_items:
-        combined = await run_tools_collected(settings, route.tool_items)
+        if await _tainted_network_guard(msg, port, settings, route.tool_items):
+            return
+        combined = await run_tools_collected(settings, route.tool_items,
+            operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)
         await port.reply(msg, combined)
         return
     if not route.tools:
@@ -192,7 +212,11 @@ async def handle_route(
     if len(route.tools) == 1:
         await _invoke_tool(msg, port, settings, route.tools[0], route.arg, runner=runner)
         return
-    combined = await run_tools(settings, route.tools, route.arg)
+    if await _tainted_network_guard(msg, port, settings,
+                                     ((name, route.arg) for name in route.tools)):
+        return
+    combined = await run_tools(settings, route.tools, route.arg,
+        operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)
     await port.reply(msg, combined)
 
 
@@ -204,12 +228,20 @@ async def handle_hybrid(
     route: RouteResult,
 ) -> None:
     """Collect deterministic facts, then ask Codex to analyze."""
+    candidates = (route.tool_items if route.tool_items else
+                  tuple((n, route.arg) for n in (
+                      route.tools or _HYBRID_DEFAULT_TOOLS)))
+    if await _tainted_network_guard(msg, port, settings, candidates):
+        return
     if route.tool_items:
-        facts = await run_tools_collected(settings, route.tool_items)
+        facts = await run_tools_collected(settings, route.tool_items,
+            operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)
     elif route.tools:
-        facts = await run_tools(settings, route.tools, route.arg)
+        facts = await run_tools(settings, route.tools, route.arg,
+            operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)
     else:
-        facts = await run_tools(settings, _HYBRID_DEFAULT_TOOLS, route.arg)
+        facts = await run_tools(settings, _HYBRID_DEFAULT_TOOLS, route.arg,
+            operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)
     question = route.question or msg.text.strip()
     prompt = build_hybrid_prompt(question, facts)
     await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=prompt)
@@ -224,7 +256,10 @@ async def handle_hybrid_project(
     arg: str,
 ) -> None:
     """Run a project analysis tool that returns [HYBRID_PROMPT], then send to Codex."""
-    result = await run_tool(settings, tool_name, arg)
+    if await _tainted_network_guard(msg, port, settings, ((tool_name, arg),)):
+        return
+    result = await run_tool(settings, tool_name, arg,
+        operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)
     if result.startswith("[HYBRID_PROMPT]"):
         prompt = result[len("[HYBRID_PROMPT]"):]
         await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=prompt)
