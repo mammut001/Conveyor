@@ -235,6 +235,8 @@ class Settings:
     skills_enabled: bool = False
     workflows_enabled: bool = False
     child_env_scope_provider_keys: bool = False
+    env_isolation: bool = False
+    secrets_file: Path | None = None
     web_mobile_ui: bool = False
     mcp_enabled: bool = False
     mcp_config_path: Path | None = None
@@ -662,6 +664,8 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "workflows_enabled": os.getenv(
             "CONVEYOR_WORKFLOWS_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
+        "env_isolation": os.getenv("CONVEYOR_ENV_ISOLATION", "false").strip().lower() in ("true", "1", "yes", "on"),
+        "secrets_file": Path(os.environ["CONVEYOR_SECRETS_FILE"]).expanduser() if os.getenv("CONVEYOR_SECRETS_FILE") else memory_root / "secrets" / "console_secrets.json",
         "child_env_scope_provider_keys": os.getenv(
             "CONVEYOR_CHILD_ENV_SCOPE_PROVIDER_KEYS", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
