@@ -9,7 +9,7 @@ import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { SecretsPanel } from './components/SecretsPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
 import { PwaNotifications } from './components/PwaNotifications'
-import { disablePwa, leavePwa } from './pwa'
+import { leavePwa } from './pwa'
 import { BrowserApprovalsPanel } from './components/BrowserApprovalsPanel'
 import { TeammatePanel } from './components/TeammatePanel'
 import { LiveScreenPanel } from './components/LiveScreenPanel'
@@ -204,7 +204,7 @@ export default function App() {
   const [contextDrawerOpen, setContextDrawerOpen] = useState(false)
 
   useEffect(() => {
-    if (authenticated && system?.features?.pwa) {
+    if (system?.features?.mobile_ui || (authenticated && system?.features?.pwa)) {
       let link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
       if (!link) {
         link = document.createElement('link')
@@ -214,9 +214,8 @@ export default function App() {
       }
     } else {
       document.querySelector<HTMLLinkElement>('link[rel="manifest"]')?.remove()
-      if (system && !system.features?.pwa) void disablePwa().catch(() => undefined)
     }
-  }, [authenticated, system?.features?.pwa])
+  }, [authenticated, system?.features?.pwa, system?.features?.mobile_ui])
 
   const sessionsDrawerRef = useRef<HTMLElement>(null)
   const contextDrawerRef = useRef<HTMLElement>(null)
