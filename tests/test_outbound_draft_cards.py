@@ -107,9 +107,9 @@ class OutboundDraftTests(unittest.TestCase):
         s = settings(self.root, outbound_allowlist="example.com,special@partner.net")
         good = dict(to="alice@example.com", cc="special@partner.net", bcc="", subject="Hi", body="text")
         self.assertEqual(cards.validate(s, "email.send", good), good)
-        with self.assertRaisesRegex(ValueError, "allowlist"):
+        with self.assertRaisesRegex(ValueError, "(?i)allowlist"):
             cards.validate(s, "email.send", {**good, "bcc": "hidden@other.net"})
-        with self.assertRaisesRegex(ValueError, "allowlist"):
+        with self.assertRaisesRegex(ValueError, "(?i)allowlist"):
             cards.validate(s, "github.comment", {"repo": "owner/repo", "number": "12", "body": "text"})
 
     def test_double_send_uncertain_once_no_retry(self):
