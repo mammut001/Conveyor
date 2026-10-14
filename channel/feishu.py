@@ -106,11 +106,12 @@ class FeishuOutbound:
         return bytes(data)
 
     async def download_audio_resource(
-        self, msg: InboundMessage, file_key: str,
-    ) -> bytes | None:
-        """Use Feishu's authenticated message-resource API (audio type=file)."""
-        return await self._channel.download_resource(
-            file_key, "file", message_id=msg.message_id,
+        self, msg: InboundMessage, file_key: str, dest, limit: int,
+    ) -> None:
+        """Bounded message-resource stream using the SDK tenant token."""
+        from channel.feishu_audio import download_bounded_resource
+        await download_bounded_resource(
+            self._channel, msg.message_id, file_key, dest, limit,
         )
 
     async def send_card(
