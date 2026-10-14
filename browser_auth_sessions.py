@@ -17,7 +17,7 @@ import tempfile
 import time
 from urllib.parse import urlsplit
 
-from browser_auth_policy import enabled, ttl, origins, check_request, browser_pins
+from browser_auth_policy import enabled, ttl, origins, _origin, check_request, browser_pins
 from browser_g3_kill import active as kill_active
 from human_takeover import HumanTakeoverStore
 from workflow_browser_external_identity import ExternalPolicyDenied
@@ -280,7 +280,10 @@ class AuthSessionManager:
                 shutil.rmtree(p)
 
     async def open(self, operator, task, domain):
-        if not enabled() or domain not in origins():
+        if not enabled():
+            raise ExternalPolicyDenied("g4_disabled_or_domain_denied")
+        domain = _origin(domain)
+        if domain not in origins():
             raise ExternalPolicyDenied("g4_disabled_or_domain_denied")
         if not isinstance(operator, str) or not re.fullmatch(r"[A-Za-z0-9:_-]{1,128}", operator):
             raise ExternalPolicyDenied("g4_operator_denied")

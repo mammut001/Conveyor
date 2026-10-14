@@ -99,8 +99,9 @@ The required-Chromium CI job installs a real browser and runs both adapter and g
 ### G4 — Optional authenticated sites, **separate opt-in and security approval**
 
 **Implementation status (G4 prototype, default OFF; external deployment NOT APPROVED):**
-`CONVEYOR_BROWSER_AUTH_SESSIONS=1` plus exact
-`CONVEYOR_BROWSER_AUTH_DOMAINS=https://host.example:443` permits the
+`CONVEYOR_BROWSER_AUTH_SESSIONS=1` **in addition to the G1/G2/G3 flags
+and `CONVEYOR_TAKEOVER_ENABLED=1`**, plus exact
+`CONVEYOR_BROWSER_AUTH_DOMAINS=host.example` (or its HTTPS origin) permits the
 internal session manager to launch one fresh persistent-context Chromium
 process with its own ephemeral 0700 user-data directory, bound to operator,
 task and exact origin. `CONVEYOR_BROWSER_AUTH_TTL_SEC` defaults to 900.

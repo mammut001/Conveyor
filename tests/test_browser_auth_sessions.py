@@ -25,6 +25,11 @@ class G4OfflineTests(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.env = patch.dict(os.environ, {
+            "CONVEYOR_REAL_BROWSER": "1",
+            "CONVEYOR_BROWSER_EXTERNAL_READONLY": "1",
+            "CONVEYOR_BROWSER_EXTERNAL_INTERACT": "1",
+            "CONVEYOR_BROWSER_EXTERNAL_SUBMIT": "1",
+            "CONVEYOR_TAKEOVER_ENABLED": "1",
             "CONVEYOR_BROWSER_AUTH_SESSIONS": "1",
             "CONVEYOR_BROWSER_AUTH_DOMAINS": "http://127.0.0.1:8765",
             "CONVEYOR_BROWSER_AUTH_TEST_LOOPBACK": "1",
@@ -48,6 +53,27 @@ class G4OfflineTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(url=url), self.assertRaises(ExternalPolicyDenied):
                 check_request(url, method, good, lease)
+
+    async def test_g4_requires_all_prior_browser_gates(self):
+        for name in (
+            "CONVEYOR_REAL_BROWSER", "CONVEYOR_BROWSER_EXTERNAL_READONLY",
+            "CONVEYOR_BROWSER_EXTERNAL_INTERACT", "CONVEYOR_BROWSER_EXTERNAL_SUBMIT",
+            "CONVEYOR_TAKEOVER_ENABLED",
+        ):
+            with self.subTest(name=name):
+                os.environ[name] = "0"
+                self.assertFalse(enabled())
+                with self.assertRaises(ExternalPolicyDenied):
+                    await self.manager.open("operator", "task1", "http://127.0.0.1:8765")
+                os.environ[name] = "1"
+
+    def test_bare_domain_normalization(self):
+        from browser_auth_policy import _origin
+        self.assertEqual(_origin("approved.example.com"), "https://approved.example.com")
+        self.assertEqual(_origin("https://approved.example.com:443"),
+                         "https://approved.example.com")
+        with self.assertRaises(ExternalPolicyDenied):
+            _origin("*.example.com")
 
     async def test_flag_off_does_not_launch(self):
         os.environ["CONVEYOR_BROWSER_AUTH_SESSIONS"] = "0"
@@ -172,6 +198,11 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.domain = f"http://127.0.0.1:{self.http.server_port}"
         self.env = patch.dict(os.environ, {
+            "CONVEYOR_REAL_BROWSER": "1",
+            "CONVEYOR_BROWSER_EXTERNAL_READONLY": "1",
+            "CONVEYOR_BROWSER_EXTERNAL_INTERACT": "1",
+            "CONVEYOR_BROWSER_EXTERNAL_SUBMIT": "1",
+            "CONVEYOR_TAKEOVER_ENABLED": "1",
             "CONVEYOR_BROWSER_AUTH_SESSIONS": "1",
             "CONVEYOR_REAL_BROWSER": "1",
             "CONVEYOR_BROWSER_AUTH_DOMAINS": self.domain,
