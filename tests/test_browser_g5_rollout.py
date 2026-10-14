@@ -70,7 +70,7 @@ class G5Tests(unittest.TestCase):
         g5.check(self.root, ORIGIN, "read")
         self.assertFalse(g5.status(self.root)["auto_promotion"])
         with patch.dict(os.environ, {"CONVEYOR_BROWSER_G5_LIVE_ACK": "1"}):
-            with self.assertRaisesRegex(ExternalPolicyDenied, "g5_manifest_missing"):
+            with self.assertRaisesRegex(ExternalPolicyDenied, "g5_manifest_unavailable"):
                 g5.check(self.root, ORIGIN, "read")
             self.sign()
             with patch("importlib.metadata.version", return_value="1.58.0"), \
