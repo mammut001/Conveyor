@@ -63,8 +63,9 @@ and packaged Chromium revision; it **cannot** verify captures merely from
 their SHA-256 hashes. A declared capture without independently checked
 evidence is not approval to deploy.
 
-Action vocabulary is only `read`, `interact`, `auth`. G5 live mode
-disables the current G3 server-dispatched submit prototype entirely. No
+Action vocabulary is only `read`, `interact`, `auth`. Any G5 mode,
+including monitoring-only without LIVE_ACK, disables the current G3
+server-dispatched submit prototype entirely. No
 payments, purchases, MFA/OTP automation, or irrevocable action is certifiable.
 
 ## Authenticated operator control (Web Console)
