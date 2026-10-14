@@ -5,6 +5,6 @@ import sys
 
 if __name__ == "__main__":
     raise SystemExit(subprocess.call([
-        sys.executable, "-m", "unittest", "-v",
-        "tests.test_browser_auth_sessions.G4OfflineTests",
+        sys.executable, "-m", "unittest", "discover", "-s", "tests",
+        "-p", "test_browser_auth_sessions.py", "-v",
     ]))
