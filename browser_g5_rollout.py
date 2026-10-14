@@ -84,7 +84,7 @@ def _manifest():
     path = Path(path_str)
     try:
         # Open only once: reject symlinks at open and validate the opened inode.
-        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
             info = os.fstat(stream.fileno())
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
                     or stat.S_IMODE(info.st_mode) & 0o077 or info.st_size > 16384):
