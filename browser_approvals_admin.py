@@ -188,7 +188,17 @@ def post(handler, path, body):
         handler._json(400,{"error":"expected boolean enabled"})
     else:
         try:
-            handler._json(200,{"kill_switch":set_kill(_settings(handler),body["enabled"])})
+            status = set_kill(_settings(handler),body["enabled"])
+            if status and os.getenv("CONVEYOR_BROWSER_AUTH_SESSIONS") == "1":
+                try:
+                    from browser_auth_policy import enabled as g4_enabled
+                    if g4_enabled():
+                        from browser_auth_sessions import manager_for
+                        handler._await(manager_for(_settings(handler)).revoke_all())
+                except Exception:
+                    # G4 teardown cannot alter the existing kill API response.
+                    pass
+            handler._json(200,{"kill_switch":status})
         except ExternalPolicyDenied as exc:
             handler._json(409,{"error":str(exc)})
     return True
