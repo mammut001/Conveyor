@@ -83,11 +83,15 @@ def _manifest():
         raise ExternalPolicyDenied("g5_manifest_missing")
     path = Path(path_str)
     try:
-        info = path.lstat()
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                or stat.S_IMODE(info.st_mode) & 0o077 or info.st_size > 16384):
-            raise ExternalPolicyDenied("g5_manifest_unsafe")
-        raw = path.read_bytes()
+        # Open only once: reject symlinks at open and validate the opened inode.
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) & 0o077 or info.st_size > 16384):
+                raise ExternalPolicyDenied("g5_manifest_unsafe")
+            raw = stream.read(16385)
+            if len(raw) > 16384:
+                raise ExternalPolicyDenied("g5_manifest_unsafe")
         data = json.loads(raw)
         if not isinstance(data, dict):
             raise ValueError()
