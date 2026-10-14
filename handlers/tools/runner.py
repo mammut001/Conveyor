@@ -87,12 +87,12 @@ async def run_tool(
     import named_agents
     if not named_agents.tool_allowed(settings, channel, chat_id, tool_name):
         return "agent tool denied"
-    if tool_name == "agent.message":
-        return named_agents.send_message(settings, arg, channel=channel, chat_id=chat_id)
     import egress_taint
     if egress_taint.requires_approval(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id) and not egress_approved:
         return "Outbound blocked: private data was read; approval required"
     egress_taint.mark_read(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id)
+    if tool_name == "agent.message":
+        return named_agents.send_message(settings, arg, channel=channel, chat_id=chat_id)
     if tool_name == "agents.parallel":
         from handlers.subagents import execute_parallel_subagents
         return await execute_parallel_subagents(
@@ -558,7 +558,7 @@ async def _request_confirmation(
         await port.reply(msg, text)
 
 
-def _audit_rejected(settings: Settings, action: PendingToolAction, msg: InboundMessage) -> None:
+def _audit_rejected(settings: Settings, action: PendingToolAction, msg: InboundMessage, *, reason: str = "context_mismatch") -> None:
     audit_tool_event(
         settings,
         operator_id=msg.operator_id,
@@ -568,7 +568,7 @@ def _audit_rejected(settings: Settings, action: PendingToolAction, msg: InboundM
         arg=action.arg,
         danger=_danger_label(action.tool_name, settings),
         action="rejected",
-        error_preview="context_mismatch",
+        error_preview=reason,
     )
 
 
@@ -625,6 +625,14 @@ async def execute_confirmed(
     if not matches_context(action, msg.operator_id, msg.chat_id, msg.channel):
         _audit_rejected(settings, action, msg)
         await port.reply(msg, "Unauthorized.")
+        return True
+    # Re-check at confirmation time, including browser tools that bypass
+    # run_tool() below. Permissions may have changed since preview/approval.
+    import named_agents
+    if not named_agents.tool_allowed(settings, action.channel, action.chat_id, action.tool_name):
+        pop_pending(token)
+        _audit_rejected(settings, action, msg, reason="agent_allowlist_denied")
+        await port.reply(msg, "agent tool denied")
         return True
     if action.tool_name.startswith("browser."):
         from browser_g3_kill import refusal

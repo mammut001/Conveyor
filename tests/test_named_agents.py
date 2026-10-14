@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+import multiprocessing
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 from dataclasses import replace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
+from channel.types import InboundMessage
+from handlers.tools.confirm import create_pending, get_pending
+from handlers.tools.runner import execute_confirmed
+import egress_taint
 
 from agents import AgentStore, chat_id_for, session_id_for, instructions_for_chat
 from handlers.chat_tools import build_tool_schemas
@@ -35,6 +42,53 @@ def settings_for(root):
         user_timezone="UTC",
         agents_enabled=True,
     ), long_term_memory_enabled=True, routines_enabled=True)
+
+
+def _migrate_old_agent_db(path, start, queue):
+    try:
+        if not start.wait(10):
+            raise RuntimeError("migration start timed out")
+        named_agents.ensure_schema(path)
+        queue.put(("ok", ""))
+    except BaseException as exc:
+        queue.put(("error", f"{type(exc).__name__}: {exc}"))
+
+
+class MigrationRaceTests(unittest.TestCase):
+    def test_four_processes_migrate_old_schema_without_duplicate_columns(self):
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("POSIX fork required by Linux migration regression")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for iteration in range(4):
+                db = root / f"old-{iteration}.sqlite3"
+                with sqlite3.connect(db) as conn:
+                    conn.execute("CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT)")
+                    conn.execute("INSERT INTO agents(id, name) VALUES('default', 'Conveyor')")
+                ctx = multiprocessing.get_context("fork")
+                start, queue = ctx.Event(), ctx.Queue()
+                children = [ctx.Process(target=_migrate_old_agent_db,
+                                        args=(str(db), start, queue)) for _ in range(4)]
+                try:
+                    for child in children:
+                        child.start()
+                    start.set()
+                    results = [queue.get(timeout=15) for _ in children]
+                    for child in children:
+                        child.join(timeout=10)
+                    self.assertTrue(all(x == ("ok", "") for x in results), results)
+                    self.assertTrue(all(child.exitcode == 0 for child in children))
+                    with sqlite3.connect(db) as conn:
+                        columns = {r[1] for r in conn.execute("PRAGMA table_info(agents)")}
+                        self.assertTrue({"persona", "memory_scope", "tools_allowlist"} <= columns)
+                        default = conn.execute("SELECT memory_scope FROM agents WHERE id='default'").fetchone()
+                        self.assertEqual(default[0], "operator")
+                finally:
+                    for child in children:
+                        if child.is_alive():
+                            child.terminate()
+                            child.join(timeout=5)
+                    queue.close()
 
 
 class NamedAgentTests(unittest.IsolatedAsyncioTestCase):
@@ -72,6 +126,72 @@ class NamedAgentTests(unittest.IsolatedAsyncioTestCase):
                                         channel="web", chat_id=self.b_chat), "agent tool denied")
         self.store.archive(self.b["id"])
         self.assertNotIn("notes__search", exposed(self.b_chat))
+
+    async def test_default_agent_legacy_tool_inventory_flag_on_off(self):
+        for channel, chat_id in (("telegram", "12345"),
+                                 ("feishu", "ou_12345"),
+                                 ("web", "web-console"),
+                                 ("web", "legacy-chat")):
+            with self.subTest(channel=channel, chat_id=chat_id):
+                with patch.dict(os.environ, {"CONVEYOR_NAMED_AGENTS": "0"}):
+                    baseline = build_tool_schemas(
+                        self.settings, channel=channel, chat_id=chat_id)
+                active = build_tool_schemas(
+                    self.settings, channel=channel, chat_id=chat_id)
+                self.assertEqual(active, baseline)
+                self.assertGreater(len(active), 0)
+                self.assertTrue(named_agents.tool_allowed(
+                    self.settings, channel, chat_id, "notes.search"))
+                result = await run_tool(
+                    self.settings, "notes.search", "no matching note",
+                    operator_id="web-console", channel=channel, chat_id=chat_id)
+                self.assertNotEqual(result, "agent tool denied")
+        self.assertFalse(named_agents.tool_allowed(
+            self.settings, "telegram", "12345", "agent.message"))
+
+    async def test_execute_confirmed_rejects_revoked_allowlist(self):
+        class Port:
+            def __init__(self):
+                self.replies = []
+
+            async def reply(self, _msg, text):
+                self.replies.append(text)
+                return "ok"
+
+        msg = InboundMessage(
+            channel="web", chat_id=self.a_chat,
+            operator_id="web-console", message_id="confirm-test", text="yes")
+        # An approval must not bypass a new or changed tool restriction.
+        pending = create_pending("notes.add", "should never run",
+                                 "web-console", self.a_chat, "web")
+        port = Port()
+        with patch("handlers.tools.runner.run_tool", new_callable=AsyncMock) as call:
+            self.assertTrue(await execute_confirmed(
+                msg, port, self.settings, pending.token))
+            call.assert_not_awaited()
+        self.assertIsNone(get_pending(pending.token))
+        self.assertIn("agent tool denied", port.replies)
+
+    async def test_agent_message_respects_private_egress_taint(self):
+        import json
+        arg = json.dumps({"to": self.b["id"], "text": "Sensitive facts should not leak"})
+        with patch("egress_taint.enabled", return_value=True):
+            egress_taint.mark_read(
+                self.settings, "notes.search", operator_id="web-console",
+                channel="web", chat_id=self.a_chat)
+            self.assertTrue(egress_taint.requires_approval(
+                self.settings, "agent.message", operator_id="web-console",
+                channel="web", chat_id=self.a_chat))
+            denied = await run_tool(
+                self.settings, "agent.message", arg, operator_id="web-console",
+                channel="web", chat_id=self.a_chat)
+            self.assertIn("Outbound blocked", denied)
+            self.assertEqual(get_transcript_store(self.settings).messages(
+                session_id_for(self.b["id"])), [])
+            accepted = await run_tool(
+                self.settings, "agent.message", arg, operator_id="web-console",
+                channel="web", chat_id=self.a_chat, egress_approved=True)
+            self.assertEqual(accepted, "agent message recorded")
 
     async def test_memory_and_routines_are_agent_isolated(self):
         from personal_tools.long_term_memory import memory_search

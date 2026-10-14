@@ -32,7 +32,10 @@ Update an agent through the already authenticated `PUT /api/agents/<id>`:
 ```
 
 The allowlist uses **exact tool names**, not wildcards; default `[]`
-means no chat tools. It is checked at both model schema generation and
+means no chat tools for newly created named agents. The built-in `default`
+agent remains unrestricted for all pre-existing tools, with `agent.message`
+excluded so Telegram, Feishu, and legacy Web chats retain identical schemas.
+It is checked at both model schema generation and
 execution (including after an operator confirms a WRITE). Existing global
 danger levels, network permissions, egress-taint checks and approvals continue
 to apply. A named agent cannot choose another agent's memory scope: nondefault
@@ -46,6 +49,9 @@ cannot touch routines belonging to another agent.
 ## Agent-to-agent messages
 
 The opt-in `agent.message` tool is **WRITE** and requires approval.
+It also goes through the same egress-taint check as other outbound tools:
+tainted sessions cannot send it without approved egress. Confirmed tools
+are rechecked against the current agent allowlist before dispatch.
 Supply a JSON string with exactly `{"to":"<agent-id>","text":"..."}`.
 Only an existing, unarchived other agent can receive it. After approval,
 the same unified transcript store records one `agent_message` in the

@@ -30,16 +30,24 @@ def ensure_schema(db_path):
         return
     conn = sqlite3.connect(str(db_path), timeout=10)
     try:
-        with conn:
-            existing = {r[1] for r in conn.execute("PRAGMA table_info(agents)")}
+        # Serialize schema changes ACROSS PROCESSES. A deferred transaction
+        # permits competing PRAGMA reads before the first ALTER.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
             for name, declaration in (
                 ("persona", "TEXT NOT NULL DEFAULT ''"),
                 ("memory_scope", "TEXT NOT NULL DEFAULT 'private'"),
                 ("tools_allowlist", "TEXT NOT NULL DEFAULT '[]'"),
             ):
+                existing = {r[1] for r in conn.execute("PRAGMA table_info(agents)")}
                 if name not in existing:
                     conn.execute(f"ALTER TABLE agents ADD COLUMN {name} {declaration}")
-            conn.execute("UPDATE agents SET memory_scope='operator' WHERE id='default'")
+            conn.execute("UPDATE agents SET memory_scope='operator' "
+                         "WHERE id='default' AND memory_scope != 'operator'")
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
     finally:
         conn.close()
     _SCHEMA_READY.add(db_path)
@@ -111,6 +119,10 @@ def tool_allowed(settings, channel, chat_id, name):
         agent = active_agent(settings, channel, chat_id)
         if not agent or agent.get("archived"):
             return False
+        if agent["id"] == "default":
+            # Legacy/default conversations keep every pre-existing tool.
+            # agent.message is new, and must not alter their schema or /tools.
+            return name != "agent.message"
         allowlist = agent.get("tools_allowlist", [])
         if isinstance(allowlist, str):
             allowlist = json.loads(allowlist)
