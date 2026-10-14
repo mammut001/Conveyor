@@ -91,6 +91,13 @@ class G5Tests(unittest.TestCase):
             with self.assertRaisesRegex(ExternalPolicyDenied, "g5_manifest_unavailable"):
                 g5._manifest()
 
+        # A non-regular manifest must also be rejected before any blocking read.
+        fifo = self.root / "manifest-fifo"
+        os.mkfifo(fifo, 0o600)
+        with patch.dict(os.environ, {"CONVEYOR_BROWSER_G5_MANIFEST": str(fifo)}):
+            with self.assertRaisesRegex(ExternalPolicyDenied, "g5_manifest_unsafe"):
+                g5._manifest()
+
         original_fstat = os.fstat
 
         def replace_path_after_open(fd):
