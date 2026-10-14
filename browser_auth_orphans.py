@@ -12,6 +12,8 @@ import signal
 import stat
 import time
 
+from browser_auth_owner import owner_alive, try_lock_for_cleanup, release
+
 
 def _matching_pids(profile: Path):
     target = ("--user-data-dir=" + str(profile)).encode()
@@ -48,18 +50,28 @@ def cleanup(root):
         # Never recurse into unexpected owner / symlinked profile data.
         if folder.stat().st_uid != os.getuid():
             raise OSError("g4_orphan_ownership_denied")
-        profile = folder / "profile"
-        pids = list(_matching_pids(profile))
-        for pid in pids:
-            _signal_verified(pid, profile, signal.SIGTERM)
-        for attempt in range(6):
-            try:
-                shutil.rmtree(folder)
-                break
-            except OSError:
-                if attempt == 2:
-                    for pid in pids:
-                        _signal_verified(pid, profile, signal.SIGKILL)
-                if attempt == 5:
-                    raise
-                time.sleep(0.1 * (attempt + 1))
+        # Hold the exclusive lock throughout killing and rmtree. The owner's
+        # PID+starttime also protects against stale/unlocked same-process dirs.
+        fd = try_lock_for_cleanup(folder)
+        if fd is None:
+            continue
+        try:
+            if owner_alive(folder):
+                continue
+            profile = folder / "profile"
+            pids = list(_matching_pids(profile))
+            for pid in pids:
+                _signal_verified(pid, profile, signal.SIGTERM)
+            for attempt in range(6):
+                try:
+                    shutil.rmtree(folder)
+                    break
+                except OSError:
+                    if attempt == 2:
+                        for pid in pids:
+                            _signal_verified(pid, profile, signal.SIGKILL)
+                    if attempt == 5:
+                        raise
+                    time.sleep(0.1 * (attempt + 1))
+        finally:
+            release(fd)

@@ -218,7 +218,10 @@ class BrowserLoginRealTests(unittest.IsolatedAsyncioTestCase):
         self.http.password_seen = self.http.challenge = self.http.reject = False
 
     async def asyncTearDown(self):
-        await manager_for(self.settings).revoke_all()
+        mgr = manager_for(self.settings)
+        watches = [s._watch for s in mgr.sessions.values() if s._watch]
+        await mgr.revoke_all()
+        await asyncio.gather(*watches, return_exceptions=True)
         self.env.stop()
         self.tmp.cleanup()
 

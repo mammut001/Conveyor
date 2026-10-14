@@ -234,9 +234,12 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.settings = SimpleNamespace(codex_memory_root=Path(self.tmp.name))
         self.mgr = AuthSessionManager(self.settings)
         self.store = HumanTakeoverStore(self.settings)
+        self._watches = []
 
     async def asyncTearDown(self):
+        self._watches.extend(s._watch for s in self.mgr.sessions.values() if s._watch)
         await self.mgr.revoke_all()
+        await asyncio.gather(*self._watches, return_exceptions=True)
         self.env.stop()
         self.tmp.cleanup()
 
@@ -245,6 +248,7 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
         current = self.store.current()
         self.store.activate(current["id"])
         s = await self.mgr.open(operator, task, self.domain)
+        self._watches.append(s._watch)
         return s, current["id"]
 
     async def test_isolation_login_takeover_and_sensitive_field(self):
@@ -274,6 +278,22 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
         await second.page.goto(self.domain + "/login")
         with self.assertRaisesRegex(ExternalPolicyDenied, "sensitive_dom"):
             await second.observe()
+
+    async def test_second_manager_must_not_cleanup_live_chromium(self):
+        s, lease = await self._session("alice", "multi-manager")
+        await s.navigate_for_human(self.domain + "/login")
+        profile = s.directory / "profile"
+        self.assertTrue(profile.exists())
+        from browser_auth_owner import owner_alive
+        self.assertTrue(owner_alive(s.directory))
+        other_manager = AuthSessionManager(self.settings)
+        self.assertIsNot(self.mgr, other_manager)
+        self.assertTrue(s.directory.exists())
+        self.assertFalse(s.page.is_closed())
+        await s.navigate_for_human(self.domain + "/who")
+        self.assertTrue(s.page.url.endswith("/who"))
+        self.assertEqual(len(other_manager.sessions), 0)
+        self.store.complete(lease)
 
     async def test_cross_domain_cookie_isolation(self):
         first, lease = await self._session("alice", "task-domain-a")
