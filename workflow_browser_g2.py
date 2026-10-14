@@ -141,6 +141,8 @@ class G2Browser(ExternalReadOnlyBrowser):
 
     def _ensure_live(self):
         super()._ensure_live()
+        from browser_g5_rollout import check as g5_check
+        g5_check(self.ledger.path.parent, self.site.origin, "interact")
         if not enabled():
             raise ExternalPolicyDenied("g2_disabled")
         if self._grant_check is not None:

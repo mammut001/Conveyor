@@ -437,6 +437,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         parts = self._segments(path)
         try:
             if path.startswith("/api/browser/"):
+                import browser_g5_api
+                if browser_g5_api.get(self, path):
+                    return
                 if __import__("os").environ.get("CONVEYOR_BROWSER_AUTH_SESSIONS") == "1":
                     import browser_auth_api
                     if browser_auth_api.get(self, path):
@@ -892,6 +895,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             if dispatch(self, "POST", parsed.path, body):
                 return
         try:
+            import browser_g5_api
+            if browser_g5_api.post(self, parsed.path, body):
+                return
             if (parsed.path == "/api/browser/auth-sessions" or
                     parsed.path.startswith("/api/browser/auth-sessions/")):
                 if __import__("os").environ.get("CONVEYOR_BROWSER_AUTH_SESSIONS") == "1":

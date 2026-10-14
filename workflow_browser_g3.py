@@ -159,7 +159,11 @@ FORM_JS = r"""(forms, args) => {
 }"""
 
 def enabled():
-    return (g2_enabled() and os.getenv("CONVEYOR_BROWSER_EXTERNAL_SUBMIT")=="1")
+    # G5 rollout NEVER promotes the current server-dispatched G3 prototype:
+    # the security roadmap keeps final submissions human-only.
+    from browser_g5_rollout import enabled as g5_enabled
+    return (g2_enabled() and os.getenv("CONVEYOR_BROWSER_EXTERNAL_SUBMIT")=="1"
+            and not g5_enabled())
 
 def validate_request(arg):
     if not isinstance(arg,str) or len(arg)>4000:

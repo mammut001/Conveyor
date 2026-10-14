@@ -70,7 +70,9 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         except ImportError:
             if required: self.fail("Chromium required, no Playwright")
             self.skipTest("Playwright not installed")
-        self.env=patch.dict(os.environ,FLAGS)
+        # G3's offline Chromium coverage must remain independent of G5's
+        # all-flags CI setting (G5 intentionally disables final G3 submit).
+        self.env=patch.dict(os.environ,{**FLAGS,"CONVEYOR_BROWSER_G5":"0"})
         self.env.start(); self.addCleanup(self.env.stop)
         self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         base=Path(self.temp.name)

@@ -64,6 +64,10 @@ class ExternalReadOnlyBrowser:
             raise ExternalPolicyDenied("external_browser_disabled")
         if self.kill_file.exists():
             raise ExternalPolicyDenied("external_kill_switch")
+        # G5 is an independent, operator-signed release gate layered on G1.
+        # Disabled G5 makes this a no-op; revocations are checked per action.
+        from browser_g5_rollout import check as g5_check
+        g5_check(self.ledger.path.parent, self.site.origin, "read")
         current = self.ledger.require(self.task)
         if current != self.site:
             raise ExternalPolicyDenied("approval_changed")
@@ -226,7 +230,7 @@ class ExternalReadOnlyBrowser:
             if self._violation:
                 if self._context:
                     try:
-                        await self._context.close()
+                        await asyncio.wait_for(self._context.close(), timeout=3)
                     except Exception:
                         pass
                 return
