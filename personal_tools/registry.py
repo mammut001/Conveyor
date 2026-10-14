@@ -24,6 +24,7 @@ from personal_tools import web_fetch as web_fetch_tools
 from personal_tools import browser_read as browser_read_tools
 from personal_tools import browser_interact as browser_interact_tools
 from personal_tools import browser_submit as browser_submit_tools
+from personal_tools import browser_login as browser_login_tools
 from personal_tools import web_search as web_search_tools
 from personal_tools import research as research_tools
 from personal_tools import file_search as file_search_tools
@@ -540,6 +541,13 @@ def register_personal_tools() -> None:
         DangerLevel.READ,
         browser_submit_tools.prepare,
     )
+    # G4 opt-in: credentials are loaded only inside the server executor.
+    _register(
+        "browser.login",
+        "Log in to a preconfigured exact domain; arg is only the domain, never credentials",
+        DangerLevel.READ,
+        browser_login_tools.login_adapter,
+    )
     # Web Fetch (P4.1 Phase A)
     _register(
         "web.fetch",
@@ -792,6 +800,8 @@ def register_personal_tools() -> None:
 
 def get_personal_tool(name: str) -> PersonalToolSpec | None:
     register_personal_tools()
+    if name == "browser.login" and not browser_login_tools.enabled():
+        return None
     return PERSONAL_TOOL_REGISTRY.get(name)
 
 
@@ -812,6 +822,8 @@ async def execute_personal_tool(
     chat_id: str = "",
 ) -> str:
     register_personal_tools()
+    if get_personal_tool(tool_name) is None:
+        return f"未知个人工具: {tool_name}"
     executor = _PERSONAL_EXECUTORS.get(tool_name)
     if executor is None:
         return f"未知个人工具: {tool_name}"

@@ -441,6 +441,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     import browser_auth_api
                     if browser_auth_api.get(self, path):
                         return
+                if __import__("os").environ.get("CONVEYOR_BROWSER_AUTOFILL_LOGIN") == "1":
+                    import browser_login_api
+                    if browser_login_api.get(self, path):
+                        return
                 import browser_approvals_admin
                 if browser_approvals_admin.get(self, path, query):
                     return
@@ -894,6 +898,11 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     import browser_auth_api
                     if browser_auth_api.post(self, parsed.path, body):
                         return
+            if (parsed.path == "/api/browser/logins" and
+                    __import__("os").environ.get("CONVEYOR_BROWSER_AUTOFILL_LOGIN") == "1"):
+                import browser_login_api
+                if browser_login_api.post(self, parsed.path, body):
+                    return
             if parsed.path == "/api/browser/kill":
                 import browser_approvals_admin
                 if browser_approvals_admin.post(self, parsed.path, body):
@@ -1556,6 +1565,11 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             if parsed.path.startswith("/api/hooks/"):
                 import event_triggers
                 if event_triggers.api_delete(self, parsed.path):
+                    return
+            if (parsed.path == "/api/browser/logins" and
+                    __import__("os").environ.get("CONVEYOR_BROWSER_AUTOFILL_LOGIN") == "1"):
+                import browser_login_api
+                if browser_login_api.delete(self, parsed.path, urlparse(self.path).query):
                     return
             if parsed.path.startswith("/api/browser/"):
                 import browser_approvals_admin

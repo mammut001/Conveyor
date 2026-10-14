@@ -195,6 +195,7 @@ def _test_registry() -> CheckResult:
             "browser.read_webpage",
             "browser.browse_site",
             "browser.prepare_submit",
+            "browser.login",  # default-off G4 extension; schema/dispatch still gated
             # Always-On Teammate & Sentry
             "teammate",
             "teammate.status",
