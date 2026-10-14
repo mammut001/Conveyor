@@ -10,8 +10,10 @@ tool, creates a domain approval, or promotes a site based on CI status.
 ## Flags / deployment
 
 - `CONVEYOR_BROWSER_G5=1`: enable the G5 status/metrics/emergency-revoke API
-  and per-session sticky revoke checks. Default off; no changes to preexisting
-  routes, `/tools`, or G1–G4 when off.
+  and per-session sticky revoke checks; **disable all G3 server-dispatched final
+  submit paths**, even in monitoring mode when `CONVEYOR_BROWSER_G5_LIVE_ACK`
+  is unset. Default off; no changes to preexisting routes, `/tools`, or
+  G1–G4 when off.
 - `CONVEYOR_BROWSER_G5_LIVE_ACK=1`: **separate manual release authorization**
   switch. If set with G5, each G1/G2/G4 active request is denied unless
   independently signed evidence permits that exact HTTPS origin and action.
