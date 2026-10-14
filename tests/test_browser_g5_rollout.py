@@ -66,6 +66,42 @@ class G5Tests(unittest.TestCase):
             self.assertFalse(browser_g5_api.post(
                 object(), "/api/browser/g5/revoke", {"origin": ORIGIN}))
 
+    def test_g5_always_disables_g3_submit_without_live_ack(self):
+        from workflow_browser_g3 import enabled as g3_enabled
+        flags = {
+            "CONVEYOR_REAL_BROWSER": "1",
+            "CONVEYOR_BROWSER_EXTERNAL_READONLY": "1",
+            "CONVEYOR_BROWSER_EXTERNAL_INTERACT": "1",
+            "CONVEYOR_BROWSER_EXTERNAL_SUBMIT": "1",
+            "CONVEYOR_BROWSER_G5": "1",
+            "CONVEYOR_BROWSER_G5_LIVE_ACK": "0",
+        }
+        with patch.dict(os.environ, flags):
+            self.assertTrue(g5.enabled())
+            self.assertFalse(g5.live_requested())
+            self.assertFalse(g3_enabled())
+            with patch.dict(os.environ, {"CONVEYOR_BROWSER_G5": "0"}):
+                self.assertTrue(g3_enabled())
+
+    def test_manifest_fd_pinned_and_symlink_denied(self):
+        self.sign()
+        link = self.root / "manifest-link"
+        link.symlink_to(self.manifest)
+        with patch.dict(os.environ, {"CONVEYOR_BROWSER_G5_MANIFEST": str(link)}):
+            with self.assertRaisesRegex(ExternalPolicyDenied, "g5_manifest_unavailable"):
+                g5._manifest()
+
+        original_fstat = os.fstat
+
+        def replace_path_after_open(fd):
+            self.manifest.rename(self.root / "original-manifest.json")
+            self.manifest.write_text('{"version":999}')
+            self.manifest.chmod(0o600)
+            return original_fstat(fd)
+
+        with patch("browser_g5_rollout.os.fstat", side_effect=replace_path_after_open):
+            self.assertEqual(g5._manifest()["origin"], ORIGIN)
+
     def test_flag_alone_never_promotes_and_signed_manifest_required(self):
         g5.check(self.root, ORIGIN, "read")
         self.assertFalse(g5.status(self.root)["auto_promotion"])
