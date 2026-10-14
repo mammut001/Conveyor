@@ -52,6 +52,8 @@ class AuthSession:
         self._watch = None
         self._violation = None
         self._in_action = asyncio.Lock()
+        self._automated_login = False
+        self._autofill_target = None
 
     def _lease(self):
         return HumanTakeoverStore(self.owner.settings).current()
@@ -74,19 +76,19 @@ class AuthSession:
             raise ExternalPolicyDenied("g4_disabled_or_domain_revoked")
         if time.time() >= self.expires_at or kill_active(self.owner.settings):
             raise ExternalPolicyDenied("g4_expired_or_killed")
-        if agent and self._lease() is not None:
+        if (agent or self._automated_login) and self._lease() is not None:
             raise ExternalPolicyDenied("g4_human_takeover_active")
 
     async def start(self):
         self.ensure()
-        if not self._human_active():
+        if not self._automated_login and not self._human_active():
             raise ExternalPolicyDenied("g4_login_takeover_required")
         # No existing browser state is imported. Chromium sees only this private
         # HOME; OS keychain, clipboard APIs and password-store integrations off.
         from playwright.async_api import async_playwright
         pw = await async_playwright().start()
         self.owner._drivers[self.id] = pw
-        headless = fixture_loopback_enabled()
+        headless = fixture_loopback_enabled() or self._automated_login
         if not headless and not os.getenv("DISPLAY"):
             raise ExternalPolicyDenied("g4_protected_display_missing")
         child_env = {
@@ -104,6 +106,7 @@ class AuthSession:
             user_data_dir=str(self.directory / "profile"),
             headless=headless, env=child_env, accept_downloads=False,
             service_workers="block", permissions=[], ignore_https_errors=False,
+            java_script_enabled=not self._automated_login,
             args=[
                 "--disable-background-networking", "--no-first-run",
                 "--disable-default-apps", "--disable-extensions",
@@ -143,7 +146,18 @@ class AuthSession:
             self.ensure()
             request = route.request
             lease = self._human_active()
-            check_request(request.url, request.method, self.domain, lease)
+            login_post = (
+                self._automated_login and
+                request.method == "POST" and
+                request.url == self._autofill_target and
+                request.is_navigation_request() and
+                request.frame == self.page.main_frame and not lease
+            )
+            if login_post:
+                # One exact POST; no other agent-origin submit is authorized.
+                self._autofill_target = None
+            else:
+                check_request(request.url, request.method, self.domain, lease)
             if request.is_navigation_request() and (
                     urlsplit(request.url).netloc != urlsplit(self.domain).netloc or
                     request.frame != self.page.main_frame):
@@ -276,13 +290,10 @@ class AuthSessionManager:
         self.sessions = {}
         self._drivers = {}
         # Orphaned browser profiles are never reopened after a crash.
-        for p in self.root.glob("session-*"):
-            if p.is_symlink():
-                p.unlink()
-            elif p.is_dir():
-                shutil.rmtree(p)
+        from browser_auth_orphans import cleanup
+        cleanup(self.root)
 
-    async def open(self, operator, task, domain):
+    async def open(self, operator, task, domain, *, automated=False):
         if not enabled():
             raise ExternalPolicyDenied("g4_disabled_or_domain_denied")
         domain = _origin(domain)
@@ -294,11 +305,16 @@ class AuthSessionManager:
             raise ExternalPolicyDenied("g4_task_denied")
         if kill_active(self.settings):
             raise ExternalPolicyDenied("g4_killed")
+        if automated:
+            from browser_login_credentials import enabled as login_enabled
+            if not login_enabled() or HumanTakeoverStore(self.settings).current():
+                raise ExternalPolicyDenied("login_automation_denied")
         if any(not s._closed and s.operator == operator and s.task == task and
                s.domain == domain for s in self.sessions.values()):
             raise ExternalPolicyDenied("g4_duplicate_session")
         folder = Path(tempfile.mkdtemp(prefix="session-", dir=self.root))
         session = AuthSession(self, operator, task, domain, folder)
+        session._automated_login = automated
         self.sessions[session.id] = session
         try:
             await session.start()
