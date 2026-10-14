@@ -153,12 +153,19 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
         cls.http.login_posts = cls.http.bad_posts = 0
         cls.worker = threading.Thread(target=cls.http.serve_forever, daemon=True)
         cls.worker.start()
+        cls.other = ThreadingHTTPServer(("127.0.0.1", 0), Fixture)
+        cls.other.login_posts = cls.other.bad_posts = 0
+        cls.other_worker = threading.Thread(target=cls.other.serve_forever, daemon=True)
+        cls.other_worker.start()
 
     @classmethod
     def tearDownClass(cls):
         cls.http.shutdown()
         cls.http.server_close()
         cls.worker.join(timeout=3)
+        cls.other.shutdown()
+        cls.other.server_close()
+        cls.other_worker.join(timeout=3)
         super().tearDownClass()
 
     async def asyncSetUp(self):
@@ -215,6 +222,27 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
         await second.page.goto(self.domain + "/login")
         with self.assertRaisesRegex(ExternalPolicyDenied, "sensitive_dom"):
             await second.observe()
+
+    async def test_cross_domain_cookie_isolation(self):
+        first, lease = await self._session("alice", "task-domain-a")
+        await first.navigate_for_human(self.domain + "/login")
+        await first.page.locator("input[type=password]").fill("private")
+        await first.page.locator("button").click()
+        self.store.complete(lease)
+
+        second_domain = f"http://127.0.0.1:{self.other.server_port}"
+        os.environ["CONVEYOR_BROWSER_AUTH_DOMAINS"] = self.domain + "," + second_domain
+        self.store.start(reason="login", task_id="task-domain-b", requested_by="bob")
+        next_lease = self.store.current()
+        self.store.activate(next_lease["id"])
+        second = await self.mgr.open("bob", "task-domain-b", second_domain)
+        await second.navigate_for_human(second_domain + "/who")
+        self.store.complete(next_lease["id"])
+        self.assertEqual((await second.observe())["text"], "guest")
+        # These two origins share the same IP/cookie-host, so a reused cookie
+        # jar would leak even though their TCP ports differ.
+        await first.page.goto(self.domain + "/who")
+        self.assertEqual((await first.observe())["text"], "logged-in")
 
     async def test_cross_domain_redirect_and_unapproved_submit(self):
         s, lease = await self._session("alice", "task3")
