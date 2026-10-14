@@ -140,17 +140,46 @@ class G5Tests(unittest.TestCase):
 
     def test_metrics_are_redacted_and_alerts_are_visible(self):
         from types import SimpleNamespace
+        from personal_tools.browser_read import _db
         replies = []
         settings = SimpleNamespace(codex_memory_root=self.root)
         handler = SimpleNamespace(
             server=SimpleNamespace(control=SimpleNamespace(settings=settings)),
             _json=lambda code, body: replies.append((code, body)),
         )
-        denial = [{"outcome": "denied", "reason": "request_filter_error"}] * 5
-        with patch("browser_approvals_admin.egress", return_value=denial):
-            self.assertTrue(browser_g5_api.get(handler, "/api/browser/g5/metrics"))
+        # Audit -> SQLite -> Web API: no mocked aggregation or page content.
+        audit = EgressAudit(_db(settings))
+        for _ in range(5):
+            audit.record("task", "approved.example.org", "GET",
+                         "denied", "request_filter_error")
+        self.assertTrue(browser_g5_api.get(handler, "/api/browser/g5/metrics"))
         code, response = replies.pop()
         self.assertEqual(code, 200)
+        self.assertEqual(response["recent_egress_count"], 5)
         self.assertEqual(response["denied"], 5)
         self.assertTrue(response["alert"])
         self.assertNotIn("query", response)
+
+    def test_domain_revoke_api_is_durable_before_bounded_session_close(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        replies = []
+        settings = SimpleNamespace(codex_memory_root=self.root)
+        session = SimpleNamespace(id="session-id", operator="web-console", domain=ORIGIN)
+        manager = SimpleNamespace(sessions={session.id: session},
+                                  revoke=AsyncMock(return_value=True))
+        handler = SimpleNamespace(
+            server=SimpleNamespace(control=SimpleNamespace(settings=settings)),
+            _await=lambda coro, timeout: asyncio.run(coro),
+            _json=lambda code, body: replies.append((code, body)),
+        )
+        with patch("browser_auth_sessions.manager_for", return_value=manager):
+            self.assertTrue(browser_g5_api.post(
+                handler, "/api/browser/g5/revoke", {"origin": ORIGIN}))
+        self.assertEqual(replies[-1][0], 200)
+        self.assertFalse(replies[-1][1]["pending_cleanup"])
+        manager.revoke.assert_awaited_once_with("session-id", operator="web-console")
+        self.assertTrue(g5.revoked(self.root / "browser_external", ORIGIN))
+        with self.assertRaisesRegex(ExternalPolicyDenied, "g5_domain_revoked"):
+            g5.check(self.root / "browser_external", ORIGIN, "auth")
