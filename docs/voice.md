@@ -2,11 +2,13 @@
 
 Voice messages are **off by default**. Set `CONVEYOR_STT_ENABLED=1` to enable
 Telegram voice/audio messages and the optional microphone button in Web Chat.
+Feishu voice also requires `CONVEYOR_FEISHU_AUDIO=1` (off by default).
 DeepSeek chat credentials are **not** used for STT. Configure an independent
 OpenAI-compatible speech-to-text provider supporting `POST /audio/transcriptions`:
 
 ```env
 CONVEYOR_STT_ENABLED=1
+CONVEYOR_FEISHU_AUDIO=0
 CONVEYOR_STT_BASE_URL=https://api.openai.com/v1
 CONVEYOR_STT_API_KEY=your-separate-provider-key
 CONVEYOR_STT_MODEL=whisper-1
@@ -47,5 +49,13 @@ to 120 seconds, configurable up to 3600 seconds. Set both to the desired policy.
 Transcripts are **untrusted text** subject to the same tool danger levels and
 human approvals as typed text. Echoed transcripts enter regular chat history
 but raw audio and STT responses are not stored. Audio temporary files are
-deleted on success and error. Feishu audio is not implemented because the
-existing Feishu SDK adapter does not expose a stable media download flow.
+deleted on success and error.
+
+**Feishu:** Opt in with both `CONVEYOR_STT_ENABLED=1` and
+`CONVEYOR_FEISHU_AUDIO=1`. Only the allowlisted operator can send voice;
+normal group mention and approval checks still apply. The SDK downloads the
+`audio` message resource with `type=file` and its existing tenant token.
+The Opus payload is converted to OGG using `ffmpeg`; `ffprobe` measures the
+resulting duration before transcription. The same size and duration settings
+apply. The bot replies `🎤 heard: …` before routing recognized words once
+through its ordinary Feishu dispatcher. Server must have ffmpeg/ffprobe.

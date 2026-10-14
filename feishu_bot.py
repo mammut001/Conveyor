@@ -26,6 +26,7 @@ from lark_oapi.channel import FeishuChannel
 from channel.auth import is_allowed
 from channel.feishu import FeishuOutbound, fetch_reply, inbound_from_event
 from channel.feishu_cards import action_to_command, extract_card_action
+from channel.feishu_audio import audio_enabled, handle_audio, is_audio_message
 from channel.types import InboundMessage
 from config import load_feishu_settings
 from handlers import dispatch
@@ -240,7 +241,7 @@ async def main() -> None:
         if not is_allowed(inbound, settings):
             logger.warning("Rejected unauthorized Feishu open_id=%s", inbound.operator_id)
             # Stay silent in groups; only a DM gets the rejection.
-            if inbound.chat_type == "p2p":
+            if inbound.chat_type == "p2p" and not (audio_enabled() and is_audio_message(msg)):
                 await port.send_new(inbound, "Unauthorized.")
             return
 
@@ -257,6 +258,13 @@ async def main() -> None:
             )
 
         try:
+            if await handle_audio(
+                msg, inbound, port=port, settings=settings,
+                dispatch_text=lambda text: dispatch(
+                    dataclasses.replace(inbound, text=text), port, settings, runner,
+                ),
+            ):
+                return
             await dispatch(inbound, port, settings, runner)
         except Exception:
             logger.exception("Failed to handle Feishu message")

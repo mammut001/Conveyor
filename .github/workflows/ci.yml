@@ -98,10 +98,14 @@ jobs:
           CONVEYOR_BROWSER_EXTERNAL_SUBMIT: "1"
           CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT: "1"
           CONVEYOR_STT_ENABLED: "1"
+          CONVEYOR_FEISHU_AUDIO: "1"
         run: .venv/bin/python -m unittest discover -s tests -v
 
       - name: Run smoke suite
         run: make smoke
+
+      - name: Feishu voice smoke
+        run: .venv/bin/python scripts/feishu_audio_smoke.py
 
       - name: PWA security smoke
         run: .venv/bin/python scripts/pwa_smoke.py
