@@ -1,4 +1,4 @@
-"""Authenticated-only read/revoke API for G4. No session-creation HTTP route."""
+"""Authenticated-only create/list/revoke API for G4, with no agent-facing routes."""
 from __future__ import annotations
 from browser_auth_sessions import manager_for
 from browser_auth_policy import enabled
@@ -9,10 +9,10 @@ def get(handler, path):
     if path != "/api/browser/auth-sessions":
         return False
     if not enabled():
-        handler._json(409, {"error": "g4_disabled"})
-        return True
+        # The pre-G4 Web route owns the identical 404 response.
+        return False
     try:
-        sessions = handler._await(manager_for(handler.server.control.settings).list_public())
+        sessions = handler._await(manager_for(handler.server.control.settings).list_public(operator="web-console"))
         handler._json(200, {"sessions": sessions})
     except Exception:
         handler._json(409, {"error": "g4_unavailable"})
@@ -26,8 +26,8 @@ def post(handler, path, body):
     ):
         return False
     if not enabled():
-        handler._json(409, {"error": "g4_disabled"})
-        return True
+        # The pre-G4 Web route owns the identical 404 response.
+        return False
     if path == "/api/browser/auth-sessions":
         if set(body) != {"task_id", "domain"}:
             handler._json(400, {"error": "expected task_id and domain"})
@@ -49,7 +49,7 @@ def post(handler, path, body):
         handler._json(400, {"error": "invalid session id or body"})
         return True
     try:
-        removed = handler._await(manager_for(handler.server.control.settings).revoke(session_id))
+        removed = handler._await(manager_for(handler.server.control.settings).revoke(session_id, operator="web-console"))
         handler._json(200 if removed else 404, {"ok": removed})
     except Exception:
         handler._json(409, {"error": "g4_revoke_failed"})

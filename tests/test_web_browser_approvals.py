@@ -117,6 +117,32 @@ class BrowserManagementTests(unittest.TestCase):
         conn.close()
         return response.status,payload
 
+    def test_g4_flag_off_preserves_main_404_and_kill_side_effects(self):
+        # Compare the pre-G4 404 response shape for all three routes.
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(self.settings, "codex_memory_root", Path(directory) / "memory"), \
+             patch.dict(os.environ, {"CONVEYOR_BROWSER_AUTH_SESSIONS": "0"}):
+            root = self.settings.codex_memory_root / "state" / "browser-auth-sessions"
+            for method, url, payload in (
+                ("GET", "/api/browser/auth-sessions", None),
+                ("POST", "/api/browser/auth-sessions",
+                 {"task_id": "task", "domain": "approved.example.org"}),
+                ("POST", "/api/browser/auth-sessions/" + "a" * 32 + "/revoke", {}),
+            ):
+                with self.subTest(method=method, url=url):
+                    self.assertEqual(self.request(method, url, payload),
+                                     (404, {"error": "not found"}))
+                    self.assertFalse(root.exists())
+
+            self.assertEqual(self.request("POST", "/api/browser/kill",
+                                          {"enabled": True}),
+                             (200, {"kill_switch": True}))
+            self.assertFalse(root.exists())
+            self.assertEqual(self.request("POST", "/api/browser/kill",
+                                          {"enabled": False}),
+                             (200, {"kill_switch": False}))
+            self.assertFalse(root.exists())
+
     def test_auth_listing_expiry_revoke_egress_and_kill(self):
         from personal_tools.browser_approval_scope import grant_confirmed
         arg = [{"type":"search_get","path":"/search","field":"q","query":"public"}]

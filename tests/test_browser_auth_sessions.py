@@ -33,6 +33,7 @@ class G4OfflineTests(unittest.IsolatedAsyncioTestCase):
             "CONVEYOR_BROWSER_AUTH_SESSIONS": "1",
             "CONVEYOR_BROWSER_AUTH_DOMAINS": "http://127.0.0.1:8765",
             "CONVEYOR_BROWSER_AUTH_TEST_LOOPBACK": "1",
+            "CONVEYOR_REQUIRE_REAL_BROWSER": "1",
             "CONVEYOR_BROWSER_AUTH_TTL_SEC": "900",
         })
         self.env.start()
@@ -75,6 +76,19 @@ class G4OfflineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ExternalPolicyDenied):
             _origin("*.example.com")
 
+    def test_loopback_fixture_refuses_display_and_non_test(self):
+        from browser_auth_policy import _origin, fixture_loopback_enabled
+        origin = "http://127.0.0.1:8765"
+        self.assertTrue(fixture_loopback_enabled())
+        with patch.dict(os.environ, {"CONVEYOR_REQUIRE_REAL_BROWSER": "0"}):
+            self.assertFalse(fixture_loopback_enabled())
+            with self.assertRaises(ExternalPolicyDenied):
+                _origin(origin)
+        with patch.dict(os.environ, {"DISPLAY": ":99"}):
+            self.assertFalse(fixture_loopback_enabled())
+            with self.assertRaises(ExternalPolicyDenied):
+                _origin(origin)
+
     async def test_flag_off_does_not_launch(self):
         os.environ["CONVEYOR_BROWSER_AUTH_SESSIONS"] = "0"
         with self.assertRaises(ExternalPolicyDenied):
@@ -92,10 +106,16 @@ class G4OfflineTests(unittest.IsolatedAsyncioTestCase):
         for s in (a, b):
             (s.directory / "profile").mkdir()
             (s.directory / "profile" / "Cookie").write_bytes(b"secret")
-        self.assertTrue(await self.manager.revoke(a.id))
+        self.assertEqual(len(await self.manager.list_public(operator="alice")), 1)
+        self.assertEqual(len(await self.manager.list_public(operator="bob")), 1)
+        self.assertNotIn(a.id, [row["id"] for row in
+                               await self.manager.list_public(operator="bob")])
+        self.assertFalse(await self.manager.revoke(a.id, operator="bob"))
+        self.assertTrue(a.directory.exists())
+        self.assertTrue(await self.manager.revoke(a.id, operator="alice"))
         self.assertFalse(a.directory.exists())
         self.assertTrue(b.directory.exists())
-        self.assertTrue(await self.manager.logout(b.id))
+        self.assertTrue(await self.manager.logout(b.id, operator="bob"))
         self.assertFalse(b.directory.exists())
 
     async def test_ttl_and_kill_delete_storage(self):
@@ -103,7 +123,7 @@ class G4OfflineTests(unittest.IsolatedAsyncioTestCase):
         cookie = a.directory / "cookie"
         cookie.write_bytes(b"secret")
         a.expires_at = time.time() - 1
-        self.assertEqual(await self.manager.list_public(), [])
+        self.assertEqual(await self.manager.list_public(operator="operator"), [])
         self.assertFalse(cookie.exists())
         b = await self._open_fake()
         cookie2 = b.directory / "cookie"
@@ -111,7 +131,7 @@ class G4OfflineTests(unittest.IsolatedAsyncioTestCase):
         from browser_g3_kill import path as kill_path
         kill = kill_path(self.settings)
         kill.touch(mode=0o600)
-        self.assertEqual(await self.manager.list_public(), [])
+        self.assertEqual(await self.manager.list_public(operator="operator"), [])
         self.assertFalse(cookie2.exists())
 
     async def test_takeover_denies_every_agent_entrypoint(self):
@@ -122,7 +142,7 @@ class G4OfflineTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(action=action), self.assertRaisesRegex(
                     ExternalPolicyDenied, "g4_human_takeover_active"):
                 await getattr(s, action)()
-        await self.manager.revoke(s.id)
+        await self.manager.revoke(s.id, operator="operator")
 
     def test_startup_orphan_cleanup(self):
         orphan = self.manager.root / "session-abandoned"
@@ -207,6 +227,7 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
             "CONVEYOR_REAL_BROWSER": "1",
             "CONVEYOR_BROWSER_AUTH_DOMAINS": self.domain,
             "CONVEYOR_BROWSER_AUTH_TEST_LOOPBACK": "1",
+            "CONVEYOR_REQUIRE_REAL_BROWSER": "1",
             "CONVEYOR_BROWSER_AUTH_TTL_SEC": "900",
         })
         self.env.start()
@@ -243,7 +264,7 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ExternalPolicyDenied, "approval_required"):
             await s.submit()
         cookie_dir = s.directory
-        self.assertTrue(await self.mgr.revoke(s.id))
+        self.assertTrue(await self.mgr.revoke(s.id, operator="alice"))
         self.assertFalse(cookie_dir.exists())
         second, lease2 = await self._session("bob", "task2")
         await second.navigate_for_human(self.domain + "/who")
@@ -297,14 +318,14 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.store.complete(lease)
         directory = s.directory
         s.expires_at = time.time() - 1
-        self.assertEqual(await self.mgr.list_public(), [])
+        self.assertEqual(await self.mgr.list_public(operator="alice"), [])
         self.assertFalse(directory.exists())
         t, lease2 = await self._session("bob", "task5")
         self.store.complete(lease2)
         from browser_g3_kill import path as kill_path
         kill = kill_path(self.settings)
         kill.touch()
-        self.assertEqual(await self.mgr.list_public(), [])
+        self.assertEqual(await self.mgr.list_public(operator="bob"), [])
         self.assertFalse(t.directory.exists())
 
 

@@ -17,7 +17,10 @@ import tempfile
 import time
 from urllib.parse import urlsplit
 
-from browser_auth_policy import enabled, ttl, origins, _origin, check_request, browser_pins
+from browser_auth_policy import (
+    enabled, ttl, origins, _origin, check_request, browser_pins,
+    fixture_loopback_enabled,
+)
 from browser_g3_kill import active as kill_active
 from human_takeover import HumanTakeoverStore
 from workflow_browser_external_identity import ExternalPolicyDenied
@@ -58,8 +61,8 @@ class AuthSession:
         if not (lease and lease["state"] == "human_active" and
                 lease.get("reason") == "login" and lease.get("task_id") == self.task):
             return False
-        if os.getenv("CONVEYOR_BROWSER_AUTH_TEST_LOOPBACK") == "1":
-            return True  # local fixture only; production requires sidecar gate
+        if fixture_loopback_enabled():
+            return True  # required Chromium fixture only
         from web_takeover import read_transport_gate
         gate = read_transport_gate(self.owner.settings)
         return bool(gate and gate.get("session_id") == lease["id"])
@@ -83,7 +86,7 @@ class AuthSession:
         from playwright.async_api import async_playwright
         pw = await async_playwright().start()
         self.owner._drivers[self.id] = pw
-        headless = os.getenv("CONVEYOR_BROWSER_AUTH_TEST_LOOPBACK") == "1"
+        headless = fixture_loopback_enabled()
         if not headless and not os.getenv("DISPLAY"):
             raise ExternalPolicyDenied("g4_protected_display_missing")
         child_env = {
@@ -229,7 +232,7 @@ class AuthSession:
             try:
                 self.ensure()
             except Exception:
-                await self.owner.revoke(self.id)
+                await self.owner.revoke(self.id, operator=self.operator)
                 return
 
     async def close(self):
@@ -300,36 +303,37 @@ class AuthSessionManager:
         try:
             await session.start()
         except BaseException:
-            await self.revoke(session.id)
+            await self.revoke(session.id, operator=operator)
             raise
         return session
 
-    async def revoke(self, session_id):
-        session = self.sessions.pop(session_id, None)
-        if session is None:
+    async def revoke(self, session_id, *, operator):
+        session = self.sessions.get(session_id)
+        if session is None or session.operator != operator:
             return False
+        self.sessions.pop(session_id)
         await session.close()
         return True
 
     async def revoke_all(self):
-        for session_id in list(self.sessions):
-            await self.revoke(session_id)
+        for session in list(self.sessions.values()):
+            await self.revoke(session.id, operator=session.operator)
 
-    async def logout(self, session_id):
-        return await self.revoke(session_id)
+    async def logout(self, session_id, *, operator):
+        return await self.revoke(session_id, operator=operator)
 
-    async def list_public(self):
+    async def list_public(self, *, operator):
         for session_id, session in list(self.sessions.items()):
             try:
                 session.ensure()
             except Exception:
-                await self.revoke(session_id)
+                await self.revoke(session_id, operator=session.operator)
         return [{
             "id": s.id, "task_id": s.task, "domain": s.domain,
             "operator_fingerprint": hashlib.sha256(s.operator.encode()).hexdigest()[:12],
             "expires_at": s.expires_at,
             "takeover_active": bool(s._lease()),
-        } for s in self.sessions.values()]
+        } for s in self.sessions.values() if s.operator == operator]
 
 
 _MANAGERS = {}

@@ -21,6 +21,13 @@ def enabled() -> bool:
     ))
 
 
+def fixture_loopback_enabled() -> bool:
+    """Only CI's required real-browser fixture, without any desktop DISPLAY."""
+    return (os.getenv("CONVEYOR_BROWSER_AUTH_TEST_LOOPBACK") == "1"
+            and os.getenv("CONVEYOR_REQUIRE_REAL_BROWSER") == "1"
+            and "DISPLAY" not in os.environ)
+
+
 def ttl() -> int:
     try:
         value = int(os.getenv("CONVEYOR_BROWSER_AUTH_TTL_SEC", "900"))
@@ -48,7 +55,7 @@ def _origin(value: str) -> str:
             not 1 <= port <= 65535):
         raise ExternalPolicyDenied("g4_origin_denied")
     if parsed.hostname == "127.0.0.1" and parsed.scheme == "http":
-        if os.getenv("CONVEYOR_BROWSER_AUTH_TEST_LOOPBACK") != "1" or (
+        if not fixture_loopback_enabled() or (
                 parsed.netloc != f"127.0.0.1:{port}"):
             raise ExternalPolicyDenied("g4_loopback_disabled")
     elif parsed.scheme == "https":

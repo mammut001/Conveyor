@@ -437,9 +437,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         parts = self._segments(path)
         try:
             if path.startswith("/api/browser/"):
-                import browser_auth_api
-                if browser_auth_api.get(self, path):
-                    return
+                if __import__("os").environ.get("CONVEYOR_BROWSER_AUTH_SESSIONS") == "1":
+                    import browser_auth_api
+                    if browser_auth_api.get(self, path):
+                        return
                 import browser_approvals_admin
                 if browser_approvals_admin.get(self, path, query):
                     return
@@ -889,9 +890,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         try:
             if (parsed.path == "/api/browser/auth-sessions" or
                     parsed.path.startswith("/api/browser/auth-sessions/")):
-                import browser_auth_api
-                if browser_auth_api.post(self, parsed.path, body):
-                    return
+                if __import__("os").environ.get("CONVEYOR_BROWSER_AUTH_SESSIONS") == "1":
+                    import browser_auth_api
+                    if browser_auth_api.post(self, parsed.path, body):
+                        return
             if parsed.path == "/api/browser/kill":
                 import browser_approvals_admin
                 if browser_approvals_admin.post(self, parsed.path, body):
