@@ -41,6 +41,9 @@ def outbound(settings: Any, tool: str) -> bool:
     """Reuse the existing draft-card outbound classification."""
     from outbound_draft_cards import is_outbound
     name = tool.lower()
+    if name == "agent.message":
+        # Cross-agent transcripts can disclose private data just like outbound sends.
+        return True
     network_read = (name in ("web.fetch", "web.text", "web.headers", "web.search")
                     or name.startswith(("browser.", "research."))
                     or (getattr(settings, "background_subagents_enabled", False)
