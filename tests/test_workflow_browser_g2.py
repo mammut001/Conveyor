@@ -141,16 +141,26 @@ class G2ChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Second page",page.text)
         self.assertEqual(self.server.requests,["/safe","/second"])
 
-    async def test_denied_origins_paths_and_clickjacking(self):
-        for path, link in (("/safe","External"),("/safe","Unapproved"),
+    async def _check_denied_origins_paths_and_clickjacking(self, start, stop):
+        cases = (("/safe","External"),("/safe","Unapproved"),
                            ("/overlay","Covered"),("/hidden-opacity","Invisible"),
-                           ("/tiny","Tiny"),("/clipped","Clipped")):
+                           ("/tiny","Tiny"),("/clipped","Clipped"))
+        for path, link in cases[start:stop]:
             self.server.requests.clear()
             async with self.browser() as b:
                 with self.assertRaises(ExternalPolicyDenied):
                     await b.browse(self.url+path,
                         validate_actions([{"type":"follow_link","text":link}]))
             self.assertEqual(self.server.requests,[path])
+
+    async def test_denied_external_and_unapproved_links(self):
+        await self._check_denied_origins_paths_and_clickjacking(0, 2)
+
+    async def test_denied_overlay_and_opacity_links(self):
+        await self._check_denied_origins_paths_and_clickjacking(2, 4)
+
+    async def test_denied_tiny_and_clipped_links(self):
+        await self._check_denied_origins_paths_and_clickjacking(4, 6)
 
     async def test_query_requires_exact_path_and_field_approval(self):
         async with self.browser() as b:
@@ -165,13 +175,15 @@ class G2ChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Search results",result.text)
         self.assertEqual(self.server.requests,["/safe","/search?q=public+records"])
 
-    async def test_iframe_password_and_post_form_denied(self):
+    async def test_iframe_and_password_pages_denied(self):
         for path in ("/realm","/password"):
             self.server.requests.clear()
             async with self.browser() as b:
                 with self.assertRaises(ExternalPolicyDenied):
                     await b.browse(self.url+path,())
             self.assertEqual(self.server.requests,[path])
+
+    async def test_post_form_search_denied(self):
         self.server.requests.clear()
         async with self.browser() as b:
             with self.assertRaises(ExternalPolicyDenied):
