@@ -215,6 +215,9 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
         super().tearDownClass()
 
     async def asyncSetUp(self):
+        loop = asyncio.get_running_loop()
+        loop.set_debug(True)
+        loop.slow_callback_duration = 1
         self.tmp = tempfile.TemporaryDirectory()
         self.domain = f"http://127.0.0.1:{self.http.server_port}"
         self.env = patch.dict(os.environ, {

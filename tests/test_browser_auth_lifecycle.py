@@ -122,6 +122,28 @@ class G4CloseOwnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.mgr.revoke(s.id, operator="alice"))
         self.assertFalse(s.directory.exists())
 
+    async def test_named_timeout_identifies_stalled_step(self):
+        from browser_auth_timeout import wait_for_step
+        with self.assertRaisesRegex(asyncio.TimeoutError, "g4_timeout:context.route"):
+            await wait_for_step(asyncio.Event().wait(), 0.01, "context.route")
+
+    async def test_login_timeout_revokes_session_and_returns_safe_status(self):
+        from browser_login_credentials import put
+        from browser_auth_sessions import manager_for
+        from personal_tools.browser_login import login
+
+        origin = "http://127.0.0.1:8765"
+        with patch.dict(os.environ, {"CONVEYOR_BROWSER_AUTOFILL_LOGIN": "1"}):
+            put(self.settings, origin, "alice", "test-secret")
+            with patch.object(AuthSession, "start", new_callable=AsyncMock), \
+                 patch("personal_tools.browser_login._login",
+                       new_callable=AsyncMock,
+                       side_effect=asyncio.TimeoutError("g4_timeout:login.cookies")):
+                status, reason = await login(self.settings, origin, "operator")
+            self.assertEqual((status, reason), ("failed", "login_unavailable"))
+            self.assertEqual(manager_for(self.settings).sessions, {})
+            self.assertEqual(list(self.mgr.root.glob("session-*")), [])
+
     def test_stale_pid_starttick_removed_only_when_unlocked(self):
         root = self.mgr.root
         orphan = root / "session-crashed"

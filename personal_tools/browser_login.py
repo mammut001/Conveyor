@@ -10,6 +10,7 @@ import re
 import secrets
 from urllib.parse import urlsplit
 
+from browser_auth_timeout import wait_for_step
 from browser_login_credentials import enabled, canonical_domain, read_for_executor
 from browser_login_audit import reserve, finish, LoginQuotaDenied
 from workflow_browser_external_identity import ExternalPolicyDenied
@@ -112,7 +113,7 @@ async def _login(session, record):
     if await _challenge(page):
         return "needs_human", "authentication_challenge"
     # A cookie is necessary evidence, never return its actual value.
-    cookies = await session.context.cookies([domain])
+    cookies = await wait_for_step(session.context.cookies([domain]), 3, "login.cookies")
     if cookies and await page.locator('input[type=password]').count() == 0:
         return "logged_in", None
     return "failed", "login_not_confirmed"
@@ -137,12 +138,20 @@ async def login(settings, domain, operator_id):
         return "failed", "audit_unavailable"
     session = None
     result, reason = "failed", "login_unavailable"
+    # Bound the combined open + login phase, not just each stage separately.
+    deadline = asyncio.get_running_loop().time() + 18
     try:
         operator = "login_" + hashlib.sha256(operator_id.encode()).hexdigest()[:24]
         task = "login_" + secrets.token_hex(12)
         from browser_auth_sessions import manager_for  # lazy: avoid G4/personal_tools import cycle
-        session = await manager_for(settings).open(operator, task, origin, automated=True)
-        result, reason = await asyncio.wait_for(_login(session, record), timeout=25)
+        session = await wait_for_step(
+            manager_for(settings).open(operator, task, origin, automated=True),
+            12, "login.open")
+        login_budget = min(15, max(0, deadline - asyncio.get_running_loop().time()))
+        result, reason = await wait_for_step(_login(session, record),
+                                             login_budget, "login.form")
+    except asyncio.TimeoutError:
+        result, reason = "failed", "login_unavailable"
     except ExternalPolicyDenied:
         result, reason = "failed", "policy_denied"
     except Exception:

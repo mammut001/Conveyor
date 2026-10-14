@@ -17,6 +17,7 @@ import tempfile
 import time
 from urllib.parse import urlsplit
 
+from browser_auth_timeout import wait_for_step
 from browser_auth_policy import (
     enabled, ttl, origins, _origin, check_request, browser_pins,
     fixture_loopback_enabled,
@@ -111,6 +112,7 @@ class AuthSession:
             headless=headless, env=child_env, accept_downloads=False,
             service_workers="block", permissions=[], ignore_https_errors=False,
             java_script_enabled=not self._automated_login,
+            timeout=10000,
             args=[
                 "--disable-background-networking", "--no-first-run",
                 "--disable-default-apps", "--disable-extensions",
@@ -122,14 +124,16 @@ class AuthSession:
         )
         if not hasattr(self.context, "route_web_socket"):
             raise ExternalPolicyDenied("g4_websocket_guard_missing")
-        await self.context.route("**/*", self._route)
-        await self.context.route_web_socket("**/*", self._websocket)
-        await self.context.add_init_script(EXTRA_INIT_SCRIPT + """
+        await wait_for_step(self.context.route("**/*", self._route), 5, "context.route")
+        await wait_for_step(self.context.route_web_socket("**/*", self._websocket),
+                            5, "context.route_web_socket")
+        await wait_for_step(self.context.add_init_script(EXTRA_INIT_SCRIPT + """
           Object.defineProperty(navigator,'clipboard',{configurable:false,
               get(){throw Error('clipboard_denied')}});
-        """)
+        """), 5, "context.add_init_script")
         self.context.on("page", self._new_page)
-        self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+        self.page = (self.context.pages[0] if self.context.pages else
+                     await wait_for_step(self.context.new_page(), 5, "context.new_page"))
         self._new_page(self.page)
         self._watch = asyncio.create_task(self._sweep())
         return self
