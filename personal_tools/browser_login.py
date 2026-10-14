@@ -148,18 +148,24 @@ async def login(settings, domain, operator_id):
     except Exception:
         result, reason = "failed", "login_unavailable"
     finally:
-        if session is not None and result != "logged_in":
+        if session is not None and result not in ("logged_in", "needs_human"):
             await manager_for(settings).revoke(session.id, operator=session.operator)
         # Only fixed status metadata is recorded.
         finish(settings, attempt, result)
     if result == "needs_human":
+        # Preserve the SAME Chromium context and task at the challenge screen.
+        # Drop the automatic one-POST capability before issuing the human lease;
+        # the G4 takeover guards still deny every agent click/type/readback.
+        session._autofill_target = None
+        session._automated_login = False
         try:
             from web_takeover import WebTakeover
             await asyncio.to_thread(WebTakeover(settings).start, {
-                "reason": "login", "task_id": task, "ttl_seconds": 300
+                "reason": "login", "task_id": session.task, "ttl_seconds": 300
             })
         except Exception:
-            reason = "takeover_unavailable"
+            await manager_for(settings).revoke(session.id, operator=session.operator)
+            return "failed", "takeover_unavailable"
     return result, reason
 
 

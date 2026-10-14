@@ -1724,6 +1724,10 @@ async def _tools(msg, port, _runner, _settings, _arg):
         lines.append("  /github_status /github_issues /github_prs /github_ci /github_create_issue /github_comment")
         lines.append("  /plan_today /plan_dev /planner_health /inbox_triage /schedule_review /planners")
         for name in sorted(PERSONAL_TOOL_REGISTRY):
+            if name == "browser.login":
+                from browser_login_credentials import enabled as login_enabled
+                if not login_enabled():
+                    continue
             pspec = PERSONAL_TOOL_REGISTRY[name]
             lines.append(f"  {name} ({pspec.danger.value}): {pspec.summary}")
         lines.append("")

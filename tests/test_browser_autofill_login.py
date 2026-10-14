@@ -89,6 +89,30 @@ class StoreAndAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("failed", result.text)
         self.assertFalse(path_for(self.settings).exists())
 
+    async def test_tools_help_flag_off_matches_main_inventory(self):
+        from handlers.commands import _tools
+        from personal_tools.registry import PERSONAL_TOOL_REGISTRY, register_personal_tools
+        register_personal_tools()
+
+        class Replies:
+            def __init__(self):
+                self.messages = []
+
+            async def reply(self, _msg, body):
+                self.messages.append(body)
+
+        actual, baseline = Replies(), Replies()
+        with patch.dict(os.environ, {"CONVEYOR_BROWSER_AUTOFILL_LOGIN": "0"}):
+            await _tools(None, actual, None, None, "")
+            login_spec = PERSONAL_TOOL_REGISTRY.pop("browser.login")
+            try:
+                # Without the only new G4 entry this is main's /tools inventory.
+                await _tools(None, baseline, None, None, "")
+            finally:
+                PERSONAL_TOOL_REGISTRY["browser.login"] = login_spec
+        self.assertEqual(actual.messages, baseline.messages)
+        self.assertNotIn("browser.login", actual.messages[0])
+
     def test_loopback_requires_ci_without_display(self):
         with patch.dict(os.environ, {"DISPLAY": ":100"}):
             with self.assertRaises(ExternalPolicyDenied):
@@ -144,14 +168,18 @@ class LoginFixture(BaseHTTPRequestHandler):
         # Fixture checks a password was transmitted only to the intended site;
         # neither it nor any response/log retains or echoes the password.
         self.server.password_seen = b"TOP_SECRET_TEST" in content
-        if self.server.challenge:
-            body = b'<html><body><input autocomplete="one-time-code" name="otp"></body></html>'
+        if self.path == "/mfa":
+            body = b"<html><body>authenticated</body></html>"
+        elif self.server.challenge:
+            body = (b'<html><body><form method="post" action="/mfa">'
+                    b'<input autocomplete="one-time-code" name="otp">'
+                    b'<button type="submit">Verify</button></form></body></html>')
         elif self.server.reject:
             body = b'<html><body>try again<input type="password"></body></html>'
         else:
             body = b"<html><body>welcome</body></html>"
         self.send_response(200)
-        if not self.server.challenge and not self.server.reject:
+        if self.path == "/mfa" or (not self.server.challenge and not self.server.reject):
             self.send_header("Set-Cookie", "session=ok; HttpOnly; SameSite=Lax; Path=/")
         self.send_header("Content-Type", "text/html")
         self.send_header("Content-Length", str(len(body)))
@@ -224,14 +252,50 @@ class BrowserLoginRealTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((result, reason), ("failed", "domain_denied"))
         self.assertEqual(self.http.posts, 0)
 
-    async def test_mfa_needs_human_and_starts_takeover(self):
+    async def test_mfa_needs_human_keeps_same_session_and_completes_otp(self):
+        from human_takeover import HumanTakeoverStore
         put(self.settings, self.origin, "alice", "TOP_SECRET_TEST")
         self.http.challenge = True
-        with patch("web_takeover.WebTakeover.start", return_value={}) as takeover:
+        # Real WebTakeover.start records a real protected lease; only the
+        # external desktop sidecar and unrelated computer steps are mocked.
+        with patch("web_takeover.read_transport_gate", return_value=None), \
+             patch("web_takeover.allow_transport"), \
+             patch("web_takeover.cancel_pending_computer_steps"), \
+             patch("web_takeover.cancel_pending_observe_requests"), \
+             patch("web_takeover.has_claimed_computer_steps", return_value=False), \
+             patch("web_takeover.has_claimed_observe_requests", return_value=False):
             result, reason = await login(self.settings, self.origin, "owner")
         self.assertEqual((result, reason), ("needs_human", "authentication_challenge"))
-        takeover.assert_called_once()
-        self.assertEqual(len(manager_for(self.settings).sessions), 0)
+        manager = manager_for(self.settings)
+        self.assertEqual(len(manager.sessions), 1)
+        session = next(iter(manager.sessions.values()))
+        lease_store = HumanTakeoverStore(self.settings)
+        lease = lease_store.current()
+        self.assertIsNotNone(lease)
+        self.assertEqual(lease["reason"], "login")
+        self.assertEqual(lease["task_id"], session.task)
+        self.assertFalse(session._automated_login)
+        self.assertIsNone(session._autofill_target)
+        with self.assertRaises(ExternalPolicyDenied):
+            session.ensure(agent=True)
+        # The pending lease cannot authorize OTP submit until activated.
+        self.assertFalse(session._human_active())
+        lease_store.activate(lease["id"])
+        self.assertTrue(session._human_active())
+        with self.assertRaises(ExternalPolicyDenied):
+            await session.type("otp", "123456")
+        # Simulate the protected human desktop completing the OTP in the
+        # *same* Chromium page, not a newly launched or cookie-less browser.
+        await session.page.locator('input[autocomplete="one-time-code"]').fill("123456")
+        await session.page.locator('button[type=submit]').click()
+        await session.page.wait_for_load_state("domcontentloaded")
+        cookies = await session.context.cookies([self.origin])
+        self.assertTrue(any(c["name"] == "session" for c in cookies))
+        self.assertEqual(self.http.posts, 2)
+        path = session.directory
+        self.assertTrue(await manager.revoke(session.id, operator=session.operator))
+        self.assertFalse(path.exists())
+        lease_store.complete(lease["id"])
 
     async def test_failed_login_locks_after_three_attempts(self):
         put(self.settings, self.origin, "alice", "TOP_SECRET_TEST")

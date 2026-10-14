@@ -88,7 +88,9 @@ class AuthSession:
         from playwright.async_api import async_playwright
         pw = await async_playwright().start()
         self.owner._drivers[self.id] = pw
-        headless = fixture_loopback_enabled() or self._automated_login
+        # On a protected desktop keep the login browser visible for OTP
+        # handoff; only the isolated CI fixture may complete it headlessly.
+        headless = fixture_loopback_enabled() or (self._automated_login and not os.getenv("DISPLAY"))
         if not headless and not os.getenv("DISPLAY"):
             raise ExternalPolicyDenied("g4_protected_display_missing")
         child_env = {
