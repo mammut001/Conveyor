@@ -333,6 +333,13 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         )
         for element in elements[start:stop]:
             with self.subTest(element=element):
+                self.server.html=FORM.replace(
+                    '<input type="text" name="topic" value="before">',element)
+                result=await prepare(self.settings,self.arg,operator_id="person",
+                                     channel="web",chat_id="chat")
+                self.assertFalse(result.ok,str(result))
+                self.assertIn("g3_uneditable_field_denied",result.text)
+                self.assertEqual(self.server.posts,[])
 
     async def test_readonly_input_cannot_be_edited(self):
         await self._check_readonly_control_denied(0, 1)
@@ -341,13 +348,6 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         await self._check_readonly_control_denied(1, 2)
 
     async def test_readonly_prefilled_value_is_preserved(self):
-        self.server.html=FORM.replace(
-                    '<input type="text" name="topic" value="before">',element)
-                result=await prepare(self.settings,self.arg,operator_id="person",
-                                     channel="web",chat_id="chat")
-                self.assertFalse(result.ok,str(result))
-                self.assertIn("g3_uneditable_field_denied",result.text)
-                self.assertEqual(self.server.posts,[])
         self.server.html=FORM.replace(
             '<input type="text" name="topic" value="before">',
             '<input type="text" name="topic" value="before" readonly>')
