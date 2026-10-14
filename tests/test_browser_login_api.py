@@ -64,7 +64,9 @@ class LoginAPITests(unittest.TestCase):
         return result
 
     def test_flag_off_is_original_404(self):
-        with patch.dict(os.environ, {"CONVEYOR_BROWSER_AUTOFILL_LOGIN": "0"}):
+        with tempfile.TemporaryDirectory() as empty_root, \
+             patch.object(self.settings, "codex_memory_root", Path(empty_root)), \
+             patch.dict(os.environ, {"CONVEYOR_BROWSER_AUTOFILL_LOGIN": "0"}):
             for method, path, payload in (
                 ("GET", "/api/browser/logins", None),
                 ("POST", "/api/browser/logins", {}),
@@ -72,7 +74,7 @@ class LoginAPITests(unittest.TestCase):
             ):
                 self.assertEqual(self.request(method, path, payload),
                                  (404, {"error": "not found"}))
-        self.assertFalse(path_for(self.settings).exists())
+            self.assertFalse(path_for(self.settings).exists())
 
     def test_authenticated_write_only_crud(self):
         env = {
