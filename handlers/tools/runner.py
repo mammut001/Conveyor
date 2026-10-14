@@ -84,6 +84,11 @@ async def run_tool(
     placeholder: str | None = None,
     egress_approved: bool = False,
 ) -> str:
+    import named_agents
+    if not named_agents.tool_allowed(settings, channel, chat_id, tool_name):
+        return "agent tool denied"
+    if tool_name == "agent.message":
+        return named_agents.send_message(settings, arg, channel=channel, chat_id=chat_id)
     import egress_taint
     if egress_taint.requires_approval(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id) and not egress_approved:
         return "Outbound blocked: private data was read; approval required"

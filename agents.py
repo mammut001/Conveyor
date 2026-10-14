@@ -43,7 +43,8 @@ class AgentError(ValueError):
 
 def enabled(settings: Any) -> bool:
     # `is True`: a mocked or partial settings object must not switch this on.
-    return getattr(settings, "agents_enabled", False) is True
+    import named_agents
+    return getattr(settings, "agents_enabled", False) is True or named_agents.enabled(settings)
 
 
 def desktops_enabled(settings: Any) -> bool:
@@ -152,6 +153,9 @@ class AgentStore:
         if key not in _initialised or not self.path.exists():
             self._init_db()
             _initialised.add(key)
+        import named_agents
+        if named_agents.enabled(settings):
+            named_agents.ensure_schema(self.path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.path), timeout=10.0)
@@ -190,6 +194,12 @@ class AgentStore:
         if row is None:
             return None
         agent = dict(row)
+        import named_agents
+        if named_agents.enabled():
+            named_agents.public_agent(agent)
+        else:
+            for field in ("persona", "memory_scope", "tools_allowlist"):
+                agent.pop(field, None)
         agent["archived"] = bool(agent["archived"])
         agent["is_default"] = agent["id"] == DEFAULT_AGENT_ID
         agent["session_id"] = session_id_for(agent["id"])
@@ -241,6 +251,8 @@ class AgentStore:
         return fields
 
     def create(self, payload: dict[str, Any]) -> dict[str, Any]:
+        import named_agents
+        extra = named_agents.validate_extra(payload) if named_agents.enabled() else {}
         fields = self._validated(payload, partial=False)
         now = time.time()
         agent_id = uuid.uuid4().hex[:10]
@@ -259,11 +271,15 @@ class AgentStore:
                 )
         finally:
             conn.close()
+        if extra:
+            named_agents.update_extra(self.path, agent_id, extra)
         return self.get(agent_id) or {}
 
     def update(self, agent_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         if self.get(agent_id) is None:
             return None
+        import named_agents
+        extra = named_agents.validate_extra(payload, agent_id=agent_id) if named_agents.enabled() else {}
         fields = self._validated(payload, partial=True)
         if fields:
             fields["updated_at"] = time.time()
@@ -274,6 +290,8 @@ class AgentStore:
                     conn.execute(f"UPDATE agents SET {assignments} WHERE id = ?", (*fields.values(), agent_id))
             finally:
                 conn.close()
+        if extra:
+            named_agents.update_extra(self.path, agent_id, extra)
         return self.get(agent_id)
 
     def ensure_display(self, agent_id: str) -> int | None:
@@ -347,9 +365,13 @@ def instructions_for_chat(settings: Any, channel: str, chat_id: str) -> tuple[st
         agent = agent_for_chat(settings, channel, chat_id)
     except (OSError, sqlite3.Error):
         return "", ""
-    if not agent or not agent["instructions"]:
+    if not agent:
         return "", ""
-    return agent["name"], agent["instructions"]
+    import named_agents
+    persona = str(agent.get("persona") or "").strip() if named_agents.enabled(settings) else ""
+    instructions = agent["instructions"]
+    combined = "\n".join(x for x in (persona, instructions) if x)
+    return (agent["name"], combined) if combined else ("", "")
 
 
 def profile_block(name: str, instructions: str) -> str:

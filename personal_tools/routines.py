@@ -18,6 +18,9 @@ async def routine_list(
 ) -> ToolResult:
     """List configured routines."""
     items = routines.list_routines(settings)
+    import named_agents
+    if named_agents.enabled(settings):
+        items = [r for r in items if named_agents.routine_belongs(settings, channel, chat_id, r)]
     if not items:
         return ToolResult(True, "暂无配置的定时任务。")
 
@@ -91,6 +94,10 @@ async def routine_pause(
     if not raw.isdigit():
         return ToolResult(False, "用法: routine.pause <id>")
 
+    import named_agents
+    if not named_agents.routine_belongs(settings, channel, chat_id,
+                                       routines.get_routine(settings, int(raw))):
+        return ToolResult(False, "routine belongs to another agent")
     r = routines.pause_routine(settings, int(raw))
     if not r:
         return ToolResult(False, f"未找到定时任务 #{raw}")
@@ -110,6 +117,10 @@ async def routine_resume(
     if not raw.isdigit():
         return ToolResult(False, "用法: routine.resume <id>")
 
+    import named_agents
+    if not named_agents.routine_belongs(settings, channel, chat_id,
+                                       routines.get_routine(settings, int(raw))):
+        return ToolResult(False, "routine belongs to another agent")
     r = routines.resume_routine(settings, int(raw))
     if not r:
         return ToolResult(False, f"未找到定时任务 #{raw}")
@@ -130,6 +141,9 @@ async def routine_delete(
         return ToolResult(False, "用法: routine.delete <id>")
 
     existing = routines.get_routine(settings, int(raw))
+    import named_agents
+    if not named_agents.routine_belongs(settings, channel, chat_id, existing):
+        return ToolResult(False, "routine belongs to another agent")
     name = existing["name"] if existing else f"#{raw}"
     ok = routines.delete_routine(settings, int(raw))
     if not ok:
@@ -151,6 +165,10 @@ async def routine_run(
         return ToolResult(False, "用法: routine.run <id>")
 
     # Only queue it: the web console executes routines (it holds their approvals).
+    import named_agents
+    if not named_agents.routine_belongs(settings, channel, chat_id,
+                                       routines.get_routine(settings, int(raw))):
+        return ToolResult(False, "routine belongs to another agent")
     r = routines.request_run_now(settings, int(raw))
     if not r:
         return ToolResult(False, f"未找到已启用的定时任务 #{raw}")
