@@ -104,7 +104,7 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         for suffix in ("/form","/submit","/delete-account"):
             with _connect(self.settings) as conn:
                 conn.execute("INSERT INTO browser_agent_grants VALUES(?,?,?,?)",
-                    (_operator_key("person"),self.url+suffix,time.time()+300,time.time()))
+                    (_operator_key("person"),self.url+suffix,time.time()+3600,time.time()))
                 conn.commit()
         dns=patch("workflow_browser_external.resolve_public_ipv4",
                   return_value="127.0.0.1")

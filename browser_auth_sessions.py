@@ -17,6 +17,7 @@ import tempfile
 import time
 from urllib.parse import urlsplit
 
+from browser_auth_timeout import wait_for_step
 from browser_auth_policy import (
     enabled, ttl, origins, _origin, check_request, browser_pins,
     fixture_loopback_enabled,
@@ -50,6 +51,8 @@ class AuthSession:
         self.page = None
         self._closed = False
         self._watch = None
+        self._closing = None
+        self._owner_lock = None
         self._violation = None
         self._in_action = asyncio.Lock()
         self._automated_login = False
@@ -109,6 +112,7 @@ class AuthSession:
             headless=headless, env=child_env, accept_downloads=False,
             service_workers="block", permissions=[], ignore_https_errors=False,
             java_script_enabled=not self._automated_login,
+            timeout=10000,
             args=[
                 "--disable-background-networking", "--no-first-run",
                 "--disable-default-apps", "--disable-extensions",
@@ -120,14 +124,16 @@ class AuthSession:
         )
         if not hasattr(self.context, "route_web_socket"):
             raise ExternalPolicyDenied("g4_websocket_guard_missing")
-        await self.context.route("**/*", self._route)
-        await self.context.route_web_socket("**/*", self._websocket)
-        await self.context.add_init_script(EXTRA_INIT_SCRIPT + """
+        await wait_for_step(self.context.route("**/*", self._route), 5, "context.route")
+        await wait_for_step(self.context.route_web_socket("**/*", self._websocket),
+                            5, "context.route_web_socket")
+        await wait_for_step(self.context.add_init_script(EXTRA_INIT_SCRIPT + """
           Object.defineProperty(navigator,'clipboard',{configurable:false,
               get(){throw Error('clipboard_denied')}});
-        """)
+        """), 5, "context.add_init_script")
         self.context.on("page", self._new_page)
-        self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+        self.page = (self.context.pages[0] if self.context.pages else
+                     await wait_for_step(self.context.new_page(), 5, "context.new_page"))
         self._new_page(self.page)
         self._watch = asyncio.create_task(self._sweep())
         return self
@@ -243,44 +249,33 @@ class AuthSession:
         raise ExternalPolicyDenied("g4_g3_approval_required")
 
     async def _sweep(self):
-        while not self._closed:
-            await asyncio.sleep(0.25)
-            try:
-                self.ensure()
-            except Exception:
-                await self.owner.revoke(self.id, operator=self.operator)
-                return
+        try:
+            while not self._closed:
+                await asyncio.sleep(0.25)
+                try:
+                    self.ensure()
+                except Exception:
+                    await self.owner.revoke(self.id, operator=self.operator)
+                    return
+        except asyncio.CancelledError:
+            return
+
+    async def _close_impl(self):
+        from browser_auth_close import bounded_close
+        await bounded_close(self)
 
     async def close(self):
-        if self._closed:
-            return
-        self._closed = True
-        if self._watch and self._watch is not asyncio.current_task():
-            self._watch.cancel()
-        try:
-            if self.context:
-                try:
-                    for page in self.context.pages:
-                        await page.evaluate("""async () => {
-                            localStorage.clear(); sessionStorage.clear();
-                            for(const k of await caches.keys()) await caches.delete(k);
-                            if (indexedDB.databases) for(const db of await indexedDB.databases())
-                              if(db.name) indexedDB.deleteDatabase(db.name);
-                        }""")
-                except Exception:
-                    pass
-                try:
-                    await self.context.clear_cookies()
-                finally:
-                    await self.context.close()
-        finally:
-            pw = self.owner._drivers.pop(self.id, None)
-            if pw:
-                try:
-                    await pw.stop()
-                except Exception:
-                    pass
-            shutil.rmtree(self.directory, ignore_errors=True)
+        # Exactly one shutdown Task; caller cancellation must not stop teardown.
+        if self._closing is None:
+            self._closed = True
+            self._closing = asyncio.ensure_future(self._close_impl())
+            task = self._closing
+            self.owner._closing[self.id] = (self.operator, task)
+            def forget(done):
+                if self.owner._closing.get(self.id, (None, None))[1] is done:
+                    self.owner._closing.pop(self.id, None)
+            task.add_done_callback(forget)
+        return await asyncio.shield(self._closing)
 
 
 class AuthSessionManager:
@@ -291,6 +286,7 @@ class AuthSessionManager:
         self.root = _private_root(settings)
         self.sessions = {}
         self._drivers = {}
+        self._closing = {}
         # Orphaned browser profiles are never reopened after a crash.
         from browser_auth_orphans import cleanup
         cleanup(self.root)
@@ -315,7 +311,14 @@ class AuthSessionManager:
                s.domain == domain for s in self.sessions.values()):
             raise ExternalPolicyDenied("g4_duplicate_session")
         folder = Path(tempfile.mkdtemp(prefix="session-", dir=self.root))
+        from browser_auth_owner import acquire
+        try:
+            ownership = acquire(folder)
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
         session = AuthSession(self, operator, task, domain, folder)
+        session._owner_lock = ownership
         session._automated_login = automated
         self.sessions[session.id] = session
         try:
@@ -327,15 +330,24 @@ class AuthSessionManager:
 
     async def revoke(self, session_id, *, operator):
         session = self.sessions.get(session_id)
-        if session is None or session.operator != operator:
+        if session is None:
+            closing = self._closing.get(session_id)
+            if closing is None or closing[0] != operator:
+                return False
+            await asyncio.shield(closing[1])
+            return True
+        if session.operator != operator:
             return False
         self.sessions.pop(session_id)
         await session.close()
         return True
 
     async def revoke_all(self):
-        for session in list(self.sessions.values()):
-            await self.revoke(session.id, operator=session.operator)
+        # Include closes whose sessions were already popped by their sweep task.
+        await asyncio.gather(*(self.revoke(s.id, operator=s.operator)
+                               for s in list(self.sessions.values())))
+        await asyncio.gather(*(asyncio.shield(task)
+                               for _, task in list(self._closing.values())))
 
     async def logout(self, session_id, *, operator):
         return await self.revoke(session_id, operator=operator)

@@ -22,6 +22,7 @@ from console_secrets import path_for
 from browser_auth_orphans import cleanup
 from personal_tools.browser_login import login, login_adapter
 from browser_auth_sessions import manager_for
+from browser_auth_timeout import wait_for_step
 
 REAL = os.getenv("CONVEYOR_REQUIRE_REAL_BROWSER") == "1"
 
@@ -208,6 +209,9 @@ class BrowserLoginRealTests(unittest.IsolatedAsyncioTestCase):
         cls.worker.join(timeout=3)
 
     async def asyncSetUp(self):
+        loop = asyncio.get_running_loop()
+        loop.set_debug(True)
+        loop.slow_callback_duration = 1
         self.tmp = tempfile.TemporaryDirectory()
         self.origin = f"http://127.0.0.1:{self.http.server_port}"
         self.env = patch.dict(os.environ, flags(self.origin))
@@ -218,7 +222,10 @@ class BrowserLoginRealTests(unittest.IsolatedAsyncioTestCase):
         self.http.password_seen = self.http.challenge = self.http.reject = False
 
     async def asyncTearDown(self):
-        await manager_for(self.settings).revoke_all()
+        mgr = manager_for(self.settings)
+        watches = [s._watch for s in mgr.sessions.values() if s._watch]
+        await mgr.revoke_all()
+        await asyncio.gather(*watches, return_exceptions=True)
         self.env.stop()
         self.tmp.cleanup()
 
@@ -235,7 +242,8 @@ class BrowserLoginRealTests(unittest.IsolatedAsyncioTestCase):
         mgr = manager_for(self.settings)
         self.assertEqual(len(mgr.sessions), 1)
         s = next(iter(mgr.sessions.values()))
-        self.assertGreater(len(await s.context.cookies([self.origin])), 0)
+        self.assertGreater(len(await wait_for_step(
+            s.context.cookies([self.origin]), 3, "test_success.cookies")), 0)
         path = s.directory
         await mgr.revoke(s.id, operator=s.operator)
         self.assertFalse(path.exists())
