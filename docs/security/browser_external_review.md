@@ -113,7 +113,10 @@ after handoff; optional readback uses CDP sensitive-DOM checks and redaction.
 Login POST is restricted to /login, /signin, /session, /mfa during the human
 lease; other writes still require G3's separate approval path. Web GET
 `/api/browser/auth-sessions` and POST `/api/browser/auth-sessions/{id}/revoke`
-require normal Web bearer authentication. No create-session API is exposed.
+require normal Web bearer authentication. Operator-only
+POST `/api/browser/auth-sessions` with `{"task_id":"...","domain":"..."}`
+can start a session **only while** its matching protected login takeover
+lease is active. This does not expose a browser-login API to the agent.
 Revoke, expiry, logout, and kill close the context and delete its directory;
 startup deletes orphans. Tests opt in to `CONVEYOR_BROWSER_AUTH_TEST_LOOPBACK=1`
 for HTTP loopback fixture sites only.

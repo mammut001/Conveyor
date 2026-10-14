@@ -167,7 +167,9 @@ class WebConsoleServer(ThreadingHTTPServer):
         self._workflow_store_lock = threading.Lock()
         self._workflow_store: Any | None = None
         # G4 startup sweep: orphaned credential-bearing profiles are deleted.
-        if __import__("os").environ.get("CONVEYOR_BROWSER_AUTH_SESSIONS") == "1":
+        if (__import__("os").environ.get("CONVEYOR_BROWSER_AUTH_SESSIONS") == "1"
+                and getattr(control, "settings", None) is not None
+                and getattr(control.settings, "codex_memory_root", None)):
             from browser_auth_sessions import manager_for
             manager_for(control.settings)
 
@@ -885,7 +887,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             if dispatch(self, "POST", parsed.path, body):
                 return
         try:
-            if parsed.path.startswith("/api/browser/auth-sessions/"):
+            if (parsed.path == "/api/browser/auth-sessions" or
+                    parsed.path.startswith("/api/browser/auth-sessions/")):
                 import browser_auth_api
                 if browser_auth_api.post(self, parsed.path, body):
                     return

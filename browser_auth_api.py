@@ -21,10 +21,27 @@ def get(handler, path):
 
 def post(handler, path, body):
     prefix = "/api/browser/auth-sessions/"
-    if not (path.startswith(prefix) and path.endswith("/revoke")):
+    if path != "/api/browser/auth-sessions" and not (
+        path.startswith(prefix) and path.endswith("/revoke")
+    ):
         return False
     if not enabled():
         handler._json(409, {"error": "g4_disabled"})
+        return True
+    if path == "/api/browser/auth-sessions":
+        if set(body) != {"task_id", "domain"}:
+            handler._json(400, {"error": "expected task_id and domain"})
+            return True
+        try:
+            # One Web bearer operator; cannot be selected by the request.
+            session = handler._await(manager_for(handler.server.control.settings).open(
+                "web-console", body["task_id"], body["domain"]))
+            handler._json(201, {"id": session.id, "domain": session.domain,
+                                "task_id": session.task, "expires_at": session.expires_at})
+        except ExternalPolicyDenied as exc:
+            handler._json(409, {"error": str(exc)})
+        except Exception:
+            handler._json(409, {"error": "g4_start_denied"})
         return True
     session_id = path[len(prefix):-len("/revoke")]
     if (len(session_id) != 32 or any(c not in "0123456789abcdef" for c in session_id)

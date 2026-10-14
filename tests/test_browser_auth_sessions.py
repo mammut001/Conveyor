@@ -82,7 +82,8 @@ class G4OfflineTests(unittest.IsolatedAsyncioTestCase):
         b = await self._open_fake()
         cookie2 = b.directory / "cookie"
         cookie2.write_bytes(b"secret")
-        kill = Path(self.tmp.name) / "state" / "browser-external.kill"
+        from browser_g3_kill import path as kill_path
+        kill = kill_path(self.settings)
         kill.touch(mode=0o600)
         self.assertEqual(await self.manager.list_public(), [])
         self.assertFalse(cookie2.exists())
@@ -241,7 +242,8 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(directory.exists())
         t, lease2 = await self._session("bob", "task5")
         self.store.complete(lease2)
-        kill = Path(self.tmp.name) / "state" / "browser-external.kill"
+        from browser_g3_kill import path as kill_path
+        kill = kill_path(self.settings)
         kill.touch()
         self.assertEqual(await self.mgr.list_public(), [])
         self.assertFalse(t.directory.exists())
