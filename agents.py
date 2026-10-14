@@ -43,8 +43,7 @@ class AgentError(ValueError):
 
 def enabled(settings: Any) -> bool:
     # `is True`: a mocked or partial settings object must not switch this on.
-    import named_agents
-    return getattr(settings, "agents_enabled", False) is True or named_agents.enabled(settings)
+    return getattr(settings, "agents_enabled", False) is True
 
 
 def desktops_enabled(settings: Any) -> bool:

@@ -8,7 +8,7 @@ without introducing a competing AgentStore.
 ## Flag and compatibility
 
 `CONVEYOR_NAMED_AGENTS=1` enables the extension (default **off**); it
-also enables the existing named-agent identity handling. With the flag off:
+requires the existing `CONVEYOR_AGENTS_ENABLED=true` named-agent feature. With the flag off:
 no extra metadata migration, no new tool schema, no agent-message dispatch,
 and the legacy `/tools` list and API behavior are unchanged. The existing
 `/api/agents` create/update endpoints accept the new fields only when the

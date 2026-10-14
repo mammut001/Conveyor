@@ -16,13 +16,18 @@ from redaction import redact_text
 
 _TOOL = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 _ID = re.compile(r"^[a-z0-9]{1,32}$")
+_SCHEMA_READY = set()
 
 
-def enabled(_settings=None):
-    return os.environ.get("CONVEYOR_NAMED_AGENTS", "").lower() in ("1", "true", "yes", "on")
+def enabled(settings=None):
+    on = os.environ.get("CONVEYOR_NAMED_AGENTS", "").lower() in ("1", "true", "yes", "on")
+    return on and (settings is None or getattr(settings, "agents_enabled", False) is True)
 
 
 def ensure_schema(db_path):
+    db_path = Path(db_path).resolve()
+    if db_path in _SCHEMA_READY and db_path.exists():
+        return
     conn = sqlite3.connect(str(db_path), timeout=10)
     try:
         with conn:
@@ -37,6 +42,7 @@ def ensure_schema(db_path):
             conn.execute("UPDATE agents SET memory_scope='operator' WHERE id='default'")
     finally:
         conn.close()
+    _SCHEMA_READY.add(db_path)
 
 
 def validate_extra(payload, *, agent_id=None):
@@ -56,7 +62,7 @@ def validate_extra(payload, *, agent_id=None):
     if "tools_allowlist" in payload:
         items = payload["tools_allowlist"]
         if not isinstance(items, list) or len(items) > 100 or any(
-            not isinstance(v, str) or not _TO.fullmatch(v) for v in items
+            not isinstance(v, str) or not _TOOL.fullmatch(v) for v in items
         ):
             raise ValueError("tools_allowlist must be an array of up to 100 exact tool names")
         out["tools_allowlist"] = json.dumps(sorted(set(items)), separators=(",", ":"))
