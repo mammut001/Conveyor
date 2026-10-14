@@ -188,7 +188,12 @@ def post(handler, path, body):
         handler._json(400,{"error":"expected boolean enabled"})
     else:
         try:
-            handler._json(200,{"kill_switch":set_kill(_settings(handler),body["enabled"])})
+            status = set_kill(_settings(handler),body["enabled"])
+            if status:
+                # Kill must synchronously destroy credential-bearing G4 profiles.
+                from browser_auth_sessions import manager_for
+                handler._await(manager_for(_settings(handler)).revoke_all())
+            handler._json(200,{"kill_switch":status})
         except ExternalPolicyDenied as exc:
             handler._json(409,{"error":str(exc)})
     return True

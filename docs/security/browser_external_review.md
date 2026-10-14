@@ -98,6 +98,36 @@ The required-Chromium CI job installs a real browser and runs both adapter and g
 
 ### G4 — Optional authenticated sites, **separate opt-in and security approval**
 
+**Implementation status (G4 prototype, default OFF; external deployment NOT APPROVED):**
+`CONVEYOR_BROWSER_AUTH_SESSIONS=1` plus exact
+`CONVEYOR_BROWSER_AUTH_DOMAINS=https://host.example:443` permits the
+internal session manager to launch one fresh persistent-context Chromium
+process with its own ephemeral 0700 user-data directory, bound to operator,
+task and exact origin. `CONVEYOR_BROWSER_AUTH_TTL_SEC` defaults to 900.
+Extra GET-only origins require explicit
+`CONVEYOR_BROWSER_AUTH_ASSET_DOMAINS` entries. Human login/MFA is gated on
+the **existing** active `login` takeover lease for the exact task and a
+protected transport gate. During the lease every agent action is refused.
+Agent click/type/screenshot/clipboard/submit remain disabled in G4 even
+after handoff; optional readback uses CDP sensitive-DOM checks and redaction.
+Login POST is restricted to /login, /signin, /session, /mfa during the human
+lease; other writes still require G3's separate approval path. Web GET
+`/api/browser/auth-sessions` and POST `/api/browser/auth-sessions/{id}/revoke`
+require normal Web bearer authentication. No create-session API is exposed.
+Revoke, expiry, logout, and kill close the context and delete its directory;
+startup deletes orphans. Tests opt in to `CONVEYOR_BROWSER_AUTH_TEST_LOOPBACK=1`
+for HTTP loopback fixture sites only.
+
+**Residual blockers:** G1–G3 do not yet provide a reviewed, process-wide
+network namespace or proxy pinning for Chromium's route.fetch transport,
+nor a dedicated OS security principal/hostile-process isolation for GUI
+takeover. Thus independent G4 acceptance items on zero unauthorized sockets
+and hostile-process resistance are not claimed. **Do not enable for real
+authenticated third-party sites until separate OS-level egress and takeover
+security validation.** CI success is not that sign-off.
+
+
+
 - **Capability:** no shared logins or preexisting browser profiles by default. If introduced, restrict to a separately reviewed domain, dedicated identity and one short-lived task; human performs login/MFA via protected takeover, never the agent. Credential handling is **not implied** by G1–G3.
 - **Acceptance tests (all mandatory):**
   1. No ambient OS/browser credentials, cookies, password manager, clipboard, SSH agent or profile directories accessible to Playwright; prove cross-user and cross-domain storage isolation through adversarial tests.
