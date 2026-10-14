@@ -12,7 +12,6 @@ from urllib.parse import urlsplit
 
 from browser_login_credentials import enabled, canonical_domain, read_for_executor
 from browser_login_audit import reserve, finish, LoginQuotaDenied
-from browser_auth_sessions import manager_for
 from workflow_browser_external_identity import ExternalPolicyDenied
 from personal_tools.base import ToolResult
 
@@ -141,6 +140,7 @@ async def login(settings, domain, operator_id):
     try:
         operator = "login_" + hashlib.sha256(operator_id.encode()).hexdigest()[:24]
         task = "login_" + secrets.token_hex(12)
+        from browser_auth_sessions import manager_for  # lazy: avoid G4/personal_tools import cycle
         session = await manager_for(settings).open(operator, task, origin, automated=True)
         result, reason = await asyncio.wait_for(_login(session, record), timeout=25)
     except ExternalPolicyDenied:
