@@ -79,6 +79,12 @@ class AuthSession:
             raise ExternalPolicyDenied("g4_disabled_or_domain_revoked")
         if time.time() >= self.expires_at or kill_active(self.owner.settings):
             raise ExternalPolicyDenied("g4_expired_or_killed")
+        # Only G4's explicit real-browser loopback test harness is exempt
+        # from G5's HTTPS-only certification namespace.
+        if not (fixture_loopback_enabled() and self.domain.startswith("http://127.0.0.1:")):
+            from browser_g5_rollout import check as g5_check
+            g5_check(Path(self.owner.settings.codex_memory_root) / "browser_external",
+                     self.domain, "auth")
         if (agent or self._automated_login) and self._lease() is not None:
             raise ExternalPolicyDenied("g4_human_takeover_active")
 

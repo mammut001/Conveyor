@@ -98,6 +98,7 @@ jobs:
           CONVEYOR_BROWSER_EXTERNAL_INTERACT: "1"
           CONVEYOR_BROWSER_EXTERNAL_SUBMIT: "1"
           CONVEYOR_BROWSER_AUTH_SESSIONS: "1"
+          CONVEYOR_BROWSER_G5: "1"
           CONVEYOR_BROWSER_AUTOFILL_LOGIN: "1"
           CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT: "1"
           CONVEYOR_STT_ENABLED: "1"
@@ -181,4 +182,4 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Run real Chromium fixture integration tests (no skips)
-        run: python -m pytest tests/test_workflow_browser_playwright.py::LocalFixturePlaywrightTests tests/test_workflow_browser_guards.py tests/test_workflow_browser_external.py tests/test_workflow_browser_g2.py tests/test_web_browser_approvals.py tests/test_browser_agent_interact.py tests/test_workflow_browser_g3.py tests/test_browser_g2_g3_hardening.py tests/test_browser_auth_sessions.py tests/test_browser_autofill_login.py -q -v --timeout=20 --timeout-method=thread
+        run: python -m pytest tests/test_workflow_browser_playwright.py::LocalFixturePlaywrightTests tests/test_workflow_browser_guards.py tests/test_workflow_browser_external.py tests/test_workflow_browser_g2.py tests/test_web_browser_approvals.py tests/test_browser_agent_interact.py tests/test_workflow_browser_g3.py tests/test_browser_g2_g3_hardening.py tests/test_browser_auth_sessions.py tests/test_browser_autofill_login.py tests/test_browser_g5_rollout.py -q -v --timeout=20 --timeout-method=thread
