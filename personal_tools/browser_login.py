@@ -130,6 +130,12 @@ async def login(settings, domain, operator_id):
     record = read_for_executor(settings, origin)
     if record is None:
         return "failed", "credential_missing"
+    # Busy retries must not burn the password attempt quota; the reservation
+    # in AuthSessionManager.open remains the atomic concurrent-authority check.
+    from browser_auth_sessions import manager_for
+    from browser_login_domain_gate import login_domain_busy
+    if login_domain_busy(manager_for(settings), origin):
+        return "failed", "busy"
     try:
         attempt = reserve(settings, origin, record["username"])
     except LoginQuotaDenied as exc:
