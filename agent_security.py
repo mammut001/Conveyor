@@ -71,7 +71,7 @@ def _reason(value):
         "identity_denied", "selected_conversation", "ambiguous",
         "approved", "queued", "rate_limited", "queue_full", "killed",
         "owner_selected", "owner_rejected", "task_cancelled",
-        "operator_stop", "task_stop", "revoked", "disabled",
+        "operator_stop", "task_stop", "revoked", "disabled", "legacy_queued",
     ))
     return value if value in allowed else "denied"
 
@@ -127,6 +127,44 @@ def check_capacity(conn, *, operator, to_agent):
         (operator, to_agent)).fetchone()[0]
     if pending >= queue_cap():
         raise ValueError("agent mailbox queue full")
+
+
+def admit_legacy_message(settings, *, operator, to_agent):
+    """Serialized rate admission for pre-Mailbox named-agent transcript sends.
+
+    Legacy writes are not mailbox enqueues, but still consume the operator's
+    Agent messaging budget. No payload enters the security audit.
+    """
+    if killed():
+        raise ValueError("agents disabled by emergency kill switch")
+    path = Path(settings.codex_memory_root) / "state" / "job_queue.sqlite3"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), timeout=10, isolation_level=None)
+    try:
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.execute("BEGIN IMMEDIATE")
+        ensure(conn)
+        now = time.time()
+        used = conn.execute(
+            """SELECT COUNT(*) FROM agent_security_audit WHERE operator=?
+               AND event='delegate' AND reason='legacy_queued'
+               AND happened_at>=?""", (operator, now-3600)).fetchone()[0]
+        if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='agent_mailbox'").fetchone():
+            used += conn.execute(
+                """SELECT COUNT(*) FROM agent_mailbox WHERE operator=?
+                   AND created_at>=? AND kind IN ('message','task','task_request','task_result')""",
+                (operator, now-3600)).fetchone()[0]
+        if used >= rate_limit():
+            raise ValueError("per-operator agent rate limit exceeded")
+        audit_tx(conn, operator=operator, event="delegate",
+                 agent_id=to_agent, reason="legacy_queued", now=now)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def audit_for_agent(settings, agent_id, operator, limit=50):
