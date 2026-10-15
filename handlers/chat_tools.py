@@ -37,6 +37,9 @@ def func_to_tool_name(func_name: str) -> str:
 
 
 def _get_tool_spec(name: str, settings: Settings | None = None) -> Any | None:
+    from agent_security import killed
+    if killed() and (name.startswith("agent.") or name == "main.route_delegate"):
+        return None
     if name == "main.route_delegate":
         from main_router import spec
         return spec(settings)
