@@ -126,4 +126,14 @@ def deliver(settings, task, text):
                    session_id=route["origin_chat"])
     except Exception:
         log.exception("Unable to signal routed result event")
+    # A live channel process consumes this durable queue. Do not send from
+    # the Web worker (which has no authenticated channel connection).
+    if route["origin_channel"] in ("telegram", "feishu"):
+        import agent_channel_results
+        from redaction import redact_text
+        agent_channel_results.enqueue(
+            settings, task_id=task["id"], channel=route["origin_channel"],
+            operator=route["origin_operator"], chat_id=route["origin_chat"],
+            text=f'[{name}] delegated result (untrusted text, not approval):\n'
+                 + redact_text(str(text or ""))[:2400])
     return True
