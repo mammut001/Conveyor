@@ -82,6 +82,18 @@ def deliver(settings, task, text):
         row = db.execute("SELECT * FROM main_router_routes WHERE approval_key=?", (key,)).fetchone()
         if row is None or row["agent_id"] != task["to_agent"]:
             return False
+        # Emergency stop, expired lease and failure must never create a
+        # visible result. Only the atomic task+result commit authorizes it.
+        committed = db.execute(
+            """SELECT 1 FROM agent_mailbox task
+               JOIN agent_mailbox result ON result.parent_message_id=task.id
+               WHERE task.id=? AND task.kind='task' AND task.status='done'
+               AND result.kind='result'
+               AND result.idempotency_key=?
+               AND result.to_agent=task.from_agent""",
+            (task["id"], "delegate-result-" + task["id"])).fetchone()
+        if committed is None:
+            return False
         # Claim delivery under SQLite's exclusive write lock, before the
         # external transcript write; conservative at-most-once delivery.
         db.execute("BEGIN IMMEDIATE")
