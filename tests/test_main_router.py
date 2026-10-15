@@ -207,7 +207,8 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
         with ac.bind(target):
             record, worker_id = queue.claim(self.settings, target)
         self.assertEqual(worker.cancel_all(self.settings), 1)
-        self.assertFalse(queue.complete(self.settings, target, record, worker_id, "late"))
+        with ac.bind(target):
+            self.assertFalse(queue.complete(self.settings, target, record, worker_id, "late"))
         self.assertEqual(next(r for r in self.rows() if r["id"] == task["id"])["status"],
                          "dead")
         self.assertFalse(results.deliver(self.settings, task, "late"))
