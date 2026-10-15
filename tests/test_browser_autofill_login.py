@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import stat
 import tempfile
+import time
 import threading
 import unittest
 from types import SimpleNamespace
@@ -126,7 +127,7 @@ class StoreAndAuditTests(unittest.IsolatedAsyncioTestCase):
             for _ in range(3):
                 conn.execute("""INSERT INTO login_attempts
                     (domain,username,result,time) VALUES (?,?,?,?)""",
-                    (self.origin, "alice", "failed", __import__("time").time()))
+                    (self.origin, "alice", "failed", time.time()))
         # Old generic failures carry no evidence of password submission.
         attempt = reserve(self.settings, self.origin, "alice")
         finish(self.settings, attempt, "failed", reason="login_open_timeout")
