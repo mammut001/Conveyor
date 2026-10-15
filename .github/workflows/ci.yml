@@ -74,6 +74,7 @@ jobs:
           CONVEYOR_AGENT_DELEGATION: "1"
           CONVEYOR_MAIN_ROUTER: "1"
           CONVEYOR_AGENT_CHANNEL_ROUTING: "1"
+          # Transactional result outbox uses CHANNEL_ROUTING; no separate flag.
           # CONVEYOR_AGENTS_KILL intentionally OFF; emergency stop is tested separately.
           # Agent rate/queue/retention limits use safe defaults, not boolean flags.
           CONVEYOR_AGENT_DESKTOPS_ENABLED: "1"
