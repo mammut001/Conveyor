@@ -71,14 +71,46 @@ class StoreAndAuditTests(unittest.IsolatedAsyncioTestCase):
         put(self.settings, self.origin, "person", "TOP_SECRET_TEST")
         for _ in range(3):
             ident = reserve(self.settings, self.origin, "person")
-            finish(self.settings, ident, "failed")
+            finish(self.settings, ident, "failed", reason="credentials_rejected",
+                   submitted=True)
         with self.assertRaises(LoginQuotaDenied) as cm:
             reserve(self.settings, self.origin, "person")
         self.assertEqual(cm.exception.reason, "locked")
         audit = public_audit(self.settings, self.origin)
         self.assertEqual(len(audit), 3)
-        self.assertTrue(all(set(x) == {"domain", "username", "result", "time"} for x in audit))
+        self.assertTrue(all(set(x) == {"domain", "username", "result", "time",
+                                      "reason", "submitted"} for x in audit))
+        self.assertTrue(all(x["reason"] == "credentials_rejected"
+                            and x["submitted"] for x in audit))
         self.assertNotIn("TOP_SECRET_TEST", str(audit))
+
+    def test_infrastructure_failures_have_separate_bounded_quota(self):
+        put(self.settings, self.origin, "person", "TOP_SECRET_TEST")
+        for _ in range(5):
+            ident = reserve(self.settings, self.origin, "person")
+            finish(self.settings, ident, "failed", reason="login_open_timeout")
+        with self.assertRaises(LoginQuotaDenied) as cm:
+            reserve(self.settings, self.origin, "person")
+        self.assertEqual(cm.exception.reason, "infra_rate_limited")
+        audit = public_audit(self.settings, self.origin)
+        self.assertEqual(len(audit), 5)
+        self.assertTrue(all(x["result"] == "failed" and
+                            x["reason"] == "login_open_timeout" and
+                            not x["submitted"] for x in audit))
+
+    def test_rejection_requires_positive_submission_evidence(self):
+        attempt = reserve(self.settings, self.origin, "person")
+        with self.assertRaisesRegex(ValueError, "unverified rejection"):
+            finish(self.settings, attempt, "failed", reason="credentials_rejected")
+        finish(self.settings, attempt, "failed", reason="login_unavailable")
+        # A generic failure, even with a server-visible POST, is not verified
+        # as an incorrect password and does not consume the credential quota.
+        attempt = reserve(self.settings, self.origin, "person")
+        finish(self.settings, attempt, "failed", reason="login_not_confirmed",
+               submitted=True)
+        self.assertEqual(len(public_audit(self.settings, self.origin)), 2)
+        attempt = reserve(self.settings, self.origin, "person")
+        finish(self.settings, attempt, "logged_in", reason="success", submitted=True)
 
     async def test_flag_off_no_model_tool_or_secret_store(self):
         from handlers.chat_tools import build_tool_schemas
@@ -316,9 +348,53 @@ class BrowserLoginRealTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_login_locks_after_three_attempts(self):
         put(self.settings, self.origin, "alice", "TOP_SECRET_TEST")
         self.http.reject = True
-        for _ in range(3):
-            result, _ = await login(self.settings, self.origin, "owner")
+        rejections = 0
+        # A transient pre-submit browser failure cannot use up a password
+        # attempt. Retry it, while preserving the exact HTTP POST assertion.
+        for _ in range(5):
+            result, reason = await wait_for_step(
+                login(self.settings, self.origin, "owner"), 19, "test.lockout")
             self.assertEqual(result, "failed")
-        result, reason = await login(self.settings, self.origin, "owner")
+            if reason == "credentials_rejected":
+                rejections += 1
+                self.assertEqual(self.http.posts, rejections)
+            else:
+                self.assertIn(reason, ("login_open_timeout", "login_form_timeout",
+                                       "login_unavailable", "login_not_confirmed"))
+            if rejections == 3:
+                break
+        self.assertEqual(rejections, 3, "three verified rejections required")
+        self.assertEqual(self.http.posts, 3)
+        result, reason = await wait_for_step(
+            login(self.settings, self.origin, "owner"), 3, "test.lockout_denial")
         self.assertEqual((result, reason), ("failed", "locked"))
         self.assertEqual(self.http.posts, 3)
+        audit = public_audit(self.settings, self.origin)
+        self.assertEqual(sum(x["reason"] == "credentials_rejected" and
+                             x["submitted"] for x in audit), 3)
+
+    async def test_forced_pre_submit_timeout_does_not_consume_password_quota(self):
+        from browser_auth_sessions import AuthSession
+        put(self.settings, self.origin, "alice", "TOP_SECRET_TEST")
+        self.http.reject = True
+        # Do not even start Chromium: this is an injected browser-open failure.
+        async def timeout_before_post(_session):
+            raise asyncio.TimeoutError("fixture forced pre-submit timeout")
+        with patch.object(AuthSession, "start", timeout_before_post):
+            for _ in range(3):
+                result, reason = await wait_for_step(
+                    login(self.settings, self.origin, "owner"), 3,
+                    "test.forced_open_timeout")
+                self.assertEqual((result, reason), ("failed", "login_open_timeout"))
+        self.assertEqual(self.http.posts, 0)
+        audit = public_audit(self.settings, self.origin)
+        self.assertEqual(len(audit), 3)
+        self.assertTrue(all(x["reason"] == "login_open_timeout" and
+                            not x["submitted"] for x in audit))
+        # A real rejected password remains permitted after those timeouts.
+        result, reason = await wait_for_step(
+            login(self.settings, self.origin, "owner"), 19,
+            "test.after_open_timeout")
+        self.assertEqual((result, reason), ("failed", "credentials_rejected"))
+        self.assertEqual(self.http.posts, 1)
+        self.assertEqual(len(public_audit(self.settings, self.origin)), 4)
