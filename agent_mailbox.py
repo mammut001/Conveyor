@@ -31,7 +31,7 @@ class MailboxConflict(ValueError):
 
 def enabled(settings) -> bool:
     from agent_security import killed
-    return (not killed() and agent_context.enabled(settings) and
+    return (not killed(settings) and agent_context.enabled(settings) and
             os.environ.get("CONVEYOR_AGENT_MAILBOX", "").lower()
             in ("1", "true", "yes", "on"))
 
@@ -127,7 +127,7 @@ def send(settings, *, sender: agent_context.AgentContext, to_agent: str,
             raise MailboxDenied("invalid deadline")
         import agent_security
         agent_security.admit(conn, operator=actor.operator_identity,
-                             to_agent=to_agent, kind=kind, now=timestamp)
+                             to_agent=to_agent, kind=kind, now=timestamp, settings=settings)
         if parent_message_id is not None:
             parent = conn.execute(
                 "SELECT * FROM agent_mailbox WHERE id=?", (parent_message_id,)
