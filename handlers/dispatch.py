@@ -70,6 +70,12 @@ async def dispatch(
         await port.reply(msg, "Unauthorized.")
         return
 
+    # The runtime kill control is a separate, owner-only command. It must
+    # remain reachable even if Agent routing/context is disabled by kill.
+    import agent_security_controls
+    if await agent_security_controls.owner_command(settings, msg, port):
+        return
+
     # Only authenticated owner DMs can select an Agent. Never intercept
     # emergency stop or /cancel, which retain their existing dispatch path.
     import agent_channel_routing
