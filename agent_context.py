@@ -192,6 +192,10 @@ def current() -> AgentContext | None:
 
 def history_key(settings, channel: str, chat_id: str, operator_id: str) -> str:
     ctx = for_request(settings, channel, chat_id, operator_id)
+    # The built-in default agent has pre-existing chat history in this key.
+    # Resolve its identity first, but preserve those records across flag flips.
+    if ctx.agent_id == "default":
+        return f"{channel}:{chat_id}"
     return f"agent:{ctx.agent_id}:{ctx.session_id}"
 
 
