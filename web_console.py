@@ -2009,6 +2009,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if agent_retention_worker is not None:
+            agent_retention_worker.cancel()
         if delegation_worker is not None:
             delegation_worker.stop()
         if relay_consumer is not None:
