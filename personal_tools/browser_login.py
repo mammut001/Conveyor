@@ -198,9 +198,14 @@ async def login(settings, domain, operator_id):
                 "reason": "login", "task_id": session.task, "ttl_seconds": 300
             }), 6, "login.takeover")
         except Exception:
-            await wait_for_step(
-                manager_for(settings).revoke(session.id, operator=session.operator),
-                5, "login.takeover_revoke")
+            finish(settings, attempt, "failed", reason="takeover_unavailable",
+                   submitted=bool(session._autofill_post_completed))
+            try:
+                await wait_for_step(
+                    manager_for(settings).revoke(session.id, operator=session.operator),
+                    5, "login.takeover_revoke")
+            except Exception:
+                pass
             return "failed", "takeover_unavailable"
     return result, reason
 
