@@ -5,6 +5,7 @@ Queue admission is called within the mailbox BEGIN IMMEDIATE transaction.
 """
 from __future__ import annotations
 import asyncio
+import json
 import os
 import re
 import sqlite3
@@ -117,6 +118,34 @@ def _reason(value):
         "invalid_arguments", "unauthorized", "archived",
     ))
     return value if value in allowed else "denied"
+
+
+def target_id(arg, *, fallback="default"):
+    """Extract only an identifier; never log arbitrary argument text."""
+    try:
+        value = json.loads(arg)
+    except (ValueError, TypeError):
+        return fallback
+    candidate = value.get("to") if isinstance(value, dict) else None
+    return candidate if isinstance(candidate, str) and _AGENT.fullmatch(candidate) else fallback
+
+
+def denial_code(error):
+    """Map failures to fixed audit codes without storing exception contents."""
+    msg = str(error).lower()
+    if "kill" in msg or "disabled" in msg:
+        return "killed"
+    if "rate limit" in msg:
+        return "rate_limited"
+    if "queue full" in msg:
+        return "queue_full"
+    if "archived" in msg:
+        return "archived"
+    if "recipient" in msg or "target" in msg or "unknown" in msg:
+        return "invalid_target"
+    if "identity" in msg or "operator" in msg or "owner" in msg:
+        return "identity_denied"
+    return "invalid_arguments"
 
 
 def audit_tx(conn, *, operator, event, agent_id, reason, now=None):
