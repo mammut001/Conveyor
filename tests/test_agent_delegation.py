@@ -123,6 +123,44 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
             channel="web", chat_id=chat_id_for(self.a["id"]),
             operator_id="web-console", approved=False), "human approval required")
 
+    async def test_real_confirmed_tool_enqueues_once_and_egress_is_outbound(self):
+        import egress_taint
+        from handlers.tools.confirm import create_pending
+        from handlers.tools.runner import execute_confirmed
+        from unittest.mock import patch
+        self.assertTrue(egress_taint.outbound(self.settings, "agent.delegate"))
+        data = json.dumps({"to": self.b["id"], "task": "Review output",
+                           "tools_subset": ["notes.search"]})
+        msg = InboundMessage(channel="web", chat_id=chat_id_for(self.a["id"]),
+                             operator_id="web-console", message_id="approve-1",
+                             text="confirm")
+        class Port:
+            supports_inline_buttons = False
+            def __init__(self):
+                self.replies = []
+            async def reply(self, msg, text):
+                self.replies.append(text)
+        port = Port()
+        pending = create_pending("agent.delegate", data, msg.operator_id,
+                                 msg.chat_id, msg.channel)
+        with patch("approval_relay.claim_local", return_value="ok"):
+            self.assertTrue(await execute_confirmed(
+                msg, port, self.settings, pending.token))
+        self.assertIn("agent task queued:", port.replies[-1])
+        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(self.rows()[0]["idempotency_key"],
+                         "delegate-" + pending.token)
+
+    async def test_cancel_before_completion_never_emits_result(self):
+        self.enqueue(token="cancel-race")
+        with ac.bind(self.target):
+            row, owner = queue.claim(self.settings, self.target)
+        self.assertEqual(worker.cancel_operator(self.settings, "web-console"), 1)
+        with ac.bind(self.target):
+            self.assertFalse(queue.complete(self.settings, self.target, row,
+                                            owner, "late response"))
+        self.assertEqual(len([r for r in self.rows() if r["kind"] == "result"]), 0)
+
     async def test_capability_intersection_and_forged_injection(self):
         self.store.update(self.a["id"], {
             "tools_allowlist": ["agent.delegate", "notes.search"]})
