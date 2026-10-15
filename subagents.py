@@ -176,7 +176,9 @@ def _parent_tools(settings: Any, msg: Any) -> dict[str, dict]:
     from personal_tools.long_term_memory import allowed_for
     return {
         func_to_tool_name(s["function"]["name"]): s
-        for s in build_tool_schemas(settings, memory_allowed=allowed_for(settings, msg))
+        for s in build_tool_schemas(
+            settings, memory_allowed=allowed_for(settings, msg),
+            operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)
         if not func_to_tool_name(s["function"]["name"]).startswith(("agents.", "subagent."))
     }
 
