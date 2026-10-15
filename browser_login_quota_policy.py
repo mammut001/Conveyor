@@ -1,6 +1,6 @@
 """Separate credential-rejection lockout from bounded infrastructure retry abuse.
 
-Only a verified POST and rejected password consumes the three-per-hour quota.
+Any dispatched login POST with a non-success outcome consumes the three-per-hour quota.
 A short per-domain infrastructure cap prevents unlimited launch/navigation
 hammering without treating those failures as wrong passwords.
 """
@@ -14,7 +14,11 @@ INFLIGHT_WINDOW = 120
 
 
 def is_rejection(result, reason, submitted):
-    return result == "failed" and reason == "credentials_rejected" and bool(submitted)
+    # Preserve already-established lockouts from pre-migration databases.
+    # A dispatched POST may have sent a wrong password even when the response
+    # was 5xx, redirect, timed out, or the process crashed before finishing.
+    return ((result == "failed" and reason == "legacy_unverified")
+            or (bool(submitted) and result in ("started", "failed")))
 
 
 def admission_reason(rows, now):
@@ -23,14 +27,19 @@ def admission_reason(rows, now):
                    for r, why, submitted, when in rows)
     if rejected >= REJECT_LIMIT:
         return "locked"
-    # In-flight reservations count briefly so different server processes
-    # cannot all race past the remaining credential-attempt budget.
-    pending = sum(r == "started" and when > now - INFLIGHT_WINDOW
-                  for r, _why, _submitted, when in rows)
+    # Fresh, not-yet-dispatched reservations protect against parallel requests.
+    # Already-dispatched 'started' rows are included in rejected above.
+    pending = sum(r == "started" and not submitted
+                  and when > now - INFLIGHT_WINDOW
+                  for r, _why, submitted, when in rows)
     if rejected + pending >= REJECT_LIMIT:
         return "rate_limited"
-    infra = sum(r == "failed" and not is_rejection(r, why, submitted)
+    # Crashed pre-submit rows stop reserving capacity after 120s, but are
+    # still infrastructure failures within their own ten-minute window.
+    infra = sum(not is_rejection(r, why, submitted)
                 and why not in ("busy", "legacy_unverified")
+                and ((r == "failed") or
+                     (r == "started" and when <= now - INFLIGHT_WINDOW))
                 and when > now - INFRA_WINDOW
                 for r, why, submitted, when in rows)
     if infra >= INFRA_LIMIT:
