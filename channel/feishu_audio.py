@@ -17,6 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+from channel.feishu_ffmpeg_policy import opus_to_ogg_command
 from channel.auth import is_allowed
 from channel.types import InboundMessage
 from handlers.context import is_addressed_to_bot
@@ -174,9 +175,7 @@ def _convert_opus(source: Path, destination: Path) -> None:
         raise VoiceError("Feishu audio requires ffmpeg on the server", 503)
     try:
         completed = subprocess.run(
-            ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-             "-i", str(source), "-map", "0:a:0", "-vn", "-c:a", "libopus",
-             "-b:a", "32k", str(destination)],
+            opus_to_ogg_command(source, destination),
             capture_output=True, timeout=45, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):

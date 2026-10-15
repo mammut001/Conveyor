@@ -277,9 +277,11 @@ class AuthSession:
             self._closing = asyncio.ensure_future(self._close_impl())
             task = self._closing
             self.owner._closing[self.id] = (self.operator, task)
+            self.owner._closing_domains[self.id] = self.domain
             def forget(done):
                 if self.owner._closing.get(self.id, (None, None))[1] is done:
                     self.owner._closing.pop(self.id, None)
+                    self.owner._closing_domains.pop(self.id, None)
             task.add_done_callback(forget)
         return await asyncio.shield(self._closing)
 
@@ -293,6 +295,7 @@ class AuthSessionManager:
         self.sessions = {}
         self._drivers = {}
         self._closing = {}
+        self._closing_domains = {}
         # Orphaned browser profiles are never reopened after a crash.
         from browser_auth_orphans import cleanup
         cleanup(self.root)
@@ -316,23 +319,26 @@ class AuthSessionManager:
         if any(not s._closed and s.operator == operator and s.task == task and
                s.domain == domain for s in self.sessions.values()):
             raise ExternalPolicyDenied("g4_duplicate_session")
-        folder = Path(tempfile.mkdtemp(prefix="session-", dir=self.root))
-        from browser_auth_owner import acquire
-        try:
-            ownership = acquire(folder)
-        except BaseException:
-            shutil.rmtree(folder, ignore_errors=True)
-            raise
-        session = AuthSession(self, operator, task, domain, folder)
-        session._owner_lock = ownership
-        session._automated_login = automated
-        self.sessions[session.id] = session
-        try:
-            await session.start()
-        except BaseException:
-            await self.revoke(session.id, operator=operator)
-            raise
-        return session
+        from contextlib import nullcontext
+        from browser_login_domain_gate import reserve_login_domain
+        with reserve_login_domain(self, domain) if automated else nullcontext():
+            folder = Path(tempfile.mkdtemp(prefix="session-", dir=self.root))
+            from browser_auth_owner import acquire
+            try:
+                ownership = acquire(folder)
+            except BaseException:
+                shutil.rmtree(folder, ignore_errors=True)
+                raise
+            session = AuthSession(self, operator, task, domain, folder)
+            session._owner_lock = ownership
+            session._automated_login = automated
+            self.sessions[session.id] = session
+            try:
+                await session.start()
+            except BaseException:
+                await self.revoke(session.id, operator=operator)
+                raise
+            return session
 
     async def revoke(self, session_id, *, operator):
         session = self.sessions.get(session_id)

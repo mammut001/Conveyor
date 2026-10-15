@@ -130,6 +130,15 @@ async def login(settings, domain, operator_id):
     record = read_for_executor(settings, origin)
     if record is None:
         return "failed", "credential_missing"
+    # Busy retries must not burn the password attempt quota; the reservation
+    # in AuthSessionManager.open remains the atomic concurrent-authority check.
+    from browser_auth_sessions import manager_for
+    from browser_login_domain_gate import login_domain_busy
+    try:
+        if login_domain_busy(manager_for(settings), origin):
+            return "failed", "busy"
+    except Exception:
+        return "failed", "login_unavailable"
     try:
         attempt = reserve(settings, origin, record["username"])
     except LoginQuotaDenied as exc:
@@ -152,8 +161,9 @@ async def login(settings, domain, operator_id):
                                              login_budget, "login.form")
     except asyncio.TimeoutError:
         result, reason = "failed", "login_unavailable"
-    except ExternalPolicyDenied:
-        result, reason = "failed", "policy_denied"
+    except ExternalPolicyDenied as exc:
+        result, reason = ("failed", "busy" if exc.args and
+                          exc.args[0] == "login_domain_busy" else "policy_denied")
     except Exception:
         result, reason = "failed", "login_unavailable"
     finally:

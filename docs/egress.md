@@ -21,8 +21,18 @@ Unless `CONVEYOR_EGRESS_PROXY=1`, the proxy is **not started**, no proxy environ
 is injected, and no new taint state is recorded or consulted. Empty egress
 allowlist means **deny all**, not allow all. Comma-separated domains are
 case-insensitive: exact `example.com`, and wildcard `*.example.com`
-matches subdomains but **not** `example.com` itself. This allowlist controls
-network destinations; it is different from `CONVEYOR_OUTBOUND_ALLOWLIST`
+matches subdomains but **not** `example.com` itself. A bare entry allows
+**only TCP port 443**; port 80 requires an explicit `example.com:80` entry,
+and nonstandard HTTPS ports require `example.com:8443` (wildcards also accept
+`*.example.com:8443`). One terminal DNS root dot normalizes consistently;
+empty labels and double terminal dots (such as `example.com..`) are rejected.
+Invalid allowlist entries (including leading-zero ports such as
+`example.com:0443`) fail closed.
+
+**Migration note:** Existing bare allowlist entries such as `example.com` now
+authorize **port 443 only**, not every port. Add `example.com:80` explicitly
+for plain HTTP traffic, and add `host:port` for any other required port.
+This allowlist controls network destinations; it is different from `CONVEYOR_OUTBOUND_ALLOWLIST`
 which limits *recipients* of editable draft cards.
 
 The proxy binds **only to 127.0.0.1** and uses the Python standard library.

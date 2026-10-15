@@ -47,28 +47,18 @@ def allowlist(settings=None):
     raw = getattr(settings, "egress_allowlist", None)
     if raw is None:
         raw = os.getenv("CONVEYOR_EGRESS_ALLOWLIST", "")
-    return tuple(sorted({s.strip().lower().rstrip(".") for s in str(raw).split(",") if s.strip()}))
+    from egress_host_rules import normalize_rules
+    return normalize_rules(raw)
 
 
 def _canonical(host):
-    if not host or len(host) > 253 or any(c in host for c in "/\\@% \r\n\t"):
-        raise ValueError("invalid_host")
-    try:
-        return str(ipaddress.ip_address(host.strip("[]")))
-    except ValueError:
-        pass
-    name = host.rstrip(".").encode("idna").decode("ascii").lower()
-    if not name or any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in name.split(".")):
-        raise ValueError("invalid_host")
-    return name
+    from egress_host_rules import canonical_host
+    return canonical_host(host)
 
 
-def _match(host, rules):
-    # A wildcard matches subdomains only, not the bare suffix.
-    exact = host in rules
-    wildcard = any(rule.startswith("*.") and host.endswith(rule[1:])
-                   and host != rule[2:] for rule in rules)
-    return exact, (exact or wildcard)
+def _match(host, port, rules):
+    from egress_host_rules import match
+    return match(host, port, rules)
 
 
 def destination(host, port, rules, resolver=socket.getaddrinfo, *,
