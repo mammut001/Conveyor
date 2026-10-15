@@ -109,9 +109,13 @@ async def consume_once(settings, channel, send):
     try:
         # Exfiltration policy wins over convenience, even for completed tasks.
         import egress_taint
-        if egress_taint.requires_approval(
+        import agents
+        if (egress_taint.requires_approval(
                 settings, "agent.reply", operator_id=row["operator"],
-                channel=channel, chat_id=row["chat_id"]):
+                channel=channel, chat_id=row["chat_id"])
+            or egress_taint.requires_approval(
+                settings, "agent.reply", operator_id=agents.WEB_OPERATOR,
+                channel="web", chat_id=agents.chat_id_for("default"))):
             _finish(settings, row["task_id"], "blocked")
             return 0
         message_id = await asyncio.wait_for(
