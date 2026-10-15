@@ -89,6 +89,8 @@ class MessagingV2Tests(unittest.IsolatedAsyncioTestCase):
     def rows(self):
         with sqlite3.connect(str(self.store.path)) as conn:
             conn.row_factory = sqlite3.Row
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='agent_mailbox'").fetchone() is None:
+                return []
             return [dict(r) for r in conn.execute("SELECT * FROM agent_mailbox ORDER BY created_at,id")]
 
     async def test_flag_off_uses_exact_legacy_transcript_path(self):
@@ -119,9 +121,10 @@ class MessagingV2Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(spec.danger, DangerLevel.WRITE)
         self.assertIn("Queue", spec.summary)
         self.assertEqual(await self.tool("agent.message", arg), "human approval required")
-        self.assertEqual(await self.tool("agent.message", arg, approved=True).split(": ")[0],
-                         "agent message queued")
+        initial = await self.tool("agent.message", arg, approved=True)
+        self.assertTrue(initial.startswith("agent message queued: "))
         same = await self.tool("agent.message", arg, approved=True)
+        self.assertEqual(initial, same)
         self.assertEqual(len(self.rows()), 1)
         self.assertTrue(same.startswith("agent message queued: "))
         # Fresh human confirmations of identical text can enqueue separately.
