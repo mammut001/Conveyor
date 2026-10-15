@@ -85,14 +85,16 @@ async def run_tool(
     egress_approved: bool = False,
 ) -> str:
     import named_agents
-    if not named_agents.tool_allowed(settings, channel, chat_id, tool_name):
+    if not named_agents.tool_allowed(settings, channel, chat_id, tool_name,
+                                     operator_id=operator_id):
         return "agent tool denied"
     import egress_taint
     if egress_taint.requires_approval(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id) and not egress_approved:
         return "Outbound blocked: private data was read; approval required"
     egress_taint.mark_read(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id)
     if tool_name == "agent.message":
-        return named_agents.send_message(settings, arg, channel=channel, chat_id=chat_id)
+        return named_agents.send_message(settings, arg, channel=channel,
+                                         chat_id=chat_id, operator_id=operator_id)
     if tool_name == "agents.parallel":
         from handlers.subagents import execute_parallel_subagents
         return await execute_parallel_subagents(
@@ -311,6 +313,12 @@ async def _invoke_tool(
     spec = get_tool(tool_name)
     if spec is None and get_personal_tool(tool_name) is None and not tool_name.startswith("mcp."):
         await port.reply(msg, f"未知工具: {tool_name}")
+        return
+    import agent_context
+    if agent_context.enabled(settings) and not agent_context.allowed(
+            settings, tool_name, channel=msg.channel, chat_id=msg.chat_id,
+            operator_id=msg.operator_id):
+        await port.reply(msg, "agent tool denied")
         return
     if _memory_blocked(settings, msg, tool_name):
         from personal_tools.long_term_memory import GROUP_REFUSAL
@@ -629,7 +637,8 @@ async def execute_confirmed(
     # Re-check at confirmation time, including browser tools that bypass
     # run_tool() below. Permissions may have changed since preview/approval.
     import named_agents
-    if not named_agents.tool_allowed(settings, action.channel, action.chat_id, action.tool_name):
+    if not named_agents.tool_allowed(settings, action.channel, action.chat_id,
+                                     action.tool_name, operator_id=action.operator_id):
         pop_pending(token)
         _audit_rejected(settings, action, msg, reason="agent_allowlist_denied")
         await port.reply(msg, "agent tool denied")
