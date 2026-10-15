@@ -188,6 +188,21 @@ class AgentContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(owner_for_chat(self.settings, "web-console",
                                         "web", self.b_chat), b.memory_owner)
 
+    async def test_memory_v2_bridge_obeys_same_canonical_owner(self):
+        from personal_tools import memory_v2_bridge
+        settings_v2 = replace(self.settings, memory_v2_enabled=True)
+        with patch("personal_tools.memory_v2.search_facts", return_value=[]) as search:
+            result = await memory_v2_bridge.memory_search(
+                settings_v2, "isolation", operator_id="web-console",
+                channel="web", chat_id=self.a_chat)
+            self.assertTrue(result.ok)
+            self.assertEqual(search.call_args.args[1], f"agent:{self.a['id']}")
+            with self.assertRaises(ac.AgentContextDenied):
+                await memory_v2_bridge.memory_search(
+                    settings_v2, "isolation", operator_id="",
+                    channel="", chat_id="")
+            self.assertEqual(search.call_count, 1)
+
     def test_web_memory_admin_requires_explicit_agent_selection(self):
         from web_console import WebConsoleHandler
 
