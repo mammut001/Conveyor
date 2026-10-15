@@ -35,6 +35,9 @@ _HYBRID_DEFAULT_TOOLS = ("load", "ps", "disk", "service_status")
 
 
 def _requires_confirmation(tool_name: str, settings: Settings | None = None) -> bool:
+    import agent_messaging_v2
+    if agent_messaging_v2.enabled(settings) and tool_name in ("agent.message", "agent.reply"):
+        return True
     from handlers.tools.registry import DangerLevel
     if tool_name == "agents.parallel":
         return False
@@ -99,6 +102,10 @@ async def run_tool(
     if egress_taint.requires_approval(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id) and not egress_approved:
         return "Outbound blocked: private data was read; approval required"
     egress_taint.mark_read(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id)
+    import agent_messaging_v2
+    if agent_messaging_v2.enabled(settings) and tool_name in ("agent.message", "agent.inbox", "agent.reply"):
+        return agent_messaging_v2.run(settings, tool_name, arg, operator_id=operator_id,
+                                      channel=channel, chat_id=chat_id, approved=egress_approved)
     if tool_name == "agent.message":
         return named_agents.send_message(settings, arg, channel=channel,
                                          chat_id=chat_id, operator_id=operator_id)
@@ -318,7 +325,9 @@ async def _invoke_tool(
     from personal_tools.registry import get_personal_tool
 
     spec = get_tool(tool_name)
-    if spec is None and get_personal_tool(tool_name) is None and not tool_name.startswith("mcp."):
+    import agent_messaging_v2
+    extra = agent_messaging_v2.spec(settings, tool_name)
+    if spec is None and get_personal_tool(tool_name) is None and extra is None and not tool_name.startswith("mcp."):
         await port.reply(msg, f"未知工具: {tool_name}")
         return
     import agent_context
@@ -695,10 +704,13 @@ async def execute_confirmed(
             result = await approve_and_read(settings, action.arg,
                                             operator_id=action.operator_id)
         else:
+            import agent_messaging_v2
+            approved_arg = (agent_messaging_v2.approval_arg(action.tool_name, action.arg, token)
+                            if agent_messaging_v2.enabled(settings) else action.arg)
             result = await run_tool(
                 settings,
                 action.tool_name,
-                action.arg,
+                approved_arg,
                 operator_id=action.operator_id,
                 channel=action.channel,
                 chat_id=action.chat_id,
