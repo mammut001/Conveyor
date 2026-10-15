@@ -214,6 +214,20 @@ async def _execute_codex_job(
     queue_job_id: str | None = None,
 ) -> None:
     """Execute a Codex job directly (not through queue)."""
+    import agent_context
+    if agent_context.enabled(runner.settings):
+        try:
+            agent_context.for_request(runner.settings, msg.channel, msg.chat_id,
+                                      msg.operator_id)
+        except agent_context.AgentContextDenied:
+            # A queued Agent may have been archived since submission.
+            # Stop before context injection, tools or workspace access.
+            if queue_job_id:
+                from handlers.job_queue import get_job_queue
+                await get_job_queue().mark_running_failed(
+                    "agent identity denied", queue_job_id)
+            await port.reply(msg, "agent identity denied")
+            return
     # Each lane has its own runner, so jobs of different agents can overlap
     # and "the current job" means this conversation's.
     from job_lanes import runner_for_chat
