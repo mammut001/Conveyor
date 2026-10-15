@@ -18,6 +18,13 @@ log = logging.getLogger(__name__)
 _SELECTION = re.compile(r"^@([\w-]{1,60})(?:\s+|$)", re.UNICODE)
 _DIRECT = re.compile(r"^(?:delegate to|ask|have|交给|让|请)(?:\s+|：|:)", re.I)
 _WORD = re.compile(r"[\w]+", re.UNICODE)
+_CJK = re.compile(r"[\u3400-\u9fff]+")
+_CJK_STOPWORDS = frozenset((
+    "帮我 一下 可以 你好 今天 什么 怎么 助手 用户 请问 能否 "
+    "我们 你们 这个 那个 一个 一些 现在 时候 帮助 谢谢 您好 "
+    "是否 能不 请你 请帮 帮忙 需要 我想 想要 有关 关于 "
+    "谁是 哪里 为什么 多少 以及 还有 一个 怎么样"
+).split())
 _MIN_CONFIDENCE = 0.85
 # Ordinary conversational/assistant boilerplate must never cause delegation.
 # Implicit routing needs two *distinctive* shared persona/name terms.
@@ -68,8 +75,19 @@ def spec(settings):
 
 
 def _words(s):
-    return {w.casefold() for w in _WORD.findall(s or "")
-            if len(w) >= 3 and w.casefold() not in _STOPWORDS}
+    text = _CJK.sub(" ", s or "")
+    words = {w.casefold() for w in _WORD.findall(text)
+             if len(w) >= 3 and w.casefold() not in _STOPWORDS}
+    for match in _CJK.finditer(s or ""):
+        segment = match.group()
+        # Chinese words normally do not have spaces: use overlapping
+        # 2-character features. Generic request/assistant boilerplate is
+        # excluded rather than allowed to vote for implicit routing.
+        for i in range(len(segment) - 1):
+            gram = segment[i:i+2]
+            if gram not in _CJK_STOPWORDS:
+                words.add(gram)
+    return words
 
 
 def _needed(text):
