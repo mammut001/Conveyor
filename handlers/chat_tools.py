@@ -37,6 +37,9 @@ def func_to_tool_name(func_name: str) -> str:
 
 
 def _get_tool_spec(name: str, settings: Settings | None = None) -> Any | None:
+    if name == "main.route_delegate":
+        from main_router import spec
+        return spec(settings)
     if name == "agent.delegate":
         from agent_delegation import spec
         return spec(settings)

@@ -62,6 +62,13 @@ async def _finish(settings, record, worker_id):
                                        summary or "(no result)")
             if not committed:
                 log.warning("Delegation lease expired or stopped: %s", record["id"])
+            else:
+                # Only a committed result is reported to its original owner.
+                from main_router_results import deliver
+                try:
+                    deliver(settings, record, summary)
+                except Exception:
+                    log.exception("Unable to publish routed result: %s", record["id"])
     except asyncio.CancelledError:
         # Emergency stop already marks tasks dead; do not requeue it.
         with ac.bind(target):
