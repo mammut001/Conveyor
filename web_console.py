@@ -2002,6 +2002,8 @@ def main() -> None:
     relay_consumer = approval_relay.start_relay_worker(loop, settings, channel="web")
     from agent_delegation_worker import start as start_delegation
     delegation_worker = start_delegation(loop, settings)
+    import agent_security
+    agent_retention_worker = agent_security.start(loop, settings)
     try:
         loop.run_forever()
     except KeyboardInterrupt:
