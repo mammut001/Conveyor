@@ -37,6 +37,9 @@ def func_to_tool_name(func_name: str) -> str:
 
 
 def _get_tool_spec(name: str, settings: Settings | None = None) -> Any | None:
+    if name == "agent.delegate":
+        from agent_delegation import spec
+        return spec(settings)
     if name in ("agent.inbox", "agent.reply"):
         from agent_messaging_v2 import spec
         return spec(settings, name)
@@ -180,6 +183,9 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
     if agent_messaging_v2.enabled(settings):
         for name in ("agent.inbox", "agent.reply"):
             candidates.append((name, agent_messaging_v2.spec(settings, name)))
+    import agent_delegation
+    if agent_delegation.enabled(settings):
+        candidates.append(("agent.delegate", agent_delegation.spec(settings)))
 
     for name, spec in candidates:
         if name in seen:

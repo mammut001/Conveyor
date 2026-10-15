@@ -36,6 +36,9 @@ _HYBRID_DEFAULT_TOOLS = ("load", "ps", "disk", "service_status")
 
 def _requires_confirmation(tool_name: str, settings: Settings | None = None) -> bool:
     import agent_messaging_v2
+    import agent_delegation
+    if agent_delegation.enabled(settings) and tool_name == "agent.delegate":
+        return True
     if agent_messaging_v2.enabled(settings) and tool_name in ("agent.message", "agent.reply"):
         return True
     from handlers.tools.registry import DangerLevel
@@ -103,6 +106,10 @@ async def run_tool(
         return "Outbound blocked: private data was read; approval required"
     egress_taint.mark_read(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id)
     import agent_messaging_v2
+    import agent_delegation
+    if agent_delegation.enabled(settings) and tool_name == "agent.delegate":
+        return agent_delegation.enqueue(settings, arg, operator_id=operator_id,
+                                        channel=channel, chat_id=chat_id, approved=egress_approved)
     if agent_messaging_v2.enabled(settings) and tool_name in ("agent.message", "agent.inbox", "agent.reply"):
         return agent_messaging_v2.run(settings, tool_name, arg, operator_id=operator_id,
                                       channel=channel, chat_id=chat_id, approved=egress_approved)
@@ -194,7 +201,9 @@ def _danger_label(tool_name: str, settings: Settings | None = None) -> str:
             return spec.danger.value
         return "write"
     import agent_messaging_v2
-    mail_spec = agent_messaging_v2.spec(settings, tool_name)
+    import agent_delegation
+    mail_spec = (agent_delegation.spec(settings) if tool_name == "agent.delegate"
+                 else agent_messaging_v2.spec(settings, tool_name))
     if mail_spec is not None:
         return mail_spec.danger.value
     spec = get_tool(tool_name)
@@ -331,6 +340,9 @@ async def _invoke_tool(
     spec = get_tool(tool_name)
     import agent_messaging_v2
     extra = agent_messaging_v2.spec(settings, tool_name)
+    if tool_name == "agent.delegate":
+        from agent_delegation import spec as delegation_spec
+        extra = delegation_spec(settings)
     if spec is None and get_personal_tool(tool_name) is None and extra is None and not tool_name.startswith("mcp."):
         await port.reply(msg, f"未知工具: {tool_name}")
         return
@@ -465,7 +477,9 @@ async def _request_confirmation(
             return
     spec = get_tool(tool_name)
     import agent_messaging_v2
-    mailbox_spec = agent_messaging_v2.spec(settings, tool_name)
+    from agent_delegation import spec as delegation_spec
+    mailbox_spec = (delegation_spec(settings) if tool_name == "agent.delegate"
+                    else agent_messaging_v2.spec(settings, tool_name))
     if mailbox_spec is not None:
         summary = mailbox_spec.summary
     elif spec is not None:
@@ -713,17 +727,25 @@ async def execute_confirmed(
                                             operator_id=action.operator_id)
         else:
             import agent_messaging_v2
-            approved_arg = (agent_messaging_v2.approval_arg(action.tool_name, action.arg, token)
+            import agent_delegation
+            approved_arg = (agent_delegation.approval_arg(action.arg, token)
+                            if action.tool_name == "agent.delegate" and agent_delegation.enabled(settings)
+                            else agent_messaging_v2.approval_arg(action.tool_name, action.arg, token)
                             if agent_messaging_v2.enabled(settings) else action.arg)
-            result = await run_tool(
-                settings,
-                action.tool_name,
-                approved_arg,
-                operator_id=action.operator_id,
-                channel=action.channel,
-                chat_id=action.chat_id,
-                egress_approved=True,
-            )
+            from contextlib import nullcontext
+            scope = (agent_delegation.approved_token(token)
+                     if action.tool_name == "agent.delegate" and agent_delegation.enabled(settings)
+                     else nullcontext())
+            with scope:
+                result = await run_tool(
+                    settings,
+                    action.tool_name,
+                    approved_arg,
+                    operator_id=action.operator_id,
+                    channel=action.channel,
+                    chat_id=action.chat_id,
+                    egress_approved=True,
+                )
     except Exception as exc:
         audit_tool_event(
             settings,

@@ -46,12 +46,42 @@ def transaction(settings) -> Iterator[sqlite3.Connection]:
     connection.row_factory = sqlite3.Row
     try:
         connection.execute("PRAGMA busy_timeout=10000")
-        connection.execute("PRAGMA foreign_keys=ON")
+        import agent_delegation
+        delegation_on = agent_delegation.enabled(settings)
+        schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_mailbox'"
+        ).fetchone() if delegation_on else None
+        # Foreign keys must be OFF only for the legacy table rebuild.
+        rebuild = bool(schema and "'task','result'" not in schema["sql"])
+        connection.execute("PRAGMA foreign_keys=" + ("OFF" if rebuild else "ON"))
         connection.execute("BEGIN IMMEDIATE")
-        # Idempotent migration stays inside the *same* write transaction.
-        connection.execute(_SCHEMA)
+        if delegation_on:
+            # A concurrent process can create or upgrade the table before
+            # BEGIN gets its write lock. Recheck under the lock so the FK
+            # mode always matches whether a rebuild is really needed.
+            while True:
+                locked = connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_mailbox'"
+                ).fetchone()
+                needs_rebuild = bool(locked and "'task','result'" not in locked["sql"])
+                if needs_rebuild == rebuild:
+                    break
+                connection.rollback()
+                rebuild = needs_rebuild
+                connection.execute("PRAGMA foreign_keys=" + ("OFF" if rebuild else "ON"))
+                connection.execute("BEGIN IMMEDIATE")
+        # A new database can use the upgraded schema directly with FKs ON.
+        upgraded = _SCHEMA.replace(
+            "'message','task_request','task_result'",
+            "'message','task_request','task_result','task','result'")
+        connection.execute(upgraded if delegation_on and not rebuild else _SCHEMA)
+        if rebuild:
+            from agent_delegation_schema import ensure
+            ensure(connection)
         connection.execute(_INDEX)
         yield connection
+        if rebuild and connection.execute("PRAGMA foreign_key_check").fetchone():
+            raise sqlite3.IntegrityError("mailbox migration foreign-key violation")
         connection.commit()
     except BaseException:
         connection.rollback()
