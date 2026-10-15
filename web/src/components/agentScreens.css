@@ -1,0 +1,11 @@
+/* Additive, opt-in per-Agent screen layout; global console styles unchanged. */
+.agent-screen { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.agent-screen-tabs { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--border, #d7dde6); }
+.agent-screen-tabs button { border: 1px solid var(--border, #d7dde6); border-radius: 8px; padding: 8px 14px; background: transparent; color: inherit; cursor: pointer; }
+.agent-screen-tabs button.active { background: var(--accent-soft, #dfeaf8); font-weight: 700; }
+.agent-screen-content { padding: 16px; overflow-y: auto; flex: 1; min-height: 0; }
+.agent-screen-content-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.agent-screen-item { border: 1px solid var(--border, #d7dde6); border-radius: 10px; padding: 12px; margin: 10px 0; overflow-wrap: anywhere; }
+.agent-screen-meta { font-size: .85rem; opacity: .8; }
+.agent-screen-message { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 10px 0 0; max-height: 400px; overflow-y: auto; }
+.agent-screen-item small { display: block; opacity: .75; }

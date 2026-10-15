@@ -415,6 +415,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 return
         if path.startswith("/api/") and not self._require_auth():
             return
+        if path.startswith("/api/agent-screens"):
+            import web_agent_screens_api
+            if web_agent_screens_api.get(self, path, parse_qs(parsed.query)):
+                return
         if path == "/api/push/config":
             from web_push import api_get
             api_get(self)
@@ -865,6 +869,13 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
 
         if not self._require_auth():
+            return
+
+        if parsed.path == "/api/agent-screens/cancel":
+            body = self._body()
+            if body is not None:
+                import web_agent_screens_api
+                web_agent_screens_api.post(self, parsed.path, body)
             return
 
         if parsed.path == "/api/hooks" or parsed.path.startswith("/api/hooks/"):
