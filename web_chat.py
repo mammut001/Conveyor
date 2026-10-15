@@ -205,6 +205,12 @@ async def run_web_chat(
     from handlers.intent import RouteResult, computer_chat_route
     from handlers.tools.runner import handle_route
     try:
+        # /api/chat uses this bridge rather than handlers.dispatch. Route
+        # through the same human approval card before the ordinary chat tier.
+        import main_router
+        if await main_router.maybe_route(msg, port, settings):
+            port.emit("done", {"outcome": "answered"})
+            return
         host_tool = readonly_host_tool(prompt, settings)
         if host_tool:
             await handle_route(
