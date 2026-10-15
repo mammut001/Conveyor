@@ -118,7 +118,7 @@ class ProxyTests(unittest.TestCase):
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "",
                      ("127.0.0.1", self.port))]
         addr, reason = egress_proxy.destination("rebind.example", self.port,
-                                                 ("*.example",), resolver=rebinding)
+                                                 (f"*.example:{self.port}",), resolver=rebinding)
         self.assertIsNone(addr)
         self.assertEqual(reason, "forbidden_dns")
 
