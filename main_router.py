@@ -182,7 +182,9 @@ async def choose(settings, msg, *, model=None):
             raise ValueError("unknown candidate")
         a, tools = options_by_id[choice["agent_id"]]
         return Decision(a["id"], a["name"], task, tools, "model")
-    except (ValueError, KeyError, TypeError, TimeoutError, OSError):
+    except Exception:
+        # Provider/network/model failures are not routing permission.
+        # asyncio.CancelledError still propagates (inherits BaseException).
         return Decision(None, reason="ambiguous")
 
 
