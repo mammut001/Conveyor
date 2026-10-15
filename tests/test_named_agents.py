@@ -95,7 +95,10 @@ class NamedAgentTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.env = patch.dict(os.environ, {"CONVEYOR_NAMED_AGENTS": "1"})
+        # These are the legacy transcript-path tests; Messaging V2 has
+        # separate flag-on coverage in test_agent_messaging_v2.py.
+        self.env = patch.dict(os.environ, {"CONVEYOR_NAMED_AGENTS": "1",
+                                            "CONVEYOR_AGENT_MAILBOX": "0"})
         self.env.start()
         self.addCleanup(self.env.stop)
         self.settings = settings_for(Path(self.temp.name))
