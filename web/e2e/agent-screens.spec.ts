@@ -69,7 +69,7 @@ async function fixture(page: Page, enabled = true) {
   await page.goto('/')
   await page.getByLabel('Console token').fill('agent-screen-e2e-token')
   await page.getByRole('button', { name: 'Unlock console' }).click()
-  await page.locator('.agent-list').getByRole('button', { name: /Beta/ }).click()
+  await page.locator('.agent-list button.agent-item').filter({ hasText: 'Beta' }).click()
 }
 
 test('agent Inbox is literal text; task cancel affects only selected task', async ({ page }) => {
