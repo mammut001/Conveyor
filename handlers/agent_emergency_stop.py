@@ -23,6 +23,8 @@ def stop_before_identity(func):
                 # Bypass ONLY the agent-scoped tool dispatcher. This is a
                 # safety cancellation, not an authority to start or edit tasks.
                 from handlers.tools.executors import exec_computer_stop
+                from agent_delegation_worker import cancel_operator
+                cancel_operator(settings, msg.operator_id)
                 result = await exec_computer_stop(settings, "")
                 await port.reply(msg, result)
                 return None
