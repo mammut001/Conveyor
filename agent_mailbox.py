@@ -89,7 +89,7 @@ def send(settings, *, sender: agent_context.AgentContext, to_agent: str,
     actor = _require(settings, sender)
     _target(settings, actor, to_agent)
     timestamp = _now(now)
-    if kind not in _KINDS or not isinstance(body, str) or not body.strip():
+    if not isinstance(kind, str) or kind not in _KINDS or not isinstance(body, str) or not body.strip():
         raise MailboxDenied("invalid message type or body")
     if len(body.encode("utf-8")) > MAX_BODY_BYTES:
         raise MailboxDenied("message body too large")
@@ -102,9 +102,8 @@ def send(settings, *, sender: agent_context.AgentContext, to_agent: str,
     if (parent_message_id is None and depth != 0 or
         parent_message_id is not None and depth != 1):
         raise MailboxDenied("invalid parent/depth")
+    explicit_deadline = deadline is not None
     deadline = timestamp + 3600 if deadline is None else float(deadline)
-    if not timestamp < deadline <= timestamp + 7 * 86400:
-        raise MailboxDenied("invalid deadline")
 
     with db.transaction(settings) as conn:
         db.ensure_active(conn, actor.agent_id, to_agent)
@@ -118,10 +117,11 @@ def send(settings, *, sender: agent_context.AgentContext, to_agent: str,
                 existing["depth"] != depth or
                 existing["parent_message_id"] != parent_message_id or
                 existing["max_attempts"] != max_attempts or
-                (deadline is not None and now is not None and
-                 existing["deadline"] != deadline)):
+                (explicit_deadline and existing["deadline"] != deadline)):
                 raise MailboxConflict("idempotency key reused with different message")
             return db.public_row(existing)
+        if not timestamp < deadline <= timestamp + 7 * 86400:
+            raise MailboxDenied("invalid deadline")
         if parent_message_id is not None:
             parent = conn.execute(
                 "SELECT * FROM agent_mailbox WHERE id=?", (parent_message_id,)
