@@ -128,11 +128,17 @@ class Worker:
 
     async def run(self):
         import agent_security
+        killed_seen = False
         while True:
-            if agent_security.killed():
-                # Hot env switch: invalidate leases *and* cancel live children.
-                cancel_all(self.settings)
-                return
+            if agent_security.killed(self.settings):
+                if not killed_seen:
+                    # Fence all leases once on kill; keep the poller alive so
+                    # an owner can clear the switch without restarting.
+                    cancel_all(self.settings)
+                killed_seen = True
+                await asyncio.sleep(0.5)
+                continue
+            killed_seen = False
             if not enabled(self.settings):
                 return
             try:
