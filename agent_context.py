@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from functools import wraps
 import json
 import os
 import re
@@ -128,9 +129,20 @@ def allowed(settings, name: str, *, channel: str, chat_id: str,
         return False
 
 
+def _chat_id(ctx: AgentContext) -> str:
+    prefix = f"{ctx.origin_channel}:{ctx.operator_identity}:"
+    if not ctx.session_id.startswith(prefix):
+        raise AgentContextDenied("invalid agent session")
+    return ctx.session_id[len(prefix):]
+
+
 def delegate(settings, source: AgentContext, target: AgentContext,
              requested: set[str] | frozenset[str], delegation_id: str) -> AgentContext:
     """Server-side capability intersection; never inherit a target's extra tools."""
+    source = validated(settings, source, source.origin_channel, _chat_id(source),
+                       source.operator_identity)
+    target = validated(settings, target, target.origin_channel, _chat_id(target),
+                       target.operator_identity)
     if not delegation_id or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", delegation_id):
         raise AgentContextDenied("invalid delegation")
     if not isinstance(source, AgentContext) or not isinstance(target, AgentContext):
@@ -162,3 +174,19 @@ def current() -> AgentContext | None:
 def history_key(settings, channel: str, chat_id: str, operator_id: str) -> str:
     ctx = for_request(settings, channel, chat_id, operator_id)
     return f"agent:{ctx.agent_id}:{ctx.session_id}"
+
+
+def scoped_inbound(func):
+    """Bind a canonical context across awaits and spawned tasks of inbound handlers."""
+    @wraps(func)
+    async def wrapped(msg, port, settings, *args, **kwargs):
+        if not enabled(settings):
+            return await func(msg, port, settings, *args, **kwargs)
+        try:
+            ctx = resolve(settings, msg.channel, msg.chat_id, msg.operator_id)
+        except AgentContextDenied:
+            await port.reply(msg, "agent identity denied")
+            return None
+        with bind(ctx):
+            return await func(msg, port, settings, *args, **kwargs)
+    return wrapped
