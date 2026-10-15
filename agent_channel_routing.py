@@ -147,8 +147,15 @@ async def maybe_command(settings, msg, port):
         selected = bind(settings, msg, argument)
     except (ValueError, PermissionError) as exc:
         import agent_security
+        import agents
+        requested = argument.strip().casefold()
+        candidates = [item["id"] for item in agents.AgentStore(settings).list()
+                      if item["id"] == requested or item["name"].casefold() == requested]
+        target = candidates[0] if len(candidates) == 1 else (
+            requested if agent_security._AGENT.fullmatch(requested) else "default")
         agent_security.audit(settings, operator=msg.operator_id,
-            event="deny", agent_id="default", reason="owner_rejected")
+            event="deny", agent_id=target,
+            reason=agent_security.denial_code(exc))
         await port.reply(msg, str(exc))
     else:
         await port.reply(msg, f'[{selected["name"]}] Selected Agent. '
