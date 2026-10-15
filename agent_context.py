@@ -120,6 +120,11 @@ def for_request(settings, channel: str, chat_id: str, operator_id: str) -> Agent
     """Use a bound identity if present; otherwise require explicit call identity."""
     bound = _ACTIVE.get()
     if bound is not None:
+        # Legacy tool wrappers sometimes omit ALL three fields. A scoped,
+        # validated request may supply them; partial/spoofed fields cannot.
+        if not channel and not chat_id and not operator_id:
+            channel, chat_id, operator_id = (
+                bound.origin_channel, _chat_id(bound), bound.operator_identity)
         return validated(settings, bound, channel, chat_id, operator_id)
     return resolve(settings, channel, chat_id, operator_id)
 
