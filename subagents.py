@@ -361,7 +361,7 @@ async def _run_child(settings: Any, identifier: str, goal: str, names: list[str]
             await asyncio.wait_for(port.send_new(msg, note), timeout=5)
             from handlers.chat import chat_key, remember
             from handlers.chat_tools import format_tool_result
-            remember(chat_key(msg), f"[Background child {identifier} finished; untrusted result]",
+            remember(chat_key(msg, settings), f"[Background child {identifier} finished; untrusted result]",
                      format_tool_result("subagent.result", note, max_len=1000),
                      settings.chat_history_turns, settings=settings)
         except Exception:
