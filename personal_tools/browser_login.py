@@ -114,8 +114,14 @@ async def _login(session, record):
         return "needs_human", "authentication_challenge"
     # A cookie is necessary evidence, never return its actual value.
     cookies = await wait_for_step(session.context.cookies([domain]), 3, "login.cookies")
-    if cookies and await page.locator('input[type=password]').count() == 0:
+    password_count = await page.locator('input[type=password]').count()
+    if cookies and password_count == 0:
         return "logged_in", None
+    # The returned login form is evidence of rejection ONLY when the verified
+    # same-origin login POST completed. Missing cookies or browser timeouts
+    # alone cannot be treated as bad credentials.
+    if session._autofill_post_completed and password_count:
+        return "failed", "credentials_rejected"
     return "failed", "login_not_confirmed"
 
 
@@ -149,6 +155,7 @@ async def login(settings, domain, operator_id):
     result, reason = "failed", "login_unavailable"
     # Bound the combined open + login phase, not just each stage separately.
     deadline = asyncio.get_running_loop().time() + 18
+    stage = "open"
     try:
         operator = "login_" + hashlib.sha256(operator_id.encode()).hexdigest()[:24]
         task = "login_" + secrets.token_hex(12)
@@ -156,11 +163,15 @@ async def login(settings, domain, operator_id):
         session = await wait_for_step(
             manager_for(settings).open(operator, task, origin, automated=True),
             12, "login.open")
+        # Installed before _login() can trigger the credential-bearing POST.
+        session._autofill_attempt_id = attempt
+        stage = "form"
         login_budget = min(15, max(0, deadline - asyncio.get_running_loop().time()))
         result, reason = await wait_for_step(_login(session, record),
                                              login_budget, "login.form")
     except asyncio.TimeoutError:
-        result, reason = "failed", "login_unavailable"
+        result, reason = "failed", ("login_open_timeout" if stage == "open"
+                                    else "login_form_timeout")
     except ExternalPolicyDenied as exc:
         result, reason = ("failed", "busy" if exc.args and
                           exc.args[0] == "login_domain_busy" else "policy_denied")
@@ -168,9 +179,16 @@ async def login(settings, domain, operator_id):
         result, reason = "failed", "login_unavailable"
     finally:
         if session is not None and result not in ("logged_in", "needs_human"):
-            await manager_for(settings).revoke(session.id, operator=session.operator)
-        # Only fixed status metadata is recorded.
-        finish(settings, attempt, result)
+            try:
+                await wait_for_step(
+                    manager_for(settings).revoke(session.id, operator=session.operator),
+                    5, "login.revoke")
+            except Exception:
+                pass  # The session owner keeps closing it; never leak exception text.
+        # Conservatively charge every dispatched POST, including ambiguous
+        # timeouts/5xx/redirects, while preserving its durable DB marker.
+        finish(settings, attempt, result, reason=reason or "success",
+               submitted=bool(session and session._autofill_post_dispatched))
     if result == "needs_human":
         # Preserve the SAME Chromium context and task at the challenge screen.
         # Drop the automatic one-POST capability before issuing the human lease;
@@ -179,11 +197,18 @@ async def login(settings, domain, operator_id):
         session._automated_login = False
         try:
             from web_takeover import WebTakeover
-            await asyncio.to_thread(WebTakeover(settings).start, {
+            await wait_for_step(asyncio.to_thread(WebTakeover(settings).start, {
                 "reason": "login", "task_id": session.task, "ttl_seconds": 300
-            })
+            }), 6, "login.takeover")
         except Exception:
-            await manager_for(settings).revoke(session.id, operator=session.operator)
+            finish(settings, attempt, "failed", reason="takeover_unavailable",
+                   submitted=bool(session._autofill_post_dispatched))
+            try:
+                await wait_for_step(
+                    manager_for(settings).revoke(session.id, operator=session.operator),
+                    5, "login.takeover_revoke")
+            except Exception:
+                pass
             return "failed", "takeover_unavailable"
     return result, reason
 
