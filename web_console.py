@@ -872,9 +872,13 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/agents/kill":
+            import agent_security_controls
+            if not agent_security_controls.available(self.server.control.settings):
+                self._drain_body()
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
             body = self._body()
             if body is not None:
-                import agent_security_controls
                 agent_security_controls.web_post(self, parsed.path, body)
             return
 

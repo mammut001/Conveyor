@@ -99,10 +99,14 @@ def _finish(settings, task_id, status, message_id=None):
 
 
 async def consume_once(settings, channel, send):
-    """Send one already-approved result with one irrevocable delivery claim.
+    """Send one routed result; new rows use retryable acknowledged outbox.
 
-    send(chat_id, plain_text) is provided by the *live* channel process.
+    Legacy pre-migration rows keep their existing at-most-once semantics.
     """
+    import agent_result_outbox
+    result = await agent_result_outbox.consume_once(settings, channel, send)
+    if result is not None:
+        return result
     row = _claim(settings, channel)
     if row is None:
         return 0
@@ -131,8 +135,17 @@ async def consume_once(settings, channel, send):
 
 
 async def run(settings, channel, send):
-    while routing.enabled(settings):
+    import agent_result_outbox
+    import agent_security
+    last_purge = 0.0
+    while routing.enabled(settings) or agent_result_outbox.configured(settings):
         try:
+            if agent_security.killed(settings):
+                await asyncio.sleep(1)
+                continue  # Do not exit: unkill resumes without bot restart.
+            if time.time() - last_purge > 3600:
+                agent_result_outbox.purge(settings)
+                last_purge = time.time()
             await consume_once(settings, channel, send)
         except asyncio.CancelledError:
             raise

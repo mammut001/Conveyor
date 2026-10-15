@@ -769,7 +769,8 @@ async def post_init(application: Application) -> None:
         except Exception:
             logger.exception("Failed to start approval relay consumer in telegram bot")
     import agent_channel_routing
-    if agent_channel_routing.enabled(settings):
+    import agent_result_outbox
+    if agent_channel_routing.enabled(settings) or agent_result_outbox.configured(settings):
         import agent_channel_results
         from channel.telegram import TelegramChatOutbound
         async def send_agent_result(chat_id, text):

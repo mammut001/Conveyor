@@ -10,9 +10,18 @@ from urllib.parse import urlparse
 import agent_security
 
 
+def available(settings):
+    """Keep emergency unkill accessible, but not without Agent features."""
+    import named_agents
+    return named_agents.enabled(settings)
+
+
 def web_post(handler, path, body):
     if path != "/api/agents/kill":
         return False
+    if not available(getattr(handler.server.control, "settings", None)):
+        handler._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        return True
     # Caller is behind the Web Console's existing _require_auth() bearer gate.
     origin = handler.headers.get("Origin", "")
     host = handler.headers.get("Host", "")
@@ -55,6 +64,8 @@ async def owner_command(settings, msg, port):
     token, _, tail = msg.text.strip().partition(" ")
     if token.split("@", 1)[0].lower() != "/agentkill":
         return False
+    if not available(settings):
+        return False  # Flag off: let ordinary unknown-command handling reply.
     from channel.auth import is_allowed
     if msg.channel not in ("telegram", "feishu") or msg.chat_type != "p2p":
         return True
