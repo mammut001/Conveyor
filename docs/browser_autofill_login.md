@@ -44,14 +44,24 @@ are created during the login attempt, and passwords and cookie values
 never enter tool responses, journals, audit rows, or exceptions.
 
 After success, the ephemeral cookie is confined to the G4 session.
-An OTP/2FA/CAPTCHA/passkey challenge returns `needs_human`, closes the
-automated session and requests the existing protected takeover (the human
-may need to repeat login in that separate GUI); never forward OTPs or
-passwords to the model. Failed login attempts are recorded in a private
-SQLite audit with exactly domain, username, result and timestamp; three
-failures in one hour lock the domain for that window, and at most three
-attempts are accepted per hour, including successful attempts. Revocation,
-TTL expiry and the external kill switch remove the G4 session/profile.
+An OTP/2FA/CAPTCHA/passkey challenge returns `needs_human` and requests
+the existing protected human takeover using that same browser context.
+Never forward OTPs or passwords to the model.
+
+The private SQLite audit records domain, username, result, timestamp, a
+fixed credential-free reason and whether the approved login POST completed.
+**Lockout means three verified rejected passwords in one hour**, not three
+attempted browser launches. A rejected-password count requires a completed
+same-origin login POST followed by a still-present password form; startup,
+navigation and browser timeouts, busy sessions, and unconfirmed outcomes
+never consume this credential quota. A separate **five infrastructure
+failures per domain per ten minutes** cap prevents endless retries
+(`infra_rate_limited`); busy results are excluded from that cap. Short
+in-flight reservations protect against parallel attempts across processes.
+Old audit rows without submission proof are not retroactively treated as
+wrong passwords. This accounting applies only while autofill login is
+enabled. Revocation, TTL expiry and the external kill switch remove the
+G4 session/profile.
 
 G4 startup cleanup searches *only* session user-data directories under the
 private G4 root; it sends SIGTERM and, if necessary, SIGKILL solely to
