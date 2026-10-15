@@ -196,6 +196,13 @@ def history_key(settings, channel: str, chat_id: str, operator_id: str) -> str:
     # Resolve its identity first, but preserve those records across flag flips.
     if ctx.agent_id == "default":
         return f"{channel}:{chat_id}"
+    # Bound channel chats share their Agent's existing Web screen history.
+    # Identity and tool permissions remain scoped to the original channel.
+    if channel in ("telegram", "feishu"):
+        import agent_channel_routing
+        if agent_channel_routing.bound(settings, channel, chat_id) == ctx.agent_id:
+            import agents
+            return f"agent:{ctx.agent_id}:{agents.session_id_for(ctx.agent_id)}"
     return f"agent:{ctx.agent_id}:{ctx.session_id}"
 
 
