@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatPanel } from './components/ChatPanel'
+import { AgentWorkspace } from './components/AgentWorkspace'
 import { FormattedText } from './components/FormattedText'
 import { InboxPanel } from './components/InboxPanel'
 import { MemoryPanel } from './components/MemoryPanel'
@@ -811,6 +812,19 @@ export default function App() {
               void refresh()
               void fetchApprovalInboxCount()
             }}
+          />
+        ) : view === 'chat' && selectedAgent ? (
+          <AgentWorkspace
+            key={selectedAgent.id}
+            agent={selectedAgent}
+            token={token}
+            onApprovalDecided={() => {
+              void refresh()
+              void fetchApprovalInboxCount()
+            }}
+            onSessionChange={refresh}
+            initialInput={chatDraft}
+            onInitialInputConsumed={() => setChatDraft('')}
           />
         ) : view === 'chat' ? (
           <ChatPanel
