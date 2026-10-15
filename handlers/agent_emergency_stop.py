@@ -24,8 +24,10 @@ def stop_before_identity(func):
                 # safety cancellation, not an authority to start or edit tasks.
                 from handlers.tools.executors import exec_computer_stop
                 from agent_delegation_worker import cancel_operator
-                cancel_operator(settings, msg.operator_id)
+                cancelled = cancel_operator(settings, msg.operator_id)
                 result = await exec_computer_stop(settings, "")
+                if cancelled:
+                    result += f" 已取消 {cancelled} 个委派任务。"
                 await port.reply(msg, result)
                 return None
         return await func(msg, port, settings, *args, **kwargs)
