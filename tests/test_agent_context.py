@@ -188,6 +188,25 @@ class AgentContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(owner_for_chat(self.settings, "web-console",
                                         "web", self.b_chat), b.memory_owner)
 
+    async def test_archived_agent_job_is_denied_at_execution(self):
+        from types import SimpleNamespace
+        from handlers.jobs import _execute_codex_job
+        from runner import JobMode
+
+        class Port:
+            def __init__(self):
+                self.replies = []
+
+            async def reply(self, msg, text):
+                self.replies.append(text)
+
+        port = Port()
+        runner = SimpleNamespace(settings=self.settings)
+        self.store.archive(self.a["id"])
+        await _execute_codex_job(
+            self.msg(self.a_chat), port, runner, JobMode.RUN, "do work")
+        self.assertEqual(port.replies, ["agent identity denied"])
+
     async def test_memory_v2_bridge_obeys_same_canonical_owner(self):
         from personal_tools import memory_v2_bridge
         settings_v2 = replace(self.settings, memory_v2_enabled=True)
