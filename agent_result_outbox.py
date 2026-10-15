@@ -132,6 +132,10 @@ def _claim(settings, channel, *, now=None):
             (channel, now, now)).fetchone()
         if row is None:
             return None
+        # A crash after send but before ACK must not bypass the attempt cap.
+        if row["attempts"] >= MAX_ATTEMPTS:
+            _terminal(db, row["id"], "denied", now)
+            return None
         import agent_channel_routing as routing
         if row["operator"] != routing._owner(settings, channel):
             _terminal(db, row["id"], "revoked", now)
