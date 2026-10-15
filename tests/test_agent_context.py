@@ -222,17 +222,16 @@ class AgentContextTests(unittest.IsolatedAsyncioTestCase):
                     channel="", chat_id="")
             self.assertEqual(search.call_count, 1)
 
-    def test_web_memory_admin_requires_explicit_agent_selection(self):
+    def test_web_memory_admin_defaults_to_authenticated_owner(self):
         from web_console import WebConsoleHandler
 
         class Handler:
-            errors = []
             def _json(self, code, value):
-                self.errors.append((code, value))
+                self.fail(f"unexpected response: {code} {value}")
 
         h = Handler()
-        self.assertIsNone(WebConsoleHandler._memory_owner(h, self.settings, ""))
-        self.assertEqual(h.errors[-1][1], {"error": "agent identity required"})
+        self.assertEqual(WebConsoleHandler._memory_owner(
+            h, self.settings, ""), "web-console")
         self.assertEqual(WebConsoleHandler._memory_owner(
             h, self.settings, self.a["id"]), f"agent:{self.a['id']}")
         self.assertEqual(WebConsoleHandler._memory_owner(
