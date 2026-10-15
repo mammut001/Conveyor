@@ -295,9 +295,26 @@ async def main() -> None:
         except Exception:
             logger.exception("Failed to start approval relay consumer in feishu bot")
 
+    import agent_channel_routing
+    result_poller = None
+    if agent_channel_routing.enabled(settings):
+        import agent_channel_results
+        async def send_agent_result(chat_id, text):
+            # Existing FeishuChannel plain-text send path: avoid card
+            # Markdown interpretation of untrusted Agent output.
+            result = await channel.send(chat_id, {"text": text})
+            if getattr(result, "ok", True) is False:
+                raise RuntimeError("Feishu result send rejected")
+            return getattr(result, "message_id", None)
+        result_poller = asyncio.create_task(
+            agent_channel_results.run(settings, "feishu", send_agent_result),
+            name="conveyor-agent-feishu-results")
     try:
         await channel.connect()
     finally:
+        if result_poller:
+            result_poller.cancel()
+            await asyncio.gather(result_poller, return_exceptions=True)
         if consumer:
             consumer.stop()
 
