@@ -106,6 +106,34 @@ class AgentScreensHTTPTests(unittest.TestCase):
         with patch.dict(os.environ, {"CONVEYOR_AGENT_CONTEXT":"0"}):
             self.assertEqual(self.req("GET", url)[0], 404)
 
+    def test_runtime_kill_api_auth_csrf_and_audit(self):
+        import agent_security
+        endpoint = "/api/agents/kill"
+        ajax = {"X-Requested-With": "XMLHttpRequest"}
+        self.assertEqual(self.req("POST", endpoint, {"enabled": True},
+                                  auth=False, headers=ajax)[0], 401)
+        self.assertEqual(self.req("POST", endpoint, {"enabled": True})[0], 403)
+        self.assertEqual(self.req("POST", endpoint, {"enabled": True},
+            headers={**ajax, "Origin": "https://evil.invalid"})[0], 403)
+        self.assertEqual(self.req("POST", endpoint, {"enabled": "yes"},
+                                  headers=ajax)[0], 400)
+        try:
+            code, body = self.req("POST", endpoint, {"enabled": True}, headers=ajax)
+            self.assertEqual(code, 200)
+            self.assertTrue(body["killed"])
+            self.assertTrue(agent_security.killed(self.settings))
+            reasons = {row["reason"] for row in agent_security.audit_for_agent(
+                self.settings, "default", WEB_OPERATOR)}
+            self.assertIn("kill_on", reasons)
+        finally:
+            code, body = self.req("POST", endpoint, {"enabled": False}, headers=ajax)
+            self.assertEqual(code, 200)
+            self.assertFalse(body["killed"])
+            self.assertFalse(agent_security.killed(self.settings))
+        reasons = {row["reason"] for row in agent_security.audit_for_agent(
+            self.settings, "default", WEB_OPERATOR)}
+        self.assertIn("kill_off", reasons)
+
     def test_cancel_requires_same_origin_ajax_and_correct_agent(self):
         a = ac.resolve(self.settings, "web", chat_id_for(self.a["id"]), WEB_OPERATOR)
         with ac.bind(a):
