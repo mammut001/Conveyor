@@ -35,6 +35,9 @@ _HYBRID_DEFAULT_TOOLS = ("load", "ps", "disk", "service_status")
 
 
 def _requires_confirmation(tool_name: str, settings: Settings | None = None) -> bool:
+    if tool_name == "main.route_delegate":
+        import main_router
+        return main_router.enabled(settings)
     import agent_messaging_v2
     import agent_delegation
     if agent_delegation.enabled(settings) and tool_name == "agent.delegate":
@@ -340,6 +343,9 @@ async def _invoke_tool(
     spec = get_tool(tool_name)
     import agent_messaging_v2
     extra = agent_messaging_v2.spec(settings, tool_name)
+    if tool_name == "main.route_delegate":
+        import main_router
+        extra = main_router.spec(settings)
     if tool_name == "agent.delegate":
         from agent_delegation import spec as delegation_spec
         extra = delegation_spec(settings)
@@ -478,7 +484,9 @@ async def _request_confirmation(
     spec = get_tool(tool_name)
     import agent_messaging_v2
     from agent_delegation import spec as delegation_spec
-    mailbox_spec = (delegation_spec(settings) if tool_name == "agent.delegate"
+    import main_router
+    mailbox_spec = (main_router.spec(settings) if tool_name == "main.route_delegate"
+                    else delegation_spec(settings) if tool_name == "agent.delegate"
                     else agent_messaging_v2.spec(settings, tool_name))
     if mailbox_spec is not None:
         summary = mailbox_spec.summary
@@ -725,6 +733,9 @@ async def execute_confirmed(
             from personal_tools.browser_read import approve_and_read
             result = await approve_and_read(settings, action.arg,
                                             operator_id=action.operator_id)
+        elif action.tool_name == "main.route_delegate":
+            import main_router
+            result = main_router.confirm(settings, action, token)
         else:
             import agent_messaging_v2
             import agent_delegation
