@@ -99,10 +99,14 @@ def _finish(settings, task_id, status, message_id=None):
 
 
 async def consume_once(settings, channel, send):
-    """Send one already-approved result with one irrevocable delivery claim.
+    """Send one routed result; new rows use retryable acknowledged outbox.
 
-    send(chat_id, plain_text) is provided by the *live* channel process.
+    Legacy pre-migration rows keep their existing at-most-once semantics.
     """
+    import agent_result_outbox
+    result = await agent_result_outbox.consume_once(settings, channel, send)
+    if result is not None:
+        return result
     row = _claim(settings, channel)
     if row is None:
         return 0
