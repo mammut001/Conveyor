@@ -110,7 +110,7 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
                 # Reopen SQLite storage: chat binding survives an in-process switch.
                 self.assertEqual(routing.bound(self.settings,channel,msg.chat_id),self.finance["id"])
                 p=await self.command(self.msg("/agent main",channel))
-                self.assertIn("[Main]",p.replies[-1][1])
+                self.assertIn("[Conveyor]",p.replies[-1][1])
                 self.assertIsNone(routing.bound(self.settings,channel,msg.chat_id))
                 self.assertEqual(ac.resolve(self.settings,channel,msg.chat_id,msg.operator_id).agent_id,
                                  "default")
