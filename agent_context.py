@@ -134,8 +134,15 @@ def allowed(settings, name: str, *, channel: str, chat_id: str,
     if not enabled(settings):
         return True
     try:
-        ctx = (validated(settings, context, channel, chat_id, operator_id)
-               if context is not None else for_request(settings, channel, chat_id, operator_id))
+        if context is not None:
+            current_ctx = _ACTIVE.get()
+            if current_ctx is not None and (
+                    current_ctx.agent_id != context.agent_id or
+                    current_ctx.session_id != context.session_id):
+                return False  # explicit context cannot override the current caller
+            ctx = validated(settings, context, channel, chat_id, operator_id)
+        else:
+            ctx = for_request(settings, channel, chat_id, operator_id)
         return ctx.permits(name)
     except AgentContextDenied:
         return False
