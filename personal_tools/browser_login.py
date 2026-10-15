@@ -134,8 +134,11 @@ async def login(settings, domain, operator_id):
     # in AuthSessionManager.open remains the atomic concurrent-authority check.
     from browser_auth_sessions import manager_for
     from browser_login_domain_gate import login_domain_busy
-    if login_domain_busy(manager_for(settings), origin):
-        return "failed", "busy"
+    try:
+        if login_domain_busy(manager_for(settings), origin):
+            return "failed", "busy"
+    except Exception:
+        return "failed", "login_unavailable"
     try:
         attempt = reserve(settings, origin, record["username"])
     except LoginQuotaDenied as exc:
