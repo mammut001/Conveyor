@@ -169,7 +169,10 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
     import agent_context
     if agent_context.enabled(settings):
         try:
-            agent_context.for_request(settings, channel, chat_id, operator_id)
+            actor = agent_context.for_request(settings, channel, chat_id, operator_id)
+            from agent_security import killed
+            if killed() and actor.agent_id != "default":
+                return []
         except agent_context.AgentContextDenied:
             return []
     register_personal_tools()
