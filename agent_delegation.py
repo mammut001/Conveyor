@@ -124,10 +124,11 @@ def enqueue(settings, arg, *, channel, chat_id, operator_id, approved):
                                max_attempts=3)
         return f"agent task queued: {row['id']}"
     except (mailbox.MailboxDenied, mailbox.MailboxConflict,
-            ac.AgentContextDenied, ValueError, TypeError, KeyError):
+            ac.AgentContextDenied, ValueError, TypeError, KeyError) as exc:
         import agent_security
-        agent_security.audit(settings, operator=operator_id,
-            event="deny", agent_id="default", reason="denied")
+        agent_security.audit(settings, operator=operator_id, event="deny",
+            agent_id=agent_security.target_id(arg),
+            reason=agent_security.denial_code(exc))
         return "agent delegation denied"
 
 
