@@ -48,7 +48,9 @@ atomic admission checks. No route-model choice is itself an approval.
 
 The Web Console starts one periodic cleanup loop only when mailbox is
 enabled. It checks hourly; each tick removes at most 100 old mailbox rows
-and 100 old audit events. `CONVEYOR_AGENT_RETENTION_DAYS` defaults to 14
+and 100 old audit events. Only `done`/`dead` mailbox rows
+are purged; even stale `queued`/`leased` messages, tasks and results are
+retained. `CONVEYOR_AGENT_RETENTION_DAYS` defaults to 14
 (clamped to 1–365 days). `purge_once` is also callable independently
 for deterministic tests.
 
@@ -90,12 +92,34 @@ stop intentionally bypasses the killed feature gate to invalidate live
 leases. The default/main operator chat and its non-Agent tools remain
 available. Turning the flag off does not resurrect dead tasks.
 
-The app reads the kill environment on each security-relevant call.
-An externally changed *process* environment is needed to switch it in
-an already running process; editing an unrelated shell's variables does
-not modify a running daemon's environment. For immediate operations
-control, restart the service with the flag set and invoke the existing
-emergency stop as needed.
+The app reads BOTH the process environment and the runtime kill marker
+`CODEX_MEMORY_ROOT/state/agents_kill` on **every** security-sensitive
+request. The environment value `CONVEYOR_AGENTS_KILL=1` always wins.
+The runtime marker is installed atomically and may be changed without
+restarting the daemon:
+
+- Web Console: authenticated `POST /api/agents/kill` with JSON
+  `{"enabled":true}` or `{"enabled":false}`, same-origin and
+  `X-Requested-With: XMLHttpRequest` headers. Anonymous and
+  cross-origin requests are rejected.
+- Authenticated Telegram/Feishu owner private chat:
+  `/agentkill on` or `/agentkill off`. Non-owner/group commands
+  cannot change the switch. Existing emergency stop and `/cancel`
+  still work while killed.
+
+Every authorized switch mutation is audited with fixed reason
+`kill_on` or `kill_off`, without chat content. On kill, active child
+leases are invalidated and running children cancelled once; the worker
+remains alive, polling at a low rate, and resumes on unkill without
+restarting. Previously killed tasks remain `dead`; they never resume.
+Clearing the runtime marker cannot override an active environment kill.
+
+The retention loop starts only in the **primary Web Console** process
+when Mailbox is enabled; workers hosted without a Web Console do not
+currently start autonomous retention. Those deployments must run
+`agent_security.purge_once(settings)` from their own scheduled service
+until retention startup is unified. Never run competing uncontrolled
+retention loops.
 
 ## Known residuals
 
