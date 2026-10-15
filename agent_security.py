@@ -103,8 +103,13 @@ def admit(conn, *, operator, to_agent, kind, now):
         audit_tx(conn, operator=operator, event="deny", agent_id=to_agent,
                  reason="killed", now=now)
         raise ValueError("agents disabled by emergency kill switch")
+    if kind == "result":
+        # Internal output is not a new owner request but must not bypass
+        # the recipient's mailbox pending cap.
+        check_capacity(conn, operator=operator, to_agent=to_agent)
+        return
     if kind not in ("message", "task", "task_request", "task_result"):
-        return  # internal result rows bypass owner enqueue quota
+        return
     ensure(conn)
     count = conn.execute(
         """SELECT COUNT(*) FROM agent_mailbox
