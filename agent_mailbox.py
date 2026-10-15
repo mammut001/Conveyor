@@ -146,7 +146,7 @@ def send(settings, *, sender: agent_context.AgentContext, to_agent: str,
              parent_message_id, depth))
         import agent_security
         agent_security.audit_tx(conn, operator=actor.operator_identity,
-            event="delegate" if kind == "task" else "delegate",
+            event="delegate",
             agent_id=to_agent, reason="queued", now=timestamp)
         return db.public_row(conn.execute(
             "SELECT * FROM agent_mailbox WHERE id=?", (identifier,)).fetchone())
