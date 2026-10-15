@@ -57,6 +57,8 @@ class AuthSession:
         self._in_action = asyncio.Lock()
         self._automated_login = False
         self._autofill_target = None
+        # Positive evidence: the approved login POST received a response.
+        self._autofill_post_completed = False
 
     def _lease(self):
         return HumanTakeoverStore(self.owner.settings).current()
@@ -192,6 +194,8 @@ class AuthSession:
             if 300 <= response.status < 400:
                 raise ExternalPolicyDenied("g4_redirect_denied")
             await route.fulfill(response=response)
+            if login_post and response.status < 500:
+                self._autofill_post_completed = True
         except Exception:
             self._deny("g4_request_denied")
             try:
