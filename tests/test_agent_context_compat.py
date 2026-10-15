@@ -49,13 +49,13 @@ class DefaultAgentCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.settings = _settings(Path(tmp.name))
-        self.store = AgentStore(self.settings)
         flags = patch.dict(os.environ, {
             "CONVEYOR_NAMED_AGENTS": "1",
             "CONVEYOR_AGENT_CONTEXT": "1",
         })
         flags.start()
         self.addCleanup(flags.stop)
+        self.store = AgentStore(self.settings)
 
     def test_default_history_and_session_files_survive_enabling_flag(self):
         channels = (
