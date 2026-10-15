@@ -112,7 +112,7 @@ class NamedAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_schema_is_scoped_and_dispatch_is_fail_closed(self):
         exposed = lambda chat: {s["function"]["name"] for s in build_tool_schemas(
-            self.settings, channel="web", chat_id=chat)}
+            self.settings, channel="web", chat_id=chat, operator_id="web-console")}
         alpha, beta = exposed(self.a_chat), exposed(self.b_chat)
         self.assertIn("agent__message", alpha)
         self.assertNotIn("agent__message", beta)
