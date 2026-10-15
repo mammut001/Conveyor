@@ -158,8 +158,9 @@ class Worker:
 
 
 def start(loop, settings):
-    """Only the primary Web Console starts polling; off means no side effects."""
-    if not enabled(settings):
+    """Start when configured even if killed; unkill must not need a restart."""
+    import agent_security
+    if not agent_security.delegation_configured(settings):
         return None
     worker = Worker(settings)
     worker.task = loop.create_task(worker.run(), name="conveyor-delegation-poller")
