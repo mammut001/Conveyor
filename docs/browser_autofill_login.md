@@ -49,18 +49,23 @@ the existing protected human takeover using that same browser context.
 Never forward OTPs or passwords to the model.
 
 The private SQLite audit records domain, username, result, timestamp, a
-fixed credential-free reason and whether the approved login POST completed.
-**Lockout means three verified rejected passwords in one hour**, not three
-attempted browser launches. A rejected-password count requires a completed
-same-origin login POST followed by a still-present password form; startup,
-navigation and browser timeouts, busy sessions, and unconfirmed outcomes
-never consume this credential quota. A separate **five infrastructure
-failures per domain per ten minutes** cap prevents endless retries
-(`infra_rate_limited`); busy results are excluded from that cap. Short
-in-flight reservations protect against parallel attempts across processes.
-Old audit rows without submission proof are not retroactively treated as
-wrong passwords. This accounting applies only while autofill login is
-enabled. Revocation, TTL expiry and the external kill switch remove the
+fixed credential-free reason and whether the approved login POST was
+**dispatched**. The attempt is committed with `submitted=1` *before*
+`route.fetch()` can send credentials; if this write fails, the POST is
+aborted. **Any submitted attempt with a non-success outcome counts toward
+the three-per-hour password lockout**. This includes HTTP 500/redirects,
+fetch and form timeouts, ambiguous login results, crashes after dispatch,
+and a subsequent human-takeover failure. Only **pre-POST** failures
+(startup/navigation/policy failure, busy sessions) skip that credential
+quota. `logged_in` and `needs_human` outcomes are exempt. Historical
+`failed` audit rows remain counted so migration cannot reset lockouts.
+Dispatched `started` records remain chargeable for one hour, even if
+their worker crashes. A separate **five pre-submit infrastructure
+failures per domain per ten minutes** cap bounds retries, including
+stale undispatched `started` rows after 120 seconds
+(`infra_rate_limited`). Short in-flight reservations prevent parallel
+attempt bypasses; busy sessions do not count toward either quota.
+This accounting applies only while autofill login is enabled. Revocation, TTL expiry and the external kill switch remove the
 G4 session/profile.
 
 G4 startup cleanup searches *only* session user-data directories under the
