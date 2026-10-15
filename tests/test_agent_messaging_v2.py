@@ -121,6 +121,11 @@ class MessagingV2Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(spec.danger, DangerLevel.WRITE)
         self.assertIn("Queue", spec.summary)
         self.assertEqual(await self.tool("agent.message", arg), "human approval required")
+        # Legacy direct helper is not a mailbox/approval escape hatch.
+        import named_agents
+        self.assertEqual(named_agents.send_message(
+            self.settings, arg, channel="web", chat_id=self.a_chat,
+            operator_id="web-console"), "human approval required")
         initial = await self.tool("agent.message", arg, approved=True)
         self.assertTrue(initial.startswith("agent message queued: "))
         same = await self.tool("agent.message", arg, approved=True)
