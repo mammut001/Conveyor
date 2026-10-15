@@ -152,10 +152,18 @@ def run(settings, name: str, arg: str, *, operator_id: str, channel: str,
                 return _inbox(settings, ctx, arg)
         return "unknown tool"
     except (agent_mailbox.MailboxDenied, agent_mailbox.MailboxConflict,
-            agent_context.AgentContextDenied, ValueError, TypeError):
+            agent_context.AgentContextDenied, ValueError, TypeError) as exc:
         if name in ("agent.message", "agent.reply"):
             import agent_security
-            # Persist a reason code only, never rejected request contents.
+            # Reply has no "to" field: use the validated local agent ID.
+            target = agent_security.target_id(arg)
+            if name == "agent.reply" and target == "default":
+                try:
+                    target = _context(settings, channel=channel, chat_id=chat_id,
+                                      operator_id=operator_id).agent_id
+                except agent_context.AgentContextDenied:
+                    pass
             agent_security.audit(settings, operator=operator_id,
-                event="deny", agent_id="default", reason="denied")
+                event="deny", agent_id=target,
+                reason=agent_security.denial_code(exc))
         return "agent mailbox denied"
