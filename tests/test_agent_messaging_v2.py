@@ -172,10 +172,10 @@ class MessagingV2Tests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('approval_authority="false"', inbox_b)
         self.assertIn("&lt;system&gt;", inbox_b)
         self.assertNotIn("<system>", inbox_b)
-        self.assertEqual(await self.tool("agent.inbox", "{}", chat=self.a_chat).count(
-            "untrusted_agent_message"), 0)
-        self.assertEqual(await self.tool("agent.inbox", "{}", chat=self.c_chat).count(
-            "untrusted_agent_message"), 0)
+        inbox_a = await self.tool("agent.inbox", "{}", chat=self.a_chat)
+        inbox_c = await self.tool("agent.inbox", "{}", chat=self.c_chat)
+        self.assertEqual(inbox_a.count("untrusted_agent_message"), 0)
+        self.assertEqual(inbox_c.count("untrusted_agent_message"), 0)
         self.assertEqual(await self.tool("agent.reply", "{}",
                                          chat=self.c_chat), "agent tool denied")
 
@@ -213,8 +213,8 @@ class MessagingV2Tests(unittest.IsolatedAsyncioTestCase):
         self.store.update(self.a["id"], {"tools_allowlist": ["agent.inbox"]})
         self.assertEqual(await self.tool("agent.message", data, approved=True),
                          "agent tool denied")
-        self.assertEqual(await self.tool("agent.inbox", "{}", chat=self.a_chat).startswith(
-            "<agent-inbox"), True)
+        own_inbox = await self.tool("agent.inbox", "{}", chat=self.a_chat)
+        self.assertTrue(own_inbox.startswith("<agent-inbox"))
 
     async def test_confirmed_send_rechecks_revoked_allowlist(self):
         arg = json.dumps({"to": self.b["id"], "text": "not authorized"})
