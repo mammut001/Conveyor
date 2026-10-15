@@ -195,6 +195,10 @@ async def run_tools_collected(
 
 
 def _danger_label(tool_name: str, settings: Settings | None = None) -> str:
+    if tool_name == "main.route_delegate":
+        import main_router
+        spec = main_router.spec(settings)
+        return spec.danger.value if spec is not None else "unknown"
     if tool_name == "agents.parallel":
         return "read"
     if tool_name.startswith("mcp."):
