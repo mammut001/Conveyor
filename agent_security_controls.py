@@ -19,6 +19,9 @@ def available(settings):
 def web_post(handler, path, body):
     if path != "/api/agents/kill":
         return False
+    if not available(getattr(handler.server.control, "settings", None)):
+        handler._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        return True
     # Caller is behind the Web Console's existing _require_auth() bearer gate.
     origin = handler.headers.get("Origin", "")
     host = handler.headers.get("Host", "")
