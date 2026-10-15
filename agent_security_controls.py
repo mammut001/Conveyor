@@ -64,6 +64,8 @@ async def owner_command(settings, msg, port):
     token, _, tail = msg.text.strip().partition(" ")
     if token.split("@", 1)[0].lower() != "/agentkill":
         return False
+    if not available(settings):
+        return True  # Flag off: absent; no reply or state mutation.
     from channel.auth import is_allowed
     if msg.channel not in ("telegram", "feishu") or msg.chat_type != "p2p":
         return True
