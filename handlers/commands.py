@@ -1768,7 +1768,7 @@ async def _forget(msg, port, _runner, settings, _arg):
     from handlers.session import clear_session
     from handlers.chat import chat_key, reset
     removed = clear_session(settings, msg)
-    reset(chat_key(msg), settings=settings)
+    reset(chat_key(msg, settings), settings=settings)
     await port.reply(msg, "会话记录与对话历史已清除。")
 
 
