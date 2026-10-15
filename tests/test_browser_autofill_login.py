@@ -473,29 +473,30 @@ class BrowserLoginRealTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_login_locks_after_three_attempts(self):
         put(self.settings, self.origin, "alice", "TOP_SECRET_TEST")
         self.http.reject = True
-        rejections = 0
-        # A transient pre-submit browser failure cannot use up a password
-        # attempt. Retry it, while preserving the exact HTTP POST assertion.
+        dispatched = 0
+        # A transient pre-submit browser failure does not consume the quota.
+        # Every dispatched POST does, even if its response is ambiguous.
         for _ in range(5):
             result, reason = await wait_for_step(
                 login(self.settings, self.origin, "owner"), 19, "test.lockout")
             self.assertEqual(result, "failed")
-            if reason == "credentials_rejected":
-                rejections += 1
-                self.assertEqual(self.http.posts, rejections)
+            last = public_audit(self.settings, self.origin)[-1]
+            if last["submitted"]:
+                dispatched += 1
+                self.assertEqual(self.http.posts, dispatched)
             else:
                 self.assertIn(reason, ("login_open_timeout", "login_form_timeout",
                                        "login_unavailable", "login_not_confirmed"))
-            if rejections == 3:
+            if dispatched == 3:
                 break
-        self.assertEqual(rejections, 3, "three verified rejections required")
+        self.assertEqual(dispatched, 3, "three dispatched attempts required")
         self.assertEqual(self.http.posts, 3)
         result, reason = await wait_for_step(
             login(self.settings, self.origin, "owner"), 3, "test.lockout_denial")
         self.assertEqual((result, reason), ("failed", "locked"))
         self.assertEqual(self.http.posts, 3)
         audit = public_audit(self.settings, self.origin)
-        self.assertEqual(sum(x["reason"] == "credentials_rejected" and
+        self.assertEqual(sum(x["result"] == "failed" and
                              x["submitted"] for x in audit), 3)
 
     async def test_forced_pre_submit_timeout_does_not_consume_password_quota(self):
