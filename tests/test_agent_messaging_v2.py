@@ -216,6 +216,18 @@ class MessagingV2Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.tool("agent.inbox", "{}", chat=self.a_chat).startswith(
             "<agent-inbox"), True)
 
+    async def test_confirmed_send_rechecks_revoked_allowlist(self):
+        arg = json.dumps({"to": self.b["id"], "text": "not authorized"})
+        msg = self.msg(self.a_chat)
+        action = create_pending("agent.message", arg, msg.operator_id,
+                                msg.chat_id, msg.channel)
+        self.store.update(self.a["id"], {"tools_allowlist": ["agent.inbox"]})
+        port = Port()
+        with patch("approval_relay.claim_local", return_value="ok"):
+            await execute_confirmed(msg, port, self.settings, action.token)
+        self.assertIn("agent tool denied", port.replies[-1])
+        self.assertFalse(any(row["body"] == "not authorized" for row in self.rows()))
+
     async def test_egress_taint_blocks_direct_sends_and_replies(self):
         data = json.dumps({"to": self.b["id"], "text": "sensitive"})
         with patch("egress_taint.enabled", return_value=True):
