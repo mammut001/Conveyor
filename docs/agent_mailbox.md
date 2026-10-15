@@ -1,11 +1,17 @@
 # Agent mailbox foundation (PR 2, default off)
 
-`CONVEYOR_AGENT_MAILBOX=1` enables the durable SQLite mailbox **only if**
-`CONVEYOR_AGENT_CONTEXT=1`, `CONVEYOR_NAMED_AGENTS=1`, and
-`CONVEYOR_AGENTS_ENABLED=1` are also active. Otherwise mailbox calls
-fail closed and do not create the `agent_mailbox` table. This PR does
-**not** register any agent tool, expose a Web/Telegram/Feishu API, start a
-delivery worker, or pass a mailbox body to an LLM.
+`agent_mailbox.enabled(settings)` returns true exactly when the
+`CONVEYOR_AGENT_MAILBOX` environment flag is enabled **and**
+`agent_context.enabled(settings)` is true. AgentContext in turn requires
+`CONVEYOR_AGENT_CONTEXT=1`, `CONVEYOR_NAMED_AGENTS=1`, and the
+`settings.agents_enabled` setting (normally `CONVEYOR_AGENTS_ENABLED=1`).
+The mailbox flag alone does not enable these dependencies. Otherwise calls
+fail closed and do not create the `agent_mailbox` table.
+
+PR 3 registers `agent.message` (approved enqueue), `agent.inbox`
+(read-only, untrusted message listing) and `agent.reply` (approved bounded
+reply) only when mailbox is enabled; there is still **no delivery worker**,
+automatic prompt injection, API for other channels or implicit approval.
 
 ## Storage and migration
 
@@ -75,5 +81,7 @@ parent/depth limit, Unicode body cap, untrusted/taint markers, and zero
 schema/behavior change with the flag disabled. CI's all-flags step
 includes `CONVEYOR_AGENT_MAILBOX=1`.
 
-This feature is database infrastructure only; PR 3 will provide
-message-to-transcript wiring, and PR 4 will add bounded delivery workers.
+PR 3 connects the existing approved `agent.message` to durable enqueue,
+not recipient transcript delivery. It introduces explicit read-only inbox
+access and approved replies. The recipient must request `agent.inbox`
+themselves; no background delivery or message execution exists until PR 4.
