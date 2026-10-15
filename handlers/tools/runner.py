@@ -732,15 +732,20 @@ async def execute_confirmed(
                             if action.tool_name == "agent.delegate" and agent_delegation.enabled(settings)
                             else agent_messaging_v2.approval_arg(action.tool_name, action.arg, token)
                             if agent_messaging_v2.enabled(settings) else action.arg)
-            result = await run_tool(
-                settings,
-                action.tool_name,
-                approved_arg,
-                operator_id=action.operator_id,
-                channel=action.channel,
-                chat_id=action.chat_id,
-                egress_approved=True,
-            )
+            from contextlib import nullcontext
+            scope = (agent_delegation.approved_token(token)
+                     if action.tool_name == "agent.delegate" and agent_delegation.enabled(settings)
+                     else nullcontext())
+            with scope:
+                result = await run_tool(
+                    settings,
+                    action.tool_name,
+                    approved_arg,
+                    operator_id=action.operator_id,
+                    channel=action.channel,
+                    chat_id=action.chat_id,
+                    egress_approved=True,
+                )
     except Exception as exc:
         audit_tool_event(
             settings,
