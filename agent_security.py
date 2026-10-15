@@ -10,6 +10,7 @@ import re
 import sqlite3
 import time
 from pathlib import Path
+from uuid import uuid4
 
 _AGENT = re.compile(r"^[a-z0-9]{1,32}$")
 _EVENTS = frozenset({"route", "delegate", "bind", "cancel", "deny"})
@@ -24,8 +25,48 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS agent_security_audit (
 _INDEX = "CREATE INDEX IF NOT EXISTS idx_agent_security_audit_scope ON agent_security_audit(operator,agent_id,happened_at)"
 
 
-def killed() -> bool:
-    return os.environ.get("CONVEYOR_AGENTS_KILL", "").lower() in ("1", "true", "yes", "on")
+def _kill_path(settings):
+    return Path(settings.codex_memory_root) / "state" / "agents_kill"
+
+
+def killed(settings=None) -> bool:
+    # A process environment flag is the highest-priority emergency override.
+    if os.environ.get("CONVEYOR_AGENTS_KILL", "").lower() in ("1", "true", "yes", "on"):
+        return True
+    if settings is None:
+        return False
+    try:
+        return _kill_path(settings).is_file()
+    except OSError:
+        return True  # Fail closed on inaccessible runtime state.
+
+
+def set_kill(settings, *, enabled, operator, source):
+    """Atomically persist an authenticated owner's runtime kill decision.
+
+    Only the trusted Web/command adapters call this after verifying ownership.
+    No untrusted message body is recorded in the audit journal.
+    """
+    if type(enabled) is not bool or source not in ("web", "telegram", "feishu"):
+        raise ValueError("invalid kill switch request")
+    path = _kill_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if enabled:
+        tmp = path.with_name("agents_kill." + uuid4().hex)
+        try:
+            fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "w") as stream:
+                stream.write("killed\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
+    else:
+        path.unlink(missing_ok=True)
+    audit(settings, operator=operator, event="cancel",
+          agent_id="default", reason="kill_on" if enabled else "kill_off")
+    return killed(settings)
 
 
 def _setting(name, default, lo, hi):
@@ -72,6 +113,8 @@ def _reason(value):
         "approved", "queued", "rate_limited", "queue_full", "killed",
         "owner_selected", "owner_rejected", "task_cancelled",
         "operator_stop", "task_stop", "revoked", "disabled", "legacy_queued",
+        "kill_on", "kill_off", "invalid_target", "identity_denied",
+        "invalid_arguments", "unauthorized", "archived",
     ))
     return value if value in allowed else "denied"
 
@@ -97,9 +140,9 @@ def audit(settings, *, operator, event, agent_id, reason):
                  agent_id=agent_id, reason=reason)
 
 
-def admit(conn, *, operator, to_agent, kind, now):
+def admit(conn, *, operator, to_agent, kind, now, settings=None):
     """Atomic admission; caller checked idempotency before invoking."""
-    if killed():
+    if killed(settings):
         audit_tx(conn, operator=operator, event="deny", agent_id=to_agent,
                  reason="killed", now=now)
         raise ValueError("agents disabled by emergency kill switch")
@@ -113,9 +156,9 @@ def admit(conn, *, operator, to_agent, kind, now):
     ensure(conn)
     count = conn.execute(
         """SELECT COUNT(*) FROM agent_mailbox
-           WHERE operator=? AND created_at>=? AND created_at<=?
+           WHERE operator=? AND created_at>=?
            AND kind IN ('message','task','task_request','task_result')""",
-        (operator, now-3600, now)).fetchone()[0]
+        (operator, now-3600)).fetchone()[0]
     count += conn.execute(
         """SELECT COUNT(*) FROM agent_security_audit
            WHERE operator=? AND event='delegate'
@@ -145,7 +188,7 @@ def admit_legacy_message(settings, *, operator, to_agent):
     Legacy writes are not mailbox enqueues, but still consume the operator's
     Agent messaging budget. No payload enters the security audit.
     """
-    if killed():
+    if killed(settings):
         raise ValueError("agents disabled by emergency kill switch")
     path = Path(settings.codex_memory_root) / "state" / "job_queue.sqlite3"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -202,7 +245,7 @@ def purge_once(settings, *, now=None, batch=100):
         # Children must be removed before their parent because FK=ON.
         # Do not purge live parent jobs with pending child results.
         for condition in (
-            "kind IN ('result','task_result')",
+            "kind IN ('result','task_result') AND status IN ('done','dead')",
             "status IN ('done','dead')",
         ):
             count = batch - total
@@ -235,7 +278,7 @@ def _audit_exists(conn):
 
 async def retention_worker(settings):
     import agent_mailbox
-    while agent_mailbox.enabled(settings) or killed():
+    while agent_mailbox.enabled(settings) or killed(settings):
         try:
             purge_once(settings, batch=100)
         except sqlite3.Error:
