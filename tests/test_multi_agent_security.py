@@ -81,6 +81,29 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(self.rows()),2)
         self.assertTrue(security.audit_for_agent(self.cfg,self.b["id"],WEB_OPERATOR))
 
+    async def test_legacy_transcript_send_uses_shared_rate_and_kill(self):
+        import named_agents
+        from transcript_store import get_transcript_store
+        payload=json.dumps({"to":self.b["id"],"text":"Untrusted ping"})
+        source_chat=chat_id_for(self.a["id"])
+        with patch.dict(os.environ, {"CONVEYOR_AGENT_MAILBOX":"0",
+                                      "CONVEYOR_AGENT_DELEGATION":"0",
+                                      "CONVEYOR_AGENT_RATE_PER_HOUR":"1"}):
+            first=named_agents.send_message(
+                self.cfg,payload,channel="web",chat_id=source_chat,
+                operator_id=WEB_OPERATOR)
+            self.assertEqual(first,"agent message recorded")
+            second=named_agents.send_message(
+                self.cfg,payload,channel="web",chat_id=source_chat,
+                operator_id=WEB_OPERATOR)
+            self.assertIn("rate limit",second)
+            with patch.dict(os.environ,{"CONVEYOR_AGENTS_KILL":"1"}):
+                self.assertIn("kill switch",named_agents.send_message(
+                    self.cfg,payload,channel="web",chat_id=source_chat,
+                    operator_id=WEB_OPERATOR))
+        records=security.audit_for_agent(self.cfg,self.b["id"],WEB_OPERATOR)
+        self.assertIn("legacy_queued",{r["reason"] for r in records})
+
     async def test_recipient_queue_cap_does_not_block_different_agent(self):
         with patch.dict(os.environ, {"CONVEYOR_AGENT_MAX_PENDING":"1"}):
             self.send("first")
