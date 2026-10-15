@@ -188,6 +188,25 @@ class AgentContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(owner_for_chat(self.settings, "web-console",
                                         "web", self.b_chat), b.memory_owner)
 
+    def test_web_memory_admin_requires_explicit_agent_selection(self):
+        from web_console import WebConsoleHandler
+
+        class Handler:
+            errors = []
+            def _json(self, code, value):
+                self.errors.append((code, value))
+
+        h = Handler()
+        self.assertIsNone(WebConsoleHandler._memory_owner(h, self.settings, ""))
+        self.assertEqual(h.errors[-1][1], {"error": "agent identity required"})
+        self.assertEqual(WebConsoleHandler._memory_owner(
+            h, self.settings, self.a["id"]), f"agent:{self.a['id']}")
+        self.assertEqual(WebConsoleHandler._memory_owner(
+            h, self.settings, "default"), "web-console")
+        with patch.dict(os.environ, {"CONVEYOR_AGENT_CONTEXT": "0"}):
+            self.assertEqual(WebConsoleHandler._memory_owner(
+                h, self.settings, ""), "web-console")
+
     def test_default_off_retains_legacy_history_and_contextless_tools(self):
         with patch.dict(os.environ, {"CONVEYOR_AGENT_CONTEXT": "0"}):
             msg = self.msg(self.a_chat)
