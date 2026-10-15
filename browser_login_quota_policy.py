@@ -37,8 +37,8 @@ def admission_reason(rows, now):
     # Crashed pre-submit rows stop reserving capacity after 120s, but are
     # still infrastructure failures within their own ten-minute window.
     infra = sum(not is_rejection(r, why, submitted)
-                and why not in ("busy", "legacy_unverified")
-                and ((r == "failed") or
+                and why != "busy"
+                and ((r == "failed" and why != "legacy_unverified") or
                      (r == "started" and when <= now - INFLIGHT_WINDOW))
                 and when > now - INFRA_WINDOW
                 for r, why, submitted, when in rows)
