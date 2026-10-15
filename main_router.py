@@ -25,6 +25,9 @@ _CJK_STOPWORDS = frozenset((
     "是否 能不 请你 请帮 帮忙 需要 我想 想要 有关 关于 "
     "谁是 哪里 为什么 多少 以及 还有 一个 怎么样"
 ).split())
+# Do not count bigrams straddling frequent conversational particles as
+# specialist vocabulary (e.g. 你是 / 的助 from "你是我的助手吗").
+_CJK_NOISE = frozenset("你我他她它的是了吗呢啊吧哦呀有和个一帮请问什怎可今用")
 _MIN_CONFIDENCE = 0.85
 # Ordinary conversational/assistant boilerplate must never cause delegation.
 # Implicit routing needs two *distinctive* shared persona/name terms.
@@ -85,7 +88,7 @@ def _words(s):
         # excluded rather than allowed to vote for implicit routing.
         for i in range(len(segment) - 1):
             gram = segment[i:i+2]
-            if gram not in _CJK_STOPWORDS:
+            if gram not in _CJK_STOPWORDS and not any(ch in _CJK_NOISE for ch in gram):
                 words.add(gram)
     return words
 
