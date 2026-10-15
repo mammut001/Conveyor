@@ -48,6 +48,10 @@ def _edit_overrides_snapshot(text: str, route: RouteResult) -> bool:
     return host_edit_imperative(text)
 
 
+from agent_context import scoped_inbound
+
+
+@scoped_inbound
 async def dispatch(
     msg: InboundMessage,
     port: OutboundPort,
