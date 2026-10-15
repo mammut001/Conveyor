@@ -94,6 +94,17 @@ async def run_tool(
     egress_approved: bool = False,
 ) -> str:
     import agent_context
+    from agent_security import killed
+    if killed(settings) and (tool_name.startswith("agent.")
+                     or tool_name == "main.route_delegate"):
+        return "agent tools disabled by emergency kill switch"
+    if killed(settings) and agent_context.enabled(settings):
+        try:
+            ctx = agent_context.for_request(settings, channel, chat_id, operator_id)
+            if ctx.agent_id != "default":
+                return "agent tools disabled by emergency kill switch"
+        except agent_context.AgentContextDenied:
+            return "agent tool denied"
     if agent_context.enabled(settings) and not (operator_id or channel or chat_id):
         bound = agent_context.current()
         if bound is not None:

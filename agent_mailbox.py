@@ -30,7 +30,8 @@ class MailboxConflict(ValueError):
 
 
 def enabled(settings) -> bool:
-    return (agent_context.enabled(settings) and
+    from agent_security import killed
+    return (not killed(settings) and agent_context.enabled(settings) and
             os.environ.get("CONVEYOR_AGENT_MAILBOX", "").lower()
             in ("1", "true", "yes", "on"))
 
@@ -124,6 +125,9 @@ def send(settings, *, sender: agent_context.AgentContext, to_agent: str,
             return db.public_row(existing)
         if not timestamp < deadline <= timestamp + 7 * 86400:
             raise MailboxDenied("invalid deadline")
+        import agent_security
+        agent_security.admit(conn, operator=actor.operator_identity,
+                             to_agent=to_agent, kind=kind, now=timestamp, settings=settings)
         if parent_message_id is not None:
             parent = conn.execute(
                 "SELECT * FROM agent_mailbox WHERE id=?", (parent_message_id,)
@@ -140,6 +144,10 @@ def send(settings, *, sender: agent_context.AgentContext, to_agent: str,
             (identifier, actor.agent_id, to_agent, actor.operator_identity,
              kind, body, idempotency_key, max_attempts, deadline, timestamp,
              parent_message_id, depth))
+        import agent_security
+        agent_security.audit_tx(conn, operator=actor.operator_identity,
+            event="delegate",
+            agent_id=to_agent, reason="queued", now=timestamp)
         return db.public_row(conn.execute(
             "SELECT * FROM agent_mailbox WHERE id=?", (identifier,)).fetchone())
 

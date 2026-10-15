@@ -21,12 +21,17 @@ def enabled(settings):
 
 def cancel_operator(settings, operator_id):
     """Authenticated emergency stop makes all queued/running tasks terminal."""
-    if not enabled(settings):
+    # Stop remains available even while the kill switch disables enqueues.
+    import agent_security
+    if not agent_security.delegation_configured(settings):
         return 0
     count = queue.cancel_operator(settings, operator_id)
     for (operator, _identifier), task in tuple(_running.items()):
         if operator == operator_id and not task.done():
-            task.cancel()
+            try:
+                task.get_loop().call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                pass  # Lease already fenced by cancel_operator's DB update.
     return count
 
 
@@ -125,7 +130,20 @@ class Worker:
         self.task = None
 
     async def run(self):
-        while enabled(self.settings):
+        import agent_security
+        killed_seen = False
+        while True:
+            if agent_security.killed(self.settings):
+                if not killed_seen:
+                    # Fence all leases once on kill; keep the poller alive so
+                    # an owner can clear the switch without restarting.
+                    cancel_all(self.settings)
+                killed_seen = True
+                await asyncio.sleep(0.5)
+                continue
+            killed_seen = False
+            if not enabled(self.settings):
+                return
             try:
                 await poll_once(self.settings)
             except Exception:
@@ -140,8 +158,9 @@ class Worker:
 
 
 def start(loop, settings):
-    """Only the primary Web Console starts polling; off means no side effects."""
-    if not enabled(settings):
+    """Start when configured even if killed; unkill must not need a restart."""
+    import agent_security
+    if not agent_security.delegation_configured(settings):
         return None
     worker = Worker(settings)
     worker.task = loop.create_task(worker.run(), name="conveyor-delegation-poller")

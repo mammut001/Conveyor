@@ -61,7 +61,8 @@ class Decision:
 
 
 def enabled(settings):
-    return (agent_delegation.enabled(settings) and
+    from agent_security import killed
+    return (not killed(settings) and agent_delegation.enabled(settings) and
             os.environ.get("CONVEYOR_MAIN_ROUTER", "").lower()
             in ("1", "true", "yes", "on"))
 
@@ -232,6 +233,10 @@ async def maybe_route(msg, port, settings):
     decision = await choose(settings, msg)
     log.info("main route agent=%s reason=%s", decision.agent_id or "main",
              decision.reason)
+    import agent_security
+    agent_security.audit(settings, operator=msg.operator_id,
+        event="route" if decision.agent_id is not None else "deny",
+        agent_id=decision.agent_id or "default", reason=decision.reason)
     if decision.agent_id is None:
         return False
     from handlers.tools.runner import _request_confirmation

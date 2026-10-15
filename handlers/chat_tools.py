@@ -37,6 +37,9 @@ def func_to_tool_name(func_name: str) -> str:
 
 
 def _get_tool_spec(name: str, settings: Settings | None = None) -> Any | None:
+    from agent_security import killed
+    if killed(settings) and (name.startswith("agent.") or name == "main.route_delegate"):
+        return None
     if name == "main.route_delegate":
         from main_router import spec
         return spec(settings)
@@ -104,6 +107,9 @@ def web_search_configured(settings: Any) -> bool:
 
 def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bool = True) -> bool:
     """Single policy used for both schema exposure and execution."""
+    from agent_security import killed
+    if killed(settings) and (name.startswith("agent.") or name == "main.route_delegate"):
+        return False
     if spec is None or name.startswith("desktop."):
         return False
     if name == "browser.login":
@@ -166,7 +172,10 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
     import agent_context
     if agent_context.enabled(settings):
         try:
-            agent_context.for_request(settings, channel, chat_id, operator_id)
+            actor = agent_context.for_request(settings, channel, chat_id, operator_id)
+            from agent_security import killed
+            if killed(settings) and actor.agent_id != "default":
+                return []
         except agent_context.AgentContextDenied:
             return []
     register_personal_tools()
@@ -180,7 +189,8 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
     for name, spec in TOOL_REGISTRY.items():
         candidates.append((name, spec))
     import named_agents
-    if named_agents.enabled(settings):
+    from agent_security import killed
+    if not killed(settings) and named_agents.enabled(settings):
         candidates.append(("agent.message", _get_tool_spec("agent.message", settings)))
     import agent_messaging_v2
     if agent_messaging_v2.enabled(settings):

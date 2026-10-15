@@ -156,6 +156,9 @@ def message_spec():
 
 
 def send_message(settings, arg, *, channel, chat_id, operator_id=""):
+    from agent_security import killed
+    if killed(settings):
+        return "agent tools disabled by emergency kill switch"
     if not enabled(settings):
         return "unknown tool"
     # The legacy helper must not bypass mailbox/approval when Messaging V2 is on.
@@ -180,8 +183,14 @@ def send_message(settings, arg, *, channel, chat_id, operator_id=""):
         target = __import__("agents").AgentStore(settings).get(target_id)
         if not target or target.get("archived") or target_id == sender["id"]:
             return "agent recipient denied"
-        from transcript_store import get_transcript_store
+        import agent_security
         import agents
+        try:
+            agent_security.admit_legacy_message(
+                settings, operator=agents.WEB_OPERATOR, to_agent=target_id)
+        except ValueError:
+            return "agent message denied: rate limit"
+        from transcript_store import get_transcript_store
         transcript = get_transcript_store(settings)
         meta = {"from_agent": sender["id"], "to_agent": target_id, "untrusted": True}
         transcript.append(agents.session_id_for(target_id), "tool",

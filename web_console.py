@@ -871,6 +871,13 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if not self._require_auth():
             return
 
+        if parsed.path == "/api/agents/kill":
+            body = self._body()
+            if body is not None:
+                import agent_security_controls
+                agent_security_controls.web_post(self, parsed.path, body)
+            return
+
         if parsed.path == "/api/agent-screens/cancel":
             body = self._body()
             if body is not None:
@@ -2002,11 +2009,15 @@ def main() -> None:
     relay_consumer = approval_relay.start_relay_worker(loop, settings, channel="web")
     from agent_delegation_worker import start as start_delegation
     delegation_worker = start_delegation(loop, settings)
+    import agent_security
+    agent_retention_worker = agent_security.start(loop, settings)
     try:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if agent_retention_worker is not None:
+            agent_retention_worker.cancel()
         if delegation_worker is not None:
             delegation_worker.stop()
         if relay_consumer is not None:

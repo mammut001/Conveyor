@@ -98,7 +98,16 @@ class AgentScreenTests(unittest.TestCase):
         self.assertEqual({x["status"] for x in tasks}, {"queued"})
         self.assertNotIn("body", tasks[0])
         self.assertTrue(screens.cancel_task(self.settings, self.b["id"], first["id"]))
+        import agent_security
+        count_before = len([row for row in agent_security.audit_for_agent(
+            self.settings, self.b["id"], WEB_OPERATOR)
+            if row["reason"] == "task_cancelled"])
         self.assertFalse(screens.cancel_task(self.settings, self.b["id"], first["id"]))
+        count_after = len([row for row in agent_security.audit_for_agent(
+            self.settings, self.b["id"], WEB_OPERATOR)
+            if row["reason"] == "task_cancelled"])
+        self.assertEqual(count_before, 1)
+        self.assertEqual(count_after, count_before)
         status = {x["id"]:x["status"] for x in screens.list_items(
             self.settings, self.a["id"], "tasks")}
         self.assertEqual(status[first["id"]], "dead")
