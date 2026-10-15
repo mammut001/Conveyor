@@ -41,7 +41,8 @@ class AgentContext:
 
 def enabled(settings) -> bool:
     import named_agents
-    return (os.environ.get("CONVEYOR_AGENT_CONTEXT", "").lower() in
+    return (settings is not None and
+            os.environ.get("CONVEYOR_AGENT_CONTEXT", "").lower() in
             ("1", "true", "yes", "on") and named_agents.enabled(settings))
 
 
@@ -87,7 +88,7 @@ def resolve(settings, channel: str, chat_id: str, operator_id: str,
         )
     except AgentContextDenied:
         raise
-    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError, AttributeError) as exc:
         raise AgentContextDenied("agent identity unavailable") from exc
 
 
