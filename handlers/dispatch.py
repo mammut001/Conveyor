@@ -49,8 +49,10 @@ def _edit_overrides_snapshot(text: str, route: RouteResult) -> bool:
 
 
 from agent_context import scoped_inbound
+from handlers.agent_emergency_stop import stop_before_identity
 
 
+@stop_before_identity
 @scoped_inbound
 async def dispatch(
     msg: InboundMessage,
