@@ -19,6 +19,15 @@ def get(handler, path, query):
         handler._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         return True
     if path == "/api/agent-screens/config":
+        agent_id = (query.get("agent_id") or [""])[0]
+        if not agent_id:
+            handler._json(HTTPStatus.BAD_REQUEST, {"error": "agent_id required"})
+            return True
+        try:
+            screens._actor(settings, agent_id)
+        except (ValueError, PermissionError, LookupError):
+            handler._json(HTTPStatus.NOT_FOUND, {"error": "agent not found"})
+            return True
         handler._json(HTTPStatus.OK, screens.features(settings))
         return True
     if path != "/api/agent-screens":
