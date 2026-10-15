@@ -54,7 +54,9 @@ class ProxyTests(unittest.TestCase):
         self.addCleanup(self.echo.shutdown)
         self.port = self.echo.server_address[1]
 
-    def proxy(self, rules=("echo.fixture.test",), *, cidrs=("198.18.0.0/15",)):
+    def proxy(self, rules=None, *, cidrs=("198.18.0.0/15",)):
+        if rules is None:
+            rules = (f"echo.fixture.test:{self.port}",)
         # The policy sees a fake DNS sandbox address, and only the test
         # dialer maps it to the loopback echo server. Production never does.
         def dns(host, port, **kwargs):
@@ -168,7 +170,7 @@ class ProxyTests(unittest.TestCase):
         self.addCleanup(task.join, 3)
         self.addCleanup(remote.server_close)
         self.addCleanup(remote.shutdown)
-        proxy = self.proxy()
+        proxy = self.proxy(rules=(f"echo.fixture.test:{remote.server_address[1]}",))
         with socket.create_connection(("127.0.0.1", proxy.server.server_address[1]), timeout=3) as sock:
             sock.settimeout(3)
             sock.sendall(f"CONNECT echo.fixture.test:{remote.server_address[1]} HTTP/1.1\r\n"
