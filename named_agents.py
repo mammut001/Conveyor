@@ -158,6 +158,12 @@ def message_spec():
 def send_message(settings, arg, *, channel, chat_id, operator_id=""):
     if not enabled(settings):
         return "unknown tool"
+    # The legacy helper must not bypass mailbox/approval when Messaging V2 is on.
+    import agent_messaging_v2
+    if agent_messaging_v2.enabled(settings):
+        return agent_messaging_v2.run(
+            settings, "agent.message", arg, channel=channel, chat_id=chat_id,
+            operator_id=operator_id, approved=False)
     sender = active_agent(settings, channel, chat_id)
     if not sender or not tool_allowed(settings, channel, chat_id, "agent.message",
                                       operator_id=operator_id):
