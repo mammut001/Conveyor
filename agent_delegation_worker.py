@@ -30,6 +30,16 @@ def cancel_operator(settings, operator_id):
     return count
 
 
+def cancel_all(settings):
+    """Stop every delegated child after an inbound channel auth check.
+
+    Delegations currently share the canonical Web Console operator, even
+    when the authenticated stop arrives from Telegram or Feishu.
+    """
+    import agents
+    return cancel_operator(settings, agents.WEB_OPERATOR)
+
+
 async def _finish(settings, record, worker_id):
     import agents
     from agent_delegation_turn import execute
