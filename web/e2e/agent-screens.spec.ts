@@ -22,7 +22,7 @@ async function fixture(page: Page, enabled = true) {
     if (path === '/api/approvals') return json({ approvals: [] })
     if (path === '/api/nodes') return json({ nodes: [] })
     if (path === '/api/agents') return json({ enabled: true, agents: [main, beta] })
-    if (path === '/api/agent-screens/config') return enabled
+    if (path === '/api/agent-screens/config' && url.searchParams.get('agent_id') === beta.id) return enabled
       ? json({ enabled: true, inbox: true, tasks: true }) : json({ error: 'not found' }, 404)
     if (path === '/api/agent-screens' && url.searchParams.get('view') === 'inbox') return json({
       agent_id: beta.id, items: [{
