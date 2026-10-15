@@ -88,7 +88,8 @@ def _mirror_transcript(
 ) -> None:
     try:
         from transcript_store import get_transcript_store, session_identity
-        get_transcript_store(settings).append_turn(
+        store = get_transcript_store(settings)
+        store.append_turn(
             session_identity(msg.channel, msg.chat_id, msg.operator_id),
             user_text,
             assistant_text,
@@ -97,6 +98,17 @@ def _mirror_transcript(
             source_chat_id=msg.chat_id,
             kind=kind,
         )
+        # Named Agent screen is a single durable conversation across Web
+        # and its authenticated owner-only private channel binding.
+        import agent_channel_routing
+        selected = agent_channel_routing.bound(settings, msg.channel, msg.chat_id)
+        if selected:
+            import agents
+            store.append_turn(
+                agents.session_id_for(selected), user_text, assistant_text,
+                channel="web", operator_id=agents.WEB_OPERATOR,
+                source_chat_id=agents.chat_id_for(selected), kind=kind,
+            )
     except Exception:
         logger.debug("structured transcript mirror failed", exc_info=True)
 
