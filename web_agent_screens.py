@@ -6,9 +6,8 @@ or a forged AgentContext; the mailbox body is *always* data.
 """
 from __future__ import annotations
 
-import os
 import sqlite3
-import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import agent_context as ac
@@ -47,12 +46,16 @@ def _actor(settings, agent_id, operator="web-console"):
     return ctx
 
 
+@contextmanager
 def _database(settings):
     path = Path(settings.codex_memory_root) / "state" / "job_queue.sqlite3"
     db = sqlite3.connect(str(path), timeout=10)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA busy_timeout=10000")
-    return db
+    try:
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA busy_timeout=10000")
+        yield db
+    finally:
+        db.close()
 
 
 def list_items(settings, agent_id, view, *, operator="web-console", limit=50):
