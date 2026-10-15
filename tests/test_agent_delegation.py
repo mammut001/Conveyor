@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -318,8 +319,10 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
         from dataclasses import replace
         from handlers.dispatch import dispatch
         self.settings = replace(self.settings, lark_allowed_open_id="ou_allowed")
-        token = f"cross-{channel}-{command.replace('/', '')}"
-        self.assertIn("queued", self.enqueue(token=token))
+        token = f"cross-{channel}-" + re.sub(r"[^A-Za-z0-9]", "-", command).strip("-")
+        queued = self.enqueue(token=token)
+        self.assertIn("queued", queued)
+        task_id = queued.rsplit(": ", 1)[1]
         started = asyncio.Event()
         cancelled = asyncio.Event()
 
@@ -347,7 +350,7 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
              patch("handlers.dispatch.run_command",
                    new_callable=AsyncMock, return_value=True) as run_command:
             self.assertEqual(await worker.poll_once(self.settings), 1)
-            row = next(r for r in self.rows() if r["kind"] == "task")
+            row = next(r for r in self.rows() if r["id"] == task_id)
             task = worker._running[(row["operator"], row["id"])]
             try:
                 await asyncio.wait_for(started.wait(), timeout=3)
