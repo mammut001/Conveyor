@@ -31,6 +31,12 @@ def resolve_or_create_session(
         resolved = control.resolve_session_identity(requested_session_id)
         if resolved:
             channel, operator_id, source_chat_id = resolved
+            import agent_context
+            # A Web token must never adopt another physical channel's
+            # transport identity through a supplied historic session ID.
+            if agent_context.enabled(getattr(control, "settings", None)) and (
+                    channel != "web" or operator_id != "web-console"):
+                return None
             return channel, operator_id, source_chat_id, requested_session_id
         # A durable web id handed out by a previous /api/chat call whose turn
         # has not been persisted yet: keep using it instead of rejecting it.
