@@ -42,7 +42,9 @@ def _get_tool_spec(name: str, settings: Settings | None = None) -> Any | None:
         return spec(settings, name)
     if name == "agent.message":
         import named_agents
-        return named_agents.message_spec() if named_agents.enabled(settings) else None
+        import agent_messaging_v2
+        return (agent_messaging_v2.spec(settings, name) if agent_messaging_v2.enabled(settings)
+                else named_agents.message_spec() if named_agents.enabled(settings) else None)
     if name.startswith("subagent."):
         import subagents
         return subagents.specs(settings).get(name)
@@ -173,7 +175,7 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
         candidates.append((name, spec))
     import named_agents
     if named_agents.enabled(settings):
-        candidates.append(("agent.message", named_agents.message_spec()))
+        candidates.append(("agent.message", _get_tool_spec("agent.message", settings)))
     import agent_messaging_v2
     if agent_messaging_v2.enabled(settings):
         for name in ("agent.inbox", "agent.reply"):
