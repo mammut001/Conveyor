@@ -55,17 +55,21 @@ def transaction(settings) -> Iterator[sqlite3.Connection]:
         rebuild = bool(schema and "'task','result'" not in schema["sql"])
         connection.execute("PRAGMA foreign_keys=" + ("OFF" if rebuild else "ON"))
         connection.execute("BEGIN IMMEDIATE")
-        if rebuild:
-            # Another process may have migrated while BEGIN waited for its
-            # write lock. Never run a normal transaction with FKs disabled.
-            locked = connection.execute(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_mailbox'"
-            ).fetchone()
-            if locked and "'task','result'" in locked["sql"]:
+        if delegation_on:
+            # A concurrent process can create or upgrade the table before
+            # BEGIN gets its write lock. Recheck under the lock so the FK
+            # mode always matches whether a rebuild is really needed.
+            while True:
+                locked = connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_mailbox'"
+                ).fetchone()
+                needs_rebuild = bool(locked and "'task','result'" not in locked["sql"])
+                if needs_rebuild == rebuild:
+                    break
                 connection.rollback()
-                connection.execute("PRAGMA foreign_keys=ON")
+                rebuild = needs_rebuild
+                connection.execute("PRAGMA foreign_keys=" + ("OFF" if rebuild else "ON"))
                 connection.execute("BEGIN IMMEDIATE")
-                rebuild = False
         # A new database can use the upgraded schema directly with FKs ON.
         upgraded = _SCHEMA.replace(
             "'message','task_request','task_result'",
