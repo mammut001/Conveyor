@@ -62,11 +62,15 @@ def list_items(settings, agent_id, view, *, operator="web-console", limit=50):
     ctx = _actor(settings, agent_id, operator)
     flags = features(settings)
     if (view == "inbox" and not flags["inbox"] or
-        view == "tasks" and not flags["tasks"] or
-        view not in ("inbox", "tasks")):
+        view in ("tasks", "audit") and not flags["tasks"] or
+        view not in ("inbox", "tasks", "audit")):
         raise ValueError("screen unavailable")
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("invalid limit")
+    if view == "audit":
+        import agent_security
+        return agent_security.audit_for_agent(
+            settings, ctx.agent_id, ctx.operator_identity, limit)
     with _database(settings) as db:
         if not db.execute("SELECT 1 FROM sqlite_master WHERE name='agent_mailbox'").fetchone():
             return []
@@ -117,6 +121,9 @@ def cancel_task(settings, agent_id, task_id, *, operator="web-console"):
                WHERE id=? AND operator=? AND kind='task'
                AND status IN ('queued','leased','failed')""",
             (task_id, ctx.operator_identity))
+    import agent_security
+    agent_security.audit(settings, operator=ctx.operator_identity,
+        event="cancel", agent_id=ctx.agent_id, reason="task_cancelled")
     # The worker may run on the Web Console's event loop, not this request
     # thread. Schedule cancellation there instead of touching the loop here.
     import agent_delegation_worker as worker
