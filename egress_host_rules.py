@@ -64,7 +64,11 @@ def _rule(value):
         host, port_text = value, None
     try:
         port = 443 if port_text is None else int(port_text)
-        if port_text is not None and (not port_text.isascii() or not port_text.isdecimal()):
+        if port_text is not None and (
+            not port_text.isascii() or not port_text.isdecimal()
+            or port_text != str(port)
+        ):
+            # Do not silently canonicalize ambiguous ports such as :0443.
             raise ValueError("invalid_rule")
         if not 1 <= port <= 65535:
             raise ValueError("invalid_rule")
