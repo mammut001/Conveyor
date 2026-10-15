@@ -28,7 +28,10 @@ def cancel_operator(settings, operator_id):
     count = queue.cancel_operator(settings, operator_id)
     for (operator, _identifier), task in tuple(_running.items()):
         if operator == operator_id and not task.done():
-            task.cancel()
+            try:
+                task.get_loop().call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                pass  # Lease already fenced by cancel_operator's DB update.
     return count
 
 
