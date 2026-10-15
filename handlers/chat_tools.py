@@ -107,6 +107,9 @@ def web_search_configured(settings: Any) -> bool:
 
 def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bool = True) -> bool:
     """Single policy used for both schema exposure and execution."""
+    from agent_security import killed
+    if killed() and (name.startswith("agent.") or name == "main.route_delegate"):
+        return False
     if spec is None or name.startswith("desktop."):
         return False
     if name == "browser.login":
