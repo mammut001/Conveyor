@@ -318,6 +318,8 @@ async def retention_worker(settings):
 
 def start(loop, settings):
     import agent_mailbox
-    if not agent_mailbox.enabled(settings):
+    if not (agent_mailbox.enabled(settings) or delegation_configured(settings)):
         return None
+    # Start even if the runtime kill is already active: keep the retention
+    # scheduler resident across subsequent unkill without a restart.
     return loop.create_task(retention_worker(settings), name="conveyor-agent-retention")
