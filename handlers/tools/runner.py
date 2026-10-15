@@ -95,10 +95,10 @@ async def run_tool(
 ) -> str:
     import agent_context
     from agent_security import killed
-    if killed() and (tool_name.startswith("agent.")
+    if killed(settings) and (tool_name.startswith("agent.")
                      or tool_name == "main.route_delegate"):
         return "agent tools disabled by emergency kill switch"
-    if killed() and agent_context.enabled(settings):
+    if killed(settings) and agent_context.enabled(settings):
         try:
             ctx = agent_context.for_request(settings, channel, chat_id, operator_id)
             if ctx.agent_id != "default":
