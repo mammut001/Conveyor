@@ -170,14 +170,16 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
                 chat_id=chat_id_for(self.a["id"])))
             with ac.bind(src),self.assertRaises(mailbox.MailboxDenied):
                 self.send("stopped")
-            self.assertIsNone(worker.start(asyncio.get_running_loop(),self.cfg))
+            poller = worker.start(asyncio.get_running_loop(),self.cfg)
+            self.assertIsNotNone(poller)
+            poller.stop()
         # Existing live tasks can still be cancelled with kill enabled.
         self.send("post-kill",kind="task")
         with patch.dict(os.environ, {"CONVEYOR_AGENTS_KILL":"1"}):
             self.assertEqual(worker.cancel_all(self.cfg),1)
         self.assertEqual(self.rows()[0]["status"],"dead")
 
-    async def test_worker_runtime_hot_kill_cancels_lease_and_stops(self):
+    async def test_worker_runtime_hot_kill_cancels_lease_without_stopping_poller(self):
         self.send("live-kill",kind="task")
         import agent_delegation_queue as q
         target=self.ctx(self.b)
@@ -186,7 +188,13 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record["status"],"leased")
         with patch.dict(os.environ,{"CONVEYOR_AGENTS_KILL":"1"}):
             obj=worker.Worker(self.cfg)
-            await asyncio.wait_for(obj.run(),timeout=2)
+            poller=asyncio.create_task(obj.run())
+            try:
+                await asyncio.sleep(0.65)
+                self.assertFalse(poller.done())
+            finally:
+                poller.cancel()
+                await asyncio.gather(poller,return_exceptions=True)
         self.assertEqual(self.rows()[0]["status"],"dead")
         with ac.bind(target):
             self.assertFalse(q.complete(self.cfg,target,record,wid,"late result"))
