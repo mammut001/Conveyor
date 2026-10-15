@@ -34,7 +34,9 @@ def killed(settings=None) -> bool:
     # A process environment flag is the highest-priority emergency override.
     if os.environ.get("CONVEYOR_AGENTS_KILL", "").lower() in ("1", "true", "yes", "on"):
         return True
-    if settings is None:
+    if settings is None or not getattr(settings, "codex_memory_root", None):
+        # Static schema tests may pass partial settings objects. They have
+        # no runtime state directory; preserve the old env-only behavior.
         return False
     try:
         return _kill_path(settings).is_file()
