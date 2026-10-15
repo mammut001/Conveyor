@@ -4,7 +4,9 @@ The **default-off** flag `CONVEYOR_MAIN_ROUTER=1` requires
 `CONVEYOR_AGENT_CONTEXT=1`, `CONVEYOR_AGENT_MAILBOX=1`,
 `CONVEYOR_AGENT_DELEGATION=1`, `CONVEYOR_NAMED_AGENTS=1` and
 `settings.agents_enabled`. With the router off, normal dispatch and
-selected-agent conversations are unchanged.
+selected-agent conversations are unchanged. Both channel dispatch and Web
+Console `POST /api/chat` invoke the same safe routing step before ordinary
+chat, sending human approval cards through their existing transports.
 
 ## Owner routing precedence
 
@@ -21,8 +23,10 @@ attachments are excluded.
 3. Otherwise a deterministic server-side filter considers only active named
    Agents belonging to the same canonical Web operator whose current tool
    allowlist and global exposure cover all identified required capabilities.
-   It intersects name/persona keywords with the message. No match stays
-   with main; a unique highest-scoring match routes deterministically.
+   It intersects name/persona keywords with the message **after removing
+   common conversational stopwords**, and requires at least **two distinct
+   keywords** for implicit routing. Zero or one match stays with main;
+   a unique highest-scoring eligible Agent routes deterministically.
 4. Equal top matches can be disambiguated by one short chat completion.
    Its only valid response is structured JSON `{"agent_id":"...",
    "confidence":0.9}` referring to an ID in the **filtered** candidate
