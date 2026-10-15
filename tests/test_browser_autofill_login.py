@@ -112,6 +112,29 @@ class StoreAndAuditTests(unittest.IsolatedAsyncioTestCase):
         attempt = reserve(self.settings, self.origin, "person")
         finish(self.settings, attempt, "logged_in", reason="success", submitted=True)
 
+    def test_legacy_failed_rows_migrate_without_false_lockout(self):
+        import sqlite3
+        from workflow_browser_egress import private_database_path
+        db = private_database_path(
+            self.settings.codex_memory_root / "browser_external" /
+            "browser_login_attempts.sqlite3")
+        with sqlite3.connect(db) as conn:
+            conn.execute("""CREATE TABLE login_attempts (
+                id INTEGER PRIMARY KEY, domain TEXT NOT NULL,
+                username TEXT NOT NULL, result TEXT NOT NULL,
+                time REAL NOT NULL)""")
+            for _ in range(3):
+                conn.execute("""INSERT INTO login_attempts
+                    (domain,username,result,time) VALUES (?,?,?,?)""",
+                    (self.origin, "alice", "failed", __import__("time").time()))
+        # Old generic failures carry no evidence of password submission.
+        attempt = reserve(self.settings, self.origin, "alice")
+        finish(self.settings, attempt, "failed", reason="login_open_timeout")
+        audit = public_audit(self.settings, self.origin)
+        self.assertEqual(len(audit), 4)
+        self.assertTrue(all(x["reason"] == "legacy_unverified" and
+                            not x["submitted"] for x in audit[:3]))
+
     async def test_flag_off_no_model_tool_or_secret_store(self):
         from handlers.chat_tools import build_tool_schemas
         os.environ["CONVEYOR_BROWSER_AUTOFILL_LOGIN"] = "0"
