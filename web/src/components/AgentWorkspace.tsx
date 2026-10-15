@@ -24,7 +24,7 @@ export function AgentWorkspace({ agent, token, ...chatProps }: Props) {
     let alive = true
     setFeatures(null)
     setTab('chat')
-    fetch('/api/agent-screens/config', {
+    fetch(`/api/agent-screens/config?agent_id=${encodeURIComponent(agent.id)}`, {
       headers: { Authorization: `Bearer ${token}` },
     }).then(async response => response.ok ? response.json() as Promise<Features> : null)
       .then(data => { if (alive) setFeatures(data) })
