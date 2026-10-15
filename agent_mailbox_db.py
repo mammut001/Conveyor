@@ -46,10 +46,17 @@ def transaction(settings) -> Iterator[sqlite3.Connection]:
     connection.row_factory = sqlite3.Row
     try:
         connection.execute("PRAGMA busy_timeout=10000")
-        connection.execute("PRAGMA foreign_keys=ON")
+        import agent_delegation
+        migrating = agent_delegation.enabled(settings)
+        # SQLite table-rebuild migrations require foreign keys OFF before BEGIN;
+        # check FK integrity explicitly before committing when they are OFF.
+        connection.execute("PRAGMA foreign_keys=" + ("OFF" if migrating else "ON"))
         connection.execute("BEGIN IMMEDIATE")
         # Idempotent migration stays inside the *same* write transaction.
         connection.execute(_SCHEMA)
+        if migrating:
+            from agent_delegation_schema import ensure
+            ensure(connection)
         connection.execute(_INDEX)
         yield connection
         connection.commit()
