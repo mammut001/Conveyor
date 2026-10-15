@@ -768,10 +768,26 @@ async def post_init(application: Application) -> None:
             consumer.start()
         except Exception:
             logger.exception("Failed to start approval relay consumer in telegram bot")
+    import agent_channel_routing
+    if agent_channel_routing.enabled(settings):
+        import agent_channel_results
+        from channel.telegram import TelegramChatOutbound
+        async def send_agent_result(chat_id, text):
+            from channel.types import InboundMessage
+            port = TelegramChatOutbound(application.bot, chat_id)
+            return await port.send_new(InboundMessage(
+                channel="telegram",operator_id=str(settings.telegram_allowed_user_id),
+                chat_id=str(chat_id),message_id=None,text="",chat_type="p2p"), text)
+        application.bot_data["agent_result_poller"] = application.create_task(
+            agent_channel_results.run(settings, "telegram", send_agent_result),
+            name="conveyor-agent-telegram-results")
     logger.info("Codex Telegram bot ready. Workspace=%s task_root=%s", settings.codex_workspace_root, settings.codex_task_root)
 
 
 async def post_shutdown(application: Application) -> None:
+    task = application.bot_data.get("agent_result_poller")
+    if task is not None:
+        task.cancel()
     consumer = application.bot_data.get("approval_relay_consumer")
     if consumer is not None:
         consumer.stop()
