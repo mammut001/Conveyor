@@ -64,7 +64,7 @@ def destination_check(host, port, rules, *, canonical, match,
         # even if the public IP of this server resolves via a DNS alias.
         if port in protected_ports:
             return None, "protected_port"
-        _, allowed = match(host, rules)
+        _, allowed = match(host, port, rules)
         if not allowed:
             return None, "not_allowlisted"
         try:
