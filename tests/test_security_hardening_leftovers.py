@@ -115,7 +115,7 @@ class FeishuFFmpegPolicyTests(unittest.TestCase):
                 self.assertTrue(kwargs["capture_output"])
                 dest.write_bytes(b"OggS")
                 return SimpleNamespace(returncode=0)
-            with patch("channel.feishu_audio.shutil.which", return_value="/usr/bin/ffmpeg"), \\
+            with patch("channel.feishu_audio.shutil.which", return_value="/usr/bin/ffmpeg"), \
                  patch("channel.feishu_audio.subprocess.run", side_effect=run):
                 _convert_opus(src, dest)
             self.assertTrue(dest.is_file())
@@ -149,7 +149,7 @@ class LoginDomainAdmissionTests(unittest.IsolatedAsyncioTestCase):
                 entered.set()
                 await asyncio.wait_for(release.wait(), 3)
 
-            with patch.object(AuthSession, "start", start), \\
+            with patch.object(AuthSession, "start", start), \
                  patch.object(AuthSession, "close", new_callable=AsyncMock):
                 first = asyncio.create_task(manager.open("op1", "task1", origin,
                                                           automated=True))
