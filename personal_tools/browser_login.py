@@ -152,8 +152,9 @@ async def login(settings, domain, operator_id):
                                              login_budget, "login.form")
     except asyncio.TimeoutError:
         result, reason = "failed", "login_unavailable"
-    except ExternalPolicyDenied:
-        result, reason = "failed", "policy_denied"
+    except ExternalPolicyDenied as exc:
+        result, reason = ("failed", "busy" if exc.args and
+                          exc.args[0] == "login_domain_busy" else "policy_denied")
     except Exception:
         result, reason = "failed", "login_unavailable"
     finally:
