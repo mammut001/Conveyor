@@ -132,6 +132,10 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
         async def ambiguous(prompt):
             return {"content":"invalid JSON"}
         self.assertIsNone((await router.choose(self.settings, m, model=ambiguous)).agent_id)
+        async def provider_down(prompt):
+            from runner.chat_client import ChatError
+            raise ChatError("provider unavailable")
+        self.assertIsNone((await router.choose(self.settings, m, model=provider_down)).agent_id)
         async def valid(prompt):
             return {"content":json.dumps({"agent_id":self.finance["id"],
                                           "confidence":0.95})}
