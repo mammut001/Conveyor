@@ -104,16 +104,23 @@ class StoreAndAuditTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "unverified rejection"):
             finish(self.settings, attempt, "failed", reason="credentials_rejected")
         finish(self.settings, attempt, "failed", reason="login_unavailable")
-        # A generic failure, even with a server-visible POST, is not verified
-        # as an incorrect password and does not consume the credential quota.
+        # An ambiguous outcome AFTER dispatch is charged conservatively,
+        # even if the returned response cannot prove the password was wrong.
         attempt = reserve(self.settings, self.origin, "person")
         finish(self.settings, attempt, "failed", reason="login_not_confirmed",
                submitted=True)
         self.assertEqual(len(public_audit(self.settings, self.origin)), 2)
         attempt = reserve(self.settings, self.origin, "person")
         finish(self.settings, attempt, "logged_in", reason="success", submitted=True)
+        for _ in range(2):
+            attempt = reserve(self.settings, self.origin, "person")
+            finish(self.settings, attempt, "failed", reason="login_form_timeout",
+                   submitted=True)
+        with self.assertRaises(LoginQuotaDenied) as cm:
+            reserve(self.settings, self.origin, "person")
+        self.assertEqual(cm.exception.reason, "locked")
 
-    def test_legacy_failed_rows_migrate_without_false_lockout(self):
+    def test_legacy_failed_rows_preserve_existing_lockout(self):
         import sqlite3
         from workflow_browser_egress import private_database_path
         db = private_database_path(
@@ -128,11 +135,13 @@ class StoreAndAuditTests(unittest.IsolatedAsyncioTestCase):
                 conn.execute("""INSERT INTO login_attempts
                     (domain,username,result,time) VALUES (?,?,?,?)""",
                     (self.origin, "alice", "failed", time.time()))
-        # Old generic failures carry no evidence of password submission.
-        attempt = reserve(self.settings, self.origin, "alice")
-        finish(self.settings, attempt, "failed", reason="login_open_timeout")
+        # Old 'failed' rows must retain their previous lockout semantics
+        # rather than silently granting three more password guesses.
+        with self.assertRaises(LoginQuotaDenied) as cm:
+            reserve(self.settings, self.origin, "alice")
+        self.assertEqual(cm.exception.reason, "locked")
         audit = public_audit(self.settings, self.origin)
-        self.assertEqual(len(audit), 4)
+        self.assertEqual(len(audit), 3)
         self.assertTrue(all(x["reason"] == "legacy_unverified" and
                             not x["submitted"] for x in audit[:3]))
 
