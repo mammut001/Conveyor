@@ -55,7 +55,9 @@ deleted on success and error.
 `CONVEYOR_FEISHU_AUDIO=1`. Only the allowlisted operator can send voice;
 normal group mention and approval checks still apply. The SDK downloads the
 `audio` message resource with `type=file` and its existing tenant token.
-The Opus payload is converted to OGG using `ffmpeg`; `ffprobe` measures the
+The Opus payload is converted to OGG using `ffmpeg` with a pinned
+`opus` input demuxer and `file,pipe`-only input protocol whitelist (no
+URL/concat auto-detection); `ffprobe` measures the
 resulting duration before transcription. The same size and duration settings
 apply. The bot replies `🎤 heard: …` before routing recognized words once
 through its ordinary Feishu dispatcher. Server must have ffmpeg/ffprobe.
