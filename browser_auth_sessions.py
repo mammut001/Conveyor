@@ -59,6 +59,8 @@ class AuthSession:
         self._autofill_target = None
         # Positive evidence: the approved login POST received a response.
         self._autofill_post_completed = False
+        self._autofill_post_dispatched = False
+        self._autofill_attempt_id = None
 
     def _lease(self):
         return HumanTakeoverStore(self.owner.settings).current()
@@ -189,6 +191,13 @@ class AuthSession:
                                                "proxy-authorization")}
             # fetch(max_redirects=0) MUST NOT follow an unapproved redirect.
             self.ensure()
+            if login_post:
+                from browser_login_audit import mark_submitted
+                # The POST can transmit a password even if fetch redirects,
+                # times out or returns 5xx. Persist BEFORE network dispatch.
+                # If the audit fails, abort rather than send an uncharged POST.
+                mark_submitted(self.owner.settings, self._autofill_attempt_id)
+                self._autofill_post_dispatched = True
             response = await route.fetch(max_redirects=0, headers=headers, timeout=10000)
             self.ensure()
             if 300 <= response.status < 400:
