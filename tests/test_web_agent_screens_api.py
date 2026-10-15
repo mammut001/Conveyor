@@ -15,9 +15,19 @@ import agent_context as ac
 import agent_mailbox as mailbox
 from agents import AgentStore, WEB_OPERATOR, chat_id_for
 from handlers.job_queue import JobQueue
-from tests.test_web_agent_screens import test_settings
+from config import Settings
 from web_console import WebConsoleHandler, WebConsoleServer
 from web_control import WebControl
+
+
+def test_settings(root):
+    return Settings(
+        telegram_bot_token="test-token", telegram_allowed_user_id=1,
+        codex_workspace_root=root/"workspace", codex_bin="codex",
+        codex_task_root=root/"tasks", codex_model=None,
+        codex_timeout_seconds=30, codex_retry_429_delays_seconds=(),
+        telegram_progress_seconds=1, codex_memory_root=root,
+        user_timezone="UTC", agents_enabled=True)
 
 
 class AgentScreensHTTPTests(unittest.TestCase):
