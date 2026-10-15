@@ -101,6 +101,33 @@ class SecurityFollowups(unittest.IsolatedAsyncioTestCase):
             self.cfg, "default", WEB_OPERATOR)}
         self.assertTrue({"kill_on", "kill_off"} <= reasons)
 
+    async def test_owner_command_while_killed_and_nonowner_silent(self):
+        from channel.types import InboundMessage
+        from agent_security_controls import owner_command
+
+        class Port:
+            def __init__(self):
+                self.replies = []
+            async def reply(self, _msg, body):
+                self.replies.append(body)
+        port = Port()
+        def message(text, operator="1", chat_type="p2p"):
+            return InboundMessage(channel="telegram", chat_id="1",
+                                  operator_id=operator, message_id="k",
+                                  text=text, chat_type=chat_type)
+        self.assertTrue(await owner_command(self.cfg, message(
+            "/agentkill on", operator="999"), port))
+        self.assertFalse(security.killed(self.cfg))
+        self.assertEqual(port.replies, [])
+        self.assertTrue(await owner_command(self.cfg, message(
+            "/agentkill on", chat_type="group"), port))
+        self.assertFalse(security.killed(self.cfg))
+        self.assertTrue(await owner_command(self.cfg, message("/agentkill on"), port))
+        self.assertTrue(security.killed(self.cfg))
+        self.assertTrue(await owner_command(self.cfg, message("/agentkill off"), port))
+        self.assertFalse(security.killed(self.cfg))
+        self.assertEqual(len(port.replies), 2)
+
     async def test_env_override_cannot_be_cleared_by_runtime_control(self):
         with patch.dict(os.environ, {"CONVEYOR_AGENTS_KILL":"1"}):
             security.set_kill(self.cfg, enabled=False,
