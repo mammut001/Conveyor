@@ -6,6 +6,7 @@ Only the approved task's opaque key joins the mailbox with its origin.
 from __future__ import annotations
 
 from pathlib import Path
+from contextlib import contextmanager
 import logging
 import re
 import sqlite3
@@ -23,14 +24,19 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS main_router_routes (
 )"""
 
 
+@contextmanager
 def _connect(settings):
     path = Path(settings.codex_memory_root) / "state" / "job_queue.sqlite3"
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(str(path), timeout=10)
     db.row_factory = sqlite3.Row
-    db.execute("PRAGMA busy_timeout=10000")
-    db.execute(_SCHEMA)
-    return db
+    try:
+        db.execute("PRAGMA busy_timeout=10000")
+        db.execute(_SCHEMA)
+        with db:
+            yield db
+    finally:
+        db.close()
 
 
 def register(settings, *, key, agent_id, agent_name, channel, chat_id, operator):
