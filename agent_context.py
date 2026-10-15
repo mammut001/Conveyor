@@ -97,11 +97,17 @@ def validated(settings, ctx: AgentContext, channel: str, chat_id: str,
     if not isinstance(ctx, AgentContext):
         raise AgentContextDenied("agent context required")
     actual = resolve(settings, channel, chat_id, operator_id)
+    capability_ok = (
+        (ctx.tool_capabilities == frozenset({"*"}) or
+         ("*" not in ctx.tool_capabilities and
+          "agent.message" not in ctx.tool_capabilities))
+        if "*" in actual.tool_capabilities
+        else ctx.tool_capabilities.issubset(actual.tool_capabilities)
+    )
     if (ctx.agent_id != actual.agent_id or ctx.session_id != actual.session_id
             or ctx.memory_owner != actual.memory_owner
             or ctx.operator_identity != actual.operator_identity
-            or ctx.origin_channel != actual.origin_channel
-            or not ctx.tool_capabilities.issubset(actual.tool_capabilities)):
+            or ctx.origin_channel != actual.origin_channel or not capability_ok):
         raise AgentContextDenied("agent context mismatch")
     # "*" cannot be conferred by nondefault agents through delegation.
     if "*" in ctx.tool_capabilities and "*" not in actual.tool_capabilities:
@@ -183,7 +189,14 @@ def scoped_inbound(func):
         if not enabled(settings):
             return await func(msg, port, settings, *args, **kwargs)
         try:
-            ctx = resolve(settings, msg.channel, msg.chat_id, msg.operator_id)
+            # Channel authentication is enforced at the adapter/dispatcher.
+            # Unconfigured Feishu bootstrap mode is not a trusted owner.
+            from channel.auth import is_allowed
+            trusted = bool(is_allowed(msg, settings))
+            if msg.channel == "feishu" and not getattr(settings, "lark_allowed_open_id", None):
+                trusted = False
+            ctx = resolve(settings, msg.channel, msg.chat_id, msg.operator_id,
+                          trusted_owner_request=trusted)
         except AgentContextDenied:
             await port.reply(msg, "agent identity denied")
             return None
