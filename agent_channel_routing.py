@@ -14,7 +14,7 @@ import agent_context
 
 def enabled(settings):
     from agent_security import killed
-    return bool(not killed() and agent_context.enabled(settings) and
+    return bool(not killed(settings) and agent_context.enabled(settings) and
         os.environ.get("CONVEYOR_AGENT_CHANNEL_ROUTING", "").lower()
         in ("1", "true", "yes", "on"))
 
