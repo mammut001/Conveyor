@@ -33,9 +33,14 @@ def cancel_operator(settings, operator_id):
 async def _finish(settings, record, worker_id):
     import agents
     from agent_delegation_turn import execute
-    target = ac.resolve(settings, "web",
-                        agents.chat_id_for(record["to_agent"]),
-                        record["operator"])
+    try:
+        target = ac.resolve(settings, "web",
+                            agents.chat_id_for(record["to_agent"]),
+                            record["operator"])
+    except ac.AgentContextDenied:
+        queue.reject_revoked(settings, record, worker_id)
+        _running.pop((record["operator"], record["id"]), None)
+        return
     try:
         summary = await execute(settings, record)
         if not enabled(settings):
