@@ -118,9 +118,10 @@ async def dispatch(
     text_clean = msg.text.strip().lower()
     if text_clean in COMPUTER_STOP_TEXTS:
         from handlers.tools.runner import run_tool
-        text = await run_tool(settings, "computer.stop", "",
-                              operator_id=msg.operator_id, channel=msg.channel,
-                              chat_id=msg.chat_id)
+        import agent_context
+        scope = (dict(operator_id=msg.operator_id, channel=msg.channel,
+                      chat_id=msg.chat_id) if agent_context.enabled(settings) else {})
+        text = await run_tool(settings, "computer.stop", "", **scope)
         await port.reply(msg, text)
         return
 
