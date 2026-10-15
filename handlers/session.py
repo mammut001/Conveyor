@@ -38,7 +38,8 @@ def session_path(settings: Settings, msg: InboundMessage) -> Path:
     filename = _safe_filename(msg.channel, msg.chat_id, msg.operator_id)
     if agent_context.enabled(settings):
         ctx = agent_context.for_request(settings, msg.channel, msg.chat_id, msg.operator_id)
-        filename = f"{ctx.agent_id}_{filename}"
+        if ctx.agent_id != "default":
+            filename = f"{ctx.agent_id}_{filename}"
     return settings.codex_memory_root / _SESSION_DIR / filename
 
 
