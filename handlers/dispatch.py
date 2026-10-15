@@ -133,6 +133,12 @@ async def dispatch(
         await handle_context_job(msg, port, settings, runner)
         return
 
+    # Owner-only main router: never intercept confirmations, commands, safety
+    # stops or attachments. A decision does not authorize delegation.
+    import main_router
+    if await main_router.maybe_route(msg, port, settings):
+        return
+
     if (
         (getattr(settings, "long_term_memory_enabled", False) or getattr(settings, "memory_v2_enabled", False))
         and getattr(settings, "chat_tools_enabled", False)
