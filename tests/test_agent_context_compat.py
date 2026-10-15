@@ -77,6 +77,10 @@ class DefaultAgentCompatibilityTests(unittest.IsolatedAsyncioTestCase):
                                 f"old {channel} result", mirror_transcript=False)
                 self.assertEqual(old_key, f"{channel}:{chat_id}")
                 self.assertTrue(old_path.is_file())
+                # Force retrieval from persistent SQLite, not the in-memory
+                # chat cache left by remember() in this test process.
+                from handlers.chat import _threads
+                _threads.pop(old_key, None)
                 # Strict mode must validate identity without changing default
                 # paths, and must read the history and session already saved.
                 self.assertEqual(chat_key(msg, self.settings), old_key)
