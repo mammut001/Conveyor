@@ -96,6 +96,29 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
         with sqlite3.connect(str(self.store.path)) as db:
             self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE name='agent_mailbox'").fetchone())
 
+    async def test_migration_preserves_legacy_mail_and_parent_links(self):
+        with patch.dict(os.environ, {"CONVEYOR_AGENT_DELEGATION": "0"}):
+            with ac.bind(self.source):
+                old = mailbox.send(
+                    self.settings, sender=self.source, to_agent=self.b["id"],
+                    kind="message", body="Legacy inbox item", idempotency_key="legacy")
+            with ac.bind(self.target):
+                reply = mailbox.send(
+                    self.settings, sender=self.target, to_agent=self.a["id"],
+                    kind="task_result", body="Legacy reply", depth=1,
+                    parent_message_id=old["id"], idempotency_key="old-reply")
+        self.enqueue(token="migrate")
+        rows = {r["id"]: r for r in self.rows()}
+        self.assertEqual(rows[old["id"]]["body"], "Legacy inbox item")
+        self.assertEqual(rows[reply["id"]]["parent_message_id"], old["id"])
+        self.assertIn("task", [r["kind"] for r in rows.values()])
+        with sqlite3.connect(str(self.store.path)) as conn:
+            self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+            schema = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE name='agent_mailbox'"
+            ).fetchone()[0]
+            self.assertIn("'task','result'", schema)
+
     async def test_approval_required_and_idempotent_task(self):
         schema = {x["function"]["name"] for x in build_tool_schemas(
             self.settings, channel="web", chat_id=chat_id_for(self.a["id"]),
