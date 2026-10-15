@@ -36,6 +36,16 @@ def _setting(name, default, lo, hi):
     return max(lo, min(hi, val))
 
 
+def delegation_configured(settings):
+    # Ignore the kill switch solely for authenticated emergency cancellation.
+    import agent_context
+    return (agent_context.enabled(settings)
+            and os.environ.get("CONVEYOR_AGENT_MAILBOX", "").lower()
+                in ("1", "true", "yes", "on")
+            and os.environ.get("CONVEYOR_AGENT_DELEGATION", "").lower()
+                in ("1", "true", "yes", "on"))
+
+
 def rate_limit():
     return _setting("CONVEYOR_AGENT_RATE_PER_HOUR", 60, 1, 10000)
 
@@ -105,14 +115,17 @@ def admit(conn, *, operator, to_agent, kind, now):
         audit_tx(conn, operator=operator, event="deny", agent_id=to_agent,
                  reason="rate_limited", now=now)
         raise ValueError("per-operator agent rate limit exceeded")
+    check_capacity(conn, operator=operator, to_agent=to_agent)
+
+
+def check_capacity(conn, *, operator, to_agent):
+    """Also used for worker-written result rows (without charging owner rate)."""
     pending = conn.execute(
         """SELECT COUNT(*) FROM agent_mailbox
            WHERE operator=? AND to_agent=?
            AND status IN ('queued','leased','failed')""",
         (operator, to_agent)).fetchone()[0]
     if pending >= queue_cap():
-        audit_tx(conn, operator=operator, event="deny", agent_id=to_agent,
-                 reason="queue_full", now=now)
         raise ValueError("agent mailbox queue full")
 
 
