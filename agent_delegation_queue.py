@@ -57,6 +57,11 @@ def cancel_operator(settings, operator):
             """UPDATE agent_mailbox SET status='dead', lease_owner=NULL,
                lease_expires_at=NULL WHERE operator=? AND kind='task'
                AND status IN ('queued','failed','leased')""", (operator,))
+        if found:
+            import agent_security
+            agent_security.audit_tx(
+                conn, operator=operator, event="cancel",
+                agent_id="default", reason="operator_stop")
         return found
 
 
