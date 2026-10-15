@@ -109,13 +109,20 @@ def bind(settings, msg, requested):
     return agent
 
 
+def is_agent_command(settings, msg):
+    if not enabled(settings) or msg.channel not in ("telegram", "feishu"):
+        return False
+    word = (msg.text.strip().split(maxsplit=1) or [""])[0]
+    return word.split("@", 1)[0].casefold() in ("/agent", "/agents")
+
+
 async def maybe_command(settings, msg, port):
-    """Commands run after channel owner auth; never handled in group chats."""
+    """Owner DMs only; ignore agent selection in group and non-owner chats."""
+    if not is_agent_command(settings, msg):
+        return False
     if not authorized(settings, msg):
-        return False
+        return True  # silent group/non-owner refusal, no binding
     raw = msg.text.strip()
-    if not raw.startswith("/agents") and not raw.startswith("/agent"):
-        return False
     word, _, argument = raw.partition(" ")
     word = word.split("@", 1)[0].casefold()  # Telegram /agent@bot username
     if word == "/agents":
