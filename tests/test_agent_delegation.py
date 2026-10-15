@@ -76,6 +76,8 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
     def rows(self):
         with sqlite3.connect(str(self.store.path)) as db:
             db.row_factory=sqlite3.Row
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='agent_mailbox'").fetchone() is None:
+                return []
             return [dict(r) for r in db.execute(
                 "SELECT * FROM agent_mailbox ORDER BY created_at,id")]
 
