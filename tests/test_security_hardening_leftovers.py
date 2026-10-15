@@ -78,7 +78,9 @@ class EgressPortPolicyTests(unittest.TestCase):
     def test_invalid_rules_and_ipv6_authority(self):
         for raw in ("example.com..", "example..com:80", "*.example.com..:8443",
                     "example.com:0", "example.com:65536", "example.com:x",
-                    "example.com:", "*..example.com"):
+                    "example.com:", "*..example.com", "example.com:0443",
+                    "example.com:0080", "*.example.com:0443",
+                    "[2606:4700:4700::1111]:0443"):
             with self.subTest(rule=raw), self.assertRaises(ValueError):
                 egress_host_rules.normalize_rules(raw)
         rule = egress_host_rules.normalize_rules("[2606:4700:4700::1111]:8443")
