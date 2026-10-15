@@ -44,7 +44,9 @@ Both legacy long-term memory tools and Memory V2 use
 `owner_for_chat()`, which requires canonical identity with the flag on.
 Nondefault Agents only access `agent:<id>` memory; the built-in default
 Agent continues to use the operator owner. Authenticated Web Console
-memory administration retains its existing explicit agent selection.
+memory administration must now supply an explicit `agent=<id>` (or
+`agent=default`) while the flag is on; missing selection fails with 400.
+Without the flag the previous default selection is unchanged.
 
 ## Safety and compatibility checks
 
