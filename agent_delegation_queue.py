@@ -109,6 +109,15 @@ def complete(settings, target, record, worker_id, body):
             """UPDATE agent_mailbox SET status='done',
                lease_owner=NULL,lease_expires_at=NULL WHERE id=?""",
             (row["id"],))
+        # Same BEGIN IMMEDIATE transaction as result INSERT + task ACK:
+        # after a crash, a committed result always has its notification.
+        import agent_result_outbox
+        result = conn.execute(
+            """SELECT id FROM agent_mailbox WHERE from_agent=? AND to_agent=?
+               AND idempotency_key=?""",
+            (row["to_agent"], row["from_agent"], key)).fetchone()
+        agent_result_outbox.enqueue_committed(
+            conn, settings, row, result["id"], body, now=now)
         return True
 
 
