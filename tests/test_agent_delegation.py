@@ -120,6 +120,10 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
                 "SELECT sql FROM sqlite_master WHERE name='agent_mailbox'"
             ).fetchone()[0]
             self.assertIn("'task','result'", schema)
+        # The next (non-migrating) transaction must enforce foreign keys.
+        import agent_mailbox_db
+        with agent_mailbox_db.transaction(self.settings) as conn:
+            self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
 
     async def test_approval_required_and_idempotent_task(self):
         schema = {x["function"]["name"] for x in build_tool_schemas(
