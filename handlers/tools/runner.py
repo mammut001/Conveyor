@@ -84,6 +84,13 @@ async def run_tool(
     placeholder: str | None = None,
     egress_approved: bool = False,
 ) -> str:
+    import agent_context
+    if agent_context.enabled(settings) and not (operator_id or channel or chat_id):
+        bound = agent_context.current()
+        if bound is not None:
+            # Match a validated request binding, never invent a default agent.
+            channel, operator_id = bound.origin_channel, bound.operator_identity
+            chat_id = agent_context._chat_id(bound)
     import named_agents
     if not named_agents.tool_allowed(settings, channel, chat_id, tool_name,
                                      operator_id=operator_id):
