@@ -48,16 +48,28 @@ class Case(unittest.TestCase):
 
 class OwnerTests(Case):
     def test_owner_of_each_kind_of_conversation(self) -> None:
-        own = lambda channel, chat: ltm.owner_for_chat(self.settings, "op", channel, chat)  # noqa: E731
+        import agent_context
+        strict = agent_context.enabled(self.settings)
+
+        def own(channel, chat, *, operator="op"):
+            if strict and channel == "web" and chat.startswith("agent-"):
+                operator = "web-console"
+            return ltm.owner_for_chat(self.settings, operator, channel, chat)
+
         self.assertEqual(own("web", self.chat_a), f"agent:{self.a['id']}")
         self.assertEqual(own("web", self.chat_b), f"agent:{self.b['id']}")
         # The default agent, Telegram, Feishu and older web sessions: the operator's store.
         for channel, chat in (("telegram", "42"), ("feishu", "oc_x"), ("web", "webchat-1"), ("web", "agent-default")):
-            self.assertEqual(own(channel, chat), "op")
+            expected = "web-console" if strict and chat == "agent-default" else "op"
+            self.assertEqual(own(channel, chat), expected)
         off = _settings(self.root, agents_enabled=False)
         self.assertEqual(ltm.owner_for_chat(off, "op", "web", self.chat_a), "op")
         self.store.archive(self.a["id"])
-        self.assertEqual(own("web", self.chat_a), "op")
+        if strict:
+            with self.assertRaises(agent_context.AgentContextDenied):
+                own("web", self.chat_a)  # archived identities no longer fall back
+        else:
+            self.assertEqual(own("web", self.chat_a), "op")
 
     def test_agent_owner_survives_shared_mode(self) -> None:
         self.assertTrue(ltm.shared(self.settings))
