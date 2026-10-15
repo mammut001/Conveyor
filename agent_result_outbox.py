@@ -233,7 +233,8 @@ def _defer_killed(settings, row):
     with _db(settings) as db:
         db.execute(
             """UPDATE agent_result_notifications SET state='retry',
-               next_attempt=0,lease_token=NULL,lease_expires=NULL
+               attempts=MAX(0, attempts-1),next_attempt=0,
+               lease_token=NULL,lease_expires=NULL
                WHERE id=? AND lease_token=? AND state='leased'""",
             (row["id"], row["lease_token"]))
 
