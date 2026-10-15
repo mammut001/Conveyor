@@ -358,8 +358,8 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(next(r for r in self.rows()
                                       if r["id"] == row["id"])["status"], "dead")
                 self.assertFalse(any(r["kind"] == "result" for r in self.rows()))
-                self.assertIsNone(next((r for r in self.rows()
-                                        if r["id"] == row["id"])["lease_owner"]))
+                self.assertIsNone(next(r for r in self.rows()
+                                       if r["id"] == row["id"])["lease_owner"])
                 if command == "/cancel":
                     run_command.assert_awaited_once()
                 else:
