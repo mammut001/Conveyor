@@ -79,7 +79,7 @@ def _db(settings):
 
 def enqueue_committed(conn, settings, task, result_id, result_text, *, now=None):
     """Called INSIDE queue.complete()'s transaction, never after it commits."""
-    if not configured(settings) or agent_security.killed(settings):
+    if not configured(settings):
         return False
     if task["idempotency_key"][:9] != "delegate-":
         return False
