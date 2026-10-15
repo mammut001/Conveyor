@@ -9,7 +9,7 @@ from __future__ import annotations
 def opus_to_ogg_command(source, destination):
     return [
         "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-        "-protocol_whitelist", "file,pipe", "-f", "opus", "-i", str(source),
+        "-protocol_whitelist", "file,pipe", "-f", "ogg", "-i", str(source),
         "-map", "0:a:0", "-vn", "-c:a", "libopus", "-b:a", "32k",
         "-f", "ogg", str(destination),
     ]
