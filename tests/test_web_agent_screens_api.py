@@ -80,7 +80,8 @@ class AgentScreensHTTPTests(unittest.TestCase):
 
     def test_scoped_get_requires_auth_and_id(self):
         self.assertEqual(self.req("GET", "/api/agent-screens/config", auth=False)[0], 401)
-        status, flags = self.req("GET", "/api/agent-screens/config")
+        self.assertEqual(self.req("GET", "/api/agent-screens/config")[0], 400)
+        status, flags = self.req("GET", "/api/agent-screens/config?agent_id=" + self.a["id"])
         self.assertEqual(status, 200)
         self.assertTrue(flags["enabled"])
         self.assertTrue(flags["inbox"])
