@@ -45,14 +45,14 @@ def allowed_tools(settings, source, target, requested):
                 for t in requested)):
         raise mailbox.MailboxDenied("invalid delegated tool set")
     requested_set = set(requested)
-    # A write or egress-restricted READ cannot silently become a child action.
-    # Human approvals go to human; no privileged delegated executor is granted.
+    # WRITE tools may be proposed only to the existing human approval inbox;
+    # they are never automatically executed by the child.
     available = set()
     for name in requested_set:
         current = _get_tool_spec(name, settings)
         if (source.permits(name) and target.permits(name) and current is not None
                 and is_exposed(name, current, settings)
-                and current.danger == DangerLevel.READ):
+                and current.danger in (DangerLevel.READ, DangerLevel.WRITE, DangerLevel.WRITE_SAFE)):
             available.add(name)
     return frozenset(available)
 
@@ -108,7 +108,7 @@ def enqueue(settings, arg, *, channel, chat_id, operator_id, approved):
         with ac.bind(source):
             row = mailbox.send(settings, sender=source, to_agent=target.agent_id,
                                kind="task", body=body, idempotency_key=key,
-                               max_attempts=3, deadline=__import__("time").time() + 180)
+                               max_attempts=3)
         return f"agent task queued: {row['id']}"
     except (mailbox.MailboxDenied, mailbox.MailboxConflict,
             ac.AgentContextDenied, ValueError, TypeError, KeyError):
