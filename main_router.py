@@ -62,7 +62,7 @@ class Decision:
 
 def enabled(settings):
     from agent_security import killed
-    return (not killed() and agent_delegation.enabled(settings) and
+    return (not killed(settings) and agent_delegation.enabled(settings) and
             os.environ.get("CONVEYOR_MAIN_ROUTER", "").lower()
             in ("1", "true", "yes", "on"))
 
