@@ -174,9 +174,8 @@ def _convert_opus(source: Path, destination: Path) -> None:
         raise VoiceError("Feishu audio requires ffmpeg on the server", 503)
     try:
         completed = subprocess.run(
-            ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-             "-i", str(source), "-map", "0:a:0", "-vn", "-c:a", "libopus",
-             "-b:a", "32k", str(destination)],
+            __import__("channel.feishu_ffmpeg_policy", fromlist=["opus_to_ogg_command"])
+                .opus_to_ogg_command(source, destination),
             capture_output=True, timeout=45, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
