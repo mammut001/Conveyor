@@ -144,13 +144,20 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
 
 
 def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool = True,
-                       channel: str = "", chat_id: str = "") -> list[dict]:
+                       channel: str = "", chat_id: str = "",
+                       operator_id: str = "") -> list[dict]:
     """OpenAI function schemas for exposed tools.
 
     Exposes personal tools and TOOL_REGISTRY tools whose danger is READ,
     WRITE_SAFE, or WRITE. Excludes DESTRUCTIVE tools, desktop.* tools, and
     network-reaching READ tools unless allowlisted.
     """
+    import agent_context
+    if agent_context.enabled(settings):
+        try:
+            agent_context.for_request(settings, channel, chat_id, operator_id)
+        except agent_context.AgentContextDenied:
+            return []
     register_personal_tools()
     schemas: list[dict] = []
     seen: set[str] = set()
@@ -172,7 +179,8 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
 
         if not is_exposed(name, spec, settings, memory_allowed=memory_allowed):
             continue
-        if named_agents.enabled(settings) and not named_agents.tool_allowed(settings, channel, chat_id, name):
+        if named_agents.enabled(settings) and not named_agents.tool_allowed(settings, channel, chat_id, name,
+                                                                operator_id=operator_id):
             continue
 
         func_name = tool_to_func_name(name)
@@ -225,7 +233,8 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
         mcp_schemas = get_mcp_manager().get_exposed_schemas(settings)
         if named_agents.enabled(settings):
             mcp_schemas = [s for s in mcp_schemas if named_agents.tool_allowed(
-                settings, channel, chat_id, func_to_tool_name(s["function"]["name"]))]
+                settings, channel, chat_id, func_to_tool_name(s["function"]["name"]),
+                operator_id=operator_id)]
         schemas.extend(mcp_schemas)
 
     from config import is_subagents_enabled
@@ -241,7 +250,8 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
             sub_spec = get_subagent_tool_spec(settings)
             if sub_spec and is_exposed(PARALLEL_TOOL_NAME, sub_spec, settings, memory_allowed=memory_allowed) and (
                     not named_agents.enabled(settings) or named_agents.tool_allowed(
-                        settings, channel, chat_id, PARALLEL_TOOL_NAME)):
+                        settings, channel, chat_id, PARALLEL_TOOL_NAME,
+                         operator_id=operator_id)):
                 func_name = tool_to_func_name(PARALLEL_TOOL_NAME)
                 REVERSE_TOOL_MAP[func_name] = PARALLEL_TOOL_NAME
                 danger_str = sub_spec.danger.value if hasattr(sub_spec.danger, "value") else str(sub_spec.danger)
@@ -259,7 +269,8 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
         extra = subagents.schemas(settings)
         if named_agents.enabled(settings):
             extra = [s for s in extra if named_agents.tool_allowed(
-                settings, channel, chat_id, func_to_tool_name(s["function"]["name"]))]
+                settings, channel, chat_id, func_to_tool_name(s["function"]["name"]),
+                operator_id=operator_id)]
         schemas.extend(extra)
     return schemas
 
@@ -309,7 +320,8 @@ async def run_tool_loop(
         except Exception:
             logger.warning("MCP tool discovery failed", exc_info=True)
     schemas = build_tool_schemas(settings, memory_allowed=memory_allowed,
-                                 channel=msg.channel, chat_id=msg.chat_id)
+                                 channel=msg.channel, chat_id=msg.chat_id,
+                                 operator_id=msg.operator_id)
     max_steps_val = getattr(settings, "chat_tool_max_steps", 3)
     max_steps = 3 if max_steps_val is None else int(max_steps_val)
     max_steps = max(0, max_steps)
@@ -374,7 +386,8 @@ async def run_tool_loop(
             spec = _get_tool_spec(real_tool_name, settings)
             if (not is_exposed(real_tool_name, spec, settings, memory_allowed=memory_allowed)
                     or not __import__("named_agents").tool_allowed(
-                        settings, msg.channel, msg.chat_id, real_tool_name)):
+                        settings, msg.channel, msg.chat_id, real_tool_name,
+                        operator_id=msg.operator_id)):
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
