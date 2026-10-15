@@ -297,7 +297,8 @@ async def main() -> None:
 
     import agent_channel_routing
     result_poller = None
-    if agent_channel_routing.enabled(settings):
+    import agent_result_outbox
+    if agent_result_outbox.configured(settings):
         import agent_channel_results
         async def send_agent_result(chat_id, text):
             # Existing FeishuChannel plain-text send path: avoid card
