@@ -503,6 +503,8 @@ class WebControl:
 
     async def emergency_stop(self) -> str:
         from handlers.tools.executors import exec_computer_stop
+        import agent_delegation_worker
+        agent_delegation_worker.cancel_operator(self.settings, "web-console")
         return await exec_computer_stop(self.settings, "")
 
     def request_host_screen(self) -> dict[str, Any]:
