@@ -64,6 +64,9 @@ async def dispatch(
         return
 
     if not is_allowed(msg, settings):
+        import agent_channel_routing
+        if agent_channel_routing.is_agent_command(settings, msg):
+            return  # no Agent existence information leaks to nonowners
         await port.reply(msg, "Unauthorized.")
         return
 
