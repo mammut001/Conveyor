@@ -82,7 +82,9 @@ def normalize_rules(raw):
         if not item.strip():
             continue
         name, port, wildcard = _rule(item)
-        rules.add(("*." if wildcard else "") + name + (f":{port}" if port != 443 else ""))
+        authority = f"[{name}]" if ":" in name else name
+        rules.add(("*." if wildcard else "") + authority +
+                  (f":{port}" if port != 443 else ""))
     return tuple(sorted(rules))
 
 
