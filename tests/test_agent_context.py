@@ -227,7 +227,7 @@ class AgentContextTests(unittest.IsolatedAsyncioTestCase):
 
         class Handler:
             def _json(self, code, value):
-                self.fail(f"unexpected response: {code} {value}")
+                raise AssertionError(f"unexpected response: {code} {value}")
 
         h = Handler()
         self.assertEqual(WebConsoleHandler._memory_owner(
