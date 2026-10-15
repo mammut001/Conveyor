@@ -30,6 +30,7 @@ def admission_reason(rows, now):
     if rejected + pending >= REJECT_LIMIT:
         return "rate_limited"
     infra = sum(r == "failed" and not is_rejection(r, why, submitted)
+                and why not in ("busy", "legacy_unverified")
                 and when > now - INFRA_WINDOW
                 for r, why, submitted, when in rows)
     if infra >= INFRA_LIMIT:
