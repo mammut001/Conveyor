@@ -76,9 +76,9 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def command(self,msg):
         port=Port()
         from handlers.dispatch import dispatch
-        with patch("job_lanes.runner_for_chat",side_effect=lambda runner,*a:runner), \\
-             patch("handlers.dispatch.try_resolve_confirmation",
-                   new_callable=AsyncMock,return_value=False):
+        with (patch("job_lanes.runner_for_chat",side_effect=lambda runner,*a:runner),
+              patch("handlers.dispatch.try_resolve_confirmation",
+                    new_callable=AsyncMock,return_value=False)):
             await dispatch(msg,port,self.settings,object())
         return port
 
