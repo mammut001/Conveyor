@@ -40,25 +40,13 @@ async def _finish(settings, record, worker_id):
         summary = await execute(settings, record)
         if not enabled(settings):
             raise asyncio.CancelledError()
-        # Persist a reply BEFORE ack: after a crash or expired lease the next
-        # owner sees the same result ID and only acknowledges the task.
+        # Enqueue the result and ACK inside ONE lease-checked transaction.
+        # A stop/lease expiry can no longer race a separate result write.
         with ac.bind(target):
-            key = "delegate-result-" + record["id"]
-            with db.transaction(settings) as conn:
-                existing = conn.execute(
-                    """SELECT id FROM agent_mailbox WHERE from_agent=?
-                       AND to_agent=? AND idempotency_key=?""",
-                    (record["to_agent"], record["from_agent"], key)).fetchone()
-            if existing is None:
-                mailbox.send(settings, sender=target,
-                             to_agent=record["from_agent"], kind="result",
-                             body=summary or "(no result)",
-                             idempotency_key=key, parent_message_id=record["id"],
-                             depth=1)
-            committed = mailbox.ack(settings, recipient=target,
-                                    message_id=record["id"], worker_id=worker_id)
-            if committed is None:
-                log.warning("Delegation lease expired before ack: %s", record["id"])
+            committed = queue.complete(settings, target, record, worker_id,
+                                       summary or "(no result)")
+            if not committed:
+                log.warning("Delegation lease expired or stopped: %s", record["id"])
     except asyncio.CancelledError:
         # Emergency stop already marks tasks dead; do not requeue it.
         with ac.bind(target):
