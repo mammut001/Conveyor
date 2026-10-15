@@ -871,6 +871,13 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if not self._require_auth():
             return
 
+        if parsed.path == "/api/agents/kill":
+            body = self._body()
+            if body is not None:
+                import agent_security_controls
+                agent_security_controls.web_post(self, parsed.path, body)
+            return
+
         if parsed.path == "/api/agent-screens/cancel":
             body = self._body()
             if body is not None:
