@@ -136,6 +136,14 @@ async def submit_codex_job(
     Browser requests return immediately after enqueue (``wait=False``), while
     existing chat adapters retain their wait-for-final-response behavior.
     """
+    import agent_context
+    if agent_context.enabled(runner.settings):
+        try:
+            agent_context.for_request(runner.settings, msg.channel, msg.chat_id,
+                                      msg.operator_id)
+        except agent_context.AgentContextDenied:
+            await port.reply(msg, "agent identity denied")
+            return False, "agent identity denied", None
     body = (prompt if prompt is not None else msg.text).strip()
     if not body:
         await port.reply(msg, "Usage: /run <prompt>")
