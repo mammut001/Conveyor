@@ -156,6 +156,9 @@ def message_spec():
 
 
 def send_message(settings, arg, *, channel, chat_id, operator_id=""):
+    from agent_security import killed
+    if killed():
+        return "agent tools disabled by emergency kill switch"
     if not enabled(settings):
         return "unknown tool"
     # The legacy helper must not bypass mailbox/approval when Messaging V2 is on.
