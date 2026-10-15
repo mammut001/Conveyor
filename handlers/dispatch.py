@@ -48,6 +48,12 @@ def _edit_overrides_snapshot(text: str, route: RouteResult) -> bool:
     return host_edit_imperative(text)
 
 
+from agent_context import scoped_inbound
+from handlers.agent_emergency_stop import stop_before_identity
+
+
+@stop_before_identity
+@scoped_inbound
 async def dispatch(
     msg: InboundMessage,
     port: OutboundPort,
@@ -114,7 +120,10 @@ async def dispatch(
     text_clean = msg.text.strip().lower()
     if text_clean in COMPUTER_STOP_TEXTS:
         from handlers.tools.runner import run_tool
-        text = await run_tool(settings, "computer.stop", "")
+        import agent_context
+        scope = (dict(operator_id=msg.operator_id, channel=msg.channel,
+                      chat_id=msg.chat_id) if agent_context.enabled(settings) else {})
+        text = await run_tool(settings, "computer.stop", "", **scope)
         await port.reply(msg, text)
         return
 

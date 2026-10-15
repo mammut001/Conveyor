@@ -193,6 +193,10 @@ def owner_for_chat(settings: Any, operator_id: str, channel: str, chat_id: str) 
     other agent's. The default agent (Telegram, Feishu, older web sessions)
     uses the operator's store exactly as before.
     """
+    import agent_context
+    if agent_context.enabled(settings):
+        return agent_context.for_request(
+            settings, channel, chat_id, operator_id).memory_owner
     try:
         import agents
 

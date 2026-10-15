@@ -190,7 +190,11 @@ _threads: dict[str, _Thread] = {}
 _last: dict[str, LastRequest] = {}
 
 
-def chat_key(msg: InboundMessage) -> str:
+def chat_key(msg: InboundMessage, settings: "Settings | None" = None) -> str:
+    import agent_context
+    if settings is not None and agent_context.enabled(settings):
+        return agent_context.history_key(
+            settings, msg.channel, msg.chat_id, msg.operator_id)
     return f"{msg.channel}:{msg.chat_id}"
 
 
@@ -653,7 +657,7 @@ async def ask_chat(
     config = config_from_settings(settings)
     if config is None or (images and not getattr(settings, "chat_vision", False)):
         return "unavailable", None
-    key = chat_key(msg)
+    key = chat_key(msg, settings)
     try:
         user_content = build_user_content(
             settings, question, reply=reply, images=images, evidence=evidence,

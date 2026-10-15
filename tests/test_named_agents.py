@@ -112,7 +112,7 @@ class NamedAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_schema_is_scoped_and_dispatch_is_fail_closed(self):
         exposed = lambda chat: {s["function"]["name"] for s in build_tool_schemas(
-            self.settings, channel="web", chat_id=chat)}
+            self.settings, channel="web", chat_id=chat, operator_id="web-console")}
         alpha, beta = exposed(self.a_chat), exposed(self.b_chat)
         self.assertIn("agent__message", alpha)
         self.assertNotIn("agent__message", beta)
@@ -133,18 +133,22 @@ class NamedAgentTests(unittest.IsolatedAsyncioTestCase):
                                  ("web", "web-console"),
                                  ("web", "legacy-chat")):
             with self.subTest(channel=channel, chat_id=chat_id):
+                identity = "web-console" if channel == "web" else "owner"
                 with patch.dict(os.environ, {"CONVEYOR_NAMED_AGENTS": "0"}):
                     baseline = build_tool_schemas(
-                        self.settings, channel=channel, chat_id=chat_id)
+                        self.settings, channel=channel, chat_id=chat_id,
+                        operator_id=identity)
                 active = build_tool_schemas(
-                    self.settings, channel=channel, chat_id=chat_id)
+                    self.settings, channel=channel, chat_id=chat_id,
+                    operator_id=identity)
                 self.assertEqual(active, baseline)
                 self.assertGreater(len(active), 0)
                 self.assertTrue(named_agents.tool_allowed(
-                    self.settings, channel, chat_id, "notes.search"))
+                    self.settings, channel, chat_id, "notes.search",
+                    operator_id=identity))
                 result = await run_tool(
                     self.settings, "notes.search", "no matching note",
-                    operator_id="web-console", channel=channel, chat_id=chat_id)
+                    operator_id=identity, channel=channel, chat_id=chat_id)
                 self.assertNotEqual(result, "agent tool denied")
         self.assertFalse(named_agents.tool_allowed(
             self.settings, "telegram", "12345", "agent.message"))
@@ -231,7 +235,8 @@ class NamedAgentTests(unittest.IsolatedAsyncioTestCase):
         import json
         msg = json.dumps({"to": self.b["id"], "text": "Review the isolation fix."})
         response = named_agents.send_message(self.settings, msg,
-                                             channel="web", chat_id=self.a_chat)
+                                             channel="web", chat_id=self.a_chat,
+                                             operator_id="web-console")
         self.assertEqual(response, "agent message recorded")
         store = get_transcript_store(self.settings)
         incoming = store.messages(session_id_for(self.b["id"]))

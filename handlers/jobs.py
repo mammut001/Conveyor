@@ -136,6 +136,14 @@ async def submit_codex_job(
     Browser requests return immediately after enqueue (``wait=False``), while
     existing chat adapters retain their wait-for-final-response behavior.
     """
+    import agent_context
+    if agent_context.enabled(runner.settings):
+        try:
+            agent_context.for_request(runner.settings, msg.channel, msg.chat_id,
+                                      msg.operator_id)
+        except agent_context.AgentContextDenied:
+            await port.reply(msg, "agent identity denied")
+            return False, "agent identity denied", None
     body = (prompt if prompt is not None else msg.text).strip()
     if not body:
         await port.reply(msg, "Usage: /run <prompt>")
@@ -206,6 +214,20 @@ async def _execute_codex_job(
     queue_job_id: str | None = None,
 ) -> None:
     """Execute a Codex job directly (not through queue)."""
+    import agent_context
+    if agent_context.enabled(runner.settings):
+        try:
+            agent_context.for_request(runner.settings, msg.channel, msg.chat_id,
+                                      msg.operator_id)
+        except agent_context.AgentContextDenied:
+            # A queued Agent may have been archived since submission.
+            # Stop before context injection, tools or workspace access.
+            if queue_job_id:
+                from handlers.job_queue import get_job_queue
+                await get_job_queue().mark_running_failed(
+                    "agent identity denied", queue_job_id)
+            await port.reply(msg, "agent identity denied")
+            return
     # Each lane has its own runner, so jobs of different agents can overlap
     # and "the current job" means this conversation's.
     from job_lanes import runner_for_chat
@@ -437,7 +459,7 @@ async def _execute_codex_job(
     # Bridge job summary to Flash chat memory so follow-up conversations have full context.
     try:
         from handlers.chat import chat_key, remember
-        key = chat_key(msg)
+        key = chat_key(msg, runner.settings)
         status_label = "完成" if not job.error else "失败"
         user_turn_text = f"[任务指令] {truncate(user_text_for_session, 200)}"
         assistant_turn_text = f"[Codex 任务 {job.id} {status_label}]\n{truncate(final_answer, 800)}"

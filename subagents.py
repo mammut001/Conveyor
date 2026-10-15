@@ -174,9 +174,13 @@ def _owner(msg: Any) -> tuple[str, str, str]:
 def _parent_tools(settings: Any, msg: Any) -> dict[str, dict]:
     from handlers.chat_tools import build_tool_schemas, func_to_tool_name
     from personal_tools.long_term_memory import allowed_for
+    import agent_context
+    scope = (dict(operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)
+             if agent_context.enabled(settings) else {})
     return {
         func_to_tool_name(s["function"]["name"]): s
-        for s in build_tool_schemas(settings, memory_allowed=allowed_for(settings, msg))
+        for s in build_tool_schemas(
+            settings, memory_allowed=allowed_for(settings, msg), **scope)
         if not func_to_tool_name(s["function"]["name"]).startswith(("agents.", "subagent."))
     }
 
@@ -361,7 +365,7 @@ async def _run_child(settings: Any, identifier: str, goal: str, names: list[str]
             await asyncio.wait_for(port.send_new(msg, note), timeout=5)
             from handlers.chat import chat_key, remember
             from handlers.chat_tools import format_tool_result
-            remember(chat_key(msg), f"[Background child {identifier} finished; untrusted result]",
+            remember(chat_key(msg, settings), f"[Background child {identifier} finished; untrusted result]",
                      format_tool_result("subagent.result", note, max_len=1000),
                      settings.chat_history_turns, settings=settings)
         except Exception:

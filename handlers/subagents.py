@@ -439,7 +439,10 @@ async def execute_parallel_subagents(
     from personal_tools.long_term_memory import allowed_for as memory_allowed_for
 
     mem_allowed = memory_allowed_for(settings, msg) if msg else True
-    parent_schemas = build_tool_schemas(settings, memory_allowed=mem_allowed)
+    import agent_context
+    scope = (dict(operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)
+             if agent_context.enabled(settings) and msg else {})
+    parent_schemas = build_tool_schemas(settings, memory_allowed=mem_allowed, **scope)
 
     subagent_schemas: list[dict] = []
     allowed_read_tools: set[str] = set()

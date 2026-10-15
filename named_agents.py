@@ -112,9 +112,15 @@ def active_agent(settings, channel, chat_id):
     return agent
 
 
-def tool_allowed(settings, channel, chat_id, name):
+def tool_allowed(settings, channel, chat_id, name, *, operator_id="", context=None):
+    # Context-free compatibility is preserved only while the P3-3 flag is OFF.
+    import agent_context
+    if agent_context.enabled(settings):
+        return agent_context.allowed(settings, name, channel=channel,
+                                     chat_id=chat_id, operator_id=operator_id,
+                                     context=context)
     if not enabled(settings) or not channel or not chat_id:
-        return True  # context-free admin/inspection calls retain legacy behavior
+        return True  # historical behavior with context enforcement off
     try:
         agent = active_agent(settings, channel, chat_id)
         if not agent or agent.get("archived"):
@@ -149,11 +155,12 @@ def message_spec():
                            danger=DangerLevel.WRITE)
 
 
-def send_message(settings, arg, *, channel, chat_id):
+def send_message(settings, arg, *, channel, chat_id, operator_id=""):
     if not enabled(settings):
         return "unknown tool"
     sender = active_agent(settings, channel, chat_id)
-    if not sender or not tool_allowed(settings, channel, chat_id, "agent.message"):
+    if not sender or not tool_allowed(settings, channel, chat_id, "agent.message",
+                                      operator_id=operator_id):
         return "agent message denied"
     try:
         data = json.loads(arg)

@@ -48,16 +48,28 @@ class Case(unittest.TestCase):
 
 class OwnerTests(Case):
     def test_owner_of_each_kind_of_conversation(self) -> None:
-        own = lambda channel, chat: ltm.owner_for_chat(self.settings, "op", channel, chat)  # noqa: E731
+        import agent_context
+        strict = agent_context.enabled(self.settings)
+
+        def own(channel, chat, *, operator="op"):
+            if strict and channel == "web" and chat.startswith("agent-"):
+                operator = "web-console"
+            return ltm.owner_for_chat(self.settings, operator, channel, chat)
+
         self.assertEqual(own("web", self.chat_a), f"agent:{self.a['id']}")
         self.assertEqual(own("web", self.chat_b), f"agent:{self.b['id']}")
         # The default agent, Telegram, Feishu and older web sessions: the operator's store.
         for channel, chat in (("telegram", "42"), ("feishu", "oc_x"), ("web", "webchat-1"), ("web", "agent-default")):
-            self.assertEqual(own(channel, chat), "op")
+            expected = "web-console" if strict and chat == "agent-default" else "op"
+            self.assertEqual(own(channel, chat), expected)
         off = _settings(self.root, agents_enabled=False)
         self.assertEqual(ltm.owner_for_chat(off, "op", "web", self.chat_a), "op")
         self.store.archive(self.a["id"])
-        self.assertEqual(own("web", self.chat_a), "op")
+        if strict:
+            with self.assertRaises(agent_context.AgentContextDenied):
+                own("web", self.chat_a)  # archived identities no longer fall back
+        else:
+            self.assertEqual(own("web", self.chat_a), "op")
 
     def test_agent_owner_survives_shared_mode(self) -> None:
         self.assertTrue(ltm.shared(self.settings))
@@ -205,7 +217,9 @@ class HttpTests(Case):
         a = self.a["id"]
         status, saved = self.call("POST", "/api/memory", {"text": "考试在周五", "agent": a})
         self.assertEqual(status, 201, saved)
-        self.call("POST", "/api/memory", {"text": "我喜欢简短回答"})
+        # Missing agent still targets the authenticated console's default bot.
+        default_body = {"text": "我喜欢简短回答"}
+        self.assertEqual(self.call("POST", "/api/memory", default_body)[0], 201)
 
         texts = lambda path: [item["text"] for item in self.call("GET", path)[1]["items"]]  # noqa: E731
         self.assertEqual(texts(f"/api/memory?agent={a}"), ["考试在周五"])
@@ -222,6 +236,23 @@ class HttpTests(Case):
         self.assertEqual(self.call("DELETE", f"/api/memory/{saved['id']}?agent={a}")[0], 200)
         self.assertEqual(texts(f"/api/memory?agent={a}"), [])
 
+
+    def test_default_memory_api_rejects_unauthenticated_requests(self) -> None:
+        # The empty-agent fallback is for the authenticated Web owner only.
+        for method, body in (("GET", None), ("POST", {"text": "unauthorized"})):
+            with self.subTest(method=method):
+                conn = http.client.HTTPConnection(
+                    "127.0.0.1", self.server.server_address[1], timeout=10)
+                headers = {}
+                payload = None
+                if body is not None:
+                    payload = json.dumps(body)
+                    headers["Content-Type"] = "application/json"
+                conn.request(method, "/api/memory", body=payload, headers=headers)
+                response = conn.getresponse()
+                response.read()
+                self.assertEqual(response.status, 401)
+                conn.close()
 
     def test_library_collects_what_belongs_to_the_agent(self) -> None:
         import routines
