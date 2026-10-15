@@ -163,6 +163,8 @@ async def login(settings, domain, operator_id):
         session = await wait_for_step(
             manager_for(settings).open(operator, task, origin, automated=True),
             12, "login.open")
+        # Installed before _login() can trigger the credential-bearing POST.
+        session._autofill_attempt_id = attempt
         stage = "form"
         login_budget = min(15, max(0, deadline - asyncio.get_running_loop().time()))
         result, reason = await wait_for_step(_login(session, record),
@@ -183,9 +185,10 @@ async def login(settings, domain, operator_id):
                     5, "login.revoke")
             except Exception:
                 pass  # The session owner keeps closing it; never leak exception text.
-        # A rejected-password count requires the browser-observed POST reply.
+        # Conservatively charge every dispatched POST, including ambiguous
+        # timeouts/5xx/redirects, while preserving its durable DB marker.
         finish(settings, attempt, result, reason=reason or "success",
-               submitted=bool(session and session._autofill_post_completed))
+               submitted=bool(session and session._autofill_post_dispatched))
     if result == "needs_human":
         # Preserve the SAME Chromium context and task at the challenge screen.
         # Drop the automatic one-POST capability before issuing the human lease;
@@ -199,7 +202,7 @@ async def login(settings, domain, operator_id):
             }), 6, "login.takeover")
         except Exception:
             finish(settings, attempt, "failed", reason="takeover_unavailable",
-                   submitted=bool(session._autofill_post_completed))
+                   submitted=bool(session._autofill_post_dispatched))
             try:
                 await wait_for_step(
                     manager_for(settings).revoke(session.id, operator=session.operator),
