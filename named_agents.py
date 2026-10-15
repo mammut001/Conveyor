@@ -157,7 +157,7 @@ def message_spec():
 
 def send_message(settings, arg, *, channel, chat_id, operator_id=""):
     from agent_security import killed
-    if killed():
+    if killed(settings):
         return "agent tools disabled by emergency kill switch"
     if not enabled(settings):
         return "unknown tool"
