@@ -13,7 +13,8 @@ import agent_context
 
 
 def enabled(settings):
-    return bool(agent_context.enabled(settings) and
+    from agent_security import killed
+    return bool(not killed() and agent_context.enabled(settings) and
         os.environ.get("CONVEYOR_AGENT_CHANNEL_ROUTING", "").lower()
         in ("1", "true", "yes", "on"))
 
@@ -106,6 +107,9 @@ def bind(settings, msg, requested):
                     (msg.channel, msg.chat_id, msg.operator_id, agent["id"]))
     finally:
         db.close()
+    import agent_security
+    agent_security.audit(settings, operator=msg.operator_id,
+        event="bind", agent_id=agent["id"], reason="owner_selected")
     return agent
 
 
@@ -142,6 +146,9 @@ async def maybe_command(settings, msg, port):
     try:
         selected = bind(settings, msg, argument)
     except (ValueError, PermissionError) as exc:
+        import agent_security
+        agent_security.audit(settings, operator=msg.operator_id,
+            event="deny", agent_id="default", reason="owner_rejected")
         await port.reply(msg, str(exc))
     else:
         await port.reply(msg, f'[{selected["name"]}] Selected Agent. '
