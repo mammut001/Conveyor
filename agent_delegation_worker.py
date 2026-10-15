@@ -21,7 +21,9 @@ def enabled(settings):
 
 def cancel_operator(settings, operator_id):
     """Authenticated emergency stop makes all queued/running tasks terminal."""
-    if not enabled(settings):
+    # Stop remains available even while the kill switch disables enqueues.
+    import agent_security
+    if not agent_security.delegation_configured(settings):
         return 0
     count = queue.cancel_operator(settings, operator_id)
     for (operator, _identifier), task in tuple(_running.items()):
@@ -125,7 +127,14 @@ class Worker:
         self.task = None
 
     async def run(self):
-        while enabled(self.settings):
+        import agent_security
+        while True:
+            if agent_security.killed():
+                # Hot env switch: invalidate leases *and* cancel live children.
+                cancel_all(self.settings)
+                return
+            if not enabled(self.settings):
+                return
             try:
                 await poll_once(self.settings)
             except Exception:
