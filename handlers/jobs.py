@@ -437,7 +437,7 @@ async def _execute_codex_job(
     # Bridge job summary to Flash chat memory so follow-up conversations have full context.
     try:
         from handlers.chat import chat_key, remember
-        key = chat_key(msg)
+        key = chat_key(msg, runner.settings)
         status_label = "完成" if not job.error else "失败"
         user_turn_text = f"[任务指令] {truncate(user_text_for_session, 200)}"
         assistant_turn_text = f"[Codex 任务 {job.id} {status_label}]\n{truncate(final_answer, 800)}"
