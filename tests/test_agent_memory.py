@@ -214,22 +214,31 @@ class HttpTests(Case):
         return response.status, data
 
     def test_console_memory_is_per_agent(self) -> None:
+        import agent_context
+        strict = agent_context.enabled(self.settings)
         a = self.a["id"]
         status, saved = self.call("POST", "/api/memory", {"text": "考试在周五", "agent": a})
         self.assertEqual(status, 201, saved)
-        self.call("POST", "/api/memory", {"text": "我喜欢简短回答"})
+        default_body = {"text": "我喜欢简短回答"}
+        if strict:
+            self.assertEqual(self.call("POST", "/api/memory", default_body)[0], 400)
+            default_body["agent"] = "default"
+        self.call("POST", "/api/memory", default_body)
 
         texts = lambda path: [item["text"] for item in self.call("GET", path)[1]["items"]]  # noqa: E731
         self.assertEqual(texts(f"/api/memory?agent={a}"), ["考试在周五"])
         self.assertEqual(texts(f"/api/memory?agent={self.b['id']}"), [])
-        self.assertEqual(texts("/api/memory"), ["我喜欢简短回答"])
+        if strict:
+            self.assertEqual(self.call("GET", "/api/memory")[0], 400)
+        else:
+            self.assertEqual(texts("/api/memory"), ["我喜欢简短回答"])
         self.assertEqual(texts("/api/memory?agent=default"), ["我喜欢简短回答"])   # default agent = operator's store
 
         self.assertEqual(self.call("GET", "/api/memory?agent=nope")[0], 404)
         self.assertEqual(self.call("POST", "/api/memory", {"text": "x", "agent": "nope"})[0], 404)
 
         # Deleting through the wrong owner does nothing.
-        self.assertEqual(self.call("DELETE", f"/api/memory/{saved['id']}")[0], 404)
+        self.assertEqual(self.call("DELETE", f"/api/memory/{saved['id']}")[0], 400 if strict else 404)
         self.assertEqual(self.call("DELETE", f"/api/memory/{saved['id']}?agent={self.b['id']}")[0], 404)
         self.assertEqual(self.call("DELETE", f"/api/memory/{saved['id']}?agent={a}")[0], 200)
         self.assertEqual(texts(f"/api/memory?agent={a}"), [])
