@@ -309,6 +309,98 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("budget exhausted", result.lower())
         self.assertLessEqual(len(calls), 1)
 
+    async def _check_cross_channel_stop(self, channel, operator, command):
+        """Run an actual leased child through the channel dispatcher."""
+        from dataclasses import replace
+        from handlers.dispatch import dispatch
+        self.settings = replace(self.settings, lark_allowed_open_id="ou_allowed")
+        token = f"cross-{channel}-{command.replace('/', '')}"
+        self.assertIn("queued", self.enqueue(token=token))
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def running_child(_settings, _record):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        class Port:
+            def __init__(self):
+                self.replies = []
+            async def reply(self, msg, text):
+                self.replies.append(text)
+                return "ok"
+
+        with patch("agent_delegation_turn.execute", side_effect=running_child), \
+             patch("handlers.tools.executors.exec_computer_stop",
+                   new_callable=AsyncMock, return_value="stopped"), \
+             patch("job_lanes.runner_for_chat", side_effect=lambda runner, *a: runner), \
+             patch("handlers.dispatch.try_resolve_confirmation",
+                   new_callable=AsyncMock, return_value=False), \
+             patch("handlers.dispatch.run_command",
+                   new_callable=AsyncMock, return_value=True) as run_command:
+            self.assertEqual(await worker.poll_once(self.settings), 1)
+            row = next(r for r in self.rows() if r["kind"] == "task")
+            task = worker._running[(row["operator"], row["id"])]
+            try:
+                await asyncio.wait_for(started.wait(), timeout=3)
+                msg = InboundMessage(
+                    channel=channel, operator_id=operator,
+                    chat_id="12345" if channel == "telegram" else "oc_owner",
+                    message_id="stop-1", text=command)
+                port = Port()
+                await dispatch(msg, port, self.settings, object())
+                await asyncio.wait_for(cancelled.wait(), timeout=3)
+                await asyncio.gather(task, return_exceptions=True)
+                self.assertEqual(next(r for r in self.rows()
+                                      if r["id"] == row["id"])["status"], "dead")
+                self.assertFalse(any(r["kind"] == "result" for r in self.rows()))
+                self.assertIsNone(next((r for r in self.rows()
+                                        if r["id"] == row["id"])["lease_owner"]))
+                if command == "/cancel":
+                    run_command.assert_awaited_once()
+                else:
+                    self.assertTrue(any("已取消 1 个委派任务" in t
+                                        for t in port.replies))
+            finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                worker._running.pop((row["operator"], row["id"]), None)
+
+    async def test_telegram_and_feishu_stop_computer_cancels_web_children(self):
+        for channel, operator in (("telegram", "1"), ("feishu", "ou_allowed")):
+            with self.subTest(channel=channel):
+                await self._check_cross_channel_stop(channel, operator, "stop computer")
+
+    async def test_telegram_and_feishu_cancel_cancels_web_children(self):
+        for channel, operator in (("telegram", "1"), ("feishu", "ou_allowed")):
+            with self.subTest(channel=channel):
+                await self._check_cross_channel_stop(channel, operator, "/cancel")
+
+    async def test_foreign_keys_on_for_new_and_normal_delegation_transactions(self):
+        import agent_mailbox_db as mailbox_db
+        with mailbox_db.transaction(self.settings) as conn:
+            self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+            self.assertIn("'task','result'", conn.execute(
+                "SELECT sql FROM sqlite_master WHERE name='agent_mailbox'"
+            ).fetchone()[0])
+        with mailbox_db.transaction(self.settings) as conn:
+            self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+            now = time.time()
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute(
+                    """INSERT INTO agent_mailbox
+                       (id,from_agent,to_agent,operator,kind,body,idempotency_key,
+                        max_attempts,deadline,created_at,parent_message_id,depth)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    ("f"*32, self.a["id"], self.b["id"], "web-console",
+                     "task_result", "orphan", "invalid-fk", 3, now+100,
+                     now, "0"*32, 1))
+
     async def test_emergency_stop_marks_dead_and_cancels(self):
         self.enqueue(token="stop")
         with ac.bind(self.target):
