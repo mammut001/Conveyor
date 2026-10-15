@@ -67,6 +67,13 @@ async def dispatch(
         await port.reply(msg, "Unauthorized.")
         return
 
+    # Only authenticated owner DMs can select an Agent. Never intercept
+    # emergency stop or /cancel, which retain their existing dispatch path.
+    import agent_channel_routing
+    if await agent_channel_routing.maybe_command(settings, msg, port):
+        return
+    port = agent_channel_routing.label_port(settings, msg, port)
+
     # Commands in a conversation act on that conversation's lane: /status,
     # /cancel, /diff and /apply in an agent's chat mean that agent's jobs.
     from job_lanes import runner_for_chat
