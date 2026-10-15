@@ -775,9 +775,12 @@ async def post_init(application: Application) -> None:
         async def send_agent_result(chat_id, text):
             from channel.types import InboundMessage
             port = TelegramChatOutbound(application.bot, chat_id)
-            return await port.send_new(InboundMessage(
+            message_id = await port.send_new(InboundMessage(
                 channel="telegram",operator_id=str(settings.telegram_allowed_user_id),
                 chat_id=str(chat_id),message_id=None,text="",chat_type="p2p"), text)
+            if not message_id:
+                raise RuntimeError("Telegram result send not acknowledged")
+            return message_id
         application.bot_data["agent_result_poller"] = application.create_task(
             agent_channel_results.run(settings, "telegram", send_agent_result),
             name="conveyor-agent-telegram-results")
