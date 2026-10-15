@@ -124,6 +124,31 @@ class AgentContextTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ac.AgentContextDenied):
             ac.delegate(self.settings, forged, b, {"notes.search"}, "task_bad")
 
+    async def test_inbound_context_propagates_over_await_and_resets(self):
+        class Port:
+            async def reply(self, _msg, _text):
+                return "denied"
+
+        @ac.scoped_inbound
+        async def handle(msg, port, settings):
+            import asyncio
+            await asyncio.sleep(0)
+            bound = ac.current()
+            self.assertIsNotNone(bound)
+            self.assertTrue(bound.trusted_owner_request)
+            self.assertEqual(bound.agent_id, self.a["id"])
+            self.assertEqual(ac.for_request(settings, "", "", ""), bound)
+            self.assertTrue(ac.allowed(settings, "notes.search",
+                channel="", chat_id="", operator_id=""))
+            self.assertFalse(ac.allowed(settings, "notes.search",
+                channel="web", chat_id=self.b_chat, operator_id="web-console",
+                context=self.ctx(self.b_chat)))
+            return bound.session_id
+
+        result = await handle(self.msg(self.a_chat), Port(), self.settings)
+        self.assertEqual(result, f"web:web-console:{self.a_chat}")
+        self.assertIsNone(ac.current())
+
     async def test_tool_dispatch_requires_identity_and_bound_capabilities(self):
         self.assertEqual(await run_tool(self.settings, "notes.search", "test"),
                          "agent tool denied")
