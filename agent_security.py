@@ -111,6 +111,11 @@ def admit(conn, *, operator, to_agent, kind, now):
            WHERE operator=? AND created_at>=? AND created_at<=?
            AND kind IN ('message','task','task_request','task_result')""",
         (operator, now-3600, now)).fetchone()[0]
+    count += conn.execute(
+        """SELECT COUNT(*) FROM agent_security_audit
+           WHERE operator=? AND event='delegate'
+           AND reason='legacy_queued' AND happened_at>=?""",
+        (operator, now-3600)).fetchone()[0]
     if count >= rate_limit():
         audit_tx(conn, operator=operator, event="deny", agent_id=to_agent,
                  reason="rate_limited", now=now)
