@@ -138,7 +138,7 @@ async def run(settings, channel, send):
     import agent_result_outbox
     import agent_security
     last_purge = 0.0
-    while agent_result_outbox.configured(settings):
+    while routing.enabled(settings) or agent_result_outbox.configured(settings):
         try:
             if agent_security.killed(settings):
                 await asyncio.sleep(1)
