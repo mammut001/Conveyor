@@ -193,6 +193,10 @@ def _danger_label(tool_name: str, settings: Settings | None = None) -> str:
         if spec is not None:
             return spec.danger.value
         return "write"
+    import agent_messaging_v2
+    mail_spec = agent_messaging_v2.spec(settings, tool_name)
+    if mail_spec is not None:
+        return mail_spec.danger.value
     spec = get_tool(tool_name)
     if spec is not None:
         return spec.danger.value
@@ -460,7 +464,11 @@ async def _request_confirmation(
             await port.reply(msg, str(exc))
             return
     spec = get_tool(tool_name)
-    if spec is not None:
+    import agent_messaging_v2
+    mailbox_spec = agent_messaging_v2.spec(settings, tool_name)
+    if mailbox_spec is not None:
+        summary = mailbox_spec.summary
+    elif spec is not None:
         summary = spec.summary
     elif tool_name.startswith("mcp."):
         from mcp_client import get_mcp_tool_spec
