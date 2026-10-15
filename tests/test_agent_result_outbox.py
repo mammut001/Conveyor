@@ -153,6 +153,73 @@ class ResultOutboxTests(unittest.IsolatedAsyncioTestCase):
         sender.assert_awaited_once()
         self.assertEqual(self.records()[0]["state"],"sent")
 
+    async def test_kill_between_claim_and_send_refunds_attempt(self):
+        self.commit_result("kill-after-claim")
+        self.assertEqual(self.records()[0]["attempts"], 0)
+        sender = AsyncMock(return_value="telegram-ack")
+        original_claim = outbox._claim
+
+        def claim_then_kill(settings, channel):
+            row = original_claim(settings, channel)
+            self.assertIsNotNone(row)
+            self.assertEqual(row["attempts"], 1)
+            agent_security.set_kill(
+                settings, enabled=True, operator="web-console", source="web")
+            return row
+
+        with patch.object(outbox, "_claim", side_effect=claim_then_kill):
+            self.assertEqual(
+                await outbox.consume_once(self.settings, "telegram", sender), 0)
+        sender.assert_not_awaited()
+        paused = self.records()[0]
+        self.assertEqual(paused["state"], "retry")
+        self.assertEqual(paused["attempts"], 0)
+        self.assertIsNone(paused["lease_token"])
+        self.assertIsNone(paused["lease_expires"])
+        self.assertEqual(paused["next_attempt"], 0)
+
+        agent_security.set_kill(
+            self.settings, enabled=False, operator="web-console", source="web")
+        with patch("egress_taint.requires_approval", return_value=False):
+            self.assertEqual(
+                await outbox.consume_once(self.settings, "telegram", sender), 1)
+        sender.assert_awaited_once()
+        self.assertEqual(
+            (self.records()[0]["state"], self.records()[0]["attempts"]),
+            ("sent", 1))
+
+    async def test_agentkill_flag_off_uses_normal_unknown_command_reply(self):
+        from handlers.dispatch import dispatch
+        disabled = {
+            "CONVEYOR_NAMED_AGENTS": "0",
+            "CONVEYOR_AGENT_CONTEXT": "0",
+            "CONVEYOR_AGENT_MAILBOX": "0",
+            "CONVEYOR_AGENT_DELEGATION": "0",
+            "CONVEYOR_MAIN_ROUTER": "0",
+            "CONVEYOR_AGENT_CHANNEL_ROUTING": "0",
+        }
+        with patch.dict(os.environ, disabled):
+            port = AsyncMock()
+            owner = InboundMessage(
+                channel="telegram", operator_id="1", chat_id="1",
+                message_id="cmd", text="/agentkill on", chat_type="p2p")
+            self.assertFalse(await agent_security_controls.owner_command(
+                self.settings, owner, port))
+            port.reply.assert_not_awaited()
+            with (patch("job_lanes.runner_for_chat", return_value=object()),
+                  patch("handlers.dispatch.try_resolve_confirmation",
+                        new_callable=AsyncMock, return_value=False)):
+                await dispatch(owner, port, self.settings, object())
+                normal = replace(owner, text="/notacommand on",
+                                 message_id="other")
+                await dispatch(normal, port, self.settings, object())
+            replies = [call.args[1] for call in port.reply.await_args_list]
+            self.assertEqual(replies, [
+                "未知命令 /agentkill。发送 /help 查看。",
+                "未知命令 /notacommand。发送 /help 查看。",
+            ])
+            self.assertFalse(agent_security.killed(self.settings))
+
     async def test_crash_claim_lease_is_retried_then_max_attempts_dead(self):
         self.commit_result("lease")
         claimed=outbox._claim(self.settings,"telegram")
@@ -200,7 +267,7 @@ class ResultOutboxTests(unittest.IsolatedAsyncioTestCase):
             message=InboundMessage(channel="telegram", operator_id="1",
                 chat_id="1",message_id="cmd",text="/agentkill on",chat_type="p2p")
             port=AsyncMock()
-            self.assertTrue(await agent_security_controls.owner_command(
+            self.assertFalse(await agent_security_controls.owner_command(
                 self.settings,message,port))
             port.reply.assert_not_awaited()
             self.assertFalse(agent_security.killed(self.settings))
