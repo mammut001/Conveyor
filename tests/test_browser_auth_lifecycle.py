@@ -140,7 +140,7 @@ class G4CloseOwnerTests(unittest.IsolatedAsyncioTestCase):
                        new_callable=AsyncMock,
                        side_effect=asyncio.TimeoutError("g4_timeout:login.cookies")):
                 status, reason = await login(self.settings, origin, "operator")
-            self.assertEqual((status, reason), ("failed", "login_unavailable"))
+            self.assertEqual((status, reason), ("failed", "login_form_timeout"))
             self.assertEqual(manager_for(self.settings).sessions, {})
             self.assertEqual(list(self.mgr.root.glob("session-*")), [])
 
