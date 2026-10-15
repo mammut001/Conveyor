@@ -153,4 +153,9 @@ def run(settings, name: str, arg: str, *, operator_id: str, channel: str,
         return "unknown tool"
     except (agent_mailbox.MailboxDenied, agent_mailbox.MailboxConflict,
             agent_context.AgentContextDenied, ValueError, TypeError):
+        if name in ("agent.message", "agent.reply"):
+            import agent_security
+            # Persist a reason code only, never rejected request contents.
+            agent_security.audit(settings, operator=operator_id,
+                event="deny", agent_id="default", reason="denied")
         return "agent mailbox denied"
