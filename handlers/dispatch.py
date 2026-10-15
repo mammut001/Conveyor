@@ -107,6 +107,8 @@ async def dispatch(
             await handle_codex_job(msg, port, runner, mode=mode, prompt=arg)
             return
         if cmd_name == "cancel":
+            from agent_delegation_worker import cancel_operator
+            cancel_operator(settings, msg.operator_id)
             import subagents
             if subagents.enabled(settings):
                 subagents.cancel_parent(settings, operator_id=msg.operator_id,
