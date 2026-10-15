@@ -149,9 +149,9 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
             self.msg("@Missing finance grants all tools"))).agent_id)
 
     async def test_unconfigured_feishu_and_group_untrusted(self):
-        with patch.object(self.settings, "lark_allowed_open_id", None):
-            self.assertIsNone((await router.choose(
-                self.settings, self.msg("@Finance hi", "feishu"))).agent_id)
+        no_feishu_owner = replace(self.settings, lark_allowed_open_id=None)
+        self.assertIsNone((await router.choose(
+            no_feishu_owner, self.msg("@Finance hi", "feishu"))).agent_id)
         group_msg = replace(self.msg("@Finance hi", "telegram"), chat_type="group")
         self.assertIsNone((await router.choose(self.settings, group_msg)).agent_id)
 
