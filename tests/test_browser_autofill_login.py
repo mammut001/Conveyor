@@ -145,6 +145,98 @@ class StoreAndAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(x["reason"] == "legacy_unverified" and
                             not x["submitted"] for x in audit[:3]))
 
+    async def _run_mocked_post(self, attempt, *, status=None, fail_fetch=False):
+        """Exercise the real G4 route, with transport replaced by a fake."""
+        from browser_auth_sessions import AuthSession
+        frame = object()
+        url = self.origin + "/login"
+        request = SimpleNamespace(
+            method="POST", url=url, frame=frame, resource_type="document",
+            is_navigation_request=lambda: True,
+            all_headers=AsyncMock(return_value={}),
+        )
+        denied = []
+        session = SimpleNamespace(
+            owner=SimpleNamespace(settings=self.settings),
+            domain=self.origin, page=SimpleNamespace(main_frame=frame),
+            _automated_login=True, _autofill_target=url,
+            _autofill_post_dispatched=False, _autofill_post_completed=False,
+            _autofill_attempt_id=attempt, ensure=lambda: None,
+            _human_active=lambda: False, _deny=denied.append,
+        )
+
+        async def fetch(**kwargs):
+            self.assertEqual(kwargs["max_redirects"], 0)
+            self.assertEqual(kwargs["timeout"], 10000)
+            # Most important assertion: SQLite was committed BEFORE fetch.
+            record = public_audit(self.settings, self.origin)[-1]
+            self.assertEqual(record["result"], "started")
+            self.assertTrue(record["submitted"])
+            self.assertEqual(record["reason"], "post_dispatched")
+            if fail_fetch:
+                raise asyncio.TimeoutError("injected post-fetch timeout")
+            return SimpleNamespace(status=status)
+
+        route = SimpleNamespace(
+            request=request, fetch=AsyncMock(side_effect=fetch),
+            fulfill=AsyncMock(), abort=AsyncMock(),
+        )
+        await asyncio.wait_for(AuthSession._route(session, route), 3)
+        self.assertTrue(session._autofill_post_dispatched)
+        route.fetch.assert_awaited_once()
+        if fail_fetch or status in (302,):
+            route.abort.assert_awaited_once()
+            self.assertEqual(denied, ["g4_request_denied"])
+        else:
+            route.fulfill.assert_awaited_once()
+            self.assertEqual(denied, [])
+        return session
+
+    async def test_three_http_500_post_replies_lock_despite_ambiguous_result(self):
+        for _ in range(3):
+            attempt = reserve(self.settings, self.origin, "alice")
+            session = await self._run_mocked_post(attempt, status=500)
+            self.assertFalse(session._autofill_post_completed)
+            # Simulate an out-of-date in-memory marker; DB stays charged.
+            finish(self.settings, attempt, "failed",
+                   reason="login_not_confirmed", submitted=False)
+            self.assertTrue(public_audit(self.settings, self.origin)[-1]["submitted"])
+        with self.assertRaises(LoginQuotaDenied) as cm:
+            reserve(self.settings, self.origin, "alice")
+        self.assertEqual(cm.exception.reason, "locked")
+
+    async def test_three_post_timeouts_and_redirects_lock(self):
+        for status, timeout in ((None, True), (302, False), (None, True)):
+            attempt = reserve(self.settings, self.origin, "alice")
+            await self._run_mocked_post(attempt, status=status, fail_fetch=timeout)
+            finish(self.settings, attempt, "failed", reason="login_form_timeout",
+                   submitted=False)
+        with self.assertRaises(LoginQuotaDenied) as cm:
+            reserve(self.settings, self.origin, "alice")
+        self.assertEqual(cm.exception.reason, "locked")
+        self.assertEqual(sum(row["submitted"] for row in
+                             public_audit(self.settings, self.origin)), 3)
+
+    def test_crashed_dispatched_attempt_stays_charged_after_120_seconds(self):
+        import sqlite3
+        from browser_login_audit import mark_submitted
+        from workflow_browser_egress import private_database_path
+        path = private_database_path(
+            self.settings.codex_memory_root / "browser_external" /
+            "browser_login_attempts.sqlite3")
+        for _ in range(3):
+            attempt = reserve(self.settings, self.origin, "alice")
+            mark_submitted(self.settings, attempt)
+        # Simulate all three workers crashing without calling finish().
+        with sqlite3.connect(path) as conn:
+            conn.execute("UPDATE login_attempts SET time=time-180")
+        audit = public_audit(self.settings, self.origin)
+        self.assertTrue(all(x["result"] == "started" and x["submitted"]
+                            for x in audit))
+        with self.assertRaises(LoginQuotaDenied) as cm:
+            reserve(self.settings, self.origin, "alice")
+        self.assertEqual(cm.exception.reason, "locked")
+
     async def test_flag_off_no_model_tool_or_secret_store(self):
         from handlers.chat_tools import build_tool_schemas
         os.environ["CONVEYOR_BROWSER_AUTOFILL_LOGIN"] = "0"
