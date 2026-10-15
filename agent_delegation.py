@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from types import SimpleNamespace
-from uuid import uuid4
 
 import agent_context as ac
 import agent_mailbox as mailbox
@@ -19,6 +20,18 @@ MAX_TASK_BYTES = 3500
 MAX_TOOLS = 12
 FORBIDDEN = frozenset({"agent.delegate", "agent.message", "agent.reply",
                        "agents.parallel", "subagent.spawn"})
+_HUMAN_APPROVED: ContextVar[str | None] = ContextVar(
+    "conveyor_delegation_human_approval", default=None)
+
+
+@contextmanager
+def approved_token(token: str):
+    """Only execute_confirmed may install a validated, single-use approval."""
+    marker = _HUMAN_APPROVED.set("delegate-" + token)
+    try:
+        yield
+    finally:
+        _HUMAN_APPROVED.reset(marker)
 
 
 def enabled(settings) -> bool:
@@ -93,8 +106,8 @@ def enqueue(settings, arg, *, channel, chat_id, operator_id, approved):
                 len(task.encode("utf-8")) > MAX_TASK_BYTES):
             raise mailbox.MailboxDenied("invalid task")
         key = obj["idempotency_key"]
-        if not isinstance(key, str) or not key.startswith("delegate-"):
-            raise mailbox.MailboxDenied("missing approval token")
+        if (not isinstance(key, str) or key != _HUMAN_APPROVED.get()):
+            raise mailbox.MailboxDenied("verified human approval required")
         source = ac.for_request(settings, channel, chat_id, operator_id)
         if not source.permits(NAME):
             raise mailbox.MailboxDenied("delegation not allowed")
