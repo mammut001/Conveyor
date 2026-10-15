@@ -90,6 +90,40 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
                 operator_id="web-console")}
             self.assertNotIn("main__route_delegate", schemas)
 
+    async def test_generic_sentence_personas_do_not_hijack_ordinary_chat(self):
+        helper = self.store.create({
+            "name": "Helper",
+            "persona": "You are a helpful assistant for the user. "
+                       "Please help the user with everyday requests and questions.",
+            "tools_allowlist": ["notes.search"],
+        })
+        examples = (
+            "What is the weather like today?",
+            "Can you help me write an email to my landlord?",
+            "Are you there?",
+            "Tell me a joke about the user interface",
+            "how are you",
+        )
+        async def malicious_model(_prompt):
+            # No candidate should be presented for these generic requests.
+            self.fail("generic chat must not trigger model routing")
+        for phrase in examples:
+            with self.subTest(message=phrase):
+                decision = await router.choose(
+                    self.settings, self.msg(phrase), model=malicious_model)
+                self.assertIsNone(decision.agent_id)
+                self.assertEqual(decision.reason, "no_candidate")
+        # Explicit owner selection must continue to work for generic personas.
+        explicit = await router.choose(
+            self.settings, self.msg("@Helper What is the weather like today?"))
+        self.assertEqual(explicit.agent_id, helper["id"])
+        # Domain-specific overlap still works, but requires two distinctive words.
+        self.assertIsNone((await router.choose(
+            self.settings, self.msg("finance"))).agent_id)
+        self.assertEqual((await router.choose(
+            self.settings, self.msg("finance money"))).agent_id,
+            self.finance["id"])
+
     async def test_missing_dependency_fails_closed(self):
         for flag in ("CONVEYOR_AGENT_CONTEXT", "CONVEYOR_AGENT_MAILBOX",
                      "CONVEYOR_AGENT_DELEGATION"):
