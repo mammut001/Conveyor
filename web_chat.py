@@ -184,6 +184,10 @@ class WebChatPort(OutboundPort):
             logger.exception("Failed to persist web chat turn to TranscriptStore")
 
 
+from agent_context import scoped_inbound
+
+
+@scoped_inbound
 async def run_web_chat(
     msg: InboundMessage,
     port: WebChatPort,
