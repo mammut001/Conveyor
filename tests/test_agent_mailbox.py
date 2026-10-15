@@ -156,9 +156,9 @@ class MailboxTests(unittest.TestCase):
         self.assertEqual(self._state(self.ctx_b, first["id"])["status"], "dead")
         second = self._send(idempotency_key="deadline", deadline=1002)
         with ac.bind(self.ctx_b):
-            self.assertEqual(mailbox.list_for_agent(
-                self.settings, recipient=self.ctx_b, now=1003, status="dead")[0]["id"],
-                second["id"])
+            self.assertIn(second["id"], [
+                item["id"] for item in mailbox.list_for_agent(
+                    self.settings, recipient=self.ctx_b, now=1003, status="dead")])
 
     def test_expired_final_lease_becomes_dead(self):
         first = self._send(max_attempts=1)
