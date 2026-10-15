@@ -32,8 +32,8 @@ def _connect(settings):
                  reason TEXT NOT NULL DEFAULT 'legacy_unverified',
                  submitted INTEGER NOT NULL DEFAULT 0)""")
     columns = {row[1] for row in conn.execute("PRAGMA table_info(login_attempts)")}
-    # Existing rows from pre-migration code have no evidence of a submitted
-    # password. Never retroactively count their generic 'failed' results.
+    # Treat pre-migration generic failed rows as possible wrong passwords:
+    # an existing three-failure lockout must survive schema migration.
     if "reason" not in columns:
         conn.execute("ALTER TABLE login_attempts ADD COLUMN reason TEXT NOT NULL DEFAULT 'legacy_unverified'")
     if "submitted" not in columns:
@@ -60,6 +60,20 @@ def reserve(settings, domain, username):
         return cursor.lastrowid
 
 
+def mark_submitted(settings, attempt_id):
+    """Commit the admission charge BEFORE any credential-bearing network I/O.
+
+    If the audit is missing/unavailable, the caller must abort the POST.
+    A crash after this commit retains a started+submitted=1 charge.
+    """
+    with _connect(settings) as c:
+        cursor = c.execute("""UPDATE login_attempts
+            SET submitted=1, reason='post_dispatched'
+            WHERE id=? AND result='started' AND submitted=0""", (attempt_id,))
+        if cursor.rowcount != 1:
+            raise ValueError("login_audit_attempt_unavailable")
+
+
 def finish(settings, attempt_id, result, *, reason=None, submitted=False):
     if result not in _STATUSES:
         raise ValueError("invalid result")
@@ -69,7 +83,10 @@ def finish(settings, attempt_id, result, *, reason=None, submitted=False):
     if reason == "credentials_rejected" and (result != "failed" or not submitted):
         raise ValueError("unverified rejection")
     with _connect(settings) as c:
-        c.execute("""UPDATE login_attempts SET result=?,reason=?,submitted=?
+        # A pre-dispatch committed marker can never be cleared by a timed-out
+        # handler, teardown error or stale in-memory session state.
+        c.execute("""UPDATE login_attempts
+                     SET result=?,reason=?,submitted=MAX(submitted,?)
                      WHERE id=?""",
                   (result, reason, int(bool(submitted)), attempt_id))
 
