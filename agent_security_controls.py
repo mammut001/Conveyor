@@ -10,6 +10,12 @@ from urllib.parse import urlparse
 import agent_security
 
 
+def available(settings):
+    """Keep emergency unkill accessible, but not without Agent features."""
+    import named_agents
+    return named_agents.enabled(settings)
+
+
 def web_post(handler, path, body):
     if path != "/api/agents/kill":
         return False
