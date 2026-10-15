@@ -121,8 +121,10 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Unknown",(await self.command(self.msg("/agent Finance"))).replies[-1][1])
         with self.assertRaises(PermissionError):
             routing.bind(self.settings,self.msg("/agent Helper",operator="2"),"Helper")
-        self.assertFalse(await routing.maybe_command(
-            self.settings,self.msg("/agents",chat_type="group"),Port()))
+        group_port = Port()
+        self.assertTrue(await routing.maybe_command(
+            self.settings,self.msg("/agents",chat_type="group"),group_port))
+        self.assertEqual(group_port.replies, [])
         with self.assertRaises(PermissionError):
             routing.bind(self.settings,self.msg("/agent Helper",chat_type="group"),"Helper")
         self.assertIsNone(routing.bound(self.settings,"telegram","1"))
