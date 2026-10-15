@@ -346,12 +346,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         No agent, or the default one, is the operator's own store.
         """
         import agents
-        import agent_context
         from personal_tools import long_term_memory as ltm
 
-        if agent_context.enabled(settings) and not agent_id:
-            self._json(HTTPStatus.BAD_REQUEST, {"error": "agent identity required"})
-            return None
+        # Omitted selection is the authenticated console's default agent.
+        # Nondefault agents still require an explicit, verified agent ID.
         if not agent_id or agent_id == agents.DEFAULT_AGENT_ID or not agents.enabled(settings):
             return ltm.WEB_OPERATOR
         agent = agents.AgentStore(settings).get(agent_id)
