@@ -49,7 +49,7 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
             "CONVEYOR_AGENTS_KILL":"0"})
         flag.start(); self.addCleanup(flag.stop)
         self.store=AgentStore(self.cfg)
-        self.a=self.store.create({"name":"Alpha", "tools_allowlist":["agent.delegate","notes.search"]})
+        self.a=self.store.create({"name":"Alpha", "tools_allowlist":["agent.delegate","agent.message","notes.search"]})
         self.b=self.store.create({"name":"Beta", "tools_allowlist":["notes.search"]})
         self.c=self.store.create({"name":"Gamma", "tools_allowlist":["notes.search"]})
 
