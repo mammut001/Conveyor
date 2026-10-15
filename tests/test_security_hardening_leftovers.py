@@ -100,7 +100,7 @@ class FeishuFFmpegPolicyTests(unittest.TestCase):
         idx = argv.index("-i")
         self.assertEqual(argv[idx + 1], "/tmp/untrusted.opus")
         self.assertEqual(argv[idx - 4:idx],
-                         ["-protocol_whitelist", "file,pipe", "-f", "opus"])
+                         ["-protocol_whitelist", "file,pipe", "-f", "ogg"])
         self.assertEqual(argv[-3:], ["-f", "ogg", "/tmp/result.ogg"])
         self.assertNotIn("-f", argv[:idx - 4])
         self.assertNotIn("http,https", argv)
