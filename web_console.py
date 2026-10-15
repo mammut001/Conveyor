@@ -1989,11 +1989,15 @@ def main() -> None:
         start_purge_worker(loop, settings)
     import approval_relay
     relay_consumer = approval_relay.start_relay_worker(loop, settings, channel="web")
+    from agent_delegation_worker import start as start_delegation
+    delegation_worker = start_delegation(loop, settings)
     try:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if delegation_worker is not None:
+            delegation_worker.stop()
         if relay_consumer is not None:
             relay_consumer.stop()
         server.shutdown()
