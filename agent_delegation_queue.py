@@ -102,3 +102,13 @@ def complete(settings, target, record, worker_id, body):
                lease_owner=NULL,lease_expires_at=NULL WHERE id=?""",
             (row["id"],))
         return True
+
+
+def reject_revoked(settings, record, worker_id):
+    """Archive/revoke after claim: close the lease without needing old context."""
+    with db.transaction(settings) as conn:
+        conn.execute(
+            """UPDATE agent_mailbox SET status='dead',lease_owner=NULL,
+               lease_expires_at=NULL WHERE id=? AND kind='task' AND
+               status='leased' AND lease_owner=? AND to_agent=? AND operator=?""",
+            (record["id"], worker_id, record["to_agent"], record["operator"]))
