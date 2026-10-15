@@ -135,8 +135,17 @@ async def consume_once(settings, channel, send):
 
 
 async def run(settings, channel, send):
-    while routing.enabled(settings):
+    import agent_result_outbox
+    import agent_security
+    last_purge = 0.0
+    while agent_result_outbox.configured(settings):
         try:
+            if agent_security.killed(settings):
+                await asyncio.sleep(1)
+                continue  # Do not exit: unkill resumes without bot restart.
+            if time.time() - last_purge > 3600:
+                agent_result_outbox.purge(settings)
+                last_purge = time.time()
             await consume_once(settings, channel, send)
         except asyncio.CancelledError:
             raise
