@@ -59,11 +59,11 @@ Web Computer Stop, channel emergency stop and /cancel also stop
 delegated tasks and mark outstanding task messages `dead`, so a stop
 cannot immediately requeue the same task.
 
-A successful turn **enqueues a single** `kind=result` reply with
-idempotency key based on the source task ID, **before** acknowledging
-the lease. On a crash between those steps, expired leases are
-reclaimable; retries reuse the same reply identity instead of
-duplicating messages. Failures call mailbox.fail for normal retry/dead
+A successful turn **atomically enqueues one** `kind=result` reply and
+ACKs the still-owned lease in a single `BEGIN IMMEDIATE` transaction,
+using a stable idempotency key based on the task ID. A concurrent stop
+prevents both the reply and the ACK; after a crash, expired leases
+are reclaimable without duplicate result messages. Failures call mailbox.fail for normal retry/dead
 transitions. Every result remains untrusted data in the recipient's
 inbox, not a system/user message or an approval.
 
