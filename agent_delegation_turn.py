@@ -100,6 +100,7 @@ async def execute(settings, row):
                             response = "denied: invalid tool argument"
                         else:
                             needs_human = (current.danger != DangerLevel.READ or
+                                egress_taint.outbound(settings, name) or
                                 egress_taint.requires_approval(
                                     settings, name, operator_id=msg.operator_id,
                                     channel=msg.channel, chat_id=msg.chat_id))
