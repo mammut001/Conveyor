@@ -241,6 +241,14 @@ class BrowserLoginRealTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("TOP_SECRET_TEST", str(public_audit(self.settings, self.origin)))
         mgr = manager_for(self.settings)
         self.assertEqual(len(mgr.sessions), 1)
+        # A second browser.login from another operator is BUSY and must not
+        # launch a browser, send a second POST, or burn a password attempt.
+        second = await asyncio.wait_for(
+            login_adapter(self.settings, self.origin, operator_id="other"), 3)
+        self.assertEqual(second.text, "failed (busy)")
+        self.assertEqual(self.http.posts, 1)
+        self.assertEqual(len(mgr.sessions), 1)
+        self.assertEqual(len(public_audit(self.settings, self.origin)), 1)
         s = next(iter(mgr.sessions.values()))
         self.assertGreater(len(await wait_for_step(
             s.context.cookies([self.origin]), 3, "test_success.cookies")), 0)
