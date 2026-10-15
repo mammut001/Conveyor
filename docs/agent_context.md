@@ -33,24 +33,31 @@ There is no delegation worker or message inbox in this PR.
 
 ## Session and memory separation
 
-The model's short-term SQLite chat key now includes canonical Agent ID
-and the full channel/operator/chat session identity, rather than only
-`channel:chat_id`. Agent session JSONL context files and Codex summaries
-use corresponding identities. This deliberately starts a clean short-term
-history window when first enabling the flag; old records are retained
-without being injected into another Agent.
+For **non-default agents**, the model's short-term SQLite chat key
+includes canonical Agent ID and the full channel/operator/chat session
+identity. Their JSONL session files use an `<agent_id>_` prefix so histories
+cannot collide. The built-in **default agent keeps its legacy**
+`channel:chat_id` key and unprefixed `channel_chat_id_operator_id.jsonl`
+file name for Telegram, Feishu, and Web, even when this flag is enabled.
+Enabling the flag therefore preserves existing default-agent chat history
+and Codex session context; only non-default agents use the new namespace.
 
 Both legacy long-term memory tools and Memory V2 use
 `owner_for_chat()`, which requires canonical identity with the flag on.
 Nondefault Agents only access `agent:<id>` memory; the built-in default
 Agent continues to use the operator owner. Authenticated Web Console
-memory administration must now supply an explicit `agent=<id>` (or
-`agent=default`) while the flag is on; missing selection fails with 400.
-Without the flag the previous default selection is unchanged.
+memory administration still interprets an omitted `agent` as the built-in
+default agent; an explicit named-agent selection uses that agent's own
+verified memory scope. All Web memory endpoints continue to require their
+existing operator authentication, regardless of the flag.
 
 ## Safety and compatibility checks
 
-- Reject missing operator/channel/chat identity and archived Agents.
+- Reject missing operator/channel/chat identity and archived Agents
+  for regular actions. Exact Computer Use stop phrases are the narrow
+  exception: after channel-owner authorization they cancel the active
+  Computer Use task even if the agent chat was archived; they never run
+  through agent tools or authorize new actions.
 - Reject forged memory owners, mismatched bound ContextVars and enlarged
   delegated tool lists; recheck policy before executing confirmed actions.
 - Check Agent A's memory cannot be read or written from Agent B.
