@@ -191,6 +191,53 @@ class WebChatTests(unittest.TestCase):
         self.assertTrue(any("tool:computer.task" in text for text in messages))
         self.assertTrue(any(name == "done" and data.get("outcome") == "answered" for name, data in events))
 
+    def test_main_router_web_chat_sse_uses_human_approval_card(self):
+        from agents import AgentStore
+        from handlers.tools.confirm import get_pending
+        import os
+
+        flags = {
+            "CONVEYOR_NAMED_AGENTS": "1",
+            "CONVEYOR_AGENT_CONTEXT": "1",
+            "CONVEYOR_AGENT_MAILBOX": "1",
+            "CONVEYOR_AGENT_DELEGATION": "1",
+            "CONVEYOR_MAIN_ROUTER": "1",
+        }
+        # Real POST /api/chat -> run_web_chat -> route -> approval SSE.
+        with patch.dict(os.environ, flags), patch.object(
+            self.settings, "agents_enabled", True, create=True
+        ):
+            agent = AgentStore(self.settings).create({
+                "name": "Pinger",
+                "persona": "Ping response diagnostics",
+                "tools_allowlist": [],
+            })
+            ask = AsyncMock(side_effect=AssertionError(
+                "main chat model must not answer an explicit Agent selection"))
+            with patch("handlers.chat.ask_chat", ask):
+                status, events = self.request_sse(
+                    "/api/chat", {"message": "@Pinger say PONG"})
+            self.assertEqual(status, 200)
+            approvals = [data for event, data in events if event == "approval"]
+            self.assertEqual(len(approvals), 1)
+            self.assertEqual(approvals[0]["tool_name"], "main.route_delegate")
+            self.assertEqual(
+                json.loads(approvals[0]["arg"])["to"], agent["id"])
+            self.assertEqual(
+                json.loads(approvals[0]["arg"])["task"], "say PONG")
+            token = approvals[0]["id"]
+            self.assertIsNotNone(get_pending(token))
+            self.assertEqual(events[-1], ("done", {"outcome": "answered"}))
+            ask.assert_not_awaited()
+            # The actual Web approval endpoint executes PR4 delegation only
+            # after the human confirms. No route decision enqueues by itself.
+            with patch("approval_relay.claim_local", return_value="ok"):
+                code, decided = self.request(
+                    "POST", f"/api/approvals/{token}/approve", {})
+            self.assertEqual(code, 200)
+            self.assertEqual(decided["status"], "accepted")
+            self.assertIn("agent task queued:", decided["result"])
+
     def test_plain_chat_sse_and_history(self):
         self.settings.chat_tools_enabled = False
 
