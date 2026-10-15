@@ -237,6 +237,23 @@ class HttpTests(Case):
         self.assertEqual(texts(f"/api/memory?agent={a}"), [])
 
 
+    def test_default_memory_api_rejects_unauthenticated_requests(self) -> None:
+        # The empty-agent fallback is for the authenticated Web owner only.
+        for method, body in (("GET", None), ("POST", {"text": "unauthorized"})):
+            with self.subTest(method=method):
+                conn = http.client.HTTPConnection(
+                    "127.0.0.1", self.server.server_address[1], timeout=10)
+                headers = {}
+                payload = None
+                if body is not None:
+                    payload = json.dumps(body)
+                    headers["Content-Type"] = "application/json"
+                conn.request(method, "/api/memory", body=payload, headers=headers)
+                response = conn.getresponse()
+                response.read()
+                self.assertEqual(response.status, 401)
+                conn.close()
+
     def test_library_collects_what_belongs_to_the_agent(self) -> None:
         import routines
         from desktop_screenshot import resolve_screenshot_dir
