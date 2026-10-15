@@ -19,6 +19,20 @@ _SELECTION = re.compile(r"^@([\w-]{1,60})(?:\s+|$)", re.UNICODE)
 _DIRECT = re.compile(r"^(?:delegate to|ask|have|交给|让|请)(?:\s+|：|:)", re.I)
 _WORD = re.compile(r"[\w]+", re.UNICODE)
 _MIN_CONFIDENCE = 0.85
+# Ordinary conversational/assistant boilerplate must never cause delegation.
+# Implicit routing needs two *distinctive* shared persona/name terms.
+_STOPWORDS = frozenset((
+    "the a an and or but if for from to of in on at by with without as is are "
+    "was were be been being do does did can could should would will shall may "
+    "might have has had i me my mine we us our ours you your yours he she it "
+    "they them their this that these those there here what when where why who "
+    "how which whose about after before into over under up down out so not no "
+    "yes just very really more most some any all each every than then now "
+    "today tomorrow yesterday please thanks thank hello hey hi good morning "
+    "user users assistant assistants helpful help helping helper bot chatbot "
+    "answer respond replies reply ask tell say make give need want like "
+    "general everyday ordinary friendly nice there"
+).split())
 # Conservative, literal capability cues. Nothing in the message grants a tool.
 _CUES = (
     (re.compile(r"(?:\bnotes?\b|笔记).{0,24}(?:search|find|查|找)|(?:search|find|查|找).{0,24}(?:\bnotes?\b|笔记)", re.I), "notes.search"),
@@ -54,7 +68,8 @@ def spec(settings):
 
 
 def _words(s):
-    return {s.casefold() for s in _WORD.findall(s or "") if len(s) >= 3}
+    return {w.casefold() for w in _WORD.findall(s or "")
+            if len(w) >= 3 and w.casefold() not in _STOPWORDS}
 
 
 def _needed(text):
@@ -141,8 +156,9 @@ async def choose(settings, msg, *, model=None):
             return Decision(None, reason="explicit_denied")
         a, tools, _ = candidates[0]
         return Decision(a["id"], a["name"], task, tools, "explicit")
-    # No semantic overlap => don't make a speculative delegation.
-    candidates = [item for item in candidates if item[2] > 0]
+    # A single overlap is often a generic word from a sentence-style
+    # persona. Require at least two independent, non-stopword signals.
+    candidates = [item for item in candidates if item[2] >= 2]
     if not candidates:
         return Decision(None, reason="no_candidate")
     best = max(item[2] for item in candidates)
