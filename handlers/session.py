@@ -34,7 +34,12 @@ def _safe_filename(channel: str, chat_id: str, operator_id: str) -> str:
 
 
 def session_path(settings: Settings, msg: InboundMessage) -> Path:
-    return settings.codex_memory_root / _SESSION_DIR / _safe_filename(msg.channel, msg.chat_id, msg.operator_id)
+    import agent_context
+    filename = _safe_filename(msg.channel, msg.chat_id, msg.operator_id)
+    if agent_context.enabled(settings):
+        ctx = agent_context.for_request(settings, msg.channel, msg.chat_id, msg.operator_id)
+        filename = f"{ctx.agent_id}_{filename}"
+    return settings.codex_memory_root / _SESSION_DIR / filename
 
 
 def _max_turns(settings: Settings) -> int:
@@ -120,7 +125,7 @@ def append_turn(
         }
 
         from runner.file_lock import file_lock
-        filename = _safe_filename(msg.channel, msg.chat_id, msg.operator_id)
+        filename = path.name
         lock_dir = settings.codex_memory_root / _SESSION_DIR / ".locks"
         lock_dir.mkdir(parents=True, exist_ok=True)
         try:
