@@ -355,6 +355,13 @@ def agent_for_chat(settings: Any, channel: str, chat_id: str) -> dict[str, Any] 
         agent = store.get(chat_id[len(AGENT_CHAT_PREFIX):])
         # An archived or unknown agent has no say over a conversation.
         return agent if agent and not agent["archived"] else None
+    # An authenticated owner can bind a private Telegram/Feishu chat to a
+    # live named Agent. The lookup never trusts the inbound message body.
+    if channel in ("telegram", "feishu"):
+        import agent_channel_routing
+        selected = agent_channel_routing.bound(settings, channel, chat_id)
+        if selected:
+            return store.get(selected)
     return store.get(DEFAULT_AGENT_ID)
 
 
