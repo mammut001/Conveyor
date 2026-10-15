@@ -180,7 +180,8 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
     for name, spec in TOOL_REGISTRY.items():
         candidates.append((name, spec))
     import named_agents
-    if named_agents.enabled(settings):
+    from agent_security import killed
+    if not killed() and named_agents.enabled(settings):
         candidates.append(("agent.message", _get_tool_spec("agent.message", settings)))
     import agent_messaging_v2
     if agent_messaging_v2.enabled(settings):
