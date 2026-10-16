@@ -49,7 +49,7 @@ async def execute(settings, row):
         raise RuntimeError("chat model unavailable")
     # Hard-cap total budget at MAX_TOKENS; do not exceed cfg.max_tokens either.
     remaining_tokens = min(MAX_TOKENS, cfg.max_tokens)
-    total_duration = min(cfg.timeout, MAX_DURATION)
+    total_duration = MAX_DURATION
     remaining_time = min(total_duration, float(row["deadline"]) - time.time(),
                          float(row["lease_expires_at"]) - time.time() - 1)
     if remaining_time <= 0:

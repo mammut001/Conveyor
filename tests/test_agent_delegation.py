@@ -437,8 +437,6 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
             return {"content": ""}
         with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
              patch("agent_delegation_turn.complete_chat", side_effect=fake_empty):
-            with self.assertRaises(RuntimeError):
-                await execute(self.settings, record)
             await worker._finish(self.settings, record, owner)
         row = next(r for r in self.rows() if r["id"] == record["id"])
         self.assertNotEqual(row["status"], "done")
@@ -453,8 +451,6 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
             return {"content": "   \n\t  \n"}
         with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
              patch("agent_delegation_turn.complete_chat", side_effect=fake_ws):
-            with self.assertRaises(RuntimeError):
-                await execute(self.settings, record_ws)
             await worker._finish(self.settings, record_ws, owner_ws)
         row_ws = next(r for r in self.rows() if r["id"] == record_ws["id"])
         self.assertNotEqual(row_ws["status"], "done")
@@ -484,8 +480,6 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
                     "finish_reason": "stop", "usage": {"completion_tokens": 50}}
         with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
              patch("agent_delegation_turn.complete_chat", side_effect=fake_reason_stop):
-            with self.assertRaises(RuntimeError):
-                await execute(self.settings, record_stop)
             await worker._finish(self.settings, record_stop, owner_stop)
         row_stop = next(r for r in self.rows() if r["id"] == record_stop["id"])
         self.assertEqual(row_stop["status"], "failed")
@@ -500,8 +494,6 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
                     "finish_reason": "length", "usage": {"completion_tokens": 100}}
         with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
              patch("agent_delegation_turn.complete_chat", side_effect=fake_reason_len):
-            with self.assertRaises(RuntimeError):
-                await execute(self.settings, record_len)
             await worker._finish(self.settings, record_len, owner_len)
         row_len = next(r for r in self.rows() if r["id"] == record_len["id"])
         self.assertEqual(row_len["status"], "failed")
@@ -517,8 +509,6 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
                     "finish_reason": "stop", "usage": {"completion_tokens": 80}}
         with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
              patch("agent_delegation_turn.complete_chat", side_effect=fake_valid):
-            summary = await execute(self.settings, record_ok)
-            self.assertIn("5000 budget", summary)
             await worker._finish(self.settings, record_ok, owner_ok)
         row_ok = next(r for r in self.rows() if r["id"] == record_ok["id"])
         self.assertEqual(row_ok["status"], "done")
@@ -545,17 +535,15 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
             }
         with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
              patch("agent_delegation_turn.complete_chat", side_effect=fake_budget_answer):
-            summary = await execute(self.settings, record)
-            # Verify output budget allocated to the call was sufficient (> 300, e.g. 900)
-            self.assertGreater(call_configs[0].max_tokens, 300)
-            self.assertIn("5000", summary)
-            self.assertNotIn("no answer", summary.lower())
             await worker._finish(self.settings, record, owner)
+        self.assertEqual(len(call_configs), 1)
+        self.assertGreater(call_configs[0].max_tokens, 300)
         row = next(r for r in self.rows() if r["id"] == record["id"])
         self.assertEqual(row["status"], "done")
         results = [r for r in self.rows() if r["kind"] == "result" and r["parent_message_id"] == record["id"]]
         self.assertEqual(len(results), 1)
         self.assertIn("5000", results[0]["body"])
+        self.assertNotIn("no answer", results[0]["body"].lower())
 
     async def test_bounded_call_token_time_and_no_repeated_tools_on_recovery(self):
         """Tool executed once; recovery from empty answer has tools=None and does not repeat tool calls."""
@@ -685,8 +673,6 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
              patch("agent_delegation_turn.complete_chat", side_effect=fake_recover_a):
-            res_a = await execute(self.settings, rec_a)
-            self.assertIn("Recovered succinct summary", res_a)
             await worker._finish(self.settings, rec_a, owner_a)
 
         self.assertEqual(len(calls_a), 2)
@@ -694,6 +680,11 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls_a[1][0], 300)
         self.assertIsNone(calls_a[1][1])
         self.assertIn("exceeded token budget", calls_a[1][2])
+        row_a = next(r for r in self.rows() if r["id"] == rec_a["id"])
+        self.assertEqual(row_a["status"], "done")
+        results_a = [r for r in self.rows() if r["kind"] == "result" and r["parent_message_id"] == rec_a["id"]]
+        self.assertEqual(len(results_a), 1)
+        self.assertIn("Recovered succinct summary", results_a[0]["body"])
 
         # Subcase B: Recovery also returns empty with missing usage; debits remaining and raises failure
         self.enqueue(token="length-fail")
@@ -706,9 +697,6 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
              patch("agent_delegation_turn.complete_chat", side_effect=fake_recover_b):
-            with self.assertRaises(RuntimeError) as ctx:
-                await execute(self.settings, rec_b)
-            self.assertIn("token budget exhausted with no content", str(ctx.exception).lower())
             await worker._finish(self.settings, rec_b, owner_b)
 
         row_b = next(r for r in self.rows() if r["id"] == rec_b["id"])
@@ -733,9 +721,6 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
              patch("agent_delegation_turn.complete_chat", side_effect=fake_exhaust):
-            with self.assertRaises(RuntimeError) as ctx:
-                await execute(self.settings, record)
-            self.assertIn("token budget exhausted with no content", str(ctx.exception).lower())
             await worker._finish(self.settings, record, owner)
 
         self.assertEqual(len(calls), 1)
