@@ -54,6 +54,19 @@ def config_from_settings(settings: Any) -> ChatConfig | None:
     )
 
 
+_ALLOWED_MSG_KEYS = {"role", "content", "name", "tool_calls", "tool_call_id"}
+
+
+def _clean_messages(messages: list[dict]) -> list[dict]:
+    cleaned = []
+    for m in messages:
+        if isinstance(m, dict):
+            cleaned.append({k: v for k, v in m.items() if k in _ALLOWED_MSG_KEYS})
+        else:
+            cleaned.append(m)
+    return cleaned
+
+
 def _request(
     config: ChatConfig,
     messages: list[dict],
@@ -62,7 +75,7 @@ def _request(
 ) -> urllib.request.Request:
     payload: dict[str, Any] = {
         "model": config.model,
-        "messages": messages,
+        "messages": _clean_messages(messages),
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
         "stream": stream,
@@ -89,6 +102,12 @@ def _delta_text(obj: dict) -> str:
     choice = choices[0]
     delta = choice.get("delta") or choice.get("message") or {}
     content = delta.get("content") if isinstance(delta, dict) else None
+    if isinstance(content, str) and content:
+        return content
+    reasoning = (delta.get("reasoning_content") or delta.get("reasoning")) if isinstance(delta, dict) else None
+    finish_reason = choice.get("finish_reason")
+    if (content is None or (isinstance(content, str) and not content.strip())) and isinstance(reasoning, str) and reasoning and finish_reason != "length":
+        return reasoning
     return content if isinstance(content, str) else ""
 
 
@@ -173,10 +192,28 @@ def _complete_worker(
         choices = obj.get("choices") if isinstance(obj, dict) else None
         if not choices or not isinstance(choices, list) or not isinstance(choices[0], dict):
             raise ChatError(f"invalid response: no choices in {data[:100]}")
-        message = choices[0].get("message")
+        choice = choices[0]
+        message = choice.get("message")
         if not isinstance(message, dict):
             raise ChatError("invalid response: message is not dict")
-        return message
+        out = dict(message)
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is not None and "finish_reason" not in out:
+            out["finish_reason"] = finish_reason
+        usage = obj.get("usage")
+        if isinstance(usage, dict) and "usage" not in out:
+            out["usage"] = usage
+        content = out.get("content")
+        raw_text = content if isinstance(content, str) else ""
+        if not raw_text.strip():
+            reasoning = (
+                out.get("reasoning_content")
+                or out.get("reasoning")
+                or (choice.get("delta", {}).get("reasoning_content") if isinstance(choice.get("delta"), dict) else None)
+            )
+            if isinstance(reasoning, str) and reasoning.strip() and finish_reason != "length":
+                out["content"] = reasoning
+        return out
     except ChatError as exc:
         raise ChatError(_clean_chat_error(str(exc), config.api_key)) from exc
     except urllib.error.HTTPError as exc:

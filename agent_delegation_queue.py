@@ -71,7 +71,9 @@ def complete(settings, target, record, worker_id, body):
     A concurrent emergency stop wins or loses the same SQLite write lock:
     it cannot leave a 'done' task without a result or emit after a stop.
     """
-    if not isinstance(body, str) or not body.strip() or len(body.encode("utf-8")) > 8192:
+    if (not isinstance(body, str) or not body.strip()
+            or body.strip() in ("(no answer)", "(no result)")
+            or len(body.encode("utf-8")) > 8192):
         raise ValueError("invalid delegation result")
     if ac.current() != target:
         raise ValueError("unbound delegation target")

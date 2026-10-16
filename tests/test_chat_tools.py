@@ -578,6 +578,38 @@ class TestCompleteChatHTTP(unittest.IsolatedAsyncioTestCase):
         self.assertIn("500", err_msg)
         self.assertNotIn(api_key, err_msg)
 
+    async def test_complete_chat_normalizes_finish_reason_usage_and_reasoning_content(self) -> None:
+        config = ChatConfig(
+            base_url=f"http://127.0.0.1:{self.port}",
+            api_key="test-key",
+            model="test-model",
+            timeout=5,
+        )
+        fake_response = {
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "Detailed calculation plan",
+                },
+            }],
+            "usage": {
+                "prompt_tokens": 15,
+                "completion_tokens": 42,
+                "total_tokens": 57,
+            },
+        }
+        FakeHTTPHandler.response_status = 200
+        FakeHTTPHandler.response_body = json.dumps(fake_response).encode("utf-8")
+
+        resp = await complete_chat(config, [{"role": "user", "content": "calculate"}])
+
+        self.assertEqual(resp.get("content"), "Detailed calculation plan")
+        self.assertEqual(resp.get("finish_reason"), "stop")
+        self.assertEqual(resp.get("usage", {}).get("completion_tokens"), 42)
+
 
 class TestAskChatToolWiring(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:

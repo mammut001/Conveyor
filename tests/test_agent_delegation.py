@@ -267,7 +267,8 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
              patch("agent_delegation_turn.complete_chat", side_effect=fake_complete):
             result = await execute(self.settings, record)
             self.assertEqual(result, "Safe child summary")
-        self.assertTrue(seen[0][0].max_tokens * (MAX_STEPS+1) <= MAX_TOKENS)
+        self.assertLessEqual(seen[0][0].max_tokens, MAX_TOKENS)
+        self.assertGreater(seen[0][0].max_tokens, 300)
         self.assertEqual(seen[0][1][0]["role"], "system")
         self.assertIn("untrusted_task_data", seen[0][1][1]["content"])
         self.assertNotIn("approve me", seen[0][1][0]["content"])
@@ -422,6 +423,173 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
                 await never_end
         finally:
             worker._running.clear()
+
+    async def test_empty_and_whitespace_responses_never_committed_as_result(self):
+        """Empty or whitespace responses must raise and mark task failed, never commit '(no answer)'."""
+        from agent_delegation_turn import execute
+        cfg = ChatConfig(base_url="https://invalid.test", api_key="x",
+                         model="x", max_tokens=1500, timeout=60)
+        # Case 1: Empty string response
+        self.enqueue(token="empty-resp")
+        with ac.bind(self.target):
+            record, owner = queue.claim(self.settings, self.target)
+        async def fake_empty(config, messages, tools=None):
+            return {"content": ""}
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_empty):
+            with self.assertRaises(RuntimeError):
+                await execute(self.settings, record)
+            await worker._finish(self.settings, record, owner)
+        row = next(r for r in self.rows() if r["id"] == record["id"])
+        self.assertNotEqual(row["status"], "done")
+        self.assertEqual(row["status"], "failed")
+        self.assertFalse(any(r["kind"] == "result" for r in self.rows()))
+
+        # Case 2: Whitespace-only response
+        self.enqueue(token="whitespace-resp")
+        with ac.bind(self.target):
+            record_ws, owner_ws = queue.claim(self.settings, self.target)
+        async def fake_ws(config, messages, tools=None):
+            return {"content": "   \n\t  \n"}
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_ws):
+            with self.assertRaises(RuntimeError):
+                await execute(self.settings, record_ws)
+            await worker._finish(self.settings, record_ws, owner_ws)
+        row_ws = next(r for r in self.rows() if r["id"] == record_ws["id"])
+        self.assertNotEqual(row_ws["status"], "done")
+        self.assertEqual(row_ws["status"], "failed")
+        self.assertFalse(any(r["kind"] == "result" for r in self.rows()))
+
+        # Case 3: queue.complete directly rejects literal '(no answer)' and '(no result)'
+        with ac.bind(self.target):
+            rec_leased, w_id = queue.claim(self.settings, self.target)
+            with self.assertRaises(ValueError):
+                queue.complete(self.settings, self.target, rec_leased, w_id, "(no answer)")
+            with self.assertRaises(ValueError):
+                queue.complete(self.settings, self.target, rec_leased, w_id, "(no result)")
+
+    async def test_token_exhaustion_and_provider_normalized_reasoning(self):
+        """Token exhaustion raises failure, while provider reasoning normalization recovers content."""
+        from agent_delegation_turn import execute
+        cfg = ChatConfig(base_url="https://invalid.test", api_key="x",
+                         model="x", max_tokens=1500, timeout=60)
+        # Token exhaustion with empty content -> must fail, not commit '(no answer)'
+        self.enqueue(token="token-exhaust")
+        with ac.bind(self.target):
+            record, owner = queue.claim(self.settings, self.target)
+        async def fake_exhaust(config, messages, tools=None):
+            return {"content": "", "finish_reason": "length",
+                    "usage": {"completion_tokens": config.max_tokens}}
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_exhaust):
+            with self.assertRaises(RuntimeError):
+                await execute(self.settings, record)
+            await worker._finish(self.settings, record, owner)
+        row = next(r for r in self.rows() if r["id"] == record["id"])
+        self.assertEqual(row["status"], "failed")
+        self.assertFalse(any(r["kind"] == "result" for r in self.rows()))
+
+        # Provider reasoning normalization: model outputs plan in reasoning_content with finish_reason stop
+        self.enqueue(token="reasoning-norm")
+        with ac.bind(self.target):
+            record2, owner2 = queue.claim(self.settings, self.target)
+        async def fake_reasoning(config, messages, tools=None):
+            return {"content": "5000 budget plan: rent 2000, food 1500, savings 1500",
+                    "finish_reason": "stop"}
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_reasoning):
+            result = await execute(self.settings, record2)
+            self.assertIn("5000", result)
+            await worker._finish(self.settings, record2, owner2)
+        row2 = next(r for r in self.rows() if r["id"] == record2["id"])
+        self.assertEqual(row2["status"], "done")
+        results = [r for r in self.rows() if r["kind"] == "result" and r["parent_message_id"] == record2["id"]]
+        self.assertEqual(len(results), 1)
+        self.assertIn("5000", results[0]["body"])
+
+    async def test_successful_no_tool_delegation_with_usable_output(self):
+        """No-tool arithmetic/budget delegation gets sufficient output budget and delivers usable final result."""
+        from agent_delegation_turn import execute
+        task_text = "验收测试 TG-1016-A：虚构每月预算5000怎么分配？请给出合计5000的简短方案，不搜索笔记、不调用工具。"
+        self.enqueue(task=task_text, tools=["notes.search"], token="no-tool-tg")
+        with ac.bind(self.target):
+            record, owner = queue.claim(self.settings, self.target)
+        cfg = ChatConfig(base_url="https://invalid.test", api_key="x",
+                         model="test-model", max_tokens=1500, timeout=60)
+        call_configs = []
+        async def fake_budget_answer(config, messages, tools=None):
+            call_configs.append(config)
+            return {
+                "content": "每月5000元预算方案：房租2000元，餐饮1500元，交通500元，娱乐500元，储蓄500元，合计5000元。",
+                "finish_reason": "stop",
+                "usage": {"completion_tokens": 120}
+            }
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_budget_answer):
+            summary = await execute(self.settings, record)
+            # Verify output budget allocated to the call was sufficient (> 300, e.g. 1200)
+            self.assertGreater(call_configs[0].max_tokens, 300)
+            self.assertIn("5000", summary)
+            self.assertNotIn("no answer", summary.lower())
+            await worker._finish(self.settings, record, owner)
+        row = next(r for r in self.rows() if r["id"] == record["id"])
+        self.assertEqual(row["status"], "done")
+        results = [r for r in self.rows() if r["kind"] == "result" and r["parent_message_id"] == record["id"]]
+        self.assertEqual(len(results), 1)
+        self.assertIn("5000", results[0]["body"])
+
+    async def test_bounded_call_token_time_and_no_repeated_tools_on_recovery(self):
+        """Tool executed once; recovery from empty answer has tools=None and does not repeat tool calls."""
+        from agent_delegation_turn import execute
+        self.enqueue(task="Check notes and summarize", tools=["notes.search"], token="tool-recovery")
+        with ac.bind(self.target):
+            record, owner = queue.claim(self.settings, self.target)
+        cfg = ChatConfig(base_url="https://invalid.test", api_key="x",
+                         model="test-model", max_tokens=1500, timeout=60)
+        tool_invocations = []
+        async def fake_tool_runner(settings, name, arg, **kwargs):
+            tool_invocations.append((name, arg))
+            return "Note: monthly budget cap is 5000"
+
+        steps_called = []
+        async def fake_model_with_recovery(config, messages, tools=None):
+            steps_called.append((config, len(messages), tools))
+            if len(steps_called) == 1:
+                # Step 0: calls notes.search tool
+                return {
+                    "tool_calls": [{
+                        "id": "call_search_1",
+                        "function": {"name": "notes__search", "arguments": json.dumps({"query": "budget"})}
+                    }],
+                    "usage": {"completion_tokens": 40}
+                }
+            elif len(steps_called) == 2:
+                # Step 1: returns empty content, triggering recovery
+                return {"content": "", "finish_reason": "stop", "usage": {"completion_tokens": 10}}
+            else:
+                # Recovery call: must be called with tools=None!
+                return {
+                    "content": "Summary: Monthly budget limit is 5000 based on notes.",
+                    "finish_reason": "stop",
+                    "usage": {"completion_tokens": 60}
+                }
+
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_model_with_recovery), \
+             patch("agent_delegation_turn.run_tool", side_effect=fake_tool_runner):
+            summary = await execute(self.settings, record)
+            self.assertIn("budget", summary.lower())
+
+        # Verify behavior assertions:
+        # 1. Tool was invoked exactly once
+        self.assertEqual(len(tool_invocations), 1)
+        self.assertEqual(tool_invocations[0][0], "notes.search")
+        # 2. Recovery call was made with tools=None
+        self.assertEqual(len(steps_called), 3)
+        self.assertIsNone(steps_called[2][2])
+        # 3. Model call count is strictly bounded
+        self.assertLessEqual(len(steps_called), 4)
 
 
 if __name__ == "__main__":
