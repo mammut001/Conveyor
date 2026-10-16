@@ -61,7 +61,7 @@ async def _finish(settings, record, worker_id):
         if not enabled(settings):
             raise asyncio.CancelledError()
         if not isinstance(summary, str) or not summary.strip() or summary.strip() in ("(no answer)", "(no result)"):
-            raise RuntimeError(f"delegation produced empty or invalid response: {summary!r}")
+            raise RuntimeError("delegation produced empty or invalid response")
         # Enqueue the result and ACK inside ONE lease-checked transaction.
         # A stop/lease expiry can no longer race a separate result write.
         with ac.bind(target):

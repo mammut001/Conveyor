@@ -19,23 +19,16 @@ MAX_TOKENS = 1200
 MAX_DURATION = 80
 
 
-def _estimate_tokens(answer: dict) -> int:
+RESERVE_RECOVERY_TOKENS = 300
+
+
+def _validated_completion_tokens(answer: dict) -> int | None:
     usage = answer.get("usage")
     if isinstance(usage, dict):
         comp = usage.get("completion_tokens")
-        if isinstance(comp, (int, float)) and comp > 0:
-            return int(comp)
-    count = 0
-    content = answer.get("content")
-    if isinstance(content, str):
-        count += max(1, len(content) // 2)
-    calls = answer.get("tool_calls") or []
-    for call in calls:
-        fn = call.get("function") or {}
-        args = str(fn.get("arguments") or "")
-        name = str(fn.get("name") or "")
-        count += max(1, (len(name) + len(args)) // 2)
-    return max(10, count)
+        if isinstance(comp, int) and not isinstance(comp, bool) and comp >= 0:
+            return comp
+    return None
 
 
 async def execute(settings, row):
@@ -54,8 +47,8 @@ async def execute(settings, row):
     cfg = config_from_settings(settings)
     if cfg is None:
         raise RuntimeError("chat model unavailable")
-    total_token_budget = min(int(getattr(settings, "delegation_max_tokens", MAX_TOKENS) or MAX_TOKENS), cfg.max_tokens)
-    remaining_tokens = total_token_budget
+    # Hard-cap total budget at MAX_TOKENS; do not exceed cfg.max_tokens either.
+    remaining_tokens = min(MAX_TOKENS, cfg.max_tokens)
     total_duration = min(cfg.timeout, MAX_DURATION)
     remaining_time = min(total_duration, float(row["deadline"]) - time.time(),
                          float(row["lease_expires_at"]) - time.time() - 1)
@@ -93,7 +86,6 @@ async def execute(settings, row):
             used = 0
             total_calls = 0
             max_model_calls = MAX_STEPS + 2
-            executed_side_effects: set[tuple[str, str]] = set()
 
             for step in range(MAX_STEPS + 1):
                 if not agent_delegation.enabled(settings):
@@ -108,7 +100,14 @@ async def execute(settings, row):
                 if total_calls >= max_model_calls:
                     raise RuntimeError("Child call budget exhausted")
 
-                step_max_tokens = min(remaining_tokens, cfg.max_tokens)
+                # Reserve budget for recovery/final synthesis if sufficient tokens remain;
+                # no new budget is created on recovery.
+                if remaining_tokens > RESERVE_RECOVERY_TOKENS:
+                    call_allowance = remaining_tokens - RESERVE_RECOVERY_TOKENS
+                else:
+                    call_allowance = remaining_tokens
+
+                step_max_tokens = min(call_allowance, cfg.max_tokens)
                 step_timeout = min(cfg.timeout, max(1.0, time_left))
                 step_cfg = replace(cfg, max_tokens=step_max_tokens, timeout=step_timeout)
 
@@ -118,13 +117,12 @@ async def execute(settings, row):
                     tools=schemas if step < MAX_STEPS else None)
 
                 finish_reason = answer.get("finish_reason")
-                usage = answer.get("usage")
-                if isinstance(usage, dict) and isinstance(usage.get("completion_tokens"), (int, float)) and usage["completion_tokens"] > 0:
-                    tokens_used = int(usage["completion_tokens"])
-                elif finish_reason == "length":
-                    tokens_used = step_max_tokens
+                comp_tokens = _validated_completion_tokens(answer)
+                if comp_tokens is not None:
+                    tokens_used = comp_tokens
                 else:
-                    tokens_used = _estimate_tokens(answer)
+                    # Missing/malformed usage: conservatively debit the entire call allowance
+                    tokens_used = step_max_tokens
                 remaining_tokens = max(0, remaining_tokens - tokens_used)
 
                 calls = answer.get("tool_calls") or []
@@ -134,11 +132,11 @@ async def execute(settings, row):
                     if text:
                         return text[:2500]
 
-                    # Empty/whitespace response: bounded recovery without tools.
+                    # Empty/whitespace response: attempt bounded recovery without tools.
                     cur_time = time.time()
                     time_left = min(total_duration, float(row["deadline"]) - cur_time,
                                     float(row["lease_expires_at"]) - cur_time - 1)
-                    if remaining_tokens >= 150 and time_left >= 5 and total_calls < max_model_calls:
+                    if remaining_tokens > 0 and time_left >= 5 and total_calls < max_model_calls:
                         total_calls += 1
                         rec_tokens = min(remaining_tokens, cfg.max_tokens)
                         rec_cfg = replace(cfg, max_tokens=rec_tokens,
@@ -149,15 +147,13 @@ async def execute(settings, row):
                             else "Previous response was empty. Please provide a concise factual result."
                         )
                         rec_messages = list(messages) + [{"role": "user", "content": rec_prompt}]
-                        # No tools offered on recovery: guarantees no side-effecting tools repeated
+                        # tools=None guarantees no tools can be called or repeated on recovery
                         rec_answer = await complete_chat(rec_cfg, rec_messages, tools=None)
-                        rec_usage = rec_answer.get("usage")
-                        if isinstance(rec_usage, dict) and isinstance(rec_usage.get("completion_tokens"), (int, float)) and rec_usage["completion_tokens"] > 0:
-                            rec_used = int(rec_usage["completion_tokens"])
-                        elif rec_answer.get("finish_reason") == "length":
-                            rec_used = rec_tokens
+                        rec_comp = _validated_completion_tokens(rec_answer)
+                        if rec_comp is not None:
+                            rec_used = rec_comp
                         else:
-                            rec_used = _estimate_tokens(rec_answer)
+                            rec_used = rec_tokens
                         remaining_tokens = max(0, remaining_tokens - rec_used)
                         rec_text = str(rec_answer.get("content") or "").strip()
                         if rec_text:
@@ -202,14 +198,9 @@ async def execute(settings, row):
                                 await _request_confirmation(
                                     msg, CollectingPort(), settings, name, arg)
                                 return f"Human approval requested for {name}; no action executed"
-                            call_key = (name, raw_args)
-                            if call_key in executed_side_effects:
-                                response = "denied: repeated tool call"
-                            else:
-                                executed_side_effects.add(call_key)
-                                response = await run_tool(
-                                    settings, name, arg, channel=msg.channel,
-                                    chat_id=msg.chat_id, operator_id=msg.operator_id)
+                            response = await run_tool(
+                                settings, name, arg, channel=msg.channel,
+                                chat_id=msg.chat_id, operator_id=msg.operator_id)
                     messages.append({"role": "tool",
                                      "tool_call_id": call.get("id", ""),
                                      "content": format_tool_result(name, response, 900)})

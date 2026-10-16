@@ -54,14 +54,14 @@ def config_from_settings(settings: Any) -> ChatConfig | None:
     )
 
 
-_ALLOWED_MSG_KEYS = {"role", "content", "name", "tool_calls", "tool_call_id"}
+_ATTACHED_METADATA_KEYS = frozenset({"finish_reason", "usage"})
 
 
-def _clean_messages(messages: list[dict]) -> list[dict]:
+def _strip_attached_metadata(messages: list[dict]) -> list[dict]:
     cleaned = []
     for m in messages:
-        if isinstance(m, dict):
-            cleaned.append({k: v for k, v in m.items() if k in _ALLOWED_MSG_KEYS})
+        if isinstance(m, dict) and any(k in m for k in _ATTACHED_METADATA_KEYS):
+            cleaned.append({k: v for k, v in m.items() if k not in _ATTACHED_METADATA_KEYS})
         else:
             cleaned.append(m)
     return cleaned
@@ -75,7 +75,7 @@ def _request(
 ) -> urllib.request.Request:
     payload: dict[str, Any] = {
         "model": config.model,
-        "messages": _clean_messages(messages),
+        "messages": _strip_attached_metadata(messages),
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
         "stream": stream,
@@ -102,12 +102,6 @@ def _delta_text(obj: dict) -> str:
     choice = choices[0]
     delta = choice.get("delta") or choice.get("message") or {}
     content = delta.get("content") if isinstance(delta, dict) else None
-    if isinstance(content, str) and content:
-        return content
-    reasoning = (delta.get("reasoning_content") or delta.get("reasoning")) if isinstance(delta, dict) else None
-    finish_reason = choice.get("finish_reason")
-    if (content is None or (isinstance(content, str) and not content.strip())) and isinstance(reasoning, str) and reasoning and finish_reason != "length":
-        return reasoning
     return content if isinstance(content, str) else ""
 
 
@@ -203,16 +197,6 @@ def _complete_worker(
         usage = obj.get("usage")
         if isinstance(usage, dict) and "usage" not in out:
             out["usage"] = usage
-        content = out.get("content")
-        raw_text = content if isinstance(content, str) else ""
-        if not raw_text.strip():
-            reasoning = (
-                out.get("reasoning_content")
-                or out.get("reasoning")
-                or (choice.get("delta", {}).get("reasoning_content") if isinstance(choice.get("delta"), dict) else None)
-            )
-            if isinstance(reasoning, str) and reasoning.strip() and finish_reason != "length":
-                out["content"] = reasoning
         return out
     except ChatError as exc:
         raise ChatError(_clean_chat_error(str(exc), config.api_key)) from exc

@@ -578,7 +578,7 @@ class TestCompleteChatHTTP(unittest.IsolatedAsyncioTestCase):
         self.assertIn("500", err_msg)
         self.assertNotIn(api_key, err_msg)
 
-    async def test_complete_chat_normalizes_finish_reason_usage_and_reasoning_content(self) -> None:
+    async def test_complete_chat_attaches_finish_reason_and_usage_without_promoting_reasoning(self) -> None:
         config = ChatConfig(
             base_url=f"http://127.0.0.1:{self.port}",
             api_key="test-key",
@@ -606,9 +606,37 @@ class TestCompleteChatHTTP(unittest.IsolatedAsyncioTestCase):
 
         resp = await complete_chat(config, [{"role": "user", "content": "calculate"}])
 
-        self.assertEqual(resp.get("content"), "Detailed calculation plan")
+        # Content must remain None/empty; reasoning is never substituted as content
+        self.assertIsNone(resp.get("content"))
+        self.assertEqual(resp.get("reasoning_content"), "Detailed calculation plan")
         self.assertEqual(resp.get("finish_reason"), "stop")
         self.assertEqual(resp.get("usage", {}).get("completion_tokens"), 42)
+
+    async def test_complete_chat_strips_attached_metadata_on_subsequent_request(self) -> None:
+        config = ChatConfig(
+            base_url=f"http://127.0.0.1:{self.port}",
+            api_key="test-key",
+            model="test-model",
+            timeout=5,
+        )
+        FakeHTTPHandler.response_status = 200
+        FakeHTTPHandler.response_body = b'{"choices": [{"message": {"role": "assistant", "content": "ok"}}]}'
+
+        # Next-turn messages include previously returned metadata plus custom provider fields
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "previous", "finish_reason": "stop",
+             "usage": {"completion_tokens": 20}, "custom_provider_field": "kept"},
+        ]
+        await complete_chat(config, messages)
+
+        sent_messages = FakeHTTPHandler.recorded_requests[0]["body"]["messages"]
+        self.assertEqual(len(sent_messages), 2)
+        second_msg = sent_messages[1]
+        self.assertNotIn("finish_reason", second_msg)
+        self.assertNotIn("usage", second_msg)
+        self.assertEqual(second_msg.get("custom_provider_field"), "kept")
+        self.assertEqual(second_msg.get("content"), "previous")
 
 
 class TestAskChatToolWiring(unittest.IsolatedAsyncioTestCase):
