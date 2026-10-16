@@ -181,6 +181,10 @@ def main() -> None:
         start_purge_worker(loop, settings)
     import approval_relay
     relay_consumer = approval_relay.start_relay_worker(loop, settings, channel="web")
+    from agent_delegation_worker import start as start_delegation
+    delegation_worker = start_delegation(loop, settings)
+    import agent_security
+    agent_retention_worker = agent_security.start(loop, settings)
     logger.info(
         "Conveyor Web Workbench listening on http://%s:%d",
         settings.conveyor_web_host,
@@ -192,6 +196,16 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        worker_tasks = []
+        if agent_retention_worker is not None:
+            agent_retention_worker.cancel()
+            worker_tasks.append(agent_retention_worker)
+        if delegation_worker is not None:
+            delegation_worker.stop()
+            if delegation_worker.task is not None:
+                worker_tasks.append(delegation_worker.task)
+        if worker_tasks:
+            loop.run_until_complete(asyncio.gather(*worker_tasks, return_exceptions=True))
         if relay_consumer is not None:
             relay_consumer.stop()
         server.shutdown()
