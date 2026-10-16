@@ -35,6 +35,7 @@ from handlers.tools.runner import cancel_pending, execute_confirmed
 from logging_setup import configure_logging
 from redaction import redact_text
 from runner import CodexRunner
+from agent_result_poller_lifecycle import cancel_poller, create_poller
 
 configure_logging(
     service_name="codex_feishu_bot",
@@ -307,15 +308,13 @@ async def main() -> None:
             if getattr(result, "ok", True) is False:
                 raise RuntimeError("Feishu result send rejected")
             return getattr(result, "message_id", None)
-        result_poller = asyncio.create_task(
-            agent_channel_results.run(settings, "feishu", send_agent_result),
+        result_poller = create_poller(
+            lambda: agent_channel_results.run(settings, "feishu", send_agent_result),
             name="conveyor-agent-feishu-results")
     try:
         await channel.connect()
     finally:
-        if result_poller:
-            result_poller.cancel()
-            await asyncio.gather(result_poller, return_exceptions=True)
+        await cancel_poller(result_poller)
         if consumer:
             consumer.stop()
 

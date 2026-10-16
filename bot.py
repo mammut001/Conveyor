@@ -32,6 +32,7 @@ from handlers.onboarding import (
 from handlers.tools.runner import cancel_pending, execute_confirmed, parse_tool_callback
 from logging_setup import configure_logging
 from runner import CodexRunner
+from agent_result_poller_lifecycle import AgentResultPollingApplication, configure_telegram_poller
 from telegram_navigation import callback_action, legacy_action, navigation_screen
 
 
@@ -782,16 +783,12 @@ async def post_init(application: Application) -> None:
             if not message_id:
                 raise RuntimeError("Telegram result send not acknowledged")
             return message_id
-        application.bot_data["agent_result_poller"] = application.create_task(
-            agent_channel_results.run(settings, "telegram", send_agent_result),
-            name="conveyor-agent-telegram-results")
+        configure_telegram_poller(application, lambda: agent_channel_results.run(
+            settings, "telegram", send_agent_result))
     logger.info("Codex Telegram bot ready. Workspace=%s task_root=%s", settings.codex_workspace_root, settings.codex_task_root)
 
 
 async def post_shutdown(application: Application) -> None:
-    task = application.bot_data.get("agent_result_poller")
-    if task is not None:
-        task.cancel()
     consumer = application.bot_data.get("approval_relay_consumer")
     if consumer is not None:
         consumer.stop()
@@ -800,6 +797,7 @@ async def post_shutdown(application: Application) -> None:
 def main() -> None:
     application = (
         Application.builder()
+        .application_class(AgentResultPollingApplication)
         .token(settings.telegram_bot_token)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
