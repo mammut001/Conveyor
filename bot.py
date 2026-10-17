@@ -404,9 +404,16 @@ async def task_status_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     if query is None:
         return
-    await query.answer()
     data = query.data or ""
-    task_ref = data.split("task:status:", 1)[-1].strip()
+    match = re.fullmatch(r"task:status:([0-9a-f]{6,32})", data)
+    if not match:
+        try:
+            await query.answer("无效的任务请求", show_alert=True)
+        except Exception:
+            pass
+        return
+    await query.answer()
+    task_ref = match.group(1)
     user = update.effective_user
     chat = update.effective_chat
     inbound = InboundMessage(
@@ -771,48 +778,50 @@ async def generic_command_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def post_init(application: Application) -> None:
     await runner.validate()
-    await application.bot.set_my_commands(
-        [
-            ("fix", "改文件：/fix <需求>"),
-            ("workers", "查看 Workers 和任务状态"),
-            ("sessions", "查看当前会话和历史任务"),
-            ("switch", "打开会话导航（只读）"),
-            ("jobs", "看最近任务"),
-            ("last", "看最近结果"),
-            ("diff", "看最近改动"),
-            ("apply", "应用最近改动"),
-            ("discard", "丢弃最近 worktree"),
-            ("clean", "清理旧任务"),
-            ("maintain", "自维护检查和清理"),
-            ("diag", "一键诊断包"),
-            ("health", "健康快照摘要"),
-            ("doctor", "后端体检"),
-            ("audit", "任务和 worktree 审计"),
-            ("log", "安全查看最近 job 日志摘要"),
-            ("meta", "查看 job.json 结构状态"),
-            ("metrics", "最近任务趋势和 token 用量"),
-            ("security", "安全审计"),
-            ("ratelimit", "查看最近 429 限流"),
-            ("smoke", "端到端验收"),
-            ("editcheck", "临时 repo 真改文件验收"),
-            ("memo", "显式记一条：/memo <内容>"),
-            ("memory", "看今天 MEMORY.md"),
-            ("journal", "看已归档的 journal 列表"),
-            ("cancel", "中止当前任务"),
-            ("load", "本机负载快照"),
-            ("vps", "同上 (alias /load)"),
-            ("htop", "top 风格进程帧"),
-            ("ps", "进程快照 (comm 模式)"),
-            ("tools", "列出 agent 工具"),
-            ("disk", "磁盘使用快照"),
-            ("logs", "Conveyor 服务日志"),
-            ("service_status", "Conveyor 服务状态"),
-            ("git_status", "Workspace git status"),
-            ("diagnose", "Hybrid 主机诊断"),
-            ("restart", "重启 Conveyor 服务"),
-            ("audit_tools", "危险工具审计"),
-        ]
-    )
+    bot_commands = [
+        ("fix", "改文件：/fix <需求>"),
+        ("workers", "查看 Workers 和任务状态"),
+        ("sessions", "查看当前会话和历史任务"),
+        ("switch", "打开会话导航（只读）"),
+        ("jobs", "看最近任务"),
+        ("last", "看最近结果"),
+        ("diff", "看最近改动"),
+        ("apply", "应用最近改动"),
+        ("discard", "丢弃最近 worktree"),
+        ("clean", "清理旧任务"),
+        ("maintain", "自维护检查和清理"),
+        ("diag", "一键诊断包"),
+        ("health", "健康快照摘要"),
+        ("doctor", "后端体检"),
+        ("audit", "任务和 worktree 审计"),
+        ("log", "安全查看最近 job 日志摘要"),
+        ("meta", "查看 job.json 结构状态"),
+        ("metrics", "最近任务趋势和 token 用量"),
+        ("security", "安全审计"),
+        ("ratelimit", "查看最近 429 限流"),
+        ("smoke", "端到端验收"),
+        ("editcheck", "临时 repo 真改文件验收"),
+        ("memo", "显式记一条：/memo <内容>"),
+        ("memory", "看今天 MEMORY.md"),
+        ("journal", "看已归档的 journal 列表"),
+        ("cancel", "中止当前任务"),
+        ("load", "本机负载快照"),
+        ("vps", "同上 (alias /load)"),
+        ("htop", "top 风格进程帧"),
+        ("ps", "进程快照 (comm 模式)"),
+        ("tools", "列出 agent 工具"),
+        ("disk", "磁盘使用快照"),
+        ("logs", "Conveyor 服务日志"),
+        ("service_status", "Conveyor 服务状态"),
+        ("git_status", "Workspace git status"),
+        ("diagnose", "Hybrid 主机诊断"),
+        ("restart", "重启 Conveyor 服务"),
+        ("audit_tools", "危险工具审计"),
+    ]
+    import agent_telegram_presentation as tg_pres
+    if tg_pres.feature_enabled(settings):
+        bot_commands.append(("agentstatus", "查看转交任务状态"))
+    await application.bot.set_my_commands(bot_commands)
     if getattr(settings, "approval_relay_enabled", False):
         try:
             import approval_relay
@@ -919,7 +928,7 @@ def main() -> None:
     application.add_handler(CommandHandler("agentstatus", agent_status_cmd))
     application.add_handler(CallbackQueryHandler(navigation_callback, pattern=r"^tgn:"))
     application.add_handler(CallbackQueryHandler(tool_callback, pattern=r"^tool:"))
-    application.add_handler(CallbackQueryHandler(task_status_callback, pattern=r"^task:status:"))
+    application.add_handler(CallbackQueryHandler(task_status_callback, pattern=r"^task:status:[0-9a-f]{6,32}$"))
     application.add_handler(CallbackQueryHandler(relay_callback, pattern=r"^relay:"))
     application.add_handler(CallbackQueryHandler(deep_callback, pattern=r"^deep$"))
     # Catch-all for COMMAND_TABLE entries without explicit CommandHandler above.

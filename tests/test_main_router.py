@@ -238,7 +238,7 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.rows())
         with patch("approval_relay.claim_local", return_value="ok"):
             await execute_confirmed(msg, port, self.settings, pending.token)
-        self.assertIn("queued:", port.replies[-1])
+        self.assertIn("正在排队", port.replies[-1])
         task = next(r for r in self.rows() if r["kind"] == "task")
         target = ac.resolve(self.settings, "web",
                             chat_id_for(self.finance["id"]), WEB_OPERATOR)
