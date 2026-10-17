@@ -177,10 +177,11 @@ def query_delegated_task_status(
     Guarantees:
     - Fails closed immediately if feature flags are disabled without touching SQLite.
     - Scopes SQL by origin_channel, origin_chat, origin_operator BEFORE prefix limit/ambiguity.
-    - Restricts task_ref to hex characters [0-9a-f]{6,32}.
+    - Restricts task_ref to lowercase hex characters [0-9a-f]{6,32}.
     - Verifies m.to_agent == r.agent_id.
     - Inspects agent_result_notifications outbox state for truthful delivery acknowledgment.
-    - Preserves historical completed tasks even if kill switch is active or agent archived.
+    - Preserves historical completed tasks even if agent archived.
+    - Distinguishes waiting retry from failed when retry attempts are exhausted.
     - Does not guess cancellation reasons for generic dead tasks.
     - Never returns task bodies or secret args.
     """
@@ -259,9 +260,6 @@ def query_delegated_task_status(
     deadline = row["deadline"]
     lease_expires = row["lease_expires_at"]
 
-    import agent_security
-    is_killed = agent_security.killed(settings)
-
     from agents import AgentStore
     store = AgentStore(settings)
     target_agent = store.get(row["agent_id"])
@@ -273,15 +271,19 @@ def query_delegated_task_status(
     # 1. Historical completed task: NEVER rewrite done -> failed/cancelled
     if status == "done":
         state_label = "已完成"
-        is_terminal = True
         if outbox_state == "sent":
             detail = "结果已发送。"
+            is_terminal = True
         elif outbox_state in ("pending", "leased", "retry"):
             detail = "结果已生成，正在等待发送。"
+            # Allow user to refresh while delivery is unresolved
+            is_terminal = False
         elif outbox_state == "dead":
             detail = "结果已生成，但通知发送未成功。"
+            is_terminal = True
         else:
             detail = "结果已生成。"
+            is_terminal = True
 
     # 2. Terminal dead task: do not guess cancelled vs revoked; use generic stopped
     elif status == "dead":
@@ -291,11 +293,7 @@ def query_delegated_task_status(
             state_label = "已停止"
         is_terminal = True
 
-    # 3. Active tasks subject to kill policy or archived agent policy
-    elif is_killed:
-        state_label = "暂停中"
-        detail = "当前策略暂停处理（安全开关已开启）。"
-        is_terminal = False
+    # 3. Active tasks subject to archived agent policy
     elif is_archived:
         state_label = "助手不可用"
         detail = "目标助手已被归档或不可用。"
@@ -317,14 +315,22 @@ def query_delegated_task_status(
             state_label = "处理中"
             is_terminal = False
         else:
-            state_label = "重试中"
-            is_terminal = False
+            # Lease expired
+            if attempts >= max_attempts:
+                state_label = "已失败"
+                is_terminal = True
+            else:
+                state_label = "等待重试"
+                is_terminal = False
     elif status == "failed":
         if deadline and now >= deadline:
             state_label = "已超时"
             is_terminal = True
+        elif attempts >= max_attempts:
+            state_label = "已失败"
+            is_terminal = True
         else:
-            state_label = "重试中"
+            state_label = "等待重试"
             is_terminal = False
     else:
         state_label = "状态未知"
@@ -392,6 +398,7 @@ def _is_unmistakable_simple_table(
     Rejects:
     - Escaped pipes (\\|)
     - Pipes inside inline code (`...|...`)
+    - Separator column count mismatch with headers
     - Row cell counts that do not exactly match header cell count
     - Empty headers
     """
@@ -410,6 +417,10 @@ def _is_unmistakable_simple_table(
         return False
 
     header_count = len(headers)
+    sep_cells = _parse_table_cells(separator_line)
+    if len(sep_cells) != header_count:
+        return False
+
     if not data_lines:
         return False
 
@@ -483,11 +494,11 @@ def convert_markdown_tables_to_bullets(text: str) -> str:
                 bullet_lines: list[str] = []
                 for d_line in data_lines:
                     row_cells = _parse_table_cells(d_line)
-                    pairs = [f"{h}: {v}" for h, v in zip(headers, row_cells) if v]
+                    pairs = [f"{h}：{v}" for h, v in zip(headers, row_cells) if v]
                     if pairs:
-                        bullet_lines.append("• " + " | ".join(pairs))
+                        bullet_lines.append("• " + "；".join(pairs))
                     else:
-                        bullet_lines.append("• " + " | ".join(row_cells))
+                        bullet_lines.append("• " + "；".join(row_cells))
 
                 out_lines.extend(bullet_lines)
                 i = j
@@ -503,5 +514,6 @@ def format_telegram_result(agent_name: str, result_tag: str, result_text: str) -
     """Format Telegram-safe completed result notification with localized header and stable tag."""
     safe_name = truncate(redact_text(str(agent_name or "")), 40)
     redacted = redact_text(result_text or "")
-    formatted_body = convert_markdown_tables_to_bullets(redacted)[:2400]
-    return f"[{safe_name}] 已完成 [result:{result_tag}]:\n{formatted_body}"
+    formatted_body = convert_markdown_tables_to_bullets(redacted)
+    full_text = f"[{safe_name}] 已完成 [result:{result_tag}]:\n{formatted_body}"
+    return truncate(full_text, 2400)
