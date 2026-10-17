@@ -191,6 +191,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
         route_agent_id: str | None = None,
         to_agent: str | None = None,
         outbox_state: str | None = None,
+        created_at: float | None = None,
     ) -> None:
         db_path = Path(self.settings.codex_memory_root) / "state" / "job_queue.sqlite3"
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -222,7 +223,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
                    VALUES (?, ?, ?, ?, ?, ?, 0)""",
                 (app_key, target_route_agent, "Finance", origin_channel, origin_operator, origin_chat)
             )
-            now = time.time()
+            now = created_at if created_at is not None else time.time()
             dl = deadline if deadline is not None else now + 3600
             conn.execute(
                 """INSERT OR REPLACE INTO agent_mailbox
@@ -908,11 +909,15 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
             await bot.agent_status_cmd(update_cmd, context)
             self.assertTrue(any("正在排队" in r for r in outbound.replies))
 
-        # Command with no args prompts usage
+        # Command with no args displays recent tasks list with buttons
         context_empty = SimpleNamespace(args=[])
-        with patch("bot._guard", return_value=True), patch("bot._reply") as mock_reply:
+        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            outbound = MockPort(supports_inline_buttons=True)
+            mock_outbound.return_value = outbound
             await bot.agent_status_cmd(update_cmd, context_empty)
-            mock_reply.assert_called_with(update_cmd, "用法: /agentstatus <任务编号>")
+            self.assertTrue(any(task_id[:12] in r for r in outbound.replies))
+            self.assertTrue(any("最近转交任务" in r for r in outbound.replies))
+            self.assertEqual(len(outbound.button_replies), 1)
 
         # Command with invalid hex
         context_invalid = SimpleNamespace(args=["bad_ref!"])
@@ -979,6 +984,449 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
                 context = SimpleNamespace(args=[task_id])
                 await bot.agent_status_cmd(update_valid, context)
                 self.assertEqual(outbound.replies[0], "功能未启用或当前不可用。")
+
+    async def test_recent_delegated_tasks_ordering_and_deterministic_tiebreak(self):
+        base_time = 1000000.0
+        # 6 tasks: task 0-3 with distinct timestamps; task 4 and 5 with identical timestamp for tiebreak
+        self._create_task_in_db("000000000000000000000000000000a1", status="queued", created_at=base_time + 10)
+        self._create_task_in_db("000000000000000000000000000000a2", status="queued", created_at=base_time + 20)
+        self._create_task_in_db("000000000000000000000000000000a3", status="queued", created_at=base_time + 30)
+        self._create_task_in_db("000000000000000000000000000000a4", status="queued", created_at=base_time + 40)
+        # Identical timestamp tiebreak: a6 (id higher) should beat a5
+        self._create_task_in_db("000000000000000000000000000000a5", status="queued", created_at=base_time + 50)
+        self._create_task_in_db("000000000000000000000000000000a6", status="queued", created_at=base_time + 50)
+
+        tasks, err = tg_pres.query_recent_delegated_tasks(self.settings, self.tg_msg(), limit=5)
+        self.assertIsNone(err)
+        self.assertEqual(len(tasks), 5)
+        # Order should be newest first: a6 (50), a5 (50), a4 (40), a3 (30), a2 (20). a1 (10) omitted due to limit 5.
+        returned_ids = [t["task_id"] for t in tasks]
+        self.assertEqual(returned_ids, [
+            "000000000000000000000000000000a6",
+            "000000000000000000000000000000a5",
+            "000000000000000000000000000000a4",
+            "000000000000000000000000000000a3",
+            "000000000000000000000000000000a2",
+        ])
+
+        display, buttons = tg_pres.get_recent_tasks_display(self.settings, self.tg_msg())
+        self.assertIn("最近转交任务", display)
+        self.assertIn("[Finance]", display)
+        self.assertEqual(len(buttons), 6)  # 5 tasks + 1 refresh button
+        # Each task button has task:status:<id>
+        for i in range(5):
+            self.assertEqual(buttons[i][0]["callback_data"], f"task:status:{returned_ids[i]}")
+        # Bottom button refreshes recent list
+        self.assertEqual(buttons[5][0]["callback_data"], "task:recent")
+
+    async def test_recent_delegated_tasks_scoping_before_limit(self):
+        base_time = 2000000.0
+        # 5 scoped tasks with older timestamps
+        for i in range(5):
+            self._create_task_in_db(
+                f"1111111111111111111111111111110{i}",
+                status="queued",
+                origin_chat="12345",
+                origin_operator="12345",
+                origin_channel="telegram",
+                created_at=base_time + i,
+            )
+
+        # 5 foreign tasks with NEWER timestamps that must NOT be selected
+        # 1. Foreign chat
+        self._create_task_in_db(
+            "99999999999999999999999999999901",
+            status="queued",
+            origin_chat="99999",
+            origin_operator="12345",
+            origin_channel="telegram",
+            created_at=base_time + 100,
+        )
+        # 2. Foreign operator
+        self._create_task_in_db(
+            "99999999999999999999999999999902",
+            status="queued",
+            origin_chat="12345",
+            origin_operator="99999",
+            origin_channel="telegram",
+            created_at=base_time + 101,
+        )
+        # 3. Foreign channel
+        self._create_task_in_db(
+            "99999999999999999999999999999903",
+            status="queued",
+            origin_chat="12345",
+            origin_operator="12345",
+            origin_channel="feishu",
+            created_at=base_time + 102,
+        )
+        # 4. Route/to_agent mismatch
+        self._create_task_in_db(
+            "99999999999999999999999999999904",
+            status="queued",
+            origin_chat="12345",
+            origin_operator="12345",
+            origin_channel="telegram",
+            route_agent_id=self.finance["id"],
+            to_agent="default",  # mismatch
+            created_at=base_time + 103,
+        )
+
+        tasks, err = tg_pres.query_recent_delegated_tasks(self.settings, self.tg_msg(), limit=5)
+        self.assertIsNone(err)
+        self.assertEqual(len(tasks), 5)
+        # Verify all returned tasks are the scoped ones
+        for t in tasks:
+            self.assertTrue(t["task_id"].startswith("1111111111111111111111111111110"))
+            self.assertFalse(t["task_id"].startswith("9999999999999999999999999999990"))
+
+    async def test_recent_delegated_tasks_empty_history_and_missing_tables(self):
+        # Empty DB (no tasks)
+        display, buttons = tg_pres.get_recent_tasks_display(self.settings, self.tg_msg())
+        self.assertIn("暂无最近转交任务", display)
+        self.assertIsNotNone(buttons)
+        self.assertEqual(buttons[0][0]["callback_data"], "task:recent")
+
+        # Missing DB file
+        isolated_root = self.root / "empty_dir"
+        isolated_root.mkdir()
+        isolated_settings = _settings(isolated_root)
+        tasks, err = tg_pres.query_recent_delegated_tasks(isolated_settings, self.tg_msg())
+        self.assertIsNone(err)
+        self.assertEqual(tasks, [])
+
+    async def test_recent_delegated_tasks_denials(self):
+        # 1. Non-owner denial
+        tasks, err = tg_pres.query_recent_delegated_tasks(self.settings, self.tg_msg(operator_id="99999"))
+        self.assertIsNone(tasks)
+        self.assertIn("无权查看", err)
+
+        # 2. Group chat denial
+        tasks, err = tg_pres.query_recent_delegated_tasks(self.settings, self.tg_msg(chat_type="group"))
+        self.assertIsNone(tasks)
+        self.assertIn("无权查看", err)
+
+        # 3. Channel denial
+        msg_feishu = InboundMessage(channel="feishu", operator_id="12345", chat_id="12345", message_id="1", text="", chat_type="p2p")
+        tasks, err = tg_pres.query_recent_delegated_tasks(self.settings, msg_feishu)
+        self.assertIsNone(tasks)
+        self.assertIn("无权查看", err)
+
+        # 4. Feature flag off
+        with patch.dict(os.environ, {"CONVEYOR_MAIN_ROUTER": "0"}):
+            self.assertFalse(tg_pres.feature_enabled(self.settings))
+            tasks, err = tg_pres.query_recent_delegated_tasks(self.settings, self.tg_msg())
+            self.assertIsNone(tasks)
+            self.assertIn("功能未启用", err)
+
+        # 5. Kill switch
+        with patch.dict(os.environ, {"CONVEYOR_AGENTS_KILL": "1"}):
+            tasks, err = tg_pres.query_recent_delegated_tasks(self.settings, self.tg_msg())
+            self.assertIsNone(tasks)
+            self.assertIn("功能未启用", err)
+
+    async def test_recent_delegated_tasks_lifecycle_and_delivery_detail(self):
+        # 1. Done task with outbox 'sent' -> 结果已发送。
+        self._create_task_in_db("40000000000000000000000000000001", status="done", outbox_state="sent")
+        # 2. Done task with outbox 'pending' -> 结果已生成，正在等待发送。
+        self._create_task_in_db("40000000000000000000000000000002", status="done", outbox_state="pending")
+        # 3. Leased task with expired lease and maxed attempts -> 已失败
+        self._create_task_in_db("40000000000000000000000000000003", status="leased", attempts=3, max_attempts=3, lease_expires_at=time.time() - 10)
+        # 4. Leased task with expired lease and attempts remaining -> 等待重试
+        self._create_task_in_db("40000000000000000000000000000004", status="leased", attempts=1, max_attempts=3, lease_expires_at=time.time() - 10)
+
+        tasks, err = tg_pres.query_recent_delegated_tasks(self.settings, self.tg_msg(), limit=5)
+        self.assertIsNone(err)
+        status_map = {t["task_id"]: t for t in tasks}
+
+        self.assertEqual(status_map["40000000000000000000000000000001"]["state_label"], "已完成")
+        self.assertEqual(status_map["40000000000000000000000000000001"]["detail"], "结果已发送。")
+        self.assertTrue(status_map["40000000000000000000000000000001"]["is_terminal"])
+
+        self.assertEqual(status_map["40000000000000000000000000000002"]["state_label"], "已完成")
+        self.assertEqual(status_map["40000000000000000000000000000002"]["detail"], "结果已生成，正在等待发送。")
+        self.assertFalse(status_map["40000000000000000000000000000002"]["is_terminal"])
+
+        self.assertEqual(status_map["40000000000000000000000000000003"]["state_label"], "已失败")
+        self.assertTrue(status_map["40000000000000000000000000000003"]["is_terminal"])
+
+        self.assertEqual(status_map["40000000000000000000000000000004"]["state_label"], "等待重试")
+        self.assertFalse(status_map["40000000000000000000000000000004"]["is_terminal"])
+
+        # Ensure task body/payload/secret not leaked in display
+        display, _ = tg_pres.get_recent_tasks_display(self.settings, self.tg_msg())
+        self.assertNotIn("secret", display)
+        self.assertNotIn("do_not_leak", display)
+
+    async def test_task_status_display_refresh_and_back_navigation(self):
+        task_id = "50000000000000000000000000000001"
+        self._create_task_in_db(task_id, status="queued")
+
+        # Without include_back: PR150 behavior (only refresh button)
+        display, buttons = tg_pres.get_task_status_display(self.settings, self.tg_msg(), task_id, include_back=False)
+        self.assertEqual(len(buttons[0]), 1)
+        self.assertEqual(buttons[0][0]["callback_data"], f"task:status:{task_id}")
+
+        # With include_back: includes both refresh and return to list
+        display, buttons = tg_pres.get_task_status_display(self.settings, self.tg_msg(), task_id, include_back=True)
+        self.assertEqual(len(buttons[0]), 2)
+        self.assertEqual(buttons[0][0]["callback_data"], f"task:status:{task_id}")
+        self.assertEqual(buttons[0][1]["callback_data"], "task:recent")
+
+        # Terminal task with include_back: returns only back button
+        task_done_id = "50000000000000000000000000000002"
+        self._create_task_in_db(task_done_id, status="done", outbox_state="sent")
+        display, buttons = tg_pres.get_task_status_display(self.settings, self.tg_msg(), task_done_id, include_back=True)
+        self.assertEqual(len(buttons[0]), 1)
+        self.assertEqual(buttons[0][0]["callback_data"], "task:recent")
+
+    async def test_bot_task_status_callback_recent_list_and_navigation(self):
+        import bot
+        task_id = "60000000000000000000000000000001"
+        self._create_task_in_db(task_id, status="queued")
+
+        # 1. Callback with task:recent returns recent tasks list
+        query_recent = AsyncMock()
+        query_recent.data = "task:recent"
+        update_recent = AsyncMock()
+        update_recent.callback_query = query_recent
+        update_recent.effective_user.id = 12345
+        update_recent.effective_chat.id = 12345
+        update_recent.effective_chat.type = "private"
+
+        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            outbound = MockPort(supports_inline_buttons=True)
+            mock_outbound.return_value = outbound
+            await bot.task_status_callback(update_recent, AsyncMock())
+            self.assertTrue(any("最近转交任务" in r for r in outbound.replies))
+            self.assertTrue(any(task_id[:12] in r for r in outbound.replies))
+            self.assertTrue(len(outbound.button_replies) > 0)
+
+        # 2. Callback with valid task_id returns status detail with back button
+        query_status = AsyncMock()
+        query_status.data = f"task:status:{task_id}"
+        update_status = AsyncMock()
+        update_status.callback_query = query_status
+        update_status.effective_user.id = 12345
+        update_status.effective_chat.id = 12345
+        update_status.effective_chat.type = "private"
+
+        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            outbound = MockPort(supports_inline_buttons=True)
+            mock_outbound.return_value = outbound
+            await bot.task_status_callback(update_status, AsyncMock())
+            self.assertTrue(any("任务状态" in r for r in outbound.replies))
+            # Verify back button is in button reply
+            buttons = outbound.button_replies[-1][1]
+            callbacks = [b["callback_data"] for row in buttons for b in row]
+            self.assertIn("task:recent", callbacks)
+
+    async def test_agent_chooser_display_and_selection(self):
+        import agent_channel_routing as routing
+        import bot
+
+        # 1. Unbound: current assistant is Conveyor (main)
+        text, buttons = tg_pres.get_agent_chooser_display(self.settings, self.tg_msg())
+        self.assertIn("当前助手: Conveyor (main)", text)
+        self.assertIn("Finance", text)
+        self.assertIsNotNone(buttons)
+
+        # 2. Select Finance via bot.agent_chooser_callback
+        query_sel = AsyncMock()
+        query_sel.data = f"agent:select:{self.finance['id']}"
+        update_sel = AsyncMock()
+        update_sel.callback_query = query_sel
+        update_sel.effective_user.id = 12345
+        update_sel.effective_chat.id = 12345
+        update_sel.effective_chat.type = "private"
+
+        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            outbound = MockPort(supports_inline_buttons=True)
+            mock_outbound.return_value = outbound
+            await bot.agent_chooser_callback(update_sel, AsyncMock())
+            self.assertTrue(any("[Finance]" in r and "已切换至该助手" in r for r in outbound.replies))
+            query_sel.answer.assert_called_with("已切换至 Finance")
+
+        # Binding persisted in DB
+        self.assertEqual(routing.bound(self.settings, "telegram", "12345"), self.finance["id"])
+
+        # 3. Chooser now shows Finance as current
+        text, buttons = tg_pres.get_agent_chooser_display(self.settings, self.tg_msg())
+        self.assertIn(f"当前助手: Finance ({self.finance['id']})", text)
+
+        # 4. Restore default via bot.agent_chooser_callback
+        query_def = AsyncMock()
+        query_def.data = "agent:select:default"
+        update_def = AsyncMock()
+        update_def.callback_query = query_def
+        update_def.effective_user.id = 12345
+        update_def.effective_chat.id = 12345
+        update_def.effective_chat.type = "private"
+
+        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            outbound = MockPort(supports_inline_buttons=True)
+            mock_outbound.return_value = outbound
+            await bot.agent_chooser_callback(update_def, AsyncMock())
+            self.assertTrue(any("[Conveyor]" in r and "已切换至该助手" in r for r in outbound.replies))
+
+        self.assertIsNone(routing.bound(self.settings, "telegram", "12345"))
+
+    async def test_agent_chooser_callback_denials_and_stale_target(self):
+        import agent_channel_routing as routing
+        import bot
+
+        # 1. Non-owner denial on callback
+        query_nonowner = AsyncMock()
+        query_nonowner.data = f"agent:select:{self.finance['id']}"
+        update_nonowner = AsyncMock()
+        update_nonowner.callback_query = query_nonowner
+        update_nonowner.effective_user.id = 99999
+        update_nonowner.effective_chat.id = 99999
+        update_nonowner.effective_chat.type = "private"
+
+        with patch("bot._guard", return_value=True):
+            await bot.agent_chooser_callback(update_nonowner, AsyncMock())
+            query_nonowner.answer.assert_called_with("无权操作或功能已停用。", show_alert=True)
+        self.assertIsNone(routing.bound(self.settings, "telegram", "12345"))
+
+        # 2. Group chat denial on callback
+        query_group = AsyncMock()
+        query_group.data = f"agent:select:{self.finance['id']}"
+        update_group = AsyncMock()
+        update_group.callback_query = query_group
+        update_group.effective_user.id = 12345
+        update_group.effective_chat.id = 12345
+        update_group.effective_chat.type = "group"
+
+        with patch("bot._guard", return_value=True):
+            await bot.agent_chooser_callback(update_group, AsyncMock())
+            query_group.answer.assert_called_with("无权操作或功能已停用。", show_alert=True)
+
+        # 3. Kill switch active
+        with patch.dict(os.environ, {"CONVEYOR_AGENTS_KILL": "1"}):
+            query_kill = AsyncMock()
+            query_kill.data = f"agent:select:{self.finance['id']}"
+            update_kill = AsyncMock()
+            update_kill.callback_query = query_kill
+            update_kill.effective_user.id = 12345
+            update_kill.effective_chat.id = 12345
+            update_kill.effective_chat.type = "private"
+
+            with patch("bot._guard", return_value=True):
+                await bot.agent_chooser_callback(update_kill, AsyncMock())
+                query_kill.answer.assert_called_with("无权操作或功能已停用。", show_alert=True)
+
+        # 4. Malformed callback data
+        query_malformed = AsyncMock()
+        query_malformed.data = "agent:select:invalid_chars!@#"
+        update_malformed = AsyncMock()
+        update_malformed.callback_query = query_malformed
+        update_malformed.effective_user.id = 12345
+        update_malformed.effective_chat.id = 12345
+        update_malformed.effective_chat.type = "private"
+
+        with patch("bot._guard", return_value=True):
+            await bot.agent_chooser_callback(update_malformed, AsyncMock())
+            query_malformed.answer.assert_called_with("无效的请求", show_alert=True)
+
+        # 5. Stale / archived agent ID
+        stale_agent = self.store.create({"name": "Stale", "persona": "soon to be archived"})
+        stale_id = stale_agent["id"]
+        self.store.archive(stale_id)
+
+        query_stale = AsyncMock()
+        query_stale.data = f"agent:select:{stale_id}"
+        update_stale = AsyncMock()
+        update_stale.callback_query = query_stale
+        update_stale.effective_user.id = 12345
+        update_stale.effective_chat.id = 12345
+        update_stale.effective_chat.type = "private"
+
+        with patch("bot._guard", return_value=True):
+            await bot.agent_chooser_callback(update_stale, AsyncMock())
+            query_stale.answer.assert_called_with("该助手已不可用或已归档。", show_alert=True)
+        self.assertIsNone(routing.bound(self.settings, "telegram", "12345"))
+
+        # 6. ID vs Name collision: an active agent named after stale_id does NOT get selected
+        new_agent = self.store.create({"name": stale_id, "persona": "agent whose name is old id"})
+        with patch("bot._guard", return_value=True):
+            await bot.agent_chooser_callback(update_stale, AsyncMock())
+            query_stale.answer.assert_called_with("该助手已不可用或已归档。", show_alert=True)
+        self.assertIsNone(routing.bound(self.settings, "telegram", "12345"))
+
+    async def test_agent_chooser_pagination_and_max_50_agents(self):
+        import bot
+
+        # Create agents up to limit (50 max)
+        for i in range(12):
+            self.store.create({
+                "name": f"Agent_{i:02d}",
+                "persona": f"Persona line 1 for agent {i}\nPersona line 2 with details",
+                "instructions": "SUPER_SECRET_INSTRUCTIONS_NEVER_LEAK",
+                "workspace_path": "/root/super/secret/path",
+            })
+
+        # Page 1
+        text_p1, buttons_p1 = tg_pres.get_agent_chooser_display(self.settings, self.tg_msg(), page=1)
+        self.assertIn("可选助手（第 1/", text_p1)
+        self.assertNotIn("SUPER_SECRET_INSTRUCTIONS", text_p1)
+        self.assertNotIn("/root/super/secret/path", text_p1)
+        self.assertNotIn("\nPersona line 2", text_p1)  # newlines replaced
+
+        # Verify pagination button exists
+        callbacks_p1 = [b["callback_data"] for row in buttons_p1 for b in row]
+        self.assertTrue(any(c.startswith("agent:page:2") for c in callbacks_p1))
+
+        # Page 2 via bot callback
+        query_p2 = AsyncMock()
+        query_p2.data = "agent:page:2"
+        update_p2 = AsyncMock()
+        update_p2.callback_query = query_p2
+        update_p2.effective_user.id = 12345
+        update_p2.effective_chat.id = 12345
+        update_p2.effective_chat.type = "private"
+
+        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            outbound = MockPort(supports_inline_buttons=True)
+            mock_outbound.return_value = outbound
+            await bot.agent_chooser_callback(update_p2, AsyncMock())
+            self.assertTrue(any("第 2/" in r for r in outbound.replies))
+
+    def test_feature_aware_bot_menu_commands(self):
+        import bot
+
+        # 1. Both disabled
+        with patch.dict(os.environ, {"CONVEYOR_AGENT_CHANNEL_ROUTING": "0", "CONVEYOR_MAIN_ROUTER": "0"}):
+            cmds = bot.get_my_bot_commands(self.settings)
+            cmd_names = [c[0] for c in cmds]
+            self.assertNotIn("agents", cmd_names)
+            self.assertNotIn("agent", cmd_names)
+            self.assertNotIn("agentstatus", cmd_names)
+            self.assertIn("fix", cmd_names)
+            self.assertIn("status", cmd_names)
+            self.assertIn("workers", cmd_names)
+
+        # 2. Only channel routing enabled
+        with patch.dict(os.environ, {"CONVEYOR_AGENT_CHANNEL_ROUTING": "1", "CONVEYOR_MAIN_ROUTER": "0"}):
+            cmds = bot.get_my_bot_commands(self.settings)
+            cmd_names = [c[0] for c in cmds]
+            self.assertIn("agents", cmd_names[:3])
+            self.assertIn("agent", cmd_names[:3])
+            self.assertNotIn("agentstatus", cmd_names)
+
+        # 3. Both enabled
+        with patch.dict(os.environ, {"CONVEYOR_AGENT_CHANNEL_ROUTING": "1", "CONVEYOR_MAIN_ROUTER": "1"}):
+            cmds = bot.get_my_bot_commands(self.settings)
+            cmd_names = [c[0] for c in cmds]
+            self.assertIn("agents", cmd_names[:4])
+            self.assertIn("agent", cmd_names[:4])
+            self.assertIn("agentstatus", cmd_names[:4])
+            # No duplicates
+            self.assertEqual(len(cmd_names), len(set(cmd_names)))
+            # Clarified copy
+            desc_map = dict(cmds)
+            self.assertIn("转交任务", desc_map["agentstatus"])
+            self.assertIn("当前任务", desc_map["status"])
 
     def test_bot_settings_isolation_and_restoration_after_cleanup(self):
         """Regression test ensuring bot.settings is isolated per-test and restores prior identity."""

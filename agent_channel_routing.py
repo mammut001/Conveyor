@@ -73,7 +73,7 @@ def bound(settings, channel, chat_id):
     return agent["id"] if agent and not agent["archived"] else None
 
 
-def bind(settings, msg, requested):
+def bind(settings, msg, requested, *, exact_id: bool = False):
     if not authorized(settings, msg):
         raise PermissionError("private owner chat required")
     from agents import AgentStore
@@ -83,6 +83,10 @@ def bind(settings, msg, requested):
         raise ValueError("Usage: /agent <name|id|main>")
     if name.casefold() in ("main", "default"):
         agent = store.get("default")
+    elif exact_id:
+        agent = store.get(name)
+        if not agent or agent["archived"]:
+            raise ValueError("Unknown, archived or ambiguous Agent")
     else:
         matched = [item for item in store.list()
                    if not item["archived"] and item["id"] != "default"
@@ -129,20 +133,40 @@ async def maybe_command(settings, msg, port):
     raw = msg.text.strip()
     word, _, argument = raw.partition(" ")
     word = word.split("@", 1)[0].casefold()  # Telegram /agent@bot username
+    argument = argument.strip()
     if word == "/agents":
-        import agents
-        from redaction import truncate
-        items = [a for a in agents.AgentStore(settings).list() if not a["archived"]]
-        lines = ["Available Agents:", "• main — default assistant"]
-        for agent in items:
-            if agent["id"] == "default":
-                continue
-            persona = str(agent.get("persona") or "").replace("\n", " ").strip()
-            lines.append(f'• {agent["name"]} ({agent["id"]}) — {truncate(persona, 80)}')
-        await port.reply(msg, "\n".join(lines))
+        if msg.channel == "feishu":
+            import agents
+            from redaction import truncate
+            items = [a for a in agents.AgentStore(settings).list() if not a["archived"]]
+            lines = ["Available Agents:", "• main — default assistant"]
+            for agent in items:
+                if agent["id"] == "default":
+                    continue
+                persona = str(agent.get("persona") or "").replace("\n", " ").strip()
+                lines.append(f'• {agent["name"]} ({agent["id"]}) — {truncate(persona, 80)}')
+            await port.reply(msg, "\n".join(lines))
+            return True
+        page = 1
+        if argument.isdigit():
+            page = max(1, int(argument))
+        import agent_telegram_presentation as tg_pres
+        text, buttons = tg_pres.get_agent_chooser_display(settings, msg, page=page)
+        if buttons and getattr(port, "supports_inline_buttons", False):
+            await port.reply_with_buttons(msg, text, buttons)
+        else:
+            await port.reply(msg, text)
         return True
     if word != "/agent":
         return False
+    if not argument and msg.channel == "telegram":
+        import agent_telegram_presentation as tg_pres
+        text, buttons = tg_pres.get_agent_chooser_display(settings, msg, page=1)
+        if buttons and getattr(port, "supports_inline_buttons", False):
+            await port.reply_with_buttons(msg, text, buttons)
+        else:
+            await port.reply(msg, text)
+        return True
     try:
         selected = bind(settings, msg, argument)
     except (ValueError, PermissionError) as exc:
@@ -158,8 +182,12 @@ async def maybe_command(settings, msg, port):
             reason=agent_security.denial_code(exc))
         await port.reply(msg, str(exc))
     else:
-        await port.reply(msg, f'[{selected["name"]}] Selected Agent. '
-                        "Further messages use this Agent's history and tools.")
+        if msg.channel == "telegram":
+            await port.reply(msg, f'[{selected["name"]}] 已切换至该助手。'
+                                  "后续消息将使用该助手的对话历史与工具。")
+        else:
+            await port.reply(msg, f'[{selected["name"]}] Selected Agent. '
+                            "Further messages use this Agent's history and tools.")
     return True
 
 
