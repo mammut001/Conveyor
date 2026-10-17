@@ -27,6 +27,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import sys
 import tempfile
 import time
 from types import SimpleNamespace
@@ -45,12 +46,33 @@ import agent_delegation as delegation
 import agent_delegation_queue as queue
 import agent_result_outbox as outbox
 import agent_telegram_presentation as tg_pres
+import config
+from config import Settings
 import main_router as router
 from agents import AgentStore, chat_id_for, WEB_OPERATOR
 from channel.types import InboundMessage, OutboundPort
-from config import Settings
 from handlers.tools.confirm import create_pending, get_pending
 from handlers.tools.runner import _request_confirmation, execute_confirmed
+
+# Ensure config.load_settings for initial bot import uses isolated dummy env, no real .env.
+# Preserve previous module settings/runner state rather than leave per-test temp roots.
+if "bot" in sys.modules:
+    import bot
+else:
+    with patch.dict(os.environ, {
+        "CONVEYOR_ENV_FILE": os.devnull,
+        "CODEX_WORKSPACE_ROOT": "/tmp/dummy_codex_ws",
+        "CODEX_TASK_ROOT": "/tmp/dummy_codex_tasks",
+        "CODEX_MEMORY_ROOT": "/tmp/dummy_codex_mem",
+        "TELEGRAM_BOT_TOKEN": "dummy_token",
+        "TELEGRAM_ALLOWED_USER_ID": "12345",
+    }):
+        _orig_load_settings = config.load_settings
+        def _dummy_load_settings(env_file=".env"):
+            isolated_env = os.devnull if env_file == ".env" else env_file
+            return _orig_load_settings(env_file=isolated_env)
+        with patch.object(config, "load_settings", side_effect=_dummy_load_settings):
+            import bot
 
 
 def _settings(root: Path) -> Settings:
@@ -129,8 +151,12 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
         env_patch.start()
         self.addCleanup(env_patch.stop)
 
-        import bot
-        bot.settings = self.settings
+        prior_bot_settings = bot.settings
+        settings_patch = patch.object(bot, "settings", self.settings)
+        settings_patch.start()
+        # Supervisor hook: verify prior bot.settings identity is restored after cleanup
+        self.addCleanup(lambda: self.assertIs(bot.settings, prior_bot_settings))
+        self.addCleanup(settings_patch.stop)
 
         self.store = AgentStore(self.settings)
         self.finance = self.store.create({
@@ -953,6 +979,34 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
                 context = SimpleNamespace(args=[task_id])
                 await bot.agent_status_cmd(update_valid, context)
                 self.assertEqual(outbound.replies[0], "功能未启用或当前不可用。")
+
+    def test_bot_settings_isolation_and_restoration_after_cleanup(self):
+        """Regression test ensuring bot.settings is isolated per-test and restores prior identity."""
+        # Inside this test, bot.settings has been isolated to self.settings
+        self.assertIs(bot.settings, self.settings)
+        self.assertEqual(bot.settings.codex_workspace_root, self.root / "workspace")
+
+        # Simulate a nested test execution lifecycle using patch.object with addCleanup
+        prior_identity = bot.settings
+        dummy_temp_root = self.root / "nested_temp"
+        dummy_temp_root.mkdir()
+        nested_settings = _settings(dummy_temp_root)
+
+        sub_test = unittest.TestCase()
+        nested_patch = patch.object(bot, "settings", nested_settings)
+        nested_patch.start()
+        sub_test.addCleanup(nested_patch.stop)
+
+        # While active, bot.settings reflects the nested settings
+        self.assertIs(bot.settings, nested_settings)
+        self.assertEqual(bot.settings.codex_workspace_root, dummy_temp_root / "workspace")
+
+        # Execute cleanup on the sub_test
+        sub_test.doCleanups()
+
+        # After cleanup, prior bot.settings identity is completely restored without leaking temp roots
+        self.assertIs(bot.settings, prior_identity)
+        self.assertEqual(bot.settings.codex_workspace_root, self.root / "workspace")
 
 
 if __name__ == "__main__":
