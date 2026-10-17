@@ -474,6 +474,7 @@ class TestChatToolsLoop(unittest.IsolatedAsyncioTestCase):
 class FakeHTTPHandler(http.server.BaseHTTPRequestHandler):
     recorded_requests: list[dict] = []
     response_status: int = 200
+    response_content_type: str = "application/json"
     response_body: bytes = b"{}"
 
     def do_POST(self) -> None:
@@ -486,7 +487,7 @@ class FakeHTTPHandler(http.server.BaseHTTPRequestHandler):
             "body": json.loads(body) if body else {},
         })
         self.send_response(FakeHTTPHandler.response_status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", FakeHTTPHandler.response_content_type)
         self.end_headers()
         self.wfile.write(FakeHTTPHandler.response_body)
 
@@ -511,6 +512,7 @@ class TestCompleteChatHTTP(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         FakeHTTPHandler.recorded_requests.clear()
         FakeHTTPHandler.response_status = 200
+        FakeHTTPHandler.response_content_type = "application/json"
         FakeHTTPHandler.response_body = b"{}"
 
     async def test_complete_chat_sends_tools_and_parses_response(self) -> None:
@@ -577,6 +579,127 @@ class TestCompleteChatHTTP(unittest.IsolatedAsyncioTestCase):
         err_msg = str(cm.exception)
         self.assertIn("500", err_msg)
         self.assertNotIn(api_key, err_msg)
+
+    async def test_complete_chat_attaches_finish_reason_and_usage_without_promoting_reasoning(self) -> None:
+        config = ChatConfig(
+            base_url=f"http://127.0.0.1:{self.port}",
+            api_key="test-key",
+            model="test-model",
+            timeout=5,
+        )
+        fake_response = {
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "Detailed calculation plan",
+                },
+            }],
+            "usage": {
+                "prompt_tokens": 15,
+                "completion_tokens": 42,
+                "total_tokens": 57,
+            },
+        }
+        FakeHTTPHandler.response_status = 200
+        FakeHTTPHandler.response_body = json.dumps(fake_response).encode("utf-8")
+
+        resp = await complete_chat(config, [{"role": "user", "content": "calculate"}])
+
+        # Content must remain None/empty; reasoning is never substituted as content
+        self.assertIsNone(resp.get("content"))
+        self.assertEqual(resp.get("reasoning_content"), "Detailed calculation plan")
+        self.assertEqual(resp.get("finish_reason"), "stop")
+        self.assertEqual(resp.get("usage", {}).get("completion_tokens"), 42)
+
+    async def test_complete_chat_strips_attached_metadata_on_subsequent_request(self) -> None:
+        config = ChatConfig(
+            base_url=f"http://127.0.0.1:{self.port}",
+            api_key="test-key",
+            model="test-model",
+            timeout=5,
+        )
+        FakeHTTPHandler.response_status = 200
+        FakeHTTPHandler.response_body = b'{"choices": [{"message": {"role": "assistant", "content": "ok"}}]}'
+
+        # Next-turn messages include previously returned metadata plus custom provider fields
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "previous", "finish_reason": "stop",
+             "usage": {"completion_tokens": 20}, "custom_provider_field": "kept"},
+        ]
+        await complete_chat(config, messages)
+
+        sent_messages = FakeHTTPHandler.recorded_requests[0]["body"]["messages"]
+        self.assertEqual(len(sent_messages), 2)
+        second_msg = sent_messages[1]
+        self.assertNotIn("finish_reason", second_msg)
+        self.assertNotIn("usage", second_msg)
+        self.assertEqual(second_msg.get("custom_provider_field"), "kept")
+        self.assertEqual(second_msg.get("content"), "previous")
+
+    async def test_stream_chat_reasoning_only_delta_never_displayed(self) -> None:
+        """Streaming deltas must never emit reasoning_content or reasoning text."""
+        from runner.chat_client import stream_chat, _delta_text
+
+        # 1. Direct unit assertion on _delta_text:
+        # reasoning_content and reasoning must never produce delta text.
+        reasoning_chunk = {
+            "choices": [{
+                "delta": {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "Internal thought step 1",
+                }
+            }]
+        }
+        self.assertEqual(_delta_text(reasoning_chunk), "")
+
+        reasoning_chunk2 = {
+            "choices": [{
+                "delta": {
+                    "reasoning": "Alternative reasoning field",
+                }
+            }]
+        }
+        self.assertEqual(_delta_text(reasoning_chunk2), "")
+
+        content_chunk = {
+            "choices": [{
+                "delta": {
+                    "content": "Real answer chunk",
+                    "reasoning_content": "Thinking should be ignored",
+                }
+            }]
+        }
+        self.assertEqual(_delta_text(content_chunk), "Real answer chunk")
+
+        # 2. Integration assertion over streaming SSE HTTP connection:
+        config = ChatConfig(
+            base_url=f"http://127.0.0.1:{self.port}",
+            api_key="test-key",
+            model="test-model",
+            timeout=5,
+        )
+        sse_body = (
+            b'data: {"choices": [{"delta": {"reasoning_content": "Thinking about budget..."}}]}\n\n'
+            b'data: {"choices": [{"delta": {"reasoning_content": "More internal chain-of-thought"}}]}\n\n'
+            b'data: {"choices": [{"delta": {"content": "Final output: 5000 budget summary"}}]}\n\n'
+            b'data: [DONE]\n\n'
+        )
+        FakeHTTPHandler.response_status = 200
+        FakeHTTPHandler.response_content_type = "text/event-stream"
+        FakeHTTPHandler.response_body = sse_body
+
+        received_chunks = []
+        async for chunk in stream_chat(config, [{"role": "user", "content": "calculate"}]):
+            received_chunks.append(chunk)
+
+        # Reasoning deltas must NEVER be yielded; only actual content chunk is yielded
+        self.assertEqual(received_chunks, ["Final output: 5000 budget summary"])
+        self.assertNotIn("Thinking", "".join(received_chunks))
 
 
 class TestAskChatToolWiring(unittest.IsolatedAsyncioTestCase):

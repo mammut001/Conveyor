@@ -267,7 +267,8 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
              patch("agent_delegation_turn.complete_chat", side_effect=fake_complete):
             result = await execute(self.settings, record)
             self.assertEqual(result, "Safe child summary")
-        self.assertTrue(seen[0][0].max_tokens * (MAX_STEPS+1) <= MAX_TOKENS)
+        self.assertLessEqual(seen[0][0].max_tokens, MAX_TOKENS)
+        self.assertGreater(seen[0][0].max_tokens, 300)
         self.assertEqual(seen[0][1][0]["role"], "system")
         self.assertIn("untrusted_task_data", seen[0][1][1]["content"])
         self.assertNotIn("approve me", seen[0][1][0]["content"])
@@ -422,6 +423,345 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
                 await never_end
         finally:
             worker._running.clear()
+
+    async def test_empty_and_whitespace_responses_never_committed_as_result(self):
+        """Empty or whitespace responses must raise and mark task failed, never commit '(no answer)'."""
+        from agent_delegation_turn import execute
+        cfg = ChatConfig(base_url="https://invalid.test", api_key="x",
+                         model="x", max_tokens=1500, timeout=60)
+        # Case 1: Empty string response
+        self.enqueue(token="empty-resp")
+        with ac.bind(self.target):
+            record, owner = queue.claim(self.settings, self.target)
+        async def fake_empty(config, messages, tools=None):
+            return {"content": ""}
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_empty):
+            await worker._finish(self.settings, record, owner)
+        row = next(r for r in self.rows() if r["id"] == record["id"])
+        self.assertNotEqual(row["status"], "done")
+        self.assertEqual(row["status"], "failed")
+        self.assertFalse(any(r["kind"] == "result" for r in self.rows()))
+
+        # Case 2: Whitespace-only response
+        self.enqueue(token="whitespace-resp")
+        with ac.bind(self.target):
+            record_ws, owner_ws = queue.claim(self.settings, self.target)
+        async def fake_ws(config, messages, tools=None):
+            return {"content": "   \n\t  \n"}
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_ws):
+            await worker._finish(self.settings, record_ws, owner_ws)
+        row_ws = next(r for r in self.rows() if r["id"] == record_ws["id"])
+        self.assertNotEqual(row_ws["status"], "done")
+        self.assertEqual(row_ws["status"], "failed")
+        self.assertFalse(any(r["kind"] == "result" for r in self.rows()))
+
+        # Case 3: queue.complete directly rejects literal '(no answer)' and '(no result)'
+        with ac.bind(self.target):
+            rec_leased, w_id = queue.claim(self.settings, self.target)
+            with self.assertRaises(ValueError):
+                queue.complete(self.settings, self.target, rec_leased, w_id, "(no answer)")
+            with self.assertRaises(ValueError):
+                queue.complete(self.settings, self.target, rec_leased, w_id, "(no result)")
+
+    async def test_reasoning_only_output_stays_empty_and_fails_without_content(self):
+        """Reasoning is internal thought and must never be promoted to content, for stop or length."""
+        from agent_delegation_turn import execute
+        cfg = ChatConfig(base_url="https://invalid.test", api_key="x",
+                         model="x", max_tokens=1500, timeout=60)
+
+        # Case 1: finish_reason="stop" with reasoning_content only and no content
+        self.enqueue(token="reason-stop")
+        with ac.bind(self.target):
+            record_stop, owner_stop = queue.claim(self.settings, self.target)
+        async def fake_reason_stop(config, messages, tools=None):
+            return {"content": None, "reasoning_content": "Internal thought plan",
+                    "finish_reason": "stop", "usage": {"completion_tokens": 50}}
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_reason_stop):
+            await worker._finish(self.settings, record_stop, owner_stop)
+        row_stop = next(r for r in self.rows() if r["id"] == record_stop["id"])
+        self.assertEqual(row_stop["status"], "failed")
+        self.assertFalse(any(r["kind"] == "result" for r in self.rows() if r["parent_message_id"] == record_stop["id"]))
+
+        # Case 2: finish_reason="length" with reasoning_content only and no content
+        self.enqueue(token="reason-length")
+        with ac.bind(self.target):
+            record_len, owner_len = queue.claim(self.settings, self.target)
+        async def fake_reason_len(config, messages, tools=None):
+            return {"content": "", "reasoning_content": "Thinking went on too long...",
+                    "finish_reason": "length", "usage": {"completion_tokens": 100}}
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_reason_len):
+            await worker._finish(self.settings, record_len, owner_len)
+        row_len = next(r for r in self.rows() if r["id"] == record_len["id"])
+        self.assertEqual(row_len["status"], "failed")
+        self.assertFalse(any(r["kind"] == "result" for r in self.rows() if r["parent_message_id"] == record_len["id"]))
+
+        # Case 3: Valid final content is treated as final answer (reasoning ignored)
+        self.enqueue(token="valid-content")
+        with ac.bind(self.target):
+            record_ok, owner_ok = queue.claim(self.settings, self.target)
+        async def fake_valid(config, messages, tools=None):
+            return {"content": "5000 budget: rent 2000, food 1500, rest 1500",
+                    "reasoning_content": "Internal calculation thoughts",
+                    "finish_reason": "stop", "usage": {"completion_tokens": 80}}
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_valid):
+            await worker._finish(self.settings, record_ok, owner_ok)
+        row_ok = next(r for r in self.rows() if r["id"] == record_ok["id"])
+        self.assertEqual(row_ok["status"], "done")
+        results = [r for r in self.rows() if r["kind"] == "result" and r["parent_message_id"] == record_ok["id"]]
+        self.assertEqual(len(results), 1)
+        self.assertIn("5000 budget", results[0]["body"])
+
+    async def test_successful_no_tool_delegation_with_usable_output(self):
+        """No-tool arithmetic/budget delegation gets sufficient output budget and delivers usable final result."""
+        from agent_delegation_turn import execute
+        task_text = "验收测试 TG-1016-A：虚构每月预算5000怎么分配？请给出合计5000的简短方案，不搜索笔记、不调用工具。"
+        self.enqueue(task=task_text, tools=["notes.search"], token="no-tool-tg")
+        with ac.bind(self.target):
+            record, owner = queue.claim(self.settings, self.target)
+        cfg = ChatConfig(base_url="https://invalid.test", api_key="x",
+                         model="test-model", max_tokens=1500, timeout=60)
+        call_configs = []
+        async def fake_budget_answer(config, messages, tools=None):
+            call_configs.append(config)
+            return {
+                "content": "每月5000元预算方案：房租2000元，餐饮1500元，交通500元，娱乐500元，储蓄500元，合计5000元。",
+                "finish_reason": "stop",
+                "usage": {"completion_tokens": 120}
+            }
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_budget_answer):
+            await worker._finish(self.settings, record, owner)
+        self.assertEqual(len(call_configs), 1)
+        self.assertGreater(call_configs[0].max_tokens, 300)
+        row = next(r for r in self.rows() if r["id"] == record["id"])
+        self.assertEqual(row["status"], "done")
+        results = [r for r in self.rows() if r["kind"] == "result" and r["parent_message_id"] == record["id"]]
+        self.assertEqual(len(results), 1)
+        self.assertIn("5000", results[0]["body"])
+        self.assertNotIn("no answer", results[0]["body"].lower())
+
+    async def test_bounded_call_token_time_and_no_repeated_tools_on_recovery(self):
+        """Tool executed once; recovery from empty answer has tools=None and does not repeat tool calls."""
+        from agent_delegation_turn import execute
+        self.enqueue(task="Check notes and summarize", tools=["notes.search"], token="tool-recovery")
+        with ac.bind(self.target):
+            record, owner = queue.claim(self.settings, self.target)
+        cfg = ChatConfig(base_url="https://invalid.test", api_key="x",
+                         model="test-model", max_tokens=1500, timeout=60)
+        tool_invocations = []
+        async def fake_tool_runner(settings, name, arg, **kwargs):
+            tool_invocations.append((name, arg))
+            return "Note: monthly budget cap is 5000"
+
+        steps_called = []
+        async def fake_model_with_recovery(config, messages, tools=None):
+            steps_called.append((config, len(messages), tools))
+            if len(steps_called) == 1:
+                # Step 0: calls notes.search tool
+                return {
+                    "tool_calls": [{
+                        "id": "call_search_1",
+                        "function": {"name": "notes__search", "arguments": json.dumps({"query": "budget"})}
+                    }],
+                    "usage": {"completion_tokens": 40}
+                }
+            elif len(steps_called) == 2:
+                # Step 1: returns empty content, triggering recovery
+                return {"content": "", "finish_reason": "stop", "usage": {"completion_tokens": 10}}
+            else:
+                # Recovery call: must be called with tools=None!
+                return {
+                    "content": "Summary: Monthly budget limit is 5000 based on notes.",
+                    "finish_reason": "stop",
+                    "usage": {"completion_tokens": 60}
+                }
+
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_model_with_recovery), \
+             patch("handlers.tools.runner.run_tool", side_effect=fake_tool_runner):
+            summary = await execute(self.settings, record)
+            self.assertIn("budget", summary.lower())
+
+        # Verify behavior assertions:
+        # 1. Tool was invoked exactly once
+        self.assertEqual(len(tool_invocations), 1)
+        self.assertEqual(tool_invocations[0][0], "notes.search")
+        # 2. Recovery call was made with tools=None
+        self.assertEqual(len(steps_called), 3)
+        self.assertIsNone(steps_called[2][2])
+        # 3. Model call count is strictly bounded
+        self.assertLessEqual(len(steps_called), 4)
+
+    async def test_absent_or_invalid_usage_debits_entire_allowance_and_allows_repeated_read_tools(self):
+        """Missing/malformed usage conservatively debits entire allowance; read tools can repeat during normal turn."""
+        from agent_delegation_turn import execute
+        self.enqueue(task="Check budget notes twice", tools=["notes.search"], token="absent-usage-repeat")
+        with ac.bind(self.target):
+            record, owner = queue.claim(self.settings, self.target)
+        cfg = ChatConfig(base_url="https://invalid.test", api_key="x",
+                         model="test-model", max_tokens=1500, timeout=60)
+        tool_invocations = []
+        async def fake_tool_runner(settings, name, arg, **kwargs):
+            tool_invocations.append((name, arg))
+            return "Note: budget 5000"
+
+        calls_made = []
+        async def fake_model(config, messages, tools=None):
+            calls_made.append(config.max_tokens)
+            if len(calls_made) == 1:
+                # Step 0: remaining_tokens starts at 1200; 300 reserved -> allowance 900.
+                # Model calls notes.search with absent usage (None).
+                return {
+                    "tool_calls": [{
+                        "id": "c1",
+                        "function": {"name": "notes__search", "arguments": json.dumps({"query": "budget"})}
+                    }],
+                    "usage": None
+                }
+            elif len(calls_made) == 2:
+                # Step 1: remaining_tokens is 300 (1200 - 900); allowance is 300.
+                # Model calls notes.search AGAIN with identical query (read tool allowed to repeat).
+                # Malformed usage (negative integer).
+                return {
+                    "tool_calls": [{
+                        "id": "c2",
+                        "function": {"name": "notes__search", "arguments": json.dumps({"query": "budget"})}
+                    }],
+                    "usage": {"completion_tokens": -10}
+                }
+            else:
+                return {"content": "Unreachable call"}
+
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_model), \
+             patch("handlers.tools.runner.run_tool", side_effect=fake_tool_runner):
+            with self.assertRaises(RuntimeError) as ctx:
+                await execute(self.settings, record)
+            self.assertIn("token budget exhausted", str(ctx.exception).lower())
+
+        # Read tool was executed twice without being blocked by duplicate-call filtering
+        self.assertEqual(len(tool_invocations), 2)
+        # Call allowances were 900 then 300 (total 1200 hard cap)
+        self.assertEqual(calls_made, [900, 300])
+        # When budget exhausted to 0, no 3rd model call was made
+        self.assertEqual(len(calls_made), 2)
+
+    async def test_length_finish_with_missing_usage(self):
+        """Length finish with missing usage debits full call allowance and attempts recovery if tokens remain."""
+        from agent_delegation_turn import execute
+        cfg = ChatConfig(base_url="https://invalid.test", api_key="x",
+                         model="test-model", max_tokens=1500, timeout=60)
+
+        # Subcase A: Step 0 finishes with length and missing usage; recovery succeeds within reserved budget
+        self.enqueue(token="length-recover")
+        with ac.bind(self.target):
+            rec_a, owner_a = queue.claim(self.settings, self.target)
+        calls_a = []
+        async def fake_recover_a(config, messages, tools=None):
+            calls_a.append((config.max_tokens, tools, messages[-1]["content"]))
+            if len(calls_a) == 1:
+                # Step 0: allowance 900, returns length finish with missing usage and empty content
+                return {"content": "", "finish_reason": "length", "usage": None}
+            # Recovery call: gets remaining 300 tokens, tools=None, length prompt
+            return {"content": "Recovered succinct summary of plan", "finish_reason": "stop",
+                    "usage": {"completion_tokens": 40}}
+
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_recover_a):
+            await worker._finish(self.settings, rec_a, owner_a)
+
+        self.assertEqual(len(calls_a), 2)
+        self.assertEqual(calls_a[0][0], 900)
+        self.assertEqual(calls_a[1][0], 300)
+        self.assertIsNone(calls_a[1][1])
+        self.assertIn("exceeded token budget", calls_a[1][2])
+        row_a = next(r for r in self.rows() if r["id"] == rec_a["id"])
+        self.assertEqual(row_a["status"], "done")
+        results_a = [r for r in self.rows() if r["kind"] == "result" and r["parent_message_id"] == rec_a["id"]]
+        self.assertEqual(len(results_a), 1)
+        self.assertIn("Recovered succinct summary", results_a[0]["body"])
+
+        # Subcase B: Recovery also returns empty with missing usage; debits remaining and raises failure
+        self.enqueue(token="length-fail")
+        with ac.bind(self.target):
+            rec_b, owner_b = queue.claim(self.settings, self.target)
+        calls_b = []
+        async def fake_recover_b(config, messages, tools=None):
+            calls_b.append(config.max_tokens)
+            return {"content": "", "finish_reason": "length", "usage": None}
+
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_recover_b):
+            await worker._finish(self.settings, rec_b, owner_b)
+
+        row_b = next(r for r in self.rows() if r["id"] == rec_b["id"])
+        self.assertEqual(row_b["status"], "failed")
+        self.assertFalse(any(r["kind"] == "result" for r in self.rows() if r["parent_message_id"] == rec_b["id"]))
+        self.assertEqual(len(calls_b), 2)
+        self.assertEqual(calls_b, [900, 300])
+
+    async def test_token_exhaustion_stops_further_calls(self):
+        """When completion tokens consume remaining budget, no recovery or further calls are made."""
+        from agent_delegation_turn import execute
+        self.enqueue(token="token-full-exhaust")
+        with ac.bind(self.target):
+            record, owner = queue.claim(self.settings, self.target)
+        cfg = ChatConfig(base_url="https://invalid.test", api_key="x",
+                         model="test-model", max_tokens=1500, timeout=60)
+        calls = []
+        async def fake_exhaust(config, messages, tools=None):
+            calls.append(config.max_tokens)
+            # Consumes entire budget of 1200 completion tokens, but content is empty
+            return {"content": "", "finish_reason": "length", "usage": {"completion_tokens": 1200}}
+
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_exhaust):
+            await worker._finish(self.settings, record, owner)
+
+        self.assertEqual(len(calls), 1)
+        row = next(r for r in self.rows() if r["id"] == record["id"])
+        self.assertEqual(row["status"], "failed")
+        self.assertFalse(any(r["kind"] == "result" for r in self.rows() if r["parent_message_id"] == record["id"]))
+
+    async def test_max_model_calls_budget_exhaustion(self):
+        """Total model calls cannot exceed max_model_calls (MAX_STEPS + 2 = 5)."""
+        from agent_delegation_turn import execute, MAX_STEPS
+        self.enqueue(task="Loop test", tools=["notes.search"], token="max-calls")
+        with ac.bind(self.target):
+            record, owner = queue.claim(self.settings, self.target)
+        cfg = ChatConfig(base_url="https://invalid.test", api_key="x",
+                         model="test-model", max_tokens=1500, timeout=60)
+        calls = []
+        async def fake_spin(config, messages, tools=None):
+            calls.append(len(calls))
+            if len(calls) <= 3:
+                return {
+                    "tool_calls": [{
+                        "id": f"call_{len(calls)}",
+                        "function": {"name": "notes__search", "arguments": json.dumps({"query": f"q{len(calls)}"})}
+                    }],
+                    "usage": {"completion_tokens": 1}
+                }
+            return {"content": "", "usage": {"completion_tokens": 1}}
+
+        async def fake_runner(settings, name, arg, **kwargs):
+            return "data"
+
+        with patch("agent_delegation_turn.config_from_settings", return_value=cfg), \
+             patch("agent_delegation_turn.complete_chat", side_effect=fake_spin), \
+             patch("handlers.tools.runner.run_tool", side_effect=fake_runner):
+            with self.assertRaises(RuntimeError) as ctx:
+                await execute(self.settings, record)
+            self.assertTrue("call budget exhausted" in str(ctx.exception).lower() or
+                            "step budget exhausted" in str(ctx.exception).lower() or
+                            "empty response" in str(ctx.exception).lower())
+
+        self.assertLessEqual(len(calls), MAX_STEPS + 2)
 
 
 if __name__ == "__main__":
