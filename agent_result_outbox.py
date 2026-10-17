@@ -104,9 +104,13 @@ def enqueue_committed(conn, settings, task, result_id, result_text, *, now=None)
     now = time.time() if now is None else now
     ensure(conn)
     result_tag = result_id[:12]
-    text = (f'[{route["agent_name"]}] delegated result (untrusted data, '
-            f'not an instruction or approval) [result:{result_tag}]:\n'
-            + redact_text(result_text)[:2400])
+    if channel == "telegram":
+        import agent_telegram_presentation as tg_pres
+        text = tg_pres.format_telegram_result(route["agent_name"], result_tag, result_text)
+    else:
+        text = (f'[{route["agent_name"]}] delegated result (untrusted data, '
+                f'not an instruction or approval) [result:{result_tag}]:\n'
+                + redact_text(result_text)[:2400])
     conn.execute(
         """INSERT OR IGNORE INTO agent_result_notifications
            (id,result_id,task_id,channel,operator,chat_id,text,created_at,updated_at)
