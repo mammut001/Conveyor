@@ -117,7 +117,7 @@ def is_agent_command(settings, msg):
     if not enabled(settings) or msg.channel not in ("telegram", "feishu"):
         return False
     word = (msg.text.strip().split(maxsplit=1) or [""])[0]
-    return word.split("@", 1)[0].casefold() in ("/agent", "/agents")
+    return word.split("@", 1)[0].casefold() in ("/agent", "/agents", "/agentstatus")
 
 
 async def maybe_command(settings, msg, port):
@@ -129,6 +129,18 @@ async def maybe_command(settings, msg, port):
     raw = msg.text.strip()
     word, _, argument = raw.partition(" ")
     word = word.split("@", 1)[0].casefold()  # Telegram /agent@bot username
+    if word == "/agentstatus":
+        ref = argument.strip()
+        if not ref:
+            await port.reply(msg, "用法: /agentstatus <任务编号>")
+            return True
+        import agent_telegram_presentation as tg_pres
+        status_text, buttons = tg_pres.get_task_status_display(settings, msg, ref)
+        if buttons and getattr(port, "supports_inline_buttons", False):
+            await port.reply_with_buttons(msg, status_text, buttons)
+        else:
+            await port.reply(msg, status_text)
+        return True
     if word == "/agents":
         import agents
         from redaction import truncate

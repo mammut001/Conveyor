@@ -397,6 +397,63 @@ async def tool_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await cancel_pending(inbound, port, settings, token)
 
 
+async def task_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline-button task status query for delegated agent tasks."""
+    if not await _guard(update):
+        return
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    data = query.data or ""
+    task_ref = data.split("task:status:", 1)[-1].strip()
+    user = update.effective_user
+    chat = update.effective_chat
+    inbound = InboundMessage(
+        channel="telegram",
+        operator_id=str(getattr(user, "id", "") or ""),
+        chat_id=str(getattr(chat, "id", "") or ""),
+        message_id=str(getattr(query.message, "message_id", "") or "") if query.message else None,
+        text="",
+        chat_type="p2p" if chat and chat.type == "private" else "group",
+        raw=update,
+    )
+    port = make_outbound(update)
+    import agent_telegram_presentation as tg_pres
+    status_text, buttons = tg_pres.get_task_status_display(settings, inbound, task_ref)
+    if buttons and getattr(port, "supports_inline_buttons", False):
+        await port.reply_with_buttons(inbound, status_text, buttons)
+    else:
+        await port.reply(inbound, status_text)
+
+
+async def agent_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard(update):
+        return
+    task_ref = _prompt(context)
+    if not task_ref:
+        await _reply(update, "用法: /agentstatus <任务编号>")
+        return
+    user = update.effective_user
+    chat = update.effective_chat
+    inbound = InboundMessage(
+        channel="telegram",
+        operator_id=str(getattr(user, "id", "") or ""),
+        chat_id=str(getattr(chat, "id", "") or ""),
+        message_id=str(getattr(update.effective_message, "message_id", "") or "") if update.effective_message else None,
+        text=f"/agentstatus {task_ref}",
+        chat_type="p2p" if chat and chat.type == "private" else "group",
+        raw=update,
+    )
+    port = make_outbound(update)
+    import agent_telegram_presentation as tg_pres
+    status_text, buttons = tg_pres.get_task_status_display(settings, inbound, task_ref)
+    if buttons and getattr(port, "supports_inline_buttons", False):
+        await port.reply_with_buttons(inbound, status_text, buttons)
+    else:
+        await port.reply(inbound, status_text)
+
+
 async def relay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle inline-button confirmation for cross-channel approval relay."""
     query = update.callback_query
@@ -859,8 +916,10 @@ def main() -> None:
         )
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
+    application.add_handler(CommandHandler("agentstatus", agent_status_cmd))
     application.add_handler(CallbackQueryHandler(navigation_callback, pattern=r"^tgn:"))
     application.add_handler(CallbackQueryHandler(tool_callback, pattern=r"^tool:"))
+    application.add_handler(CallbackQueryHandler(task_status_callback, pattern=r"^task:status:"))
     application.add_handler(CallbackQueryHandler(relay_callback, pattern=r"^relay:"))
     application.add_handler(CallbackQueryHandler(deep_callback, pattern=r"^deep$"))
     # Catch-all for COMMAND_TABLE entries without explicit CommandHandler above.

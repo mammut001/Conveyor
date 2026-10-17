@@ -535,6 +535,11 @@ async def _request_confirmation(
         except ValueError as exc:
             await port.reply(msg, f"Outbound draft blocked: {exc}")
             return
+    if msg.channel == "telegram" and tool_name == "main.route_delegate":
+        import agent_telegram_presentation as tg_pres
+        if not tg_pres.validate_route_target(settings, arg):
+            await port.reply(msg, "无法转交任务：目标 Agent 不存在或已归档。")
+            return
     pending = create_pending(
         tool_name=tool_name,
         arg=arg,
@@ -579,24 +584,28 @@ async def _request_confirmation(
         danger=danger_label,
         action="requested",
     )
-    text = (
-        f"⚠️ 危险操作需确认\n\n"
-        f"工具: {tool_name}\n"
-        f"说明: {summary}\n"
-        f"风险: {danger_label}\n"
-    )
-    if is_outbound_draft:
-        from redaction import redact_text
-        draft_preview = cards._parse(settings, tool_name, arg)
-        for field, value in draft_preview.items():
-            text += f"{field}: {redact_text(value)[:500]}\n"
-        text += "Edit in Web Approval Inbox, or approve this exact original draft.\n"
-    elif arg.strip():
-        if tool_name == "service_restart":
-            text += f"目标单元: {arg.strip()}\n"
-        else:
-            text += f"参数: {arg.strip()}\n"
-    text += "\n确认执行？"
+    if msg.channel == "telegram" and tool_name == "main.route_delegate":
+        import agent_telegram_presentation as tg_pres
+        text = tg_pres.format_route_confirmation_card(settings, arg)
+    else:
+        text = (
+            f"⚠️ 危险操作需确认\n\n"
+            f"工具: {tool_name}\n"
+            f"说明: {summary}\n"
+            f"风险: {danger_label}\n"
+        )
+        if is_outbound_draft:
+            from redaction import redact_text
+            draft_preview = cards._parse(settings, tool_name, arg)
+            for field, value in draft_preview.items():
+                text += f"{field}: {redact_text(value)[:500]}\n"
+            text += "Edit in Web Approval Inbox, or approve this exact original draft.\n"
+        elif arg.strip():
+            if tool_name == "service_restart":
+                text += f"目标单元: {arg.strip()}\n"
+            else:
+                text += f"参数: {arg.strip()}\n"
+        text += "\n确认执行？"
     if port.supports_inline_buttons:
         buttons = [[
             {"text": "✅ 确认", "callback_data": f"{CALLBACK_CONFIRM_PREFIX}{pending.token}"},
@@ -807,7 +816,15 @@ async def execute_confirmed(
         approval_relay.mark_local(settings, token, "done", result_preview=result)
     except Exception:
         pass
-    await port.reply(msg, result)
+    if msg.channel == "telegram" and action.tool_name == "main.route_delegate":
+        import agent_telegram_presentation as tg_pres
+        ack_text, buttons = tg_pres.format_queue_ack(settings, msg, action, result)
+        if buttons and getattr(port, "supports_inline_buttons", False):
+            await port.reply_with_buttons(msg, ack_text, buttons)
+        else:
+            await port.reply(msg, ack_text)
+    else:
+        await port.reply(msg, result)
     return True
 
 
