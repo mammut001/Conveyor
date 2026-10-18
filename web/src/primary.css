@@ -1142,3 +1142,17 @@
   .chat-context-strip span { max-width: 100%; font-size: 10px; }
   .agent-screen-tabs { padding: 4px 8px; }
 }
+
+/* Agent identity is a switcher; conversation history lives inside the workspace. */
+@media (max-width: 600px) {
+  .primary-interface .agent-list-heading { padding: 8px 16px; min-height: 44px; }
+  .primary-interface .agent-list-heading .eyebrow { display: none; }
+  .primary-interface .agent-list-heading h2 { font-size: 12px; color: #78716c; }
+  .primary-interface .agent-list-heading .icon-button { width: 30px; height: 30px; min-height: 30px; }
+  .primary-interface .agent-list .agent-item { padding: 8px 30px 8px 8px; min-height: 52px; border-radius: 10px; gap: 8px; }
+  .primary-interface .agent-list .agent-avatar { width: 32px !important; height: 32px !important; font-size: 14px !important; }
+  .primary-interface .agent-list .agent-item.active { background: #f2eae3; box-shadow: inset 0 0 0 1px #e5d5c8; }
+  .primary-interface .agent-list .agent-item small { font-size: 10px; }
+  .primary-interface .agent-list .agent-item strong { font-size: 12px; }
+  .primary-interface .agent-list .agent-edit-btn { opacity: 1; width: 28px; height: 36px; }
+}
