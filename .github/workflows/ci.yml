@@ -164,6 +164,9 @@ jobs:
       - name: Run Web Workbench browser E2E
         run: npm run test:e2e
 
+      - name: Verify chat interactions
+        run: npm run test:chat
+
       - name: Dependency audit
         run: npm audit --audit-level=high
 

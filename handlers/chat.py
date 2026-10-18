@@ -891,7 +891,7 @@ async def chat_or_agent(
     from runner import JobMode
 
     untrusted = reply is not None or bool(images)
-    key = chat_key(msg)
+    key = chat_key(msg, settings)
     outcome, checked = await ask_chat(
         msg, port, settings, question=question, reply=reply, images=images, evidence=evidence, runner=runner,
     )
@@ -920,7 +920,7 @@ async def handle_deep(
     from handlers.jobs import handle_codex_job
     from runner import JobMode
 
-    last = pop_last(chat_key(msg), settings=settings)
+    last = pop_last(chat_key(msg, settings), settings=settings)
     if last is None:
         await port.reply(msg, "没有可以深入的上一个问题。直接发问题，或用 /run <任务>。")
         return
@@ -933,5 +933,5 @@ async def handle_chat_clear(
     settings: "Settings",
 ) -> None:
     """``/chat_clear``: reset conversation history for this chat."""
-    reset(chat_key(msg), settings=settings)
+    reset(chat_key(msg, settings), settings=settings)
     await port.reply(msg, "🧹 对话历史已清空，新的对话将从零开始。")

@@ -229,15 +229,15 @@ async def run_web_chat(
         outcome, checked = await ask_chat(
             msg, port, settings, question=prompt, runner=runner,
         )
-        if outcome == "escalate":
-            reason = f": {checked.reason}" if checked and checked.reason else ""
-            msg_text = f"This request requires task execution{reason}. Please submit it as a task using the composer."
-            port.emit("message", {"text": msg_text})
-            port._persist_turn(msg, msg_text, kind="chat")
-        elif outcome == "unavailable":
-            msg_text = "The chat tier is currently unavailable. Please submit your request as a task using the composer."
-            port.emit("message", {"text": msg_text})
-            port._persist_turn(msg, msg_text, kind="chat")
+        if outcome in {"escalate", "unavailable"}:
+            msg_text = (
+                "这个请求需要执行任务。可以将原请求带到任务页，检查后发送。"
+                if outcome == "escalate" else
+                "对话模型暂时不可用。可以将原请求带到任务页，交给执行模型处理。"
+            )
+            suggestion = {"prompt": prompt, "session_id": port.durable_session_id}
+            port.emit("message", {"text": msg_text, "task_suggestion": suggestion})
+            port._persist_turn(msg, msg_text, kind="task_suggestion", metadata={"prompt": prompt})
         port.emit("done", {"outcome": outcome})
     except Exception:
         logger.exception("Error in run_web_chat")
@@ -360,6 +360,10 @@ def build_history(session: dict[str, Any] | None) -> list[dict[str, Any]]:
             "kind": m.get("kind") or "",
         }
         text = item["text"]
+        if m.get("kind") == "task_suggestion" and isinstance(meta.get("prompt"), str):
+            item["task_suggestion"] = {
+                "prompt": meta["prompt"], "session_id": str((session or {}).get("id") or ""),
+            }
         if m.get("kind") == "tool_approval" and meta.get("approval_id"):
             token = str(meta["approval_id"])
             pending = get_pending(token)

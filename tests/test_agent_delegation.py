@@ -1,6 +1,7 @@
 """Delegation PR 4 security and worker integration regression tests."""
 from __future__ import annotations
 
+import importlib
 import asyncio
 import json
 import os
@@ -346,9 +347,9 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
              patch("handlers.tools.executors.exec_computer_stop",
                    new_callable=AsyncMock, return_value="stopped"), \
              patch("job_lanes.runner_for_chat", side_effect=lambda runner, *a: runner), \
-             patch("handlers.dispatch.try_resolve_confirmation",
+             patch.object(importlib.import_module("handlers.dispatch"), "try_resolve_confirmation",
                    new_callable=AsyncMock, return_value=False), \
-             patch("handlers.dispatch.run_command",
+             patch.object(importlib.import_module("handlers.dispatch"), "run_command",
                    new_callable=AsyncMock, return_value=True) as run_command:
             self.assertEqual(await worker.poll_once(self.settings), 1)
             row = next(r for r in self.rows() if r["id"] == task_id)

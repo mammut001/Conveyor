@@ -10,7 +10,7 @@ Tests:
   - project.remove requires confirmation
   - project.add/use are WRITE_SAFE and audited
   - daily briefing includes active projects but degrades if none
-  - /help and /tools list project commands
+  - /commands and /tools list project commands
   - no network calls in smoke
   - all outputs redacted
 """
@@ -380,7 +380,7 @@ async def _test_command_registration():
 
 async def _test_help_includes_project_commands():
     """Help text includes project commands."""
-    from handlers.commands import _help
+    from handlers.commands import _commands
 
     help_text = ""
     class FakePort:
@@ -389,9 +389,9 @@ async def _test_help_includes_project_commands():
             help_text = text
 
     class FakeMsg:
-        text = "/help"
+        text = "/commands"
 
-    await _help(FakeMsg(), FakePort(), None, None, "")
+    await _commands(FakeMsg(), FakePort(), None, None, "")
     assert "/projects" in help_text
     assert "/project_add" in help_text
     assert "/project_use" in help_text

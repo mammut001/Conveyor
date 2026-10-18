@@ -1832,14 +1832,29 @@ async def _pulse(msg, port, _runner, settings, arg):
 
 
 async def _help(msg, port, _runner, _settings, _arg):
+    text = (
+        "Conveyor · 常用操作\n\n"
+        "直接说你想做什么，例如：查一下服务器状态、帮我分析这个报错。\n"
+        "接着追问即可；引用一条消息，可以明确你在问哪件事。\n\n"
+        "• 看任务进度：说“查看任务进度”，或 /status\n"
+        "• 看上次结果：/last\n"
+        "• 停止当前任务：/cancel\n"
+        "• 清空当前对话：说“清空对话”，或 /chat_clear\n"
+        "• 交给 Codex 深入处理上一问：/deep\n\n"
+        "更多示例：/nl_help · 完整命令：/commands"
+    )
+    await port.reply(msg, text)
+
+
+async def _commands(msg, port, _runner, _settings, _arg):
     from handlers.chat import chat_enabled
 
     text = "Codex Bot\n"
     if _settings is not None and chat_enabled(_settings):
-        text += "直接发文字 → 对话模型秒回；需要动手时转 Codex（danger-full-access）\n"
+        text += "直接发文字 → 对话模型回复；需要动手时转 Codex（danger-full-access）\n"
         text += "/deep → 把上一个问题交给 Codex 用工具深入查\n"
     else:
-        text += "直接发文字 → 跑 Codex（danger-full-access）\n"
+        text += "直接发文字 → 交给 Codex 处理（danger-full-access）\n"
     text += "记 xxx / /memo xxx → 写 MEMORY.md（不经 Codex）\n"
     text += "/status /last /diff /apply /discard /cancel\n"
     text += "/jobs [n] /memory [date] [cat] /journal [n]\n"
@@ -2356,10 +2371,32 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
             _pulse,
             takes_optional_arg=True,
         ),
-        CommandSpec("help", "帮助", _help),
+        CommandSpec("help", "常用操作", _help),
+        CommandSpec("commands", "完整命令列表", _commands),
         CommandSpec("nl_help", "自然语言示例", _nl_help),
     ]
 }
+
+
+_CONVERSATION_CONTROLS = {
+    "查看任务进度": "status",
+    "看看任务进度": "status",
+    "任务进度": "status",
+    "查看当前任务": "status",
+    "查看帮助": "help",
+    "怎么用": "help",
+    "使用帮助": "help",
+    "清空对话": "chat_clear",
+    "清空当前对话": "chat_clear",
+    "重新开始对话": "chat_clear",
+}
+
+
+def parse_conversation_control(text: str) -> tuple[str, str] | None:
+    """Only whole, explicit control phrases; never match inside a task or quote."""
+    normalized = text.strip().rstrip("。.!！?？").strip()
+    command = _CONVERSATION_CONTROLS.get(normalized)
+    return (command, "") if command else None
 
 
 def parse_command(text: str) -> tuple[str, str] | None:
@@ -2367,7 +2404,9 @@ def parse_command(text: str) -> tuple[str, str] | None:
     s = text.strip()
     if not s.startswith("/"):
         return None
-    name, _, rest = s.partition(" ")
+    parts = s.split(maxsplit=1)
+    name = parts[0]
+    rest = parts[1] if len(parts) > 1 else ""
     name = name.lstrip("/").lower()
     if not name:
         return None

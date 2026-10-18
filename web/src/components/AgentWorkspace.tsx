@@ -33,14 +33,12 @@ export function AgentWorkspace({ agent, token, ...chatProps }: Props) {
   }, [agent.id, token])
 
   const chat = <ChatPanel key={agent.id} {...chatProps} token={token}
-    agentSessionId={agent.session_id} agentName={agent.name} />
-
-  // Identical old ChatPanel on feature-off installations.
-  if (!features?.enabled) return chat
+    agentSessionId={agent.session_id} agentName={agent.name}
+    active={chatProps.active !== false && (!features?.enabled || tab === 'chat')} />
 
   return (
     <div className="agent-screen" aria-label={`${agent.name} workspace`}>
-      <nav className="agent-screen-tabs" aria-label="Agent sections">
+      {features?.enabled && <nav className="agent-screen-tabs" aria-label="Agent sections">
         {(['chat', ...(features.inbox ? ['inbox'] : []),
           ...(features.tasks ? ['tasks'] : []), 'memory'] as Tab[]).map(item => (
           <button type="button" key={item}
@@ -48,12 +46,15 @@ export function AgentWorkspace({ agent, token, ...chatProps }: Props) {
             className={tab === item ? 'active' : ''}
             onClick={() => setTab(item)}>{item[0].toUpperCase() + item.slice(1)}</button>
         ))}
-      </nav>
-      {tab === 'chat' ? chat : tab === 'memory'
+      </nav>}
+      <div style={{ display: !features?.enabled || tab === 'chat' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
+        {chat}
+      </div>
+      {features?.enabled && tab !== 'chat' && (tab === 'memory'
         ? <MemoryPanel key={agent.id} token={token}
             agentId={agent.is_default ? undefined : agent.id} agentName={agent.name} />
         : <AgentMailboxTab key={`${agent.id}:${tab}`} token={token}
-            agentId={agent.id} tab={tab as 'inbox' | 'tasks'} />}
+            agentId={agent.id} tab={tab as 'inbox' | 'tasks'} />)}
     </div>
   )
 }

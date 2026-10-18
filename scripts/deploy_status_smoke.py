@@ -212,14 +212,14 @@ def _test_deploy_vps_writes_json_fields() -> CheckResult:
 def _test_help_mentions_deploy_status() -> CheckResult:
     name = "help: mentions /deploy_status"
     try:
-        from handlers.commands import _help
+        from handlers.commands import _commands
         import asyncio
         msg = MagicMock()
         port = MagicMock()
         port.reply = AsyncMock()
         runner = MagicMock()
         settings = SimpleNamespace()
-        asyncio.run(_help(msg, port, runner, settings, ""))
+        asyncio.run(_commands(msg, port, runner, settings, ""))
         output = port.reply.call_args[0][1]
         ok = "deploy_status" in output
         return CheckResult(name, ok, "/deploy_status in help text" if ok else "not in help text")

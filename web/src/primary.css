@@ -1049,3 +1049,51 @@
   font-size: 11px;
   opacity: .72;
 }
+/* Let readers stay in history while a chat answer streams. */
+.chat-panel-container { position: relative; min-height: 0; }
+.chat-panel-container .event-stream { overflow-anchor: none; }
+.chat-jump-latest {
+  position: absolute;
+  bottom: 108px;
+  align-self: center;
+  z-index: 5;
+  padding: 8px 14px;
+  border: 1px solid #dedfe3;
+  border-radius: 20px;
+  background: #fff;
+  color: #5d4037;
+  box-shadow: 0 4px 16px rgba(31, 35, 42, .12);
+  cursor: pointer;
+}
+.chat-jump-latest:focus-visible { outline: 2px solid #bd5c40; outline-offset: 3px; }
+
+.composer-handoff-note { grid-column: 1 / -1; color: #6b554c; font-size: 12px; line-height: 1.5; padding: 2px 4px; }
+
+/* Structured answers remain readable inside chat bubbles and narrow screens. */
+.formatted-text-flow { min-width: 0; max-width: 100%; }
+.formatted-text-flow > :first-child { margin-top: 0; }
+.formatted-text-flow > :last-child { margin-bottom: 0; }
+.formatted-text-flow h1, .formatted-text-flow h2, .formatted-text-flow h3,
+.formatted-text-flow h4, .formatted-text-flow h5, .formatted-text-flow h6 {
+  margin: 8px 0 2px;
+  line-height: 1.4;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.formatted-text-flow h1 { font-size: 1.5em; }
+.formatted-text-flow h2 { font-size: 1.3em; }
+.formatted-text-flow h3 { font-size: 1.15em; }
+.formatted-text-flow h4, .formatted-text-flow h5, .formatted-text-flow h6 { font-size: 1em; }
+.formatted-list .formatted-list { margin-top: 5px; }
+.formatted-list li { overflow-wrap: anywhere; }
+.formatted-quote { margin: 4px 0; padding: 4px 14px; border-left: 3px solid #c6cbd3; color: #616b79; }
+.formatted-quote > :first-child { margin-top: 0; }
+.formatted-quote > :last-child { margin-bottom: 0; }
+.formatted-table-scroll { max-width: 100%; overflow-x: auto; border: 1px solid #e3e6eb; border-radius: 9px; }
+.formatted-table-scroll:focus-visible { outline: 2px solid #bd5c40; outline-offset: 2px; }
+.formatted-table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+.formatted-table th, .formatted-table td { min-width: 100px; padding: 8px 12px; border-bottom: 1px solid #e3e6eb; overflow-wrap: anywhere; }
+.formatted-table th { background: #f6f7f9; font-weight: 600; text-align: left; }
+.formatted-table tr:last-child td { border-bottom: 0; }
+.formatted-text-flow .code-block-container { min-width: 0; max-width: 100%; }
+.formatted-text-flow hr { width: 100%; border: 0; border-top: 1px solid #e3e6eb; margin: 10px 0; }

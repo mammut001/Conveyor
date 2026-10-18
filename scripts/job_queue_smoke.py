@@ -365,12 +365,12 @@ def _check_queue_commands_registered():
 
 
 def _check_queue_help_text():
-    """Test that queue commands appear in /help."""
-    from handlers.commands import _help
+    """Test that queue commands appear in /commands."""
+    from handlers.commands import _commands
     import inspect
 
-    # Get the source of _help to check for queue commands
-    source = inspect.getsource(_help)
+    # Get the source of _commands to check for queue commands
+    source = inspect.getsource(_commands)
     has_queue = "/queue" in source
     has_cancel = "/queue_cancel" in source
     has_clear = "/queue_clear" in source
@@ -379,7 +379,7 @@ def _check_queue_help_text():
 
     all_present = has_queue and has_cancel and has_clear and has_pause and has_resume
     return CheckResult(
-        "help: queue commands listed in /help",
+        "help: queue commands listed in /commands",
         all_present,
         f"queue={has_queue} cancel={has_cancel} clear={has_clear} pause={has_pause} resume={has_resume}",
     )

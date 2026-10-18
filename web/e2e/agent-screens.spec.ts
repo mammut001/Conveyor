@@ -8,7 +8,7 @@ const beta = { ...main, id: 'beta', name: 'Beta', is_default: false,
 const attack = '<img src=x onerror="document.body.dataset.agentXss=1"><script>alert(1)</script>'
 let cancelCount = 0
 
-async function fixture(page: Page, enabled = true) {
+async function fixture(page: Page, enabled = true, mobileUI = false) {
   cancelCount = 0
   await page.route('**/api/**', async (route: Route) => {
     const url = new URL(route.request().url())
@@ -55,7 +55,7 @@ async function fixture(page: Page, enabled = true) {
       disk: { total: 1000, used: 0, free: 1000 },
       queue: { depth: 0, paused: false, states: {} },
       channels: { telegram: { configured: false }, feishu: { configured: false } },
-      nodes: [], features: { mobile_ui: false, agents: true },
+      nodes: [], features: { mobile_ui: mobileUI, agents: true },
     })
     if (path === '/api/computer/status') return json({
       armed: false, arm_remaining_seconds: 0, screenshots: [],
@@ -92,4 +92,66 @@ test('feature off leaves the old agent chat without extra screen tabs', async ({
   await fixture(page, false)
   await expect(page.locator('.agent-screen-tabs')).toHaveCount(0)
   await expect(page.getByText('Beta', { exact: true }).first()).toBeVisible()
+})
+
+test('agent chat retains a pending reply and next draft while viewing its Inbox', async ({ page }) => {
+  await fixture(page, true, true)
+  let reply: Route | undefined
+  await page.route('**/api/chat', async route => { reply = route })
+  const input = page.getByRole('textbox', { name: 'Message Beta', exact: true })
+  await input.fill('Please keep working while I inspect Inbox')
+  await input.press('Enter')
+  await expect.poll(() => Boolean(reply)).toBe(true)
+  await input.fill('My next draft')
+  const tabs = page.locator('.agent-screen-tabs')
+  await tabs.getByRole('button', { name: 'Inbox', exact: true }).click()
+  await expect(page.locator('.agent-screen-message')).toBeVisible()
+  await reply!.fulfill({ status: 200, contentType: 'text/event-stream', body: [
+    `event: session\ndata: ${JSON.stringify({ session_id: beta.session_id })}\n\n`,
+    `event: message\ndata: ${JSON.stringify({ text: 'Reply completed while Inbox was open\n\n```text\n' + 'x'.repeat(200) + '\n```' })}\n\n`,
+    'event: done\ndata: {"outcome":"answered"}\n\n',
+  ].join('') })
+  await tabs.getByRole('button', { name: 'Chat', exact: true }).click()
+  await expect(page.getByText('Reply completed while Inbox was open', { exact: true })).toBeVisible()
+  await expect(input).toHaveValue('My next draft')
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(input).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
+test('voice submission preserves a typed draft and displays the transcription', async ({ page }) => {
+  await fixture(page)
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+      getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }),
+    } })
+    Object.defineProperty(globalThis, 'MediaRecorder', { configurable: true, value: class {
+      static isTypeSupported() { return true }
+      state = 'inactive'
+      ondataavailable?: (event: { data: Blob }) => void
+      onstop?: () => void
+      start() { this.state = 'recording' }
+      stop() {
+        this.state = 'inactive'
+        this.ondataavailable?.({ data: new Blob(['fake test audio']) })
+        this.onstop?.()
+      }
+    } })
+  })
+  await page.route('**/api/chat/voice**', async route => {
+    expect(route.request().headers()['content-type']).toContain('audio/webm')
+    await route.fulfill({ status: 200, contentType: 'text/event-stream', body: [
+      `event: session\ndata: ${JSON.stringify({ session_id: beta.session_id })}\n\n`,
+      'event: heard\ndata: {"text":"Voice request transcribed"}\n\n',
+      'event: message\ndata: {"text":"Voice request answered"}\n\n',
+      'event: done\ndata: {"outcome":"answered"}\n\n',
+    ].join('') })
+  })
+  const input = page.getByRole('textbox', { name: 'Message Beta', exact: true })
+  await input.fill('Keep this typed draft')
+  await page.getByRole('button', { name: 'Record voice message', exact: true }).click()
+  await page.getByRole('button', { name: 'Stop recording', exact: true }).click()
+  await expect(page.getByText('Voice request transcribed', { exact: true })).toBeVisible()
+  await expect(page.getByText('Voice request answered', { exact: true })).toBeVisible()
+  await expect(input).toHaveValue('Keep this typed draft')
 })

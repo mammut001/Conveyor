@@ -673,7 +673,9 @@ class TestApprovalRelayEndToEndHandoff(unittest.TestCase):
         self.tmpdir = Path(self.tmp.name)
         (self.tmpdir / "memory").mkdir(parents=True, exist_ok=True)
         self.settings = make_test_settings(self.tmpdir, enabled=True)
-        approval_relay.reset_notifier_factory()
+        # Keep notifications synchronous and offline so a background writer
+        # cannot reopen the temporary database during tearDown.
+        approval_relay.set_notifier_factory(lambda _channel, _settings: None)
 
     def tearDown(self):
         clear_all_pending()

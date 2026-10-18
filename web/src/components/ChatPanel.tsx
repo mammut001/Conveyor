@@ -11,12 +11,16 @@ export type SubagentProgress = {
   tools: string[];
 };
 
+export type TaskSuggestion = { prompt: string; session_id: string };
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
   created_at: string;
   subagents?: SubagentProgress[];
+  interrupted?: boolean;
+  taskSuggestion?: TaskSuggestion;
   pendingApproval?: {
     id: string;
     tool_name: string;
@@ -35,11 +39,13 @@ export type ChatMessage = {
 };
 
 type HistoryApproval = { id: string; tool_name: string; arg: string; status: string; expires_in_seconds?: number };
-type HistoryMessage = { role: 'user' | 'assistant'; text: string; created_at?: string; kind?: string; approval?: HistoryApproval };
+type HistoryMessage = { role: 'user' | 'assistant'; text: string; created_at?: string; kind?: string; approval?: HistoryApproval; task_suggestion?: TaskSuggestion };
 
 export type ChatPanelProps = {
   token: string;
+  active?: boolean;
   onApprovalDecided?: () => void;
+  onPrepareTask?: (suggestion: TaskSuggestion) => void;
   onSessionChange?: (sessionId: string) => void;
   initialInput?: string;
   onInitialInputConsumed?: () => void;
@@ -122,10 +128,20 @@ function SubagentCardGroup({ tasks, live }: { tasks: SubagentProgress[]; live?: 
   );
 }
 
-export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName }: ChatPanelProps) {
+export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
+  const draftKey = `conveyor-chat-draft:v1:${agentSessionId || 'free-chat'}`;
+  const [input, setInput] = useState(() => {
+    try { return (sessionStorage.getItem(draftKey) || '').slice(0, 8000); }
+    catch { return ''; }
+  });
+  useEffect(() => {
+    try {
+      if (input) sessionStorage.setItem(draftKey, input);
+      else sessionStorage.removeItem(draftKey);
+    } catch { /* Typing still works if browser storage is unavailable. */ }
+  }, [draftKey, input]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [streamingDelta, setStreamingDelta] = useState('');
@@ -135,6 +151,15 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
   subagentsRef.current = subagents;
   const [approvalsInProgress, setApprovalsInProgress] = useState<Record<string, boolean>>({});
   const streamRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const lastScrollTopRef = useRef(0);
+  const followStreamRef = useRef(true);
+  const sendingRef = useRef(false);
+  const requestRef = useRef<AbortController | null>(null);
+  const historyVersionRef = useRef(0);
+  const [showLatest, setShowLatest] = useState(false);
+
+  useEffect(() => () => { requestRef.current?.abort(); }, []);
 
   useEffect(() => {
     if (initialInput) {
@@ -148,11 +173,13 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
       setMessages([]);
       return;
     }
+    const version = ++historyVersionRef.current;
     setError('');
     try {
       const res = await fetch(`/api/chat/history?session_id=${encodeURIComponent(sid)}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (version !== historyVersionRef.current) return;
       if (res.status === 401) {
         setError('Token rejected');
         return;
@@ -162,6 +189,7 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
         throw new Error(body.error || `Failed to load history (${res.status})`);
       }
       const data = await res.json();
+      if (version !== historyVersionRef.current) return;
       if (Array.isArray(data.messages)) {
         setMessages(
           (data.messages as HistoryMessage[]).map((m, idx) => {
@@ -169,6 +197,7 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
               id: `hist-${idx}-${m.created_at || Date.now()}`,
               role: m.role,
               text: m.text,
+              taskSuggestion: m.task_suggestion,
               created_at: m.created_at || new Date().toISOString(),
             };
             const appr = m.approval;
@@ -187,7 +216,9 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
         );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load chat history');
+      if (version === historyVersionRef.current) {
+        setError(err instanceof Error ? err.message : 'Could not load chat history');
+      }
     }
   }, [token]);
 
@@ -201,15 +232,36 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
     }
   }, [loadHistory]);
 
-  useEffect(() => {
+  const scrollToLatest = useCallback(() => {
     const node = streamRef.current;
     if (node) {
-      node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' });
+      node.scrollTo({ top: node.scrollHeight, behavior: 'instant' });
+      lastScrollTopRef.current = node.scrollTop;
     }
-  }, [messages.length, streamingDelta, statusText, subagents.length]);
+  }, []);
+
+  useEffect(() => {
+    if (active && followStreamRef.current) scrollToLatest();
+  }, [active, messages, streamingDelta, statusText, subagents, scrollToLatest]);
+
+  // Markdown can finish loading after the message render; viewport changes can
+  // also reflow a long answer. Follow those size changes only for readers at end.
+  useEffect(() => {
+    if (!active || !streamRef.current || !contentRef.current) return;
+    const observer = new ResizeObserver(() => {
+      if (followStreamRef.current) scrollToLatest();
+    });
+    observer.observe(streamRef.current);
+    observer.observe(contentRef.current);
+    return () => observer.disconnect();
+  }, [active, scrollToLatest]);
 
   const handleNewChat = () => {
+    historyVersionRef.current++;
+    followStreamRef.current = true;
+    setShowLatest(false);
     setSessionId('');
+    setInput('');
     localStorage.removeItem('conveyor-chat-session');
     setMessages([]);
     setStreamingDelta('');
@@ -268,9 +320,19 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
   const handleSend = async (e?: FormEvent, audio?: Blob) => {
     if (e) e.preventDefault();
     const text = audio ? '🎤 Transcribing…' : input.trim();
-    if (!text || busy) return;
+    if (!text || sendingRef.current) return;
+    sendingRef.current = true;
+    historyVersionRef.current++;
+    followStreamRef.current = true;
+    setShowLatest(false);
+    const controller = new AbortController();
+    requestRef.current = controller;
+    let partialText = '';
+    let receivedAnswer = false;
+    let completed = false;
+    let streamError = '';
 
-    setInput('');
+    if (!audio) setInput('');
     setBusy(true);
     setError('');
     setStatusText('');
@@ -291,6 +353,7 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
         audio ? `/api/chat/voice?session_id=${encodeURIComponent(sessionId)}` : '/api/chat',
         {
           method: 'POST',
+          signal: controller.signal,
           headers: {
             'Content-Type': audio ? audio.type : 'application/json',
             Authorization: `Bearer ${token}`,
@@ -353,6 +416,7 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
               setMessages(prev => prev.map(m => m.id === userMsg.id ? { ...m, text: payload.text } : m));
             } else if (eventName === 'delta') {
               if (payload.text !== undefined) {
+                partialText = payload.text;
                 setStreamingDelta(payload.text);
               }
             } else if (eventName === 'status') {
@@ -373,6 +437,8 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
                 return updated;
               });
             } else if (eventName === 'approval') {
+              receivedAnswer = true;
+              partialText = '';
               setStreamingDelta('');
               setStatusText('');
               setMessages(prev => [
@@ -386,6 +452,8 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
                 },
               ]);
             } else if (eventName === 'message') {
+              receivedAnswer = true;
+              partialText = '';
               setStreamingDelta('');
               setStatusText('');
               const finishedSubagents = subagentsRef.current.length > 0 ? [...subagentsRef.current] : undefined;
@@ -395,6 +463,7 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
                   id: `asst-${Date.now()}`,
                   role: 'assistant',
                   text: payload.text,
+                  taskSuggestion: payload.task_suggestion,
                   created_at: new Date().toISOString(),
                   subagents: finishedSubagents,
                 },
@@ -402,8 +471,10 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
               setSubagents([]);
               subagentsRef.current = [];
             } else if (eventName === 'error') {
-              setError(payload.error || 'Chat request failed');
+              streamError = payload.error || 'Chat request failed';
+              setError(streamError);
             } else if (eventName === 'done') {
+              completed = true;
               setStreamingDelta('');
               setStatusText('');
             }
@@ -412,9 +483,23 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
           }
         }
       }
+      if (!completed) throw new Error('连接已中断，回答可能不完整。请检查网络后继续。');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send chat message');
+      if (!controller.signal.aborted) {
+        setError(err instanceof Error ? err.message : 'Failed to send chat message');
+      }
     } finally {
+      if (!controller.signal.aborted && partialText) {
+        setMessages(prev => [...prev, {
+          id: `partial-${Date.now()}`, role: 'assistant', text: partialText,
+          created_at: new Date().toISOString(), interrupted: true,
+        }]);
+      }
+      if (!audio && !controller.signal.aborted && !receivedAnswer && (!completed || streamError)) {
+        setInput(draft => draft || text);
+      }
+      sendingRef.current = false;
+      requestRef.current = null;
       setBusy(false);
       setStreamingDelta('');
       setStatusText('');
@@ -425,7 +510,16 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
 
   return (
     <div className="chat-panel-container" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div className="event-stream" ref={streamRef} style={{ flex: 1, overflowY: 'auto' }}>
+      <div className="event-stream" ref={streamRef} style={{ flex: 1, overflowY: 'auto' }}
+        onScroll={e => {
+          const node = e.currentTarget;
+          const nearBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+          if (nearBottom) followStreamRef.current = true;
+          else if (node.scrollTop < lastScrollTopRef.current) followStreamRef.current = false;
+          lastScrollTopRef.current = node.scrollTop;
+          setShowLatest(!followStreamRef.current);
+        }}>
+        <div ref={contentRef} className="chat-stream-content">
         {messages.length === 0 && !streamingDelta && (
           <div className="welcome-state">
             <div className="brand-mark">C</div>
@@ -521,7 +615,16 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
                 <div className="transcript-content">
                   <FormattedText content={message.text} />
                 </div>
+                {message.taskSuggestion && onPrepareTask && (
+                  <div className="action-row" style={{ marginTop: 10 }}>
+                    <button type="button" className="primary" disabled={busy}
+                      onClick={() => onPrepareTask(message.taskSuggestion!)}>
+                      准备执行任务 →
+                    </button>
+                  </div>
+                )}
                 <footer className="transcript-footer">
+                  {message.interrupted && <span>回答中断 · 已保留收到的内容</span>}
                   <time dateTime={message.created_at}>
                     {new Date(message.created_at).toLocaleString([], {
                       month: 'short',
@@ -543,6 +646,15 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
               <SubagentCardGroup tasks={subagents} live />
             </div>
           </article>
+        )}
+
+        {busy && !streamingDelta && !statusText && subagents.length === 0 && (
+          <div className="live-job-turn" role="status" style={{ padding: '8px 12px' }}>
+            <div className="live-job-banner queued">
+              <span className="live-pulse queued" aria-hidden="true" />
+              <span>正在处理，请稍候…</span>
+            </div>
+          </div>
         )}
 
         {statusText && (
@@ -568,10 +680,19 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
             </div>
           </article>
         )}
+        </div>
       </div>
 
+      {showLatest && (
+        <button type="button" className="chat-jump-latest" onClick={() => {
+          followStreamRef.current = true;
+          setShowLatest(false);
+          scrollToLatest();
+        }}>↓ 回到最新消息</button>
+      )}
+
       {error && (
-        <div className="error-banner global" style={{ margin: '6px 12px' }}>
+        <div className="error-banner global" role="alert" style={{ margin: '6px 12px' }}>
           {error}
           <button type="button" onClick={() => setError('')}>×</button>
         </div>
@@ -595,8 +716,9 @@ export function ChatPanel({ token, onApprovalDecided, onSessionChange, initialIn
           placeholder={agentName ? `Message ${agentName}…` : 'Ask Conveyor on the chat tier…'}
           rows={2}
           maxLength={8000}
-          disabled={busy}
+          aria-label={agentName ? `Message ${agentName}` : 'Message Conveyor'}
           onKeyDown={e => {
+            if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
               e.currentTarget.form?.requestSubmit();

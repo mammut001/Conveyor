@@ -1218,9 +1218,18 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     settings, durable_session_id,
                     is_codex=(mode == JobMode.FIX), prompt=prompt,
                 )
-                ok, message, job = self._await(self._handle_task(
-                    msg, outbound, settings, self.server.control.runner, mode, prompt,
-                ))
+                if body.get("execution_only") is True:
+                    # Explicit chat-to-task handoff: do not send the same request
+                    # through the chat model a second time.
+                    task_call = submit_codex_job(
+                        msg, outbound, self.server.control.runner,
+                        mode=mode, prompt=prompt, wait=False,
+                    )
+                else:
+                    task_call = self._handle_task(
+                        msg, outbound, settings, self.server.control.runner, mode, prompt,
+                    )
+                ok, message, job = self._await(task_call)
                 self._json(HTTPStatus.ACCEPTED if ok else HTTPStatus.CONFLICT, {
                     "ok": ok, "message": message, "job_id": job.id if job else None,
                     "session_id": durable_session_id,

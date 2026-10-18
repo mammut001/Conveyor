@@ -310,9 +310,9 @@ def test_commands_registered():
 
 
 def test_help_includes_briefing():
-    """/help output includes briefing commands."""
+    """/commands output includes briefing commands."""
     import asyncio
-    from handlers.commands import _help
+    from handlers.commands import _commands
     from unittest.mock import AsyncMock
 
     msg = AsyncMock()
@@ -320,7 +320,7 @@ def test_help_includes_briefing():
     runner = AsyncMock()
     settings = _settings()
 
-    asyncio.run(_help(msg, port, runner, settings, ""))
+    asyncio.run(_commands(msg, port, runner, settings, ""))
 
     # Check port.reply was called
     if not port.reply.called:

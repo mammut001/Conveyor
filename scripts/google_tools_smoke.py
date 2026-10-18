@@ -206,10 +206,10 @@ def test_commands_registered() -> CheckResult:
         return CheckResult(name, False, str(exc))
 
 
-# ---- Test 9: /help and /tools include new commands ----
+# ---- Test 9: /commands and /tools include new commands ----
 
 async def test_help_and_tools_include_google() -> CheckResult:
-    name = "/help and /tools: include Google/Calendar/Contacts commands"
+    name = "/commands and /tools: include Google/Calendar/Contacts commands"
     try:
         with tempfile.TemporaryDirectory() as td:
             settings = _settings(Path(td))
@@ -217,8 +217,8 @@ async def test_help_and_tools_include_google() -> CheckResult:
             runner = FakeRunner()
             runner.settings = settings
 
-            # Test /help
-            await run_command("help", _msg("/help"), port, runner, settings, "")
+            # Test /commands
+            await run_command("commands", _msg("/commands"), port, runner, settings, "")
             help_text = "\n".join(port.replies)
             has_google_in_help = "/auth_google" in help_text and "/calendar_today" in help_text
 

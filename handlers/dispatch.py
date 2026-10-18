@@ -22,7 +22,7 @@ from handlers.chat import (
     routes_to_agent,
     web_evidence,
 )
-from handlers.commands import parse_command, run_command
+from handlers.commands import parse_command, parse_conversation_control, run_command
 from handlers.context import detect_context_intent, handle_context_job, memo_text_with_quote
 from handlers.intent import COMPUTER_STOP_TEXTS, RouteResult, desktop_followup_route, route_intent
 from handlers.jobs import handle_codex_job
@@ -92,6 +92,8 @@ async def dispatch(
         return
 
     parsed = parse_command(msg.text)
+    if parsed is None and msg.reply_to is None and not msg.attachments:
+        parsed = parse_conversation_control(msg.text)
     if parsed is not None:
         cmd_name, arg = parsed
         if cmd_name == "memo":

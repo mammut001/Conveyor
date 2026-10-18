@@ -9,7 +9,7 @@ Tests:
   - missing curl graceful
   - non-text content rejected
   - output redacted/truncated
-  - /help and /tools list web commands
+  - /commands and /tools list web commands
   - tools correct danger levels
   - command registration
   - no network calls
@@ -146,7 +146,7 @@ async def _test_command_registration():
 
 async def _test_help_includes_web():
     """Help includes web commands."""
-    from handlers.commands import _help
+    from handlers.commands import _commands
 
     help_text = ""
     class FakePort:
@@ -154,9 +154,9 @@ async def _test_help_includes_web():
             nonlocal help_text
             help_text = text
     class FakeMsg:
-        text = "/help"
+        text = "/commands"
 
-    await _help(FakeMsg(), FakePort(), None, None, "")
+    await _commands(FakeMsg(), FakePort(), None, None, "")
     assert "/web_fetch" in help_text
     assert "/web_search" in help_text
     assert "/research" in help_text

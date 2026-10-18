@@ -1,6 +1,7 @@
 """PR7: owner-only channel Agent binding, isolation, Chinese routing, outbox."""
 from __future__ import annotations
 
+import importlib
 import asyncio
 from dataclasses import replace
 import os
@@ -77,7 +78,7 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
         port=Port()
         from handlers.dispatch import dispatch
         with (patch("job_lanes.runner_for_chat",side_effect=lambda runner,*a:runner),
-              patch("handlers.dispatch.try_resolve_confirmation",
+              patch.object(importlib.import_module("handlers.dispatch"), "try_resolve_confirmation",
                     new_callable=AsyncMock,return_value=False)):
             await dispatch(msg,port,self.settings,object())
         return port
