@@ -54,3 +54,20 @@ A read-only check confirmed the existing named-Agent, canonical-context and
 channel-routing flags are enabled in Telegram, Feishu and Web production
 processes. No flags were changed. Deployment still requires the operator's
 separate approval and validation of the final merged revision.
+
+## Final results
+
+Code candidate: `f991bdd` on `codex/experience-improvements`.
+
+- Full isolated Linux unittest discovery: **1,308 tests**, **93 skipped**, passed.
+- Full isolated Linux `make smoke`: **75 scripts**, passed.
+- Typecheck and production Web build: passed.
+- Full Web Playwright suite: **16 cases**, passed.
+- Standalone Web chat interaction smoke: **18 groups**, passed.
+
+The latest backend snapshot includes the legacy-entry continuity path and the
+recovered capability-bound request identity. The final Web build and browser
+checks also include the narrow-screen provenance/time wrapping adjustment.
+No production deployment, restart, queue mutation, or channel message was made.
+
+Mobile picker preview is a local fixture screenshot, not a live production chat.

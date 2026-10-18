@@ -1,12 +1,11 @@
 # Conversation experience release plan
 
-Latest candidate code commit: `2de042b` on `codex/experience-improvements`.
-The earlier candidate `2c76393861743a69f1f722aa8a65ed5837ae00dd` is superseded
-by the requested Agent identity/history-origin improvements. That earlier code
-passed the full Linux gates; the latest slice passed 77 backend regressions,
-five Agent browser cases, typecheck and build. Validate the final merged
-revision before release; do not attribute the earlier full gates to untested
-later changes.
+Latest candidate code commit: `f991bdd` on `codex/experience-improvements`.
+This supersedes the earlier single-conversation candidates: the operator chose
+independent entry histories with explicit continuation. Final evidence is in
+`docs/testing/independent-conversations.md`: 1,308 Linux tests (93 skipped),
+75 smoke scripts, 16 Web browser cases, 18 chat interaction groups and Web build
+passed. Validate the final merged revision before release.
 Production baseline checked on 2026-10-18:
 `8617183efd6f510fb68411e2faff564bae2acf35`.
 
@@ -56,3 +55,16 @@ message-sending authorization. Otherwise have the operator perform these checks:
 
 The goal remains unproven until real channel behavior has been checked and the
 operator can assess the experience. Local/Linux tests do not establish this.
+
+Additional channel acceptance for the independent-history release:
+
+- Start with the same Agent in Telegram and Feishu. Distinct entry conversations
+  must not know one another's newly supplied test phrases by default.
+- Explicitly choose a listed conversation from the other entry, then verify
+  continuity and source labeling. Return to the local root and confirm its
+  earlier context remains separate.
+- Create a topic, change Agent and return; the topic selection and its draft
+  should be restored. Existing Web conversations and default-entry context must
+  remain accessible.
+- Do not treat history continuation as permission to adopt another channel's
+  identity or control its worktree.
