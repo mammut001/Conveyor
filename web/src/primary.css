@@ -1111,3 +1111,34 @@
 .transcript-footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; line-height: 1.4; }
 .transcript-footer .transcript-source { margin-right: 0; }
 .transcript-footer > span:not(.transcript-source) { font-size: 11px; color: #6b7280; }
+
+/* Keep conversation controls compact so the transcript owns the screen. */
+.conversation-picker { gap: 8px 12px; padding: 12px 20px; background: #fafaf9; }
+.conversation-picker-current { display: flex; flex: 1; min-width: 0; align-items: center; gap: 12px; }
+.conversation-picker-current > span { color: #78716c; font-size: 11px; white-space: nowrap; }
+.conversation-picker-current select { flex: 1; min-width: 0; max-width: 480px; min-height: 38px; padding: 8px 30px 8px 12px; border: 1px solid #e5e2dd; border-radius: 10px; background: white; color: #292524; font: inherit; text-overflow: ellipsis; }
+.conversation-picker button { min-height: 38px; padding: 8px 12px; border: 1px solid #e5e2dd; border-radius: 10px; background: white; color: #57534e; font: inherit; cursor: pointer; }
+.conversation-picker .conversation-new-toggle { border-color: transparent; background: #f0e9e3; color: #88452e; white-space: nowrap; }
+.conversation-picker button:disabled { opacity: .5; cursor: default; }
+.conversation-picker :is(button, input, select):focus-visible { outline: 2px solid #b96743; outline-offset: 3px; }
+.conversation-picker small { font-size: 11px; color: #8b8580; }
+.conversation-create { flex-basis: 100%; padding: 14px; border: 1px solid #e5e2dd; border-radius: 12px; background: white; }
+.conversation-create > label { display: block; margin-bottom: 10px; font-weight: 600; color: #57534e; }
+.conversation-create > div { display: flex; gap: 8px; flex-wrap: wrap; }
+.conversation-create input { flex: 1; min-width: 130px; max-width: none; padding: 9px 12px; border: 1px solid #e5e2dd; border-radius: 8px; font: inherit; }
+.conversation-create button[type="submit"] { background: #88452e; color: white; border-color: #88452e; }
+.chat-context-strip { padding: 8px 20px; border-bottom: 0; font-size: 11px; }
+.chat-context-strip strong { font-weight: 600; }
+.agent-screen-tabs { gap: 4px; padding: 6px 16px; }
+.agent-screen-tabs button { border-color: transparent; border-radius: 7px; padding: 7px 12px; font-size: 12px; color: #78716c; }
+.agent-screen-tabs button.active { background: #f2eae3; color: #88452e; font-weight: 600; }
+@media (max-width: 600px) {
+  .conversation-picker { padding: 10px 12px; gap: 6px 8px; }
+  .conversation-picker-current { gap: 6px; }
+  .conversation-picker-current > span { display: none; }
+  .conversation-picker-current select { width: 100%; max-width: none; }
+  .conversation-picker small { font-size: 10px; }
+  .chat-context-strip { padding: 6px 12px; }
+  .chat-context-strip span { max-width: 100%; font-size: 10px; }
+  .agent-screen-tabs { padding: 4px 8px; }
+}

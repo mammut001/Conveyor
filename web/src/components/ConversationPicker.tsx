@@ -10,6 +10,7 @@ export function ConversationPicker({ token, agentId, defaultSession, selected, b
   const [error, setError] = useState('')
   const [creating, setCreating] = useState(false)
   const [title, setTitle] = useState('')
+  const [showCreate, setShowCreate] = useState(false)
   const [loading, setLoading] = useState(true)
   const [revision, setRevision] = useState(0)
   const selectedRef = useRef(selected)
@@ -51,7 +52,7 @@ export function ConversationPicker({ token, agentId, defaultSession, selected, b
       const body = await response.json()
       const row = body.conversation as Conversation
       if (!row || typeof row.session_id !== 'string') throw new Error('会话信息无效')
-      setItems(old => [row, ...old]); onSelect(row.session_id); setTitle('')
+      setItems(old => [row, ...old]); onSelect(row.session_id); setTitle(''); setShowCreate(false)
     } catch (reason) { setError(String(reason)) }
     finally { setCreating(false) }
   }
@@ -59,18 +60,25 @@ export function ConversationPicker({ token, agentId, defaultSession, selected, b
   return <div className="conversation-picker">
     {loading && <span role="status">正在读取会话…</span>}
     {!!items.length && <>
-      <label>会话 <select aria-label="选择要接续的会话" value={selected} disabled={busy || creating}
+      <label className="conversation-picker-current"><span>当前会话</span><select aria-label="选择要接续的会话" value={selected} disabled={busy || creating}
         onChange={event => onSelect(event.target.value)}>
         {items.map(row => <option key={row.id} value={row.session_id}>
           {labels[row.origin_channel] || '其他入口'} · {row.title}
         </option>)}
       </select></label>
-      <input aria-label="新话题标题" placeholder="新话题标题" value={title} maxLength={80}
-        disabled={busy || creating} onChange={event => setTitle(event.target.value)} />
-      <button type="button" disabled={busy || creating} onClick={() => void create()}>
-        {creating ? '创建中…' : '另开话题'}
-      </button>
-      <small>各入口独立；选择已有会话后才接续它的历史。</small>
+      <button className="conversation-new-toggle" type="button" disabled={busy || creating}
+        aria-expanded={showCreate} onClick={() => setShowCreate(value => !value)}>另开话题</button>
+      {showCreate && <form className="conversation-create" onSubmit={event => { event.preventDefault(); void create() }}>
+        <label htmlFor="new-conversation-title">给新话题起个名字</label>
+        <div>
+          <input id="new-conversation-title" aria-label="新话题标题" placeholder="例如：发布计划" value={title} maxLength={80}
+            autoFocus disabled={busy || creating} onChange={event => setTitle(event.target.value)}
+            onKeyDown={event => { if (event.key === 'Escape' && !creating) setShowCreate(false) }} />
+          <button type="submit" disabled={busy || creating}>{creating ? '创建中…' : '创建话题'}</button>
+          <button type="button" disabled={creating} onClick={() => setShowCreate(false)}>取消</button>
+        </div>
+      </form>}
+      <small>各入口的历史独立 · 选择会话即可接着聊</small>
     </>}
     {error && <>
       <span role="alert">{error}</span>
