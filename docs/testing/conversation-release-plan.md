@@ -1,6 +1,12 @@
 # Conversation experience release plan
 
-Candidate code commit: `2c76393861743a69f1f722aa8a65ed5837ae00dd`.
+Latest candidate code commit: `2de042b` on `codex/experience-improvements`.
+The earlier candidate `2c76393861743a69f1f722aa8a65ed5837ae00dd` is superseded
+by the requested Agent identity/history-origin improvements. That earlier code
+passed the full Linux gates; the latest slice passed 77 backend regressions,
+five Agent browser cases, typecheck and build. Validate the final merged
+revision before release; do not attribute the earlier full gates to untested
+later changes.
 Production baseline checked on 2026-10-18:
 `8617183efd6f510fb68411e2faff564bae2acf35`.
 
