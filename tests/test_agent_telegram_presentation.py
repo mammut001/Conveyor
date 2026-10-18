@@ -26,13 +26,17 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import sys
 import tempfile
 import time
 from types import SimpleNamespace
+from typing import Any
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from telegram.ext import CallbackQueryHandler, CommandHandler
 
 # Provide fallback environment variables before importing bot or config
 os.environ.setdefault("CODEX_WORKSPACE_ROOT", "/tmp/dummy_codex_ws")
@@ -1670,15 +1674,22 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
         mock_app.add_handler.side_effect = lambda h: handlers_registered.append(h)
 
         mock_builder = MagicMock()
+        mock_builder.application_class.return_value = mock_builder
         mock_builder.token.return_value = mock_builder
         mock_builder.post_init.return_value = mock_builder
+        mock_builder.post_shutdown.return_value = mock_builder
         mock_builder.build.return_value = mock_app
 
         with patch("bot.Application.builder", return_value=mock_builder), \
              patch.object(mock_app, "run_polling"):
             bot.main()
 
-        cmd_handlers = {h.commands[0]: h.callback for h in handlers_registered if isinstance(h, CommandHandler)}
+        cmd_handlers = {
+            cmd: h.callback
+            for h in handlers_registered
+            if isinstance(h, CommandHandler)
+            for cmd in h.commands
+        }
         self.assertIn("agents", cmd_handlers)
         self.assertEqual(cmd_handlers["agents"], bot.agents_cmd)
         self.assertIn("agent", cmd_handlers)
@@ -1725,7 +1736,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
             await bot.agent_status_cmd(update_cmd, context_cmd)
             self.assertTrue(any("正在排队" in r for r in outbound.replies))
             self.assertTrue(any(task_id[:12] in r for r in outbound.replies))
-            callbacks = [b["callback_data"] for row in outbound.button_replies[0] for b in row]
+            callbacks = [b["callback_data"] for row in outbound.button_replies[0][1] for b in row]
             self.assertIn(f"task:status:{task_id}", callbacks)
             self.assertIn("task:recent", callbacks)
 
@@ -1744,7 +1755,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
             await bot.task_status_callback(update_cb, AsyncMock())
             query.answer.assert_called_once_with()
             self.assertTrue(any("正在排队" in r for r in outbound.replies))
-            callbacks = [b["callback_data"] for row in outbound.button_replies[0] for b in row]
+            callbacks = [b["callback_data"] for row in outbound.button_replies[0][1] for b in row]
             self.assertIn(f"task:status:{task_id}", callbacks)
             self.assertIn("task:recent", callbacks)
 
