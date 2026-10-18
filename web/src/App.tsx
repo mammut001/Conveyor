@@ -765,7 +765,7 @@ export default function App() {
       </aside>
 
       <section className="stream-panel panel">
-        <div className="stream-header">
+        <div className={`stream-header ${!mobileUiOn ? 'stream-header-standard' : ''} ${view === 'chat' ? 'stream-header-chat' : ''}`}>
           <div>
             <p className="eyebrow">
               {view === 'chat' ? (selectedAgent ? 'AGENT' : 'DIRECT CHAT TIER') : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'browser' ? 'EXTERNAL BROWSER MANAGEMENT' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'workflows' ? 'DURABLE WORKFLOWS' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'secrets' ? 'PRIVATE CREDENTIALS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · CODEX EXECUTION'}
@@ -775,7 +775,7 @@ export default function App() {
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div className="mode-switch">
+            <div className="mode-switch" role="navigation" aria-label="Workbench sections">
               <button type="button" className={view === 'tasks' ? 'active' : ''} onClick={() => setView('tasks')}>Tasks</button>
               <button type="button" className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>Chat</button>
               <button type="button" className={view === 'inbox' ? 'active' : ''} onClick={() => setView('inbox')}>

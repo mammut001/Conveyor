@@ -1156,3 +1156,11 @@
   .primary-interface .agent-list .agent-item strong { font-size: 12px; }
   .primary-interface .agent-list .agent-edit-btn { opacity: 1; width: 28px; height: 36px; }
 }
+
+@media (max-width: 600px) {
+  .primary-interface .stream-header-standard { flex-wrap: wrap; gap: 8px; padding: 10px 12px; min-height: 0; }
+  .primary-interface .stream-header-standard > div:last-child { width: 100%; min-width: 0; }
+  .primary-interface .stream-header-standard.stream-header-chat > div:first-child { display: none; }
+  .primary-interface .stream-header-standard .mode-switch { width: 100%; min-width: 0; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: thin; }
+  .primary-interface .stream-header-standard .mode-switch button { flex-shrink: 0; min-height: 36px; }
+}
