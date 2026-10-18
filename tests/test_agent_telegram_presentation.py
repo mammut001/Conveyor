@@ -198,11 +198,9 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
         target_route_agent = route_agent_id or self.finance["id"]
         target_mailbox_agent = to_agent or self.finance["id"]
         with sqlite3.connect(str(db_path)) as conn:
-            conn.execute("""CREATE TABLE IF NOT EXISTS main_router_routes (
-                approval_key TEXT PRIMARY KEY, agent_id TEXT NOT NULL,
-                agent_name TEXT NOT NULL, origin_channel TEXT NOT NULL,
-                origin_operator TEXT NOT NULL, origin_chat TEXT NOT NULL,
-                delivered INTEGER NOT NULL DEFAULT 0)""")
+            import main_router_results
+            import agent_result_outbox
+            conn.execute(main_router_results._SCHEMA)
             conn.execute("""CREATE TABLE IF NOT EXISTS agent_mailbox (
                 id TEXT PRIMARY KEY, from_agent TEXT NOT NULL, to_agent TEXT NOT NULL,
                 operator TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL,
@@ -210,11 +208,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
                 attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 3,
                 deadline REAL, created_at REAL NOT NULL, lease_owner TEXT,
                 lease_expires_at REAL, parent_message_id TEXT, depth INTEGER NOT NULL DEFAULT 0)""")
-            conn.execute("""CREATE TABLE IF NOT EXISTS agent_result_notifications (
-                id TEXT PRIMARY KEY, result_id TEXT NOT NULL, task_id TEXT NOT NULL,
-                channel TEXT NOT NULL, operator TEXT NOT NULL, chat_id TEXT NOT NULL,
-                text TEXT NOT NULL, state TEXT NOT NULL, created_at REAL NOT NULL,
-                updated_at REAL NOT NULL)""")
+            agent_result_outbox.ensure(conn)
 
             app_key = f"delegate-token-{task_id}"
             conn.execute(
@@ -237,8 +231,8 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
                 conn.execute(
                     """INSERT OR REPLACE INTO agent_result_notifications
                        (id, result_id, task_id, channel, operator, chat_id, text, state, created_at, updated_at)
-                       VALUES (?, 'res-1', ?, ?, ?, ?, 'text', ?, ?, ?)""",
-                    (f"notif-{task_id}", task_id, origin_channel, origin_operator, origin_chat, outbox_state, now, now)
+                       VALUES (?, ?, ?, ?, ?, ?, 'text', ?, ?, ?)""",
+                    (f"notif-{task_id}", f"res-{task_id}", task_id, origin_channel, origin_operator, origin_chat, outbox_state, now, now)
                 )
 
     # -------------------------------------------------------------------------
@@ -1245,7 +1239,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
             mock_outbound.return_value = outbound
             await bot.agent_chooser_callback(update_sel, AsyncMock())
             self.assertTrue(any("[Finance]" in r and "已切换至该助手" in r for r in outbound.replies))
-            query_sel.answer.assert_called_with("已切换至 Finance")
+            query_sel.answer.assert_called_once_with()
 
         # Binding persisted in DB
         self.assertEqual(routing.bound(self.settings, "telegram", "12345"), self.finance["id"])
@@ -1267,6 +1261,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
             outbound = MockPort(supports_inline_buttons=True)
             mock_outbound.return_value = outbound
             await bot.agent_chooser_callback(update_def, AsyncMock())
+            query_def.answer.assert_called_once_with()
             self.assertTrue(any("[Conveyor]" in r and "已切换至该助手" in r for r in outbound.replies))
 
         self.assertIsNone(routing.bound(self.settings, "telegram", "12345"))
@@ -1354,79 +1349,404 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
             query_stale.answer.assert_called_with("该助手已不可用或已归档。", show_alert=True)
         self.assertIsNone(routing.bound(self.settings, "telegram", "12345"))
 
-    async def test_agent_chooser_pagination_and_max_50_agents(self):
+    async def test_agent_chooser_callback_bind_exception_safe(self):
+        import agent_channel_routing as routing
         import bot
 
-        # Create agents up to limit (50 max)
-        for i in range(12):
-            self.store.create({
-                "name": f"Agent_{i:02d}",
-                "persona": f"Persona line 1 for agent {i}\nPersona line 2 with details",
-                "instructions": "SUPER_SECRET_INSTRUCTIONS_NEVER_LEAK",
-                "workspace_path": "/root/super/secret/path",
-            })
+        query = AsyncMock()
+        query.data = f"agent:select:{self.finance['id']}"
+        update = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 12345
+        update.effective_chat.id = 12345
+        update.effective_chat.type = "private"
 
-        # Page 1
-        text_p1, buttons_p1 = tg_pres.get_agent_chooser_display(self.settings, self.tg_msg(), page=1)
-        self.assertIn("可选助手（第 1/", text_p1)
-        self.assertNotIn("SUPER_SECRET_INSTRUCTIONS", text_p1)
-        self.assertNotIn("/root/super/secret/path", text_p1)
-        self.assertNotIn("\nPersona line 2", text_p1)  # newlines replaced
-
-        # Verify pagination button exists
-        callbacks_p1 = [b["callback_data"] for row in buttons_p1 for b in row]
-        self.assertTrue(any(c.startswith("agent:page:2") for c in callbacks_p1))
-
-        # Page 2 via bot callback
-        query_p2 = AsyncMock()
-        query_p2.data = "agent:page:2"
-        update_p2 = AsyncMock()
-        update_p2.callback_query = query_p2
-        update_p2.effective_user.id = 12345
-        update_p2.effective_chat.id = 12345
-        update_p2.effective_chat.type = "private"
-
-        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+        secret_err = "Simulated failure: /root/super/secret/path token=sk-live-secret-key-12345"
+        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound, \
+             patch("agent_channel_routing.bind", side_effect=RuntimeError(secret_err)):
             outbound = MockPort(supports_inline_buttons=True)
             mock_outbound.return_value = outbound
-            await bot.agent_chooser_callback(update_p2, AsyncMock())
-            self.assertTrue(any("第 2/" in r for r in outbound.replies))
+            await bot.agent_chooser_callback(update, AsyncMock())
+
+            # Answer callback preserved
+            query.answer.assert_called_once_with()
+            # Fixed safe Chinese message replied to chat
+            self.assertTrue(any("切换助手失败，请稍后重试。" in r for r in outbound.replies))
+            # No raw leak of secret or path or exception type
+            self.assertFalse(any("/root/super/secret/path" in r for r in outbound.replies))
+            self.assertFalse(any("sk-live-secret-key" in r for r in outbound.replies))
+            self.assertFalse(any("RuntimeError" in r for r in outbound.replies))
+            # Did not claim switched
+            self.assertFalse(any("已切换至该助手" in r for r in outbound.replies))
+            # No binding persisted
+            self.assertIsNone(routing.bound(self.settings, "telegram", "12345"))
+
+    async def test_agent_chooser_no_persona_leak(self):
+        sentinel = "PRIVATE_PERSONA_SENTINEL_NEVER_SHOW_IN_TELEGRAM"
+        self.store.create({
+            "name": "SecretPersonaAgent",
+            "persona": sentinel,
+            "instructions": "SUPER_SECRET_INSTRUCTIONS_NEVER_LEAK",
+            "workspace_path": "/var/secret/path",
+        })
+
+        text, buttons = tg_pres.get_agent_chooser_display(self.settings, self.tg_msg())
+        self.assertNotIn(sentinel, text)
+        self.assertNotIn("SUPER_SECRET_INSTRUCTIONS", text)
+        self.assertNotIn("/var/secret/path", text)
+        for row in (buttons or []):
+            for btn in row:
+                self.assertNotIn(sentinel, btn["text"])
+                self.assertNotIn(sentinel, btn["callback_data"])
+
+    def test_format_safe_single_line_and_button_label_bounds(self):
+        # 1. 60-char ASCII name
+        long_name = "A" * 60
+        safe_long = tg_pres.format_safe_single_line(long_name, 20)
+        self.assertEqual(len(safe_long), 20)
+        self.assertTrue(safe_long.startswith("AAAAAAAA"))
+        self.assertTrue(safe_long.endswith("…"))
+        self.assertNotIn("\n", safe_long)
+        self.assertNotIn("[truncated]", safe_long)
+
+        # 2. Multiline and control characters normalized
+        multiline = "First Line\nSecond\tLine\r\nThird\x00Line"
+        safe_multi = tg_pres.format_safe_single_line(multiline, 40)
+        self.assertEqual(safe_multi, "First Line Second Line Third Line")
+        self.assertNotIn("\n", safe_multi)
+        self.assertNotIn("\t", safe_multi)
+        self.assertNotIn("\x00", safe_multi)
+
+        # 3. CJK characters bounded
+        cjk_name = "这是一个非常非常非常非常非常长的助手名称用于测试截断效果"
+        safe_cjk = tg_pres.format_safe_single_line(cjk_name, 15)
+        self.assertEqual(len(safe_cjk), 15)
+        self.assertTrue(safe_cjk.endswith("…"))
+
+        # 4. Agent button preserves ID distinguishability and name without losing name
+        agent_id = "agent_test_1234"
+        id_part = f" ({agent_id})"
+        avail = max(4, 32 - len(id_part))
+        btn_label = f"{tg_pres.format_safe_single_line(long_name, avail)}{id_part}"
+        self.assertLessEqual(len(btn_label), 32)
+        self.assertTrue(btn_label.startswith("AAAA"))
+        self.assertTrue(btn_label.endswith(f" ({agent_id})"))
+        self.assertNotIn("\n", btn_label)
+        self.assertNotIn("[truncated]", btn_label)
+
+    async def test_agent_chooser_pagination_and_max_50_agents(self):
+        import agent_channel_routing as routing
+        import bot
+
+        # Default agent exists (1). Create 48 more custom agents + self.finance = 49 custom = 50 total
+        for i in range(48):
+            self.store.create({
+                "name": f"Agent_{i:02d}",
+                "persona": f"PRIVATE_PERSONA_SENTINEL_{i}",
+                "instructions": "SUPER_SECRET_INSTRUCTIONS_NEVER_LEAK",
+                "workspace_path": f"/root/super/secret/path/{i}",
+            })
+
+        all_agents = [a for a in self.store.list() if not a.get("archived", False)]
+        custom_agents = [a for a in all_agents if a["id"] != "default"]
+        self.assertEqual(len(custom_agents), 49)
+
+        PAGE_SIZE = 6
+        expected_pages = (len(custom_agents) + PAGE_SIZE - 1) // PAGE_SIZE  # 9 pages
+
+        seen_agent_ids_in_buttons = set()
+        seen_agent_ids_in_text = set()
+
+        # Walk all pages 1 to 9
+        for p in range(1, expected_pages + 1):
+            text_p, buttons_p = tg_pres.get_agent_chooser_display(self.settings, self.tg_msg(), page=p)
+            self.assertIn(f"第 {p}/{expected_pages} 页", text_p)
+            self.assertNotIn("PRIVATE_PERSONA_SENTINEL", text_p)
+            self.assertNotIn("SUPER_SECRET_INSTRUCTIONS", text_p)
+            self.assertNotIn("/root/super/secret/path", text_p)
+
+            # Check buttonless pagination hints in text
+            if expected_pages > 1:
+                self.assertIn("翻页命令：", text_p)
+                if p > 1:
+                    self.assertIn(f"/agents {p - 1}", text_p)
+                if p < expected_pages:
+                    self.assertIn(f"/agents {p + 1}", text_p)
+
+            # Check buttons
+            for row in (buttons_p or []):
+                for b in row:
+                    cb = b["callback_data"]
+                    self.assertLess(len(cb.encode("utf-8")), 64)
+                    self.assertNotIn("\n", b["text"])
+                    if cb.startswith("agent:select:") and cb != "agent:select:default":
+                        a_id = cb.split("agent:select:")[1]
+                        seen_agent_ids_in_buttons.add(a_id)
+
+            # Extract IDs listed in text bullets
+            for line in text_p.split("\n"):
+                if line.startswith("• ") and "— 默认主助手" not in line:
+                    m = re.search(r"\(([a-z0-9_-]+)\)", line)
+                    if m:
+                        seen_agent_ids_in_text.add(m.group(1))
+
+        # Verify all 49 custom agent IDs visited across pages with NO omissions and NO duplicates
+        expected_ids = {a["id"] for a in custom_agents}
+        self.assertEqual(seen_agent_ids_in_buttons, expected_ids)
+        self.assertEqual(seen_agent_ids_in_text, expected_ids)
+
+        # Off-page current binding test:
+        # Bind the last agent (on page 9), then inspect page 1
+        last_agent = custom_agents[-1]
+        routing.bind(self.settings, self.tg_msg(), last_agent["id"], exact_id=True)
+        self.assertEqual(routing.bound(self.settings, "telegram", "12345"), last_agent["id"])
+
+        text_p1, buttons_p1 = tg_pres.get_agent_chooser_display(self.settings, self.tg_msg(), page=1)
+        self.assertIn(f"当前助手: {last_agent['name']} ({last_agent['id']})", text_p1)
+        for row in buttons_p1[:-2]:
+            for b in row:
+                self.assertFalse(b["text"].startswith("✓ "))
+        main_btn = buttons_p1[-1][0]
+        self.assertFalse(main_btn["text"].startswith("✓ "))
+
+        # Out-of-range page after archiving:
+        to_archive = [a["id"] for a in custom_agents[:30]]
+        for aid in to_archive:
+            self.store.archive(aid)
+
+        remaining_custom = [a for a in self.store.list() if not a.get("archived", False) and a["id"] != "default"]
+        new_total_pages = (len(remaining_custom) + PAGE_SIZE - 1) // PAGE_SIZE
+        text_clamped, _ = tg_pres.get_agent_chooser_display(self.settings, self.tg_msg(), page=9)
+        self.assertIn(f"第 {new_total_pages}/{new_total_pages} 页", text_clamped)
 
     def test_feature_aware_bot_menu_commands(self):
         import bot
 
-        # 1. Both disabled
+        baseline_cmds = [
+            ("fix", "改文件：/fix <需求>"),
+            ("workers", "查看 Workers 和任务状态"),
+            ("sessions", "查看当前会话和历史任务"),
+            ("switch", "打开会话导航（只读）"),
+            ("jobs", "看最近任务"),
+            ("last", "看最近结果"),
+            ("diff", "看最近改动"),
+            ("apply", "应用最近改动"),
+            ("discard", "丢弃最近 worktree"),
+            ("clean", "清理旧任务"),
+            ("maintain", "自维护检查和清理"),
+            ("diag", "一键诊断包"),
+            ("health", "健康快照摘要"),
+            ("doctor", "后端体检"),
+            ("audit", "任务和 worktree 审计"),
+            ("log", "安全查看最近 job 日志摘要"),
+            ("meta", "查看 job.json 结构状态"),
+            ("metrics", "最近任务趋势和 token 用量"),
+            ("security", "安全审计"),
+            ("ratelimit", "查看最近 429 限流"),
+            ("smoke", "端到端验收"),
+            ("editcheck", "临时 repo 真改文件验收"),
+            ("memo", "显式记一条：/memo <内容>"),
+            ("memory", "看今天 MEMORY.md"),
+            ("journal", "看已归档的 journal 列表"),
+            ("cancel", "中止当前任务"),
+            ("load", "本机负载快照"),
+            ("vps", "同上 (alias /load)"),
+            ("htop", "top 风格进程帧"),
+            ("ps", "进程快照 (comm 模式)"),
+            ("tools", "列出 agent 工具"),
+            ("disk", "磁盘使用快照"),
+            ("logs", "Conveyor 服务日志"),
+            ("service_status", "Conveyor 服务状态"),
+            ("git_status", "Workspace git status"),
+            ("diagnose", "Hybrid 主机诊断"),
+            ("restart", "重启 Conveyor 服务"),
+            ("audit_tools", "危险工具审计"),
+        ]
+        self.assertEqual(len(baseline_cmds), 38)
+        baseline_names = [c[0] for c in baseline_cmds]
+
+        # Mode 1. Both disabled (off-mode): exactly matches 38 baseline commands in same order
         with patch.dict(os.environ, {"CONVEYOR_AGENT_CHANNEL_ROUTING": "0", "CONVEYOR_MAIN_ROUTER": "0"}):
             cmds = bot.get_my_bot_commands(self.settings)
             cmd_names = [c[0] for c in cmds]
+            self.assertEqual(len(cmds), 38)
+            self.assertEqual(cmd_names, baseline_names)
+            self.assertEqual(cmds, baseline_cmds)
             self.assertNotIn("agents", cmd_names)
             self.assertNotIn("agent", cmd_names)
             self.assertNotIn("agentstatus", cmd_names)
-            self.assertIn("fix", cmd_names)
-            self.assertIn("status", cmd_names)
-            self.assertIn("workers", cmd_names)
+            self.assertNotIn("status", cmd_names)
 
-        # 2. Only channel routing enabled
+        # Mode 2. Only channel routing enabled: agents and agent at front, all 38 baseline reachable
         with patch.dict(os.environ, {"CONVEYOR_AGENT_CHANNEL_ROUTING": "1", "CONVEYOR_MAIN_ROUTER": "0"}):
             cmds = bot.get_my_bot_commands(self.settings)
             cmd_names = [c[0] for c in cmds]
-            self.assertIn("agents", cmd_names[:3])
-            self.assertIn("agent", cmd_names[:3])
+            self.assertEqual(len(cmds), 40)
+            self.assertEqual(cmd_names[:2], ["agents", "agent"])
             self.assertNotIn("agentstatus", cmd_names)
+            for b_name in baseline_names:
+                self.assertIn(b_name, cmd_names)
 
-        # 3. Both enabled
+        # Mode 3. Both enabled: agents, agent, agentstatus near front, all 38 baseline reachable, no duplicates
         with patch.dict(os.environ, {"CONVEYOR_AGENT_CHANNEL_ROUTING": "1", "CONVEYOR_MAIN_ROUTER": "1"}):
             cmds = bot.get_my_bot_commands(self.settings)
             cmd_names = [c[0] for c in cmds]
-            self.assertIn("agents", cmd_names[:4])
-            self.assertIn("agent", cmd_names[:4])
-            self.assertIn("agentstatus", cmd_names[:4])
-            # No duplicates
+            self.assertEqual(len(cmds), 41)
+            self.assertEqual(cmd_names[:3], ["agents", "agent", "agentstatus"])
             self.assertEqual(len(cmd_names), len(set(cmd_names)))
-            # Clarified copy
+            for b_name in baseline_names:
+                self.assertIn(b_name, cmd_names)
             desc_map = dict(cmds)
             self.assertIn("转交任务", desc_map["agentstatus"])
-            self.assertIn("当前任务", desc_map["status"])
+
+    async def test_agents_cmd_and_agent_cmd_wrappers_and_routing_denials(self):
+        import agent_channel_routing as routing
+        import bot
+
+        update_owner = AsyncMock()
+        update_owner.effective_user.id = 12345
+        update_owner.effective_chat.id = 12345
+        update_owner.effective_chat.type = "private"
+        context_agents = SimpleNamespace(args=[])
+        context_bind = SimpleNamespace(args=["Finance"])
+
+        # 1. Routing OFF: owner gets safe unavailable message
+        with patch.dict(os.environ, {"CONVEYOR_AGENT_CHANNEL_ROUTING": "0"}), \
+             patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            outbound = MockPort(supports_inline_buttons=True)
+            mock_outbound.return_value = outbound
+            await bot.agents_cmd(update_owner, context_agents)
+            self.assertEqual(outbound.replies, ["功能未启用或当前不可用。"])
+
+            outbound.replies.clear()
+            await bot.agent_cmd(update_owner, context_bind)
+            self.assertEqual(outbound.replies, ["功能未启用或当前不可用。"])
+            self.assertIsNone(routing.bound(self.settings, "telegram", "12345"))
+
+        # 2. Kill switch active: owner gets safe unavailable message
+        with patch.dict(os.environ, {"CONVEYOR_AGENT_CHANNEL_ROUTING": "1", "CONVEYOR_AGENTS_KILL": "1"}), \
+             patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            outbound = MockPort(supports_inline_buttons=True)
+            mock_outbound.return_value = outbound
+            await bot.agents_cmd(update_owner, context_agents)
+            self.assertEqual(outbound.replies, ["功能未启用或当前不可用。"])
+
+            outbound.replies.clear()
+            await bot.agent_cmd(update_owner, context_bind)
+            self.assertEqual(outbound.replies, ["功能未启用或当前不可用。"])
+            self.assertIsNone(routing.bound(self.settings, "telegram", "12345"))
+
+        # 3. Non-owner: silent refusal, no information leak
+        update_nonowner = AsyncMock()
+        update_nonowner.effective_user.id = 99999
+        update_nonowner.effective_chat.id = 99999
+        update_nonowner.effective_chat.type = "private"
+        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            outbound = MockPort(supports_inline_buttons=True)
+            mock_outbound.return_value = outbound
+            await bot.agents_cmd(update_nonowner, context_agents)
+            self.assertEqual(outbound.replies, [])
+            await bot.agent_cmd(update_nonowner, context_bind)
+            self.assertEqual(outbound.replies, [])
+
+        # 4. Group chat: silent refusal
+        update_group = AsyncMock()
+        update_group.effective_user.id = 12345
+        update_group.effective_chat.id = 12345
+        update_group.effective_chat.type = "group"
+        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            outbound = MockPort(supports_inline_buttons=True)
+            mock_outbound.return_value = outbound
+            await bot.agents_cmd(update_group, context_agents)
+            self.assertEqual(outbound.replies, [])
+            await bot.agent_cmd(update_group, context_bind)
+            self.assertEqual(outbound.replies, [])
+
+    def test_bot_main_handler_registration_and_callback_anchoring(self):
+        import bot
+
+        handlers_registered: list[Any] = []
+        mock_app = MagicMock()
+        mock_app.add_handler.side_effect = lambda h: handlers_registered.append(h)
+
+        mock_builder = MagicMock()
+        mock_builder.token.return_value = mock_builder
+        mock_builder.post_init.return_value = mock_builder
+        mock_builder.build.return_value = mock_app
+
+        with patch("bot.Application.builder", return_value=mock_builder), \
+             patch.object(mock_app, "run_polling"):
+            bot.main()
+
+        cmd_handlers = {h.commands[0]: h.callback for h in handlers_registered if isinstance(h, CommandHandler)}
+        self.assertIn("agents", cmd_handlers)
+        self.assertEqual(cmd_handlers["agents"], bot.agents_cmd)
+        self.assertIn("agent", cmd_handlers)
+        self.assertEqual(cmd_handlers["agent"], bot.agent_cmd)
+        self.assertIn("agentstatus", cmd_handlers)
+        self.assertEqual(cmd_handlers["agentstatus"], bot.agent_status_cmd)
+
+        cb_handlers = [h for h in handlers_registered if isinstance(h, CallbackQueryHandler)]
+        agent_cb = next((h for h in cb_handlers if h.pattern and h.pattern.pattern == r"^agent:"), None)
+        self.assertIsNotNone(agent_cb)
+        self.assertEqual(agent_cb.callback, bot.agent_chooser_callback)
+
+        task_cb = next((h for h in cb_handlers if h.pattern and h.pattern.pattern == r"^task:"), None)
+        self.assertIsNotNone(task_cb)
+        self.assertEqual(task_cb.callback, bot.task_status_callback)
+
+        # Verify pattern matching
+        self.assertTrue(agent_cb.pattern.match("agent:select:Finance"))
+        self.assertTrue(agent_cb.pattern.match("agent:select:default"))
+        self.assertTrue(agent_cb.pattern.match("agent:page:2"))
+        self.assertIsNone(agent_cb.pattern.match("task:recent"))
+        self.assertIsNone(agent_cb.pattern.match("other:agent:select:1"))
+
+        self.assertTrue(task_cb.pattern.match("task:status:0123456789abcdef"))
+        self.assertTrue(task_cb.pattern.match("task:recent"))
+        self.assertIsNone(task_cb.pattern.match("agent:select:default"))
+
+    async def test_explicit_task_id_flow_preserved(self):
+        import bot
+
+        task_id = "0123456789abcdef0123456789abcdef"
+        self._create_task_in_db(task_id, status="queued")
+
+        # 1. Explicit /agentstatus <task_id> returns task status with back button
+        update_cmd = AsyncMock()
+        update_cmd.effective_user.id = 12345
+        update_cmd.effective_chat.id = 12345
+        update_cmd.effective_chat.type = "private"
+        context_cmd = SimpleNamespace(args=[task_id])
+
+        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            outbound = MockPort(supports_inline_buttons=True)
+            mock_outbound.return_value = outbound
+            await bot.agent_status_cmd(update_cmd, context_cmd)
+            self.assertTrue(any("正在排队" in r for r in outbound.replies))
+            self.assertTrue(any(task_id[:12] in r for r in outbound.replies))
+            callbacks = [b["callback_data"] for row in outbound.button_replies[0] for b in row]
+            self.assertIn(f"task:status:{task_id}", callbacks)
+            self.assertIn("task:recent", callbacks)
+
+        # 2. Callback task:status:<task_id> returns task status with back button
+        query = AsyncMock()
+        query.data = f"task:status:{task_id}"
+        update_cb = AsyncMock()
+        update_cb.callback_query = query
+        update_cb.effective_user.id = 12345
+        update_cb.effective_chat.id = 12345
+        update_cb.effective_chat.type = "private"
+
+        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            outbound = MockPort(supports_inline_buttons=True)
+            mock_outbound.return_value = outbound
+            await bot.task_status_callback(update_cb, AsyncMock())
+            query.answer.assert_called_once_with()
+            self.assertTrue(any("正在排队" in r for r in outbound.replies))
+            callbacks = [b["callback_data"] for row in outbound.button_replies[0] for b in row]
+            self.assertIn(f"task:status:{task_id}", callbacks)
+            self.assertIn("task:recent", callbacks)
 
     def test_bot_settings_isolation_and_restoration_after_cleanup(self):
         """Regression test ensuring bot.settings is isolated per-test and restores prior identity."""

@@ -44,6 +44,26 @@ _REJECTION_MAP: dict[str, str] = {
 
 _MD_SEP_PATTERN = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
 _CODE_FENCE_PATTERN = re.compile(r"^\s*(`{3,}|~{3,})")
+_CONTROL_CHARS_PATTERN = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def format_safe_single_line(text: str, max_chars: int = 30, ellipsis: str = "…") -> str:
+    """Narrow presentation helper for single-line redacted bounded names/labels.
+
+    Normalizes embedded newlines and control characters to spaces, redacts secrets,
+    and cleanly truncates with an ellipsis without adding newlines or reserving 80 chars.
+    """
+    if not text:
+        return ""
+    redacted = redact_text(str(text))
+    cleaned = _CONTROL_CHARS_PATTERN.sub(" ", redacted)
+    cleaned = " ".join(cleaned.split())
+    if len(cleaned) <= max_chars:
+        return cleaned
+    if max_chars <= len(ellipsis):
+        return cleaned[:max_chars]
+    return cleaned[: max_chars - len(ellipsis)].rstrip() + ellipsis
+
 
 
 def feature_enabled(settings: Settings) -> bool:
@@ -101,7 +121,7 @@ def format_route_confirmation_card(settings: Settings, arg: str) -> str:
     from agents import AgentStore
     agent = AgentStore(settings).get(target_id)
     raw_name = agent["name"] if agent else target_id
-    safe_agent_name = truncate(redact_text(str(raw_name)), 40)
+    safe_agent_name = format_safe_single_line(raw_name, 40)
 
     raw_task = str(req.get("task", "")).strip()
     safe_task = truncate(redact_text(raw_task), 300)
@@ -143,7 +163,7 @@ def format_queue_ack(
         except Exception:
             pass
 
-        safe_name = truncate(redact_text(str(agent_name)), 40)
+        safe_name = format_safe_single_line(agent_name, 40)
         text = (
             f"已交给 {safe_name}，正在排队。完成后会在这里通知你。\n"
             f"任务编号: {short_ref}\n"
@@ -263,7 +283,7 @@ def query_delegated_task_status(
         dict(row), outbox_state, is_archived, now
     )
 
-    safe_name = truncate(redact_text(str(row["agent_name"])), 40)
+    safe_name = format_safe_single_line(row["agent_name"], 40)
     return {
         "agent_name": safe_name,
         "task_id": task_id,
@@ -473,7 +493,7 @@ def query_recent_delegated_tasks(
         state_label, detail, is_terminal = _interpret_task_lifecycle(
             row, outbox_state, is_archived, now
         )
-        safe_name = truncate(redact_text(str(row["agent_name"])), 40)
+        safe_name = format_safe_single_line(row["agent_name"], 40)
         created_time = _format_time(row.get("created_at"), tz_name)
 
         tasks.append({
@@ -543,8 +563,10 @@ def get_recent_tasks_display(
     if not tasks:
         text = (
             "暂无最近转交任务。\n\n"
-            "提示：您可以在对话中直接提出需求，系统将按需转交给专业助手处理；"
-            "也可以发送 /agents 查看或切换当前对话助手。"
+            "提示：\n"
+            "• 使用默认主助手：发送 /agent main\n"
+            "• 发起任务转交：发送 @<助手名> <任务内容>（确认后执行）\n"
+            "• 查看与切换助手：发送 /agents"
         )
         buttons = [[{"text": "🔄 刷新列表", "callback_data": "task:recent"}]]
         return text, buttons
@@ -560,14 +582,15 @@ def get_recent_tasks_display(
         time_desc = f" · {task['created_time']}" if task.get("created_time") else ""
         lines.append(f"• [{agent_name}] {short_ref} — {status_desc}{time_desc}")
 
-        btn_text = f"🔍 {short_ref} · {agent_name} ({task['state_label']})"
-        btn_text = truncate(btn_text, 36)
+        btn_agent = format_safe_single_line(agent_name, 12)
+        btn_text = f"🔍 {short_ref} · {btn_agent} ({task['state_label']})"
+        btn_text = format_safe_single_line(btn_text, 36)
         buttons.append([{
             "text": btn_text,
             "callback_data": f"task:status:{task['task_id']}",
         }])
 
-    lines.append("\n点击上方按钮可查看详细进度，或发送 /agentstatus <任务编号> 查询。")
+    lines.append("\n点击下方按钮可查看详细进度，或发送 /agentstatus <任务编号> 查询。")
     buttons.append([{"text": "🔄 刷新列表", "callback_data": "task:recent"}])
     return "\n".join(lines), buttons
 
@@ -581,8 +604,8 @@ def get_agent_chooser_display(
 
     Guarantees:
     - Fails closed if channel routing disabled or unauthorized.
-    - Identifies actual current assistant (fallback Conveyor/main when binding unavailable).
-    - Lists live non-archived agents, never exposing instructions, paths, or credentials.
+    - Identifies actual current assistant (fallback actual default name/main when binding unavailable).
+    - Lists live non-archived agents, never exposing instructions, paths, credentials, or persona.
     - Paginates up to 50 agents cleanly without silent truncation.
     - Buttons carry exact IDs in callback_data, bounded <= 64 bytes.
     - Includes return-to-main and link to recent tasks (if status feature enabled).
@@ -594,11 +617,13 @@ def get_agent_chooser_display(
     if not routing.authorized(settings, msg):
         return "未找到助手或无权操作。", None
 
-    current_agent_id = routing.bound(settings, msg.channel, msg.chat_id)
     from agents import AgentStore
     store = AgentStore(settings)
-    current_name = "Conveyor"
-    current_ref = "main"
+    default_agent = store.get("default")
+    default_name = default_agent["name"] if default_agent and default_agent.get("name") else "Conveyor"
+    safe_default_name = format_safe_single_line(default_name, 20)
+
+    current_agent_id = routing.bound(settings, msg.channel, msg.chat_id)
     if current_agent_id:
         curr = store.get(current_agent_id)
         if curr and not curr.get("archived", False):
@@ -606,6 +631,11 @@ def get_agent_chooser_display(
             current_ref = curr["id"]
         else:
             current_agent_id = None
+            current_name = default_name
+            current_ref = "main"
+    else:
+        current_name = default_name
+        current_ref = "main"
 
     all_agents = [a for a in store.list() if not a.get("archived", False)]
     custom_agents = [a for a in all_agents if a["id"] != "default"]
@@ -619,7 +649,7 @@ def get_agent_chooser_display(
     start = (page - 1) * PAGE_SIZE
     page_agents = custom_agents[start : start + PAGE_SIZE]
 
-    safe_curr_name = truncate(redact_text(str(current_name)), 30)
+    safe_curr_name = format_safe_single_line(current_name, 30)
     lines = [
         "🤖 助手切换\n",
         f"当前助手: {safe_curr_name} ({current_ref})\n",
@@ -629,14 +659,23 @@ def get_agent_chooser_display(
     else:
         lines.append(f"可选助手（共 {total_custom} 个自定义助手）：")
 
-    lines.append("• main (Conveyor) — 默认主助手")
+    is_main_cur = (current_agent_id is None or current_agent_id == "default")
+    main_cur_label = "（当前）" if is_main_cur else ""
+    lines.append(f"• main ({safe_default_name}) — 默认主助手{main_cur_label}")
     for a in page_agents:
-        safe_a_name = truncate(redact_text(str(a["name"])), 30)
-        persona = str(a.get("persona") or "").replace("\n", " ").strip()
-        safe_persona = truncate(redact_text(persona), 60) if persona else "无额外描述"
-        lines.append(f"• {safe_a_name} ({a['id']}) — {safe_persona}")
+        safe_a_name = format_safe_single_line(a["name"], 30)
+        is_cur = (current_agent_id == a["id"])
+        cur_label = "（当前）" if is_cur else ""
+        lines.append(f"• {safe_a_name} ({a['id']}){cur_label}")
 
     lines.append("\n点击下方按钮直接切换，或发送 /agent <名称|ID|main>。")
+    if total_pages > 1:
+        page_hints = []
+        if page > 1:
+            page_hints.append(f"/agents {page - 1}（上一页）")
+        if page < total_pages:
+            page_hints.append(f"/agents {page + 1}（下一页）")
+        lines.append(f"翻页命令：{' · '.join(page_hints)}")
     if feature_enabled(settings):
         lines.append("发送 /agentstatus 可查看最近转交任务。")
 
@@ -645,8 +684,10 @@ def get_agent_chooser_display(
     for a in page_agents:
         is_cur = (current_agent_id == a["id"])
         mark = "✓ " if is_cur else ""
-        btn_label = f"{mark}{truncate(redact_text(str(a['name'])), 20)} ({a['id']})"
-        btn_label = truncate(btn_label, 32)
+        id_part = f" ({a['id']})"
+        avail_for_name = max(4, 32 - len(mark) - len(id_part))
+        safe_btn_name = format_safe_single_line(a["name"], avail_for_name)
+        btn_label = f"{mark}{safe_btn_name}{id_part}"
         buttons.append([{
             "text": btn_label,
             "callback_data": f"agent:select:{a['id']}",
@@ -664,10 +705,9 @@ def get_agent_chooser_display(
 
     # Control row: main return + recent tasks
     ctrl_row: list[dict[str, str]] = []
-    is_main_cur = (current_agent_id is None or current_agent_id == "default")
     main_mark = "✓ " if is_main_cur else ""
     ctrl_row.append({
-        "text": f"{main_mark}🏠 main (默认助手)",
+        "text": f"{main_mark}🏠 main ({safe_default_name})",
         "callback_data": "agent:select:default",
     })
     if feature_enabled(settings):
@@ -814,7 +854,7 @@ def convert_markdown_tables_to_bullets(text: str) -> str:
 
 def format_telegram_result(agent_name: str, result_tag: str, result_text: str) -> str:
     """Format Telegram-safe completed result notification with localized header and stable tag."""
-    safe_name = truncate(redact_text(str(agent_name or "")), 40)
+    safe_name = format_safe_single_line(agent_name or "", 40)
     redacted = redact_text(result_text or "")
     formatted_body = convert_markdown_tables_to_bullets(redacted)
     full_text = f"[{safe_name}] 已完成 [result:{result_tag}]:\n{formatted_body}"

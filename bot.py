@@ -405,17 +405,7 @@ async def task_status_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if query is None:
         return
     data = query.data or ""
-    user = update.effective_user
-    chat = update.effective_chat
-    inbound = InboundMessage(
-        channel="telegram",
-        operator_id=str(getattr(user, "id", "") or ""),
-        chat_id=str(getattr(chat, "id", "") or ""),
-        message_id=str(getattr(query.message, "message_id", "") or "") if query.message else None,
-        text="",
-        chat_type="p2p" if chat and chat.type == "private" else "group",
-        raw=update,
-    )
+    inbound = inbound_from_update(update, text="")
     port = make_outbound(update)
     import agent_telegram_presentation as tg_pres
 
@@ -447,18 +437,8 @@ async def task_status_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def agent_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    user = update.effective_user
-    chat = update.effective_chat
     task_ref = _prompt(context)
-    inbound = InboundMessage(
-        channel="telegram",
-        operator_id=str(getattr(user, "id", "") or ""),
-        chat_id=str(getattr(chat, "id", "") or ""),
-        message_id=str(getattr(update.effective_message, "message_id", "") or "") if update.effective_message else None,
-        text=f"/agentstatus {task_ref}".strip(),
-        chat_type="p2p" if chat and chat.type == "private" else "group",
-        raw=update,
-    )
+    inbound = inbound_from_update(update, text=f"/agentstatus {task_ref}".strip())
     port = make_outbound(update)
     import agent_telegram_presentation as tg_pres
 
@@ -473,46 +453,26 @@ async def agent_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await port.reply(inbound, status_text)
 
 
-async def agents_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _dispatch_agent_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cmd: str) -> None:
     if not await _guard(update):
         return
-    user = update.effective_user
-    chat = update.effective_chat
     arg = _prompt(context)
-    text = f"/agents {arg}".strip()
-    inbound = InboundMessage(
-        channel="telegram",
-        operator_id=str(getattr(user, "id", "") or ""),
-        chat_id=str(getattr(chat, "id", "") or ""),
-        message_id=str(getattr(update.effective_message, "message_id", "") or "") if update.effective_message else None,
-        text=text,
-        chat_type="p2p" if chat and chat.type == "private" else "group",
-        raw=update,
-    )
+    text = f"/{cmd} {arg}".strip()
+    inbound = inbound_from_update(update, text=text)
     port = make_outbound(update)
-    import agent_channel_routing
-    await agent_channel_routing.maybe_command(settings, inbound, port)
+    import agent_channel_routing as routing
+    handled = await routing.maybe_command(settings, inbound, port)
+    if not handled:
+        if routing.is_owner_private(settings, inbound):
+            await port.reply(inbound, "功能未启用或当前不可用。")
+
+
+async def agents_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _dispatch_agent_command(update, context, "agents")
 
 
 async def agent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _guard(update):
-        return
-    user = update.effective_user
-    chat = update.effective_chat
-    arg = _prompt(context)
-    text = f"/agent {arg}".strip()
-    inbound = InboundMessage(
-        channel="telegram",
-        operator_id=str(getattr(user, "id", "") or ""),
-        chat_id=str(getattr(chat, "id", "") or ""),
-        message_id=str(getattr(update.effective_message, "message_id", "") or "") if update.effective_message else None,
-        text=text,
-        chat_type="p2p" if chat and chat.type == "private" else "group",
-        raw=update,
-    )
-    port = make_outbound(update)
-    import agent_channel_routing
-    await agent_channel_routing.maybe_command(settings, inbound, port)
+    await _dispatch_agent_command(update, context, "agent")
 
 
 async def agent_chooser_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -523,17 +483,7 @@ async def agent_chooser_callback(update: Update, context: ContextTypes.DEFAULT_T
     if query is None:
         return
     data = query.data or ""
-    user = update.effective_user
-    chat = update.effective_chat
-    inbound = InboundMessage(
-        channel="telegram",
-        operator_id=str(getattr(user, "id", "") or ""),
-        chat_id=str(getattr(chat, "id", "") or ""),
-        message_id=str(getattr(query.message, "message_id", "") or "") if query.message else None,
-        text="",
-        chat_type="p2p" if chat and chat.type == "private" else "group",
-        raw=update,
-    )
+    inbound = inbound_from_update(update, text="")
     port = make_outbound(update)
 
     import agent_channel_routing as routing
@@ -547,7 +497,7 @@ async def agent_chooser_callback(update: Update, context: ContextTypes.DEFAULT_T
             pass
         return
 
-    match_page = re.fullmatch(r"agent:page:(\d{1,3})", data)
+    match_page = re.fullmatch(r"agent:page:([0-9]{1,3})", data)
     if match_page:
         await query.answer()
         page = int(match_page.group(1))
@@ -586,10 +536,13 @@ async def agent_chooser_callback(update: Update, context: ContextTypes.DEFAULT_T
     try:
         selected = routing.bind(settings, inbound, target_id, exact_id=True)
     except Exception as exc:
-        await port.reply(inbound, str(exc))
+        from redaction import redact_text
+        logger.warning("Agent chooser bind failed for target=%s: %s", target_id, redact_text(str(exc)))
+        await port.reply(inbound, "切换助手失败，请稍后重试。")
         return
 
-    ack_text = f'[{selected["name"]}] 已切换至该助手。后续消息将使用该助手的对话历史与工具。'
+    safe_name = tg_pres.format_safe_single_line(selected["name"], 40)
+    ack_text = f'[{safe_name}] 已切换至该助手。后续消息将使用该助手的对话历史与工具。'
     await port.reply(inbound, ack_text)
 
 
