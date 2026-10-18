@@ -425,6 +425,61 @@ class WebChatTests(unittest.TestCase):
         # Executor must NOT run on reject
         run_mock.assert_not_called()
 
+    def test_conversation_picker_http_auth_creation_and_web_identity(self):
+        import os
+        from config import Settings
+        from agents import AgentStore
+        from dataclasses import replace
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            settings=Settings(telegram_bot_token='test',telegram_allowed_user_id=1,
+                codex_workspace_root=root,codex_bin='codex',codex_task_root=root/'tasks',
+                codex_model=None,codex_timeout_seconds=30,codex_retry_429_delays_seconds=(),
+                telegram_progress_seconds=1,codex_memory_root=root,user_timezone='UTC',
+                agents_enabled=True,chat_mode='auto',chat_api_key='test',chat_model='test')
+            flags={'CONVEYOR_NAMED_AGENTS':'1','CONVEYOR_AGENT_CONTEXT':'1','CONVEYOR_AGENT_CHANNEL_ROUTING':'1'}
+            with patch.dict(os.environ,flags), patch.object(self.control,'settings',settings):
+                agent=AgentStore(settings).create({'name':'Topic Agent','tools_allowlist':[]})
+                path='/api/agent-conversations?agent_id='+agent['id']
+                self.assertEqual(self.request('GET',path,authorized=False)[0],401)
+                status,body=self.request('GET',path)
+                self.assertEqual(status,200)
+                self.assertEqual(len(body['conversations']),1)
+                self.assertEqual(self.request('POST','/api/agent-conversations/new',
+                    {'agent_id':agent['id'],'title':'new'})[0],403)
+
+                def create(origin):
+                    conn=http.client.HTTPConnection('127.0.0.1',self.port,timeout=5)
+                    headers={'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json',
+                             'X-Requested-With':'XMLHttpRequest','Origin':origin}
+                    conn.request('POST','/api/agent-conversations/new',
+                        body=json.dumps({'agent_id':agent['id'],'title':'Budget topic'}),headers=headers)
+                    response=conn.getresponse(); payload=json.loads(response.read()); conn.close()
+                    return response.status,payload
+
+                self.assertEqual(create('https://outside.invalid')[0],403)
+                status,body=create('http://127.0.0.1:'+str(self.port))
+                self.assertEqual(status,201)
+                sid=body['conversation']['session_id']
+                self.assertTrue(sid.startswith('web:web-console:topic-'))
+                from agent_context import resolve
+                ctx=resolve(settings,'web',sid.split(':',2)[2],'web-console')
+                self.assertEqual(ctx.agent_id,agent['id'])
+                self.assertEqual(ctx.origin_channel,'web')
+                self.assertEqual(ctx.tool_capabilities,frozenset())
+                self.assertEqual(self.request('POST','/api/chat',{'message':'hello',
+                    'session_id':'web:web-console:topic-'+('f'*32)})[0],400)
+                async def stream(config,messages):
+                    yield 'Topic response\n[[confidence:high]]'
+                with patch('runner.chat_client.stream_chat',new=stream):
+                    status,events=self.request_sse('/api/chat',{'message':'hello','session_id':sid})
+                self.assertEqual(status,200)
+                self.assertTrue(any(kind=='done' for kind,_ in events))
+                _,history=self.request('GET','/api/chat/history?session_id='+sid)
+                self.assertIn('Topic response',str(history['messages']))
+                AgentStore(settings).archive(agent['id'])
+                self.assertEqual(self.request('GET',path)[0],404)
+
     def test_history_unknown_session_is_empty_200(self):
         status, body = self.request("GET", "/api/chat/history?session_id=web%3Aweb-console%3Awebchat-doesnotexist")
         self.assertEqual(status, 200)

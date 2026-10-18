@@ -176,3 +176,79 @@ test('agent conversation identifies message origins without guessing legacy hist
   await expect(page.locator('.transcript-message.role-assistant .transcript-source')).toHaveText(['飞书', '来源未记录'])
   await page.screenshot({ path: test.info().outputPath('agent-history-origins.png') })
 })
+
+test('explicit continuation separates drafts, restores each Agent selection, and locks picker during a reply', async ({ page }) => {
+  await fixture(page)
+  const phone = { id: 'a'.repeat(32), title: 'Telegram 独立会话', origin_channel: 'telegram',
+    session_id: `web:web-console:topic-${'a'.repeat(32)}` }
+  const fresh = { id: 'b'.repeat(32), title: '发布计划', origin_channel: 'web',
+    session_id: `web:web-console:topic-${'b'.repeat(32)}` }
+  let created = false
+  let releaseReply!: () => void
+  const waiting = new Promise<void>(resolve => { releaseReply = resolve })
+  await page.route('**/api/agent-conversations?**', route => {
+    const isBeta = new URL(route.request().url()).searchParams.get('agent_id') === beta.id
+    const agent = isBeta ? beta : main
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      conversations: [{ id: agent.id, title: 'Web 原有会话', origin_channel: 'web', session_id: agent.session_id },
+        ...(isBeta ? [phone, ...(created ? [fresh] : [])] : [])],
+    }) })
+  })
+  await page.route('**/api/agent-conversations/new', route => {
+    expect(route.request().postDataJSON()).toEqual({ agent_id: beta.id, title: '发布计划' })
+    created = true
+    return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ conversation: fresh }) })
+  })
+  await page.route('**/api/chat', async route => {
+    expect(route.request().postDataJSON().session_id).toBe(fresh.session_id)
+    await waiting
+    return route.fulfill({ status: 200, contentType: 'text/event-stream', body:
+      `event: session\ndata: ${JSON.stringify({ session_id: fresh.session_id })}\n\n` +
+      'event: delta\ndata: {"text":"New topic answer"}\n\nevent: message\ndata: {"text":"New topic answer"}\n\nevent: done\ndata: {"outcome":"answered"}\n\n' })
+  })
+  await page.reload()
+  const picker = page.getByLabel('选择要接续的会话')
+  await expect(picker).toHaveValue(beta.session_id)
+  await picker.selectOption(phone.session_id)
+  const input = page.getByRole('textbox', { name: 'Message Beta', exact: true })
+  await input.fill('Telegram topic draft')
+  await picker.selectOption(beta.session_id)
+  await expect(input).toHaveValue('')
+  await picker.selectOption(phone.session_id)
+  await expect(input).toHaveValue('Telegram topic draft')
+  await page.locator('.agent-list button.agent-item').filter({ hasText: 'Main' }).click()
+  await expect(picker).toHaveValue(main.session_id)
+  await page.locator('.agent-list button.agent-item').filter({ hasText: 'Beta' }).click()
+  await expect(picker).toHaveValue(phone.session_id)
+  await page.getByLabel('新话题标题').fill('发布计划')
+  await page.getByRole('button', { name: '另开话题', exact: true }).click()
+  await expect(picker).toHaveValue(fresh.session_id)
+  await expect(input).toHaveValue('')
+  await input.fill('Plan this release')
+  await page.getByRole('button', { name: 'Send', exact: false }).click()
+  await expect(picker).toBeDisabled()
+  await expect(page.getByRole('button', { name: '另开话题', exact: true })).toBeDisabled()
+  releaseReply()
+  await expect(page.getByText('New topic answer', { exact: true })).toBeVisible()
+  await expect(page.getByText('回答中断 · 已保留收到的内容', { exact: true })).toHaveCount(0)
+  await expect(picker).toBeEnabled()
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
+test('conversation lookup failure offers retry without silently opening a cached history', async ({ page }) => {
+  await fixture(page)
+  let fail = true
+  await page.route('**/api/agent-conversations?**', route => route.fulfill({
+    status: fail ? 503 : 200, contentType: 'application/json', body: JSON.stringify(fail ? { error: 'offline' } : {
+      conversations: [{ id: beta.id, title: 'Web 原有会话', origin_channel: 'web', session_id: beta.session_id }],
+    }),
+  }))
+  await page.reload()
+  await expect(page.getByRole('alert')).toContainText('暂时无法读取会话')
+  await expect(page.getByRole('textbox', { name: 'Message Beta', exact: true })).toHaveCount(0)
+  fail = false
+  await page.getByRole('button', { name: '重试读取会话', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: 'Message Beta', exact: true })).toBeVisible()
+  await expect(page.getByLabel('选择要接续的会话')).toHaveValue(beta.session_id)
+})

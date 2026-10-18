@@ -415,6 +415,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 return
         if path.startswith("/api/") and not self._require_auth():
             return
+        if path == "/api/agent-conversations":
+            from web_agent_conversations_api import get
+            get(self, parse_qs(parsed.query))
+            return
         if path.startswith("/api/agent-screens"):
             import web_agent_screens_api
             if web_agent_screens_api.get(self, path, parse_qs(parsed.query)):
@@ -882,6 +886,12 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 agent_security_controls.web_post(self, parsed.path, body)
             return
 
+        if parsed.path == "/api/agent-conversations/new":
+            body = self._body()
+            if body is not None:
+                from web_agent_conversations_api import post
+                post(self, body)
+            return
         if parsed.path == "/api/agent-screens/cancel":
             body = self._body()
             if body is not None:

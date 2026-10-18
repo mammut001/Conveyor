@@ -37,6 +37,10 @@ def resolve_or_create_session(
             if agent_context.enabled(getattr(control, "settings", None)) and (
                     channel != "web" or operator_id != "web-console"):
                 return None
+            if channel == "web" and source_chat_id.startswith("topic-"):
+                from agent_conversations import for_web_chat
+                if not for_web_chat(getattr(control, "settings", None), source_chat_id):
+                    return None
             return channel, operator_id, source_chat_id, requested_session_id
         # A durable web id handed out by a previous /api/chat call whose turn
         # has not been persisted yet: keep using it instead of rejecting it.
@@ -47,6 +51,10 @@ def resolve_or_create_session(
     if len(source_chat_id) > 128 or not all(ch.isalnum() or ch in "-_" for ch in source_chat_id):
         return None
     channel, operator_id = "web", "web-console"
+    if source_chat_id.startswith("topic-"):
+        from agent_conversations import for_web_chat
+        if not for_web_chat(getattr(control, "settings", None), source_chat_id):
+            return None
     durable_session_id = session_identity(channel, source_chat_id, operator_id)
     return channel, operator_id, source_chat_id, durable_session_id
 
@@ -191,9 +199,11 @@ class WebChatPort(OutboundPort):
 
 
 from agent_context import scoped_inbound
+from agent_conversations import scoped as scoped_conversation
 
 
 @scoped_inbound
+@scoped_conversation
 async def run_web_chat(
     msg: InboundMessage,
     port: WebChatPort,

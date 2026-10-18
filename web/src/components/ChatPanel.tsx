@@ -54,6 +54,7 @@ export type ChatPanelProps = {
    *  and never read from or written to this browser's "last chat" slot. */
   agentSessionId?: string;
   agentName?: string;
+  onBusyChange?: (busy: boolean) => void;
 };
 
 function SubagentCardGroup({ tasks, live }: { tasks: SubagentProgress[]; live?: boolean }) {
@@ -134,7 +135,7 @@ function sourceLabel(message: ChatMessage): string {
   return message.id.startsWith('hist-') ? '来源未记录' : 'Web';
 }
 
-export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName }: ChatPanelProps) {
+export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, onBusyChange }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const draftKey = `conveyor-chat-draft:v1:${agentSessionId || 'free-chat'}`;
@@ -149,6 +150,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     } catch { /* Typing still works if browser storage is unavailable. */ }
   }, [draftKey, input]);
   const [busy, setBusy] = useState(false);
+  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   const [error, setError] = useState('');
   const [streamingDelta, setStreamingDelta] = useState('');
   const [statusText, setStatusText] = useState('');
@@ -341,6 +343,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
 
     if (!audio) setInput('');
     setBusy(true);
+    onBusyChange?.(true);
     setError('');
     setStatusText('');
     setStreamingDelta('');

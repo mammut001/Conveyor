@@ -49,11 +49,13 @@ def _edit_overrides_snapshot(text: str, route: RouteResult) -> bool:
 
 
 from agent_context import scoped_inbound
+from agent_conversations import scoped as scoped_conversation
 from handlers.agent_emergency_stop import stop_before_identity
 
 
 @stop_before_identity
 @scoped_inbound
+@scoped_conversation
 async def dispatch(
     msg: InboundMessage,
     port: OutboundPort,
@@ -81,6 +83,11 @@ async def dispatch(
     import agent_channel_routing
     if await agent_channel_routing.maybe_command(settings, msg, port):
         return
+    import agent_conversations
+    if await agent_conversations.maybe_command(settings, msg, port):
+        return
+    if agent_channel_routing.authorized(settings, msg):
+        agent_conversations.ensure_entry(settings, msg)
     port = agent_channel_routing.label_port(settings, msg, port)
 
     # Commands in a conversation act on that conversation's lane: /status,

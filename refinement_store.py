@@ -443,6 +443,7 @@ def stable_session_id(channel: str, chat_id: str, operator_id: str) -> str:
 def should_route_refinement(settings: Any, msg: Any) -> bool:
     if not is_refinement_feedback(getattr(msg, "text", "")):
         return False
-    session_id = stable_session_id(msg.channel, msg.chat_id, msg.operator_id)
+    from agent_conversations import refinement_id
+    session_id = refinement_id(settings, msg)
     store = RefinementStore(settings)
     return store.active(session_id) is not None or store.pending_or_running(session_id)

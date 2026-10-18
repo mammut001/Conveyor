@@ -101,6 +101,17 @@ class WebControl:
             return None
         return session_identity(channel, chat, operator)
 
+    def _refinement_key(self, item: dict[str, Any]) -> str | None:
+        physical = self._session_key(item)
+        if not physical:
+            return None
+        from channel.types import InboundMessage
+        from agent_conversations import refinement_id
+        return refinement_id(self.settings, InboundMessage(
+            channel=str(item["channel"]), operator_id=str(item["operator_id"]),
+            chat_id=str(item["source_chat_id"]), message_id=None, text="",
+        ))
+
     @staticmethod
     def _run_view(job: dict[str, Any]) -> dict[str, Any]:
         """Stable run navigation payload, without logs, paths or raw prompts."""
@@ -121,7 +132,7 @@ class WebControl:
 
     def _attach_session_workbench(self, session: dict[str, Any], jobs: list[dict[str, Any]]) -> dict[str, Any]:
         """Session-native state remains correct while older runs are selected."""
-        key = self._session_key(session)
+        key = self._refinement_key(session)
         session["active_refinement"] = RefinementStore(self.settings).session_summary(key) if key else None
         session["runs"] = [self._run_view(item) for item in jobs]
         session["latest_job"] = jobs[0] if jobs else None
@@ -142,7 +153,7 @@ class WebControl:
                     latest_by_session[key] = job
             chain_by_session = RefinementStore(self.settings).active_summaries([
                 key for session in transcript_sessions
-                if (key := self._session_key(session))
+                if (key := self._refinement_key(session))
             ])
             for session in transcript_sessions:
                 session["last_activity"] = session.get("updated_at") or session.get("created_at")
@@ -152,7 +163,7 @@ class WebControl:
                     str(session.get("source_chat_id") or ""),
                 )
                 session["latest_job"] = latest_by_session.get(key)
-                session["active_refinement"] = chain_by_session.get(self._session_key(session) or "")
+                session["active_refinement"] = chain_by_session.get(self._refinement_key(session) or "")
             return transcript_sessions
 
         # Backward-compatible projection for installations that have not yet
@@ -180,11 +191,11 @@ class WebControl:
                 session["latest_job"] = job
         rows = list(grouped.values())[:limit]
         summaries = RefinementStore(self.settings).active_summaries([
-            key for session in rows if (key := self._session_key(session))
+            key for session in rows if (key := self._refinement_key(session))
         ])
         for session in rows:
             session["active_refinement"] = summaries.get(
-                self._session_key(session) or ""
+                self._refinement_key(session) or ""
             )
         return rows
 

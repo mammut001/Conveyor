@@ -1102,3 +1102,12 @@
 .chat-context-strip { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 10px 16px; border-bottom: 1px solid var(--border, #e7e8eb); font-size: 12px; }
 .chat-context-strip span { color: #6b7280; }
 .transcript-source { font-size: 11px; color: #6b7280; margin-right: 8px; }
+
+.conversation-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #e7e8eb; font-size: 12px; }
+.conversation-picker select { max-width: min(380px, 70vw); padding: 6px; }
+.conversation-picker input { min-width: 90px; max-width: 160px; padding: 6px; }
+.conversation-picker small { flex-basis: 100%; color: #6b7280; }
+
+.transcript-footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; line-height: 1.4; }
+.transcript-footer .transcript-source { margin-right: 0; }
+.transcript-footer > span:not(.transcript-source) { font-size: 11px; color: #6b7280; }

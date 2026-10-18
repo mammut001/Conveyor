@@ -110,6 +110,8 @@ def bind(settings, msg, requested):
     import agent_security
     agent_security.audit(settings, operator=msg.operator_id,
         event="bind", agent_id=agent["id"], reason="owner_selected")
+    import agent_conversations
+    agent_conversations.ensure_entry(settings, msg)
     return agent
 
 
@@ -132,13 +134,14 @@ def conversation_card(settings, msg):
     name = info["name"] if info else "Conveyor"
     entrance = "Telegram" if msg.channel == "telegram" else "飞书"
     lines = [f"[{name}] 当前助手", f"入口：{entrance} 私聊"]
-    if selected:
-        lines += ["会话：这个 Agent 的共享会话",
-                  "与该 Agent 的 Web 会话和已绑定的私聊入口接续上下文。",
-                  "其他 Agent、未绑定的聊天和外部应用记录不会自动加入。"]
-    else:
-        lines += ["会话：当前私聊独立保存",
-                  "不会自动接入其他入口或其他 Agent 的聊天记录。"]
+    import agent_conversations
+    conversation = agent_conversations.summary(settings, msg)
+    local = (conversation["origin_channel"] == msg.channel
+             and conversation["origin_chat_id"] == msg.chat_id)
+    lines += [f'会话：{conversation["title"]}',
+              "当前入口独立保存历史。" if local else "正在接续你明确选择的会话。",
+              "Agent 的身份和权限独立；其他入口的聊天不会自动加入。",
+              "接着已有会话聊：/conversations"]
     lines += ["", "查看与切换：/agents · 查看当前助手：/agent"]
     return "\n".join(lines)
 

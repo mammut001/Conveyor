@@ -94,6 +94,8 @@ class QueuedJob:
     position: int = 0
     session_id: str = ""
     refinement_intent: bool = False
+    conversation_id: str = ""
+    conversation_context: dict = field(default_factory=dict, repr=False)
 
     _msg: "InboundMessage | None" = field(default=None, repr=False)
     _port: "OutboundPort | None" = field(default=None, repr=False)
@@ -394,6 +396,8 @@ class JobQueue:
             position=row["position"],
             session_id=str(row["session_id"] or "") if "session_id" in keys else "",
             refinement_intent=bool(row["refinement_intent"]) if "refinement_intent" in keys else False,
+            conversation_id=str(metadata.get("conversation_id") or ""),
+            conversation_context=metadata.get("conversation_context") or {},
             _msg=msg,
             _port=port,
             _runner=runner,
@@ -420,7 +424,18 @@ class JobQueue:
         original_text: str | None = None,
     ) -> tuple[bool, str, QueuedJob | None]:
         """Add a queue job and persist whether it expects chain continuation."""
-        session_id = stable_session_id(msg.channel, msg.chat_id, msg.operator_id)
+        import agent_conversations
+        import agents
+        settings = self._settings or getattr(runner, "settings", None)
+        session_id = agent_conversations.refinement_id(settings, msg)
+        agent = agents.agent_for_chat(settings, msg.channel, msg.chat_id) if agent_conversations.enabled(settings) else None
+        conversation = agent_conversations.current(settings, msg.channel, msg.chat_id,
+            msg.operator_id, agent["id"]) if agent else None
+        conversation_context = {}
+        if conversation:
+            import agent_context
+            ctx = agent_context.for_request(settings, msg.channel, msg.chat_id, msg.operator_id)
+            conversation_context = dict(vars(ctx), tool_capabilities=sorted(ctx.tool_capabilities))
         # Resolved before the write transaction below: looking up the agent
         # opens the same database and would wait on our own lock.
         lane = self._lane_for(msg, runner)
@@ -461,6 +476,8 @@ class JobQueue:
                     "original_text": original_text or msg.text,
                     "session_id": session_id,
                     "refinement_intent": refinement_intent,
+                    "conversation_id": conversation["id"] if conversation else "",
+                    "conversation_context": conversation_context,
                 })
                 conn.execute(
                     """INSERT INTO queued_jobs (

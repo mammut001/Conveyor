@@ -121,7 +121,7 @@ class TestApprovalRelayCoreStore(unittest.TestCase):
         self.tmpdir = Path(self.tmp.name)
         (self.tmpdir / "memory").mkdir(parents=True, exist_ok=True)
         self.settings = make_test_settings(self.tmpdir, enabled=True)
-        approval_relay.reset_notifier_factory()
+        approval_relay.set_notifier_factory(lambda _channel, _settings: None)
 
     def tearDown(self):
         clear_all_pending()
@@ -421,7 +421,7 @@ class TestApprovalRelayBotCallbacks(unittest.TestCase):
         self.tmpdir = Path(self.tmp.name)
         (self.tmpdir / "memory").mkdir(parents=True, exist_ok=True)
         self.settings = make_test_settings(self.tmpdir, enabled=True)
-        approval_relay.reset_notifier_factory()
+        approval_relay.set_notifier_factory(lambda _channel, _settings: None)
 
     def tearDown(self):
         clear_all_pending()
@@ -545,6 +545,8 @@ class TestApprovalRelayWebInboxHTTP(unittest.TestCase):
 
     def setUp(self):
         clear_all_pending()
+        approval_relay.set_notifier_factory(lambda _channel, _settings: None)
+        self.addCleanup(approval_relay.reset_notifier_factory)
 
     def raw_request(self, method: str, path: str, body: str | None = None, authorized: bool = True):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)

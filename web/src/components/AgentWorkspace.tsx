@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ChatPanel, type ChatPanelProps } from './ChatPanel'
 import { MemoryPanel } from './MemoryPanel'
+import { ConversationPicker } from './ConversationPicker'
 import type { Agent } from './AgentList'
 import './agentScreens.css'
 
@@ -19,6 +20,17 @@ type Props = ChatPanelProps & { agent: Agent }
 export function AgentWorkspace({ agent, token, ...chatProps }: Props) {
   const [features, setFeatures] = useState<Features | null>(null)
   const [tab, setTab] = useState<Tab>('chat')
+  const [conversation, setConversation] = useState(() => {
+    try { return sessionStorage.getItem(`conveyor-agent-conversation:${agent.id}`) || agent.session_id }
+    catch { return agent.session_id }
+  })
+  const [conversationReady, setConversationReady] = useState(false)
+  const [chatBusy, setChatBusy] = useState(false)
+  const chooseConversation = useCallback((session: string) => {
+    setConversation(session)
+    try { sessionStorage.setItem(`conveyor-agent-conversation:${agent.id}`, session) } catch { /* optional persistence */ }
+  }, [agent.id])
+  const conversationLoaded = useCallback(() => setConversationReady(true), [])
 
   useEffect(() => {
     let alive = true
@@ -32,8 +44,8 @@ export function AgentWorkspace({ agent, token, ...chatProps }: Props) {
     return () => { alive = false }
   }, [agent.id, token])
 
-  const chat = <ChatPanel key={agent.id} {...chatProps} token={token}
-    agentSessionId={agent.session_id} agentName={agent.name}
+  const chat = conversationReady && <ChatPanel key={`${agent.id}:${conversation}`} {...chatProps} token={token}
+    agentSessionId={conversation} agentName={agent.name} onBusyChange={setChatBusy}
     active={chatProps.active !== false && (!features?.enabled || tab === 'chat')} />
 
   return (
@@ -47,6 +59,11 @@ export function AgentWorkspace({ agent, token, ...chatProps }: Props) {
             onClick={() => setTab(item)}>{item[0].toUpperCase() + item.slice(1)}</button>
         ))}
       </nav>}
+      <div hidden={tab !== 'chat'}>
+        <ConversationPicker key={agent.id} token={token} agentId={agent.id}
+          defaultSession={agent.session_id} selected={conversation} busy={chatBusy}
+          onSelect={chooseConversation} onReady={conversationLoaded} />
+      </div>
       <div style={{ display: !features?.enabled || tab === 'chat' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
         {chat}
       </div>

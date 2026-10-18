@@ -1,53 +1,71 @@
-# Agent, conversation, and channel identity
+# Independent entries and explicit conversation continuation
 
-The operator asked how to distinguish different Agents and the conversations
-held in different places. The product model is:
+The operator chose: each entry keeps independent history by default; explicitly
+select an existing conversation to continue it. Agent identity, conversation
+history, and message origin are separate concepts.
 
-- Agent: assistant identity, instructions, tool permissions and scoped memory.
-- Conversation: the history/context selected for a particular topic.
-- Channel: where a message entered, such as Telegram, Feishu or Web.
+## Behavior
 
-Current storage has one durable Web conversation per named Agent. An authorized
-private Telegram/Feishu binding joins that existing conversation; the default
-assistant's unbound channel chat remains independent. This update describes
-that behavior explicitly; it does not silently split or merge existing history.
-Multiple topic conversations per Agent require a separate session-selection
-extension. The operator has been asked whether channel entries should default
-to independent conversations with explicit continuation or automatic sharing.
+- Telegram, Feishu and Web have independent initial conversations for each
+  Agent. Selecting an Agent restores that entry's last selected conversation
+  for that Agent. Switching Agent does not copy any previous Agent's history.
+- In a private phone chat, “接着已有会话聊” or `/conversations` lists only the
+  current Agent's conversations. `/conversation <reference>` explicitly joins
+  one. `/conversation local` returns to this entry's independent root;
+  `/conversation new <title>` starts a new topic.
+- The Web Agent workspace has a conversation picker and an “另开话题” action.
+  Selection and drafts persist separately per Agent/conversation in the browser.
+  A pending reply disables the picker; an unreadable list offers retry or an
+  explicit fallback to the original Web conversation.
+- Current Agent cards state the selected conversation. New transcript messages
+  retain Telegram/Feishu/Web provenance. Legacy records without provenance are
+  not relabeled with an inferred origin.
 
-## Implemented first slice
+## Storage and compatibility
 
-- `/agent` without arguments, “当前助手”, or “我在和谁聊天” shows the current
-  assistant, entrance and real history-sharing boundary without changing it.
-- `/agents`, “切换助手”, or “有哪些助手” shows available assistants, marks the
-  selected one and provides exact switch commands. Switching reports its new
-  context boundary and does not move previous messages.
-- Existing owner-only private-chat authorization and feature flags remain.
-  Quoted text and attachments never become natural-language selection controls.
-- New transcript messages record an allowlisted origin channel in existing
-  metadata. Mirrored channel turns preserve Telegram/Feishu provenance in the
-  Agent Web conversation instead of being presented as Web-origin messages.
-- The Web chat shows current assistant identity and source labels for user and
-  assistant turns. Historical messages without provenance say “来源未记录”.
-  No old origin is inferred and no historical content is rewritten.
+The existing control-plane database gains two additive tables:
+`agent_conversations` and `agent_conversation_selections`. Selection is keyed
+by physical channel, chat, operator and Agent. New conversation IDs are opaque;
+short list references are selectors rather than credentials.
 
-## Next interaction model
+Existing Agent Web conversations retain their session IDs, history keys, and
+context files. They appear as “Web 会话（原有记录）” and can be explicitly
+continued. Prior shared records remain there. Existing raw channel transcripts
+and legacy context files are not deleted or rewritten; mixed legacy channel
+logs are not automatically imported into a new Agent conversation. The default
+assistant's own legacy entry-specific chat cache and JSONL context keep their
+existing keys/paths. They remain usable in that entry and via explicit
+continuation, without importing the mixed physical channel transcript.
 
-Prefer an Agent picker followed by that Agent's conversation picker. A selected
-conversation header should show its title and continuation/sharing scope, with
-an explicit “接着已有会话聊” action for cross-channel continuation. Switching
-Agent should restore that Agent's selected conversation, not copy the previous
-Agent's context. External application conversations require explicit selection
-or import; merely connecting a channel must not ingest unrelated histories.
+New phone conversations have a Web-safe transport alias for viewing/continuing
+from the authenticated console. Server-side alias lookup derives the Agent and
+capabilities. A Web token cannot adopt a phone operator or transport identity.
 
-Native Telegram/Feishu picker buttons and multiple topic conversations are not
-implemented by this first slice. The existing text switch commands remain the
-actual selection mechanism. No channel messages or production changes were
-made during this implementation.
+History can be rebuilt from the selected durable transcript after short-term
+cache expiry. Rebuild is bounded to the configured turn count (maximum 20 turns,
+4,000 characters per message). Clearing context writes a reset boundary and
+clears that conversation's cache/context file; older transcript records remain
+visible but are not silently reintroduced into model context.
 
-## Verification
+## Authorization and in-flight behavior
 
-77 backend regressions passed, including Agent authorization, scoped history,
-mirrored source metadata, transcript storage, chat history and delegation.
-The Agent browser suite passed five cases including a mixed-origin conversation
-and a historical message whose origin is unknown. Typecheck/build passed.
+Private channel selection still requires the configured owner, a live Agent,
+and the existing Agent routing/context flags. Group/non-owner controls expose
+no conversation list. References for a different Agent, an unknown/archived
+Agent, or a previous channel owner are rejected. A selection whose source owner
+is no longer valid falls back to the current entry's independent root.
+
+Conversation selection is pinned for an inbound request across awaits. A reply
+finishing after a selection change is saved to its originating conversation.
+Queued tasks persist the originating conversation in existing job metadata;
+recovery pins it again and revalidates Agent/owner authority before execution.
+Changing Agent cannot cause queued work to execute with the new Agent's rights.
+
+Conversation continuation shares chat context only. Task refinement/worktree
+identity also includes the physical channel/operator scope, so joining a phone
+conversation from Web does not transfer that entry's task-worktree authority.
+Agent instructions, tool grants and explicit long-term memory retain their
+Agent scope; independent conversation history is distinct from Agent memory.
+
+No production migration, restart or outgoing Telegram/Feishu message has been
+performed. The routing feature remains behind its existing enablement flags.

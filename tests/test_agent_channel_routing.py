@@ -87,11 +87,11 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
         for channel in ("telegram", "feishu"):
             with self.subTest(channel=channel):
                 before = await self.command(self.msg("当前助手", channel))
-                self.assertIn("当前私聊独立保存", before.replies[-1][1])
+                self.assertIn("当前入口独立保存", before.replies[-1][1])
                 await self.command(self.msg("/agent\tFinance", channel))
                 after = await self.command(self.msg("/agent", channel))
                 self.assertIn("[Finance]", after.replies[-1][1])
-                self.assertIn("共享会话", after.replies[-1][1])
+                self.assertIn("独立会话", after.replies[-1][1])
                 picker = await self.command(self.msg("切换助手", channel))
                 self.assertIn("● Finance", picker.replies[-1][1])
                 self.assertIn("/agent " + self.finance["id"], picker.replies[-1][1])
@@ -110,6 +110,10 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
         for channel in ("telegram", "feishu"):
             msg = self.msg("来源测试", channel)
             routing.bind(self.settings, msg, "Finance")
+            import agent_conversations as conversations
+            web = next(row for row in conversations.list_for_entry(self.settings, msg)
+                       if row["origin_channel"] == "web")
+            conversations.select(self.settings, msg, web["id"])
             with ac.bind(ac.resolve(self.settings, channel, msg.chat_id, msg.operator_id)):
                 append_turn(self.settings, msg, "问题来自" + channel, "回答")
         session = get_transcript_store(self.settings).get_session(session_id_for(self.finance["id"]))
@@ -137,9 +141,15 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
                 ctx=ac.resolve(self.settings,channel,msg.chat_id,msg.operator_id)
                 self.assertEqual(ctx.agent_id,self.finance["id"])
                 self.assertEqual(ctx.memory_owner,"agent:"+self.finance["id"])
-                self.assertEqual(ac.history_key(self.settings,channel,msg.chat_id,msg.operator_id),
-                                 "agent:"+self.finance["id"]+":"+session_id_for(self.finance["id"]))
-                # Session mirror populates the existing per-Agent Web Console.
+                import agent_conversations as conversations
+                local = ac.history_key(self.settings,channel,msg.chat_id,msg.operator_id)
+                web_key = "agent:"+self.finance["id"]+":"+session_id_for(self.finance["id"])
+                self.assertNotEqual(local, web_key)
+                web = next(row for row in conversations.list_for_entry(self.settings, msg)
+                           if row["origin_channel"] == "web")
+                conversations.select(self.settings, msg, web["id"])
+                self.assertEqual(ac.history_key(self.settings,channel,msg.chat_id,msg.operator_id), web_key)
+                # Only explicit continuation populates the existing Agent Web conversation.
                 from handlers.session import append_turn
                 with ac.bind(ctx):
                     append_turn(self.settings,msg,"Investment question","Safe answer")
