@@ -1,11 +1,14 @@
 # Conversation experience release plan
 
-Latest candidate code commit: `f991bdd` on `codex/experience-improvements`.
+Latest candidate code commit: `150ccd0` on `codex/experience-improvements`.
 This supersedes the earlier single-conversation candidates: the operator chose
 independent entry histories with explicit continuation. Final evidence is in
 `docs/testing/independent-conversations.md`: 1,308 Linux tests (93 skipped),
 75 smoke scripts, 16 Web browser cases, 18 chat interaction groups and Web build
-passed. Validate the final merged revision before release.
+passed for the backend candidate `f991bdd`. The UI follow-up through `150ccd0`
+adds compact Agent cards, a collapsible new-topic form and responsive navigation.
+Its typecheck/build and all 16 Web browser cases passed. Validate the final
+merged revision before release.
 Production baseline checked on 2026-10-18:
 `8617183efd6f510fb68411e2faff564bae2acf35`.
 
@@ -68,3 +71,21 @@ Additional channel acceptance for the independent-history release:
   remain accessible.
 - Do not treat history continuation as permission to adopt another channel's
   identity or control its worktree.
+
+## UI acceptance for the final candidate
+
+The latest mobile preview is a fixture, not evidence of a deployed interface.
+At 390px width, check the Agent switcher and conversation selector separately:
+
+- The Agent list is titled Agents; the current Agent has a visible selected state.
+- New-topic naming is hidden until “另开话题”; cancel and Escape close the form,
+  while Enter submits it. Creating a topic must not erase another topic's draft.
+- Global navigation has no clipped title; all sections remain reachable by
+  horizontal scrolling and keyboard. The dedicated mobile UI retains its own
+  navigation rather than adopting the standard layout's header changes.
+- Replying disables conversation changes. Switching to Inbox and back retains
+  the pending reply and next draft. Loading failure offers explicit retry.
+
+The next release gate is operator approval for the reviewed publication and
+production cutover. Do not send Telegram/Feishu test messages without separate
+message-sending authorization.

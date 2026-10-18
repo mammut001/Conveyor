@@ -71,3 +71,16 @@ checks also include the narrow-screen provenance/time wrapping adjustment.
 No production deployment, restart, queue mutation, or channel message was made.
 
 Mobile picker preview is a local fixture screenshot, not a live production chat.
+
+## UI follow-up verification
+
+UI code candidate: `150ccd0`. Backend code is unchanged from `f991bdd`.
+The final UI revision passed typecheck/production build, all 16 Playwright
+cases and all 18 standalone chat smoke groups. The conversation browser case
+also verifies initial form focus, Escape and cancel without changing the
+selected session or its draft, retained topic title, and Enter submission.
+These targeted assertions passed against the final production build.
+
+The 390×844 fixture preview confirms compact Agent cards, a separate conversation
+selector and global navigation without a clipped heading. This remains local
+acceptance; no publication or real channel acceptance has occurred.
