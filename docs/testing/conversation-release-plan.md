@@ -12,9 +12,10 @@ merged revision before release.
 Production baseline checked on 2026-10-18:
 `8617183efd6f510fb68411e2faff564bae2acf35`.
 
-The operator has been asked to approve production deployment. No approval has
-been received. Do not interpret automatic goal continuation as that approval.
-No source has been pushed, merged, or deployed.
+The operator explicitly approved review and production publication on 2026-10-18
+(“批准审查并发布”). This includes restarting existing services. Telegram/Feishu
+acceptance messages remain operator-driven; sending messages is not authorized.
+Publication and cutover evidence will be recorded after execution.
 
 ## Release procedure after approval
 
@@ -86,6 +87,6 @@ At 390px width, check the Agent switcher and conversation selector separately:
 - Replying disables conversation changes. Switching to Inbox and back retains
   the pending reply and next draft. Loading failure offers explicit retry.
 
-The next release gate is operator approval for the reviewed publication and
-production cutover. Do not send Telegram/Feishu test messages without separate
+The next release gate is passing review and CI for the authorized publication
+and production cutover. Do not send Telegram/Feishu test messages without separate
 message-sending authorization.
