@@ -108,6 +108,7 @@ def _mirror_transcript(
                 agents.session_id_for(selected), user_text, assistant_text,
                 channel="web", operator_id=agents.WEB_OPERATOR,
                 source_chat_id=agents.chat_id_for(selected), kind=kind,
+                metadata={"origin_channel": msg.channel},
             )
     except Exception:
         logger.debug("structured transcript mirror failed", exc_info=True)

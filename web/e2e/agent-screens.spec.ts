@@ -155,3 +155,24 @@ test('voice submission preserves a typed draft and displays the transcription', 
   await expect(page.getByText('Voice request answered', { exact: true })).toBeVisible()
   await expect(input).toHaveValue('Keep this typed draft')
 })
+
+
+test('agent conversation identifies message origins without guessing legacy history', async ({ page }) => {
+  await fixture(page)
+  await page.route('**/api/chat/history?**', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({
+      session_id: beta.session_id,
+      messages: [
+        { role: 'user', text: 'Telegram question', origin_channel: 'telegram' },
+        { role: 'assistant', text: 'Feishu answer', origin_channel: 'feishu' },
+        { role: 'assistant', text: 'Legacy answer' },
+      ],
+    }),
+  }))
+  await page.reload()
+  const context = page.getByLabel('当前会话', { exact: true })
+  await expect(context).toContainText('Beta')
+  await expect(page.locator('.transcript-message.role-user .transcript-source')).toHaveText('Telegram')
+  await expect(page.locator('.transcript-message.role-assistant .transcript-source')).toHaveText(['飞书', '来源未记录'])
+  await page.screenshot({ path: test.info().outputPath('agent-history-origins.png') })
+})

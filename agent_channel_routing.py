@@ -113,11 +113,40 @@ def bind(settings, msg, requested):
     return agent
 
 
+def _command_parts(msg):
+    raw = msg.text.strip()
+    aliases = {"当前助手": "/agent", "我在和谁聊天": "/agent",
+               "切换助手": "/agents", "有哪些助手": "/agents"}
+    if msg.reply_to is None and not msg.attachments:
+        raw = aliases.get(raw.rstrip("。？！?!"), raw)
+    parts = raw.split(maxsplit=1)
+    word = (parts[0] if parts else "").split("@", 1)[0].casefold()
+    return word, parts[1] if len(parts) > 1 else ""
+
+
+def conversation_card(settings, msg):
+    """Describe the actual binding without reading any conversation contents."""
+    import agents
+    selected = bound(settings, msg.channel, msg.chat_id)
+    info = agents.AgentStore(settings).get(selected or "default")
+    name = info["name"] if info else "Conveyor"
+    entrance = "Telegram" if msg.channel == "telegram" else "飞书"
+    lines = [f"[{name}] 当前助手", f"入口：{entrance} 私聊"]
+    if selected:
+        lines += ["会话：这个 Agent 的共享会话",
+                  "与该 Agent 的 Web 会话和已绑定的私聊入口接续上下文。",
+                  "其他 Agent、未绑定的聊天和外部应用记录不会自动加入。"]
+    else:
+        lines += ["会话：当前私聊独立保存",
+                  "不会自动接入其他入口或其他 Agent 的聊天记录。"]
+    lines += ["", "查看与切换：/agents · 查看当前助手：/agent"]
+    return "\n".join(lines)
+
+
 def is_agent_command(settings, msg):
     if not enabled(settings) or msg.channel not in ("telegram", "feishu"):
         return False
-    word = (msg.text.strip().split(maxsplit=1) or [""])[0]
-    return word.split("@", 1)[0].casefold() in ("/agent", "/agents")
+    return _command_parts(msg)[0] in ("/agent", "/agents")
 
 
 async def maybe_command(settings, msg, port):
@@ -126,19 +155,23 @@ async def maybe_command(settings, msg, port):
         return False
     if not authorized(settings, msg):
         return True  # silent group/non-owner refusal, no binding
-    raw = msg.text.strip()
-    word, _, argument = raw.partition(" ")
-    word = word.split("@", 1)[0].casefold()  # Telegram /agent@bot username
+    word, argument = _command_parts(msg)
+    if word == "/agent" and not argument.strip():
+        await port.reply(msg, conversation_card(settings, msg))
+        return True
     if word == "/agents":
         import agents
         from redaction import truncate
         items = [a for a in agents.AgentStore(settings).list() if not a["archived"]]
-        lines = ["Available Agents:", "• main — default assistant"]
+        selected_id = bound(settings, msg.channel, msg.chat_id) or "default"
+        lines = [conversation_card(settings, msg), "", "可切换的助手：",
+                 ("● " if selected_id == "default" else "○ ") + "main — 默认助手 · /agent main"]
         for agent in items:
             if agent["id"] == "default":
                 continue
             persona = str(agent.get("persona") or "").replace("\n", " ").strip()
-            lines.append(f'• {agent["name"]} ({agent["id"]}) — {truncate(persona, 80)}')
+            marker = "●" if selected_id == agent["id"] else "○"
+            lines.append(f'{marker} {agent["name"]} — {truncate(persona, 80)}\n  /agent {agent["id"]}')
         await port.reply(msg, "\n".join(lines))
         return True
     if word != "/agent":
@@ -158,8 +191,8 @@ async def maybe_command(settings, msg, port):
             reason=agent_security.denial_code(exc))
         await port.reply(msg, str(exc))
     else:
-        await port.reply(msg, f'[{selected["name"]}] Selected Agent. '
-                        "Further messages use this Agent's history and tools.")
+        await port.reply(msg, "已切换。后续消息使用下方会话；切换不会搬移之前的聊天记录。\n\n"
+                         + conversation_card(settings, msg))
     return True
 
 

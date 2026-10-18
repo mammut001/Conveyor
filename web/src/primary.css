@@ -1097,3 +1097,8 @@
 .formatted-table tr:last-child td { border-bottom: 0; }
 .formatted-text-flow .code-block-container { min-width: 0; max-width: 100%; }
 .formatted-text-flow hr { width: 100%; border: 0; border-top: 1px solid #e3e6eb; margin: 10px 0; }
+
+/* Keep assistant identity and message origin visible across channel entries. */
+.chat-context-strip { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 10px 16px; border-bottom: 1px solid var(--border, #e7e8eb); font-size: 12px; }
+.chat-context-strip span { color: #6b7280; }
+.transcript-source { font-size: 11px; color: #6b7280; margin-right: 8px; }

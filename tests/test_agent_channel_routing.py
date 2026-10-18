@@ -83,6 +83,43 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
             await dispatch(msg,port,self.settings,object())
         return port
 
+    async def test_current_agent_card_and_list_show_actual_history_scope(self):
+        for channel in ("telegram", "feishu"):
+            with self.subTest(channel=channel):
+                before = await self.command(self.msg("当前助手", channel))
+                self.assertIn("当前私聊独立保存", before.replies[-1][1])
+                await self.command(self.msg("/agent\tFinance", channel))
+                after = await self.command(self.msg("/agent", channel))
+                self.assertIn("[Finance]", after.replies[-1][1])
+                self.assertIn("共享会话", after.replies[-1][1])
+                picker = await self.command(self.msg("切换助手", channel))
+                self.assertIn("● Finance", picker.replies[-1][1])
+                self.assertIn("/agent " + self.finance["id"], picker.replies[-1][1])
+                self.assertEqual(routing.bound(self.settings, channel, self.msg("", channel).chat_id),
+                                 self.finance["id"])
+
+    def test_natural_agent_controls_do_not_swallow_quoted_or_longer_requests(self):
+        from channel.types import ReplyContext
+        self.assertFalse(routing.is_agent_command(self.settings, self.msg("解释当前助手是什么")))
+        self.assertFalse(routing.is_agent_command(self.settings,
+                         replace(self.msg("切换助手"), reply_to=ReplyContext("某段内容"))))
+
+    async def test_mirrored_history_preserves_channel_provenance(self):
+        from handlers.session import append_turn
+        from web_chat import build_history
+        for channel in ("telegram", "feishu"):
+            msg = self.msg("来源测试", channel)
+            routing.bind(self.settings, msg, "Finance")
+            with ac.bind(ac.resolve(self.settings, channel, msg.chat_id, msg.operator_id)):
+                append_turn(self.settings, msg, "问题来自" + channel, "回答")
+        session = get_transcript_store(self.settings).get_session(session_id_for(self.finance["id"]))
+        messages = build_history(session)
+        self.assertEqual([m.get("origin_channel") for m in messages],
+                         ["telegram", "telegram", "feishu", "feishu"])
+        # Historical messages without provenance must not be relabeled as Web.
+        old = build_history({"messages": [{"role": "user", "content": "old"}]})
+        self.assertNotIn("origin_channel", old[0])
+
     async def test_flag_off_does_not_bind_or_route(self):
         with patch.dict(os.environ,{"CONVEYOR_AGENT_CHANNEL_ROUTING":"0"}):
             self.assertFalse(routing.enabled(self.settings))

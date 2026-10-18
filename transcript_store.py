@@ -172,6 +172,9 @@ class TranscriptStore:
             source_chat_id=source_chat_id,
             title=safe_content[:80] if role == "user" and safe_content else None,
         )
+        provenance = dict(metadata or {})
+        if channel in ("web", "telegram", "feishu"):
+            provenance.setdefault("origin_channel", channel)
         message = TranscriptMessage(
             id=uuid.uuid4().hex,
             session_id=session_id,
@@ -180,7 +183,7 @@ class TranscriptStore:
             created_at=_utc_now(),
             job_id=job_id,
             kind=kind,
-            metadata=_safe_metadata(metadata or {}),
+            metadata=_safe_metadata(provenance),
         )
         conn = self._connect()
         try:
@@ -299,6 +302,7 @@ class TranscriptStore:
         operator_id: str | None = None,
         source_chat_id: str | None = None,
         kind: str = "codex",
+        metadata: dict[str, Any] | None = None,
     ) -> tuple[TranscriptMessage, TranscriptMessage]:
         user = self.append(
             session_id,
@@ -306,6 +310,7 @@ class TranscriptStore:
             user_text,
             job_id=job_id,
             kind=kind,
+            metadata=metadata,
             channel=channel,
             operator_id=operator_id,
             source_chat_id=source_chat_id,
@@ -316,6 +321,7 @@ class TranscriptStore:
             assistant_text,
             job_id=job_id,
             kind=kind,
+            metadata=metadata,
             channel=channel,
             operator_id=operator_id,
             source_chat_id=source_chat_id,

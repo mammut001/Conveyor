@@ -359,6 +359,8 @@ def build_history(session: dict[str, Any] | None) -> list[dict[str, Any]]:
             "created_at": m.get("created_at") or "",
             "kind": m.get("kind") or "",
         }
+        if meta.get("origin_channel") in ("web", "telegram", "feishu"):
+            item["origin_channel"] = meta["origin_channel"]
         text = item["text"]
         if m.get("kind") == "task_suggestion" and isinstance(meta.get("prompt"), str):
             item["task_suggestion"] = {

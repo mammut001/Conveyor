@@ -21,6 +21,7 @@ export type ChatMessage = {
   subagents?: SubagentProgress[];
   interrupted?: boolean;
   taskSuggestion?: TaskSuggestion;
+  originChannel?: 'web' | 'telegram' | 'feishu';
   pendingApproval?: {
     id: string;
     tool_name: string;
@@ -39,7 +40,7 @@ export type ChatMessage = {
 };
 
 type HistoryApproval = { id: string; tool_name: string; arg: string; status: string; expires_in_seconds?: number };
-type HistoryMessage = { role: 'user' | 'assistant'; text: string; created_at?: string; kind?: string; approval?: HistoryApproval; task_suggestion?: TaskSuggestion };
+type HistoryMessage = { origin_channel?: 'web' | 'telegram' | 'feishu'; role: 'user' | 'assistant'; text: string; created_at?: string; kind?: string; approval?: HistoryApproval; task_suggestion?: TaskSuggestion };
 
 export type ChatPanelProps = {
   token: string;
@@ -128,6 +129,11 @@ function SubagentCardGroup({ tasks, live }: { tasks: SubagentProgress[]; live?: 
   );
 }
 
+function sourceLabel(message: ChatMessage): string {
+  if (message.originChannel) return { web: 'Web', telegram: 'Telegram', feishu: '飞书' }[message.originChannel];
+  return message.id.startsWith('hist-') ? '来源未记录' : 'Web';
+}
+
 export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -198,6 +204,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
               role: m.role,
               text: m.text,
               taskSuggestion: m.task_suggestion,
+              originChannel: m.origin_channel,
               created_at: m.created_at || new Date().toISOString(),
             };
             const appr = m.approval;
@@ -510,6 +517,10 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
 
   return (
     <div className="chat-panel-container" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div className="chat-context-strip" aria-label="当前会话">
+        <strong>{agentName || '默认助手'}</strong>
+        <span>Web · {agentSessionId ? '当前 Agent 会话，其他 Agent 的记录独立' : '当前对话'}</span>
+      </div>
       <div className="event-stream" ref={streamRef} style={{ flex: 1, overflowY: 'auto' }}
         onScroll={e => {
           const node = e.currentTarget;
@@ -537,6 +548,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                 <div className="transcript-content">
                   <FormattedText content={message.text} />
                 </div>
+                <footer className="transcript-footer"><span className="transcript-source">{sourceLabel(message)}</span></footer>
               </article>
             );
           }
@@ -624,6 +636,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                   </div>
                 )}
                 <footer className="transcript-footer">
+                  <span className="transcript-source">{sourceLabel(message)}</span>
                   {message.interrupted && <span>回答中断 · 已保留收到的内容</span>}
                   <time dateTime={message.created_at}>
                     {new Date(message.created_at).toLocaleString([], {
