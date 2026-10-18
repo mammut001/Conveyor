@@ -405,6 +405,19 @@ async def task_status_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if query is None:
         return
     data = query.data or ""
+    inbound = inbound_from_update(update, text="")
+    port = make_outbound(update)
+    import agent_telegram_presentation as tg_pres
+
+    if data in ("task:recent", "task:status:recent"):
+        await query.answer()
+        status_text, buttons = tg_pres.get_recent_tasks_display(settings, inbound)
+        if buttons and getattr(port, "supports_inline_buttons", False):
+            await port.reply_with_buttons(inbound, status_text, buttons)
+        else:
+            await port.reply(inbound, status_text)
+        return
+
     match = re.fullmatch(r"task:status:([0-9a-f]{6,32})", data)
     if not match:
         try:
@@ -414,20 +427,7 @@ async def task_status_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     await query.answer()
     task_ref = match.group(1)
-    user = update.effective_user
-    chat = update.effective_chat
-    inbound = InboundMessage(
-        channel="telegram",
-        operator_id=str(getattr(user, "id", "") or ""),
-        chat_id=str(getattr(chat, "id", "") or ""),
-        message_id=str(getattr(query.message, "message_id", "") or "") if query.message else None,
-        text="",
-        chat_type="p2p" if chat and chat.type == "private" else "group",
-        raw=update,
-    )
-    port = make_outbound(update)
-    import agent_telegram_presentation as tg_pres
-    status_text, buttons = tg_pres.get_task_status_display(settings, inbound, task_ref)
+    status_text, buttons = tg_pres.get_task_status_display(settings, inbound, task_ref, include_back=True)
     if buttons and getattr(port, "supports_inline_buttons", False):
         await port.reply_with_buttons(inbound, status_text, buttons)
     else:
@@ -438,27 +438,112 @@ async def agent_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not await _guard(update):
         return
     task_ref = _prompt(context)
-    if not task_ref:
-        await _reply(update, "用法: /agentstatus <任务编号>")
-        return
-    user = update.effective_user
-    chat = update.effective_chat
-    inbound = InboundMessage(
-        channel="telegram",
-        operator_id=str(getattr(user, "id", "") or ""),
-        chat_id=str(getattr(chat, "id", "") or ""),
-        message_id=str(getattr(update.effective_message, "message_id", "") or "") if update.effective_message else None,
-        text=f"/agentstatus {task_ref}",
-        chat_type="p2p" if chat and chat.type == "private" else "group",
-        raw=update,
-    )
+    inbound = inbound_from_update(update, text=f"/agentstatus {task_ref}".strip())
     port = make_outbound(update)
     import agent_telegram_presentation as tg_pres
-    status_text, buttons = tg_pres.get_task_status_display(settings, inbound, task_ref)
+
+    if not task_ref:
+        status_text, buttons = tg_pres.get_recent_tasks_display(settings, inbound)
+    else:
+        status_text, buttons = tg_pres.get_task_status_display(settings, inbound, task_ref, include_back=True)
+
     if buttons and getattr(port, "supports_inline_buttons", False):
         await port.reply_with_buttons(inbound, status_text, buttons)
     else:
         await port.reply(inbound, status_text)
+
+
+async def _dispatch_agent_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cmd: str) -> None:
+    if not await _guard(update):
+        return
+    arg = _prompt(context)
+    text = f"/{cmd} {arg}".strip()
+    inbound = inbound_from_update(update, text=text)
+    port = make_outbound(update)
+    import agent_channel_routing as routing
+    handled = await routing.maybe_command(settings, inbound, port)
+    if not handled:
+        if routing.is_owner_private(settings, inbound):
+            await port.reply(inbound, "功能未启用或当前不可用。")
+
+
+async def agents_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _dispatch_agent_command(update, context, "agents")
+
+
+async def agent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _dispatch_agent_command(update, context, "agent")
+
+
+async def agent_chooser_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline-button interactions for Agent Chooser."""
+    if not await _guard(update):
+        return
+    query = update.callback_query
+    if query is None:
+        return
+    data = query.data or ""
+    inbound = inbound_from_update(update, text="")
+    port = make_outbound(update)
+
+    import agent_channel_routing as routing
+    import agent_telegram_presentation as tg_pres
+
+    # Recheck authorized private owner + flags/kill on EVERY callback
+    if not routing.enabled(settings) or not routing.authorized(settings, inbound):
+        try:
+            await query.answer("无权操作或功能已停用。", show_alert=True)
+        except Exception:
+            pass
+        return
+
+    match_page = re.fullmatch(r"agent:page:([0-9]{1,3})", data)
+    if match_page:
+        await query.answer()
+        page = int(match_page.group(1))
+        text, buttons = tg_pres.get_agent_chooser_display(settings, inbound, page=page)
+        if buttons and getattr(port, "supports_inline_buttons", False):
+            await port.reply_with_buttons(inbound, text, buttons)
+        else:
+            await port.reply(inbound, text)
+        return
+
+    match_sel = re.fullmatch(r"agent:select:([a-z0-9_-]{1,36})", data)
+    if not match_sel:
+        try:
+            await query.answer("无效的请求", show_alert=True)
+        except Exception:
+            pass
+        return
+
+    target_id = match_sel.group(1)
+    from agents import AgentStore
+    store = AgentStore(settings)
+    if target_id in ("default", "main"):
+        target_agent = store.get("default")
+    else:
+        target_agent = store.get(target_id)
+
+    # Recheck live nonarchived target on EVERY callback; exact target ID selection
+    if not target_agent or target_agent.get("archived", False):
+        try:
+            await query.answer("该助手已不可用或已归档。", show_alert=True)
+        except Exception:
+            pass
+        return
+
+    await query.answer()
+    try:
+        selected = routing.bind(settings, inbound, target_id, exact_id=True)
+    except Exception as exc:
+        from redaction import redact_text
+        logger.warning("Agent chooser bind failed for target=%s: %s", target_id, redact_text(str(exc)))
+        await port.reply(inbound, "切换助手失败，请稍后重试。")
+        return
+
+    safe_name = tg_pres.format_safe_single_line(selected["name"], 40)
+    ack_text = f'[{safe_name}] 已切换至该助手。后续消息将使用该助手的对话历史与工具。'
+    await port.reply(inbound, ack_text)
 
 
 async def relay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -776,52 +861,71 @@ async def generic_command_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _dispatch_command(update)
 
 
+def get_my_bot_commands(settings: Settings) -> list[tuple[str, str]]:
+    """Return feature-aware bot commands near front when enabled, without duplicates."""
+    import agent_channel_routing as routing
+    import agent_telegram_presentation as tg_pres
+
+    front_cmds: list[tuple[str, str]] = []
+    if routing.enabled(settings):
+        front_cmds.append(("agents", "助手列表与切换"))
+        front_cmds.append(("agent", "切换助手：/agent <名称|main>"))
+    if tg_pres.feature_enabled(settings):
+        front_cmds.append(("agentstatus", "查看最近转交任务状态"))
+
+    base_cmds = [
+        ("fix", "改文件：/fix <需求>"),
+        ("workers", "查看 Workers 和任务状态"),
+        ("sessions", "查看当前会话和历史任务"),
+        ("switch", "打开会话导航（只读）"),
+        ("jobs", "看最近任务"),
+        ("last", "看最近结果"),
+        ("diff", "看最近改动"),
+        ("apply", "应用最近改动"),
+        ("discard", "丢弃最近 worktree"),
+        ("clean", "清理旧任务"),
+        ("maintain", "自维护检查和清理"),
+        ("diag", "一键诊断包"),
+        ("health", "健康快照摘要"),
+        ("doctor", "后端体检"),
+        ("audit", "任务和 worktree 审计"),
+        ("log", "安全查看最近 job 日志摘要"),
+        ("meta", "查看 job.json 结构状态"),
+        ("metrics", "最近任务趋势和 token 用量"),
+        ("security", "安全审计"),
+        ("ratelimit", "查看最近 429 限流"),
+        ("smoke", "端到端验收"),
+        ("editcheck", "临时 repo 真改文件验收"),
+        ("memo", "显式记一条：/memo <内容>"),
+        ("memory", "看今天 MEMORY.md"),
+        ("journal", "看已归档的 journal 列表"),
+        ("cancel", "中止当前任务"),
+        ("load", "本机负载快照"),
+        ("vps", "同上 (alias /load)"),
+        ("htop", "top 风格进程帧"),
+        ("ps", "进程快照 (comm 模式)"),
+        ("tools", "列出 agent 工具"),
+        ("disk", "磁盘使用快照"),
+        ("logs", "Conveyor 服务日志"),
+        ("service_status", "Conveyor 服务状态"),
+        ("git_status", "Workspace git status"),
+        ("diagnose", "Hybrid 主机诊断"),
+        ("restart", "重启 Conveyor 服务"),
+        ("audit_tools", "危险工具审计"),
+    ]
+
+    all_cmds: list[tuple[str, str]] = []
+    seen = set()
+    for cmd, desc in front_cmds + base_cmds:
+        if cmd not in seen:
+            seen.add(cmd)
+            all_cmds.append((cmd, desc))
+    return all_cmds
+
+
 async def post_init(application: Application) -> None:
     await runner.validate()
-    import agent_telegram_presentation as tg_pres
-    extra_cmds = [("agentstatus", "查看转交任务状态")] if tg_pres.feature_enabled(settings) else []
-    await application.bot.set_my_commands(
-        [
-            ("fix", "改文件：/fix <需求>"),
-            ("workers", "查看 Workers 和任务状态"),
-            ("sessions", "查看当前会话和历史任务"),
-            ("switch", "打开会话导航（只读）"),
-            ("jobs", "看最近任务"),
-            ("last", "看最近结果"),
-            ("diff", "看最近改动"),
-            ("apply", "应用最近改动"),
-            ("discard", "丢弃最近 worktree"),
-            ("clean", "清理旧任务"),
-            ("maintain", "自维护检查和清理"),
-            ("diag", "一键诊断包"),
-            ("health", "健康快照摘要"),
-            ("doctor", "后端体检"),
-            ("audit", "任务和 worktree 审计"),
-            ("log", "安全查看最近 job 日志摘要"),
-            ("meta", "查看 job.json 结构状态"),
-            ("metrics", "最近任务趋势和 token 用量"),
-            ("security", "安全审计"),
-            ("ratelimit", "查看最近 429 限流"),
-            ("smoke", "端到端验收"),
-            ("editcheck", "临时 repo 真改文件验收"),
-            ("memo", "显式记一条：/memo <内容>"),
-            ("memory", "看今天 MEMORY.md"),
-            ("journal", "看已归档的 journal 列表"),
-            ("cancel", "中止当前任务"),
-            ("load", "本机负载快照"),
-            ("vps", "同上 (alias /load)"),
-            ("htop", "top 风格进程帧"),
-            ("ps", "进程快照 (comm 模式)"),
-            ("tools", "列出 agent 工具"),
-            ("disk", "磁盘使用快照"),
-            ("logs", "Conveyor 服务日志"),
-            ("service_status", "Conveyor 服务状态"),
-            ("git_status", "Workspace git status"),
-            ("diagnose", "Hybrid 主机诊断"),
-            ("restart", "重启 Conveyor 服务"),
-            ("audit_tools", "危险工具审计"),
-        ] + extra_cmds
-    )
+    await application.bot.set_my_commands(get_my_bot_commands(settings))
     if getattr(settings, "approval_relay_enabled", False):
         try:
             import approval_relay
@@ -925,10 +1029,13 @@ def main() -> None:
         )
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
+    application.add_handler(CommandHandler("agents", agents_cmd))
+    application.add_handler(CommandHandler("agent", agent_cmd))
     application.add_handler(CommandHandler("agentstatus", agent_status_cmd))
     application.add_handler(CallbackQueryHandler(navigation_callback, pattern=r"^tgn:"))
     application.add_handler(CallbackQueryHandler(tool_callback, pattern=r"^tool:"))
-    application.add_handler(CallbackQueryHandler(task_status_callback, pattern=r"^task:status:[0-9a-f]{6,32}$"))
+    application.add_handler(CallbackQueryHandler(agent_chooser_callback, pattern=r"^agent:"))
+    application.add_handler(CallbackQueryHandler(task_status_callback, pattern=r"^task:"))
     application.add_handler(CallbackQueryHandler(relay_callback, pattern=r"^relay:"))
     application.add_handler(CallbackQueryHandler(deep_callback, pattern=r"^deep$"))
     # Catch-all for COMMAND_TABLE entries without explicit CommandHandler above.

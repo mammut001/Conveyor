@@ -44,6 +44,26 @@ _REJECTION_MAP: dict[str, str] = {
 
 _MD_SEP_PATTERN = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
 _CODE_FENCE_PATTERN = re.compile(r"^\s*(`{3,}|~{3,})")
+_CONTROL_CHARS_PATTERN = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def format_safe_single_line(text: str, max_chars: int = 30, ellipsis: str = "…") -> str:
+    """Narrow presentation helper for single-line redacted bounded names/labels.
+
+    Normalizes embedded newlines and control characters to spaces, redacts secrets,
+    and cleanly truncates with an ellipsis without adding newlines or reserving 80 chars.
+    """
+    if not text:
+        return ""
+    redacted = redact_text(str(text))
+    cleaned = _CONTROL_CHARS_PATTERN.sub(" ", redacted)
+    cleaned = " ".join(cleaned.split())
+    if len(cleaned) <= max_chars:
+        return cleaned
+    if max_chars <= len(ellipsis):
+        return cleaned[:max_chars]
+    return cleaned[: max_chars - len(ellipsis)].rstrip() + ellipsis
+
 
 
 def feature_enabled(settings: Settings) -> bool:
@@ -101,7 +121,7 @@ def format_route_confirmation_card(settings: Settings, arg: str) -> str:
     from agents import AgentStore
     agent = AgentStore(settings).get(target_id)
     raw_name = agent["name"] if agent else target_id
-    safe_agent_name = truncate(redact_text(str(raw_name)), 40)
+    safe_agent_name = format_safe_single_line(raw_name, 40)
 
     raw_task = str(req.get("task", "")).strip()
     safe_task = truncate(redact_text(raw_task), 300)
@@ -143,7 +163,7 @@ def format_queue_ack(
         except Exception:
             pass
 
-        safe_name = truncate(redact_text(str(agent_name)), 40)
+        safe_name = format_safe_single_line(agent_name, 40)
         text = (
             f"已交给 {safe_name}，正在排队。完成后会在这里通知你。\n"
             f"任务编号: {short_ref}\n"
@@ -254,16 +274,57 @@ def query_delegated_task_status(
         conn.close()
 
     now = time.time()
-    status = row["status"]
-    attempts = row["attempts"]
-    max_attempts = row["max_attempts"]
-    deadline = row["deadline"]
-    lease_expires = row["lease_expires_at"]
-
     from agents import AgentStore
     store = AgentStore(settings)
     target_agent = store.get(row["agent_id"])
     is_archived = target_agent is None or bool(target_agent.get("archived", False))
+
+    state_label, detail, is_terminal = _interpret_task_lifecycle(
+        dict(row), outbox_state, is_archived, now
+    )
+
+    safe_name = format_safe_single_line(row["agent_name"], 40)
+    return {
+        "agent_name": safe_name,
+        "task_id": task_id,
+        "state_label": state_label,
+        "attempts": row["attempts"],
+        "max_attempts": row["max_attempts"],
+        "is_terminal": is_terminal,
+        "detail": detail,
+    }, None
+
+
+def _format_time(created_at: float | int | None, tz_name: str | None) -> str:
+    """Format timestamp into readable user timezone string; gracefully fallback to UTC."""
+    if not created_at:
+        return ""
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(tz_name or "UTC")
+    except Exception:
+        from datetime import timezone
+        tz = timezone.utc
+    try:
+        from datetime import datetime
+        dt = datetime.fromtimestamp(float(created_at), tz=tz)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return ""
+
+
+def _interpret_task_lifecycle(
+    row: dict[str, Any],
+    outbox_state: str | None,
+    is_archived: bool,
+    now: float,
+) -> tuple[str, str | None, bool]:
+    """Shared truthful state interpretation for mailbox tasks avoiding lifecycle drift."""
+    status = row.get("status")
+    attempts = row.get("attempts", 0)
+    max_attempts = row.get("max_attempts", 1)
+    deadline = row.get("deadline")
+    lease_expires = row.get("lease_expires_at")
 
     detail = None
     is_terminal = False
@@ -336,24 +397,129 @@ def query_delegated_task_status(
         state_label = "状态未知"
         is_terminal = True
 
-    safe_name = truncate(redact_text(str(row["agent_name"])), 40)
-    return {
-        "agent_name": safe_name,
-        "task_id": task_id,
-        "state_label": state_label,
-        "attempts": attempts,
-        "max_attempts": max_attempts,
-        "is_terminal": is_terminal,
-        "detail": detail,
-    }, None
+    return state_label, detail, is_terminal
+
+
+def query_recent_delegated_tasks(
+    settings: Settings,
+    msg: InboundMessage,
+    limit: int = 5,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Owner-scoped read-only query of recent delegated tasks for this Telegram chat.
+
+    Guarantees:
+    - Fails closed immediately if feature flags are disabled without touching SQLite.
+    - Fails closed for unauthorized / non-owner / non-p2p / non-telegram.
+    - Scopes SQL by origin_channel, origin_chat, origin_operator BEFORE LIMIT.
+    - Requires m.kind = 'task' and m.to_agent = r.agent_id.
+    - Deterministic order: m.created_at DESC, m.id DESC LIMIT <limit>.
+    - Inspects outbox state for truthful delivery acknowledgment.
+    - Preserves historical completed tasks even if agent archived.
+    - Never exposes task bodies, payload, or secret args.
+    """
+    if not feature_enabled(settings):
+        return None, "功能未启用或当前不可用。"
+
+    from channel.auth import is_allowed
+    import agent_channel_routing as routing
+
+    if not is_allowed(msg, settings) or msg.chat_type != "p2p" or msg.channel != "telegram":
+        return None, "未找到任务记录或无权查看。"
+
+    owner = routing._owner(settings, "telegram")
+    if not owner or str(msg.operator_id) != owner:
+        return None, "未找到任务记录或无权查看。"
+
+    db_path = Path(settings.codex_memory_root) / "state" / "job_queue.sqlite3"
+    if not db_path.exists():
+        return [], None
+
+    conn = sqlite3.connect(str(db_path), timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        tables = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "agent_mailbox" not in tables or "main_router_routes" not in tables:
+            return [], None
+
+        capped_limit = max(1, min(int(limit or 5), 20))
+        # Scope SQL strictly by origin_channel, origin_chat, origin_operator BEFORE LIMIT
+        rows = conn.execute(
+            """SELECT m.id, m.status, m.attempts, m.max_attempts, m.deadline,
+                      m.lease_expires_at, m.created_at, r.agent_id, r.agent_name,
+                      r.origin_channel, r.origin_operator, r.origin_chat, r.delivered
+               FROM agent_mailbox m
+               JOIN main_router_routes r ON r.approval_key = m.idempotency_key
+               WHERE r.origin_channel = ? AND r.origin_chat = ? AND r.origin_operator = ?
+                 AND m.kind = 'task' AND m.to_agent = r.agent_id
+               ORDER BY m.created_at DESC, m.id DESC LIMIT ?""",
+            (msg.channel, str(msg.chat_id), str(msg.operator_id), capped_limit),
+        ).fetchall()
+
+        if not rows:
+            return [], None
+
+        task_ids = [r["id"] for r in rows]
+        outbox_states: dict[str, str] = {}
+        if "agent_result_notifications" in tables and task_ids:
+            placeholders = ",".join("?" for _ in task_ids)
+            outbox_rows = conn.execute(
+                f"""SELECT task_id, state FROM agent_result_notifications
+                    WHERE channel = ? AND chat_id = ? AND operator = ?
+                      AND task_id IN ({placeholders})""",
+                [msg.channel, str(msg.chat_id), str(msg.operator_id)] + task_ids,
+            ).fetchall()
+            for ob_row in outbox_rows:
+                outbox_states[ob_row["task_id"]] = ob_row["state"]
+    finally:
+        conn.close()
+
+    now = time.time()
+    from agents import AgentStore
+    store = AgentStore(settings)
+    tz_name = getattr(settings, "user_timezone", "UTC") or "UTC"
+
+    tasks = []
+    for raw_row in rows:
+        row = dict(raw_row)
+        task_id = row["id"]
+        outbox_state = outbox_states.get(task_id)
+        target_agent = store.get(row["agent_id"])
+        is_archived = target_agent is None or bool(target_agent.get("archived", False))
+
+        state_label, detail, is_terminal = _interpret_task_lifecycle(
+            row, outbox_state, is_archived, now
+        )
+        safe_name = format_safe_single_line(row["agent_name"], 40)
+        created_time = _format_time(row.get("created_at"), tz_name)
+
+        tasks.append({
+            "agent_name": safe_name,
+            "agent_id": row["agent_id"],
+            "task_id": task_id,
+            "state_label": state_label,
+            "attempts": row["attempts"],
+            "max_attempts": row["max_attempts"],
+            "is_terminal": is_terminal,
+            "detail": detail,
+            "created_time": created_time,
+            "created_at": row.get("created_at"),
+        })
+
+    return tasks, None
 
 
 def get_task_status_display(
     settings: Settings,
     msg: InboundMessage,
     task_ref: str,
+    *,
+    include_back: bool = False,
 ) -> tuple[str, list[list[dict[str, str]]] | None]:
-    """Return formatted status text and optional refresh button."""
+    """Return formatted status text and optional refresh/back buttons."""
     info, error = query_delegated_task_status(settings, msg, task_ref)
     if error is not None or info is None:
         return error or "未找到该任务或无权查看。", None
@@ -370,12 +536,188 @@ def get_task_status_display(
     elif not info["is_terminal"]:
         text += "\n完成后会在这里通知你。"
 
-    buttons = None
-    if not info["is_terminal"]:
-        buttons = [[
-            {"text": "🔄 刷新状态", "callback_data": f"task:status:{info['task_id']}"}
-        ]]
+    buttons: list[list[dict[str, str]]] | None = None
+    if include_back:
+        row: list[dict[str, str]] = []
+        if not info["is_terminal"]:
+            row.append({"text": "🔄 刷新状态", "callback_data": f"task:status:{info['task_id']}"})
+        row.append({"text": "📋 返回列表", "callback_data": "task:recent"})
+        buttons = [row]
+    else:
+        if not info["is_terminal"]:
+            buttons = [[
+                {"text": "🔄 刷新状态", "callback_data": f"task:status:{info['task_id']}"}
+            ]]
     return text, buttons
+
+
+def get_recent_tasks_display(
+    settings: Settings,
+    msg: InboundMessage,
+) -> tuple[str, list[list[dict[str, str]]] | None]:
+    """Return formatted list of recent delegated tasks with navigation buttons."""
+    tasks, error = query_recent_delegated_tasks(settings, msg, limit=5)
+    if error is not None:
+        return error, None
+
+    if not tasks:
+        text = (
+            "暂无最近转交任务。\n\n"
+            "提示：\n"
+            "• 使用默认主助手：发送 /agent main\n"
+            "• 发起任务转交：发送 @<助手名> <任务内容>（确认后执行）\n"
+            "• 查看与切换助手：发送 /agents"
+        )
+        buttons = [[{"text": "🔄 刷新列表", "callback_data": "task:recent"}]]
+        return text, buttons
+
+    lines = ["📋 最近转交任务（最新 5 条）：\n"]
+    buttons: list[list[dict[str, str]]] = []
+    for task in tasks:
+        short_ref = task["task_id"][:12]
+        agent_name = task["agent_name"]
+        status_desc = task["state_label"]
+        if task.get("detail"):
+            status_desc += f"（{task['detail']}）"
+        time_desc = f" · {task['created_time']}" if task.get("created_time") else ""
+        lines.append(f"• [{agent_name}] {short_ref} — {status_desc}{time_desc}")
+
+        btn_agent = format_safe_single_line(agent_name, 12)
+        btn_text = f"🔍 {short_ref} · {btn_agent} ({task['state_label']})"
+        btn_text = format_safe_single_line(btn_text, 36)
+        buttons.append([{
+            "text": btn_text,
+            "callback_data": f"task:status:{task['task_id']}",
+        }])
+
+    lines.append("\n点击下方按钮可查看详细进度，或发送 /agentstatus <任务编号> 查询。")
+    buttons.append([{"text": "🔄 刷新列表", "callback_data": "task:recent"}])
+    return "\n".join(lines), buttons
+
+
+def get_agent_chooser_display(
+    settings: Settings,
+    msg: InboundMessage,
+    page: int = 1,
+) -> tuple[str, list[list[dict[str, str]]] | None]:
+    """Return Chinese agent chooser display text and compact navigation buttons.
+
+    Guarantees:
+    - Fails closed if channel routing disabled or unauthorized.
+    - Identifies actual current assistant (fallback actual default name/main when binding unavailable).
+    - Lists live non-archived agents, never exposing instructions, paths, credentials, or persona.
+    - Paginates up to 50 agents cleanly without silent truncation.
+    - Buttons carry exact IDs in callback_data, bounded <= 64 bytes.
+    - Includes return-to-main and link to recent tasks (if status feature enabled).
+    """
+    import agent_channel_routing as routing
+    if not routing.enabled(settings):
+        return "功能未启用或当前不可用。", None
+
+    if not routing.authorized(settings, msg):
+        return "未找到助手或无权操作。", None
+
+    from agents import AgentStore
+    store = AgentStore(settings)
+    default_agent = store.get("default")
+    default_name = default_agent["name"] if default_agent and default_agent.get("name") else "Conveyor"
+    safe_default_name = format_safe_single_line(default_name, 20)
+
+    current_agent_id = routing.bound(settings, msg.channel, msg.chat_id)
+    if current_agent_id:
+        curr = store.get(current_agent_id)
+        if curr and not curr.get("archived", False):
+            current_name = curr["name"]
+            current_ref = curr["id"]
+        else:
+            current_agent_id = None
+            current_name = default_name
+            current_ref = "main"
+    else:
+        current_name = default_name
+        current_ref = "main"
+
+    all_agents = [a for a in store.list() if not a.get("archived", False)]
+    custom_agents = [a for a in all_agents if a["id"] != "default"]
+    custom_agents.sort(key=lambda a: (a.get("name", "").casefold(), a.get("id", "")))
+
+    PAGE_SIZE = 6
+    total_custom = len(custom_agents)
+    total_pages = max(1, (total_custom + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(1, min(page, total_pages))
+
+    start = (page - 1) * PAGE_SIZE
+    page_agents = custom_agents[start : start + PAGE_SIZE]
+
+    safe_curr_name = format_safe_single_line(current_name, 30)
+    lines = [
+        "🤖 助手切换\n",
+        f"当前助手: {safe_curr_name} ({current_ref})\n",
+    ]
+    if total_pages > 1:
+        lines.append(f"可选助手（第 {page}/{total_pages} 页，共 {total_custom} 个自定义助手）：")
+    else:
+        lines.append(f"可选助手（共 {total_custom} 个自定义助手）：")
+
+    is_main_cur = (current_agent_id is None or current_agent_id == "default")
+    main_cur_label = "（当前）" if is_main_cur else ""
+    lines.append(f"• main ({safe_default_name}) — 默认主助手{main_cur_label}")
+    for a in page_agents:
+        safe_a_name = format_safe_single_line(a["name"], 30)
+        is_cur = (current_agent_id == a["id"])
+        cur_label = "（当前）" if is_cur else ""
+        lines.append(f"• {safe_a_name} ({a['id']}){cur_label}")
+
+    lines.append("\n点击下方按钮直接切换，或发送 /agent <名称|ID|main>。")
+    if total_pages > 1:
+        page_hints = []
+        if page > 1:
+            page_hints.append(f"/agents {page - 1}（上一页）")
+        if page < total_pages:
+            page_hints.append(f"/agents {page + 1}（下一页）")
+        lines.append(f"翻页命令：{' · '.join(page_hints)}")
+    if feature_enabled(settings):
+        lines.append("发送 /agentstatus 可查看最近转交任务。")
+
+    buttons: list[list[dict[str, str]]] = []
+    # Buttons for agents on this page
+    for a in page_agents:
+        is_cur = (current_agent_id == a["id"])
+        mark = "✓ " if is_cur else ""
+        id_part = f" ({a['id']})"
+        avail_for_name = max(4, 32 - len(mark) - len(id_part))
+        safe_btn_name = format_safe_single_line(a["name"], avail_for_name)
+        btn_label = f"{mark}{safe_btn_name}{id_part}"
+        buttons.append([{
+            "text": btn_label,
+            "callback_data": f"agent:select:{a['id']}",
+        }])
+
+    # Pagination controls if multiple pages
+    if total_pages > 1:
+        p_row: list[dict[str, str]] = []
+        if page > 1:
+            p_row.append({"text": "⬅️ 上一页", "callback_data": f"agent:page:{page - 1}"})
+        p_row.append({"text": f"{page}/{total_pages}", "callback_data": f"agent:page:{page}"})
+        if page < total_pages:
+            p_row.append({"text": "下一页 ➡️", "callback_data": f"agent:page:{page + 1}"})
+        buttons.append(p_row)
+
+    # Control row: main return + recent tasks
+    ctrl_row: list[dict[str, str]] = []
+    main_mark = "✓ " if is_main_cur else ""
+    ctrl_row.append({
+        "text": f"{main_mark}🏠 main ({safe_default_name})",
+        "callback_data": "agent:select:default",
+    })
+    if feature_enabled(settings):
+        ctrl_row.append({
+            "text": "📋 最近任务",
+            "callback_data": "task:recent",
+        })
+    buttons.append(ctrl_row)
+
+    return "\n".join(lines), buttons
 
 
 def _parse_table_cells(row_str: str) -> list[str]:
@@ -512,7 +854,7 @@ def convert_markdown_tables_to_bullets(text: str) -> str:
 
 def format_telegram_result(agent_name: str, result_tag: str, result_text: str) -> str:
     """Format Telegram-safe completed result notification with localized header and stable tag."""
-    safe_name = truncate(redact_text(str(agent_name or "")), 40)
+    safe_name = format_safe_single_line(agent_name or "", 40)
     redacted = redact_text(result_text or "")
     formatted_body = convert_markdown_tables_to_bullets(redacted)
     full_text = f"[{safe_name}] 已完成 [result:{result_tag}]:\n{formatted_body}"

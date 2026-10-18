@@ -193,5 +193,112 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
                 "SELECT state FROM agent_channel_result_outbox WHERE task_id=?",
                 ("c"*32,)).fetchone()[0],"blocked")
 
+    async def test_feishu_command_behavior_unchanged(self):
+        # 1. /agents on Feishu outputs English plain text
+        port = await self.command(self.msg("/agents", channel="feishu"))
+        self.assertIn("Available Agents:", port.replies[-1][1])
+        self.assertIn("• main — default assistant", port.replies[-1][1])
+        self.assertIn("Finance", port.replies[-1][1])
+
+        # 2. /agent without argument on Feishu gives usage error
+        port_empty = await self.command(self.msg("/agent", channel="feishu"))
+        self.assertIn("Usage: /agent <name|id|main>", port_empty.replies[-1][1])
+
+        # 3. /agent <name> on Feishu gives English acknowledgment
+        port_bind = await self.command(self.msg("/agent Finance", channel="feishu"))
+        self.assertIn("[Finance] Selected Agent.", port_bind.replies[-1][1])
+        self.assertIn("Further messages use this Agent's history and tools.", port_bind.replies[-1][1])
+
+    async def test_telegram_command_chinese_chooser_and_localized_ack(self):
+        # 1. /agents on Telegram outputs Chinese chooser
+        port_agents = await self.command(self.msg("/agents", channel="telegram"))
+        self.assertIn("🤖 助手切换", port_agents.replies[-1][1])
+        self.assertIn("当前助手: Conveyor (main)", port_agents.replies[-1][1])
+        self.assertIn("Finance", port_agents.replies[-1][1])
+
+        # 2. /agent without argument on Telegram outputs Chinese chooser
+        port_agent_empty = await self.command(self.msg("/agent", channel="telegram"))
+        self.assertIn("🤖 助手切换", port_agent_empty.replies[-1][1])
+        self.assertIn("当前助手: Conveyor (main)", port_agent_empty.replies[-1][1])
+
+        # 3. /agent <name> on Telegram gives Chinese acknowledgment
+        port_bind = await self.command(self.msg("/agent Finance", channel="telegram"))
+        self.assertIn("[Finance] 已切换至该助手。", port_bind.replies[-1][1])
+        self.assertIn("后续消息将使用该助手的对话历史与工具。", port_bind.replies[-1][1])
+
+    async def test_bind_exact_id_rejects_name_collision_with_archived_id(self):
+        # Create agent A and archive it
+        agent_a = self.store.create({"name": "TargetA", "persona": "original agent"})
+        id_a = agent_a["id"]
+        self.store.archive(id_a)
+
+        # Create agent B whose name is agent A's ID
+        agent_b = self.store.create({"name": id_a, "persona": "agent named after old id"})
+
+        # Exact ID lookup must fail closed and NOT bind to agent B
+        with self.assertRaises(ValueError):
+            routing.bind(self.settings, self.msg("/agent"), id_a, exact_id=True)
+        self.assertIsNone(routing.bound(self.settings, "telegram", "1"))
+
+        # Exact ID lookup for live agent succeeds
+        bound = routing.bind(self.settings, self.msg("/agent"), self.finance["id"], exact_id=True)
+        self.assertEqual(bound["id"], self.finance["id"])
+        self.assertEqual(routing.bound(self.settings, "telegram", "1"), self.finance["id"])
+
+    async def test_agents_page_parsing_graceful_unicode_superscript(self):
+        # Create enough agents for multiple pages
+        for i in range(10):
+            self.store.create({"name": f"Extra_{i:02d}"})
+
+        # Unicode superscript ² would raise ValueError: invalid literal for int() if using .isdigit()
+        port_unicode = await self.command(self.msg("/agents ²", channel="telegram"))
+        self.assertIn("🤖 助手切换", port_unicode.replies[-1][1])
+        self.assertIn("第 1/", port_unicode.replies[-1][1])
+
+        # Valid ASCII page 2
+        port_p2 = await self.command(self.msg("/agents 2", channel="telegram"))
+        self.assertIn("🤖 助手切换", port_p2.replies[-1][1])
+        self.assertIn("第 2/", port_p2.replies[-1][1])
+
+        # Non-numeric or overflow page does not crash
+        port_invalid = await self.command(self.msg("/agents abc", channel="telegram"))
+        self.assertIn("🤖 助手切换", port_invalid.replies[-1][1])
+        self.assertIn("第 1/", port_invalid.replies[-1][1])
+
+    async def test_renamed_default_agent_reflected_in_chooser_and_ack(self):
+        # Rename default agent in SQLite
+        with self.store._connect() as conn:
+            with conn:
+                conn.execute("UPDATE agents SET name=? WHERE id='default'", ("CustomConveyor",))
+
+        # Chooser display shows renamed default agent
+        port_agents = await self.command(self.msg("/agents", channel="telegram"))
+        self.assertIn("CustomConveyor", port_agents.replies[-1][1])
+        self.assertIn("当前助手: CustomConveyor (main)", port_agents.replies[-1][1])
+
+        # Ack shows renamed default agent
+        port_main = await self.command(self.msg("/agent main", channel="telegram"))
+        self.assertIn("[CustomConveyor] 已切换至该助手。", port_main.replies[-1][1])
+
+    async def test_valid_id_name_collision_exact_id(self):
+        # Agent 1 has unique ID and name
+        agent_alpha = self.store.create({"name": "AlphaBot"})
+        id_alpha = agent_alpha["id"]
+
+        # Agent 2 has unique ID and its NAME is exactly Agent 1's ID
+        agent_beta = self.store.create({"name": id_alpha})
+        id_beta = agent_beta["id"]
+
+        # Exact ID binding with id_alpha must bind Agent 1, not Agent 2
+        bound = routing.bind(self.settings, self.msg("/agent"), id_alpha, exact_id=True)
+        self.assertEqual(bound["id"], id_alpha)
+        self.assertEqual(bound["name"], "AlphaBot")
+        self.assertEqual(routing.bound(self.settings, "telegram", "1"), id_alpha)
+
+        # Archive Agent 1: exact ID binding must fail closed and NOT fall back to Agent 2
+        self.store.archive(id_alpha)
+        with self.assertRaises(ValueError):
+            routing.bind(self.settings, self.msg("/agent"), id_alpha, exact_id=True)
+
 if __name__ == "__main__":
     unittest.main()
