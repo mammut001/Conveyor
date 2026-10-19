@@ -74,7 +74,7 @@ performed. The routing feature remains behind its existing enablement flags.
 
 With named-Agent routing enabled, `/agent` (or “当前助手”) opens a current-context
 card. `/agents` (“切换助手”) offers Agent buttons, and `/conversations`
-(“接着已有会话聊”) offers this Agent's conversation buttons. Each choice shows
+(“接着已有会话聊”、“切换会话”或“会话列表”) offers this Agent's conversation buttons. Each choice shows
 its origin entry and the selected item is marked. Both menus support eight
 choices per page. “另开新话题” starts immediately, while “回到本入口” restores the
 independent local root. Custom titles remain available through

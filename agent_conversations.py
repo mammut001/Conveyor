@@ -241,6 +241,7 @@ async def maybe_command(settings, msg, port):
     raw = msg.text.strip()
     if msg.reply_to is None and not msg.attachments:
         raw = {'接着已有会话聊': '/conversations', '查看会话': '/conversations',
+               '切换会话': '/conversations', '会话列表': '/conversations',
                '回到本入口会话': '/conversation local'}.get(raw.rstrip('。？！?!'), raw)
     parts = raw.split(maxsplit=2)
     word = (parts[0] if parts else '').split('@', 1)[0].lower()
@@ -279,7 +280,7 @@ def scoped(fn):
     @wraps(fn)
     async def wrapped(msg, port, settings, *args, **kwargs):
         import agent_channel_routing as routing
-        controls = {'接着已有会话聊', '查看会话', '回到本入口会话'}
+        controls = {'接着已有会话聊', '查看会话', '切换会话', '会话列表', '回到本入口会话'}
         word = (msg.text.strip().split(maxsplit=1) or [''])[0].split('@', 1)[0].lower()
         if (not enabled(settings) or routing.is_agent_command(settings, msg)
                 or word in ('/conversation', '/conversations')

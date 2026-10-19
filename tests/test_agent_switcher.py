@@ -146,3 +146,10 @@ class SwitcherTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('/agents',self.port.text)
         self.assertIn('/conversations',self.port.text)
         self.assertLess(len(self.port.text),600)
+
+    async def test_plain_switch_conversation_phrase_opens_both_channel_selectors(self):
+        for msg in (self.tg,self.fs):
+            for phrase in ('切换会话','会话列表'):
+                self.assertTrue(await conversations.maybe_command(self.settings,replace(msg,text=phrase),self.port))
+                self.assertIn('选择要接着聊的会话',self.port.text)
+        self.assertFalse(await conversations.maybe_command(self.settings,replace(self.fs,text='切换会话后修复代码'),self.port))
