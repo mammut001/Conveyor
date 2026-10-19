@@ -139,3 +139,10 @@ class SwitcherTests(unittest.IsolatedAsyncioTestCase):
         await ui.show(self.settings,self.fs,self.port,'topics')
         root=conversations.summary(self.settings,self.fs)
         self.assertIn('/conversation '+root['id'][:12],self.port.text)
+
+    async def test_short_help_exposes_the_direct_switchers(self):
+        from handlers.commands import _help
+        await _help(self.tg,self.port,None,self.settings,'')
+        self.assertIn('/agents',self.port.text)
+        self.assertIn('/conversations',self.port.text)
+        self.assertLess(len(self.port.text),600)
