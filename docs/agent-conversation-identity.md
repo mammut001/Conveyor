@@ -69,3 +69,27 @@ Agent scope; independent conversation history is distinct from Agent memory.
 
 No production migration, restart or outgoing Telegram/Feishu message has been
 performed. The routing feature remains behind its existing enablement flags.
+
+## Direct channel selection
+
+With named-Agent routing enabled, `/agent` (or “当前助手”) opens a current-context
+card. `/agents` (“切换助手”) offers Agent buttons, and `/conversations`
+(“接着已有会话聊”) offers this Agent's conversation buttons. Each choice shows
+its origin entry and the selected item is marked. Both menus support eight
+choices per page. “另开新话题” starts immediately, while “回到本入口” restores the
+independent local root. Custom titles remain available through
+`/conversation new <标题>`.
+
+Telegram uses inline buttons; Feishu uses its existing `cardAction` event
+subscription. Existing legacy Telegram “我的 Workers” and “切换会话” reply-keyboard
+labels open these selectors when owner-private routing is enabled. The explicit
+`/workers` and `/sessions` read-only task views remain available.
+
+Button payloads contain only opaque server-issued references (under Telegram's
+64-byte limit). References expire after 15 minutes, are one-use, and are bound
+to channel, operator and physical private chat. Topic actions also check the
+Agent that issued the card. Forwarded Feishu cards cannot acquire private-chat
+authority; duplicate deliveries cannot create duplicate topics. Live Agent and
+conversation ownership checks still apply when a button is pressed. Feature-off
+and noninteractive transports retain the original text-command path. Failed
+interactive delivery provides executable text choices as a fallback.

@@ -545,6 +545,17 @@ async def deep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await dispatch(inbound, make_outbound(update), settings, runner)
 
 
+async def agent_switcher_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard(update):
+        return
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    import agent_switcher
+    await agent_switcher.handle(settings, inbound_from_update(update), make_outbound(update), query.data)
+
+
 def _navigation_markup(screen):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(text, callback_data=data) for text, data in row]
@@ -626,6 +637,12 @@ async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     inbound = inbound_from_update(update)
     menu_action = legacy_action(inbound.text) if inbound.chat_type == "p2p" else None
     if menu_action:
+        import agent_channel_routing
+        if agent_channel_routing.authorized(settings, inbound):
+            import agent_switcher
+            await agent_switcher.show(settings, inbound, make_outbound(update),
+                                      "topics" if menu_action == "sessions" else "agents")
+            return
         await _show_navigation(update, menu_action)
         return
     # Onboarding-C: first-run nudge. If the user types ANY message
@@ -926,6 +943,7 @@ def main() -> None:
     )
     application.add_handler(CommandHandler("profile", profile_cmd))
     application.add_handler(CommandHandler("agentstatus", agent_status_cmd))
+    application.add_handler(CallbackQueryHandler(agent_switcher_callback, pattern=r"^acs:"))
     application.add_handler(CallbackQueryHandler(navigation_callback, pattern=r"^tgn:"))
     application.add_handler(CallbackQueryHandler(tool_callback, pattern=r"^tool:"))
     application.add_handler(CallbackQueryHandler(task_status_callback, pattern=r"^task:status:[0-9a-f]{6,32}$"))

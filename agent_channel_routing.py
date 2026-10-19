@@ -159,6 +159,10 @@ async def maybe_command(settings, msg, port):
     if not authorized(settings, msg):
         return True  # silent group/non-owner refusal, no binding
     word, argument = _command_parts(msg)
+    import agent_switcher
+    if agent_switcher.available(msg, port) and (word == "/agents" or not argument.strip()):
+        await agent_switcher.show(settings, msg, port, "agents" if word == "/agents" else "home")
+        return True
     if word == "/agent" and not argument.strip():
         await port.reply(msg, conversation_card(settings, msg))
         return True
@@ -194,8 +198,11 @@ async def maybe_command(settings, msg, port):
             reason=agent_security.denial_code(exc))
         await port.reply(msg, str(exc))
     else:
-        await port.reply(msg, "已切换。后续消息使用下方会话；切换不会搬移之前的聊天记录。\n\n"
-                         + conversation_card(settings, msg))
+        if agent_switcher.available(msg, port):
+            await agent_switcher.show(settings, msg, port, notice="已切换 Agent。后续消息发往下方会话。")
+        else:
+            await port.reply(msg, "已切换。后续消息使用下方会话；切换不会搬移之前的聊天记录。\n\n"
+                             + conversation_card(settings, msg))
     return True
 
 
