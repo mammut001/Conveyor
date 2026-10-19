@@ -174,17 +174,17 @@ async def test_tools_lists_new_tools() -> CheckResult:
         return CheckResult(name, False, str(exc))
 
 
-# ---- Test 5: /help includes new commands ----
+# ---- Test 5: /commands includes new commands ----
 
 async def test_help_includes_new_commands() -> CheckResult:
-    name = "/help: includes scheduler commands"
+    name = "/commands: includes scheduler commands"
     try:
         with tempfile.TemporaryDirectory() as td:
             settings = _settings(Path(td))
             port = FakeOutbound()
             runner = FakeRunner()
             runner.settings = settings
-            await run_command("help", _msg("/help"), port, runner, settings, "")
+            await run_command("commands", _msg("/commands"), port, runner, settings, "")
             text = "\n".join(port.replies)
             has_status = "/scheduler_status" in text
             has_probe = "/scheduler_probe" in text

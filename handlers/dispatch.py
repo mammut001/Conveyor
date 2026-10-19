@@ -22,7 +22,7 @@ from handlers.chat import (
     routes_to_agent,
     web_evidence,
 )
-from handlers.commands import parse_command, run_command
+from handlers.commands import parse_command, parse_conversation_control, run_command
 from handlers.context import detect_context_intent, handle_context_job, memo_text_with_quote
 from handlers.intent import COMPUTER_STOP_TEXTS, RouteResult, desktop_followup_route, route_intent
 from handlers.jobs import handle_codex_job
@@ -49,11 +49,13 @@ def _edit_overrides_snapshot(text: str, route: RouteResult) -> bool:
 
 
 from agent_context import scoped_inbound
+from agent_conversations import scoped as scoped_conversation
 from handlers.agent_emergency_stop import stop_before_identity
 
 
 @stop_before_identity
 @scoped_inbound
+@scoped_conversation
 async def dispatch(
     msg: InboundMessage,
     port: OutboundPort,
@@ -81,6 +83,11 @@ async def dispatch(
     import agent_channel_routing
     if await agent_channel_routing.maybe_command(settings, msg, port):
         return
+    import agent_conversations
+    if await agent_conversations.maybe_command(settings, msg, port):
+        return
+    if agent_channel_routing.authorized(settings, msg):
+        agent_conversations.ensure_entry(settings, msg)
     port = agent_channel_routing.label_port(settings, msg, port)
 
     # Commands in a conversation act on that conversation's lane: /status,
@@ -92,6 +99,8 @@ async def dispatch(
         return
 
     parsed = parse_command(msg.text)
+    if parsed is None and msg.reply_to is None and not msg.attachments:
+        parsed = parse_conversation_control(msg.text)
     if parsed is not None:
         cmd_name, arg = parsed
         if cmd_name == "memo":

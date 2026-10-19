@@ -667,6 +667,15 @@ async def ask_chat(
     use_tools = bool(getattr(settings, "chat_tools_enabled", False)) and not images
     can_search = not evidence and getattr(settings, "web_search_backend", "disabled") != "disabled" and not use_tools
     past = history(key, settings.chat_history_turns, settings=settings)
+    if not past:
+        import agent_context
+        import agent_conversations
+        if agent_context.enabled(settings):
+            ctx = agent_context.for_request(settings, msg.channel, msg.chat_id, msg.operator_id)
+            conversation = agent_conversations.current(settings, msg.channel, msg.chat_id,
+                                                       msg.operator_id, ctx.agent_id)
+            if conversation:
+                past = agent_conversations.recent_history(settings, conversation, settings.chat_history_turns)
 
     worktree_info = ""
     if runner is not None:
@@ -891,7 +900,7 @@ async def chat_or_agent(
     from runner import JobMode
 
     untrusted = reply is not None or bool(images)
-    key = chat_key(msg)
+    key = chat_key(msg, settings)
     outcome, checked = await ask_chat(
         msg, port, settings, question=question, reply=reply, images=images, evidence=evidence, runner=runner,
     )
@@ -920,7 +929,7 @@ async def handle_deep(
     from handlers.jobs import handle_codex_job
     from runner import JobMode
 
-    last = pop_last(chat_key(msg), settings=settings)
+    last = pop_last(chat_key(msg, settings), settings=settings)
     if last is None:
         await port.reply(msg, "没有可以深入的上一个问题。直接发问题，或用 /run <任务>。")
         return
@@ -933,5 +942,22 @@ async def handle_chat_clear(
     settings: "Settings",
 ) -> None:
     """``/chat_clear``: reset conversation history for this chat."""
-    reset(chat_key(msg), settings=settings)
-    await port.reply(msg, "🧹 对话历史已清空，新的对话将从零开始。")
+    reset(chat_key(msg, settings), settings=settings)
+    import agent_context
+    import agent_conversations
+    if agent_context.enabled(settings):
+        ctx = agent_context.for_request(settings, msg.channel, msg.chat_id, msg.operator_id)
+        conversation = agent_conversations.current(settings, msg.channel, msg.chat_id,
+                                                   msg.operator_id, ctx.agent_id)
+        if conversation:
+            from transcript_store import get_transcript_store
+            from handlers.session import clear_session
+            clear_session(settings, msg)
+            get_transcript_store(settings).append(
+                agent_conversations.transcript_id(conversation), "assistant",
+                "本会话上下文已清空。", kind="context_reset",
+                channel="web", operator_id="web-console",
+                source_chat_id=conversation["transport_chat_id"],
+                metadata={"origin_channel": msg.channel},
+            )
+    await port.reply(msg, "🧹 本会话上下文已清空，历史记录保留。")

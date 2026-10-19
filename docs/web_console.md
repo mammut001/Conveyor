@@ -93,6 +93,9 @@ make web-test
 make web-build
 ```
 
+Browser checks for chat input, streaming, interruption recovery, and mobile layout
+are documented in [Web chat interaction regression checks](testing/web-chat-experience.md).
+
 `make web-build` requires Node.js only on the build machine and writes static
 assets to `web/dist`. Deploy those assets with the Python source. ARM64 runtime
 has no new compiled Python dependency.

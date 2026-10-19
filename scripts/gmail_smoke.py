@@ -180,10 +180,10 @@ def test_app_password_redacted() -> CheckResult:
         return CheckResult(name, False, str(exc))
 
 
-# ---- Test 7: /help and /tools include Gmail/email commands ----
+# ---- Test 7: /commands and /tools include Gmail/email commands ----
 
 async def test_help_and_tools_include_gmail() -> CheckResult:
-    name = "/help and /tools: include Gmail/email commands"
+    name = "/commands and /tools: include Gmail/email commands"
     try:
         with tempfile.TemporaryDirectory() as td:
             settings = _settings(Path(td))
@@ -191,8 +191,8 @@ async def test_help_and_tools_include_gmail() -> CheckResult:
             runner = FakeRunner()
             runner.settings = settings
 
-            # Test /help
-            await run_command("help", _msg("/help"), port, runner, settings, "")
+            # Test /commands
+            await run_command("commands", _msg("/commands"), port, runner, settings, "")
             help_text = "\n".join(port.replies)
             has_gmail_in_help = "/gmail_status" in help_text and "/email_send" in help_text
 

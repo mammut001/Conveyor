@@ -47,8 +47,8 @@ export function AgentList({ agents, selectedId, onSelect, onNew, onEdit }: {
 }) {
   return (
     <>
-      <div className="panel-heading">
-        <div><p className="eyebrow">AGENTS</p><h2>Conversations</h2></div>
+      <div className="panel-heading agent-list-heading">
+        <div><p className="eyebrow">YOUR TEAM</p><h2>Agents</h2></div>
         <button className="icon-button" onClick={onNew} aria-label="New agent">＋</button>
       </div>
       <div className="session-list agent-list">

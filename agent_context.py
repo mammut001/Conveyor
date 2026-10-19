@@ -60,8 +60,9 @@ def resolve(settings, channel: str, chat_id: str, operator_id: str,
         if not agent or agent.get("archived") or not _ID.fullmatch(str(agent["id"])):
             raise AgentContextDenied("unknown or archived agent")
         agent_id = agent["id"]
-        if channel == "web" and chat_id.startswith(agents.AGENT_CHAT_PREFIX):
-            if chat_id != agents.chat_id_for(agent_id) or operator_id != agents.WEB_OPERATOR:
+        if channel == "web" and chat_id.startswith((agents.AGENT_CHAT_PREFIX, "topic-")):
+            if (operator_id != agents.WEB_OPERATOR or
+                    (chat_id.startswith(agents.AGENT_CHAT_PREFIX) and chat_id != agents.chat_id_for(agent_id))):
                 raise AgentContextDenied("invalid agent conversation")
         if agent_id == agents.DEFAULT_AGENT_ID:
             caps = frozenset({"*"})
@@ -192,17 +193,12 @@ def current() -> AgentContext | None:
 
 def history_key(settings, channel: str, chat_id: str, operator_id: str) -> str:
     ctx = for_request(settings, channel, chat_id, operator_id)
-    # The built-in default agent has pre-existing chat history in this key.
-    # Resolve its identity first, but preserve those records across flag flips.
+    import agent_conversations
+    conversation = agent_conversations.current(settings, channel, chat_id, operator_id, ctx.agent_id)
+    if conversation:
+        return conversation["history_key"]
     if ctx.agent_id == "default":
         return f"{channel}:{chat_id}"
-    # Bound channel chats share their Agent's existing Web screen history.
-    # Identity and tool permissions remain scoped to the original channel.
-    if channel in ("telegram", "feishu"):
-        import agent_channel_routing
-        if agent_channel_routing.bound(settings, channel, chat_id) == ctx.agent_id:
-            import agents
-            return f"agent:{ctx.agent_id}:{agents.session_id_for(ctx.agent_id)}"
     return f"agent:{ctx.agent_id}:{ctx.session_id}"
 
 

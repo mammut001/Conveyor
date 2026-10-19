@@ -415,6 +415,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 return
         if path.startswith("/api/") and not self._require_auth():
             return
+        if path == "/api/agent-conversations":
+            from web_agent_conversations_api import get
+            get(self, parse_qs(parsed.query))
+            return
         if path.startswith("/api/agent-screens"):
             import web_agent_screens_api
             if web_agent_screens_api.get(self, path, parse_qs(parsed.query)):
@@ -882,6 +886,12 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 agent_security_controls.web_post(self, parsed.path, body)
             return
 
+        if parsed.path == "/api/agent-conversations/new":
+            body = self._body()
+            if body is not None:
+                from web_agent_conversations_api import post
+                post(self, body)
+            return
         if parsed.path == "/api/agent-screens/cancel":
             body = self._body()
             if body is not None:
@@ -1218,9 +1228,18 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     settings, durable_session_id,
                     is_codex=(mode == JobMode.FIX), prompt=prompt,
                 )
-                ok, message, job = self._await(self._handle_task(
-                    msg, outbound, settings, self.server.control.runner, mode, prompt,
-                ))
+                if body.get("execution_only") is True:
+                    # Explicit chat-to-task handoff: do not send the same request
+                    # through the chat model a second time.
+                    task_call = submit_codex_job(
+                        msg, outbound, self.server.control.runner,
+                        mode=mode, prompt=prompt, wait=False,
+                    )
+                else:
+                    task_call = self._handle_task(
+                        msg, outbound, settings, self.server.control.runner, mode, prompt,
+                    )
+                ok, message, job = self._await(task_call)
                 self._json(HTTPStatus.ACCEPTED if ok else HTTPStatus.CONFLICT, {
                     "ok": ok, "message": message, "job_id": job.id if job else None,
                     "session_id": durable_session_id,

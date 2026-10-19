@@ -1049,3 +1049,118 @@
   font-size: 11px;
   opacity: .72;
 }
+/* Let readers stay in history while a chat answer streams. */
+.chat-panel-container { position: relative; min-height: 0; }
+.chat-panel-container .event-stream { overflow-anchor: none; }
+.chat-jump-latest {
+  position: absolute;
+  bottom: 108px;
+  align-self: center;
+  z-index: 5;
+  padding: 8px 14px;
+  border: 1px solid #dedfe3;
+  border-radius: 20px;
+  background: #fff;
+  color: #5d4037;
+  box-shadow: 0 4px 16px rgba(31, 35, 42, .12);
+  cursor: pointer;
+}
+.chat-jump-latest:focus-visible { outline: 2px solid #bd5c40; outline-offset: 3px; }
+
+.composer-handoff-note { grid-column: 1 / -1; color: #6b554c; font-size: 12px; line-height: 1.5; padding: 2px 4px; }
+
+/* Structured answers remain readable inside chat bubbles and narrow screens. */
+.formatted-text-flow { min-width: 0; max-width: 100%; }
+.formatted-text-flow > :first-child { margin-top: 0; }
+.formatted-text-flow > :last-child { margin-bottom: 0; }
+.formatted-text-flow h1, .formatted-text-flow h2, .formatted-text-flow h3,
+.formatted-text-flow h4, .formatted-text-flow h5, .formatted-text-flow h6 {
+  margin: 8px 0 2px;
+  line-height: 1.4;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.formatted-text-flow h1 { font-size: 1.5em; }
+.formatted-text-flow h2 { font-size: 1.3em; }
+.formatted-text-flow h3 { font-size: 1.15em; }
+.formatted-text-flow h4, .formatted-text-flow h5, .formatted-text-flow h6 { font-size: 1em; }
+.formatted-list .formatted-list { margin-top: 5px; }
+.formatted-list li { overflow-wrap: anywhere; }
+.formatted-quote { margin: 4px 0; padding: 4px 14px; border-left: 3px solid #c6cbd3; color: #616b79; }
+.formatted-quote > :first-child { margin-top: 0; }
+.formatted-quote > :last-child { margin-bottom: 0; }
+.formatted-table-scroll { max-width: 100%; overflow-x: auto; border: 1px solid #e3e6eb; border-radius: 9px; }
+.formatted-table-scroll:focus-visible { outline: 2px solid #bd5c40; outline-offset: 2px; }
+.formatted-table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+.formatted-table th, .formatted-table td { min-width: 100px; padding: 8px 12px; border-bottom: 1px solid #e3e6eb; overflow-wrap: anywhere; }
+.formatted-table th { background: #f6f7f9; font-weight: 600; text-align: left; }
+.formatted-table tr:last-child td { border-bottom: 0; }
+.formatted-text-flow .code-block-container { min-width: 0; max-width: 100%; }
+.formatted-text-flow hr { width: 100%; border: 0; border-top: 1px solid #e3e6eb; margin: 10px 0; }
+
+/* Keep assistant identity and message origin visible across channel entries. */
+.chat-context-strip { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 10px 16px; border-bottom: 1px solid var(--border, #e7e8eb); font-size: 12px; }
+.chat-context-strip span { color: #6b7280; }
+.transcript-source { font-size: 11px; color: #6b7280; margin-right: 8px; }
+
+.conversation-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #e7e8eb; font-size: 12px; }
+.conversation-picker select { max-width: min(380px, 70vw); padding: 6px; }
+.conversation-picker input { min-width: 90px; max-width: 160px; padding: 6px; }
+.conversation-picker small { flex-basis: 100%; color: #6b7280; }
+
+.transcript-footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; line-height: 1.4; }
+.transcript-footer .transcript-source { margin-right: 0; }
+.transcript-footer > span:not(.transcript-source) { font-size: 11px; color: #6b7280; }
+
+/* Keep conversation controls compact so the transcript owns the screen. */
+.conversation-picker { gap: 8px 12px; padding: 12px 20px; background: #fafaf9; }
+.conversation-picker-current { display: flex; flex: 1; min-width: 0; align-items: center; gap: 12px; }
+.conversation-picker-current > span { color: #78716c; font-size: 11px; white-space: nowrap; }
+.conversation-picker-current select { flex: 1; min-width: 0; max-width: 480px; min-height: 38px; padding: 8px 30px 8px 12px; border: 1px solid #e5e2dd; border-radius: 10px; background: white; color: #292524; font: inherit; text-overflow: ellipsis; }
+.conversation-picker button { min-height: 38px; padding: 8px 12px; border: 1px solid #e5e2dd; border-radius: 10px; background: white; color: #57534e; font: inherit; cursor: pointer; }
+.conversation-picker .conversation-new-toggle { border-color: transparent; background: #f0e9e3; color: #88452e; white-space: nowrap; }
+.conversation-picker button:disabled { opacity: .5; cursor: default; }
+.conversation-picker :is(button, input, select):focus-visible { outline: 2px solid #b96743; outline-offset: 3px; }
+.conversation-picker small { font-size: 11px; color: #8b8580; }
+.conversation-create { flex-basis: 100%; padding: 14px; border: 1px solid #e5e2dd; border-radius: 12px; background: white; }
+.conversation-create > label { display: block; margin-bottom: 10px; font-weight: 600; color: #57534e; }
+.conversation-create > div { display: flex; gap: 8px; flex-wrap: wrap; }
+.conversation-create input { flex: 1; min-width: 130px; max-width: none; padding: 9px 12px; border: 1px solid #e5e2dd; border-radius: 8px; font: inherit; }
+.conversation-create button[type="submit"] { background: #88452e; color: white; border-color: #88452e; }
+.chat-context-strip { padding: 8px 20px; border-bottom: 0; font-size: 11px; }
+.chat-context-strip strong { font-weight: 600; }
+.agent-screen-tabs { gap: 4px; padding: 6px 16px; }
+.agent-screen-tabs button { border-color: transparent; border-radius: 7px; padding: 7px 12px; font-size: 12px; color: #78716c; }
+.agent-screen-tabs button.active { background: #f2eae3; color: #88452e; font-weight: 600; }
+@media (max-width: 600px) {
+  .conversation-picker { padding: 10px 12px; gap: 6px 8px; }
+  .conversation-picker-current { gap: 6px; }
+  .conversation-picker-current > span { display: none; }
+  .conversation-picker-current select { width: 100%; max-width: none; }
+  .conversation-picker small { font-size: 10px; }
+  .chat-context-strip { padding: 6px 12px; }
+  .chat-context-strip span { max-width: 100%; font-size: 10px; }
+  .agent-screen-tabs { padding: 4px 8px; }
+}
+
+/* Agent identity is a switcher; conversation history lives inside the workspace. */
+@media (max-width: 600px) {
+  .primary-interface .agent-list-heading { padding: 8px 16px; min-height: 44px; }
+  .primary-interface .agent-list-heading .eyebrow { display: none; }
+  .primary-interface .agent-list-heading h2 { font-size: 12px; color: #78716c; }
+  .primary-interface .agent-list-heading .icon-button { width: 30px; height: 30px; min-height: 30px; }
+  .primary-interface .agent-list .agent-item { padding: 8px 30px 8px 8px; min-height: 52px; border-radius: 10px; gap: 8px; }
+  .primary-interface .agent-list .agent-avatar { width: 32px !important; height: 32px !important; font-size: 14px !important; }
+  .primary-interface .agent-list .agent-item.active { background: #f2eae3; box-shadow: inset 0 0 0 1px #e5d5c8; }
+  .primary-interface .agent-list .agent-item small { font-size: 10px; }
+  .primary-interface .agent-list .agent-item strong { font-size: 12px; }
+  .primary-interface .agent-list .agent-edit-btn { opacity: 1; width: 28px; height: 36px; }
+}
+
+@media (max-width: 600px) {
+  .primary-interface .stream-header-standard { flex-wrap: wrap; gap: 8px; padding: 10px 12px; min-height: 0; }
+  .primary-interface .stream-header-standard > div:last-child { width: 100%; min-width: 0; }
+  .primary-interface .stream-header-standard.stream-header-chat > div:first-child { display: none; }
+  .primary-interface .stream-header-standard .mode-switch { width: 100%; min-width: 0; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: thin; }
+  .primary-interface .stream-header-standard .mode-switch button { flex-shrink: 0; min-height: 36px; }
+}

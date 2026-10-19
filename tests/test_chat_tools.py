@@ -201,6 +201,87 @@ class TestChatToolsLoop(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
+    async def test_model_wait_budget_is_shared_and_closes_pending_round(self) -> None:
+        from dataclasses import replace
+        from runner.chat_client import ChatError
+        calls = []
+        cancelled = asyncio.Event()
+
+        async def slow_model(config, messages, *, tools):
+            calls.append(config.timeout)
+            if len(calls) == 1:
+                await asyncio.sleep(0.08)
+                return {"role": "assistant", "tool_calls": [{"id": "read", "function": {
+                    "name": "notes__search", "arguments": '{"arg":"groceries"}',
+                }}]}
+            try:
+                await asyncio.sleep(1)
+            finally:
+                cancelled.set()
+
+        with patch("handlers.chat_tools.complete_chat", side_effect=slow_model), \
+                patch("handlers.chat_tools.run_tool", new=AsyncMock(return_value="notes")):
+            with self.assertRaisesRegex(ChatError, "budget timed out"):
+                await run_tool_loop(self.msg, self.port, self.settings, [],
+                                    replace(self.cfg, timeout=0.2))
+        self.assertEqual(len(calls), 2)
+        self.assertLess(calls[1], calls[0] - 0.05)
+        self.assertTrue(cancelled.is_set())
+
+    async def test_tool_execution_does_not_consume_model_wait_budget(self) -> None:
+        from dataclasses import replace
+        calls = []
+
+        async def model(config, messages, *, tools):
+            calls.append(config.timeout)
+            if len(calls) == 1:
+                return {"role": "assistant", "tool_calls": [{"id": "read", "function": {
+                    "name": "notes__search", "arguments": '{"arg":"groceries"}',
+                }}]}
+            return {"role": "assistant", "content": "Found notes."}
+
+        async def slow_tool(*args, **kwargs):
+            await asyncio.sleep(0.15)
+            return "notes"
+
+        with patch("handlers.chat_tools.complete_chat", side_effect=model), \
+                patch("handlers.chat_tools.run_tool", side_effect=slow_tool):
+            result = await run_tool_loop(self.msg, self.port, self.settings, [],
+                                        replace(self.cfg, timeout=0.1))
+        self.assertEqual(result.text, "Found notes.")
+        self.assertGreater(calls[1], 0.05)
+
+    async def test_read_progress_is_visible_before_tool_finishes(self) -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        async def slow_tool(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return "notes found"
+        calls = [
+            {"role": "assistant", "tool_calls": [{"id": "progress", "function": {
+                "name": "notes__search", "arguments": '{"arg":"groceries"}',
+            }}]},
+            {"role": "assistant", "content": "Found notes."},
+        ]
+        with patch("handlers.chat_tools.complete_chat", new=AsyncMock(side_effect=calls)), \
+                patch("handlers.chat_tools.run_tool", side_effect=slow_tool):
+            task = asyncio.create_task(run_tool_loop(
+                self.msg, self.port, self.settings, [], self.cfg, placeholder="pending",
+            ))
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                self.assertTrue(any("正在读取" in text for _, _, text in self.port.edits))
+                self.assertFalse(task.done())
+                release.set()
+                result = await task
+            finally:
+                release.set()
+                if not task.done():
+                    task.cancel()
+            self.assertEqual(result.text, "Found notes.")
+            self.assertTrue(any("正在整理回答" in text for _, _, text in self.port.edits))
+
     async def test_read_tool_call_round_trip(self) -> None:
         # Round 1 returns tool_call for notes.search
         round1_msg = {

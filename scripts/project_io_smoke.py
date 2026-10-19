@@ -13,7 +13,7 @@ Tests:
   - template for specific type
   - tools are correct danger levels
   - command registration
-  - /help lists commands
+  - /commands lists commands
   - no network calls
   - all outputs redacted
 """
@@ -248,7 +248,7 @@ async def _test_command_registration():
 
 async def _test_help_includes_commands():
     """Help includes commands."""
-    from handlers.commands import _help
+    from handlers.commands import _commands
 
     help_text = ""
     class FakePort:
@@ -256,9 +256,9 @@ async def _test_help_includes_commands():
             nonlocal help_text
             help_text = text
     class FakeMsg:
-        text = "/help"
+        text = "/commands"
 
-    await _help(FakeMsg(), FakePort(), None, None, "")
+    await _commands(FakeMsg(), FakePort(), None, None, "")
     assert "/project_export" in help_text
     assert "/project_import" in help_text
     assert "/project_template" in help_text

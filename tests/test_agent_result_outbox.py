@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import importlib
 import asyncio
 import json
 import os
@@ -207,7 +208,7 @@ class ResultOutboxTests(unittest.IsolatedAsyncioTestCase):
                 self.settings, owner, port))
             port.reply.assert_not_awaited()
             with (patch("job_lanes.runner_for_chat", return_value=object()),
-                  patch("handlers.dispatch.try_resolve_confirmation",
+                  patch.object(importlib.import_module("handlers.dispatch"), "try_resolve_confirmation",
                         new_callable=AsyncMock, return_value=False)):
                 await dispatch(owner, port, self.settings, object())
                 normal = replace(owner, text="/notacommand on",

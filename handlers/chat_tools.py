@@ -6,10 +6,11 @@ confirmation for any WRITE / WRITE_SAFE tool.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from channel.types import InboundMessage, OutboundPort
@@ -19,7 +20,7 @@ from handlers.tools.registry import TOOL_REGISTRY, DangerLevel
 from handlers.tools.runner import _request_confirmation, run_tool
 from personal_tools.registry import PERSONAL_TOOL_REGISTRY, register_personal_tools
 from redaction import redact_text
-from runner.chat_client import ChatConfig, complete_chat
+from runner.chat_client import ChatConfig, ChatError, complete_chat
 
 logger = logging.getLogger(__name__)
 
@@ -329,6 +330,15 @@ def _parse_tool_arg(raw_args: Any) -> str:
     return ""
 
 
+async def _tool_progress(port, msg, placeholder, text: str) -> None:
+    if not placeholder:
+        return
+    try:
+        await port.edit_progress(msg, placeholder, text)
+    except Exception:
+        logger.debug("Could not update chat tool progress", exc_info=True)
+
+
 async def run_tool_loop(
     msg: InboundMessage,
     port: OutboundPort,
@@ -354,9 +364,27 @@ async def run_tool_loop(
     max_steps = 3 if max_steps_val is None else int(max_steps_val)
     max_steps = max(0, max_steps)
     tools_called: list[str] = []
+    # Share the provider wait budget across rounds. Tool execution has its own
+    # lifecycle and must not be cancelled just because model time ran out.
+    model_remaining = float(config.timeout)
+
+    async def model_reply(tools):
+        nonlocal model_remaining
+        if model_remaining <= 0:
+            raise ChatError("chat model wait budget timed out")
+        started = asyncio.get_running_loop().time()
+        try:
+            return await asyncio.wait_for(
+                complete_chat(replace(config, timeout=model_remaining), messages, tools=tools),
+                timeout=model_remaining,
+            )
+        except asyncio.TimeoutError as exc:
+            raise ChatError("chat model wait budget timed out") from exc
+        finally:
+            model_remaining -= asyncio.get_running_loop().time() - started
 
     for _step in range(max_steps):
-        resp_message = await complete_chat(config, messages, tools=schemas)
+        resp_message = await model_reply(schemas)
         tool_calls = resp_message.get("tool_calls")
         if not tool_calls:
             return ToolLoopResult(
@@ -488,6 +516,7 @@ async def run_tool_loop(
                                               confirmation_requested=True, messages=messages)
                 logger.info("Chat tier tool call executed: %s", real_tool_name)
                 tools_called.append(real_tool_name)
+                await _tool_progress(port, msg, placeholder, f"🧩 正在读取：{spec.summary}…")
                 if real_tool_name.startswith("subagent."):
                     import subagents
                     raw_res = await subagents.dispatch(settings, real_tool_name, arg,
@@ -514,6 +543,7 @@ async def run_tool_loop(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
                     )
+                await _tool_progress(port, msg, placeholder, "🧩 已收到工具结果，正在整理回答…")
                 max_tasks = int(getattr(settings, "subagents_max_tasks", 4))
                 max_output = int(getattr(settings, "subagents_max_output_chars", 2500))
                 # Tool result cap: bounded at 16000 chars for agents.parallel specifically, else 4000
@@ -532,7 +562,7 @@ async def run_tool_loop(
                 })
 
     # Step budget exhausted; make one last call without tools to get final answer
-    final_msg = await complete_chat(config, messages, tools=None)
+    final_msg = await model_reply(None)
     return ToolLoopResult(
         text=final_msg.get("content") or "",
         tools_called=tools_called,

@@ -6,7 +6,7 @@ Tests:
   - setup.project includes project_add examples
   - setup.gmail warns not to share app password
   - setup.github does not leak GITHUB_TOKEN
-  - /help lists setup commands
+  - /commands lists setup commands
   - /tools lists setup tools
   - no network calls in smoke
 """
@@ -174,7 +174,7 @@ async def _test_command_registration():
 
 async def _test_help_includes_setup():
     """Help text includes setup commands."""
-    from handlers.commands import _help
+    from handlers.commands import _commands
 
     help_text = ""
     class FakePort:
@@ -183,9 +183,9 @@ async def _test_help_includes_setup():
             help_text = text
 
     class FakeMsg:
-        text = "/help"
+        text = "/commands"
 
-    await _help(FakeMsg(), FakePort(), None, None, "")
+    await _commands(FakeMsg(), FakePort(), None, None, "")
     assert "/setup" in help_text
     assert "/setup_check" in help_text
     assert "设置向导" in help_text

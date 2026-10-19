@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import agent_context as ac
 from agents import AgentStore, chat_id_for
@@ -76,6 +76,35 @@ class AgentContextTests(unittest.IsolatedAsyncioTestCase):
                             chat_key(self.msg(self.b_chat), self.settings))
         self.assertTrue(chat_key(self.msg(self.a_chat), self.settings).startswith(
             f"agent:{self.a['id']}:web:web-console:"))
+
+    async def test_clear_resets_current_agent_history_and_preserves_other_agent(self):
+        from handlers import chat
+        a_msg, b_msg = self.msg(self.a_chat), self.msg(self.b_chat)
+        a_key, b_key = chat.chat_key(a_msg, self.settings), chat.chat_key(b_msg, self.settings)
+        self.addCleanup(chat.reset)
+        chat.remember(a_key, "writer question", "writer answer", 6, settings=self.settings)
+        chat.remember(b_key, "reviewer question", "reviewer answer", 6, settings=self.settings)
+        await chat.handle_chat_clear(a_msg, AsyncMock(), self.settings)
+        self.assertEqual(chat.history(a_key, 6, settings=self.settings), [])
+        self.assertEqual(chat.history(b_key, 6, settings=self.settings)[0]["content"], "reviewer question")
+
+    async def test_deep_tracks_current_agent_and_survives_memory_reload(self):
+        from handlers import chat
+        a_msg, b_msg = self.msg(self.a_chat), self.msg(self.b_chat)
+        port, runner = AsyncMock(), object()
+        self.addCleanup(chat.reset)
+        answered = chat.Checked("answer", "high", 0, False)
+        with patch("handlers.chat.ask_chat", new=AsyncMock(return_value=("answered", answered))):
+            await chat.chat_or_agent(a_msg, port, self.settings, runner,
+                                     question="writer question", codex_prompt="writer task")
+            await chat.chat_or_agent(b_msg, port, self.settings, runner,
+                                     question="reviewer question", codex_prompt="reviewer task")
+        chat._last.clear()  # Recover the scoped last requests from durable storage.
+        with patch("handlers.jobs.handle_codex_job", new=AsyncMock()) as execute:
+            await chat.handle_deep(a_msg, port, runner, settings=self.settings)
+            self.assertEqual(execute.await_args.kwargs["prompt"], "writer task")
+            await chat.handle_deep(b_msg, port, runner, settings=self.settings)
+            self.assertEqual(execute.await_args.kwargs["prompt"], "reviewer task")
 
     def test_fail_closed_missing_invalid_or_archived_identity(self):
         from named_agents import tool_allowed

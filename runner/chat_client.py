@@ -1,24 +1,21 @@
 """runner/chat_client.py — direct chat-model calls (OpenAI-compatible).
 
 The chat tier answers conversation without starting a Codex job. This is
-a tiny stdlib client for ``POST {base_url}/chat/completions`` with SSE
-streaming or non-streaming tool completion, run in a worker thread so
-the bot's event loop never blocks.
+an asynchronous client for ``POST {base_url}/chat/completions`` with SSE
+streaming and tool completion. Total deadlines and cancellation close the
+provider connection instead of leaving a background reader running.
 """
 from __future__ import annotations
 
 import asyncio
 import json
-import logging
-import threading
-import urllib.error
-import urllib.request
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
-from redaction import redact_text
+import httpx
 
-logger = logging.getLogger(__name__)
+from redaction import redact_text
 
 DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
 
@@ -32,7 +29,7 @@ class ChatConfig:
     base_url: str
     api_key: str
     model: str
-    timeout: int = 60
+    timeout: float = 60
     max_tokens: int = 1500
     temperature: float = 0.2
 
@@ -67,125 +64,124 @@ def _strip_attached_metadata(messages: list[dict]) -> list[dict]:
     return cleaned
 
 
-def _request(
-    config: ChatConfig,
-    messages: list[dict],
-    stream: bool,
-    tools: list[dict] | None = None,
-) -> urllib.request.Request:
+def _payload(config: ChatConfig, messages: list[dict], stream: bool, tools=None) -> dict:
     payload: dict[str, Any] = {
-        "model": config.model,
-        "messages": _strip_attached_metadata(messages),
-        "temperature": config.temperature,
-        "max_tokens": config.max_tokens,
-        "stream": stream,
+        "model": config.model, "messages": _strip_attached_metadata(messages), "temperature": config.temperature,
+        "max_tokens": config.max_tokens, "stream": stream,
     }
     if tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
-    body = json.dumps(payload).encode("utf-8")
-    return urllib.request.Request(
-        f"{config.base_url}/chat/completions",
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {config.api_key}",
-            "Accept": "text/event-stream" if stream else "application/json",
-        },
-    )
+        payload.update(tools=tools, tool_choice="auto")
+    return payload
 
 
-def _delta_text(obj: dict) -> str:
-    choices = obj.get("choices") or []
-    if not choices or not isinstance(choices[0], dict):
+def _headers(config: ChatConfig, stream: bool) -> dict[str, str]:
+    return {
+        "Content-Type": "application/json", "Authorization": f"Bearer {config.api_key}",
+        "Accept": "text/event-stream" if stream else "application/json",
+    }
+
+
+def _clean_chat_error(text: str, api_key: str | None) -> str:
+    if api_key:
+        text = text.replace(api_key, "[REDACTED]")
+    return redact_text(text)[:200]
+
+
+def _provider_error(obj: Any) -> None:
+    base = obj.get("base_resp") if isinstance(obj, dict) else None
+    if isinstance(base, dict) and base.get("status_code"):
+        raise ChatError(f"provider error: {base}")
+
+
+def _delta_text(obj: Any) -> str:
+    choices = obj.get("choices") if isinstance(obj, dict) else None
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         return ""
-    choice = choices[0]
-    delta = choice.get("delta") or choice.get("message") or {}
+    delta = choices[0].get("delta") or choices[0].get("message") or {}
     content = delta.get("content") if isinstance(delta, dict) else None
     return content if isinstance(content, str) else ""
 
 
-def _stream_worker(config: ChatConfig, messages: list[dict], emit) -> None:
-    """Blocking SSE reader; calls ``emit(kind, value)``."""
+async def _stream_response(config: ChatConfig, messages: list[dict], queue: asyncio.Queue) -> None:
+    """Read on the event loop; cancellation closes the response and client."""
     try:
-        with urllib.request.urlopen(_request(config, messages, True), timeout=config.timeout) as resp:
-            ctype = resp.headers.get("Content-Type", "")
-            if "text/event-stream" not in ctype:
-                # Endpoint ignored stream=true: one JSON body.
-                obj = json.loads(resp.read().decode("utf-8", errors="replace"))
-                emit("text", _delta_text(obj))
-                return
-            for raw in resp:
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    obj = json.loads(data)
-                except ValueError:
-                    continue
-                if isinstance(obj, dict) and obj.get("base_resp", {}).get("status_code"):
-                    raise ChatError(f"provider error: {obj.get('base_resp')}")
-                text = _delta_text(obj) if isinstance(obj, dict) else ""
-                if text:
-                    emit("text", text)
-    except urllib.error.HTTPError as exc:
-        emit("error", f"HTTP {exc.code}")
-    except Exception as exc:  # network, timeout, bad JSON, provider error
-        emit("error", redact_text(str(exc))[:200])
-    finally:
-        emit("done", None)
+        async with httpx.AsyncClient(timeout=config.timeout, follow_redirects=True) as client:
+            async with client.stream(
+                "POST", f"{config.base_url}/chat/completions",
+                json=_payload(config, messages, True), headers=_headers(config, True),
+            ) as response:
+                response.raise_for_status()
+                if "text/event-stream" not in response.headers.get("Content-Type", "").lower():
+                    obj = json.loads(await response.aread())
+                    _provider_error(obj)
+                    await queue.put(("text", _delta_text(obj)))
+                else:
+                    async for line in response.aiter_lines():
+                        line = line.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            obj = json.loads(data)
+                        except ValueError:
+                            continue
+                        _provider_error(obj)
+                        text = _delta_text(obj)
+                        if text:
+                            await queue.put(("text", text))
+    except httpx.TimeoutException:
+        await queue.put(("error", "chat request timed out"))
+    except httpx.HTTPStatusError as exc:
+        await queue.put(("error", f"HTTP {exc.response.status_code}"))
+    except Exception as exc:
+        await queue.put(("error", _clean_chat_error(str(exc), config.api_key)))
+    else:
+        await queue.put(("done", None))
 
 
 async def stream_chat(config: ChatConfig, messages: list[dict]) -> AsyncIterator[str]:
-    """Yield text chunks from the chat model; raise ChatError on failure."""
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue = asyncio.Queue()
-
-    def emit(kind: str, value: Any) -> None:
-        loop.call_soon_threadsafe(queue.put_nowait, (kind, value))
-
-    thread = threading.Thread(
-        target=_stream_worker, args=(config, messages, emit), daemon=True,
-    )
-    thread.start()
-    while True:
-        kind, value = await queue.get()
-        if kind == "text":
-            yield value
-        elif kind == "error":
-            raise ChatError(value)
-        elif kind == "done":
-            return
-
-
-def _clean_chat_error(text: str, api_key: str | None) -> str:
-    msg = text
-    if api_key:
-        msg = msg.replace(api_key, "[REDACTED]")
-    return redact_text(msg)[:200]
-
-
-def _complete_worker(
-    config: ChatConfig,
-    messages: list[dict],
-    tools: list[dict] | None,
-) -> dict:
+    """Yield text with a total request deadline, including provider heartbeats."""
+    queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+    deadline = asyncio.get_running_loop().time() + config.timeout
+    worker = asyncio.create_task(_stream_response(config, messages, queue))
     try:
-        req = _request(config, messages, stream=False, tools=tools)
-        with urllib.request.urlopen(req, timeout=config.timeout) as resp:
-            data = resp.read().decode("utf-8", errors="replace")
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
+            kind, value = await asyncio.wait_for(queue.get(), remaining)
+            if kind == "text":
+                if value:
+                    yield value
+            elif kind == "error":
+                raise ChatError(value)
+            else:
+                return
+    except asyncio.TimeoutError as exc:
+        raise ChatError("chat request timed out") from exc
+    finally:
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
+
+
+async def _complete_response(config: ChatConfig, messages: list[dict], tools) -> dict:
+    async with httpx.AsyncClient(timeout=config.timeout, follow_redirects=True) as client:
+        response = await client.post(
+            f"{config.base_url}/chat/completions", json=_payload(config, messages, False, tools),
+            headers=_headers(config, False),
+        )
+        response.raise_for_status()
         try:
-            obj = json.loads(data)
+            obj = response.json()
         except ValueError as exc:
-            raise ChatError(f"invalid JSON response: {data[:100]}") from exc
-        if isinstance(obj, dict) and obj.get("base_resp", {}).get("status_code"):
-            raise ChatError(f"provider error: {obj.get('base_resp')}")
+            raise ChatError("invalid JSON response") from exc
+        _provider_error(obj)
         choices = obj.get("choices") if isinstance(obj, dict) else None
-        if not choices or not isinstance(choices, list) or not isinstance(choices[0], dict):
-            raise ChatError(f"invalid response: no choices in {data[:100]}")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ChatError("invalid response: no choices")
         choice = choices[0]
         message = choice.get("message")
         if not isinstance(message, dict):
@@ -198,19 +194,15 @@ def _complete_worker(
         if isinstance(usage, dict) and "usage" not in out:
             out["usage"] = usage
         return out
-    except ChatError as exc:
-        raise ChatError(_clean_chat_error(str(exc), config.api_key)) from exc
-    except urllib.error.HTTPError as exc:
-        raise ChatError(_clean_chat_error(f"HTTP {exc.code}", config.api_key)) from exc
+
+
+async def complete_chat(config: ChatConfig, messages: list[dict], tools: list[dict] | None = None) -> dict:
+    """Return a tool-capable completion with cancellation and a total deadline."""
+    try:
+        return await asyncio.wait_for(_complete_response(config, messages, tools), config.timeout)
+    except (asyncio.TimeoutError, httpx.TimeoutException) as exc:
+        raise ChatError("chat request timed out") from exc
+    except httpx.HTTPStatusError as exc:
+        raise ChatError(f"HTTP {exc.response.status_code}") from exc
     except Exception as exc:
         raise ChatError(_clean_chat_error(str(exc), config.api_key)) from exc
-
-
-async def complete_chat(
-    config: ChatConfig,
-    messages: list[dict],
-    tools: list[dict] | None = None,
-) -> dict:
-    """Non-streaming chat completion; returns the first choice's message dict."""
-    return await asyncio.to_thread(_complete_worker, config, messages, tools)
-

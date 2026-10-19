@@ -228,19 +228,19 @@ def test_commands_registered() -> CheckResult:
 
 
 def test_help_and_tools_include_github() -> CheckResult:
-    """/help and /tools include GitHub commands."""
-    name = "/help and /tools: include GitHub commands"
+    """/commands and /tools include GitHub commands."""
+    name = "/commands and /tools: include GitHub commands"
     try:
         import asyncio
-        from handlers.commands import _help, _tools
+        from handlers.commands import _commands, _tools
 
         msg = AsyncMock()
         port = AsyncMock()
         runner = AsyncMock()
         s = _settings()
 
-        # Test /help
-        asyncio.run(_help(msg, port, runner, s, ""))
+        # Test /commands
+        asyncio.run(_commands(msg, port, runner, s, ""))
         help_text = port.reply.call_args[0][1]
         if "/github_status" not in help_text:
             return CheckResult(name, False, "missing /github_status in help")

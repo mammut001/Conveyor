@@ -5,7 +5,7 @@ Tests:
   2. Each planner profile only uses READ tools
   3. Missing integrations degrade gracefully
   4. Collected facts are redacted
-  5. /help lists planner commands
+  5. /commands lists planner commands
   6. /tools lists planner commands
   7. Natural language intent routing works
   8. No network calls
@@ -99,8 +99,8 @@ def main() -> int:
         # The redaction depends on redaction.py patterns; just verify prompt builds
         _pass("Prompt template builds with collected facts")
 
-    # 6. /help lists planner commands
-    from handlers.commands import _help
+    # 6. /commands lists planner commands
+    from handlers.commands import _commands
     import asyncio
 
     class FakeMsg:
@@ -116,9 +116,9 @@ def main() -> int:
         async def reply_with_buttons(self, msg, text, buttons):
             self.last_text = text
 
-    # We can't easily test _help directly due to async/port requirements,
+    # We can't easily test _commands directly due to async/port requirements,
     # but we can verify the command table has them
-    _pass("/help includes planner commands (verified via COMMAND_TABLE)")
+    _pass("/commands includes planner commands (verified via COMMAND_TABLE)")
 
     # 7. Natural language intent routing
     test_cases = [

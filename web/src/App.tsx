@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChatPanel } from './components/ChatPanel'
+import { ChatPanel, type ChatPanelProps } from './components/ChatPanel'
 import { AgentWorkspace } from './components/AgentWorkspace'
 import { FormattedText } from './components/FormattedText'
 import { InboxPanel } from './components/InboxPanel'
@@ -21,10 +21,7 @@ import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
 import { dropApproval, isStale, shouldRefreshForEvent } from './approvalFreshness'
 
-type EventItem = {
-  schema_version: number; event_id: string; sequence: number; timestamp: string
-  kind: string; job_id: string; payload: Record<string, unknown>; tool_call_id?: string
-}
+import { mergeJobEvents, type JobEvent as EventItem } from './jobEvents'
 type Job = {
   id: string; state: string; mode: string; channel: string; chat_id: string; operator_id?: string
   created_at: string; updated_at?: string; started_at?: string; finished_at?: string
@@ -48,10 +45,10 @@ type Session = {
   active_refinement?: ActiveRefinement | null
 }
 type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[]; runs?: RunSummary[] }
-// Sessions created by the Chat view (POST /api/chat) live only in the Chat view.
+// Chat-only sessions stay in Chat; promoted conversations with jobs also appear in Tasks.
 const isChatSessionId = (id: string) => id.includes(':webchat-') || id.startsWith('webchat-')
 const isChatSession = (session: Session) => isChatSessionId(session.id) || (session.source_chat_id || '').startsWith('webchat-')
-const taskSessionsOnly = (items: Session[]) => items.filter(item => !isChatSession(item))
+const taskSessionsOnly = (items: Session[]) => items.filter(item => !isChatSession(item) || item.job_count > 0 || Boolean(item.latest_job))
 type Approval = {
   id: string
   kind?: 'job' | 'tool'
@@ -176,7 +173,7 @@ export default function App() {
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([])
   const [selectedSessionDetail, setSelectedSessionDetail] = useState<SessionDetail | null>(null)
   const [sessionDetailError, setSessionDetailError] = useState('')
-  const sessionDetailFetchGen = useRef(0)
+  const [transcriptError, setTranscriptError] = useState(false)
   const [events, setEvents] = useState<EventItem[]>([])
   const [approvals, setApprovals] = useState<Approval[]>([])
   const [nodes, setNodes] = useState<NodeInfo[]>([])
@@ -185,6 +182,7 @@ export default function App() {
   const [changesDiff, setChangesDiff] = useState('')
   const [prompt, setPrompt] = useState('')
   const [mode, setMode] = useState<'run' | 'fix'>('run')
+  const [executionOnly, setExecutionOnly] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -195,6 +193,11 @@ export default function App() {
   const [inboxUnread, setInboxUnread] = useState(0)
   const [approvalInboxCount, setApprovalInboxCount] = useState(0)
   const [chatDraft, setChatDraft] = useState('')
+  const [realtimeState, setRealtimeState] = useState<'connecting' | 'live' | 'reconnecting'>('connecting')
+  const sessionDetailFetchGen = useRef(0)
+  const transcriptRequestRef = useRef<{ sessionId: string; generation: number } | null>(null)
+  const transcriptSessionRef = useRef(selectedSessionId)
+  transcriptSessionRef.current = selectedSessionId
   const lastSequence = useRef(0)
   const refreshGen = useRef(0)
   const approvalInboxFetchGen = useRef(0)
@@ -312,9 +315,12 @@ export default function App() {
   }, [sessionsDrawerOpen, contextDrawerOpen])
 
   const selectSession = useCallback((sessionId: string, jobId?: string) => {
-    sessionDetailFetchGen.current += 1
     setSelectedSessionDetail(null)
     setTranscript([])
+    sessionDetailFetchGen.current++
+    transcriptSessionRef.current = sessionId
+    setTranscriptError(false)
+    setExecutionOnly(false)
     setCreatingSession(false)
     setSelectedSessionId(sessionId)
     if (sessionId) sessionStorage.setItem('conveyor-selected-session', sessionId)
@@ -411,24 +417,28 @@ export default function App() {
   }, [api, creatingSession, selectedJobId, selectedSessionId, token])
 
   const refreshTranscript = useCallback(async () => {
-    const generation = ++sessionDetailFetchGen.current
+    if (selectedSessionId !== transcriptSessionRef.current) return
     if (!authenticated || !selectedSessionId) {
-      setTranscript([])
-      setSelectedSessionDetail(null)
-      setSessionDetailError('')
-      return
+      sessionDetailFetchGen.current++; setTranscript([]); setTranscriptError(false); setSelectedSessionDetail(null); setSessionDetailError(''); return
     }
-    setSessionDetailError('')
+    const pending = transcriptRequestRef.current
+    if (pending?.sessionId === selectedSessionId && pending.generation === sessionDetailFetchGen.current) return
+    const request = { sessionId: selectedSessionId, generation: ++sessionDetailFetchGen.current }
+    transcriptRequestRef.current = request
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 15_000)
     try {
-      const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`)
-      if (generation !== sessionDetailFetchGen.current) return
-      setTranscript(session.messages || [])
-      setSelectedSessionDetail(session)
+      const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`, { signal: controller.signal })
+      if (request.generation === sessionDetailFetchGen.current && selectedSessionId === transcriptSessionRef.current) {
+        setTranscript(session.messages || []); setTranscriptError(false); setSelectedSessionDetail(session); setSessionDetailError('')
+      }
     } catch {
-      if (generation !== sessionDetailFetchGen.current) return
-      setTranscript([])
-      setSelectedSessionDetail(null)
-      setSessionDetailError('Could not load this session’s history. Retrying automatically.')
+      if (request.generation === sessionDetailFetchGen.current && selectedSessionId === transcriptSessionRef.current) {
+        setTranscriptError(true); setSessionDetailError('Could not load this session’s history. Retrying automatically.')
+      }
+    } finally {
+      window.clearTimeout(timeout)
+      if (transcriptRequestRef.current === request) transcriptRequestRef.current = null
     }
   }, [api, authenticated, selectedSessionId])
 
@@ -479,20 +489,23 @@ export default function App() {
   useEffect(() => {
     if (!authenticated || !selectedJobId) return
     let stopped = false; let controller: AbortController | null = null; let retry: number | undefined
-    lastSequence.current = 0; setEvents([])
+    lastSequence.current = 0; setEvents([]); setRealtimeState('connecting')
     void api<{ events: EventItem[] }>(`/api/jobs/${selectedJobId}/events`).then(({ events: initial }) => {
       if (stopped) return
-      const unique = [...new Map(initial.map(item => [item.event_id, item])).values()]
-      setEvents(unique.slice(-1000)); lastSequence.current = unique.at(-1)?.sequence || 0
-    }).catch(reason => setError(String(reason)))
+      setEvents(previous => mergeJobEvents(previous, initial))
+      for (const event of initial) lastSequence.current = Math.max(lastSequence.current, event.sequence)
+    }).catch(reason => { if (!stopped) setError(String(reason)) })
 
     const connect = async () => {
-      controller = new AbortController()
+      const connection = new AbortController()
+      controller = connection
       try {
         const response = await fetch(`/api/events/stream?job_id=${encodeURIComponent(selectedJobId)}&after=${lastSequence.current}`, {
-          headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
+          headers: { Authorization: `Bearer ${token}` }, signal: connection.signal,
         })
         if (!response.ok || !response.body) throw new Error('Realtime unavailable')
+        if (stopped) return
+        setRealtimeState('live')
         const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''
         while (!stopped) {
           const { value, done } = await reader.read(); if (done) break
@@ -502,7 +515,7 @@ export default function App() {
             const line = frame.split('\n').find(part => part.startsWith('data: ')); if (!line) continue
             const event = JSON.parse(line.slice(6)) as EventItem
             lastSequence.current = Math.max(lastSequence.current, event.sequence)
-            setEvents(previous => previous.some(item => item.event_id === event.event_id) ? previous : [...previous, event].slice(-1000))
+            setEvents(previous => mergeJobEvents(previous, [event]))
             if (shouldRefreshForEvent(event.kind)) {
               void refresh()
               void refreshTranscript()
@@ -510,7 +523,11 @@ export default function App() {
           }
         }
       } catch { /* reconnect below unless the selection changed */ }
-      if (!stopped) retry = window.setTimeout(() => void connect(), 1500)
+      finally { connection.abort() }
+      if (!stopped) {
+        setRealtimeState('reconnecting')
+        retry = window.setTimeout(() => void connect(), 1500)
+      }
     }
     void connect()
     return () => { stopped = true; controller?.abort(); if (retry) window.clearTimeout(retry) }
@@ -601,9 +618,10 @@ export default function App() {
     setBusy(true); setError('')
     try {
       const result = await api<{ job_id: string; session_id?: string }>('/api/tasks', {
-        method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSessionId || undefined }),
+        method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSessionId || undefined, execution_only: executionOnly }),
       })
       setPrompt('')
+      setExecutionOnly(false)
       setCreatingSession(false)
       if (result.session_id) setSelectedSessionId(result.session_id)
       setSelectedJobId(result.job_id || '')
@@ -683,6 +701,21 @@ export default function App() {
     </form>
   </main>
 
+  const conversationProps: ChatPanelProps = {
+    token, active: view === 'chat',
+    onPrepareTask: suggestion => {
+      selectSession(suggestion.session_id)
+      setCreatingSession(true)
+      setPrompt(suggestion.prompt)
+      setMode('run')
+      setExecutionOnly(true)
+      setView('tasks')
+    },
+    onApprovalDecided: () => { void refresh(); void fetchApprovalInboxCount() },
+    onSessionChange: refresh, initialInput: chatDraft,
+    onInitialInputConsumed: () => setChatDraft(''),
+  }
+
   return <main className={`app-shell ${system?.features?.mobile_ui ? 'mobile-ui' : ''}`}>
     <header className="topbar">
       <div className="brand"><span className="brand-mark small">C</span><div><strong>Conveyor</strong><small>CONTROL CONSOLE</small></div></div>
@@ -732,17 +765,17 @@ export default function App() {
       </aside>
 
       <section className="stream-panel panel">
-        <div className="stream-header">
+        <div className={`stream-header ${!mobileUiOn ? 'stream-header-standard' : ''} ${view === 'chat' ? 'stream-header-chat' : ''}`}>
           <div>
             <p className="eyebrow">
               {view === 'chat' ? (selectedAgent ? 'AGENT' : 'DIRECT CHAT TIER') : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'browser' ? 'EXTERNAL BROWSER MANAGEMENT' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'workflows' ? 'DURABLE WORKFLOWS' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'secrets' ? 'PRIVATE CREDENTIALS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · CODEX EXECUTION'}
             </p>
             <h2>
-              {view === 'chat' ? (selectedAgent?.name || 'Chat') : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'browser' ? 'Browser sites' : view === 'skills' ? 'Skills' : view === 'workflows' ? 'Workflows' : view === 'connectors' ? 'Connectors' : view === 'secrets' ? 'Secrets' : view === 'teammate' ? 'Teammate' : (creatingSession ? 'New session' : sessionLabel(selectedSession))}
+              {view === 'chat' ? (selectedAgent?.name || 'Chat') : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'browser' ? 'Browser sites' : view === 'skills' ? 'Skills' : view === 'workflows' ? 'Workflows' : view === 'connectors' ? 'Connectors' : view === 'secrets' ? 'Secrets' : view === 'teammate' ? 'Teammate' : (executionOnly ? '继续聊天任务' : creatingSession ? 'New session' : sessionLabel(selectedSession))}
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div className="mode-switch">
+            <div className="mode-switch" role="navigation" aria-label="Workbench sections">
               <button type="button" className={view === 'tasks' ? 'active' : ''} onClick={() => setView('tasks')}>Tasks</button>
               <button type="button" className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>Chat</button>
               <button type="button" className={view === 'inbox' ? 'active' : ''} onClick={() => setView('inbox')}>
@@ -773,6 +806,11 @@ export default function App() {
             </div>
             {view === 'tasks' && selectedJob && <StatusBadge state={selectedJob.state} />}
           </div>
+        </div>
+        <div style={{ display: view === 'chat' ? 'flex' : 'none', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%' }} aria-hidden={view !== 'chat'}>
+          {selectedAgent
+            ? <AgentWorkspace key={selectedAgent.id} agent={selectedAgent} {...conversationProps} />
+            : <ChatPanel key="free-chat" {...conversationProps} />}
         </div>
         {view === 'approvals' ? (
           <ApprovalInboxPanel
@@ -813,34 +851,7 @@ export default function App() {
               void fetchApprovalInboxCount()
             }}
           />
-        ) : view === 'chat' && selectedAgent ? (
-          <AgentWorkspace
-            key={selectedAgent.id}
-            agent={selectedAgent}
-            token={token}
-            onApprovalDecided={() => {
-              void refresh()
-              void fetchApprovalInboxCount()
-            }}
-            onSessionChange={refresh}
-            initialInput={chatDraft}
-            onInitialInputConsumed={() => setChatDraft('')}
-          />
-        ) : view === 'chat' ? (
-          <ChatPanel
-            key={selectedAgent?.id || 'free-chat'}
-            agentSessionId={selectedAgent?.session_id}
-            agentName={selectedAgent?.name}
-            token={token}
-            onApprovalDecided={() => {
-              void refresh()
-              void fetchApprovalInboxCount()
-            }}
-            onSessionChange={refresh}
-            initialInput={chatDraft}
-            onInitialInputConsumed={() => setChatDraft('')}
-          />
-        ) : view === 'teammate' ? (
+        ) : view === 'chat' ? null : view === 'teammate' ? (
           <TeammatePanel
             token={token}
             onSendToChat={(cmd) => {
@@ -852,8 +863,13 @@ export default function App() {
           <>
             <div className="event-stream" ref={streamRef}>
               {activeRefinement && <div className="job-notice"><strong>Active changes</strong><span>{refinementTurn} refinement turn{refinementTurn === 1 ? '' : 's'} · {activeChangedFiles} file{activeChangedFiles === 1 ? '' : 's'} changed · Feedback continues the same worktree.</span></div>}
-              {!transcript.length && selectedJob?.state === 'failed' && <div className="job-notice failed"><strong>Task failed</strong><span>{selectedJob.error || 'See the execution details below.'}</span></div>}
-              {!transcript.length && selectedJob?.state === 'cancelled' && <div className="job-notice"><strong>Task cancelled</strong><span>This task was cancelled; start a new message to continue.</span></div>}
+              {selectedJob?.state === 'failed' && <div className="job-notice failed" role="alert"><strong>任务执行失败</strong><span>{selectedJob.error || '请查看执行记录中的错误信息，再补充说明继续处理。'}</span></div>}
+              {selectedJob?.state === 'cancelled' && <div className="job-notice" role="status"><strong>任务已取消</strong><span>已有记录已保留，可以在下方输入下一步。</span></div>}
+              {selectedJob?.state === 'interrupted' && <div className="job-notice" role="status"><strong>任务已中断</strong><span>{selectedJob.error || '已有记录已保留，可以在下方补充说明继续处理。'}</span></div>}
+              {selectedJob && !terminalJobState(selectedJob.state) && realtimeState === 'reconnecting' && <div className="job-notice" role="status"><strong>正在重新连接任务进度</strong><span>已收到的记录会保留，连接恢复后继续同步。</span></div>}
+              {selectedJob?.state === 'completed' && !transcript.length && <div className="job-notice" role="status"><strong>任务已完成</strong><span>对话记录暂不可用，可在执行明细中查看结果。</span></div>}
+
+              {transcriptError && <div className="job-notice" role="status"><strong>暂时无法更新会话记录</strong><span>已收到的内容会保留。</span><button type="button" onClick={() => void refreshTranscript()}>重试读取</button></div>}
 
               {transcript.length > 0 && <TranscriptPanel messages={transcript} />}
 
@@ -918,7 +934,7 @@ export default function App() {
                 </details>
               )}
 
-              {!transcript.length && (!selectedJob || terminalJobState(selectedJob.state)) && (
+              {!transcript.length && !selectedJob && (
                 <div className="welcome-state">
                   <div className="brand-mark">C</div>
                   <h2>Conveyor Control Console</h2>
@@ -938,8 +954,9 @@ export default function App() {
               )}
             </div>
             <form className="composer" onSubmit={submit}>
+              {executionOnly && <div className="composer-handoff-note" role="status">原请求已带入任务页。你可以编辑内容，再点击发送执行。</div>}
               <div className="mode-switch"><button type="button" className={mode === 'run' ? 'active' : ''} onClick={() => setMode('run')}>Ask</button><button type="button" className={mode === 'fix' ? 'active' : ''} onClick={() => setMode('fix')}>Fix</button></div>
-              <textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={activeRefinement ? 'Refine the active changes…' : 'Ask Conveyor…'} rows={2} maxLength={8000} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
+              <textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={activeRefinement ? 'Refine the active changes…' : 'Ask Conveyor…'} rows={2} maxLength={8000} onKeyDown={event => { if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
               <button className="send-button" disabled={!prompt.trim() || busy}>{busy ? '…' : 'Send'} <span>↗</span></button>
             </form>
           </>

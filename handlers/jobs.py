@@ -195,6 +195,9 @@ async def submit_codex_job(
         execution = _execute_codex_job(
             execute_msg, execute_port, runner, execute_mode,
             dequeued_job.prompt, queue_job_id=dequeued_job.id,
+            **({"conversation_id": dequeued_job.conversation_id,
+                "conversation_context": dequeued_job.conversation_context}
+               if getattr(dequeued_job, "conversation_id", "") else {}),
         )
         if wait:
             await execution
@@ -204,6 +207,10 @@ async def submit_codex_job(
     return True, queue_msg, queued_job
 
 
+from agent_conversations import scoped_job
+
+
+@scoped_job
 async def _execute_codex_job(
     msg: InboundMessage,
     port: OutboundPort,
@@ -586,6 +593,9 @@ async def _start_queued_job_callback(queued_job: QueuedJob) -> None:
     
     asyncio.create_task(_execute_codex_job(
         msg, port, runner, mode, queued_job.prompt, queue_job_id=queued_job.id,
+        **({"conversation_id": queued_job.conversation_id,
+            "conversation_context": queued_job.conversation_context}
+           if getattr(queued_job, "conversation_id", "") else {}),
     ))
 
 from handlers.job_queue import get_job_queue

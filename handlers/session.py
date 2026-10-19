@@ -38,7 +38,21 @@ def session_path(settings: Settings, msg: InboundMessage) -> Path:
     filename = _safe_filename(msg.channel, msg.chat_id, msg.operator_id)
     if agent_context.enabled(settings):
         ctx = agent_context.for_request(settings, msg.channel, msg.chat_id, msg.operator_id)
-        if ctx.agent_id != "default":
+        import agent_conversations
+        conversation = agent_conversations.current(settings, msg.channel, msg.chat_id,
+                                                   msg.operator_id, ctx.agent_id)
+        if conversation:
+            import agents
+            if agent_conversations.legacy_entry_root(conversation):
+                filename = _safe_filename(conversation["origin_channel"],
+                                          conversation["origin_chat_id"], conversation["origin_operator"])
+            elif conversation["transport_chat_id"] == agents.chat_id_for(ctx.agent_id):
+                filename = _safe_filename("web", agents.chat_id_for(ctx.agent_id), agents.WEB_OPERATOR)
+                if ctx.agent_id != "default":
+                    filename = f"{ctx.agent_id}_{filename}"
+            else:
+                filename = f'conversation-{conversation["id"]}.jsonl'
+        elif ctx.agent_id != "default":
             filename = f"{ctx.agent_id}_{filename}"
     return settings.codex_memory_root / _SESSION_DIR / filename
 
@@ -98,17 +112,21 @@ def _mirror_transcript(
             source_chat_id=msg.chat_id,
             kind=kind,
         )
-        # Named Agent screen is a single durable conversation across Web
-        # and its authenticated owner-only private channel binding.
-        import agent_channel_routing
-        selected = agent_channel_routing.bound(settings, msg.channel, msg.chat_id)
-        if selected:
-            import agents
-            store.append_turn(
-                agents.session_id_for(selected), user_text, assistant_text,
-                channel="web", operator_id=agents.WEB_OPERATOR,
-                source_chat_id=agents.chat_id_for(selected), kind=kind,
-            )
+        import agent_context
+        import agent_conversations
+        if agent_context.enabled(settings):
+            ctx = agent_context.for_request(settings, msg.channel, msg.chat_id, msg.operator_id)
+            conversation = agent_conversations.current(settings, msg.channel, msg.chat_id,
+                                                       msg.operator_id, ctx.agent_id)
+            if conversation:
+                target = agent_conversations.transcript_id(conversation)
+                physical = session_identity(msg.channel, msg.chat_id, msg.operator_id)
+                if target != physical:
+                    store.append_turn(
+                        target, user_text, assistant_text, channel="web", operator_id="web-console",
+                        source_chat_id=conversation["transport_chat_id"], kind=kind,
+                        metadata={"origin_channel": msg.channel},
+                    )
     except Exception:
         logger.debug("structured transcript mirror failed", exc_info=True)
 
