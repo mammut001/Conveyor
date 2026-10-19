@@ -241,6 +241,7 @@ async def maybe_command(settings, msg, port):
     raw = msg.text.strip()
     if msg.reply_to is None and not msg.attachments:
         raw = {'接着已有会话聊': '/conversations', '查看会话': '/conversations',
+               '切换会话': '/conversations', '会话列表': '/conversations',
                '回到本入口会话': '/conversation local'}.get(raw.rstrip('。？！?!'), raw)
     parts = raw.split(maxsplit=2)
     word = (parts[0] if parts else '').split('@', 1)[0].lower()
@@ -250,6 +251,10 @@ async def maybe_command(settings, msg, port):
         return True
     try:
         if word == '/conversations' or len(parts) == 1:
+            import agent_switcher
+            if agent_switcher.available(msg, port):
+                await agent_switcher.show(settings, msg, port, 'topics')
+                return True
             selected = summary(settings, msg)
             lines = ['接着已有会话聊', '只显示当前 Agent 的会话；选择后接续上下文。', '']
             for row in list_for_entry(settings, msg):
@@ -260,7 +265,11 @@ async def maybe_command(settings, msg, port):
         else:
             row = (new(settings, msg, parts[2] if len(parts) > 2 else '新话题')
                    if parts[1] == 'new' else select(settings, msg, parts[1]))
-            await port.reply(msg, f"已接续：{row['title']}\n后续消息使用这段历史；权限仍由当前入口校验。")
+            import agent_switcher
+            if agent_switcher.available(msg, port):
+                await agent_switcher.show(settings, msg, port, notice=f"已接续：{row['title']}")
+            else:
+                await port.reply(msg, f"已接续：{row['title']}\n后续消息使用这段历史；权限仍由当前入口校验。")
     except (ValueError, PermissionError) as exc:
         await port.reply(msg, str(exc))
     return True
@@ -271,7 +280,7 @@ def scoped(fn):
     @wraps(fn)
     async def wrapped(msg, port, settings, *args, **kwargs):
         import agent_channel_routing as routing
-        controls = {'接着已有会话聊', '查看会话', '回到本入口会话'}
+        controls = {'接着已有会话聊', '查看会话', '切换会话', '会话列表', '回到本入口会话'}
         word = (msg.text.strip().split(maxsplit=1) or [''])[0].split('@', 1)[0].lower()
         if (not enabled(settings) or routing.is_agent_command(settings, msg)
                 or word in ('/conversation', '/conversations')

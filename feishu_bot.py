@@ -160,6 +160,10 @@ async def _handle_card_action(msg: Any) -> None:
             else:
                 await port.send_new(inbound, "未找到该审批或已失效。")
             return
+        if action == "agent_switcher":
+            import agent_switcher
+            await agent_switcher.handle(settings, inbound, port, payload.get("token", ""))
+            return
         cmd = action_to_command(action)
         if cmd is None:
             await port.send_new(inbound, f"未知卡片操作: {action}")

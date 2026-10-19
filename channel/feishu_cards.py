@@ -36,6 +36,7 @@ from typing import Any
 #: Anything else is rejected with a short safe error. Do NOT trust
 #: client-provided strings outside this list.
 ALLOWED_ACTIONS: frozenset[str] = frozenset({
+    "agent_switcher",
     "status",
     "diff",
     "apply",
@@ -139,6 +140,8 @@ def parse_action(value: Any) -> dict[str, Any] | None:
     # job_id presence (a `status` action has no job_id) but reject
     # token on slash actions since it's meaningless.
     if action in ("confirm", "cancel_confirm", "relay_approve", "relay_reject", "relay_confirm", "relay_cancel") and "token" not in payload:
+        return None
+    if action == "agent_switcher" and ("token" not in payload or "job_id" in payload):
         return None
     slash_actions = (
         "status", "diff", "apply", "discard", "cancel",
