@@ -43,6 +43,7 @@ def main():
         from overnight_repair import PiRepair
         from overnight_worker import serve
         from overnight_preflight import prepare_repository
+        from overnight_probes import SourceProbes
         from dotenv import dotenv_values
         config=json.loads(Path(args.config).read_text())
         preview_root=Path(config['preview_root']).resolve()
@@ -52,7 +53,8 @@ def main():
         checks=PreviewChecks('http://127.0.0.1:18790',env['CONVEYOR_WEB_TOKEN'])
         github=GitHubDelivery(config['github_repo'])
         workspaces=Workspaces(config['repository'],config['workspaces'])
-        verifier=IndependentVerifier(workspaces,repo=config['github_repo'],checks=config['verification_commands'])
+        probes=SourceProbes(workspaces,config.get('source_probes',[]))
+        verifier=IndependentVerifier(workspaces,repo=config['github_repo'],checks=probes.verification_commands()+config['verification_commands'])
         async def verify_and_wait(payload):
             receipt = await verifier(payload)
             return await github.wait_verified(payload['candidate']['pr'],receipt)
@@ -61,12 +63,13 @@ def main():
             if (preview_root/'current').resolve().name != expected:
                 raise RuntimeError('preview revision changed before discovery')
             findings=await checks.discover(payload)
+            findings.extend(await probes.discover(payload))
             if (preview_root/'current').resolve().name != expected:
                 raise RuntimeError('preview revision changed during discovery')
             return findings
         pipeline=OvernightPipeline(github=github,discover=pinned_discovery,
             repair=PiRepair(workspaces,github),verify=verify_and_wait,
-            deploy=PreviewDelivery(config['repository'],preview_root,checks))
+            deploy=PreviewDelivery(config['repository'],preview_root,checks,source_probes=probes))
         # A single host coordinator owns external issue/PR reconciliation. Lock all
         # runs, not just this run, to prevent two coordinators deploying concurrently.
         with Path(str(Path(args.db).resolve())+'.coordinator.lock').open('a') as lock:

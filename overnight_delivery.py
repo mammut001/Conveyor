@@ -7,11 +7,12 @@ from overnight_preview import PreviewReleases
 
 
 class PreviewDelivery:
-    def __init__(self, repo, root, checks, *, restart=None):
+    def __init__(self, repo, root, checks, *, restart=None, source_probes=None):
         self.repo=repo
         self.releases=PreviewReleases(root)
         self.checks=checks
         self.restart=restart or self._restart
+        self.source_probes=source_probes
 
     @staticmethod
     def _restart(_release):
@@ -45,6 +46,8 @@ class PreviewDelivery:
             for _ in range(10):
                 findings=asyncio.run(self.checks.discover({}))
                 if not findings:
+                    if self.source_probes is not None and _release.name==commit:
+                        return not asyncio.run(self.source_probes.discover({'revision':commit}))
                     return True
                 time.sleep(.5)
             return False
