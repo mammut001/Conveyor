@@ -33,3 +33,20 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
                 await PiRepair(workspaces,github)({'issue':{'number':12},'finding':{'scenario':'fixture'}})
         self.assertFalse(any('push' in argv for argv in commands))
         github.command.assert_not_called()
+
+    async def test_saved_commit_is_published_without_agent_rerun(self):
+        github=Mock();github._json.return_value=[]
+        adapter=PiRepair(SimpleNamespace(repo=Path('/fixture')),github)
+        adapter._publish=AsyncMock(return_value={'pr':42,'head':'b'*40})
+        async def process(argv,**kw):
+            if argv[:2]==['git','fetch']:
+                return ''
+            if argv[:2]==['git','for-each-ref']:
+                return 'b'*40
+            if argv[:2]==['git','show']:
+                return 'Fix preview issue #12'
+            return 'a'*40
+        with patch('overnight_repair.command',side_effect=process):
+            result=await adapter({'issue':{'number':12}})
+        self.assertEqual(result,{'pr':42,'head':'b'*40})
+        adapter._publish.assert_awaited_once()

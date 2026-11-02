@@ -42,6 +42,7 @@ def main():
         from overnight_process import Workspaces,IndependentVerifier
         from overnight_repair import PiRepair
         from overnight_worker import serve
+        from overnight_preflight import prepare_repository
         from dotenv import dotenv_values
         config=json.loads(Path(args.config).read_text())
         preview_root=Path(config['preview_root']).resolve()
@@ -62,7 +63,10 @@ def main():
         # runs, not just this run, to prevent two coordinators deploying concurrently.
         with Path(str(Path(args.db).resolve())+'.coordinator.lock').open('a') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            asyncio.run(serve(store,args.run_id,pipeline.handlers()))
+            async def execute():
+                await prepare_repository(workspaces.repo,github)
+                await serve(store,args.run_id,pipeline.handlers())
+            asyncio.run(execute())
         print(json.dumps(store.status(args.run_id)))
 
 

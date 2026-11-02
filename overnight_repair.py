@@ -23,12 +23,22 @@ class PiRepair:
         # Reconcile a prior push/PR before any agent work after a restart.
         import asyncio
         rows=await asyncio.to_thread(self.github._json,'pr','list','--head',branch,
-                                     '--base','preview','--state','open','--json','number,headRefOid')
+                                     '--base','preview','--state','all','--json','number,headRefOid,state')
         if rows:
-            return {'pr':rows[0]['number'],'head':rows[0]['headRefOid']}
+            eligible = [row for row in rows if row.get('state','OPEN') in {'OPEN','MERGED'}]
+            if not eligible:
+                raise ValueError('previous repair PR was closed without merging')
+            return {'pr':eligible[0]['number'],'head':eligible[0]['headRefOid']}
         repo=self.workspaces.repo
         await command(['git','fetch','origin','preview'],cwd=repo)
         base=(await command(['git','rev-parse','refs/remotes/origin/preview'],cwd=repo)).strip()
+        existing=(await command(['git','for-each-ref','--format=%(objectname)',f'refs/heads/{branch}'],cwd=repo)).strip()
+        if existing:
+            parent=(await command(['git','rev-parse',existing+'^'],cwd=repo)).strip()
+            subject=(await command(['git','show','-s','--format=%s',existing],cwd=repo)).strip()
+            if parent != base or subject != f'Fix preview issue #{issue}':
+                raise ValueError('saved repair commit does not match current preview base')
+            return await self._publish(repo,branch,issue,base,existing)
         async with self.workspaces.detached(base) as path:
             await command(['git','switch','-C',branch],cwd=path)
             prompt=("Fix only the reproducible Conveyor preview finding below. Add regression tests only under tests/. Do not create root-level test or scratch files. "
@@ -56,14 +66,18 @@ class PiRepair:
             await command(['git','-c','user.name=Conveyor Nightly','-c','user.email=nightly@conveyor.local',
                            'commit','-m',f'Fix preview issue #{issue}'],cwd=path)
             head=(await command(['git','rev-parse','HEAD'],cwd=path)).strip()
-            await command(['git','push','origin',f'HEAD:refs/heads/{branch}'],cwd=path)
-            # File-backed bodies preserve literal issue text and shell metacharacters.
-            with tempfile.TemporaryDirectory() as root:
-                body=Path(root)/'pr.md'
-                body.write_text(f'Preview repair for #{issue}. Independent verification is required before merge.\n\nBase: {base}\nCandidate: {head}\n')
-                url=await asyncio.to_thread(self.github.command,['gh','pr','create','--repo',self.github.repo,
-                    '--base','preview','--head',branch,'--title',f'Nightly: repair issue #{issue}','--body-file',str(body)])
-            match=re.fullmatch(r'https://github.com/'+re.escape(self.github.repo)+r'/pull/(\d+)',url.strip())
-            if not match:
-                raise RuntimeError('PR response requires reconciliation')
-            return {'pr':int(match.group(1)),'head':head}
+            return await self._publish(path,branch,issue,base,head)
+
+    async def _publish(self,path,branch,issue,base,head):
+        import asyncio
+        await command(['git','push','origin',f'HEAD:refs/heads/{branch}'],cwd=path)
+        # File-backed bodies preserve literal issue text and shell metacharacters.
+        with tempfile.TemporaryDirectory() as root:
+            body=Path(root)/'pr.md'
+            body.write_text(f'Preview repair for #{issue}. Independent verification is required before merge.\n\nBase: {base}\nCandidate: {head}\n')
+            url=await asyncio.to_thread(self.github.command,['gh','pr','create','--repo',self.github.repo,
+                '--base','preview','--head',branch,'--title',f'Nightly: repair issue #{issue}','--body-file',str(body)])
+        match=re.fullmatch(r'https://github.com/'+re.escape(self.github.repo)+r'/pull/(\d+)',url.strip())
+        if not match:
+            raise RuntimeError('PR response requires reconciliation')
+        return {'pr':int(match.group(1)),'head':head}
