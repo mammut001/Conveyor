@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import queue
 from pathlib import Path
 import tempfile
@@ -107,7 +108,9 @@ class PiBackendTests(unittest.TestCase):
             async def on_progress(text: str) -> None:
                 updates.append(text)
 
-            asyncio.run(backend._run_codex_attempt(job, on_progress))
+            with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-test-deepseek"}):
+                asyncio.run(backend._run_codex_attempt(job, on_progress))
+            self.assertEqual(job.return_code, 0, job.error)
             self.assertEqual(job.final_message_path.read_text(encoding="utf-8"), "GitHub 已登录: mammut001")
             self.assertTrue(any("🔧 bash" in u for u in updates))
 
