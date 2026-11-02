@@ -39,7 +39,7 @@ def _check_config(settings: Settings) -> str | None:
 def _make_headers(settings: Settings) -> dict[str, str]:
     """Build GitHub API request headers."""
     return {
-        "Authorization": f"token {settings.github_token}",
+        **({"Authorization": f"token {settings.github_token}"} if settings.github_token else {}),
         "Accept": "application/vnd.github.v3+json",
         "User-Agent": "Conveyor-Bot",
     }

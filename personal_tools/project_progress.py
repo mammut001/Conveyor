@@ -46,8 +46,6 @@ async def project_progress(settings, arg: str, *, operator_id: str = '', **_kw) 
         repo = await asyncio.to_thread(resolve_repo, settings, arg or '', operator_id)
     except ValueError as exc:
         return ToolResult(False, str(exc))
-    if not getattr(settings, 'github_token', ''):
-        return ToolResult(False, 'GitHub 尚未配置访问凭据，无法读取项目进度。')
     requests = [
         ('待处理 PR（最近更新，最多 5 项）', f'/repos/{repo}/pulls', {'state': 'open', 'sort': 'updated', 'direction': 'desc', 'per_page': 5}),
         ('近期合并（最近更新的 20 个关闭 PR）', f'/repos/{repo}/pulls', {'state': 'closed', 'sort': 'updated', 'direction': 'desc', 'per_page': 20}),
