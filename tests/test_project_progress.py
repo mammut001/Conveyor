@@ -19,8 +19,9 @@ class ProjectProgressTests(unittest.IsolatedAsyncioTestCase):
         with patch('personal_tools.project_progress.PersonalToolsStore') as store:
             store.return_value.list_project_profiles.return_value = []
             self.assertEqual(resolve_repo(settings, 'Conveyor', 'alice'), 'owner/Conveyor')
-            with self.assertRaises(ValueError):
-                resolve_repo(settings, 'unknown', 'alice')
+            for invalid in ['unknown', '../..', 'owner/..', 'owner/repo?x=1']:
+                with self.assertRaises(ValueError):
+                    resolve_repo(settings, invalid, 'alice')
             store.return_value.list_project_profiles.assert_called_with('alice')
 
     async def test_partial_failures_and_failed_ci_remain_visible(self):

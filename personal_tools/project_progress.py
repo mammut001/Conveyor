@@ -10,7 +10,7 @@ from personal_tools.github_tools import _github_request
 from personal_tools.store import PersonalToolsStore
 from redaction import redact_text
 
-_REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+_REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}\Z)[A-Za-z0-9_.-]+\Z")
 
 
 def resolve_repo(settings, selector: str, operator_id: str) -> str:
