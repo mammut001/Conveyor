@@ -34,5 +34,14 @@ with os.fdopen(fd,'w') as file:
 PY
   chown conveyor-preview:conveyor-preview "$preview_root/runtime/preview.env"
 fi
+# The coordinator owns release switching; preview can read only its own runtime.
+coordinator_user="${SUDO_USER:-ubuntu}"
+id "$coordinator_user" >/dev/null
+usermod -a -G conveyor-preview "$coordinator_user"
+chown "$coordinator_user:conveyor-preview" "$preview_root" "$preview_root/releases"
+chmod 0750 "$preview_root" "$preview_root/runtime"
+chmod 0755 "$preview_root/releases"
+chmod 0640 "$preview_root/runtime/preview.env"
+install -d -m 0700 -o "$coordinator_user" "$preview_root/coordinator"
 python3 -m venv "$preview_root/venv"
 echo 'Preview runtime provisioned; no production state or credentials copied.'
