@@ -4,6 +4,26 @@ import asyncio
 from overnight_worker import StageResult
 
 
+def repair_batches(findings):
+    """Keep complete acceptance repairable when several contracts fail together."""
+    unique={}
+    for finding in findings:
+        if not isinstance(finding,dict):
+            raise ValueError('invalid acceptance finding')
+        scenario=finding.get('scenario');reproduction=finding.get('reproduction')
+        if not isinstance(scenario,str) or not scenario.strip() or not isinstance(reproduction,str) or not reproduction.strip():
+            raise ValueError('a finding needs a scenario and reproduction')
+        unique.setdefault((scenario.strip(),reproduction.strip()),finding)
+    ordered=[unique[key] for key in sorted(unique)]
+    if len(ordered)<=1:
+        return ordered
+    reproduction='Resolve all of these independently reproduced acceptance failures together:\n\n'
+    reproduction+='\n\n'.join(f"{index}. {item['scenario']}\n{item['reproduction']}" for index,item in enumerate(ordered,1))
+    evidence='\n'.join(f"{item['scenario']}: {item.get('evidence','No evidence supplied')}" for item in ordered)
+    return [{'scenario':f'Preview acceptance batch: {len(ordered)} failures','reproduction':reproduction,
+             'evidence':evidence,'failures':ordered}]
+
+
 class OvernightPipeline:
     def __init__(self, *, github, discover, repair, verify, deploy, prepare=None):
         self.prepare = prepare
@@ -17,7 +37,8 @@ class OvernightPipeline:
 
     async def discover(self, task):
         preparation = await self.prepare(task) if self.prepare is not None else None
-        findings = await self.discover_check(task['payload'])
+        observed = await self.discover_check(task['payload'])
+        findings = repair_batches(observed)
         successors = []
         issues = []
         async with self.issue_lock:
@@ -34,7 +55,8 @@ class OvernightPipeline:
             if clean_passes < 2:
                 successors.append(('discover',f'clean:{revision}:{clean_passes}',
                                    {**task['payload'],'clean_passes':clean_passes}))
-        result={'issues':issues,'clean':not findings,'clean_passes':clean_passes}
+        result={'issues':issues,'clean':not findings,'clean_passes':clean_passes,
+                'failed_scenarios':[item['scenario'] for item in observed]}
         if preparation is not None:
             result['acceptance_plan']=preparation
         return StageResult(result,tuple(successors))

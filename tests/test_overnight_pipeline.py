@@ -48,3 +48,55 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events,['prepare','discover'])
         self.assertEqual(result.result['acceptance_plan']['sha256'],'pinned')
         pipeline.github.issue.assert_not_called()
+
+    async def test_multiple_failed_contracts_are_repaired_as_one_complete_candidate(self):
+        import asyncio
+        from overnight_worker import serve
+        with tempfile.TemporaryDirectory() as root:
+            store=OvernightStore(Path(root)/'runs.sqlite3')
+            run=store.create('Restore both independent contracts',hours=1,max_tasks=12)
+            store.enqueue(run,'discover','initial',{'revision':'a'*40,'clean_passes':0})
+            current={'A':False,'B':False};candidates={};issued=[]
+            async def discover(payload):
+                return [{'scenario':'contract '+name,'reproduction':'Restore contract '+name,'evidence':'failed twice'}
+                        for name,passed in current.items() if not passed]
+            def issue(finding):
+                issued.append(finding)
+                return {'number':len(issued)}
+            github=Mock();github.issue.side_effect=issue
+            async def repair(payload):
+                number=len(candidates)+1
+                # A repair can only implement the failures it was told about.
+                snapshot={name:passed or ('contract '+name in payload['finding']['reproduction'])
+                          for name,passed in current.items()}
+                candidates[number]=snapshot
+                return {'pr':number,'head':'b'*40}
+            async def verify(payload):
+                if not all(candidates[payload['candidate']['pr']].values()):
+                    raise ValueError('full frozen acceptance still has another known failure')
+                return {'passed':True,'pr':payload['candidate']['pr'],'head':'b'*40,'checks':['A','B']}
+            async def deploy(payload,receipt):
+                current.update(candidates[receipt['pr']])
+                return {'healthy':True,'commit':'c'*40}
+            pipeline=OvernightPipeline(github=github,discover=discover,repair=repair,verify=verify,deploy=deploy)
+            await asyncio.wait_for(serve(store,run,pipeline.handlers(),poll_seconds=.001),10)
+            self.assertEqual(store.status(run)['state'],'completed')
+            self.assertEqual(len(issued),1)
+            self.assertTrue(all(current.values()))
+            for name in ('A','B'):
+                self.assertIn('contract '+name,issued[0]['reproduction'])
+
+    async def test_group_identity_preserves_all_failures_across_order_and_revision_changes(self):
+        first=[{'scenario':'B','reproduction':'Restore B','evidence':'failed at old sha'},
+               {'scenario':'A','reproduction':'Restore A','evidence':'failed at old sha'}]
+        second=[{**item,'evidence':'failed at new sha'} for item in reversed(first)]
+        github=Mock();github.issue.return_value={'number':1}
+        pipeline=OvernightPipeline(github=github,discover=AsyncMock(side_effect=[first,second]),
+            repair=AsyncMock(),verify=AsyncMock(),deploy=AsyncMock())
+        for _ in range(2):
+            await pipeline.discover({'payload':{'revision':'a'*40}})
+        left,right=[call.args[0] for call in github.issue.call_args_list]
+        self.assertEqual(left['scenario'],right['scenario'])
+        self.assertEqual(left['reproduction'],right['reproduction'])
+        self.assertNotEqual(left['evidence'],right['evidence'])
+        self.assertEqual(len(left['failures']),2)
