@@ -114,7 +114,7 @@ class WebChatPort(OutboundPort):
         if self._is_redundant_note(text):
             return True
         if text.endswith(" ▍"):
-            clean = text[:-2].strip()
+            clean = text[:-2]
             self.emit("delta", {"text": clean})
             return True
         if text.startswith(("🔎 搜索", "↪️", "🧩", "🔧", "💭", "⏳", "⚡")):
