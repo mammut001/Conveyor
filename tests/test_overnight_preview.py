@@ -75,7 +75,52 @@ class PreviewTests(unittest.TestCase):
                 preview.deploy(repo,new,activate=lambda p:None,healthy=lambda p:True)
             self.assertEqual((preview.root/'current').resolve().name,new)
             preview._write_manifest=write
-            result=preview.deploy(repo,new,activate=lambda p:self.fail('no restart required'),healthy=lambda p:True)
+            reactivated=[]
+            result=preview.deploy(repo,new,activate=lambda p:reactivated.append(p.name),healthy=lambda p:True)
+            self.assertEqual(reactivated,[new])
             self.assertEqual(result,{'commit':new,'previous':old})
             self.assertFalse((preview.root/'deployment-pending.json').exists())
             self.assertEqual(preview.deploy(repo,new,activate=lambda p:None,healthy=lambda p:True),result)
+
+    def test_recovery_restarts_service_if_process_died_after_switch_before_activation(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo=Path(root)/'repo';repo.mkdir()
+            def git(*args):
+                return subprocess.check_output(['git','-C',str(repo),*args],stderr=subprocess.DEVNULL).decode().strip()
+            git('init');git('config','user.email','test@example.com');git('config','user.name','test')
+            (repo/'app.txt').write_text('old');git('add','.');git('commit','-m','old')
+            old=git('rev-parse','HEAD');git('branch','preview')
+            preview=PreviewReleases(Path(root)/'preview');activated=[]
+            preview.deploy(repo,old,activate=lambda p:activated.append(p.name),healthy=lambda p:True)
+            (repo/'app.txt').write_text('new');git('add','.');git('commit','-m','new')
+            new=git('rev-parse','HEAD');git('branch','-f','preview',new)
+            switch=preview._switch
+            def crash_after_switch(target):
+                switch(target)
+                raise SystemExit(23)
+            preview._switch=crash_after_switch
+            with self.assertRaises(SystemExit):
+                preview.deploy(repo,new,activate=lambda p:activated.append(p.name),healthy=lambda p:True)
+            preview._switch=switch
+            self.assertEqual((preview.root/'current').resolve().name,new)
+            self.assertEqual(activated,[old])
+            # The old process can still answer generic health probes. Recovery
+            # must activate the new release before trusting those probes.
+            result=preview.deploy(repo,new,activate=lambda p:activated.append(p.name),healthy=lambda p:True)
+            self.assertEqual(result,{'commit':new,'previous':old})
+            self.assertEqual(activated,[old,new])
+
+            (repo/'app.txt').write_text('bad');git('add','.');git('commit','-m','bad')
+            bad=git('rev-parse','HEAD');git('branch','-f','preview',bad)
+            preview._switch=crash_after_switch
+            with self.assertRaises(SystemExit):
+                preview.deploy(repo,bad,activate=lambda p:None,healthy=lambda p:True)
+            preview._switch=switch
+            def failed_activation(path):
+                activated.append(path.name)
+                if path.name==bad:
+                    raise RuntimeError('activation failed')
+            with self.assertRaisesRegex(RuntimeError,'activation failed'):
+                preview.deploy(repo,bad,activate=failed_activation,healthy=lambda p:True)
+            self.assertEqual((preview.root/'current').resolve().name,new)
+            self.assertEqual(activated[-2:],[bad,new])
