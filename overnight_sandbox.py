@@ -24,4 +24,7 @@ def sandbox_argv(argv, workspace):
           '--bind',str(workspace),'/workspace','--chdir','/workspace']
     if Path('/lib64').exists():
         args += ['--symlink','usr/lib64','/lib64']
+    venv = Path('/srv/conveyor-preview/venv')
+    if venv.is_dir():
+        args += ['--ro-bind',str(venv),str(venv)]
     return [*args,'--',*argv]

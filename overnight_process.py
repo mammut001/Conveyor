@@ -94,7 +94,7 @@ class IndependentVerifier:
         candidate=payload['candidate'];completed=[]
         async with self.workspaces.detached(candidate['head']) as path:
             for index,argv in enumerate(self.checks):
-                await command(argv,cwd=path,timeout=600)
+                await command(argv,cwd=path,timeout=600,sandboxed=True)
                 completed.append(f'configured-check-{index+1}')
         return {'repo':self.repo,'pr':candidate['pr'],'head':candidate['head'],
                 'passed':True,'checks':completed}
