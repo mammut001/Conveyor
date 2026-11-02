@@ -21,9 +21,15 @@ def build_frontend(release):
         index=web/'dist/index.html'
         if not index.is_file():
             raise RuntimeError('frontend build did not produce an entry point')
+        dist=web/'dist'
+        for artifact in [dist,*dist.rglob('*')]:
+            if artifact.is_symlink():
+                raise RuntimeError('frontend artifacts must not be symlinks')
+            artifact.chmod(0o755 if artifact.is_dir() else 0o644)
         evidence={'lock_sha256':hashlib.sha256((web/'package-lock.json').read_bytes()).hexdigest(),
                   'index_sha256':hashlib.sha256(index.read_bytes()).hexdigest()}
         (root/'preview-build.json').write_text(json.dumps(evidence))
+        (root/'preview-build.json').chmod(0o644)
     finally:
         dependencies=web/'node_modules'
         if dependencies.exists():
