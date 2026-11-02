@@ -14,7 +14,7 @@ class CommandFailure(RuntimeError):
 
 
 def child_environment(*, provider=False):
-    allowed = {'PATH','LANG','LC_ALL','SSL_CERT_FILE','SSL_CERT_DIR','SYSTEMROOT'}
+    allowed = {'HOME','PATH','LANG','LC_ALL','SSL_CERT_FILE','SSL_CERT_DIR','SYSTEMROOT'}
     if provider:
         allowed |= {'DEEPSEEK_API_KEY','OPENAI_API_KEY','ANTHROPIC_API_KEY'}
     result = {key:value for key,value in os.environ.items() if key in allowed}
