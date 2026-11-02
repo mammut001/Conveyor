@@ -19,6 +19,16 @@ class Controller:
         self.start=start or (lambda ident:subprocess.run(['sudo','-n','systemctl','start',f'conveyor-nightly@{ident}.service'],check=True,timeout=30,capture_output=True))
         self.stop=stop or (lambda ident:subprocess.run(['sudo','-n','systemctl','stop',f'conveyor-nightly@{ident}.service'],check=True,timeout=45,capture_output=True))
 
+    def resume_runs(self):
+        with self.store.db() as db:
+            identities=[row[0] for row in db.execute("SELECT id FROM nightly_runs WHERE state='running'")]
+        resumed=[]
+        for ident in identities:
+            if self.store.reconcile(ident)['state']=='running':
+                self.start(ident)
+                resumed.append(ident)
+        return resumed
+
     def request(self,data):
         action=data.get('action')
         if action=='start':
@@ -72,6 +82,7 @@ def client(data,path=SOCKET):
 def main():
     import grp
     controller=Controller()
+    controller.resume_runs()
     class Handler(socketserver.StreamRequestHandler):
         def handle(self):
             self.connection.settimeout(60)

@@ -29,3 +29,12 @@ class ControlTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 control.request({'action':'cancel','run_id':'conveyor-web.service'})
             control.stop.assert_not_called()
+
+    def test_control_restart_resumes_only_active_runs(self):
+        with tempfile.TemporaryDirectory() as root:
+            start=Mock();control=Controller(root,start=start,stop=Mock())
+            running=control.store.create('recover')
+            control.store.enqueue(running,'discover','initial',{'revision':'a'*40})
+            cancelled=control.store.create('cancelled');control.store.cancel(cancelled)
+            self.assertEqual(control.resume_runs(),[running])
+            start.assert_called_once_with(running)
