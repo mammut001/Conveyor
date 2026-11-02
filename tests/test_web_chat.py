@@ -169,6 +169,16 @@ class WebChatTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("web sessions", body.get("error", ""))
 
+    def test_nightly_control_does_not_require_chat_model(self):
+        self.settings.chat_mode = "off"
+        self.settings.conveyor_chat_mode = "off"
+        result={"id":"a"*32,"state":"running","objective":"检查预览","tasks":[]}
+        with patch.dict("os.environ",{"CONVEYOR_NIGHTLY_CONTROL":"1"}), patch("overnight_chat.client",return_value=result) as client:
+            status,events=self.request_sse("/api/chat",{"message":"/nightly_start 检查预览"})
+        self.assertEqual(status,200)
+        client.assert_called_once_with({"action":"start","objective":"检查预览"})
+        self.assertTrue(any(name=="message" and result["id"] in data.get("text","") for name,data in events))
+
     def test_chat_disabled_409(self):
         self.settings.chat_mode = "off"
         self.settings.conveyor_chat_mode = "off"
