@@ -37,8 +37,16 @@ async def execute_claim(store, task, handler, *, lease_seconds=60, heartbeat_sec
             result = job.result()
         except Exception as exc:
             # Persist type only: provider errors can contain credentials.
+            evidence={'error':type(exc).__name__}
+            from overnight_process import CommandFailure
+            if isinstance(exc,CommandFailure):
+                evidence['diagnostics']=exc.diagnostics
+                if exc.diagnostics.get('category')=='nonzero_exit':
+                    await asyncio.sleep(1)
+                    if await asyncio.to_thread(store.retry,task['id'],task['lease'],evidence):
+                        return True
             return await asyncio.to_thread(store.finish, task['id'], task['lease'],
-                                           {'error':type(exc).__name__}, success=False)
+                                           evidence, success=False)
         if isinstance(result, StageResult):
             try:
                 return await asyncio.to_thread(store.advance, task['id'], task['lease'], result.result, result.next_tasks)

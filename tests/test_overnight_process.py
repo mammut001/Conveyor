@@ -36,3 +36,11 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await command([sys.executable,'-c','print("event")'],cwd=root,retain_output=False),'')
             with self.assertRaises(CommandFailure):
                 await command([sys.executable,'-c','print("x"*10000)'],cwd=root,retain_output=False,output_limit=100)
+
+    async def test_failure_keeps_program_and_exit_code_without_output(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(CommandFailure) as caught:
+                await command([sys.executable,'-c','print("private-provider-output");raise SystemExit(7)'],cwd=root,retain_output=False)
+            self.assertEqual(caught.exception.diagnostics['return_code'],7)
+            self.assertEqual(caught.exception.diagnostics['category'],'nonzero_exit')
+            self.assertNotIn('private-provider-output',str(caught.exception.diagnostics))
