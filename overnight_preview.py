@@ -29,6 +29,8 @@ class PreviewReleases:
             yield
 
     def _switch(self, target):
+        from overnight_guard import check_guard
+        check_guard()
         link = self.root/('switch-'+uuid.uuid4().hex)
         link.symlink_to(target)
         os.replace(link, self.root/'current')
@@ -97,10 +99,14 @@ class PreviewReleases:
                 activate(release)
                 if not healthy(release):
                     raise RuntimeError('preview health check failed')
+                from overnight_guard import check_guard
+                check_guard()
             except BaseException:
                 if previous:
-                    self._switch(previous)
-                    activate(previous)
+                    from overnight_guard import cleanup_scope
+                    with cleanup_scope():
+                        self._switch(previous)
+                        activate(previous)
                     if not healthy(previous):
                         raise RuntimeError('preview rollback health check failed')
                 else:

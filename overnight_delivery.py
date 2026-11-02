@@ -15,6 +15,8 @@ class PreviewDelivery:
 
     @staticmethod
     def _restart(_release):
+        from overnight_guard import check_guard
+        check_guard()
         result=subprocess.run(['sudo','-n','systemctl','restart','conveyor-preview.service'],
                               capture_output=True,timeout=45)
         if result.returncode:
@@ -25,6 +27,8 @@ class PreviewDelivery:
         if receipt.get('head') != head or receipt.get('passed') is not True:
             raise ValueError('deployment needs matching independent verification')
         def git(*args):
+            from overnight_guard import check_guard
+            check_guard()
             result=subprocess.run(['git','-c',f'safe.directory={self.repo}','-C',str(self.repo),*args],capture_output=True,text=True,timeout=90)
             if result.returncode:
                 raise RuntimeError('preview repository reconciliation failed')

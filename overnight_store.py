@@ -166,3 +166,10 @@ class OvernightStore:
                     state='completed' if 'blocked' not in states and result.get('clean_passes',0)>=2 else 'blocked'
                     db.execute('UPDATE nightly_runs SET state=? WHERE id=?',(state,run_id))
         return self.status(run_id)
+
+    def is_current(self,task_id,lease):
+        now=time.time()
+        with self.db() as db:
+            return db.execute("""SELECT 1 FROM nightly_tasks t JOIN nightly_runs r ON r.id=t.run_id
+              WHERE t.id=? AND t.lease=? AND t.state='running' AND t.lease_until>?
+              AND r.state='running' AND r.deadline>?""",(task_id,lease,now,now)).fetchone() is not None

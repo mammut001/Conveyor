@@ -17,6 +17,8 @@ class GitHubDelivery:
 
     @staticmethod
     def _command(args):
+        from overnight_guard import check_guard
+        check_guard()
         result = subprocess.run(args, capture_output=True, text=True, timeout=90)
         if result.returncode:
             # Do not persist stderr, which can include provider credentials.

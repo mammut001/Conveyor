@@ -23,6 +23,8 @@ def child_environment(*, provider=False):
 
 
 async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_limit=100_000, sandboxed=False, retain_output=True):
+    from overnight_guard import check_guard
+    check_guard()
     if not argv or not 0 < timeout <= 1800:
         raise ValueError('invalid subprocess limits')
     if sandboxed:
@@ -89,7 +91,9 @@ class Workspaces:
         try:
             yield path
         finally:
-            await command(['git','worktree','remove','--force',str(path)],cwd=self.repo)
+            from overnight_guard import cleanup_scope
+            with cleanup_scope():
+                await command(['git','worktree','remove','--force',str(path)],cwd=self.repo)
 
 
 class IndependentVerifier:

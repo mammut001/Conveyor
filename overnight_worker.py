@@ -16,13 +16,17 @@ ROLES = ('discover', 'repair', 'verify')
 async def execute_claim(store, task, handler, *, lease_seconds=60, heartbeat_seconds=10):
     if not 0 < heartbeat_seconds < lease_seconds:
         raise ValueError('heartbeat must be shorter than lease')
-    job = asyncio.create_task(handler(task))
+    from overnight_guard import LeaseGuard,bind_guard
+    guard=LeaseGuard(store,task)
+    with bind_guard(guard):
+        job = asyncio.create_task(handler(task))
     try:
         while not job.done():
             done, _ = await asyncio.wait({job}, timeout=heartbeat_seconds)
             # Fence results even if cancellation or deadline raced with completion.
             valid = await asyncio.to_thread(store.renew, task['id'], task['lease'], lease_seconds=lease_seconds)
             if not valid:
+                guard.stopped.set()
                 job.cancel()
                 with suppress(asyncio.CancelledError, Exception):
                     await job
@@ -42,6 +46,7 @@ async def execute_claim(store, task, handler, *, lease_seconds=60, heartbeat_sec
                 return await asyncio.to_thread(store.finish, task['id'], task['lease'], {'error':'successor_budget_or_validation'}, success=False)
         return await asyncio.to_thread(store.finish, task['id'], task['lease'], result)
     finally:
+        guard.stopped.set()
         if not job.done():
             job.cancel()
             with suppress(asyncio.CancelledError, Exception):
