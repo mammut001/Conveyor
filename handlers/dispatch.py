@@ -158,6 +158,19 @@ async def dispatch(
         await handle_context_job(msg, port, settings, runner)
         return
 
+    if getattr(runner, "name", "") == "pi":
+        followed = desktop_followup_route(settings, msg.text)
+        if followed is not None:
+            await handle_route(msg, port, runner, settings, followed)
+            return
+        from handlers.chat import is_destructive_request
+        if is_destructive_request(msg.text):
+            from handlers.tools.runner import _request_confirmation
+            await _request_confirmation(msg, port, settings, "pi.destructive_task", msg.text)
+            return
+        await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=msg.text)
+        return
+
     # Owner-only main router: never intercept confirmations, commands, safety
     # stops or attachments. A decision does not authorize delegation.
     import main_router
@@ -247,6 +260,7 @@ async def dispatch(
             question=msg.text, codex_prompt=prompt, evidence=evidence,
         )
         return
+
 
     await handle_codex_job(
         msg,

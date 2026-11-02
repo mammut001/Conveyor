@@ -851,6 +851,69 @@ async def exec_computer_stop(settings: Settings, _arg: str) -> str:
     return f"取消失败: {res.get('error')}"
 
 
+
+
+async def exec_pi_destructive_task(
+    settings: Settings,
+    arg: str,
+    *,
+    channel: str = "",
+    chat_id: str = "",
+    operator_id: str = "",
+) -> str:
+    """Execute an operator-confirmed destructive/deletion task via PiBackend."""
+    import asyncio
+    from runner.pi_agent import DESTRUCTIVE_CONFIRM_TAG, PiBackend
+    from runner.types import JobMode, JobState
+
+    prompt = (arg or "").strip()
+    if not prompt:
+        return "未提供要执行的任务内容。"
+
+    backend = PiBackend(settings)
+    ctx_prefix = ""
+    msg_obj = None
+    start_options: dict = {}
+    if channel and chat_id:
+        try:
+            from agents import instructions_for_chat, profile_block, workspace_for_chat
+            from channel.types import InboundMessage
+            from handlers.session import build_context_prompt
+            ws = workspace_for_chat(settings, channel, chat_id)
+            if ws is not None:
+                start_options["workspace_root"] = ws
+            msg_obj = InboundMessage(
+                channel=channel,
+                operator_id=operator_id or "web-console",
+                chat_id=chat_id,
+                message_id=None,
+                text=prompt,
+            )
+            ctx_prefix = (
+                profile_block(*instructions_for_chat(settings, channel, chat_id))
+                + build_context_prompt(settings, msg_obj)
+            )
+        except Exception:
+            pass
+
+    tagged_prompt = f"{DESTRUCTIVE_CONFIRM_TAG}\n{ctx_prefix}{prompt}"
+
+    async def _noop_progress(_text: str) -> None:
+        pass
+
+    job = await backend.start(JobMode.RUN, tagged_prompt, _noop_progress, **start_options)
+    while job.state == JobState.RUNNING:
+        await asyncio.sleep(0.25)
+    result_text = job.summary or (f"执行失败：{job.error}" if job.error else (job.last_event or "已确认并执行完成。"))
+    if msg_obj is not None:
+        try:
+            from handlers.session import append_turn
+            append_turn(settings, msg_obj, prompt, result_text, kind="codex")
+        except Exception:
+            pass
+    return result_text
+
+
 def register_builtin_tools() -> None:
     """Populate TOOL_REGISTRY. Called once at import."""
     specs = [
@@ -1051,6 +1114,12 @@ def register_builtin_tools() -> None:
             danger=DangerLevel.WRITE,
             executor=exec_computer_retry,
             keywords=("computer retry", "重试电脑任务", "恢复电脑任务", "resume computer"),
+        ),
+        ToolSpec(
+            name="pi.destructive_task",
+            summary="检测到删除/卸载等破坏性操作，确认后将由 Pi 执行",
+            danger=DangerLevel.DESTRUCTIVE,
+            executor=exec_pi_destructive_task,
         ),
     ]
     for spec in specs:

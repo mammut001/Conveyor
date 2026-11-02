@@ -53,7 +53,7 @@ async def execute(settings, row):
     remaining_time = min(total_duration, float(row["deadline"]) - time.time(),
                          float(row["lease_expires_at"]) - time.time() - 1)
     if remaining_time <= 0:
-        raise TimeoutError("delegation deadline exceeded")
+        raise asyncio.TimeoutError("delegation deadline exceeded")
     msg = InboundMessage(
         channel=delegated.origin_channel, operator_id=delegated.operator_identity,
         chat_id=ac._chat_id(delegated), message_id=row["id"],
@@ -94,7 +94,7 @@ async def execute(settings, row):
                 time_left = min(total_duration, float(row["deadline"]) - cur_time,
                                 float(row["lease_expires_at"]) - cur_time - 1)
                 if time_left <= 0:
-                    raise TimeoutError("delegation deadline exceeded")
+                    raise asyncio.TimeoutError("delegation deadline exceeded")
                 if remaining_tokens <= 0:
                     raise RuntimeError("Child token budget exhausted")
                 if total_calls >= max_model_calls:
@@ -209,5 +209,5 @@ async def execute(settings, row):
         remaining = min(MAX_DURATION, float(row["deadline"])-time.time(),
                         float(row["lease_expires_at"])-time.time()-1)
         if remaining <= 0:
-            raise TimeoutError("delegation deadline exceeded")
+            raise asyncio.TimeoutError("delegation deadline exceeded")
         return redact_text(await asyncio.wait_for(turn(), timeout=remaining))[:2400]

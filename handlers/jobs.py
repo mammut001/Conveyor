@@ -300,7 +300,7 @@ async def _execute_codex_job(
             # custom on_progress paths.
             last_progress = outgoing
             return
-        if progress_mode == "compact" and _is_prose_progress_text(outgoing):
+        if progress_mode == "compact" and _is_prose_progress_text(outgoing) and not (msg.channel == "web" and outgoing.endswith(" ▍")):
             # Drop agent prose in compact mode. Do NOT update
             # last_progress; if a tool call follows immediately
             # and the channel latched, the next progress should
@@ -461,7 +461,14 @@ async def _execute_codex_job(
         await port.send_new(msg, last_progress)
 
     # Record turn for session continuity.
-    append_turn(runner.settings, msg, user_text_for_session, final_answer)
+    skip_transcript = getattr(port, "handles_transcript_directly", False)
+    append_turn(
+        runner.settings,
+        msg,
+        user_text_for_session,
+        final_answer,
+        mirror_transcript=not skip_transcript,
+    )
 
     # Bridge job summary to Flash chat memory so follow-up conversations have full context.
     try:

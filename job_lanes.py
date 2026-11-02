@@ -81,11 +81,11 @@ def runner_for_lane(runner: Any, lane: str) -> Any:
             return existing
         base = registry[DEFAULT_LANE]
         try:
-            from runner import CodexRunner
+            from runner import CodexRunner, PiBackend
 
-            if type(base) is not CodexRunner:
+            if type(base) not in (CodexRunner, PiBackend):
                 return base
-            clone = CodexRunner(base.settings)
+            clone = type(base)(base.settings)
             clone.lane = lane
             clone._lane_base = base
         except Exception:

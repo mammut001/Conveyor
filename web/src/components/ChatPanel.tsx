@@ -539,8 +539,8 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
             <div className="brand-mark">C</div>
             <h2>{agentName || 'Conveyor Direct Chat'}</h2>
             <p>{agentName
-              ? 'This is the one conversation with this agent. Ask it something, or give it a task.'
-              : 'Direct chat tier answering in seconds without Codex. READ tools run automatically; WRITE tools require approval.'}</p>
+              ? '由 Pi + DeepSeek 驱动：查询、命令执行、文件下载与代码修改自动执行；仅删除/破坏性操作需你确认。'
+              : '由 Pi + DeepSeek 驱动：查询、命令执行、文件下载与代码修改自动执行；仅删除/破坏性操作需你确认。'}</p>
           </div>
         )}
 

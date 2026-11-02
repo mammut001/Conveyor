@@ -167,7 +167,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_task_cancel_and_authorized_mutations(self):
         with patch("web_console.submit_codex_job", fake_submit):
-            status, task = self.request("POST", "/api/tasks", {"prompt": "hello", "session_id": "web-a"})
+            status, task = self.request("POST", "/api/tasks", {"prompt": "hello", "session_id": "web-a", "execution_only": True})
         self.assertEqual(status, 202); self.assertEqual(task["job_id"], "q2")
         self.assertEqual(self.request("POST", "/api/jobs/q1/cancel", {})[0], 200)
         self.assertEqual(self.request("POST", "/api/jobs/q1/cancel", {}, authorized=False)[0], 401)

@@ -253,7 +253,14 @@ async def _run_job(self, job: Job, on_progress: ProgressCallback) -> None:
     finally:
         try:
             if (
-                job.state in (JobState.FAILED, JobState.CANCELLED)
+                (
+                    job.state in (JobState.FAILED, JobState.CANCELLED)
+                    or (
+                        getattr(self, "name", "") == "pi"
+                        and job.state == JobState.COMPLETED
+                        and job.mode == JobMode.RUN
+                    )
+                )
                 and job.worktree_path is not None
                 and getattr(job, "worktree_created", False)
                 and getattr(job, "reuse_worktree_path", None) is None

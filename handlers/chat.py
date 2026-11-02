@@ -75,12 +75,32 @@ _QUESTION_RE = re.compile(
 # Clear requests to *do* something go straight to the agent.
 _ACTION_RE = re.compile(
     r"(改一下|修改|修复|修一下|帮我修|实现|重构|部署|回滚|运行|跑一下|跑下|执行|提交|推送|合并"
-    r"|安装|卸载|重启|删除|删掉|新建|创建|生成.{0,6}(文件|脚本|代码)|写.{0,4}(脚本|代码|程序|函数|测试)"
-    r"|排查|检查一下|看看.{0,6}(日志|代码|仓库|配置|报错)"
+    r"|下载|拉取|克隆|抓取|安装|卸载|重启|删除|删掉|清空|新建|创建|生成.{0,6}(文件|脚本|代码)|写.{0,4}(脚本|代码|程序|函数|测试|文件)"
+    r"|排查|检查一下|查一下.{0,10}(登录|状态|有没有|配置|文件|目录)|看看.{0,8}(日志|代码|仓库|配置|报错|登录|有没有|目录|文件)"
     r"|\b(fix|implement|refactor|deploy|rollback|run|execute|commit|push|merge|install"
-    r"|uninstall|restart|delete|remove|create|debug|investigate)\b)",
+    r"|download|clone|curl|wget|uninstall|restart|delete|remove|create|debug|investigate)\b)",
     re.IGNORECASE,
 )
+
+_DESTRUCTIVE_REQUEST_RE = re.compile(
+    r"((?:帮我|请|去|把|将|给|直接|立刻|马上|试着|执行|运行).{0,20}(?:删除|删掉|清空|清除|卸载|抹掉|格式化|销毁)"
+    r"|(?:删除|删掉|清空|卸载|格式化|销毁).{0,20}(?:文件|目录|文件夹|仓库|数据|数据库|表|包|软件|服务|镜像|容器|记录|日志|缓存)"
+    r"|(?:删除|删掉|清空|卸载|格式化|销毁)\s*[/~.\w-]+"
+    r"|\b(?:rm|rmdir|unlink|shred|delete|remove|uninstall|drop\s+table|drop\s+database|truncate\s+table|purge|destroy|wipe|git\s+clean)\b)",
+    re.IGNORECASE,
+)
+_NEGATED_DESTRUCTIVE_RE = re.compile(
+    r"(不删除|不要删除|别删除|不要删|别删|不卸载|不要卸载|\bdo\s+not\s+(?:delete|remove|rm|uninstall)\b|\bdon't\s+(?:delete|remove|rm|uninstall)\b)",
+    re.IGNORECASE,
+)
+
+
+def is_destructive_request(text: str) -> bool:
+    """True when the user prompt requests deleting, removing, or destroying resources."""
+    raw = (text or "").strip()
+    if not raw or _QUESTION_RE.search(raw) or _NEGATED_DESTRUCTIVE_RE.search(raw):
+        return False
+    return bool(_DESTRUCTIVE_REQUEST_RE.search(raw))
 _TIME_SENSITIVE_RE = re.compile(
     r"(最新|今天|今日|现在|目前|当前|最近|昨天|本周|这周|今年|价格|股价|币价|汇率|新闻|天气|比分|赛果|发布了"
     r"|\b(latest|today|tonight|current(ly)?|right now|recent(ly)?|this (week|year)|news|price|weather|score)\b"
@@ -914,6 +934,10 @@ async def chat_or_agent(
         # agent job without the operator saying so.
         set_last(key, LastRequest(codex_prompt=codex_prompt, confirm=True), settings=settings)
         await _offer_deep(msg, port, "这件事需要在服务器上动手。确认交给 Codex 执行吗？发 /deep 确认。")
+        return
+    if is_destructive_request(codex_prompt):
+        from handlers.tools.runner import _request_confirmation
+        await _request_confirmation(msg, port, settings, "pi.destructive_task", codex_prompt)
         return
     await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=codex_prompt)
 
