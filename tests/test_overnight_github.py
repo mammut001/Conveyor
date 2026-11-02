@@ -33,3 +33,12 @@ class GitHubGateTests(unittest.TestCase):
         self.candidate['statusCheckRollup'].append({'status':'COMPLETED','conclusion':'FAILURE'})
         with self.assertRaises(ValueError):
             assert_mergeable(self.repo,self.candidate,self.receipt)
+
+    def test_resume_after_merge_does_not_merge_twice(self):
+        import json
+        from unittest.mock import Mock
+        self.candidate.update(state='MERGED',mergeable='UNKNOWN',mergeCommit={'oid':'b'*40})
+        command=Mock(return_value=json.dumps(self.candidate))
+        delivery=GitHubDelivery(self.repo,command=command)
+        self.assertEqual(delivery.merge_verified(12,self.receipt),self.head)
+        self.assertEqual(command.call_count,1)

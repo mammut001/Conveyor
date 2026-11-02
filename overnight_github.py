@@ -64,11 +64,20 @@ class GitHubDelivery:
         if not isinstance(number,int) or number <= 0:
             raise ValueError('invalid PR number')
         return self._json('pr','view',str(number),'--json',
-                          'number,state,isDraft,baseRefName,headRefOid,headRepository,headRepositoryOwner,statusCheckRollup,mergeable')
+                          'number,state,isDraft,baseRefName,headRefOid,headRepository,headRepositoryOwner,statusCheckRollup,mergeable,mergeCommit')
 
     def merge_verified(self, number, receipt):
         """Re-read the head and CI immediately before GitHub's SHA-guarded merge."""
         candidate = self.candidate(number)
+        if candidate.get('state') == 'MERGED':
+            merge = candidate.get('mergeCommit') or {}
+            if not re.fullmatch(r'[0-9a-f]{40}',merge.get('oid','')):
+                raise ValueError('merged candidate lacks immutable merge evidence')
+            # A crashed coordinator may resume after GitHub accepted the merge.
+            # Revalidate the same receipt and checks without issuing another merge.
+            reconciled = {**candidate,'state':'OPEN','mergeable':'MERGEABLE'}
+            assert_mergeable(self.repo,reconciled,receipt)
+            return receipt['head']
         assert_mergeable(self.repo, candidate, receipt)
         self.command(['gh','pr','merge',str(number),'--repo',self.repo,'--merge',
                       '--match-head-commit',receipt['head']])
