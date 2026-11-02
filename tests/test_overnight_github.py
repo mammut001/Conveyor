@@ -42,3 +42,15 @@ class GitHubGateTests(unittest.TestCase):
         delivery=GitHubDelivery(self.repo,command=command)
         self.assertEqual(delivery.merge_verified(12,self.receipt),self.head)
         self.assertEqual(command.call_count,1)
+
+    def test_recurrence_reopens_fingerprinted_issue(self):
+        import hashlib,json
+        from unittest.mock import Mock
+        finding={'scenario':'stream','reproduction':'whitespace stripped'}
+        digest=hashlib.sha256(f'{self.repo}\nstream\nwhitespace stripped'.encode()).hexdigest()
+        row={'number':7,'state':'CLOSED','body':f'<!-- conveyor-nightly:{digest} -->'}
+        command=Mock(side_effect=[json.dumps([row]),''])
+        result=GitHubDelivery(self.repo,command=command).issue(finding)
+        self.assertEqual(result['number'],7)
+        self.assertEqual(result['state'],'OPEN')
+        self.assertEqual(command.call_args.args[0][1:3],['issue','reopen'])

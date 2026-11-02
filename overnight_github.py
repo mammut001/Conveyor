@@ -41,7 +41,12 @@ class GitHubDelivery:
                           '--limit', '100', '--json', 'number,body,state,url')
         matches = [row for row in rows if marker in row.get('body', '')]
         if matches:
-            return min(matches, key=lambda row:row['number'])
+            issue=min(matches,key=lambda row:row['number'])
+            if issue.get('state') == 'CLOSED':
+                self.command(['gh','issue','reopen',str(issue['number']),'--repo',self.repo,
+                              '--comment','The same acceptance failure was reproduced in a new preview check; reopening for repair.'])
+                issue={**issue,'state':'OPEN'}
+            return issue
         body = (f'{marker}\n\n## Scenario\n{scenario}\n\n## Reproduction\n{reproduction}'
                 f'\n\n## Evidence\n{finding.get("evidence", "No evidence supplied")}\n')
         with tempfile.TemporaryDirectory() as root:

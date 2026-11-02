@@ -22,7 +22,7 @@ class OvernightPipeline:
             for finding in findings:
                 issue = await asyncio.to_thread(self.github.issue, finding)
                 issues.append(issue['number'])
-                successors.append(('repair',f"issue:{issue['number']}",{'issue':issue,'finding':finding,'repair_attempt':1}))
+                successors.append(('repair',f"issue:{issue['number']}",{'issue':issue,'finding':finding,'repair_attempt':1,'run_id':task.get('run_id')}))
         clean_passes = 0
         if not findings:
             revision = task['payload'].get('revision')

@@ -19,7 +19,12 @@ class PiRepair:
         attempt=int(payload.get('repair_attempt',1))
         if not 1 <= attempt <= 3:
             raise ValueError('repair attempt limit exceeded')
+        run_id=payload.get('run_id')
+        if run_id is not None and not re.fullmatch(r'[0-9a-f]{32}',run_id):
+            raise ValueError('invalid run identity')
         branch=f'codex/nightly-issue-{issue}-attempt-{attempt}'
+        if run_id:
+            branch += f'-run-{run_id}'
         # Reconcile a prior push/PR before any agent work after a restart.
         import asyncio
         rows=await asyncio.to_thread(self.github._json,'pr','list','--head',branch,
@@ -70,7 +75,7 @@ class PiRepair:
 
     async def _publish(self,path,branch,issue,base,head):
         import asyncio
-        await command(['git','push','origin',f'HEAD:refs/heads/{branch}'],cwd=path)
+        await command(['git','push','origin',f'{head}:refs/heads/{branch}'],cwd=path)
         # File-backed bodies preserve literal issue text and shell metacharacters.
         with tempfile.TemporaryDirectory() as root:
             body=Path(root)/'pr.md'

@@ -50,3 +50,17 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
             result=await adapter({'issue':{'number':12}})
         self.assertEqual(result,{'pr':42,'head':'b'*40})
         adapter._publish.assert_awaited_once()
+
+    async def test_repair_branch_is_unique_to_run(self):
+        github=Mock();github._json.return_value=[{'number':34,'headRefOid':'a'*40,'state':'OPEN'}]
+        adapter=PiRepair(SimpleNamespace(repo=Path('/unused')),github)
+        await adapter({'issue':{'number':12},'run_id':'c'*32})
+        self.assertIn('codex/nightly-issue-12-attempt-1-run-'+'c'*32,github._json.call_args.args)
+
+    async def test_publication_pushes_saved_sha_not_checkout_head(self):
+        github=Mock(repo='owner/repo');github.command.return_value='https://github.com/owner/repo/pull/42'
+        adapter=PiRepair(SimpleNamespace(repo=Path('/fixture')),github)
+        with patch('overnight_repair.command',new_callable=AsyncMock) as process:
+            result=await adapter._publish(Path('/fixture'),'codex/repair',12,'a'*40,'b'*40)
+        self.assertEqual(process.await_args.args[0][-1],'b'*40+':refs/heads/codex/repair')
+        self.assertEqual(result['head'],'b'*40)
