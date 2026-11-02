@@ -138,6 +138,7 @@ def _test_registry() -> CheckResult:
             "projects.use",
             "projects.show",
             "projects.remove",
+            "project.progress",
             "project.status",
             "project.health",
             "project.roadmap",
@@ -302,6 +303,7 @@ def _test_registry() -> CheckResult:
             and projects_use_level == DangerLevel.WRITE_SAFE
             and projects_show_level == DangerLevel.READ
             and projects_remove_level == DangerLevel.DESTRUCTIVE
+            and PERSONAL_TOOL_REGISTRY["project.progress"].danger == DangerLevel.READ
             and project_status_level == DangerLevel.READ
             and project_health_level == DangerLevel.READ
             and project_roadmap_level == DangerLevel.READ
