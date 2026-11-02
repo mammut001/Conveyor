@@ -102,3 +102,22 @@ class OvernightStore:
         with self.db() as db:
             db.execute("UPDATE nightly_runs SET state='cancelled' WHERE id=? AND state='running'", (run_id,))
             db.execute("UPDATE nightly_tasks SET state='cancelled',lease=NULL WHERE run_id=? AND state IN('queued','running')", (run_id,))
+
+    def renew(self, task_id, lease, *, lease_seconds=300):
+        if not 0 < lease_seconds <= 3600:
+            raise ValueError('invalid lease limit')
+        now = time.time()
+        with self.db() as db:
+            return db.execute("""UPDATE nightly_tasks SET lease_until=min(?,
+              (SELECT deadline FROM nightly_runs WHERE id=nightly_tasks.run_id))
+              WHERE id=? AND lease=? AND state='running' AND lease_until>?
+              AND run_id IN(SELECT id FROM nightly_runs WHERE state='running' AND deadline>?)""",
+              (now+lease_seconds, task_id, lease, now, now)).rowcount == 1
+
+    def status(self, run_id):
+        with self.db() as db:
+            row = db.execute('SELECT * FROM nightly_runs WHERE id=?', (run_id,)).fetchone()
+            if not row:
+                raise KeyError(run_id)
+            tasks = db.execute('SELECT id,role,state,attempts,result FROM nightly_tasks WHERE run_id=? ORDER BY rowid', (run_id,)).fetchall()
+            return {**dict(row), 'tasks':[dict(task) for task in tasks]}
