@@ -153,6 +153,11 @@ def main() -> None:
         "enabled" if settings.conveyor_takeover_enabled else "disabled",
     )
 
+    # Tool modules import each other. Finish registration on the startup thread
+    # before HTTP and background workers can concurrently import the registry.
+    from personal_tools.registry import register_personal_tools
+    register_personal_tools()
+
     runner = create_runtime_runner(settings)
     queue = get_job_queue()
     queue.configure(settings, runner, recover=False)
