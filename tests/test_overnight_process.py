@@ -30,3 +30,9 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
     async def test_normal_command_returns_captured_output(self):
         with tempfile.TemporaryDirectory() as root:
             self.assertEqual((await command([sys.executable,'-c','print("ok")'],cwd=root)).strip(),'ok')
+
+    async def test_discarded_event_stream_still_obeys_byte_limit(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(await command([sys.executable,'-c','print("event")'],cwd=root,retain_output=False),'')
+            with self.assertRaises(CommandFailure):
+                await command([sys.executable,'-c','print("x"*10000)'],cwd=root,retain_output=False,output_limit=100)

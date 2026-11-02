@@ -40,7 +40,7 @@ class PiRepair:
                            '--no-skills','--no-prompt-templates','--no-themes','--no-context-files',
                            '--provider',self.provider,'--model',self.model,
                            '--tools','read,bash,edit,write,grep,find,ls'],
-                          cwd=path,timeout=600,stdin=prompt,provider=True,output_limit=1_000_000,sandboxed=True)
+                          cwd=path,timeout=600,stdin=prompt,provider=True,output_limit=16_000_000,sandboxed=True,retain_output=False)
             # The coordinator owns commit/push. Restrict generated changes to the
             # workbench and regression source; deployment/auth/CI policy stays fixed.
             await command(['git','add','--all'],cwd=path)

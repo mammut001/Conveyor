@@ -22,7 +22,7 @@ def child_environment(*, provider=False):
     return result
 
 
-async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_limit=100_000, sandboxed=False):
+async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_limit=100_000, sandboxed=False, retain_output=True):
     if not argv or not 0 < timeout <= 1800:
         raise ValueError('invalid subprocess limits')
     if sandboxed:
@@ -33,14 +33,18 @@ async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_
         stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT,start_new_session=True)
     captured = bytearray()
+    total_output = 0
     async def read():
+        nonlocal total_output
         while True:
             chunk = await process.stdout.read(8192)
             if not chunk:
                 return
-            if len(captured)+len(chunk) > output_limit:
+            total_output += len(chunk)
+            if total_output > output_limit:
                 raise CommandFailure('subprocess output limit exceeded')
-            captured.extend(chunk)
+            if retain_output:
+                captured.extend(chunk)
     async def run():
         if stdin is not None:
             process.stdin.write(stdin.encode())
@@ -62,6 +66,11 @@ async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_
         except ProcessLookupError:
             pass
         await process.wait()
+        # Reap pipe transports after forced termination as well as the leader.
+        await process.stdout.read()
+        if process.stdin is not None:
+            process.stdin.close()
+        await asyncio.sleep(0)
 
 
 class Workspaces:
