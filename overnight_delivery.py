@@ -4,6 +4,7 @@ import asyncio
 import re
 import subprocess
 from overnight_preview import PreviewReleases
+from overnight_build import build_frontend
 
 
 class PreviewDelivery:
@@ -51,7 +52,7 @@ class PreviewDelivery:
                     return True
                 time.sleep(.5)
             return False
-        manifest=self.releases.deploy(self.repo,commit,activate=self.restart,healthy=healthy)
+        manifest=self.releases.deploy(self.repo,commit,activate=self.restart,healthy=healthy,prepare=build_frontend)
         return {**manifest,'healthy':True,'verified_head':head}
 
     async def __call__(self,payload,receipt):
