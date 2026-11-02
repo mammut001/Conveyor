@@ -66,6 +66,30 @@ class GitHubDelivery:
         return self._json('pr','view',str(number),'--json',
                           'number,state,isDraft,baseRefName,headRefOid,headRepository,headRepositoryOwner,statusCheckRollup,mergeable,mergeCommit')
 
+    async def wait_verified(self, number, receipt, *, timeout=900, poll_seconds=10):
+        import asyncio
+        if not 0 < timeout <= 1800 or not 0 < poll_seconds <= 30:
+            raise ValueError('invalid CI wait limits')
+        deadline=asyncio.get_running_loop().time()+timeout
+        while True:
+            candidate=await asyncio.to_thread(self.candidate,number)
+            if candidate.get('headRefOid') != receipt.get('head') or candidate.get('baseRefName') != 'preview':
+                raise ValueError('candidate changed while waiting for CI')
+            checks=candidate.get('statusCheckRollup') or []
+            if any(check.get('conclusion') in {'FAILURE','CANCELLED','TIMED_OUT','ACTION_REQUIRED'}
+                   or check.get('state') in {'FAILURE','ERROR'} for check in checks):
+                raise ValueError('candidate CI failed')
+            try:
+                assert_mergeable(self.repo,candidate,receipt)
+                return receipt
+            except ValueError:
+                if candidate.get('state') != 'OPEN' or candidate.get('isDraft'):
+                    raise
+            remaining=deadline-asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError('candidate CI deadline exceeded')
+            await asyncio.sleep(min(poll_seconds,remaining))
+
     def merge_verified(self, number, receipt):
         """Re-read the head and CI immediately before GitHub's SHA-guarded merge."""
         candidate = self.candidate(number)

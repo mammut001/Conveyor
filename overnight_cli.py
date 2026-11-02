@@ -52,8 +52,11 @@ def main():
         github=GitHubDelivery(config['github_repo'])
         workspaces=Workspaces(config['repository'],config['workspaces'])
         verifier=IndependentVerifier(workspaces,repo=config['github_repo'],checks=config['verification_commands'])
+        async def verify_and_wait(payload):
+            receipt = await verifier(payload)
+            return await github.wait_verified(payload['candidate']['pr'],receipt)
         pipeline=OvernightPipeline(github=github,discover=checks.discover,
-            repair=PiRepair(workspaces,github),verify=verifier,
+            repair=PiRepair(workspaces,github),verify=verify_and_wait,
             deploy=PreviewDelivery(config['repository'],preview_root,checks))
         # A single host coordinator owns external issue/PR reconciliation. Lock all
         # runs, not just this run, to prevent two coordinators deploying concurrently.

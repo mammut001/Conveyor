@@ -16,7 +16,10 @@ class PiRepair:
         issue=payload['issue']['number']
         if not isinstance(issue,int) or issue <= 0:
             raise ValueError('invalid issue')
-        branch=f'codex/nightly-issue-{issue}'
+        attempt=int(payload.get('repair_attempt',1))
+        if not 1 <= attempt <= 3:
+            raise ValueError('repair attempt limit exceeded')
+        branch=f'codex/nightly-issue-{issue}-attempt-{attempt}'
         # Reconcile a prior push/PR before any agent work after a restart.
         import asyncio
         rows=await asyncio.to_thread(self.github._json,'pr','list','--head',branch,

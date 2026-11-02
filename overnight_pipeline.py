@@ -22,7 +22,7 @@ class OvernightPipeline:
             for finding in findings:
                 issue = await asyncio.to_thread(self.github.issue, finding)
                 issues.append(issue['number'])
-                successors.append(('repair',f"issue:{issue['number']}",{'issue':issue,'finding':finding}))
+                successors.append(('repair',f"issue:{issue['number']}",{'issue':issue,'finding':finding,'repair_attempt':1}))
         clean_passes = 0
         if not findings:
             revision = task['payload'].get('revision')
@@ -43,7 +43,15 @@ class OvernightPipeline:
 
     async def verify(self, task):
         payload = task['payload']
-        receipt = await self.verify_candidate(payload)
+        try:
+            receipt = await self.verify_candidate(payload)
+        except Exception as exc:
+            attempt = int(payload.get('repair_attempt',1))
+            if attempt >= 3:
+                raise RuntimeError('independent verification retry limit reached') from exc
+            retry = {**payload,'repair_attempt':attempt+1,'verification_failure':type(exc).__name__}
+            return StageResult({'verification_failed':True,'attempt':attempt},
+                (('repair',f"issue:{payload['issue']['number']}:attempt:{attempt+1}",retry),))
         if receipt.get('passed') is not True:
             raise RuntimeError('independent verification failed; issue remains open')
         candidate = payload['candidate']
