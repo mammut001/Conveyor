@@ -28,6 +28,19 @@ class PreviewReleases:
             fcntl.flock(lock, fcntl.LOCK_EX)
             yield
 
+    def _write_manifest(self, path, manifest):
+        pending = self.root/('manifest-'+uuid.uuid4().hex)
+        with pending.open('w') as stream:
+            json.dump(manifest, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(pending, path)
+        descriptor = os.open(self.root, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
     def _switch(self, target):
         from overnight_guard import check_guard
         check_guard()
@@ -59,14 +72,33 @@ class PreviewReleases:
                 raise ValueError('previous release outside managed preview')
             release = self.root/'releases'/sha
             if previous == release:
-                if not healthy(release):
-                    raise RuntimeError('existing preview release is unhealthy')
                 manifest_path=self.root/'deployment.json'
-                if not manifest_path.is_file():
-                    raise RuntimeError('existing preview release lacks deployment evidence')
-                manifest=json.loads(manifest_path.read_text())
-                if manifest.get('commit') != sha:
-                    raise RuntimeError('preview deployment evidence does not match current release')
+                manifest=json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
+                journal=self.root/'deployment-pending.json'
+                interrupted=manifest.get('commit') != sha
+                if interrupted:
+                    if not journal.is_file():
+                        raise RuntimeError('preview deployment evidence does not match current release')
+                    recovered=json.loads(journal.read_text())
+                    previous_sha=recovered.get('previous')
+                    if (recovered.get('commit') != sha or previous_sha != manifest.get('commit')
+                            or previous_sha is not None and (not isinstance(previous_sha,str)
+                                or not re.fullmatch(r'[0-9a-f]{40}',previous_sha))):
+                        raise RuntimeError('invalid interrupted deployment evidence')
+                if not healthy(release):
+                    if interrupted and previous_sha:
+                        from overnight_guard import cleanup_scope
+                        rollback=self.root/'releases'/previous_sha
+                        with cleanup_scope():
+                            self._switch(rollback)
+                            activate(rollback)
+                        if not healthy(rollback):
+                            raise RuntimeError('preview rollback health check failed')
+                    raise RuntimeError('existing preview release is unhealthy')
+                if interrupted:
+                    self._write_manifest(manifest_path,recovered)
+                    manifest=recovered
+                journal.unlink(missing_ok=True)
                 return manifest
             if release.is_symlink():
                 raise ValueError('release must not be a symlink')
@@ -96,6 +128,9 @@ class PreviewReleases:
                         shutil.rmtree(stage)
             # The deployment owner differs from the unprivileged preview user.
             release.chmod(0o755)
+            manifest = {'commit':sha, 'previous':previous.name if previous else None}
+            journal = self.root/'deployment-pending.json'
+            self._write_manifest(journal, manifest)
             self._switch(release)
             try:
                 activate(release)
@@ -114,8 +149,6 @@ class PreviewReleases:
                 else:
                     current.unlink(missing_ok=True)
                 raise
-            manifest = {'commit':sha, 'previous':previous.name if previous else None}
-            pending = self.root/('manifest-'+uuid.uuid4().hex)
-            pending.write_text(json.dumps(manifest))
-            os.replace(pending, self.root/'deployment.json')
+            self._write_manifest(self.root/'deployment.json', manifest)
+            journal.unlink(missing_ok=True)
             return manifest
