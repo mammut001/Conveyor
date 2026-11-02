@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from config import Settings
 from handlers.tools.registry import DangerLevel
 from personal_tools.base import PersonalToolSpec, ToolResult
+import overnight_chat
 from personal_tools import notes as notes_tools
 from personal_tools import reminders as reminders_tools
 from personal_tools import gmail_imap as gmail_tools
@@ -375,6 +376,9 @@ def register_personal_tools() -> None:
     )
     _register("project.progress", "查询 GitHub 项目进度、PR 和 CI", DangerLevel.READ,
               project_progress, keywords=("项目进度", "项目进展"))
+    _register('nightly.start','启动有时限的预览夜间任务',DangerLevel.WRITE_SAFE,overnight_chat.start)
+    _register('nightly.status','查看夜间任务',DangerLevel.READ,overnight_chat.status)
+    _register('nightly.cancel','停止夜间任务',DangerLevel.WRITE_SAFE,overnight_chat.cancel)
     # Project Profiles (P3.9)
     _register(
         "projects.list",

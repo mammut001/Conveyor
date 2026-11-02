@@ -223,6 +223,12 @@ async def run_web_chat(
         if await try_resolve_confirmation(msg, port, settings):
             port.emit("done", {"outcome": "answered"})
             return
+        from overnight_chat import route as nightly_route
+        nightly=nightly_route(prompt)
+        if nightly is not None:
+            await handle_route(msg,port,runner,settings,nightly)
+            port.emit('done',{'outcome':'answered'})
+            return
         from handlers.intent import project_progress_route
         progress = project_progress_route(prompt)
         if progress is not None:
