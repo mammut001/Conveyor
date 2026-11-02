@@ -41,6 +41,10 @@ async def execute_claim(store, task, handler, *, lease_seconds=60, heartbeat_sec
             from overnight_process import CommandFailure
             if isinstance(exc,CommandFailure):
                 evidence['diagnostics']=exc.diagnostics
+                if exc.diagnostics.get('category')=='nonzero_exit':
+                    await asyncio.sleep(1)
+                    if await asyncio.to_thread(store.retry,task['id'],task['lease'],evidence):
+                        return True
             return await asyncio.to_thread(store.finish, task['id'], task['lease'],
                                            evidence, success=False)
         if isinstance(result, StageResult):

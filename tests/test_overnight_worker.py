@@ -37,3 +37,16 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             task=store.status(run)['tasks'][0]
             self.assertEqual(task['state'],'blocked')
             self.assertNotIn('secret-provider-credential',task['result'])
+
+    async def test_nonzero_process_exit_retries_without_exceeding_attempt_cap(self):
+        from overnight_process import CommandFailure
+        with tempfile.TemporaryDirectory() as root:
+            store=OvernightStore(Path(root)/'run.db');run=store.create('retry process')
+            store.enqueue(run,'repair','issue',{})
+            async def handler(task):
+                raise CommandFailure('failed',program='pi',category='nonzero_exit',return_code=1)
+            for expected in ('queued','queued','blocked'):
+                claim=store.claim(run,'repair')
+                await execute_claim(store,claim,handler)
+                self.assertEqual(store.status(run)['tasks'][0]['state'],expected)
+            self.assertIsNone(store.claim(run,'repair'))

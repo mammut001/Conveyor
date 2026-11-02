@@ -188,3 +188,11 @@ class OvernightStore:
                 raise ValueError('run configuration changed; create a new run with explicit acceptance settings')
             db.execute('INSERT OR IGNORE INTO nightly_configuration VALUES(?,?,?)',(run_id,digest,encoded))
         return digest
+
+    def retry(self,task_id,lease,result,*,max_attempts=3):
+        now=time.time()
+        with self.db() as db:
+            return db.execute("""UPDATE nightly_tasks SET state='queued',result=?,lease=NULL,lease_until=NULL
+              WHERE id=? AND lease=? AND state='running' AND lease_until>? AND attempts<?
+              AND run_id IN(SELECT id FROM nightly_runs WHERE state='running' AND deadline>?)""",
+              (json.dumps(result),task_id,lease,now,max_attempts,now)).rowcount==1
