@@ -542,6 +542,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
               ? '由 Pi + DeepSeek 驱动：查询、命令执行、文件下载与代码修改自动执行；仅删除/破坏性操作需你确认。'
               : '由 Pi + DeepSeek 驱动：查询、命令执行、文件下载与代码修改自动执行；仅删除/破坏性操作需你确认。'}</p>
             <div className="welcome-nightly-commands" aria-label="夜间任务命令">
+              <p>夜间任务仅作用于预览环境，排除生产；默认运行 1 小时，最多处理 12 个任务。</p>
               <p>夜间任务命令：</p>
               <p><code>{'/nightly_start <objective>'}</code> 启动夜间任务</p>
               <p><code>{'/nightly_status <run ID>'}</code> 查看运行状态</p>

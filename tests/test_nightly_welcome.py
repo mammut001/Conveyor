@@ -20,6 +20,16 @@ class NightlyWelcomeTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIn(command, welcome)
 
+    def test_fresh_chat_welcome_shows_nightly_scope_and_defaults(self):
+        source = (ROOT / "web/src/components/ChatPanel.tsx").read_text(encoding="utf-8")
+        start = source.index('<div className="welcome-state">')
+        end = source.index("{messages.map", start)
+        welcome = source[start:end]
+
+        for term in ("预览", "生产", "1 小时", "12"):
+            with self.subTest(term=term):
+                self.assertIn(term, welcome)
+
 
 if __name__ == "__main__":
     unittest.main()
