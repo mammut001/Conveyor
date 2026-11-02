@@ -56,6 +56,16 @@ class PreviewReleases:
             if previous and previous.parent != self.root/'releases':
                 raise ValueError('previous release outside managed preview')
             release = self.root/'releases'/sha
+            if previous == release:
+                if not healthy(release):
+                    raise RuntimeError('existing preview release is unhealthy')
+                manifest_path=self.root/'deployment.json'
+                if not manifest_path.is_file():
+                    raise RuntimeError('existing preview release lacks deployment evidence')
+                manifest=json.loads(manifest_path.read_text())
+                if manifest.get('commit') != sha:
+                    raise RuntimeError('preview deployment evidence does not match current release')
+                return manifest
             if release.is_symlink():
                 raise ValueError('release must not be a symlink')
             if not release.exists():

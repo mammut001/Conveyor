@@ -30,7 +30,8 @@ class PreviewDelivery:
                 raise RuntimeError('preview repository reconciliation failed')
             return result.stdout.strip()
         git('fetch','origin','preview')
-        commit=git('rev-parse','refs/remotes/origin/preview')
+        history=git('log','--first-parent','--merges','--format=%H %P','refs/remotes/origin/preview')
+        commit=verified_merge_commit(history,head)
         if not re.fullmatch(r'[0-9a-f]{40}',commit):
             raise ValueError('invalid preview integration commit')
         git('merge-base','--is-ancestor',head,commit)
@@ -48,3 +49,12 @@ class PreviewDelivery:
 
     async def __call__(self,payload,receipt):
         return await asyncio.to_thread(self._deploy,payload,receipt)
+
+
+def verified_merge_commit(history, head):
+    """Pin the actual two-parent merge of this verified head, not a newer tip."""
+    for line in history.splitlines():
+        fields=line.split()
+        if len(fields)==3 and fields[2]==head and all(re.fullmatch(r'[0-9a-f]{40}',field) for field in fields):
+            return fields[0]
+    raise ValueError('verified candidate has no matching preview merge commit')
