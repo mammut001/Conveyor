@@ -20,6 +20,9 @@ class OvernightStore:
               deadline REAL NOT NULL, max_tasks INTEGER NOT NULL, created REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS nightly_configuration(
               run_id TEXT PRIMARY KEY REFERENCES nightly_runs(id), digest TEXT NOT NULL, config TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS nightly_acceptance(
+              run_id TEXT PRIMARY KEY REFERENCES nightly_runs(id),
+              digest TEXT NOT NULL, document TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS nightly_tasks(
               id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES nightly_runs(id),
               role TEXT NOT NULL, fingerprint TEXT NOT NULL, payload TEXT NOT NULL,
@@ -52,6 +55,47 @@ class OvernightStore:
             db.execute('INSERT INTO nightly_runs VALUES(?,?,?,?,?,?)',
                        (ident, objective.strip(), 'running', now+hours*3600, max_tasks, now))
         return ident
+
+    def acceptance(self, run_id):
+        with self.db() as db:
+            row=db.execute('SELECT digest,document FROM nightly_acceptance WHERE run_id=?',(run_id,)).fetchone()
+            return {'digest':row['digest'],'document':json.loads(row['document'])} if row else None
+
+    def reusable_acceptance(self, run_id):
+        """Reuse exact-goal/config contracts so repeated runs keep issue identities."""
+        with self.db() as db:
+            current=db.execute('SELECT r.objective,c.digest FROM nightly_runs r JOIN nightly_configuration c ON c.run_id=r.id WHERE r.id=?',(run_id,)).fetchone()
+            if not current:
+                return None
+            row=db.execute("""SELECT a.digest,a.document FROM nightly_acceptance a
+              JOIN nightly_runs r ON r.id=a.run_id JOIN nightly_configuration c ON c.run_id=r.id
+              WHERE r.objective=? AND c.digest=? AND r.id<>? ORDER BY a.rowid LIMIT 1""",
+              (current['objective'],current['digest'],run_id)).fetchone()
+            return {'digest':row['digest'],'document':json.loads(row['document'])} if row else None
+
+    def freeze_acceptance(self, task_id, lease, document):
+        """Only the current discovery lease can freeze a run's generated checks."""
+        import hashlib
+        encoded=json.dumps(document,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+        if len(encoded.encode())>64000:
+            raise ValueError('acceptance plan is too large')
+        digest=hashlib.sha256(encoded.encode()).hexdigest()
+        with self.db() as db:
+            now=time.time()
+            task=db.execute("""SELECT t.run_id,t.payload,r.objective FROM nightly_tasks t JOIN nightly_runs r ON r.id=t.run_id
+              WHERE t.id=? AND t.lease=? AND t.role='discover' AND t.state='running'
+              AND t.lease_until>? AND r.state='running' AND r.deadline>?""",(task_id,lease,now,now)).fetchone()
+            if not task:
+                raise ValueError('discovery lease is no longer current')
+            if (document.get('objective') != task['objective']
+                    or document.get('revision') != json.loads(task['payload']).get('revision')):
+                raise ValueError('acceptance plan does not match the discovery target')
+            existing=db.execute('SELECT digest FROM nightly_acceptance WHERE run_id=?',(task['run_id'],)).fetchone()
+            if existing and existing['digest'] != digest:
+                raise ValueError('frozen acceptance plan cannot change during a run')
+            if not existing:
+                db.execute('INSERT INTO nightly_acceptance VALUES(?,?,?)',(task['run_id'],digest,encoded))
+        return digest
 
     def enqueue(self, run_id, role, fingerprint, payload):
         if role not in {'discover', 'repair', 'verify'} or not fingerprint:

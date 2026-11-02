@@ -26,7 +26,7 @@ def child_environment(*, provider=False):
     return result
 
 
-async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_limit=100_000, sandboxed=False, retain_output=True):
+async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_limit=100_000, sandboxed=False, retain_output=True, read_only=False, network=True, output_root=None):
     from overnight_guard import check_guard
     check_guard()
     if not argv or not 0 < timeout <= 1800:
@@ -34,7 +34,7 @@ async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_
     program=Path(argv[0]).name
     if sandboxed:
         from overnight_sandbox import sandbox_argv
-        argv = sandbox_argv(argv,cwd,source_only=provider)
+        argv = sandbox_argv(argv,cwd,source_only=provider,read_only=read_only,network=network,output_root=output_root)
     process = await asyncio.create_subprocess_exec(
         *argv,cwd=cwd,env=child_environment(provider=provider),
         stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,

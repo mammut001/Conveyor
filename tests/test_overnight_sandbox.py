@@ -27,3 +27,12 @@ class SandboxTests(unittest.TestCase):
             self.assertIn('/workspace/web/dist',agent)
             self.assertIn('--remount-ro',agent)
             self.assertNotIn('/workspace/web/dist',verifier)
+
+    def test_goal_checks_have_readonly_source_and_no_host_network(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as output, patch('overnight_sandbox.sys.platform','linux'), patch('overnight_sandbox.shutil.which',return_value='/usr/bin/bwrap'):
+            argv=sandbox_argv(['python'],root,read_only=True,network=False,output_root=output)
+            self.assertIn('--unshare-net',argv)
+            source=argv.index(str(Path(root).resolve()))
+            self.assertEqual(argv[source-1],'--ro-bind')
+            target=argv.index('/output')
+            self.assertEqual(argv[target-2],'--bind')

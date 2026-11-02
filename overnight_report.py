@@ -14,7 +14,7 @@ def format_run(run,repo='mammut001/Conveyor'):
     tasks=run.get('tasks',[])
     if run.get('max_tasks'):
         lines.append(f"任务额度：{len(tasks)}/{run['max_tasks']}；单个问题最多修复 3 次。")
-    links=set();commits=set();failures=set();summary={}
+    links=set();commits=set();failures=set();summary={};plans={}
     for task in tasks:
         key=(task['role'],task['state']);summary[key]=summary.get(key,0)+1
         try:
@@ -23,6 +23,9 @@ def format_run(run,repo='mammut001/Conveyor'):
             continue
         if not isinstance(result,dict):
             continue
+        plan=result.get('acceptance_plan')
+        if isinstance(plan,dict) and isinstance(plan.get('sha256'),str):
+            plans[plan['sha256']]=plan.get('scenarios',[])
         for number in result.get('issues',[]):
             if isinstance(number,int): links.add(f'https://github.com/{repo}/issues/{number}')
         issue=result.get('issue') or {}
@@ -40,6 +43,11 @@ def format_run(run,repo='mammut001/Conveyor'):
             failures.add('独立验收未通过，已安排下一次修复')
     for (role,state),count in summary.items():
         lines.append(f"• {roles.get(role,role)}：{labels.get(state,state)} × {count}")
+    for digest,scenarios in plans.items():
+        lines.append('目标验收计划：'+digest)
+        for scenario in scenarios:
+            if isinstance(scenario,str):
+                lines.append('• '+scenario)
     lines.extend(sorted(links))
     for commit in sorted(commits):
         lines.append(f'已验证预览版本：https://github.com/{repo}/commit/{commit}')
