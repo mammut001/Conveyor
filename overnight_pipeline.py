@@ -44,8 +44,7 @@ class OvernightPipeline:
         deployment = await self.deploy_candidate(payload,receipt)
         if deployment.get('healthy') is not True or not deployment.get('commit'):
             raise RuntimeError('preview deployment was not verified healthy')
-        # Closing issues and re-discovery are intentionally coordinated separately;
-        # this result is the durable evidence required before either action.
+        await asyncio.to_thread(self.github.close_verified_issue,payload['issue']['number'],deployment)
         return StageResult({'receipt':receipt,'deployment':deployment,'issue':payload['issue']})
 
     def handlers(self):

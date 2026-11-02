@@ -52,6 +52,14 @@ class GitHubDelivery:
             raise RuntimeError('GitHub did not return an issue URL; reconcile before retry')
         return {'number':int(match.group(1)), 'url':url, 'state':'OPEN'}
 
+    def close_verified_issue(self, number, deployment):
+        if (not isinstance(number,int) or number <= 0 or deployment.get('healthy') is not True
+                or not re.fullmatch(r'[0-9a-f]{40}',deployment.get('commit',''))):
+            raise ValueError('issue closure requires healthy preview deployment')
+        self.command(['gh','issue','close',str(number),'--repo',self.repo,
+                      '--reason','completed','--comment',
+                      f"Independently verified and deployed to preview commit {deployment['commit']}."])
+
     def candidate(self, number):
         if not isinstance(number,int) or number <= 0:
             raise ValueError('invalid PR number')

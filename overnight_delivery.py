@@ -1,0 +1,50 @@
+"""Deploy the preview integration commit and prove health before closing issues."""
+from __future__ import annotations
+import asyncio
+import re
+import subprocess
+from overnight_preview import PreviewReleases
+
+
+class PreviewDelivery:
+    def __init__(self, repo, root, checks, *, restart=None):
+        self.repo=repo
+        self.releases=PreviewReleases(root)
+        self.checks=checks
+        self.restart=restart or self._restart
+
+    @staticmethod
+    def _restart(_release):
+        result=subprocess.run(['sudo','-n','systemctl','restart','conveyor-preview.service'],
+                              capture_output=True,timeout=45)
+        if result.returncode:
+            raise RuntimeError('preview restart failed')
+
+    def _deploy(self, payload, receipt):
+        head=payload['candidate']['head']
+        if receipt.get('head') != head or receipt.get('passed') is not True:
+            raise ValueError('deployment needs matching independent verification')
+        def git(*args):
+            result=subprocess.run(['git','-C',str(self.repo),*args],capture_output=True,text=True,timeout=90)
+            if result.returncode:
+                raise RuntimeError('preview repository reconciliation failed')
+            return result.stdout.strip()
+        git('fetch','origin','preview:refs/heads/preview')
+        commit=git('rev-parse','refs/heads/preview')
+        if not re.fullmatch(r'[0-9a-f]{40}',commit):
+            raise ValueError('invalid preview integration commit')
+        git('merge-base','--is-ancestor',head,commit)
+        def healthy(_release):
+            # systemd may report start before the listener is ready.
+            import time
+            for _ in range(10):
+                findings=asyncio.run(self.checks.discover({}))
+                if not findings:
+                    return True
+                time.sleep(.5)
+            return False
+        manifest=self.releases.deploy(self.repo,commit,activate=self.restart,healthy=healthy)
+        return {**manifest,'healthy':True,'verified_head':head}
+
+    async def __call__(self,payload,receipt):
+        return await asyncio.to_thread(self._deploy,payload,receipt)
