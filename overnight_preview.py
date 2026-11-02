@@ -43,9 +43,11 @@ class PreviewReleases:
             raise ValueError('a full immutable commit is required')
         repo = Path(repo).resolve()
         def git(*args, **kw):
-            return subprocess.run(['git', '-C', str(repo), *args], check=True,
+            return subprocess.run(['git', '-c', f'safe.directory={repo}', '-C', str(repo), *args], check=True,
                                   capture_output=True, **kw)
-        git('merge-base', '--is-ancestor', sha, 'refs/heads/preview')
+        refs = git('for-each-ref','--format=%(refname)','refs/remotes/origin/preview').stdout.decode().strip()
+        preview_ref = 'refs/remotes/origin/preview' if refs else 'refs/heads/preview'
+        git('merge-base', '--is-ancestor', sha, preview_ref)
         with self.locked():
             current = self.root/'current'
             previous = current.resolve() if current.is_symlink() else None
@@ -72,11 +74,14 @@ class PreviewReleases:
                             if path.name == '.env' or path.name.startswith('.env.') and path.name not in {'.env.example', '.env.test.example'}:
                                 raise ValueError('release contains environment secrets')
                         source.extractall(stage)
+                    stage.chmod(0o755)
                     os.replace(stage, release)
                 finally:
                     if stage.exists():
                         import shutil
                         shutil.rmtree(stage)
+            # The deployment owner differs from the unprivileged preview user.
+            release.chmod(0o755)
             self._switch(release)
             try:
                 activate(release)

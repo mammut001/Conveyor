@@ -25,12 +25,12 @@ class PreviewDelivery:
         if receipt.get('head') != head or receipt.get('passed') is not True:
             raise ValueError('deployment needs matching independent verification')
         def git(*args):
-            result=subprocess.run(['git','-C',str(self.repo),*args],capture_output=True,text=True,timeout=90)
+            result=subprocess.run(['git','-c',f'safe.directory={self.repo}','-C',str(self.repo),*args],capture_output=True,text=True,timeout=90)
             if result.returncode:
                 raise RuntimeError('preview repository reconciliation failed')
             return result.stdout.strip()
-        git('fetch','origin','preview:refs/heads/preview')
-        commit=git('rev-parse','refs/heads/preview')
+        git('fetch','origin','preview')
+        commit=git('rev-parse','refs/remotes/origin/preview')
         if not re.fullmatch(r'[0-9a-f]{40}',commit):
             raise ValueError('invalid preview integration commit')
         git('merge-base','--is-ancestor',head,commit)
