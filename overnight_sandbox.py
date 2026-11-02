@@ -5,7 +5,7 @@ import shutil
 import sys
 
 
-def sandbox_argv(argv, workspace):
+def sandbox_argv(argv, workspace, *, source_only=False):
     if sys.platform != 'linux' or not shutil.which('bwrap'):
         raise RuntimeError('nightly agent execution requires Linux bubblewrap')
     workspace=Path(workspace).resolve()
@@ -22,6 +22,14 @@ def sandbox_argv(argv, workspace):
           '--tmpfs','/tmp','--dir','/tmp/home','--setenv','HOME','/tmp/home',
           '--setenv','PI_CODING_AGENT_DIR','/tmp/home/pi',
           '--bind',str(workspace),'/workspace','--chdir','/workspace']
+    if source_only:
+        # Minified bundles are generated artifacts, not repair input. Hiding them
+        # prevents expensive searches over a single enormous line, while leaving
+        # tracked host files intact for the coordinator's diff validation.
+        for generated in ('web/dist','web/node_modules','node_modules'):
+            if (workspace/generated).is_dir():
+                target='/workspace/'+generated
+                args += ['--tmpfs',target,'--remount-ro',target]
     if Path('/lib64').exists():
         args += ['--symlink','usr/lib64','/lib64']
     venv = Path('/srv/conveyor-preview/venv')
