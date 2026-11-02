@@ -1193,7 +1193,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     settings = load_runtime_settings()
 
                 from handlers.chat import chat_enabled
-                if not chat_enabled(settings):
+                from overnight_chat import route as nightly_route
+                nightly_control = os.getenv('CONVEYOR_NIGHTLY_CONTROL') == '1' and nightly_route(message) is not None
+                if not chat_enabled(settings) and not nightly_control:
                     self._json(HTTPStatus.CONFLICT, {"error": "chat tier is disabled (set CONVEYOR_CHAT_MODE and CONVEYOR_CHAT_*)"})
                     return
 
