@@ -82,6 +82,12 @@ class GitHubDelivery:
             candidate=await asyncio.to_thread(self.candidate,number)
             if candidate.get('headRefOid') != receipt.get('head') or candidate.get('baseRefName') != 'preview':
                 raise ValueError('candidate changed while waiting for CI')
+            if candidate.get('state') == 'MERGED':
+                merge = candidate.get('mergeCommit') or {}
+                if not re.fullmatch(r'[0-9a-f]{40}',merge.get('oid','')):
+                    raise ValueError('merged candidate lacks immutable merge evidence')
+                assert_mergeable(self.repo,{**candidate,'state':'OPEN','mergeable':'MERGEABLE'},receipt)
+                return receipt
             checks=candidate.get('statusCheckRollup') or []
             if any(check.get('conclusion') in {'FAILURE','CANCELLED','TIMED_OUT','ACTION_REQUIRED'}
                    or check.get('state') in {'FAILURE','ERROR'} for check in checks):
