@@ -85,16 +85,30 @@ class PreviewReleases:
                             or previous_sha is not None and (not isinstance(previous_sha,str)
                                 or not re.fullmatch(r'[0-9a-f]{40}',previous_sha))):
                         raise RuntimeError('invalid interrupted deployment evidence')
-                if not healthy(release):
-                    if interrupted and previous_sha:
-                        from overnight_guard import cleanup_scope
-                        rollback=self.root/'releases'/previous_sha
-                        with cleanup_scope():
-                            self._switch(rollback)
-                            activate(rollback)
-                        if not healthy(rollback):
-                            raise RuntimeError('preview rollback health check failed')
-                    raise RuntimeError('existing preview release is unhealthy')
+                try:
+                    if interrupted:
+                        # A crash may have occurred after the symlink switch but
+                        # before service restart. Generic health could still be
+                        # answered by the old process: activate before trusting it.
+                        activate(release)
+                    if not healthy(release):
+                        raise RuntimeError('existing preview release is unhealthy')
+                    if interrupted:
+                        from overnight_guard import check_guard
+                        check_guard()
+                except BaseException:
+                    if interrupted:
+                        if previous_sha:
+                            from overnight_guard import cleanup_scope
+                            rollback=self.root/'releases'/previous_sha
+                            with cleanup_scope():
+                                self._switch(rollback)
+                                activate(rollback)
+                            if not healthy(rollback):
+                                raise RuntimeError('preview rollback health check failed')
+                        else:
+                            current.unlink(missing_ok=True)
+                    raise
                 if interrupted:
                     self._write_manifest(manifest_path,recovered)
                     manifest=recovered
