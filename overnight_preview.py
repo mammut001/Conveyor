@@ -35,7 +35,7 @@ class PreviewReleases:
         link.symlink_to(target)
         os.replace(link, self.root/'current')
 
-    def deploy(self, repo, sha, *, activate, healthy):
+    def deploy(self, repo, sha, *, activate, healthy, prepare=None):
         """Callbacks restart/check preview only; a failed activation restores prior release.
 
         Caller must validate matching-head CI and independent verification before invoking.
@@ -86,6 +86,8 @@ class PreviewReleases:
                             if path.name == '.env' or path.name.startswith('.env.') and path.name not in {'.env.example', '.env.test.example'}:
                                 raise ValueError('release contains environment secrets')
                         source.extractall(stage)
+                    if prepare is not None:
+                        prepare(stage)
                     stage.chmod(0o755)
                     os.replace(stage, release)
                 finally:
