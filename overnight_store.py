@@ -18,6 +18,8 @@ class OvernightStore:
             CREATE TABLE IF NOT EXISTS nightly_runs(
               id TEXT PRIMARY KEY, objective TEXT NOT NULL, state TEXT NOT NULL,
               deadline REAL NOT NULL, max_tasks INTEGER NOT NULL, created REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS nightly_configuration(
+              run_id TEXT PRIMARY KEY REFERENCES nightly_runs(id), digest TEXT NOT NULL, config TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS nightly_tasks(
               id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES nightly_runs(id),
               role TEXT NOT NULL, fingerprint TEXT NOT NULL, payload TEXT NOT NULL,
@@ -173,3 +175,16 @@ class OvernightStore:
             return db.execute("""SELECT 1 FROM nightly_tasks t JOIN nightly_runs r ON r.id=t.run_id
               WHERE t.id=? AND t.lease=? AND t.state='running' AND t.lease_until>?
               AND r.state='running' AND r.deadline>?""",(task_id,lease,now,now)).fetchone() is not None
+
+    def bind_configuration(self,run_id,config):
+        import hashlib
+        encoded=json.dumps(config,sort_keys=True,separators=(',',':'))
+        digest=hashlib.sha256(encoded.encode()).hexdigest()
+        with self.db() as db:
+            if not db.execute('SELECT 1 FROM nightly_runs WHERE id=?',(run_id,)).fetchone():
+                raise KeyError(run_id)
+            previous=db.execute('SELECT digest FROM nightly_configuration WHERE run_id=?',(run_id,)).fetchone()
+            if previous and previous['digest'] != digest:
+                raise ValueError('run configuration changed; create a new run with explicit acceptance settings')
+            db.execute('INSERT OR IGNORE INTO nightly_configuration VALUES(?,?,?)',(run_id,digest,encoded))
+        return digest

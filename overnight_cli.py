@@ -17,6 +17,7 @@ def main():
     create.add_argument('--revision',required=True)
     create.add_argument('--hours',type=float,default=1)
     create.add_argument('--max-tasks',type=int,default=12)
+    create.add_argument('--config')
     for action in ('status','cancel','run'):
         sub=commands.add_parser(action);sub.add_argument('run_id')
         if action=='run':
@@ -28,6 +29,8 @@ def main():
         if not re.fullmatch(r'[0-9a-f]{40}',args.revision):
             parser.error('revision must be a full deployed preview commit')
         ident=store.create(args.objective,hours=args.hours,max_tasks=args.max_tasks)
+        if args.config:
+            store.bind_configuration(ident,json.loads(Path(args.config).read_text()))
         store.enqueue(ident,'discover','initial',{'revision':args.revision,'clean_passes':0})
         print(json.dumps(store.status(ident)))
     elif args.action=='status':
@@ -35,6 +38,10 @@ def main():
     elif args.action=='cancel':
         store.cancel(args.run_id);print(json.dumps(store.status(args.run_id)))
     else:
+        status=store.reconcile(args.run_id)
+        if status['state'] != 'running':
+            print(json.dumps(status))
+            return
         from overnight_checks import PreviewChecks
         from overnight_delivery import PreviewDelivery
         from overnight_github import GitHubDelivery
@@ -46,6 +53,7 @@ def main():
         from overnight_probes import SourceProbes
         from dotenv import dotenv_values
         config=json.loads(Path(args.config).read_text())
+        store.bind_configuration(args.run_id,config)
         preview_root=Path(config['preview_root']).resolve()
         if preview_root != Path('/srv/conveyor-preview'):
             parser.error('only the provisioned isolated preview root is supported')

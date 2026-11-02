@@ -38,3 +38,10 @@ class OvernightStoreTests(unittest.TestCase):
             self.store.enqueue(self.run, 'discover', 'c', {})
         with patch('overnight_store.time.time', return_value=10**12):
             self.assertIsNone(self.store.claim(self.run, 'discover'))
+
+    def test_configuration_snapshot_survives_restart_and_rejects_drift(self):
+        config={'repo':'owner/repo','checks':[['python','-m','unittest']]}
+        digest=self.store.bind_configuration(self.run,config)
+        self.assertEqual(OvernightStore(self.path).bind_configuration(self.run,config),digest)
+        with self.assertRaises(ValueError):
+            self.store.bind_configuration(self.run,{**config,'checks':[['true']]})
