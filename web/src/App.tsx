@@ -768,7 +768,7 @@ export default function App() {
         <div className={`stream-header ${!mobileUiOn ? 'stream-header-standard' : ''} ${view === 'chat' ? 'stream-header-chat' : ''}`}>
           <div>
             <p className="eyebrow">
-              {view === 'chat' ? (selectedAgent ? 'AGENT' : 'DIRECT CHAT TIER') : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'browser' ? 'EXTERNAL BROWSER MANAGEMENT' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'workflows' ? 'DURABLE WORKFLOWS' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'secrets' ? 'PRIVATE CREDENTIALS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · CODEX EXECUTION'}
+              {view === 'chat' ? (selectedAgent ? 'AGENT' : 'DIRECT CHAT TIER') : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'browser' ? 'EXTERNAL BROWSER MANAGEMENT' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'workflows' ? 'DURABLE WORKFLOWS' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'secrets' ? 'PRIVATE CREDENTIALS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · PI EXECUTION'}
             </p>
             <h2>
               {view === 'chat' ? (selectedAgent?.name || 'Chat') : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'browser' ? 'Browser sites' : view === 'skills' ? 'Skills' : view === 'workflows' ? 'Workflows' : view === 'connectors' ? 'Connectors' : view === 'secrets' ? 'Secrets' : view === 'teammate' ? 'Teammate' : (executionOnly ? '继续聊天任务' : creatingSession ? 'New session' : sessionLabel(selectedSession))}
@@ -1022,7 +1022,7 @@ export default function App() {
         <ContextSection title="Job">
           {selectedJob ? <>
             <KeyValue label="ID" value={selectedJob.id} mono /><KeyValue label="State" value={selectedJob.state} />
-            <KeyValue label="Provider" value="Codex" /><KeyValue label="Mode" value={selectedJob.mode} />
+            <KeyValue label="Provider" value="Pi · DeepSeek" /><KeyValue label="Mode" value={selectedJob.mode} />
             <KeyValue label="Started" value={formatTime(selectedJob.started_at)} />
             {activeRefinement && <KeyValue label="Refinement" value={`${refinementTurn} turn${refinementTurn === 1 ? '' : 's'} · active`} />}
             <RuntimeOwnerCard owner={runtimeOwner} state={selectedJob.state} />

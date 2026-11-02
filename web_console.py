@@ -29,7 +29,7 @@ from handlers.job_queue import get_job_queue
 from handlers.jobs import submit_codex_job
 from logging_setup import configure_logging
 from redaction import redact_text
-from runner import CodexRunner, JobMode
+from runner import CodexRunner, JobMode, create_runtime_runner
 from agents import AgentError
 from live_screen import LiveScreen, LiveScreenError
 from web_control import WebControl
@@ -1970,6 +1970,13 @@ def _serve_extra_address(server: "WebConsoleServer", host: str, port: int) -> No
 
 
 def validate_codex_bin(settings: Any) -> None:
+    backend = os.getenv("CONVEYOR_AGENT_BACKEND", "codex").strip().lower()
+    if backend in ("pi", "pi-agent", "pi_agent") and getattr(settings, "codex_bin", "codex") == "codex":
+        pi_bin = os.getenv("CONVEYOR_PI_BIN", "pi").strip() or "pi"
+        resolved = shutil.which(pi_bin) if os.path.sep not in pi_bin else (pi_bin if Path(pi_bin).is_file() else None)
+        if not resolved:
+            raise RuntimeError(f"CONVEYOR_PI_BIN not found: {pi_bin}")
+        return
     codex_bin = getattr(settings, "codex_bin", "") or ""
     if not codex_bin:
         raise RuntimeError(f"CODEX_BIN not found: {codex_bin}")
@@ -2003,7 +2010,7 @@ def main() -> None:
             sys.exit(1)
         print("web console configuration: ok")
         return
-    runner = CodexRunner(settings)
+    runner = create_runtime_runner(settings)
     queue = get_job_queue()
     # The chat worker owns restart recovery. Merely starting the Web Console
     # must never relabel a live Telegram/Feishu job as interrupted.

@@ -151,9 +151,9 @@ class WebControl:
                 )
                 if all(key) and key not in latest_by_session:
                     latest_by_session[key] = job
+            ref_keys = {id(session): self._refinement_key(session) for session in transcript_sessions}
             chain_by_session = RefinementStore(self.settings).active_summaries([
-                key for session in transcript_sessions
-                if (key := self._refinement_key(session))
+                key for key in ref_keys.values() if key
             ])
             for session in transcript_sessions:
                 session["last_activity"] = session.get("updated_at") or session.get("created_at")
@@ -163,7 +163,7 @@ class WebControl:
                     str(session.get("source_chat_id") or ""),
                 )
                 session["latest_job"] = latest_by_session.get(key)
-                session["active_refinement"] = chain_by_session.get(self._refinement_key(session) or "")
+                session["active_refinement"] = chain_by_session.get(ref_keys.get(id(session)) or "")
             return transcript_sessions
 
         # Backward-compatible projection for installations that have not yet

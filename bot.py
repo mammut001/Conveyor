@@ -31,7 +31,7 @@ from handlers.onboarding import (
 )
 from handlers.tools.runner import cancel_pending, execute_confirmed, parse_tool_callback
 from logging_setup import configure_logging
-from runner import CodexRunner
+from runner import CodexRunner, create_runtime_runner
 from agent_result_poller_lifecycle import AgentResultPollingApplication, configure_telegram_poller
 from telegram_navigation import callback_action, legacy_action, navigation_screen
 
@@ -44,7 +44,7 @@ configure_logging(
 logger = logging.getLogger("conveyor.telegram")
 
 settings = load_settings()
-runner = CodexRunner(settings)
+runner = create_runtime_runner(settings)
 
 from handlers.job_queue import get_job_queue
 get_job_queue().configure(settings, runner)

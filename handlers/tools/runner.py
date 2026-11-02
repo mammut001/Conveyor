@@ -175,6 +175,11 @@ async def run_tool(
             return await exec_computer_task_for_chat(
                 settings, arg, operator_id=operator_id, chat_id=chat_id, channel=channel,
             )
+        if tool_name == "pi.destructive_task":
+            from handlers.tools.executors import exec_pi_destructive_task
+            return await exec_pi_destructive_task(
+                settings, arg, operator_id=operator_id, chat_id=chat_id, channel=channel,
+            )
         return await spec.executor(settings, arg)
     except Exception as exc:
         logger.exception("Tool %s failed", tool_name)

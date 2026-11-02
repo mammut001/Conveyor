@@ -20,7 +20,7 @@ from config import load_runtime_settings
 from handlers.job_queue import get_job_queue
 from logging_setup import configure_logging
 from redaction import redact_text
-from runner import CodexRunner
+from runner import CodexRunner, create_runtime_runner
 from web_console import (
     WebConsoleHandler,
     WebConsoleServer,
@@ -153,7 +153,7 @@ def main() -> None:
         "enabled" if settings.conveyor_takeover_enabled else "disabled",
     )
 
-    runner = CodexRunner(settings)
+    runner = create_runtime_runner(settings)
     queue = get_job_queue()
     queue.configure(settings, runner, recover=False)
     loop = asyncio.new_event_loop()

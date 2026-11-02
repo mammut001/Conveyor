@@ -34,7 +34,7 @@ from handlers.context import is_addressed_to_bot
 from handlers.tools.runner import cancel_pending, execute_confirmed
 from logging_setup import configure_logging
 from redaction import redact_text
-from runner import CodexRunner
+from runner import CodexRunner, create_runtime_runner
 from agent_result_poller_lifecycle import cancel_poller, create_poller
 
 configure_logging(
@@ -45,7 +45,7 @@ configure_logging(
 logger = logging.getLogger("codex_feishu_bot")
 
 settings = load_feishu_settings()
-runner = CodexRunner(settings)
+runner = create_runtime_runner(settings)
 
 from handlers.job_queue import get_job_queue
 get_job_queue().configure(settings, runner)

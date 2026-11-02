@@ -16,6 +16,7 @@ from pathlib import Path
 
 
 _ACTIVE = ContextVar("conveyor_conversation", default=None)
+_SCHEMA_READY: set[Path] = set()
 
 
 def enabled(settings):
@@ -24,22 +25,26 @@ def enabled(settings):
 
 
 def _connect(settings):
-    path = Path(settings.codex_memory_root) / 'state' / 'job_queue.sqlite3'
+    path = (Path(settings.codex_memory_root) / 'state' / 'job_queue.sqlite3').resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path, timeout=10)
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA busy_timeout=10000')
-    db.executescript('''
-        CREATE TABLE IF NOT EXISTS agent_conversations(
-          id TEXT PRIMARY KEY, agent_id TEXT NOT NULL,
-          origin_channel TEXT NOT NULL, origin_operator TEXT NOT NULL,
-          origin_chat_id TEXT NOT NULL, transport_chat_id TEXT NOT NULL UNIQUE,
-          history_key TEXT NOT NULL, title TEXT NOT NULL, created_at REAL NOT NULL);
-        CREATE TABLE IF NOT EXISTS agent_conversation_selections(
-          channel TEXT NOT NULL, chat_id TEXT NOT NULL, operator TEXT NOT NULL,
-          agent_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
-          PRIMARY KEY(channel,chat_id,operator,agent_id));
-    ''')
+    ino = path.stat().st_ino if path.exists() else None
+    key = (path, ino)
+    if ino is None or key not in _SCHEMA_READY:
+        db.executescript('''
+            CREATE TABLE IF NOT EXISTS agent_conversations(
+              id TEXT PRIMARY KEY, agent_id TEXT NOT NULL,
+              origin_channel TEXT NOT NULL, origin_operator TEXT NOT NULL,
+              origin_chat_id TEXT NOT NULL, transport_chat_id TEXT NOT NULL UNIQUE,
+              history_key TEXT NOT NULL, title TEXT NOT NULL, created_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS agent_conversation_selections(
+              channel TEXT NOT NULL, chat_id TEXT NOT NULL, operator TEXT NOT NULL,
+              agent_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+              PRIMARY KEY(channel,chat_id,operator,agent_id));
+        ''')
+        _SCHEMA_READY.add((path, path.stat().st_ino))
     return db
 
 

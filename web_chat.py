@@ -87,7 +87,10 @@ class WebChatPort(OutboundPort):
         self.emit("subagent", data)
 
     async def reply(self, msg: InboundMessage, text: str) -> str | None:
-        if text.startswith("💭") or text.startswith("⏳"):
+        if text.startswith("⏳"):
+            self.emit("status", {"text": text})
+            return self.placeholder_id
+        if text.startswith("💭"):
             return self.placeholder_id
         self.emit("message", {"text": text})
         self._persist_turn(msg, text, kind="chat")
@@ -114,7 +117,7 @@ class WebChatPort(OutboundPort):
             clean = text[:-2].strip()
             self.emit("delta", {"text": clean})
             return True
-        if text.startswith("🔎 搜索") or text.startswith("↪️") or text.startswith("🧩"):
+        if text.startswith(("🔎 搜索", "↪️", "🧩", "🔧", "💭", "⏳", "⚡")):
             self.emit("status", {"text": text})
             return True
         # Final answer delivered via edit_progress
@@ -211,10 +214,29 @@ async def run_web_chat(
     runner: Any,
     prompt: str,
 ) -> None:
-    from handlers.chat import ask_chat, readonly_host_tool
+    from handlers.chat import ask_chat, is_destructive_request, readonly_host_tool, routes_to_agent
     from handlers.intent import RouteResult, computer_chat_route
-    from handlers.tools.runner import handle_route
+    from handlers.jobs import handle_codex_job
+    from handlers.tools.runner import _request_confirmation, handle_route, try_resolve_confirmation
+    from runner.types import JobMode
     try:
+        if await try_resolve_confirmation(msg, port, settings):
+            port.emit("done", {"outcome": "answered"})
+            return
+        if getattr(runner, "name", "") == "pi":
+            desktop = computer_chat_route(prompt, settings)
+            if desktop is not None:
+                await handle_route(msg, port, runner, settings, desktop)
+                port.emit("done", {"outcome": "answered"})
+                return
+            if is_destructive_request(prompt):
+                await _request_confirmation(msg, port, settings, "pi.destructive_task", prompt)
+                port.emit("done", {"outcome": "answered"})
+                return
+            port.emit("status", {"text": "⚡ Pi 正在执行任务…"})
+            await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=prompt, wait=True)
+            port.emit("done", {"outcome": "answered"})
+            return
         # /api/chat uses this bridge rather than handlers.dispatch. Route
         # through the same human approval card before the ordinary chat tier.
         import main_router
@@ -236,10 +258,29 @@ async def run_web_chat(
             await handle_route(msg, port, runner, settings, desktop)
             port.emit("done", {"outcome": "answered"})
             return
+        # Delete/destructive requests require explicit operator confirmation.
+        if runner is not None and is_destructive_request(prompt):
+            await _request_confirmation(msg, port, settings, "pi.destructive_task", prompt)
+            port.emit("done", {"outcome": "answered"})
+            return
+        # Clear non-destructive execution imperatives run automatically on Pi.
+        if runner is not None and routes_to_agent(prompt, settings):
+            port.emit("status", {"text": "⚡ Pi 正在执行任务…"})
+            await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=prompt, wait=True)
+            port.emit("done", {"outcome": "answered"})
+            return
         outcome, checked = await ask_chat(
             msg, port, settings, question=prompt, runner=runner,
         )
         if outcome in {"escalate", "unavailable"}:
+            if runner is not None:
+                if is_destructive_request(prompt):
+                    await _request_confirmation(msg, port, settings, "pi.destructive_task", prompt)
+                else:
+                    port.emit("status", {"text": "⚡ Pi 正在执行任务…"})
+                    await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=prompt, wait=True)
+                port.emit("done", {"outcome": "answered"})
+                return
             msg_text = (
                 "这个请求需要执行任务。可以将原请求带到任务页，检查后发送。"
                 if outcome == "escalate" else
