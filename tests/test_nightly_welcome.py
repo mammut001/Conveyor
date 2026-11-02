@@ -54,6 +54,26 @@ class NightlyWelcomeTests(unittest.TestCase):
             with self.subTest(term=term):
                 self.assertIn(term, welcome)
 
+    def test_fresh_chat_welcome_explains_run_id_retention(self):
+        source = (ROOT / "web/src/components/ChatPanel.tsx").read_text(encoding="utf-8")
+        start = source.index('<div className="welcome-state">')
+        end = source.index("{messages.map", start)
+        welcome = source[start:end]
+
+        for term in ("/nightly_start", "run ID", "保留", "查询运行状态", "取消"):
+            with self.subTest(term=term):
+                self.assertIn(term, welcome)
+
+    def test_fresh_chat_welcome_explains_shutdown_and_issue_retention(self):
+        source = (ROOT / "web/src/components/ChatPanel.tsx").read_text(encoding="utf-8")
+        start = source.index('<div className="welcome-state">')
+        end = source.index("{messages.map", start)
+        welcome = source[start:end]
+
+        for term in ("时间限制", "任务配额", "停止", "Issue", "保留", "继续"):
+            with self.subTest(term=term):
+                self.assertIn(term, welcome)
+
 
 if __name__ == "__main__":
     unittest.main()
