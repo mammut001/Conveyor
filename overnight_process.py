@@ -22,9 +22,12 @@ def child_environment(*, provider=False):
     return result
 
 
-async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_limit=100_000):
+async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_limit=100_000, sandboxed=False):
     if not argv or not 0 < timeout <= 1800:
         raise ValueError('invalid subprocess limits')
+    if sandboxed:
+        from overnight_sandbox import sandbox_argv
+        argv = sandbox_argv(argv,cwd)
     process = await asyncio.create_subprocess_exec(
         *argv,cwd=cwd,env=child_environment(provider=provider),
         stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
