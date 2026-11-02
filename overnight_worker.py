@@ -2,6 +2,13 @@
 from __future__ import annotations
 import asyncio
 from contextlib import suppress
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class StageResult:
+    result: dict
+    next_tasks: tuple = ()
 
 ROLES = ('discover', 'repair', 'verify')
 
@@ -28,6 +35,8 @@ async def execute_claim(store, task, handler, *, lease_seconds=60, heartbeat_sec
             # Persist type only: provider errors can contain credentials.
             return await asyncio.to_thread(store.finish, task['id'], task['lease'],
                                            {'error':type(exc).__name__}, success=False)
+        if isinstance(result, StageResult):
+            return await asyncio.to_thread(store.advance, task['id'], task['lease'], result.result, result.next_tasks)
         return await asyncio.to_thread(store.finish, task['id'], task['lease'], result)
     finally:
         if not job.done():

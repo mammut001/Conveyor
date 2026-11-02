@@ -121,3 +121,30 @@ class OvernightStore:
                 raise KeyError(run_id)
             tasks = db.execute('SELECT id,role,state,attempts,result FROM nightly_tasks WHERE run_id=? ORDER BY rowid', (run_id,)).fetchall()
             return {**dict(row), 'tasks':[dict(task) for task in tasks]}
+
+    def advance(self, task_id, lease, result, next_tasks):
+        """Persist a stage result and successor tasks atomically under the lease."""
+        now = time.time()
+        with self.db() as db:
+            row = db.execute("""SELECT t.run_id,r.max_tasks FROM nightly_tasks t
+              JOIN nightly_runs r ON r.id=t.run_id WHERE t.id=? AND t.lease=?
+              AND t.state='running' AND t.lease_until>? AND r.state='running'
+              AND r.deadline>?""", (task_id,lease,now,now)).fetchone()
+            if not row:
+                return False
+            for successor in next_tasks:
+                role, fingerprint, payload = successor
+                if role not in {'discover','repair','verify'} or not fingerprint:
+                    raise ValueError('invalid successor task')
+                exists = db.execute('SELECT 1 FROM nightly_tasks WHERE run_id=? AND role=? AND fingerprint=?',
+                                    (row['run_id'],role,fingerprint)).fetchone()
+                if exists:
+                    continue
+                count = db.execute('SELECT count(*) FROM nightly_tasks WHERE run_id=?', (row['run_id'],)).fetchone()[0]
+                if count >= row['max_tasks']:
+                    raise ValueError('nightly task budget exhausted')
+                db.execute('INSERT INTO nightly_tasks(id,run_id,role,fingerprint,payload,state) VALUES(?,?,?,?,?,?)',
+                           (uuid.uuid4().hex,row['run_id'],role,fingerprint,json.dumps(payload),'queued'))
+            db.execute("UPDATE nightly_tasks SET state='passed',result=?,lease=NULL WHERE id=?",
+                       (json.dumps(result),task_id))
+            return True
