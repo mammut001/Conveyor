@@ -28,14 +28,8 @@ async def invoke(action,arg,*,operator_id='',channel='',**_kw):
         run=await asyncio.to_thread(client,request)
     except (OSError,RuntimeError,ValueError):
         return ToolResult(False,'夜间任务控制暂不可用，请检查控制服务；未确认任务已经启动。')
-    labels={'running':'运行中','completed':'已完成','cancelled':'已停止','expired':'已到时限','blocked':'需要处理阻塞'}
-    lines=[f"夜间任务：{run['id']}",f"状态：{labels.get(run['state'],run['state'])}",
-           f"目标：{run['objective']}",'交付：preview 分支和独立预览环境',
-           '验收范围：已配置的页面、健康、会话及独立源码检查。']
-    for task in run.get('tasks',[]):
-        lines.append(f"• {task['role']}：{task['state']}")
-    lines.extend([f"查看：/nightly_status {run['id']}",f"停止：/nightly_cancel {run['id']}"])
-    return ToolResult(True,'\n'.join(lines))
+    from overnight_report import format_run
+    return ToolResult(True,format_run(run))
 
 
 async def start(settings,arg,**kw):
