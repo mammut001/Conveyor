@@ -18,6 +18,7 @@ from personal_tools import briefing as briefing_tools
 from personal_tools import github_tools as github_tools
 from personal_tools import planner as planner_tools
 from personal_tools import projects as projects_tools
+from personal_tools.project_progress import project_progress
 from personal_tools import setup as setup_tools
 from personal_tools import project_io as project_io_tools
 from personal_tools import web_fetch as web_fetch_tools
@@ -372,6 +373,8 @@ def register_personal_tools() -> None:
         planner_tools.planner_schedule_adapter,
         keywords=("日程安排",),
     )
+    _register("project.progress", "查询 GitHub 项目进度、PR 和 CI", DangerLevel.READ,
+              project_progress, keywords=("项目进度", "项目进展"))
     # Project Profiles (P3.9)
     _register(
         "projects.list",

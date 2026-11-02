@@ -546,11 +546,31 @@ _RESEARCH_PATTERNS = (
 )
 
 
+def project_progress_route(text: str) -> RouteResult | None:
+    """Only explicit progress questions; mutations continue through normal routing."""
+    body = (text or "").strip()
+    command = re.fullmatch(r"/project_progress(?:\s+(.+))?", body)
+    if command:
+        return RouteResult(kind="deterministic", tools=("project.progress",), arg=command.group(1) or "")
+    match = re.fullmatch(
+        r"(?:请)?(?:查看|查询|看看)?\s*([A-Za-z0-9_./-]+|当前项目|这个项目)\s*(?:项目)?(?:的)?(?:最近|最新)?(?:进度|进展)(?:如何|怎么样|怎样|啥样)?[？?]?", body,
+    )
+    if not match:
+        return None
+    selector = match.group(1)
+    return RouteResult(kind="deterministic", tools=("project.progress",),
+                       arg="" if selector in {"当前项目", "这个项目"} else selector)
+
+
 def route_intent(text: str) -> RouteResult:
     """Classify user text into deterministic / hybrid / llm path."""
     body = (text or "").strip()
     if not body:
         return RouteResult(kind="llm")
+
+    progress = project_progress_route(body)
+    if progress is not None:
+        return progress
 
     # Execution-node patterns run BEFORE the generic
     # ``detect_ops_intent`` (``机器状态``/``主机状态`` would

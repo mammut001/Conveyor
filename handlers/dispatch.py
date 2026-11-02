@@ -158,6 +158,12 @@ async def dispatch(
         await handle_context_job(msg, port, settings, runner)
         return
 
+    from handlers.intent import project_progress_route
+    progress = project_progress_route(msg.text)
+    if progress is not None:
+        await handle_route(msg, port, runner, settings, progress)
+        return
+
     if getattr(runner, "name", "") == "pi":
         followed = desktop_followup_route(settings, msg.text)
         if followed is not None:

@@ -411,6 +411,7 @@ _TOOL_SLASH: dict[str, tuple[str, ...]] = {
     "projects.use": ("/project_use",),
     "projects.show": ("/project_show",),
     "projects.remove": ("/project_remove",),
+    "project.progress": ("/project_progress",),
     "project.status": ("/project_status",),
     "project.health": ("/project_health",),
     "project.roadmap": ("/project_roadmap",),
@@ -892,6 +893,11 @@ async def _project_remove(msg, port, _runner, settings, arg):
         await port.reply(msg, "用法: /project_remove <id>")
         return
     await _invoke_tool(msg, port, settings, "projects.remove", arg)
+
+
+async def _project_progress(msg, port, _runner, settings, arg):
+    from handlers.tools.runner import _invoke_tool
+    await _invoke_tool(msg, port, settings, "project.progress", arg)
 
 
 async def _project_status(msg, port, runner, settings, arg):
@@ -1917,6 +1923,7 @@ async def _commands(msg, port, _runner, _settings, _arg):
     text += "/project_use <id> — 切换活跃项目\n"
     text += "/project_show [id] — 查看项目详情\n"
     text += "/project_remove <id> — 删除项目 (需确认)\n"
+    text += "/project_progress [项目名或 owner/repo] — 查看项目进度\n"
     text += "/project_status [id] — 项目状态分析\n"
     text += "/project_health [id] — 项目健康检查\n"
     text += "/project_roadmap [id] — 项目 Roadmap\n"
@@ -2293,6 +2300,7 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("project_use", "切换活跃项目 (审计)", _project_use, takes_arg=True),
         CommandSpec("project_show", "查看项目详情", _project_show, takes_optional_arg=True),
         CommandSpec("project_remove", "删除项目 (需确认)", _project_remove, takes_arg=True),
+        CommandSpec("project_progress", "项目进度、PR 与 CI", _project_progress, takes_optional_arg=True),
         CommandSpec("project_status", "项目状态分析", _project_status, takes_optional_arg=True),
         CommandSpec("project_health", "项目健康检查", _project_health, takes_optional_arg=True),
         CommandSpec("project_roadmap", "项目 Roadmap", _project_roadmap, takes_optional_arg=True),
