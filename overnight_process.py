@@ -34,7 +34,7 @@ async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_
     program=Path(argv[0]).name
     if sandboxed:
         from overnight_sandbox import sandbox_argv
-        argv = sandbox_argv(argv,cwd)
+        argv = sandbox_argv(argv,cwd,source_only=provider)
     process = await asyncio.create_subprocess_exec(
         *argv,cwd=cwd,env=child_environment(provider=provider),
         stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
