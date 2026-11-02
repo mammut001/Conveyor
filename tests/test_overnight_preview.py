@@ -52,3 +52,30 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual((preview.root/'current').resolve().name,good)
             self.assertEqual(len(activated),1)
             self.assertFalse((preview.root/'releases'/bad).exists())
+
+    def test_interrupted_manifest_commit_recovers_previous_release_evidence(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo=Path(root)/'repo';repo.mkdir()
+            def git(*args):
+                return subprocess.check_output(['git','-C',str(repo),*args],stderr=subprocess.DEVNULL).decode().strip()
+            git('init');git('config','user.email','test@example.com');git('config','user.name','test')
+            (repo/'app.txt').write_text('old');git('add','.');git('commit','-m','old')
+            old=git('rev-parse','HEAD');git('branch','preview')
+            preview=PreviewReleases(Path(root)/'preview')
+            preview.deploy(repo,old,activate=lambda p:None,healthy=lambda p:True)
+            (repo/'app.txt').write_text('new');git('add','.');git('commit','-m','new')
+            new=git('rev-parse','HEAD');git('branch','-f','preview',new)
+            write=preview._write_manifest
+            def interrupted(path, manifest):
+                if path.name=='deployment.json':
+                    raise OSError('process interrupted before manifest commit')
+                write(path,manifest)
+            preview._write_manifest=interrupted
+            with self.assertRaises(OSError):
+                preview.deploy(repo,new,activate=lambda p:None,healthy=lambda p:True)
+            self.assertEqual((preview.root/'current').resolve().name,new)
+            preview._write_manifest=write
+            result=preview.deploy(repo,new,activate=lambda p:self.fail('no restart required'),healthy=lambda p:True)
+            self.assertEqual(result,{'commit':new,'previous':old})
+            self.assertFalse((preview.root/'deployment-pending.json').exists())
+            self.assertEqual(preview.deploy(repo,new,activate=lambda p:None,healthy=lambda p:True),result)

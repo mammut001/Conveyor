@@ -1,7 +1,7 @@
 [Unit]
 Description=Conveyor preview nightly task control bridge
 After=conveyor-preview.service
-Requires=conveyor-preview.service
+Wants=conveyor-preview.service
 
 [Service]
 Type=simple

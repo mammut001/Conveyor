@@ -2,7 +2,7 @@
 Description=Conveyor bounded overnight run %i
 After=network-online.target conveyor-preview.service
 Wants=network-online.target
-Requires=conveyor-preview.service
+Wants=conveyor-preview.service
 
 [Service]
 Type=simple
