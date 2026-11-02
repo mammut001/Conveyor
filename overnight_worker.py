@@ -36,7 +36,10 @@ async def execute_claim(store, task, handler, *, lease_seconds=60, heartbeat_sec
             return await asyncio.to_thread(store.finish, task['id'], task['lease'],
                                            {'error':type(exc).__name__}, success=False)
         if isinstance(result, StageResult):
-            return await asyncio.to_thread(store.advance, task['id'], task['lease'], result.result, result.next_tasks)
+            try:
+                return await asyncio.to_thread(store.advance, task['id'], task['lease'], result.result, result.next_tasks)
+            except ValueError:
+                return await asyncio.to_thread(store.finish, task['id'], task['lease'], {'error':'successor_budget_or_validation'}, success=False)
         return await asyncio.to_thread(store.finish, task['id'], task['lease'], result)
     finally:
         if not job.done():
@@ -51,7 +54,7 @@ async def serve(store, run_id, handlers, *, poll_seconds=1):
 
     async def worker(role):
         while True:
-            status = await asyncio.to_thread(store.status, run_id)
+            status = await asyncio.to_thread(store.reconcile, run_id)
             import time
             if status['state'] != 'running' or status['deadline'] <= time.time():
                 return

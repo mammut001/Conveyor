@@ -21,7 +21,8 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
                 task=store.claim(run,role)
                 self.assertIsNotNone(task)
                 self.assertTrue(await execute_claim(store,task,pipeline.handlers()[role]))
-            self.assertEqual([t['state'] for t in store.status(run)['tasks']],['passed']*3)
+            self.assertEqual([t['state'] for t in store.status(run)['tasks']],['passed']*3+['queued'])
+            self.assertEqual(store.status(run)['tasks'][-1]['role'],'discover')
             github.merge_verified.assert_called_once_with(8,receipt)
             deploy.assert_awaited_once()
 

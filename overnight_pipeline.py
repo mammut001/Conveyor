@@ -23,7 +23,16 @@ class OvernightPipeline:
                 issue = await asyncio.to_thread(self.github.issue, finding)
                 issues.append(issue['number'])
                 successors.append(('repair',f"issue:{issue['number']}",{'issue':issue,'finding':finding}))
-        return StageResult({'issues':issues,'clean':not findings},tuple(successors))
+        clean_passes = 0
+        if not findings:
+            revision = task['payload'].get('revision')
+            if not revision:
+                raise ValueError('discovery requires a pinned preview revision')
+            clean_passes = int(task['payload'].get('clean_passes',0))+1
+            if clean_passes < 2:
+                successors.append(('discover',f'clean:{revision}:{clean_passes}',
+                                   {**task['payload'],'clean_passes':clean_passes}))
+        return StageResult({'issues':issues,'clean':not findings,'clean_passes':clean_passes},tuple(successors))
 
     async def repair(self, task):
         candidate = await self.repair_issue(task['payload'])
@@ -45,7 +54,9 @@ class OvernightPipeline:
         if deployment.get('healthy') is not True or not deployment.get('commit'):
             raise RuntimeError('preview deployment was not verified healthy')
         await asyncio.to_thread(self.github.close_verified_issue,payload['issue']['number'],deployment)
-        return StageResult({'receipt':receipt,'deployment':deployment,'issue':payload['issue']})
+        return StageResult({'receipt':receipt,'deployment':deployment,'issue':payload['issue']},
+                           (('discover',f"deployed:{deployment['commit']}",
+                             {'revision':deployment['commit'],'clean_passes':0}),))
 
     def handlers(self):
         return {'discover':self.discover,'repair':self.repair,'verify':self.verify}

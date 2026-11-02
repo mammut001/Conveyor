@@ -148,3 +148,21 @@ class OvernightStore:
             db.execute("UPDATE nightly_tasks SET state='passed',result=?,lease=NULL WHERE id=?",
                        (json.dumps(result),task_id))
             return True
+
+    def reconcile(self, run_id):
+        """Give deadline and exhausted-run outcomes durable terminal states."""
+        with self.db() as db:
+            run=db.execute('SELECT * FROM nightly_runs WHERE id=?',(run_id,)).fetchone()
+            if not run:
+                raise KeyError(run_id)
+            if run['state'] == 'running' and run['deadline'] <= time.time():
+                db.execute("UPDATE nightly_runs SET state='expired' WHERE id=?",(run_id,))
+                db.execute("UPDATE nightly_tasks SET state='cancelled',lease=NULL WHERE run_id=? AND state IN('queued','running')",(run_id,))
+            elif run['state'] == 'running':
+                states=[row[0] for row in db.execute('SELECT state FROM nightly_tasks WHERE run_id=?',(run_id,))]
+                if states and not any(state in {'queued','running'} for state in states):
+                    clean=db.execute("SELECT result FROM nightly_tasks WHERE run_id=? AND role='discover' AND state='passed' ORDER BY rowid DESC LIMIT 1",(run_id,)).fetchone()
+                    result=json.loads(clean[0]) if clean and clean[0] else {}
+                    state='completed' if 'blocked' not in states and result.get('clean_passes',0)>=2 else 'blocked'
+                    db.execute('UPDATE nightly_runs SET state=? WHERE id=?',(state,run_id))
+        return self.status(run_id)
