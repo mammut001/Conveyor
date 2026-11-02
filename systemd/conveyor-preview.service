@@ -1,0 +1,24 @@
+[Unit]
+Description=Conveyor isolated preview workbench
+After=network-online.target
+
+[Service]
+Type=simple
+User=conveyor-preview
+Group=conveyor-preview
+WorkingDirectory=/srv/conveyor-preview/current
+EnvironmentFile=/srv/conveyor-preview/runtime/preview.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/srv/conveyor-preview/venv/bin/python /srv/conveyor-preview/current/web_console_takeover.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+InaccessiblePaths=-/opt/conveyor -/srv/conveyor -/home/ubuntu
+ReadWritePaths=/srv/conveyor-preview/runtime /srv/conveyor-preview/state /srv/conveyor-preview/tasks
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
