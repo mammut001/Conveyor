@@ -32,6 +32,8 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await PiRepair(workspaces,github)({'issue':{'number':12},'finding':{'scenario':'fixture'}})
         self.assertFalse(any('push' in argv for argv in commands))
+        pi_call=next(argv for argv in commands if argv[0]=='pi')
+        self.assertEqual(pi_call[pi_call.index('--mode')+1],'text')
         github.command.assert_not_called()
 
     async def test_saved_commit_is_published_without_agent_rerun(self):

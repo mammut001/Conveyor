@@ -51,7 +51,7 @@ class PiRepair:
                     "Do not push, create PRs, merge, deploy, change dependencies, CI, secrets, or production. "
                     "Do not delete files or use network services. Leave source changes uncommitted.\n"
                     +json.dumps(payload['finding'],ensure_ascii=False))
-            await command([self.pi,'--mode','json','-p','--no-session','--no-extensions',
+            await command([self.pi,'--mode','text','-p','--no-session','--no-extensions',
                            '--no-skills','--no-prompt-templates','--no-themes','--no-context-files',
                            '--provider',self.provider,'--model',self.model,
                            '--tools','read,bash,edit,write,grep,find,ls'],
