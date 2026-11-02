@@ -61,10 +61,21 @@ def main():
         checks=PreviewChecks('http://127.0.0.1:18790',env['CONVEYOR_WEB_TOKEN'])
         github=GitHubDelivery(config['github_repo'])
         workspaces=Workspaces(config['repository'],config['workspaces'])
-        probes=SourceProbes(workspaces,config.get('source_probes',[]))
-        verifier=IndependentVerifier(workspaces,repo=config['github_repo'],checks=probes.verification_commands()+config['verification_commands'])
+        base_probes=SourceProbes(workspaces,config.get('source_probes',[]))
+        objective=None
+        if 'objective_planning' in config and not isinstance(config['objective_planning'],bool):
+            raise ValueError('objective_planning must be a boolean')
+        if config.get('objective_planning',False):
+            from overnight_objective import ObjectiveChecks,CombinedProbes
+            objective=ObjectiveChecks(store,args.run_id,workspaces)
+            probes=CombinedProbes(base_probes,objective)
+        else:
+            probes=base_probes
+        verifier=IndependentVerifier(workspaces,repo=config['github_repo'],checks=base_probes.verification_commands()+config['verification_commands'])
         async def verify_and_wait(payload):
             receipt = await verifier(payload)
+            if objective is not None:
+                receipt['checks'].extend(await objective.verify(payload))
             return await github.wait_verified(payload['candidate']['pr'],receipt)
         async def pinned_discovery(payload):
             expected=payload.get('revision')
@@ -76,6 +87,7 @@ def main():
                 raise RuntimeError('preview revision changed during discovery')
             return findings
         pipeline=OvernightPipeline(github=github,discover=pinned_discovery,
+            prepare=objective.prepare if objective is not None else None,
             repair=PiRepair(workspaces,github),verify=verify_and_wait,
             deploy=PreviewDelivery(config['repository'],preview_root,checks,source_probes=probes))
         # A single host coordinator owns external issue/PR reconciliation. Lock all

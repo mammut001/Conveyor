@@ -5,7 +5,8 @@ from overnight_worker import StageResult
 
 
 class OvernightPipeline:
-    def __init__(self, *, github, discover, repair, verify, deploy):
+    def __init__(self, *, github, discover, repair, verify, deploy, prepare=None):
+        self.prepare = prepare
         self.github = github
         self.discover_check = discover
         self.repair_issue = repair
@@ -15,6 +16,7 @@ class OvernightPipeline:
         self.issue_lock = asyncio.Lock()
 
     async def discover(self, task):
+        preparation = await self.prepare(task) if self.prepare is not None else None
         findings = await self.discover_check(task['payload'])
         successors = []
         issues = []
@@ -32,7 +34,10 @@ class OvernightPipeline:
             if clean_passes < 2:
                 successors.append(('discover',f'clean:{revision}:{clean_passes}',
                                    {**task['payload'],'clean_passes':clean_passes}))
-        return StageResult({'issues':issues,'clean':not findings,'clean_passes':clean_passes},tuple(successors))
+        result={'issues':issues,'clean':not findings,'clean_passes':clean_passes}
+        if preparation is not None:
+            result['acceptance_plan']=preparation
+        return StageResult(result,tuple(successors))
 
     async def repair(self, task):
         candidate = await self.repair_issue(task['payload'])

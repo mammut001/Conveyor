@@ -17,3 +17,10 @@ class ReportTests(unittest.TestCase):
             'tasks':[{'role':'verify','state':'blocked','result':json.dumps({'error':'CommandFailure'})}]})
         self.assertIn('需要处理阻塞',report);self.assertIn('CommandFailure',report)
         self.assertNotIn('连续两轮通过',report)
+
+    def test_frozen_goal_scenarios_are_visible_without_exposing_probe_code(self):
+        run={'id':'a'*32,'objective':'Explain controls','state':'running','tasks':[
+            {'role':'discover','state':'passed','result':json.dumps({'acceptance_plan':{'sha256':'d'*64,'scenarios':['Welcome exposes controls']}})}]}
+        text=format_run(run)
+        self.assertIn('d'*64,text)
+        self.assertIn('Welcome exposes controls',text)

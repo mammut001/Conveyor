@@ -33,3 +33,18 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 store.advance(ident,task['lease'],{},(('repair','issue',{}),))
             self.assertEqual(store.status(run)['tasks'][0]['state'],'running')
+
+    async def test_goal_plan_is_frozen_before_any_discovery_or_issue(self):
+        events=[]
+        async def prepare(task):
+            events.append('prepare')
+            return {'sha256':'pinned','scenarios':['goal contract']}
+        async def discover(payload):
+            events.append('discover')
+            return []
+        pipeline=OvernightPipeline(github=Mock(),prepare=prepare,discover=discover,
+            repair=AsyncMock(),verify=AsyncMock(),deploy=AsyncMock())
+        result=await pipeline.discover({'payload':{'revision':'a'*40}})
+        self.assertEqual(events,['prepare','discover'])
+        self.assertEqual(result.result['acceptance_plan']['sha256'],'pinned')
+        pipeline.github.issue.assert_not_called()
