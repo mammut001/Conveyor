@@ -10,7 +10,11 @@ import uuid
 
 
 class CommandFailure(RuntimeError):
-    pass
+    def __init__(self,message,*,program=None,category=None,return_code=None,output_bytes=None):
+        super().__init__(message)
+        self.diagnostics={key:value for key,value in {
+            'program':program,'category':category,'return_code':return_code,'output_bytes':output_bytes
+        }.items() if value is not None}
 
 
 def child_environment(*, provider=False):
@@ -27,6 +31,7 @@ async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_
     check_guard()
     if not argv or not 0 < timeout <= 1800:
         raise ValueError('invalid subprocess limits')
+    program=Path(argv[0]).name
     if sandboxed:
         from overnight_sandbox import sandbox_argv
         argv = sandbox_argv(argv,cwd)
@@ -44,7 +49,7 @@ async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_
                 return
             total_output += len(chunk)
             if total_output > output_limit:
-                raise CommandFailure('subprocess output limit exceeded')
+                raise CommandFailure('subprocess output limit exceeded',program=program,category='output_limit',output_bytes=total_output)
             if retain_output:
                 captured.extend(chunk)
     async def run():
@@ -58,7 +63,7 @@ async def command(argv, *, cwd, timeout=120, stdin=None, provider=False, output_
         code = await asyncio.wait_for(run(),timeout)
         if code:
             # Avoid including generated output or credentials in exception messages.
-            raise CommandFailure(f'subprocess exited with status {code}')
+            raise CommandFailure(f'subprocess exited with status {code}',program=program,category='nonzero_exit',return_code=code,output_bytes=total_output)
         return captured.decode('utf-8',errors='replace')
     finally:
         # Kill the whole process group even when the leader exited: grandchildren
