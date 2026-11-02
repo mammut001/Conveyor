@@ -1,0 +1,23 @@
+[Unit]
+Description=Conveyor preview nightly task control bridge
+After=conveyor-preview.service
+Requires=conveyor-preview.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=conveyor-preview
+WorkingDirectory=/srv/conveyor-preview/coordinator/controller
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/srv/conveyor-preview/venv/bin/python overnight_control.py
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+InaccessiblePaths=-/opt/conveyor -/srv/conveyor
+ReadWritePaths=/srv/conveyor-preview/coordinator /srv/conveyor-preview/control
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

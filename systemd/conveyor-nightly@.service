@@ -1,0 +1,25 @@
+[Unit]
+Description=Conveyor bounded overnight run %i
+After=network-online.target conveyor-preview.service
+Wants=network-online.target
+Requires=conveyor-preview.service
+
+[Service]
+Type=simple
+User=ubuntu
+SupplementaryGroups=conveyor-preview
+WorkingDirectory=/srv/conveyor-preview/coordinator/controller
+Environment=PATH=/srv/conveyor-preview/coordinator/tools:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=-/srv/conveyor-preview/coordinator/provider.env
+ExecStart=/srv/conveyor-preview/venv/bin/python overnight_cli.py --db /srv/conveyor-preview/coordinator/runs.sqlite3 run %i --config /srv/conveyor-preview/coordinator/config.json
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+KillMode=control-group
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+InaccessiblePaths=-/opt/conveyor -/srv/conveyor
+ReadWritePaths=/srv/conveyor-preview
+UMask=0077
