@@ -18,7 +18,7 @@ from pathlib import Path
 path=Path('/srv/conveyor-preview/runtime/preview.env')
 settings={
     'CONVEYOR_WEB_ENABLED':'1', 'CONVEYOR_WEB_HOST':'127.0.0.1',
-    'CONVEYOR_WEB_PORT':'8790', 'CONVEYOR_WEB_TOKEN':secrets.token_urlsafe(48),
+    'CONVEYOR_WEB_PORT':'18790', 'CONVEYOR_WEB_TOKEN':secrets.token_urlsafe(48),
     'CODEX_WORKSPACE_ROOT':'/srv/conveyor-preview/tasks/workspace',
     'CODEX_TASK_ROOT':'/srv/conveyor-preview/tasks/jobs',
     'CODEX_MEMORY_ROOT':'/srv/conveyor-preview/state',
