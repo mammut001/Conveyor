@@ -25,6 +25,11 @@ class Controller:
             objective=data.get('objective','')
             if not isinstance(objective,str) or not 1 <= len(objective.strip()) <= 2000:
                 raise ValueError('an objective of 1–2000 characters is required')
+            import time
+            with self.store.db() as db:
+                active=db.execute("SELECT id FROM nightly_runs WHERE state='running' AND deadline>? LIMIT 1",(time.time(),)).fetchone()
+            if active:
+                raise ValueError('another nightly run is active; inspect or cancel it before starting a new run')
             config=json.loads((self.root/'config.json').read_text())
             revision=(self.root.parent/'current').resolve().name
             if not re.fullmatch(r'[0-9a-f]{40}',revision):
