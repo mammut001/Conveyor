@@ -185,6 +185,7 @@ class WebChatTests(unittest.TestCase):
         status, body = self.request("POST", "/api/chat", {"message": "hello"})
         self.assertEqual(status, 409)
         self.assertIn("chat tier is disabled", body.get("error", ""))
+        self.assertEqual(body.get("code"), "chat_disabled")
 
     def test_desktop_sentence_runs_the_computer_route(self):
         async def fake_handle(msg, port, runner, settings, route):
@@ -455,6 +456,10 @@ class WebChatTests(unittest.TestCase):
                 status,body=self.request('GET',path)
                 self.assertEqual(status,200)
                 self.assertEqual(len(body['conversations']),1)
+                root=body['conversations'][0]
+                self.assertRegex(root['created_at'],r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$')
+                # Nothing said yet: the last activity is the creation.
+                self.assertEqual(root['last_activity'],root['created_at'])
                 self.assertEqual(self.request('POST','/api/agent-conversations/new',
                     {'agent_id':agent['id'],'title':'new'})[0],403)
 
@@ -472,6 +477,8 @@ class WebChatTests(unittest.TestCase):
                 self.assertEqual(status,201)
                 sid=body['conversation']['session_id']
                 self.assertTrue(sid.startswith('web:web-console:topic-'))
+                created=body['conversation']
+                self.assertEqual(created['last_activity'],created['created_at'])
                 from agent_context import resolve
                 ctx=resolve(settings,'web',sid.split(':',2)[2],'web-console')
                 self.assertEqual(ctx.agent_id,agent['id'])
@@ -487,6 +494,15 @@ class WebChatTests(unittest.TestCase):
                 self.assertTrue(any(kind=='done' for kind,_ in events))
                 _,history=self.request('GET','/api/chat/history?session_id='+sid)
                 self.assertIn('Topic response',str(history['messages']))
+                # After a reply the topic's last activity is its newest message.
+                from datetime import datetime
+                from transcript_store import get_transcript_store
+                _,listing=self.request('GET',path)
+                topic=next(row for row in listing['conversations'] if row['session_id']==sid)
+                self.assertEqual(topic['created_at'],created['created_at'])
+                self.assertEqual(topic['last_activity'],get_transcript_store(settings).last_message(sid)['created_at'])
+                when=lambda value: datetime.fromisoformat(value.replace('Z','+00:00'))
+                self.assertGreater(when(topic['last_activity']),when(topic['created_at']))
                 AgentStore(settings).archive(agent['id'])
                 self.assertEqual(self.request('GET',path)[0],404)
 

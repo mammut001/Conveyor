@@ -249,7 +249,7 @@ def test_teammate_commands():
     # Status
     status_str = run_teammate_command(settings, "")
     assert "全天候智能体队友" in status_str
-    assert "活跃巡检中" in status_str
+    assert "🟢 巡检中" in status_str
 
     # Pause & Resume
     pause_res = run_teammate_command(settings, "pause 4")

@@ -105,6 +105,17 @@ has no new compiled Python dependency.
 `GET /api/health` is intentionally minimal and unauthenticated. Every other API
 requires `Authorization: Bearer <token>`.
 
+An endpoint whose feature is switched off or not configured answers with an
+`error` text naming the setting plus a stable machine-readable `code`, for
+example `409 {"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)", "code": "routines_disabled"}`.
+The `error` texts are kept as they were for existing clients; new clients
+should match on `code`. With 409: `agents_disabled`, `memory_disabled`,
+`memory_v2_required`, `skills_disabled`, `mcp_disabled`,
+`approval_inbox_disabled`, `routines_disabled`, `webhooks_disabled`,
+`chat_disabled` and `voice_disabled`; with 503 from `POST /api/chat/voice`:
+`stt_not_configured` and `stt_config_invalid`; with 403 from the takeover
+endpoints: `takeover_disabled`.
+
 - `GET /api/system/status`
 - `GET /api/sessions`, `GET /api/sessions/{id}`
 - `GET /api/jobs`, `GET /api/jobs/{id}`
@@ -137,7 +148,7 @@ The web console exposes Conveyor's direct chat tier (`handlers.chat.ask_chat`) v
     "session_id": "web:web-console:web-12345"
   }
   ```
-  `session_id` is optional; when omitted, a fresh web session is generated. If the chat tier is disabled (`chat_enabled(settings)` is false), the endpoint returns `409 Conflict`.
+  `session_id` is optional; when omitted, a fresh web session is generated. If the chat tier is disabled (`chat_enabled(settings)` is false), the endpoint returns `409 Conflict` with `"code": "chat_disabled"`.
 - **Response**: Server-Sent Events (`text/event-stream`, `Cache-Control: no-store`, `X-Accel-Buffering: no`). Event types:
   - `session`: `{"session_id": "<id>"}` emitted first.
   - `delta`: `{"text": "<partial>"}` live streaming tokens.
@@ -196,7 +207,7 @@ To enable takeover endpoints and the transport sidecar, set
 `CONVEYOR_TAKEOVER_ENABLED=true` in `.env` (honored by both the web entrypoint
 `web_console_takeover.py` and the sidecar `handoff_sidecar.py`). When disabled,
 `/api/takeover/status` returns `enabled: false` and mutation endpoints respond
-with `403 Forbidden`.
+with `403 Forbidden` (`"code": "takeover_disabled"`).
 
 `POST /api/takeover/start` establishes exclusive GUI ownership before a remote
 desktop is opened. It cancels pending pre-handoff computer/screenshot work and

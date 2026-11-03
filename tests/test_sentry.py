@@ -130,6 +130,10 @@ class TestSentryEngine(unittest.TestCase):
             self.assertTrue(len(alerts) > 0)
             self.assertEqual(alerts[0].source, "host.disk")
             self.assertIn("磁盘空间偏低", alerts[0].title)
+            self.assertEqual(
+                [a["label"] for a in alerts[0].suggested_actions],
+                ["清理旧任务", "查看详细磁盘挂载情况"],
+            )
 
     def test_check_cpu_and_load(self):
         with patch("os.getloadavg", return_value=(8.0, 6.0, 5.0)), \
@@ -147,6 +151,54 @@ class TestSentryEngine(unittest.TestCase):
             self.assertEqual(len(alerts), 1)
             self.assertEqual(alerts[0].source, "host.service")
             self.assertEqual(alerts[0].severity, "critical")
+            self.assertEqual(alerts[0].summary, "当前状态：未运行。")
+
+    def test_check_services_describes_systemd_failure_in_chinese(self):
+        def systemctl(cmd, **_kwargs):
+            if cmd[1] == "show":
+                return MagicMock(returncode=0, stdout="ActiveState=failed\nSubState=failed\nResult=exit-code\n")
+            return MagicMock(returncode=3, stdout="failed\n" if cmd[2] == "conveyor-test-bot" else "inactive\n")
+
+        with patch("shutil.which", return_value="/bin/systemctl"), \
+             patch("subprocess.run", side_effect=systemctl):
+            alerts = check_services(self.settings)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0].summary, "当前状态：已失败（进程异常退出）。")
+        self.assertNotIn("Result", alerts[0].summary)
+        self.assertNotIn("exit-code", alerts[0].summary)
+
+    def test_unit_state_wording(self):
+        from personal_tools.sentry import _describe_unit_state
+
+        cases = [
+            ("failed", "ActiveState=failed\nSubState=failed\nResult=exit-code", "已失败（进程异常退出）"),
+            ("inactive", "ActiveState=inactive\nSubState=dead\nResult=success", "未运行（已停止）"),
+            ("activating", "ActiveState=activating\nSubState=auto-restart\nResult=exit-code",
+             "正在启动（等待自动重启，进程异常退出）"),
+            ("failed", "ActiveState=failed\nSubState=failed\nResult=start-limit-hit",
+             "已失败（重启次数过多，已停止重试）"),
+            # `systemctl show` failed: only the is-active answer is known.
+            ("inactive", "", "未运行"),
+            # Values systemd may add later are shown as printed.
+            ("failed", "ActiveState=failed\nSubState=brand-new\nResult=new-result", "已失败（new-result）"),
+        ]
+        for state, show, expected in cases:
+            with self.subTest(show=show):
+                self.assertEqual(_describe_unit_state(state, show), expected)
+
+    def test_ci_failure_suggests_chinese_fix_command(self):
+        from types import SimpleNamespace
+        from personal_tools.base import ToolResult
+
+        settings = SimpleNamespace(github_token="t", github_repo="owner/repo")
+        with patch("personal_tools.github_tools.get_ci_status", create=True,
+                   return_value=ToolResult(ok=True, text="main: failure")):
+            alerts = check_github_ci(settings)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(
+            alerts[0].suggested_actions[1],
+            {"label": "启动自动排查与修复", "command": "/fix 排查并修复 main 分支的 CI 失败"},
+        )
 
     def test_check_log_error_spikes(self):
         with patch("shutil.which", return_value="/bin/journalctl"), \
@@ -201,6 +253,9 @@ class TestSentryEngine(unittest.TestCase):
         text = format_alert_text(alert)
         self.assertIn("【全天候守护·主动预警】", text)
         self.assertIn("`/ps`", text)
+        self.assertIn("*（来源：CPU 负载 host.cpu · 发送 `/teammate pause` 可暂停提醒）*", text)
+        unknown = dataclasses.replace(alert, source="host.other")
+        self.assertIn("（来源：host.other ·", format_alert_text(unknown))
 
         sent = deliver_sentry_alerts(self.settings, [alert], dry_run=True)
         self.assertEqual(sent, 1)
@@ -208,9 +263,13 @@ class TestSentryEngine(unittest.TestCase):
     def test_teammate_commands(self):
         status = run_teammate_command(self.settings, "")
         self.assertIn("全天候智能体队友", status)
+        self.assertIn("运行状态: 🟢 巡检中", status)
+        for english in ("Always-On", "(Active)", "(Paused)"):
+            self.assertNotIn(english, status)
 
         pause_res = run_teammate_command(self.settings, "pause 5")
         self.assertIn("5 小时", pause_res)
+        self.assertIn("运行状态: ⏸️ 已暂停\n", run_teammate_command(self.settings, ""))
 
         resume_res = run_teammate_command(self.settings, "resume")
         self.assertIn("已恢复", resume_res)
@@ -223,6 +282,29 @@ class TestSentryEngine(unittest.TestCase):
 
         check_res = run_teammate_command(self.settings, "check")
         self.assertIn("实时系统巡检完成", check_res)
+
+    def test_check_and_status_list_alerts_in_chinese(self):
+        alert = SentryAlert(
+            source="host.disk", severity="warning", title="磁盘空间偏低 (/)",
+            summary="可用空间不足", fingerprint="disk.fp",
+        )
+        for name in ("check_cpu_and_load", "check_services", "check_log_error_spikes",
+                     "check_repo_git", "check_github_ci"):
+            quiet = patch(f"personal_tools.sentry.{name}", return_value=[])
+            quiet.start()
+            self.addCleanup(quiet.stop)
+        with patch("personal_tools.sentry.check_disk_space", return_value=[alert]):
+            check_res = run_teammate_command(self.settings, "check")
+            self.assertIn("• **磁盘空间偏低 (/)**（警告）\n  可用空间不足", check_res)
+            run_sentry_patrol(self.settings, force=True)
+
+        self.assertIn("  - [磁盘空间] 磁盘空间偏低 (/)", run_teammate_command(self.settings, "pulse evening"))
+        self.assertIn("] 磁盘空间偏低 (/)：可用空间不足", teammate_status_text(self.settings))
+        # An entry saved without a title still reads as Chinese.
+        state = SentryState.load(self.settings)
+        state.recent_alerts[0].pop("title")
+        state.save(self.settings)
+        self.assertIn("] 告警：可用空间不足", teammate_status_text(self.settings))
 
     def test_intent_routing_and_personal_tools(self):
         for phrase, tool in [

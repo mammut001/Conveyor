@@ -1,9 +1,11 @@
 """Authenticated conversation picker; transport identity remains Web-only."""
+from datetime import datetime, timezone
 from http import HTTPStatus
 from urllib.parse import urlparse
 
 from channel.types import InboundMessage
 import agent_conversations as conversations
+from transcript_store import get_transcript_store
 
 
 def _entry(handler, agent_id):
@@ -18,16 +20,23 @@ def _entry(handler, agent_id):
         chat_id=agents.chat_id_for(agent_id), message_id=None, text='', chat_type='p2p')
 
 
-def _public(row):
+def _public(settings, row):
+    # UTC ISO 8601 times like the transcript's; last_activity is the newest
+    # message, or created_at while the conversation is still empty.
+    session_id = conversations.transcript_id(row)
+    created = datetime.fromtimestamp(row['created_at'], timezone.utc).isoformat(
+        timespec='microseconds').replace('+00:00', 'Z')
+    last = get_transcript_store(settings).last_message(session_id)
     return {'id': row['id'], 'title': row['title'], 'origin_channel': row['origin_channel'],
-            'session_id': conversations.transcript_id(row)}
+            'session_id': session_id, 'created_at': created,
+            'last_activity': (last or {}).get('created_at') or created}
 
 
 def get(handler, query):
     try:
         settings, msg = _entry(handler, (query.get('agent_id') or [''])[0])
         rows = conversations.list_for_entry(settings, msg)
-        handler._json(HTTPStatus.OK, {'conversations': [_public(row) for row in rows]})
+        handler._json(HTTPStatus.OK, {'conversations': [_public(settings, row) for row in rows]})
     except (ValueError, PermissionError, LookupError):
         handler._json(HTTPStatus.NOT_FOUND, {'error': 'conversation unavailable'})
 
@@ -46,6 +55,6 @@ def post(handler, body):
             raise ValueError('invalid request')
         settings, msg = _entry(handler, body['agent_id'])
         row = conversations.new(settings, msg, body.get('title') or 'Web 新话题')
-        handler._json(HTTPStatus.CREATED, {'conversation': _public(row)})
+        handler._json(HTTPStatus.CREATED, {'conversation': _public(settings, row)})
     except (ValueError, PermissionError, LookupError):
         handler._json(HTTPStatus.NOT_FOUND, {'error': 'conversation unavailable'})

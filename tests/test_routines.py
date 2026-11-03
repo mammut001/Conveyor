@@ -368,9 +368,85 @@ class TestRoutineRunner(unittest.TestCase):
                 # Verify Telegram delivery was called with approval reminder
                 self.assertTrue(mock_tg.called)
                 tg_text = mock_tg.call_args[0][1]
-                self.assertIn("Web Console inbox", tg_text)
+                self.assertTrue(tg_text.startswith("⏰ 定时任务「Create Reminder」等你批准：\n\n⚠️ 危险操作需确认"))
+                self.assertTrue(tg_text.endswith("\n\n⚠️ 这个操作需要确认，请到网页控制台的收件箱里批准或拒绝。"))
 
         asyncio.run(_test())
+
+    def _run_with_outcome(self, ask_chat):
+        """Run a routine delivered to Telegram; return (run record, Telegram text)."""
+        r = routines.create_routine(
+            self.settings, name="早报", schedule="0 8 * * *", prompt="总结昨天的进展",
+            deliver=["web", "telegram"],
+        )
+
+        async def _run():
+            with patch("handlers.chat.ask_chat", new=ask_chat), \
+                 patch("scripts.telegram_api.send_message") as mock_tg:
+                rec = await routines.run_routine_now(self.settings, r["id"])
+            return rec, mock_tg.call_args[0][1]
+
+        return asyncio.run(_run())
+
+    def test_run_outcomes_are_reported_in_chinese(self):
+        escalate = SimpleNamespace(body="", reason="需要改代码", confidence="low", removed_links=0)
+        cases = [
+            (AsyncMock(return_value=("escalate", escalate)), "escalate",
+             "这次需要让 Codex 执行任务（需要改代码），定时任务不会自动执行；需要的话请手动发起。",
+             "需要你手动处理"),
+            (AsyncMock(return_value=("escalate", None)), "escalate",
+             "这次需要让 Codex 执行任务，定时任务不会自动执行；需要的话请手动发起。",
+             "需要你手动处理"),
+            (AsyncMock(return_value=("unavailable", None)), "unavailable",
+             "对话模型当时不可用，这次没有运行。", "没有运行"),
+            # wait_for passes on the TimeoutError it raises when the run is too slow.
+            (AsyncMock(side_effect=asyncio.TimeoutError), "error",
+             "运行超时（超过 120 秒），已停止。", "失败"),
+            (AsyncMock(side_effect=RuntimeError("boom")), "error",
+             "运行出错：RuntimeError: boom", "失败"),
+        ]
+        # The crashing run logs its traceback.
+        with self.assertLogs("conveyor.routines", level="ERROR"):
+            for ask_chat, status, output, label in cases:
+                with self.subTest(output=output):
+                    rec, tg_text = self._run_with_outcome(ask_chat)
+                    self.assertEqual(rec["status"], status)
+                    self.assertEqual(rec["output"], output)
+                    self.assertEqual(tg_text, f"⏰ 定时任务「早报」（{label}）：\n\n{output}")
+
+    def test_notification_text(self):
+        self.assertEqual(
+            routines._notification_text("早报", "ok", "一切正常"),
+            "⏰ 定时任务「早报」（已完成）：\n\n一切正常",
+        )
+        self.assertEqual(
+            routines._notification_text("早报", "approval_pending", "等你批准"),
+            "⏰ 定时任务「早报」等你批准：\n\n等你批准\n\n"
+            "⚠️ 这个操作需要确认，请到网页控制台的收件箱里批准或拒绝。",
+        )
+        # A status without a label is shown as stored.
+        self.assertEqual(
+            routines._notification_text("早报", "new_status", "x"),
+            "⏰ 定时任务「早报」（new_status）：\n\nx",
+        )
+
+    def test_agent_conversation_post_wording(self):
+        from transcript_store import get_transcript_store
+
+        agent = {"id": "a1", "session_id": "web:web-console:agent-a1"}
+        cases = [
+            ("approval_pending", "⏰ 早报 — 等你批准\n\n输出"),
+            ("ok", "⏰ 早报\n\n输出"),
+            ("unavailable", "⏰ 早报（没有运行）\n\n输出"),
+            ("error", "⏰ 早报（失败）\n\n输出"),
+        ]
+        for status, expected in cases:
+            with self.subTest(status=status):
+                self.assertEqual(
+                    routines._post_to_agent_conversation(self.settings, agent, "早报", status, "输出"), "ok",
+                )
+                last = get_transcript_store(self.settings).last_message(agent["session_id"])
+                self.assertEqual(last["content"], expected)
 
 
 class TestWebAPI(unittest.TestCase):
@@ -453,7 +529,8 @@ class TestWebAPI(unittest.TestCase):
         self.settings.routines_enabled = False
         status, data = self.request("GET", "/api/routines")
         self.assertEqual(status, 409)
-        self.assertIn("routines are disabled", data.get("error", ""))
+        self.assertEqual(data, {"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)",
+                                "code": "routines_disabled"})
 
         status, data = self.request("GET", "/api/inbox")
         self.assertEqual(status, 409)
@@ -558,7 +635,7 @@ class TestWebAPI(unittest.TestCase):
         self.assertEqual(status, 200)
         updated_item = inbox["items"][0]
         self.assertEqual(updated_item["approval"]["status"], "approved")
-        self.assertIn("Approved", updated_item["output"])
+        self.assertTrue(updated_item["output"].endswith("\n\n[已批准：Note added successfully]"))
 
     def raw_post(self, path: str, *, content_length: str | None):
         """POST exactly like a browser fetch() without a body: no Content-Length, or 0."""
@@ -670,7 +747,7 @@ class TestWebAPI(unittest.TestCase):
         status, inbox = self.request("GET", "/api/inbox")
         item = inbox["items"][0]
         self.assertEqual(item["approval"]["status"], "expired")
-        self.assertIn("[Expired]", item["output"])
+        self.assertEqual(item["output"], "needs approval\n\n[批准已过期]")
         clear_all_pending()
         self.assertEqual(routines.restore_routine_approvals(self.settings), 0)
 
@@ -860,6 +937,21 @@ class TestRunStatusAfterDecision(unittest.TestCase):
                     [r for r in routines.list_routines(self.settings) if r["id"] == self.r["id"]][0]["last_run_status"],
                     expected,
                 )
+
+    def test_decision_is_appended_to_output_in_chinese(self):
+        cases = [
+            ("approved", "已保存", "needs approval\n\n[已批准：已保存]"),
+            ("denied", "", "needs approval\n\n[已拒绝]"),
+            ("cancelled", "", "needs approval\n\n[已取消]"),
+            # A decision without a label keeps the old English form.
+            ("withdrawn", "", "needs approval\n\n[Withdrawn]"),
+        ]
+        for decision, result_text, expected in cases:
+            with self.subTest(decision=decision):
+                pending, run = self._pending_run()
+                routines.record_approval_decision(self.settings, pending.token, decision, result_text)
+                items, _ = routines.list_inbox(self.settings)
+                self.assertEqual(next(i for i in items if i["id"] == run["id"])["output"], expected)
 
     def test_expired(self):
         import time as _time
@@ -1224,6 +1316,7 @@ class TestRoutineWebhooksApi(unittest.TestCase):
         status, data, _ = self.raw_request("POST", f"/api/routines/{r['id']}/hook", body=b"{}", authorized=True)
         self.assertEqual(status, 409)
         self.assertIn("webhooks are disabled", data.get("error", ""))
+        self.assertEqual(data.get("code"), "webhooks_disabled")
 
         status, data, _ = self.raw_request("DELETE", f"/api/routines/{r['id']}/hook", authorized=True)
         self.assertEqual(status, 409)

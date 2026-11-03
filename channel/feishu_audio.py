@@ -221,7 +221,7 @@ async def handle_audio(
             # The shared STT boundary probes the *decoded* duration with
             # ffprobe, not merely the untrusted Feishu metadata.
             transcript = await transcribe_async(converted)
-        await port.reply(inbound, f"🎤 heard: {transcript}")
+        await port.reply(inbound, f"🎤 听到：{transcript}")
         # Same Feishu dispatch/approval path as ordinary typed text.
         await dispatch_text(transcript)
     except VoiceError as exc:

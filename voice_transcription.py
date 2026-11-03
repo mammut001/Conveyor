@@ -28,9 +28,11 @@ _ALLOWED_SUFFIXES = {
 
 
 class VoiceError(Exception):
-    def __init__(self, message: str, status: int = 400):
+    def __init__(self, message: str, status: int = 400, *, code: str | None = None):
         super().__init__(message)
         self.status = status
+        # Machine-readable reason for configuration errors, sent to the Web API.
+        self.code = code
 
 
 def enabled() -> bool:
@@ -41,9 +43,9 @@ def _int_config(name: str, default: int, max_value: int) -> int:
     try:
         value = int(os.getenv(name, str(default)))
     except ValueError:
-        raise VoiceError(f"Invalid {name} configuration", 503) from None
+        raise VoiceError(f"Invalid {name} configuration", 503, code="stt_config_invalid") from None
     if not 1 <= value <= max_value:
-        raise VoiceError(f"Invalid {name} configuration", 503)
+        raise VoiceError(f"Invalid {name} configuration", 503, code="stt_config_invalid")
     return value
 
 
@@ -133,7 +135,8 @@ def _endpoint() -> str:
             parsed.fragment or (parsed.scheme != "https" and not (
                 parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1", "::1")
             ))):
-        raise VoiceError("Set CONVEYOR_STT_BASE_URL to a valid HTTPS STT provider URL", 503)
+        raise VoiceError("Set CONVEYOR_STT_BASE_URL to a valid HTTPS STT provider URL", 503,
+                         code="stt_not_configured")
     if not base.endswith("/audio/transcriptions"):
         base += "/audio/transcriptions"
     return base
@@ -141,12 +144,12 @@ def _endpoint() -> str:
 
 def transcribe_file(path: Path, *, duration: float | None = None) -> str:
     if not enabled():
-        raise VoiceError("Voice transcription is disabled (set CONVEYOR_STT_ENABLED=1)", 409)
+        raise VoiceError("Voice transcription is disabled (set CONVEYOR_STT_ENABLED=1)", 409, code="voice_disabled")
     validate_file(path, duration)
     key = os.getenv("CONVEYOR_STT_API_KEY", "")
     model = os.getenv("CONVEYOR_STT_MODEL", "").strip()
     if not key or not model:
-        raise VoiceError("Configure CONVEYOR_STT_API_KEY and CONVEYOR_STT_MODEL", 503)
+        raise VoiceError("Configure CONVEYOR_STT_API_KEY and CONVEYOR_STT_MODEL", 503, code="stt_not_configured")
     url = _endpoint()
     # Multipart without dependency, with an explicit one-request/no-retry policy.
     import uuid

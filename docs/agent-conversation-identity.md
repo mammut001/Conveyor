@@ -14,6 +14,10 @@ history, and message origin are separate concepts.
   one. `/conversation local` returns to this entry's independent root;
   `/conversation new <title>` starts a new topic.
 - The Web Agent workspace has a conversation picker and an “另开话题” action.
+  Its list (`GET /api/agent-conversations?agent_id=<id>`) gives each
+  conversation's `id`, `title`, `origin_channel`, `session_id`, `created_at`
+  and `last_activity` (UTC ISO 8601; `last_activity` is the newest message, or
+  `created_at` while the conversation is empty).
   Selection and drafts persist separately per Agent/conversation in the browser.
   A pending reply disables the picker; an unreadable list offers retry or an
   explicit fallback to the original Web conversation.

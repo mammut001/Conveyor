@@ -165,7 +165,8 @@ class WebTakeoverApiTests(unittest.TestCase):
                 with self.subTest(endpoint=path, auth=True):
                     status, body = self.request("POST", path, {"reason": "operator_requested", "session_id": "takeover-1"}, authorized=True)
                     self.assertEqual(status, 403)
-                    self.assertEqual(body, {"error": "Human takeover is disabled (set CONVEYOR_TAKEOVER_ENABLED=true)"})
+                    self.assertEqual(body, {"error": "Human takeover is disabled (set CONVEYOR_TAKEOVER_ENABLED=true)",
+                                            "code": "takeover_disabled"})
         finally:
             self.takeover.enabled = True
 
@@ -213,7 +214,8 @@ class WebTakeoverApiTests(unittest.TestCase):
                 for path in ("/api/takeover/start", "/api/takeover/activate", "/api/takeover/complete", "/api/takeover/cancel"):
                     st, body = req("POST", path, {"reason": "operator_requested", "session_id": "test"})
                     self.assertEqual(st, 403)
-                    self.assertEqual(body, {"error": "Human takeover is disabled (set CONVEYOR_TAKEOVER_ENABLED=true)"})
+                    self.assertEqual(body, {"error": "Human takeover is disabled (set CONVEYOR_TAKEOVER_ENABLED=true)",
+                                            "code": "takeover_disabled"})
 
                 self.assertIsNone(HumanTakeoverStore(settings).current())
                 self.assertFalse(transport_gate_path(settings).exists())

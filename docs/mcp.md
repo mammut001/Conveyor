@@ -22,7 +22,7 @@ When enabled:
 - Modifying tools request operator confirmation and appear in the Web approval inbox.
 
 When disabled (`CONVEYOR_MCP_ENABLED=false`):
-- All `/api/mcp/*` endpoints return `409 Conflict` with `{"error": "MCP connectors are disabled (set CONVEYOR_MCP_ENABLED=true)"}`.
+- All `/api/mcp/*` endpoints return `409 Conflict` with `{"error": "MCP connectors are disabled (set CONVEYOR_MCP_ENABLED=true)", "code": "mcp_disabled"}`.
 - No child processes are spawned and no HTTP connections are made.
 - No MCP tools are exposed in chat schemas or tool dispatch.
 - The Web Console hides the Connectors tab.

@@ -28,6 +28,68 @@ logger = logging.getLogger("conveyor.sentry")
 
 STATE_FILE = "state/teammate_sentry_state.json"
 
+# Chinese names shown to the owner; the English keys stay machine-readable
+# (``/teammate mute`` takes the source key). Same wording as the web console.
+SOURCE_LABELS = {
+    "host.disk": "磁盘空间",
+    "host.cpu": "CPU 负载",
+    "host.service": "系统服务",
+    "host.logs": "错误日志",
+    "repo.git": "Git 工作区",
+    "repo.ci": "GitHub CI",
+}
+SEVERITY_LABELS = {"critical": "严重", "warning": "警告", "info": "提示"}
+
+# systemd unit states as printed by `systemctl is-active` / `systemctl show`.
+# Values not listed here are shown as systemd printed them.
+_UNIT_STATES = {
+    "active": "运行中",
+    "reloading": "正在重新加载",
+    "inactive": "未运行",
+    "failed": "已失败",
+    "activating": "正在启动",
+    "deactivating": "正在停止",
+    "maintenance": "维护中",
+    "unknown": "状态未知",
+}
+_UNIT_SUBSTATES = {
+    "dead": "已停止",
+    "exited": "已退出",
+    "failed": "已失败",
+    "auto-restart": "等待自动重启",
+    "running": "运行中",
+    "waiting": "等待触发",
+}
+_UNIT_RESULTS = {
+    "exit-code": "进程异常退出",
+    "signal": "进程被信号终止",
+    "core-dump": "进程崩溃",
+    "timeout": "启动或停止超时",
+    "watchdog": "看门狗超时",
+    "start-limit-hit": "重启次数过多，已停止重试",
+    "resources": "系统资源不足",
+    "oom-kill": "内存不足，进程被终止",
+}
+
+
+def _describe_unit_state(state: str, show_output: str) -> str:
+    """Describe a systemd unit's state in Chinese, e.g. "已失败（进程异常退出）"."""
+    props = {}
+    for line in show_output.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            props[key.strip()] = value.strip()
+    active = props.get("ActiveState") or state or "unknown"
+    text = _UNIT_STATES.get(active, active)
+    notes = []
+    sub = _UNIT_SUBSTATES.get(props.get("SubState", ""))
+    if sub and sub != text:
+        notes.append(sub)
+    result = props.get("Result", "")
+    if result and result != "success":
+        notes.append(_UNIT_RESULTS.get(result, result))
+    return f"{text}（{'，'.join(notes)}）" if notes else text
+
 
 @dataclass
 class SentryAlert:
@@ -191,7 +253,7 @@ def check_disk_space(settings: Settings) -> list[SentryAlert]:
                         summary=summary,
                         fingerprint=f"host.disk.{path_str}",
                         suggested_actions=[
-                            {"label": "清理历史旧任务与 Worktree", "command": "/clean"},
+                            {"label": "清理旧任务", "command": "/clean"},
                             {"label": "查看详细磁盘挂载情况", "command": "/disk"},
                         ],
                     )
@@ -293,14 +355,14 @@ def check_services(settings: Settings) -> list[SentryAlert]:
                     text=True,
                     timeout=5,
                 )
-                details = fail_res.stdout.strip().replace("\n", ", ") if fail_res.returncode == 0 else state
+                details = _describe_unit_state(state, fail_res.stdout if fail_res.returncode == 0 else "")
                 alias = "telegram" if "telegram" in unit else ("feishu" if "feishu" in unit else unit)
                 alerts.append(
                     SentryAlert(
                         source="host.service",
                         severity="critical",
                         title=f"系统服务异常: {unit}",
-                        summary=f"服务状态为 `{state}` ({details})，未处于正常运行状态。",
+                        summary=f"当前状态：{details}。",
                         fingerprint=f"host.service.{unit}",
                         suggested_actions=[
                             {"label": f"尝试重启服务", "command": f"/restart {alias}"},
@@ -411,7 +473,7 @@ def check_github_ci(settings: Settings) -> list[SentryAlert]:
                     fingerprint=f"repo.ci.{repo}.failure",
                     suggested_actions=[
                         {"label": "查看详细 CI 状态", "command": "/github_ci"},
-                        {"label": "启动自动排查与修复", "command": "/fix GitHub CI failure on main"},
+                        {"label": "启动自动排查与修复", "command": "/fix 排查并修复 main 分支的 CI 失败"},
                     ],
                 )
             )
@@ -507,7 +569,9 @@ def format_alert_text(alert: SentryAlert) -> str:
         for act in alert.suggested_actions:
             lines.append(f"• `{act['command']}` — {act['label']}")
 
-    lines.append(f"\n*(来源: {alert.source} · 发送 `/teammate pause` 可暂停提醒)*")
+    label = SOURCE_LABELS.get(alert.source)
+    source = f"{label} {alert.source}" if label else alert.source
+    lines.append(f"\n*（来源：{source} · 发送 `/teammate pause` 可暂停提醒）*")
     return "\n".join(lines)
 
 
@@ -592,7 +656,7 @@ def teammate_status_text(settings: Settings) -> str:
     """Generate comprehensive status text for /teammate command."""
     state = SentryState.load(settings)
     is_paused = state.is_effective_paused()
-    status_emoji = "⏸️ 已暂停 (Paused)" if is_paused else "🟢 活跃巡检中 (Active)"
+    status_emoji = "⏸️ 已暂停" if is_paused else "🟢 巡检中"
 
     interval = getattr(settings, "sentry_interval_seconds", 300)
     cooldown = getattr(settings, "sentry_cooldown_seconds", 7200)
@@ -602,7 +666,7 @@ def teammate_status_text(settings: Settings) -> str:
     services_str = ", ".join(getattr(settings, "sentry_monitored_services", ()))
 
     lines = [
-        "🛡️ **全天候智能体队友 (Always-On Teammate)**",
+        "🛡️ **全天候智能体队友**",
         f"• 运行状态: {status_emoji}",
         f"• 巡检周期: 每 {interval} 秒 ({interval // 60} 分钟)",
         f"• 告警防骚扰冷却: {cooldown // 3600} 小时",
@@ -624,7 +688,7 @@ def teammate_status_text(settings: Settings) -> str:
         lines.append("\n🕒 **最近触发的守护预警：**")
         for a in state.recent_alerts[:3]:
             ts = a.get("created_at", "")[:16].replace("T", " ")
-            lines.append(f"• [{ts}] {a.get('title', 'Alert')}: {truncate(a.get('summary', ''), 60)}")
+            lines.append(f"• [{ts}] {a.get('title', '告警')}：{truncate(a.get('summary', ''), 60)}")
 
     lines.extend([
         "",
@@ -739,7 +803,7 @@ def teammate_daily_pulse(
         if state.recent_alerts:
             lines.append(f"• 今日守护处置事件: {len(state.recent_alerts)} 条")
             for a in state.recent_alerts[:2]:
-                lines.append(f"  - [{a.get('source')}] {a.get('title')}")
+                lines.append(f"  - [{SOURCE_LABELS.get(a.get('source'), a.get('source'))}] {a.get('title')}")
         else:
             lines.append("• 今日系统平稳运行，未发生严重报警")
 
@@ -776,7 +840,7 @@ def run_teammate_command(settings: Settings, arg: str) -> str:
             if alerts:
                 lines.append(f"🚨 **发现 {len(alerts)} 项需要关注的异常：**\n")
                 for a in alerts:
-                    lines.append(f"• **{a.title}** ({a.severity})\n  {a.summary}")
+                    lines.append(f"• **{a.title}**（{SEVERITY_LABELS.get(a.severity, a.severity)}）\n  {a.summary}")
             if suppressed:
                 lines.append(f"\nℹ️ 另有 {len(suppressed)} 项处于冷却或静音期的报警。")
         return "\n".join(lines)
