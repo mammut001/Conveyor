@@ -122,7 +122,7 @@ class FeishuAudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.response.closed)
         self.assertEqual(len(self.api.sent), 1)
         self.assertEqual(self.api.sent[0][2], {"reply_to": "om_1"})
-        self.assertIn("🎤 heard: /run safe-command",
+        self.assertIn("🎤 听到：/run safe-command",
                       self.api.sent[0][1]["elements"][0]["content"])
         self.dispatch.assert_awaited_once_with("/run safe-command")
         self.assertTrue(observed)

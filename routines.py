@@ -900,6 +900,29 @@ def _run_status_for_decision(decision: str) -> str:
     return APPROVAL_RUN_STATUS.get(decision, "approval_pending")
 
 
+# What the owner reads for a run status in Telegram / Feishu / agent
+# conversations; same wording as the web console's inbox.
+STATUS_LABELS = {
+    "ok": "已完成",
+    "error": "失败",
+    "escalate": "需要你手动处理",
+    "unavailable": "没有运行",
+    "approval_pending": "等你批准",
+    "executed": "已批准并执行",
+    "denied": "已拒绝",
+    "expired": "批准已过期",
+    "cancelled": "已取消",
+}
+
+# Appended to a run's output once its approval is decided, e.g. "[已拒绝]".
+DECISION_LABELS = {
+    "approved": "已批准",
+    "denied": "已拒绝",
+    "expired": "批准已过期",
+    "cancelled": "已取消",
+}
+
+
 def record_approval_decision(
     settings: Any,
     approval_id: str,
@@ -922,7 +945,8 @@ def record_approval_decision(
             if not row:
                 return False
 
-            extra = f"\n\n[{decision.capitalize()}: {truncate(result_text, 1000)}]" if result_text else f"\n\n[{decision.capitalize()}]"
+            label = DECISION_LABELS.get(decision, decision.capitalize())
+            extra = f"\n\n[{label}：{truncate(result_text, 1000)}]" if result_text else f"\n\n[{label}]"
             new_output = truncate(row["output"] + extra, 4_000)
             conn.execute(
                 "UPDATE routine_runs SET approval_status = ?, output = ?, "
@@ -1028,9 +1052,9 @@ def expire_routine_approvals(settings: Any, now: float | None = None) -> int:
                 conn.execute(
                     "UPDATE routine_runs SET approval_status = 'expired', "
                     "status = CASE WHEN status = 'approval_pending' THEN 'expired' ELSE status END, "
-                    "output = substr(output || char(10) || char(10) || '[Expired]', 1, 4000) "
+                    "output = substr(output || char(10) || char(10) || ?, 1, 4000) "
                     "WHERE approval_id = ? AND (approval_status IS NULL OR approval_status = 'pending')",
-                    (token,),
+                    (f"[{DECISION_LABELS['expired']}]", token),
                 )
         try:
             import approval_relay
@@ -1151,11 +1175,11 @@ def _post_to_agent_conversation(settings: Any, agent: dict[str, Any], name: str,
         from transcript_store import get_transcript_store
 
         if status == "approval_pending":
-            text = f"⏰ {name} — needs your approval\n\n{output}"
+            text = f"⏰ {name} — 等你批准\n\n{output}"
         elif status == "ok":
             text = f"⏰ {name}\n\n{output}"
         else:
-            text = f"⏰ {name} ({status})\n\n{output}"
+            text = f"⏰ {name}（{STATUS_LABELS.get(status, status)}）\n\n{output}"
         get_transcript_store(settings).append(
             agent["session_id"], "assistant", text, kind="routine",
             channel=agents.WEB_CHANNEL, operator_id=agents.WEB_OPERATOR,
@@ -1165,6 +1189,17 @@ def _post_to_agent_conversation(settings: Any, agent: dict[str, Any], name: str,
     except Exception as exc:
         logger.warning("Routine could not post to agent conversation: %s", exc)
         return f"error: {type(exc).__name__}"
+
+
+def _notification_text(name: str, status: str, output: str) -> str:
+    """The Telegram / Feishu message for one routine run."""
+    if status == "approval_pending":
+        return (
+            f"⏰ 定时任务「{name}」等你批准：\n\n"
+            f"{output}\n\n"
+            "⚠️ 这个操作需要确认，请到网页控制台的收件箱里批准或拒绝。"
+        )
+    return f"⏰ 定时任务「{name}」（{STATUS_LABELS.get(status, status)}）：\n\n{output}"
 
 
 async def run_single_routine(
@@ -1179,7 +1214,7 @@ async def run_single_routine(
     from handlers.chat import ask_chat, reset
 
     routine_id = int(routine["id"])
-    name = routine.get("name", f"Routine #{routine_id}")
+    name = routine.get("name", f"定时任务 #{routine_id}")
     prompt = routine.get("prompt", "")
     deliver = routine.get("deliver", ["web"])
     origin_channel = routine.get("origin_channel", "web")
@@ -1245,30 +1280,30 @@ async def run_single_routine(
                 persist_routine_approval(settings, approval_id, routine_id)
             except Exception:
                 logger.exception("Failed to persist approval for routine #%d", routine_id)
-            raw_output = port.last_text or "Approval pending"
+            raw_output = port.last_text or "等你批准"
         elif outcome == "answered":
             status = "ok"
             raw_output = port.last_text or (checked.body if checked else "")
         elif outcome == "escalate":
             status = "escalate"
-            reason = f" ({checked.reason})" if checked and checked.reason else ""
+            reason = f"（{checked.reason}）" if checked and checked.reason else ""
             raw_output = (
-                f"This routine requested task execution on Codex{reason}, "
-                "which is not auto-run for scheduled routines. Please run it manually if needed."
+                f"这次需要让 Codex 执行任务{reason}，"
+                "定时任务不会自动执行；需要的话请手动发起。"
             )
         elif outcome == "unavailable":
             status = "unavailable"
-            raw_output = "The chat tier was unavailable to run this routine."
+            raw_output = "对话模型当时不可用，这次没有运行。"
         else:
             status = "ok"
             raw_output = port.last_text
     except asyncio.TimeoutError:
         status = "error"
-        raw_output = f"Routine execution timed out after {int(PER_RUN_TIMEOUT_SECONDS)} seconds."
+        raw_output = f"运行超时（超过 {int(PER_RUN_TIMEOUT_SECONDS)} 秒），已停止。"
     except Exception as exc:
         logger.exception("Error executing routine #%d", routine_id)
         status = "error"
-        raw_output = f"Routine execution error: {type(exc).__name__}: {exc}"
+        raw_output = f"运行出错：{type(exc).__name__}: {exc}"
 
     finished_at = datetime.now(timezone.utc).isoformat()
     safe_output = truncate(redact_text(raw_output), 4_000)
@@ -1303,14 +1338,7 @@ async def run_single_routine(
 
                 if tg_target:
                     from scripts.telegram_api import send_message
-                    if status == "approval_pending":
-                        tg_text = (
-                            f"⏰ Routine '{name}' needs approval:\n\n"
-                            f"{safe_output}\n\n"
-                            f"⚠️ Action requires confirmation. Please decide this approval in the Web Console inbox."
-                        )
-                    else:
-                        tg_text = f"⏰ Routine '{name}' ({status}):\n\n{safe_output}"
+                    tg_text = _notification_text(name, status, safe_output)
                     await asyncio.to_thread(send_message, settings, tg_text, chat_id=tg_target)
                     delivery_record["telegram"] = "ok"
                 else:
@@ -1338,14 +1366,7 @@ async def run_single_routine(
                 if fs_target:
                     from lark_oapi.channel import FeishuChannel
                     channel = FeishuChannel(app_id=lark_id, app_secret=lark_secret)
-                    if status == "approval_pending":
-                        fs_text = (
-                            f"⏰ Routine '{name}' needs approval:\n\n"
-                            f"{safe_output}\n\n"
-                            f"⚠️ Action requires confirmation. Please decide this approval in the Web Console inbox."
-                        )
-                    else:
-                        fs_text = f"⏰ Routine '{name}' ({status}):\n\n{safe_output}"
+                    fs_text = _notification_text(name, status, safe_output)
                     result = await channel.send(fs_target, {"text": truncate(fs_text)})
                     ok = bool(getattr(result, "success", True))
                     delivery_record["feishu"] = "ok" if ok else "error: send failed"

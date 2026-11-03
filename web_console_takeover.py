@@ -99,7 +99,8 @@ class TakeoverWebConsoleHandler(WebConsoleHandler):
         if not self._takeover_enabled():
             self._json(
                 HTTPStatus.FORBIDDEN,
-                {"error": "Human takeover is disabled (set CONVEYOR_TAKEOVER_ENABLED=true)"},
+                {"error": "Human takeover is disabled (set CONVEYOR_TAKEOVER_ENABLED=true)",
+                 "code": "takeover_disabled"},
             )
             return
         body = self._body()

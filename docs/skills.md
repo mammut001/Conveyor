@@ -19,7 +19,7 @@ When enabled:
 - Explicit `/skill <slug> [request]` invocation loads and injects the skill into system context for that turn.
 
 When disabled (`CONVEYOR_SKILLS_ENABLED=false`):
-- Endpoints return `409 Conflict` with `{"error": "skills are disabled (set CONVEYOR_SKILLS_ENABLED=true)"}`.
+- Endpoints return `409 Conflict` with `{"error": "skills are disabled (set CONVEYOR_SKILLS_ENABLED=true)", "code": "skills_disabled"}`.
 - Skill tools are not exposed in OpenAI schemas or tool dispatch.
 - No skills index is injected into the system prompt.
 - `/skill` is treated as ordinary conversational text.

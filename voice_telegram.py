@@ -39,7 +39,7 @@ async def handle_voice(update, context, *, settings, dispatch_text) -> None:
                 raise VoiceError("Audio exceeds the STT upload size limit", 413)
             await remote.download_to_drive(custom_path=path)
             transcript = await transcribe_async(path, duration=float(duration))
-        await message.reply_text(f"🎤 heard: {transcript}")
+        await message.reply_text(f"🎤 听到：{transcript}")
         # Dispatch exactly once through the existing Telegram command/chat/approval path.
         await dispatch_text(update, transcript)
     except VoiceError as exc:

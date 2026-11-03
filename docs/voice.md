@@ -26,14 +26,16 @@ without retries; provider failures are reported without returning its body.
 *before* fetching audio. Supported voice OGG/Opus and audio MP3/MP4/etc are
 downloaded into a temporary directory. Server-provided Telegram duration and
 size, plus downloaded file size, are checked before STT. The bot replies
-`🎤 heard: …`, then passes the recognized words once through the existing
+`🎤 听到：…`, then passes the recognized words once through the existing
 Telegram text dispatcher (commands, natural language and tool confirmations
 behave as usual). Unauthorized senders are ignored.
 
 **Web:** The chat composer microphone sends a raw MediaRecorder blob (WebM,
 OGG or MP4) to authenticated `POST /api/chat/voice?session_id=…` using the
 normal bearer token. The endpoint returns the **same SSE event stream** as
-`POST /api/chat`, prefixed with `heard` to update the visible user message.
+`POST /api/chat`, prefixed with `heard` to update the visible user message
+(`{"text": "🎤 听到：…", "transcript": "…"}`; `transcript` is the recognized
+text alone).
 It uses the same Web Chat session resolution and approval flow. Request bodies
 must have a Content-Length, cannot use chunked encoding, and are bounded
 before allocation/reading. The server needs `ffprobe` (FFmpeg) installed to
@@ -59,5 +61,5 @@ The Opus payload is converted to OGG using `ffmpeg` with a pinned
 `ogg` input demuxer (Ogg/Opus container) and `file,pipe`-only input protocol whitelist (no
 URL/concat auto-detection); `ffprobe` measures the
 resulting duration before transcription. The same size and duration settings
-apply. The bot replies `🎤 heard: …` before routing recognized words once
+apply. The bot replies `🎤 听到：…` before routing recognized words once
 through its ordinary Feishu dispatcher. Server must have ffmpeg/ffprobe.

@@ -39,6 +39,21 @@ logger = logging.getLogger("conveyor.web")
 MAX_BODY_BYTES = 65_536
 STATIC_ROOT = Path(__file__).resolve().parent / "web" / "dist"
 
+# 409 answers for features that are switched off in the configuration, by
+# their machine-readable ``code``. Keep the ``error`` texts as they are: the
+# web console still recognises them.
+FEATURE_OFF_ERRORS = {
+    "agents_disabled": "agents are disabled (set CONVEYOR_AGENTS_ENABLED=true)",
+    "memory_disabled": "memory is disabled (set CONVEYOR_MEMORY_V2=1 or CONVEYOR_LONG_TERM_MEMORY=true)",
+    "memory_v2_required": "memory editing requires CONVEYOR_MEMORY_V2=1",
+    "skills_disabled": "skills are disabled (set CONVEYOR_SKILLS_ENABLED=true)",
+    "mcp_disabled": "MCP connectors are disabled (set CONVEYOR_MCP_ENABLED=true)",
+    "approval_inbox_disabled": "approval inbox is disabled (set CONVEYOR_APPROVAL_INBOX_ENABLED=true)",
+    "routines_disabled": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)",
+    "webhooks_disabled": "webhooks are disabled (set CONVEYOR_WEBHOOKS_ENABLED=true and CONVEYOR_ROUTINES_ENABLED=true)",
+    "chat_disabled": "chat tier is disabled (set CONVEYOR_CHAT_MODE and CONVEYOR_CHAT_*)",
+}
+
 
 class WebOutbound:
     """Outbound port for Web Console requests.
@@ -264,6 +279,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         self._headers(status, "application/json; charset=utf-8", len(data), extra_headers=extra_headers)
         self.wfile.write(data)
 
+    def _feature_off(self, code: str) -> None:
+        """Answer 409 for a feature that is switched off in the configuration."""
+        self._json(HTTPStatus.CONFLICT, {"error": FEATURE_OFF_ERRORS[code], "code": code})
+
     def _authorized(self) -> bool:
         header = self.headers.get("Authorization", "")
         prefix = "Bearer "
@@ -363,7 +382,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         import agents
         if agents.enabled(getattr(self.server.control, "settings", None)):
             return True
-        self._json(HTTPStatus.CONFLICT, {"error": "agents are disabled (set CONVEYOR_AGENTS_ENABLED=true)"})
+        self._feature_off("agents_disabled")
         return False
 
     def _memory_settings(self) -> Any:
@@ -373,7 +392,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             from config import load_runtime_settings
             settings = load_runtime_settings()
         if not (getattr(settings, "long_term_memory_enabled", False) or getattr(settings, "memory_v2_enabled", False)):
-            self._json(HTTPStatus.CONFLICT, {"error": "memory is disabled (set CONVEYOR_MEMORY_V2=1 or CONVEYOR_LONG_TERM_MEMORY=true)"})
+            self._feature_off("memory_disabled")
             return None
         return settings
 
@@ -384,7 +403,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             from config import load_runtime_settings
             settings = load_runtime_settings()
         if not getattr(settings, "skills_enabled", False):
-            self._json(HTTPStatus.CONFLICT, {"error": "skills are disabled (set CONVEYOR_SKILLS_ENABLED=true)"})
+            self._feature_off("skills_disabled")
             return None
         return settings
 
@@ -395,7 +414,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             from config import load_runtime_settings
             settings = load_runtime_settings()
         if not getattr(settings, "mcp_enabled", False):
-            self._json(HTTPStatus.CONFLICT, {"error": "MCP connectors are disabled (set CONVEYOR_MCP_ENABLED=true)"})
+            self._feature_off("mcp_disabled")
             return None
         return settings
 
@@ -504,7 +523,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     from config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "approval_inbox_enabled", False):
-                    self._json(HTTPStatus.CONFLICT, {"error": "approval inbox is disabled (set CONVEYOR_APPROVAL_INBOX_ENABLED=true)"})
+                    self._feature_off("approval_inbox_disabled")
                     return
                 import approval_inbox
                 items = approval_inbox.list_items(settings, self.server.control)
@@ -591,7 +610,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     from config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "routines_enabled", False):
-                    self._json(HTTPStatus.CONFLICT, {"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)"})
+                    self._feature_off("routines_disabled")
                     return
                 import routines
                 self._json(HTTPStatus.OK, {"routines": routines.list_routines(settings)})
@@ -601,7 +620,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     from config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "routines_enabled", False):
-                    self._json(HTTPStatus.CONFLICT, {"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)"})
+                    self._feature_off("routines_disabled")
                     return
                 limit = int((query.get("limit") or ["50"])[0])
                 import routines
@@ -1068,7 +1087,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     from config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "routines_enabled", False):
-                    self._json(HTTPStatus.CONFLICT, {"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)"})
+                    self._feature_off("routines_disabled")
                     return
 
                 import routines
@@ -1105,7 +1124,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     return
                 elif len(parts) == 4 and parts[:2] == ["api", "routines"] and parts[3] == "hook":
                     if not ((getattr(settings, "webhooks_enabled", False) or getattr(settings, "hooks_enabled", False)) and getattr(settings, "routines_enabled", False)):
-                        self._json(HTTPStatus.CONFLICT, {"error": "webhooks are disabled (set CONVEYOR_WEBHOOKS_ENABLED=true and CONVEYOR_ROUTINES_ENABLED=true)"})
+                        self._feature_off("webhooks_disabled")
                         return
                     routine_id_str = parts[2]
                     if not routine_id_str.isdigit():
@@ -1196,7 +1215,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 from overnight_chat import route as nightly_route
                 nightly_control = os.getenv('CONVEYOR_NIGHTLY_CONTROL') == '1' and nightly_route(message) is not None
                 if not chat_enabled(settings) and not nightly_control:
-                    self._json(HTTPStatus.CONFLICT, {"error": "chat tier is disabled (set CONVEYOR_CHAT_MODE and CONVEYOR_CHAT_*)"})
+                    self._feature_off("chat_disabled")
                     return
 
                 msg = InboundMessage(
@@ -1317,7 +1336,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     from config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "approval_inbox_enabled", False):
-                    self._json(HTTPStatus.CONFLICT, {"error": "approval inbox is disabled (set CONVEYOR_APPROVAL_INBOX_ENABLED=true)"})
+                    self._feature_off("approval_inbox_disabled")
                     return
 
                 from handlers.tools.confirm import get_pending
@@ -1522,7 +1541,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if settings is None:
                     return
                 if not getattr(settings, "memory_v2_enabled", False):
-                    self._json(HTTPStatus.CONFLICT, {"error": "memory editing requires CONVEYOR_MEMORY_V2=1"})
+                    self._feature_off("memory_v2_required")
                     return
                 if not parts[2].isdigit() or not isinstance(body.get("text"), str):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "numeric memory id and text are required"})
@@ -1676,11 +1695,11 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     from config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "routines_enabled", False):
-                    self._json(HTTPStatus.CONFLICT, {"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)"})
+                    self._feature_off("routines_disabled")
                     return
                 if len(parts) == 4 and parts[:2] == ["api", "routines"] and parts[3] == "hook":
                     if not ((getattr(settings, "webhooks_enabled", False) or getattr(settings, "hooks_enabled", False)) and getattr(settings, "routines_enabled", False)):
-                        self._json(HTTPStatus.CONFLICT, {"error": "webhooks are disabled (set CONVEYOR_WEBHOOKS_ENABLED=true and CONVEYOR_ROUTINES_ENABLED=true)"})
+                        self._feature_off("webhooks_disabled")
                         return
                     routine_id_str = parts[2]
                     if not routine_id_str.isdigit():
@@ -1773,7 +1792,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         self.wfile.write(f"event: session\ndata: {session_data}\n\n".encode("utf-8"))
         self.wfile.flush()
         if heard is not None:
-            heard_data = json.dumps({"text": f"🎤 heard: {heard}"}, ensure_ascii=False)
+            # ``transcript`` is the recognized text alone, for clients that
+            # show it without the prefix.
+            heard_data = json.dumps({"text": f"🎤 听到：{heard}", "transcript": heard}, ensure_ascii=False)
             self.wfile.write(f"event: heard\ndata: {heard_data}\n\n".encode("utf-8"))
             self.wfile.flush()
 

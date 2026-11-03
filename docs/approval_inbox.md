@@ -12,7 +12,7 @@ The feature is opt-in and disabled by default.
 - **Config Setting**: `Settings.approval_inbox_enabled: bool = False`
 - **System Status**: Reported in `WebControl.system_status()` under `features.approval_inbox`.
 - **Default (Flag OFF)**:
-  - `GET /api/approval-inbox` and `POST /api/approval-inbox/<id>/approve|reject` return `409 Conflict` with `{"error": "approval inbox is disabled (set CONVEYOR_APPROVAL_INBOX_ENABLED=true)"}`.
+  - `GET /api/approval-inbox` and `POST /api/approval-inbox/<id>/approve|reject` return `409 Conflict` with `{"error": "approval inbox is disabled (set CONVEYOR_APPROVAL_INBOX_ENABLED=true)", "code": "approval_inbox_disabled"}`.
   - The Web Console UI does not render the **Approvals** tab.
   - Existing endpoints (`GET /api/approvals`, `POST /api/approvals/<id>/approve|reject`) continue functioning unchanged.
 

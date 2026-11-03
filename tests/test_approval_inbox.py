@@ -502,6 +502,7 @@ class TestApprovalInboxHttpApi(unittest.TestCase):
         status, body = self.raw_request("GET", "/api/approval-inbox")
         self.assertEqual(status, 409)
         self.assertIn("approval inbox is disabled", body.get("error", ""))
+        self.assertEqual(body.get("code"), "approval_inbox_disabled")
 
         status, body = self.raw_request("POST", "/api/approval-inbox/any-id/approve", body="{}")
         self.assertEqual(status, 409)

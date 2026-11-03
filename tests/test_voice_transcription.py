@@ -98,9 +98,31 @@ class VoiceTranscriptionTests(unittest.TestCase):
 
     def test_flag_off_ignores_audio(self):
         os.environ["CONVEYOR_STT_ENABLED"] = "0"
-        with self.assertRaisesRegex(VoiceError, "disabled"):
+        with self.assertRaisesRegex(VoiceError, "disabled") as caught:
             transcribe_file(self.path)
+        self.assertEqual(caught.exception.code, "voice_disabled")
         self.assertEqual(FakeSTT.calls, 0)
+
+    def test_configuration_errors_carry_codes(self):
+        cases = [
+            ({"CONVEYOR_STT_API_KEY": ""}, "Configure CONVEYOR_STT_API_KEY and CONVEYOR_STT_MODEL",
+             "stt_not_configured"),
+            ({"CONVEYOR_STT_BASE_URL": "ftp://stt.invalid"},
+             "Set CONVEYOR_STT_BASE_URL to a valid HTTPS STT provider URL", "stt_not_configured"),
+            ({"CONVEYOR_STT_MAX_BYTES": "lots"}, "Invalid CONVEYOR_STT_MAX_BYTES configuration",
+             "stt_config_invalid"),
+        ]
+        for env, message, code in cases:
+            with self.subTest(code=code, env=env), patch.dict(os.environ, env):
+                with self.assertRaises(VoiceError) as caught:
+                    transcribe_file(self.path)
+                self.assertEqual((str(caught.exception), caught.exception.code), (message, code))
+        self.assertEqual(FakeSTT.calls, 0)
+        # Errors that are not about configuration have no code.
+        FakeSTT.status = 503
+        with self.assertRaises(VoiceError) as caught:
+            transcribe_file(self.path)
+        self.assertIsNone(caught.exception.code)
 
     def test_temp_file_cleanup_on_exception(self):
         audio_path = None
@@ -158,7 +180,7 @@ class VoiceTelegramTests(unittest.IsolatedAsyncioTestCase):
             inbound.return_value = SimpleNamespace(channel="telegram", operator_id="42", chat_id="42")
             await handle_voice(update, context, settings=SimpleNamespace(telegram_allowed_user_id=42), dispatch_text=dispatch)
         dispatch.assert_awaited_once_with(update, malicious)
-        self.assertIn("🎤 heard: ", update.effective_message.reply_text.await_args.args[0])
+        self.assertEqual(update.effective_message.reply_text.await_args.args[0], f"🎤 听到：{malicious}")
 
 
 class VoiceWebTests(unittest.TestCase):
@@ -221,7 +243,32 @@ class VoiceWebTests(unittest.TestCase):
         with patch.dict(os.environ, {"CONVEYOR_STT_ENABLED": "0"}):
             status, body = self.request()
         self.assertEqual(status, 409)
-        self.assertIn(b"disabled", body)
+        self.assertEqual(json.loads(body), {"error": "Voice messages are disabled (CONVEYOR_STT_ENABLED=1)",
+                                            "code": "voice_disabled"})
+
+    def test_configuration_errors_carry_code(self):
+        cases = [
+            (VoiceError("Configure CONVEYOR_STT_API_KEY and CONVEYOR_STT_MODEL", 503, code="stt_not_configured"),
+             503, {"error": "Configure CONVEYOR_STT_API_KEY and CONVEYOR_STT_MODEL", "code": "stt_not_configured"}),
+            # Errors that are not about configuration keep their old shape.
+            (VoiceError("No speech was detected; try recording again", 422),
+             422, {"error": "No speech was detected; try recording again"}),
+        ]
+        for error, expected_status, expected_body in cases:
+            with self.subTest(code=error.code), patch.dict(os.environ, {"CONVEYOR_STT_ENABLED": "1"}), \
+                    patch("voice_web.transcribe_file", side_effect=error):
+                status, body = self.request()
+            self.assertEqual(status, expected_status)
+            self.assertEqual(json.loads(body), expected_body)
+
+    def test_chat_tier_off_returns_code(self):
+        with patch.dict(os.environ, {"CONVEYOR_STT_ENABLED": "1"}), \
+                patch("handlers.chat.chat_enabled", return_value=False), \
+                patch("voice_web.transcribe_file") as transcribe:
+            status, body = self.request()
+        self.assertEqual(status, 409)
+        self.assertEqual(json.loads(body), {"error": "Chat tier is disabled", "code": "chat_disabled"})
+        transcribe.assert_not_called()
 
     def test_oversize_web_upload_rejected(self):
         with patch.dict(os.environ, {"CONVEYOR_STT_ENABLED": "1", "CONVEYOR_STT_MAX_BYTES": "4"}), patch("voice_web.transcribe_file") as transcribe:
@@ -243,6 +290,9 @@ class VoiceWebTests(unittest.TestCase):
             status, body = self.request()
         self.assertEqual(status, 200)
         self.assertIn(b"event: heard", body)
+        heard = next(json.loads(frame.split("\ndata: ", 1)[1])
+                     for frame in body.decode("utf-8").split("\n\n") if frame.startswith("event: heard\n"))
+        self.assertEqual(heard, {"text": f"🎤 听到：{injected}", "transcript": injected})
         self.assertIn(b"event: approval", body)
         self.assertNotIn(b"event: error", body)
         transcribe.assert_called_once()

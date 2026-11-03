@@ -12,7 +12,8 @@ from voice_transcription import (
 def handle_voice_post(handler) -> None:
     if not enabled():
         handler._drain_body()
-        handler._json(HTTPStatus.CONFLICT, {"error": "Voice messages are disabled (CONVEYOR_STT_ENABLED=1)"})
+        handler._json(HTTPStatus.CONFLICT, {"error": "Voice messages are disabled (CONVEYOR_STT_ENABLED=1)",
+                                            "code": "voice_disabled"})
         return
     if "Transfer-Encoding" in handler.headers:
         handler.close_connection = True
@@ -34,7 +35,7 @@ def handle_voice_post(handler) -> None:
         from handlers.chat import chat_enabled
         settings = handler.server.control.settings
         if not chat_enabled(settings):
-            raise VoiceError("Chat tier is disabled", 409)
+            raise VoiceError("Chat tier is disabled", 409, code="chat_disabled")
         with temporary_audio(suffix) as path:
             with path.open("wb") as out:
                 remaining = size
@@ -56,7 +57,10 @@ def handle_voice_post(handler) -> None:
         handler._handle_chat_stream(msg, settings, durable_id, transcript, heard=transcript)
     except VoiceError as exc:
         handler.close_connection = True  # unread invalid bodies must not be reused
-        handler._json(exc.status, {"error": str(exc)})
+        body = {"error": str(exc)}
+        if exc.code:
+            body["code"] = exc.code
+        handler._json(exc.status, body)
     except (OSError, ValueError):
         handler.close_connection = True
         handler._json(HTTPStatus.BAD_GATEWAY, {"error": "Voice processing failed"})

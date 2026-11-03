@@ -542,6 +542,7 @@ class MemoryWebApiTests(unittest.TestCase):
         status, data = self.request("GET", "/api/memory")
         self.assertEqual(status, 409)
         self.assertIn("CONVEYOR_LONG_TERM_MEMORY", data["error"])
+        self.assertEqual(data["code"], "memory_disabled")
 
     def test_list_search_add_delete(self) -> None:
         ltm.remember_fact(self.settings, "12345", "我的猫叫 Mochi，是一只橘猫。", source_channel="telegram")

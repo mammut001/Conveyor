@@ -22,7 +22,7 @@ CONVEYOR_ROUTINES_ENABLED=true
 # CONVEYOR_ROUTINES_APPROVAL_TTL_SECONDS=86400
 ```
 
-When disabled, all routine API endpoints return HTTP 409 (`{"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)"}`) and `routine.*` tools are hidden from the chat model.
+When disabled, all routine API endpoints return HTTP 409 (`{"error": "routines are disabled (set CONVEYOR_ROUTINES_ENABLED=true)", "code": "routines_disabled"}`) and `routine.*` tools are hidden from the chat model.
 
 ## Key Design Constraint: Where the Runner Executes
 
@@ -134,7 +134,7 @@ CONVEYOR_WEBHOOKS_ENABLED=true
 
 When either flag is false:
 - Public webhook receiver requests (`POST /hooks/<hook_id>`) return HTTP 404 (`{"error": "not found"}`).
-- Authenticated hook management endpoints return HTTP 409 (`{"error": "webhooks are disabled (set CONVEYOR_WEBHOOKS_ENABLED=true)"}`).
+- Authenticated hook management endpoints return HTTP 409 (`{"error": "webhooks are disabled (set CONVEYOR_WEBHOOKS_ENABLED=true and CONVEYOR_ROUTINES_ENABLED=true)", "code": "webhooks_disabled"}`).
 - The Web Console UI hides webhook controls.
 
 ### Creating and Managing Hooks

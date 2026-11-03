@@ -837,6 +837,7 @@ class TestMCPWebConsoleApi(unittest.TestCase):
         status, data = self.request("GET", "/api/mcp/servers")
         self.assertEqual(status, 409)
         self.assertIn("CONVEYOR_MCP_ENABLED", data.get("error", ""))
+        self.assertEqual(data.get("code"), "mcp_disabled")
 
     def test_get_servers_list_and_secret_redaction(self) -> None:
         status, data = self.request("GET", "/api/mcp/servers")

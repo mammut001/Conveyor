@@ -727,6 +727,7 @@ class TestSkillsWebApi(unittest.TestCase):
         status, data = self.request("GET", "/api/skills")
         self.assertEqual(status, 409)
         self.assertIn("CONVEYOR_SKILLS_ENABLED", data.get("error", ""))
+        self.assertEqual(data.get("code"), "skills_disabled")
 
         status, data = self.request("POST", "/api/skills", {"name": "x", "description": "d", "body": "b"})
         self.assertEqual(status, 409)
