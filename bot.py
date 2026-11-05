@@ -61,9 +61,16 @@ DATE_ARG_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # ---- Channel-agnostic handler shims ---------------------------------------
 
+def _inbound(update: Update, text: str | None = None) -> InboundMessage:
+    import telegram_topics
+    return telegram_topics.contextualize_inbound(
+        settings, inbound_from_update(update, text=text)
+    )
+
+
 async def _dispatch_text(update: Update, text: str) -> None:
     """Send a free-text message through the shared dispatcher."""
-    inbound = inbound_from_update(update, text=text)
+    inbound = _inbound(update, text=text)
     await dispatch(inbound, make_outbound(update), settings, runner)
 
 
@@ -76,13 +83,13 @@ async def _dispatch_command(update: Update, *, arg_text: str | None = None) -> N
     message = update.effective_message
     if message is None or not message.text:
         return
-    inbound = inbound_from_update(update, text=message.text)
+    inbound = _inbound(update, text=message.text)
     if arg_text is not None:
         # Substitute the (already-mutated) text the dispatcher will see.
         # We re-parse via parse_command by rebuilding the full /<cmd> arg.
         cmd_name, _sep, _rest = message.text.partition(" ")
         rebuilt = f"{cmd_name} {arg_text}".strip()
-        inbound = inbound_from_update(update, text=rebuilt)
+        inbound = _inbound(update, text=rebuilt)
     await dispatch(inbound, make_outbound(update), settings, runner)
 
 
@@ -553,7 +560,7 @@ async def agent_switcher_callback(update: Update, context: ContextTypes.DEFAULT_
         return
     await query.answer()
     import agent_switcher
-    await agent_switcher.handle(settings, inbound_from_update(update), make_outbound(update), query.data)
+    await agent_switcher.handle(settings, _inbound(update), make_outbound(update), query.data)
 
 
 def _navigation_markup(screen):
@@ -595,6 +602,55 @@ async def _show_navigation(update: Update, action: str, *, edit: bool = False) -
     await _reply(update, screen.text, reply_markup=markup)
 
 
+async def topics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _guard(update):
+        return
+    import telegram_topics
+    chat = update.effective_chat
+    user = update.effective_user
+    msg = update.effective_message
+    if chat is None or user is None:
+        return
+    args = list(context.args or [])
+    sub = args[0].lower() if args else "sync"
+    if sub == "guide" or sub == "status":
+        await _reply(update, telegram_topics.format_topics_guide(settings, chat.id))
+        return
+    if sub == "bind":
+        target = " ".join(args[1:]).strip()
+        tid = getattr(msg, "message_thread_id", None) if msg is not None else None
+        if not isinstance(tid, int) or tid <= 0:
+            await _reply(update, "请在具体的话题（Topic）内发送 `/topics bind <助手名称>`，或直接发送 `/topics` 自动创建全部助手话题。")
+            return
+        try:
+            agent = telegram_topics.bind_topic(
+                settings,
+                chat_id=chat.id,
+                thread_id=tid,
+                operator=str(user.id),
+                agent_id=target,
+            )
+        except (ValueError, PermissionError) as exc:
+            await _reply(update, str(exc))
+            return
+        card = telegram_topics.format_pinned_card(agent, thread_id=tid)
+        sent_id = await send_text(update, card)
+        if sent_id:
+            try:
+                await update.get_bot().pin_chat_message(
+                    chat_id=chat.id,
+                    message_id=int(sent_id),
+                    disable_notification=True,
+                )
+            except Exception:
+                pass
+        return
+    result = await telegram_topics.sync_forum_topics(
+        update.get_bot(), chat.id, str(user.id), settings
+    )
+    await _reply(update, result["text"])
+
+
 async def workers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await _guard(update):
         await _show_navigation(update, "workers")
@@ -625,16 +681,15 @@ async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Groups: act only when @mentioned or replied to (Grok-style), so
-    # ordinary group conversation is neither answered nor rejected.
-    if not is_addressed_to_bot(inbound_from_update(update)):
+    inbound = _inbound(update)
+    # Groups: act only when @mentioned, replied to, or inside an owner-bound Forum Topic.
+    if not is_addressed_to_bot(inbound):
         return
     if not await _guard(update):
         return
     # Legacy Telegram reply keyboards send ordinary text, not callbacks.
     # Consume only these exact labels before onboarding or LLM routing.
     # This works with already-sent reply keyboards without recreating them.
-    inbound = inbound_from_update(update)
     menu_action = legacy_action(inbound.text) if inbound.chat_type == "p2p" else None
     if menu_action:
         import agent_channel_routing
@@ -800,6 +855,7 @@ async def post_init(application: Application) -> None:
     await application.bot.set_my_commands(
         [
             ("fix", "改文件：/fix <需求>"),
+            ("topics", "同步竖排话题栏（每个助手一个话题）"),
             ("workers", "查看 Workers 和任务状态"),
             ("sessions", "查看当前会话和历史任务"),
             ("switch", "打开会话导航（只读）"),
@@ -887,6 +943,7 @@ def main() -> None:
         .build()
     )
     application.add_handler(CommandHandler("start", start_cmd))
+    application.add_handler(CommandHandler("topics", topics_cmd))
     application.add_handler(CommandHandler("workers", workers_cmd))
     application.add_handler(CommandHandler("sessions", sessions_cmd))
     application.add_handler(CommandHandler("switch", sessions_cmd))

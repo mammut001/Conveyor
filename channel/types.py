@@ -60,6 +60,7 @@ class InboundMessage:
     # Raw SDK payload, used by adapter-specific UI (e.g. inline buttons).
     # Handlers must not branch on this; it is purely for adapter handoff.
     raw: Any = None
+    thread_id: str | None = None
 
 
 class OutboundPort(Protocol):

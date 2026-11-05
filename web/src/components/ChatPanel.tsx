@@ -735,8 +735,14 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                   </div>
                 </div>
                 <footer className="transcript-footer chat-meta">
-                  {source && <span className="transcript-source">{source}</span>}
+                  {source && (
+                    <span className="chat-source-pill is-user">
+                      <i className="chat-source-hash" aria-hidden="true">#</i>
+                      <span className="transcript-source">{source}</span>
+                    </span>
+                  )}
                   <MessageTime value={message.created_at} />
+                  <span className="chat-sent-check" aria-hidden="true">✓</span>
                 </footer>
               </article>
             );
@@ -832,6 +838,19 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
             <article key={message.id} className="transcript-message role-assistant chat-turn">
               {avatar}
               <div className="transcript-body">
+                <div className="chat-bubble-head">
+                  <span className="chat-bubble-avatar" aria-hidden="true" style={agentColor ? { background: agentColor } : undefined}>
+                    {(displayName.trim()[0] || 'C').toUpperCase()}
+                  </span>
+                  <span className="chat-bubble-author" aria-hidden="true">{displayName}</span>
+                  {source && (
+                    <span className="chat-source-pill">
+                      <i className="chat-source-hash" aria-hidden="true">#</i>
+                      <span className="transcript-source">{source}</span>
+                      <i className="chat-source-arrow" aria-hidden="true">›</i>
+                    </span>
+                  )}
+                </div>
                 {message.subagents && message.subagents.length > 0 && (
                   <SubagentCardGroup tasks={message.subagents} />
                 )}
@@ -847,7 +866,6 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                   </div>
                 )}
                 <footer className="transcript-footer chat-meta">
-                  {source && <span className="transcript-source">{source}</span>}
                   {message.interrupted && <span>回答中断 · 已保留收到的内容</span>}
                   <MessageTime value={message.created_at} />
                   <CopyButton text={shownText} className="chat-copy-button" title="复制这条回复" />

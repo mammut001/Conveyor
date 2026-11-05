@@ -1,13 +1,14 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import { CHANNEL_LABELS, ChatRequestError, describeChatError, formatDayTime, formatRelativeTime } from './chatFormat'
 
-type Conversation = {
+export type Conversation = {
   id: string; title: string; origin_channel: string; session_id: string
   // Optional: shown when the server provides it.
   updated_at?: string | number; last_activity?: string | number; created_at?: string | number
 }
 type Props = { token: string; agentId: string; defaultSession: string; busy: boolean;
-  selected: string; onSelect: (session: string) => void; onReady: () => void }
+  selected: string; onSelect: (session: string) => void; onReady: () => void;
+  onItemsChange?: (items: Conversation[]) => void }
 type PickerError = { message: string; detail?: string }
 
 // Server-made titles repeat the channel that the list already shows.
@@ -15,16 +16,18 @@ const DEFAULT_TITLES: Record<string, string> = {
   'Web 会话（原有记录）': '主会话', 'Telegram 独立会话': '主会话', '飞书独立会话': '主会话',
   'Web 新话题': '新会话', '新话题': '新会话',
 }
-const channelOf = (row: Conversation) => CHANNEL_LABELS[row.origin_channel] || '其他入口'
-const titleOf = (row: Conversation) => DEFAULT_TITLES[row.title] || row.title
+export const channelOf = (row: Conversation) => CHANNEL_LABELS[row.origin_channel] || '其他入口'
+export const titleOf = (row: Conversation) => DEFAULT_TITLES[row.title] || row.title
 const timeOf = (row: Conversation) => formatRelativeTime(row.updated_at ?? row.last_activity ?? row.created_at)
 
 function Chevron() {
   return <svg className="chat-picker-chevron" aria-hidden="true" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4" /></svg>
 }
 
-export function ConversationPicker({ token, agentId, defaultSession, selected, busy, onSelect, onReady }: Props) {
+export function ConversationPicker({ token, agentId, defaultSession, selected, busy, onSelect, onReady, onItemsChange }: Props) {
   const [items, setItems] = useState<Conversation[]>([])
+  const onItemsChangeRef = useRef(onItemsChange)
+  onItemsChangeRef.current = onItemsChange
   const [error, setError] = useState<PickerError | null>(null)
   const [creating, setCreating] = useState(false)
   const [title, setTitle] = useState('')
@@ -60,6 +63,7 @@ export function ConversationPicker({ token, agentId, defaultSession, selected, b
     }).then(rows => {
       if (disposed) return
       setItems(rows)
+      onItemsChangeRef.current?.(rows)
       // Never silently continue a stale selection from a different Agent.
       if (!rows.some(row => row.session_id === selectedRef.current)) onSelect(defaultSession)
       onReady()
@@ -130,7 +134,12 @@ export function ConversationPicker({ token, agentId, defaultSession, selected, b
       const body = await response.json()
       const row = body.conversation as Conversation
       if (!row || typeof row.session_id !== 'string') throw new ChatRequestError('invalid conversation')
-      setItems(old => [row, ...old]); onSelect(row.session_id); setTitle(''); setShowCreate(false)
+      setItems(old => {
+        const next = [row, ...old]
+        onItemsChangeRef.current?.(next)
+        return next
+      })
+      onSelect(row.session_id); setTitle(''); setShowCreate(false)
     } catch (reason) {
       setError({ message: '新会话没有创建成功，可以重试', detail: describeChatError(reason).detail })
     } finally { setCreating(false) }

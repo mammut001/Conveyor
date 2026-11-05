@@ -164,6 +164,34 @@ def _mentions_bot(msg: Any, text: str, username: str, bot_id: int | None) -> boo
     return False
 
 
+def _thread_id(msg: Any, chat: Any = None) -> str | None:
+    if msg is None:
+        return None
+    tid = getattr(msg, "message_thread_id", None)
+    if isinstance(tid, int) and tid > 0 and (
+        getattr(msg, "is_topic_message", False)
+        or getattr(chat, "is_forum", False)
+        or getattr(getattr(msg, "chat", None), "is_forum", False)
+    ):
+        return str(tid)
+    return None
+
+
+def split_chat_thread(chat_id: str | int) -> tuple[int | str, int | None]:
+    """Parse `<chat_id>:topic:<thread_id>` or plain `<chat_id>` into `(chat_id, thread_id)`."""
+    raw = str(chat_id or "")
+    if ":topic:" in raw:
+        base, _, tid = raw.partition(":topic:")
+        try:
+            return int(base), int(tid)
+        except ValueError:
+            return base, None
+    try:
+        return int(raw), None
+    except ValueError:
+        return raw, None
+
+
 def inbound_from_update(
     update: Update, text: str | None = None
 ) -> InboundMessage:
@@ -202,6 +230,7 @@ def inbound_from_update(
         reply_to=reply_to,
         attachments=_attachments(msg),
         raw=update,
+        thread_id=_thread_id(msg, chat),
     )
 
 
@@ -306,12 +335,17 @@ class TelegramOutbound:
             file_size,
         )
         bot = self._update.get_bot()
+        target_chat, thread_id = split_chat_thread(chat_id)
+        photo_kwargs: dict[str, Any] = {}
+        if thread_id is not None:
+            photo_kwargs["message_thread_id"] = thread_id
         try:
             with open(image_path, "rb") as f:
                 await bot.send_photo(
-                    chat_id=chat_id,
+                    chat_id=target_chat,
                     photo=f,
                     caption=caption,
+                    **photo_kwargs,
                 )
             logger.debug("Telegram send_image: send completed successfully")
         except Exception:
@@ -339,11 +373,16 @@ class TelegramChatOutbound(OutboundPort):
         return await self.send_new(msg, text)
 
     async def send_new(self, msg: InboundMessage, text: str) -> str | None:
+        target_chat, thread_id = split_chat_thread(self.chat_id)
+        extra: dict[str, Any] = {}
+        if thread_id is not None:
+            extra["message_thread_id"] = thread_id
         try:
             sent = await self.bot.send_message(
-                chat_id=int(self.chat_id),
+                chat_id=target_chat,
                 text=truncate(text),
                 disable_web_page_preview=True,
+                **extra,
             )
             return str(getattr(sent, "message_id", "") or "")
         except Exception:
@@ -359,16 +398,21 @@ class TelegramChatOutbound(OutboundPort):
         text: str,
         buttons: Sequence[Sequence[dict]],
     ) -> str | None:
+        target_chat, thread_id = split_chat_thread(self.chat_id)
+        extra: dict[str, Any] = {}
+        if thread_id is not None:
+            extra["message_thread_id"] = thread_id
         try:
             keyboard = [
                 [InlineKeyboardButton(b["text"], callback_data=b["callback_data"]) for b in row]
                 for row in buttons
             ]
             sent = await self.bot.send_message(
-                chat_id=int(self.chat_id),
+                chat_id=target_chat,
                 text=truncate(text),
                 disable_web_page_preview=True,
                 reply_markup=InlineKeyboardMarkup(keyboard),
+                **extra,
             )
             return str(getattr(sent, "message_id", "") or "")
         except Exception:

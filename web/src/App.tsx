@@ -1099,7 +1099,7 @@ export default function App() {
         </div>
         <div style={{ display: view === 'chat' ? 'flex' : 'none', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%' }} aria-hidden={view !== 'chat'}>
           {selectedAgent
-            ? <AgentWorkspace key={selectedAgent.id} agent={selectedAgent} {...conversationProps} />
+            ? <AgentWorkspace key={selectedAgent.id} agent={selectedAgent} agents={agentState.agents} onSelectAgent={selectAgent} {...conversationProps} />
             : <ChatPanel key="free-chat" {...conversationProps} />}
         </div>
         {view === 'approvals' ? (

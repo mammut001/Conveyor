@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import { ChatPanel, type ChatPanelProps } from './ChatPanel'
-import { ConversationPicker } from './ConversationPicker'
+import { ConversationPicker, channelOf, titleOf, type Conversation } from './ConversationPicker'
 import type { Agent } from './AgentList'
 import { ChatRequestError, describeChatError, formatFullTime, formatRelativeTime } from './chatFormat'
 import { useMediaQuery } from '../ux/shellNav'
@@ -17,7 +17,11 @@ type Task = {
 }
 type Pane = 'chat' | 'inbox' | 'tasks'
 type SecondaryView = Exclude<Pane, 'chat'>
-type Props = ChatPanelProps & { agent: Agent }
+type Props = ChatPanelProps & {
+  agent: Agent
+  agents?: Agent[]
+  onSelectAgent?: (agent: Agent) => void
+}
 
 // Agent-to-agent messages and delegated tasks are secondary views of the conversation.
 const PANE_LABELS = { inbox: '助手消息', tasks: '委派记录' } as const
@@ -26,9 +30,10 @@ const STATUS_LABELS: Record<string, string> = {
 }
 const KIND_LABELS: Record<string, string> = { message: '消息', task_request: '任务请求', task_result: '任务结果' }
 
-export function AgentWorkspace({ agent, token, ...chatProps }: Props) {
+export function AgentWorkspace({ agent, agents, onSelectAgent, token, ...chatProps }: Props) {
   const [features, setFeatures] = useState<Features | null>(null)
   const [pane, setPane] = useState<Pane>('chat')
+  const [conversations, setConversations] = useState<Conversation[]>([])
   const [conversation, setConversation] = useState(() => {
     try { return sessionStorage.getItem(`conveyor-agent-conversation:${agent.id}`) || agent.session_id }
     catch { return agent.session_id }
@@ -57,18 +62,21 @@ export function AgentWorkspace({ agent, token, ...chatProps }: Props) {
   const views = (['inbox', 'tasks'] as const).filter(view => features?.enabled && features[view])
   // Phones: the conversation title gets the row; the two record views fold into a "⋯" menu.
   const compactBar = useMediaQuery('(max-width: 480px)')
+  const narrowRail = useMediaQuery('(max-width: 820px)')
   const toggleView = (view: SecondaryView) => setPane(current => current === view ? 'chat' : view)
 
   const chat = conversationReady && <ChatPanel key={`${agent.id}:${conversation}`} {...chatProps} token={token}
     agentSessionId={conversation} agentName={agent.name} agentColor={agent.color} onBusyChange={setChatBusy}
     active={chatProps.active !== false && pane === 'chat'} />
+  const showTopicRail = narrowRail || conversations.length > 1
 
   return (
     <section className="agent-screen" aria-label={`和 ${agent.name} 的对话`}>
       <div className="chat-conversation-bar">
         <ConversationPicker key={agent.id} token={token} agentId={agent.id}
           defaultSession={agent.session_id} selected={conversation} busy={chatBusy}
-          onSelect={chooseConversation} onReady={conversationLoaded} />
+          onSelect={chooseConversation} onReady={conversationLoaded}
+          onItemsChange={setConversations} />
         {views.length > 0 && (compactBar
           ? <SecondaryViewsMenu views={views} pane={pane} onPick={toggleView} />
           : <div className="chat-secondary-views" role="group" aria-label="其他记录">
@@ -79,12 +87,135 @@ export function AgentWorkspace({ agent, token, ...chatProps }: Props) {
             ))}
           </div>)}
       </div>
-      <div style={{ display: pane === 'chat' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
-        {chat}
+      <div className="chat-body-with-rail" style={{ display: pane === 'chat' ? 'flex' : 'none', flexDirection: 'row', flex: 1, minWidth: 0, minHeight: 0 }}>
+        {showTopicRail && (
+          <ChatTopicRail
+            agent={agent}
+            agents={narrowRail ? agents : undefined}
+            conversations={conversations}
+            selectedConversation={conversation}
+            busy={chatBusy}
+            onSelectConversation={chooseConversation}
+            onSelectAgent={onSelectAgent}
+          />
+        )}
+        <div className="chat-main-column" style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
+          {chat}
+        </div>
       </div>
       {pane !== 'chat' && <AgentMailboxTab key={`${agent.id}:${pane}`} token={token}
         agentId={agent.id} tab={pane} onBack={() => setPane('chat')} />}
     </section>
+  )
+}
+
+/** Telegram-style vertical topic & agent rail on the left edge of the chat stream. */
+function ChatTopicRail({
+  agent,
+  agents,
+  conversations,
+  selectedConversation,
+  busy,
+  onSelectConversation,
+  onSelectAgent,
+}: {
+  agent: Agent
+  agents?: Agent[]
+  conversations: Conversation[]
+  selectedConversation: string
+  busy: boolean
+  onSelectConversation: (session: string) => void
+  onSelectAgent?: (agent: Agent) => void
+}) {
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return sessionStorage.getItem('conveyor-topic-rail-collapsed') === '1' }
+    catch { return false }
+  })
+  const toggleRail = () => {
+    setCollapsed(prev => {
+      const next = !prev
+      try { sessionStorage.setItem('conveyor-topic-rail-collapsed', next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
+  }
+  const topicItems = conversations.length > 0
+    ? conversations.slice(0, 5)
+    : [{ id: agent.id, title: '主会话', origin_channel: 'web', session_id: agent.session_id }]
+  const agentList = agents && agents.length > 1 ? agents.slice(0, 6) : []
+
+  return (
+    <nav className={`chat-topic-rail ${collapsed ? 'is-collapsed' : ''}`} aria-label="话题与助手栏">
+      <button
+        type="button"
+        className="chat-rail-toggle"
+        aria-label={collapsed ? '展开话题栏' : '收起话题栏'}
+        aria-expanded={!collapsed}
+        title={collapsed ? '展开左侧话题栏' : '收起左侧话题栏'}
+        onClick={toggleRail}
+      >
+        <svg aria-hidden="true" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2.5" y="3.5" width="15" height="13" rx="3" />
+          <path d="M7.5 3.5v13" />
+        </svg>
+      </button>
+      {!collapsed && (
+        <div className="chat-rail-items">
+          {topicItems.map((row, idx) => {
+            const isCurrent = row.session_id === selectedConversation
+            const shortTitle = titleOf(row)
+            const ch = channelOf(row)
+            const isMain = idx === 0 && shortTitle === '主会话' && row.origin_channel === 'web'
+            return (
+              <button
+                key={row.id}
+                type="button"
+                disabled={busy}
+                className={`chat-rail-item ${isCurrent ? 'is-active' : ''}`}
+                aria-label={`话题：${ch} · ${shortTitle}`}
+                aria-current={isCurrent ? 'true' : undefined}
+                title={`${ch} · ${shortTitle}`}
+                onClick={() => onSelectConversation(row.session_id)}
+              >
+                <span className={`chat-rail-icon ${isMain ? 'is-all' : 'is-topic'}`} aria-hidden="true">
+                  {isMain ? (
+                    <svg viewBox="0 0 20 20" width="17" height="17" fill="currentColor">
+                      <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2h7A2.5 2.5 0 0 1 16 4.5v5a2.5 2.5 0 0 1-2.5 2.5H9l-3.2 2.4A.5.5 0 0 1 5 14v-2H6.5A2.5 2.5 0 0 1 4 9.5v-5Z" />
+                    </svg>
+                  ) : '#'}
+                  {row.origin_channel === 'telegram' && <i className="chat-rail-badge">TG</i>}
+                  {row.origin_channel === 'feishu' && <i className="chat-rail-badge">飞</i>}
+                </span>
+                <span className="chat-rail-label">{shortTitle}</span>
+              </button>
+            )
+          })}
+          {agentList.length > 0 && <span className="chat-rail-divider" aria-hidden="true" />}
+          {agentList.map(item => {
+            const isSelected = item.id === agent.id
+            const initial = (item.name.trim()[0] || 'C').toUpperCase()
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className={`chat-rail-item chat-rail-agent ${isSelected ? 'is-active' : ''}`}
+                aria-label={`${item.name}（直达）`}
+                aria-pressed={isSelected}
+                title={item.name}
+                onClick={() => { if (!isSelected) onSelectAgent?.(item) }}
+              >
+                <span className="chat-rail-avatar" style={{ background: item.color || '#bd5c40' }} aria-hidden="true">
+                  {initial}
+                  {item.status && item.status !== 'idle' && (
+                    <i className={`chat-rail-dot is-${item.status}`} />
+                  )}
+                </span>
+                <span className="chat-rail-label">{item.name}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </nav>
   )
 }
 
