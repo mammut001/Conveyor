@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { formatWhen, friendlyError } from '../ux/knowledgeKit';
 
 export type SkillItem = {
   id: number;
@@ -77,7 +78,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
       }
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
-        throw new Error(errBody.error || `Failed to load skills (${res.status})`);
+        throw new Error(errBody.error || `HTTP ${res.status}`);
       }
       const data = (await res.json()) as SkillsResponse;
       if (gen !== fetchGen.current) return;
@@ -85,7 +86,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
       setError('');
     } catch (err) {
       if (gen !== fetchGen.current) return;
-      setError(err instanceof Error ? err.message : 'Failed to load skills');
+      setError(friendlyError(err, '没能读取技能列表，请稍后重试').message);
     }
   }, [token]);
 
@@ -135,7 +136,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
         });
         if (!res.ok) {
           const errBody = await res.json().catch(() => ({}));
-          throw new Error(errBody.error || `Failed to update skill (${res.status})`);
+          throw new Error(errBody.error || `HTTP ${res.status}`);
         }
       } else {
         // Create new skill
@@ -148,13 +149,13 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
         });
         if (!res.ok) {
           const errBody = await res.json().catch(() => ({}));
-          throw new Error(errBody.error || `Failed to create skill (${res.status})`);
+          throw new Error(errBody.error || `HTTP ${res.status}`);
         }
       }
       closeForm();
       await load();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Failed to save skill');
+      setFormError(friendlyError(err, '保存失败，请检查后重试').message);
     } finally {
       setFormBusy(false);
     }
@@ -169,11 +170,11 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
-        throw new Error(errBody.error || `Failed to update (${res.status})`);
+        throw new Error(errBody.error || `HTTP ${res.status}`);
       }
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to toggle skill');
+      setError(friendlyError(err, '切换失败，请重试').message);
     }
   };
 
@@ -186,12 +187,12 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
       });
       if (!res.ok && res.status !== 404) {
         const errBody = await res.json().catch(() => ({}));
-        throw new Error(errBody.error || `Failed to delete (${res.status})`);
+        throw new Error(errBody.error || `HTTP ${res.status}`);
       }
       setConfirmDeleteSlug(null);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete skill');
+      setError(friendlyError(err, '删除失败，请重试').message);
     } finally {
       setDeleting(false);
     }
@@ -211,13 +212,13 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
-        throw new Error(errBody.error || `Failed to import skill (${res.status})`);
+        throw new Error(errBody.error || `HTTP ${res.status}`);
       }
       setIsImporting(false);
       setImportMarkdown('');
       await load();
     } catch (err) {
-      setImportError(err instanceof Error ? err.message : 'Failed to import skill');
+      setImportError(friendlyError(err, '导入失败，请检查格式后重试').message);
     } finally {
       setImportBusy(false);
     }
@@ -246,7 +247,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
     if (toastTimeoutRef.current) {
       window.clearTimeout(toastTimeoutRef.current);
     }
-    setToastMessage(`Exported "${skill.name}" as ${skill.slug}.md — check your browser's Downloads folder.`);
+    setToastMessage(`已导出“${skill.name}”为 ${skill.slug}.md，请在浏览器的下载文件夹里查看。`);
     toastTimeoutRef.current = window.setTimeout(() => {
       setToastMessage(null);
     }, 6000);
@@ -256,8 +257,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
     return (
       <div className="stream-body" style={{ padding: '24px 20px' }}>
         <div className="job-notice" style={{ maxWidth: 640 }}>
-          <strong>Skills library is disabled</strong>
-          <span>Set <code>CONVEYOR_SKILLS_ENABLED=true</code> on the server to enable skills.</span>
+          <strong>技能库未开启</strong>
         </div>
       </div>
     );
@@ -297,7 +297,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
           <span>{toastMessage}</span>
           <button
             type="button"
-            aria-label="Dismiss notice"
+            aria-label="关闭提示"
             onClick={() => {
               if (toastTimeoutRef.current) window.clearTimeout(toastTimeoutRef.current);
               setToastMessage(null);
@@ -328,46 +328,46 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
       <section className="memory-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600 }}>
-            Skills library · {skills.length} saved procedure{skills.length === 1 ? '' : 's'}
+            技能库 · 已保存 {skills.length} 个
           </h3>
           <div style={{ display: 'flex', gap: 8 }}>
             <button type="button" className="action-btn" onClick={openCreate}>
-              + Create skill
+              ＋ 新建技能
             </button>
             <button type="button" className="action-btn" onClick={() => { setIsImporting(!isImporting); setImportError(''); }}>
-              {isImporting ? 'Cancel import' : 'Import Markdown'}
+              {isImporting ? '取消导入' : '导入 Markdown'}
             </button>
           </div>
         </div>
         <p className="memory-secondary" style={{ fontSize: '0.8rem', margin: '8px 0 0' }}>
-          Reusable operator-authored procedures. Loaded into chat context via <code>/skill &lt;slug&gt;</code> or on demand by the assistant. Skills never grant extra permissions or bypass approvals.
+          你写好的、可重复使用的做事步骤。在对话里用 <code>/skill &lt;slug&gt;</code> 调用，或由助手按需加载。技能不会增加权限，也不会绕过审批。
         </p>
       </section>
 
       {/* Import Markdown Drawer */}
       {isImporting && (
         <section className="memory-card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <h4 style={{ margin: 0, fontSize: '0.9rem', fontWeight: 600 }}>Import Skill from Markdown</h4>
+          <h4 style={{ margin: 0, fontSize: '0.9rem', fontWeight: 600 }}>从 Markdown 导入技能</h4>
           <p className="memory-secondary" style={{ fontSize: '0.78rem', margin: 0 }}>
-            Paste Markdown with front-matter (<code>--- name / description / triggers --- body</code>).
+            粘贴带头部信息的 Markdown（<code>--- name / description / triggers --- body</code>）。
           </p>
           <form onSubmit={handleImport} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <textarea
               className="memory-input"
               rows={6}
-              placeholder={`---\nname: Deploy Checklist\ndescription: Standard steps for production deployment\ntriggers: deploy, release\n---\n1. Run tests\n2. Check migrations\n3. Deploy to prod`}
+              placeholder={`---\nname: 发布检查清单\ndescription: 上线前的标准步骤\ntriggers: 发布, 上线\n---\n1. 运行测试\n2. 检查数据库迁移\n3. 发布到正式环境`}
               value={importMarkdown}
               onChange={(e) => setImportMarkdown(e.target.value)}
-              aria-label="Markdown to import"
+              aria-label="要导入的 Markdown"
               style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
             />
             {importError && <div className="memory-error">{importError}</div>}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button type="button" className="action-btn" onClick={() => setIsImporting(false)} disabled={importBusy}>
-                Cancel
+                取消
               </button>
               <button type="submit" className="action-btn" disabled={importBusy || !importMarkdown.trim()}>
-                {importBusy ? 'Importing…' : 'Import'}
+                {importBusy ? '导入中…' : '导入'}
               </button>
             </div>
           </form>
@@ -378,19 +378,19 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
       {isEditing && (
         <section className="memory-card" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <h4 style={{ margin: 0, fontSize: '0.92rem', fontWeight: 600 }}>
-            {editingSlug ? `Edit skill: ${editingSlug}` : 'Create new skill'}
+            {editingSlug ? `编辑技能：${editingSlug}` : '新建技能'}
           </h4>
           <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               <div style={{ flex: 2, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <label style={{ fontSize: '0.78rem', fontWeight: 600 }}>
-                  Name * <span className="memory-secondary">(1-80 chars)</span>
+                  名称 * <span className="memory-secondary">（1–80 字）</span>
                 </label>
                 <input
                   type="text"
                   className="memory-input"
                   maxLength={80}
-                  placeholder="e.g. Code Review Checklist"
+                  placeholder="例如：代码审查清单"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   required
@@ -399,13 +399,13 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
               {!editingSlug && (
                 <div style={{ flex: 1, minWidth: 160, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <label style={{ fontSize: '0.78rem', fontWeight: 600 }}>
-                    Slug <span className="memory-secondary">(optional, auto-derived)</span>
+                    标识 <span className="memory-secondary">（可选，不填会自动生成）</span>
                   </label>
                   <input
                     type="text"
                     className="memory-input"
                     maxLength={48}
-                    placeholder="e.g. code-review"
+                    placeholder="例如：code-review"
                     value={slug}
                     onChange={(e) => setSlug(e.target.value)}
                   />
@@ -415,13 +415,13 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <label style={{ fontSize: '0.78rem', fontWeight: 600 }}>
-                Description * <span className="memory-secondary">(1-300 chars, visible in assistant index)</span>
+                说明 * <span className="memory-secondary">（1–300 字，助手会看到）</span>
               </label>
               <input
                 type="text"
                 className="memory-input"
                 maxLength={300}
-                placeholder="What this procedure does and when to apply it"
+                placeholder="这个技能做什么、什么时候用"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 required
@@ -430,13 +430,13 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <label style={{ fontSize: '0.78rem', fontWeight: 600 }}>
-                Triggers <span className="memory-secondary">(optional, comma-separated keywords)</span>
+                触发词 <span className="memory-secondary">（可选，多个用逗号分开）</span>
               </label>
               <input
                 type="text"
                 className="memory-input"
                 maxLength={200}
-                placeholder="e.g. review, pr, pull request"
+                placeholder="例如：审查, PR, 合并请求"
                 value={triggers}
                 onChange={(e) => setTriggers(e.target.value)}
               />
@@ -445,7 +445,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <label style={{ fontSize: '0.78rem', fontWeight: 600 }}>
-                  Procedure Body * <span className="memory-secondary">(Markdown instructions, steps, rules)</span>
+                  具体步骤 * <span className="memory-secondary">（Markdown：步骤和规则）</span>
                 </label>
                 <span className="memory-secondary" style={{ fontSize: '0.75rem' }}>
                   {body.length} / 8000
@@ -455,7 +455,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
                 className="memory-input"
                 rows={10}
                 maxLength={8000}
-                placeholder="Write the full instructions for the assistant..."
+                placeholder="写下给助手的完整说明…"
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 required
@@ -467,10 +467,10 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
               <button type="button" className="action-btn" onClick={closeForm} disabled={formBusy}>
-                Cancel
+                取消
               </button>
               <button type="submit" className="action-btn" disabled={formBusy || !name.trim() || !description.trim() || !body.trim()}>
-                {formBusy ? 'Saving…' : 'Save skill'}
+                {formBusy ? '保存中…' : '保存技能'}
               </button>
             </div>
           </form>
@@ -483,14 +483,14 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
           type="search"
           className="memory-input"
           value={query}
-          placeholder="Search skills by name, slug, description, triggers, or content…"
+          placeholder="按名称、标识、说明、触发词或内容搜索技能…"
           onChange={(e) => setQuery(e.target.value)}
           style={{ flex: 1 }}
-          aria-label="Search skills"
+          aria-label="搜索技能"
         />
         {query && (
           <button type="button" className="action-btn" onClick={() => setQuery('')}>
-            Clear
+            清除
           </button>
         )}
       </section>
@@ -499,7 +499,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
       <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {filtered.length === 0 ? (
           <p className="memory-secondary" style={{ fontSize: '0.85rem' }}>
-            {query ? `No skills match “${query}”.` : 'No skills in library yet. Click "+ Create skill" or "Import Markdown" to add one.'}
+            {query ? `没有找到和“${query}”相关的技能。` : '还没有技能。点“＋ 新建技能”或“导入 Markdown”添加一个。'}
           </p>
         ) : (
           filtered.map((skill) => (
@@ -515,15 +515,15 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
                       type="button"
                       className={`status-badge ${skill.enabled ? 'completed' : 'interrupted'}`}
                       style={{ padding: '2px 8px', border: 'none', cursor: 'pointer', fontSize: '0.72rem' }}
-                      title="Click to toggle enabled/disabled"
+                      title="点击启用或停用"
                       onClick={() => void handleToggleEnabled(skill)}
                     >
-                      {skill.enabled ? '● Enabled' : '○ Disabled'}
+                      {skill.enabled ? '● 已启用' : '○ 已停用'}
                     </button>
                   </div>
                   <div className="memory-secondary" style={{ fontSize: '0.76rem' }}>
-                    Used {skill.use_count} time{skill.use_count === 1 ? '' : 's'}
-                    {skill.last_used_at ? ` · Last used ${new Date(skill.last_used_at).toLocaleDateString()}` : ' · Never used'}
+                    已用 {skill.use_count} 次
+                    {skill.last_used_at ? ` · 上次 ${formatWhen(skill.last_used_at)}` : ' · 还没用过'}
                   </div>
                 </div>
 
@@ -534,9 +534,9 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
                       className="action-btn"
                       style={{ fontSize: '0.8rem', padding: '3px 10px' }}
                       onClick={() => onUseInChat(skill.slug)}
-                      title="Switch to chat and prefill /skill"
+                      title="切换到对话并填入 /skill"
                     >
-                      Use in chat
+                      在对话中使用
                     </button>
                   )}
                   <button
@@ -545,7 +545,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
                     style={{ fontSize: '0.8rem', padding: '3px 10px' }}
                     onClick={() => openEdit(skill)}
                   >
-                    Edit
+                    编辑
                   </button>
                   <button
                     type="button"
@@ -553,11 +553,11 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
                     style={{ fontSize: '0.8rem', padding: '3px 10px' }}
                     onClick={() => handleExport(skill)}
                   >
-                    Export
+                    导出
                   </button>
                   {confirmDeleteSlug === skill.slug ? (
                     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                      <span className="memory-confirm-warning" style={{ fontSize: '0.76rem' }}>Delete?</span>
+                      <span className="memory-confirm-warning" style={{ fontSize: '0.76rem' }}>确定删除？</span>
                       <button
                         type="button"
                         className="action-btn memory-btn-danger"
@@ -565,7 +565,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
                         disabled={deleting}
                         onClick={() => void handleDelete(skill.slug)}
                       >
-                        {deleting ? 'Deleting…' : 'Confirm delete'}
+                        {deleting ? '删除中…' : '确定删除'}
                       </button>
                       <button
                         type="button"
@@ -574,7 +574,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
                         disabled={deleting}
                         onClick={() => setConfirmDeleteSlug(null)}
                       >
-                        Cancel
+                        取消
                       </button>
                     </div>
                   ) : (
@@ -584,7 +584,7 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
                       style={{ fontSize: '0.8rem', padding: '3px 10px' }}
                       onClick={() => setConfirmDeleteSlug(skill.slug)}
                     >
-                      Delete
+                      删除
                     </button>
                   )}
                 </div>
@@ -596,13 +596,13 @@ export function SkillsPanel({ token, onUseInChat }: SkillsPanelProps) {
 
               {skill.triggers && (
                 <div className="memory-secondary" style={{ fontSize: '0.75rem', marginBottom: 8 }}>
-                  <strong>Triggers:</strong> {skill.triggers}
+                  <strong>触发词：</strong> {skill.triggers}
                 </div>
               )}
 
               <details style={{ marginTop: 6, fontSize: '0.82rem' }}>
                 <summary style={{ cursor: 'pointer', color: 'var(--text-muted, #666)' }}>
-                  View procedure ({skill.body.length} chars) ⌄
+                  查看步骤（{skill.body.length} 字）⌄
                 </summary>
                 <pre style={{
                   background: 'var(--bg-subtle, rgba(0,0,0,0.03))',

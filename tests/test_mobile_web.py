@@ -205,7 +205,7 @@ class TestMobileUiRegressions(unittest.TestCase):
 
     def test_changes_section_uses_stable_class_not_has_file_list(self) -> None:
         app = self._read("web/src/App.tsx")
-        self.assertIn('title="Changes" className="context-section--changes" collapsible storageKey="conveyor-changes-collapsed"', app)
+        self.assertIn('title="改动" className="context-section--changes" collapsible storageKey="conveyor-changes-collapsed"', app)
         # Collapsing removes .file-list from the DOM, so no layout rule may key on it.
         for css in ("web/src/primary.css", "web/src/takeover.css"):
             text = self._read(css)
@@ -241,8 +241,11 @@ class TestMobileUiRegressions(unittest.TestCase):
         self.assertIn("swallowClicksUntil", app)
         # The backdrop must be a real, labelled click target (not aria-hidden).
         self.assertNotIn('className="mobile-backdrop" onClick={() => setSessionsDrawerOpen(false)} aria-hidden="true"', app)
-        self.assertIn('aria-label="Close sessions panel"', app)
-        self.assertIn('aria-label="Close context panel"', app)
+        self.assertIn('aria-label="关闭列表"', app)
+        self.assertIn('aria-label="关闭详情"', app)
+        # Phones get these drawers whatever features.mobile_ui says (flag OR narrow viewport).
+        self.assertIn("const mobileUiOn = Boolean(system?.features?.mobile_ui) || narrowViewport", app)
+        self.assertIn("useMediaQuery('(max-width: 820px)')", app)
 
     def test_escape_detection_accepts_all_key_forms(self) -> None:
         app = self._read("web/src/App.tsx")
@@ -260,16 +263,18 @@ class TestMobileUiRegressions(unittest.TestCase):
         self.assertNotIn("user-scalable=no", index)
 
     def test_closed_drawers_hidden_and_no_horizontal_scroll(self) -> None:
-        css = self._read("web/src/primary.css")
+        # The phone frame (≤820px) lives in the shell layer; the old ≤760px copies in primary.css are gone,
+        # so the shell no longer needs !important to win.
+        css = self._read("web/src/ux/shell.css")
         self.assertIn("overflow-x: clip;", css)
-        self.assertIn("visibility: hidden !important;", css)
-        self.assertIn("visibility: visible !important;", css)
-        self.assertIn("width: min(80vw, 320px) !important;", css)
-        self.assertIn("touch-action: none !important;", css)
-        self.assertIn("min-height: 48px; /* v2.css sets min-height: 60px", css)
+        self.assertIn("visibility: hidden;", css)
+        self.assertIn("visibility: visible;", css)
+        self.assertIn("width: min(84vw, 320px);", css)
+        self.assertIn("touch-action: none;", css)
+        self.assertIn("min-height: 48px;", css)
         built = "".join(p.read_text(encoding="utf-8") for p in (self.ROOT / "web" / "dist" / "assets").glob("*.css"))
         self.assertIn("overflow-x:clip", built.replace(" ", ""))
-        self.assertIn("min(80vw,320px)", built.replace(" ", ""))
+        self.assertIn("min(84vw,320px)", built.replace(" ", ""))
 
     def test_devtools_emulation_regression_script_present(self) -> None:
         script = self._read("scripts/ui_regress/devtools_emulation_regress.py")

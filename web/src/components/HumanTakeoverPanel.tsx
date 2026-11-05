@@ -32,12 +32,33 @@ function remaining(seconds: number) {
   return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`
 }
 
+const REASONS: Record<string, string> = {
+  sensitive_input: '输入敏感信息', payment: '付款', login: '登录', captcha: '验证码',
+  identity_check: '身份验证', operator_requested: '你主动接手', other: '其他原因',
+}
+
 function labelReason(reason?: string) {
-  return (reason || 'operator requested').replaceAll('_', ' ')
+  return REASONS[reason || 'operator_requested'] || (reason || '').replaceAll('_', ' ')
+}
+
+const PHASES: Record<string, string> = {
+  idle: '空闲', starting: '启动中', ready: '已就绪', closing: '正在关闭', stopped: '已停止',
+  waiting_for_idle: '等助手停下手头操作', manual_transport: '手动连接', unmanaged_transport: '外部连接',
+  error: '出错', cleanup_error: '清理出错', disabled: '未开启', disabled_cleanup_error: '清理出错', unknown: '未知',
+}
+
+function labelPhase(phase?: string | null) {
+  return PHASES[phase || 'unknown'] || (phase || '').replaceAll('_', ' ')
+}
+
+// A remembered token lives in localStorage only (a new tab has an empty sessionStorage).
+function consoleToken() {
+  try { return sessionStorage.getItem('conveyor-token') || localStorage.getItem('conveyor-token') || '' } catch { return '' }
 }
 
 export function HumanTakeoverPanel() {
   const [target, setTarget] = useState<HTMLElement | null>(null)
+  const [idleTarget, setIdleTarget] = useState<HTMLElement | null>(null)
   const [status, setStatus] = useState<TakeoverStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -47,7 +68,7 @@ export function HumanTakeoverPanel() {
 
   const load = useCallback(async () => {
     if (unavailableRef.current) return null
-    const token = sessionStorage.getItem('conveyor-token') || ''
+    const token = consoleToken()
     if (!token) { setStatus(null); return null }
     const response = await fetch('/api/takeover/status', {
       headers: { Authorization: `Bearer ${token}` },
@@ -63,7 +84,7 @@ export function HumanTakeoverPanel() {
       return null
     }
     const body = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(body.error || `Takeover status failed (${response.status})`)
+    if (!response.ok) throw new Error('无法读取人工接管状态' + (body.error ? `（${body.error}）` : ''))
     if (body && body.available === false) {
       unavailableRef.current = true
       setUnavailable(true)
@@ -75,8 +96,8 @@ export function HumanTakeoverPanel() {
   }, [])
 
   const mutate = useCallback(async (path: string, body: Record<string, unknown>) => {
-    const token = sessionStorage.getItem('conveyor-token') || ''
-    if (!token) throw new Error('Web Console is locked')
+    const token = consoleToken()
+    if (!token) throw new Error('控制台已锁定')
     setBusy(true); setError('')
     try {
       const response = await fetch(path, {
@@ -85,17 +106,20 @@ export function HumanTakeoverPanel() {
         body: JSON.stringify(body),
       })
       const result = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(result.error || `Takeover action failed (${response.status})`)
+      if (!response.ok) throw new Error('接手操作没有成功' + (result.error ? `（${result.error}）` : ''))
       setStatus(result as TakeoverStatus)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Takeover action failed')
+      setError(reason instanceof Error ? reason.message : '接手操作没有成功')
     } finally {
       setBusy(false)
     }
   }, [])
 
   useEffect(() => {
-    const findTarget = () => setTarget(document.querySelector<HTMLElement>('.context-panel'))
+    const findTarget = () => {
+      setTarget(document.querySelector<HTMLElement>('.takeover-active-slot') || document.querySelector<HTMLElement>('.context-panel'))
+      setIdleTarget(document.querySelector<HTMLElement>('.takeover-slot'))
+    }
     findTarget()
     const observer = new MutationObserver(findTarget)
     observer.observe(document.body, { childList: true, subtree: true })
@@ -109,7 +133,7 @@ export function HumanTakeoverPanel() {
       if (unavailableRef.current) return
       void load().catch(reason => {
         if (active && !unavailableRef.current) {
-          setError(reason instanceof Error ? reason.message : 'Could not load takeover status')
+          setError(reason instanceof Error ? reason.message : '无法读取人工接管状态')
         }
       })
     }
@@ -119,22 +143,10 @@ export function HumanTakeoverPanel() {
     return () => { active = false; window.clearInterval(timer) }
   }, [load, status?.enabled, unavailable])
 
-  if (unavailable || !target || !status) return null
+  if (unavailable || !status) return null
 
-  if (status.enabled === false) {
-    const disabledCard = (
-      <section className="context-section takeover-context" aria-label="Human takeover">
-        <h3 className="eyebrow">HUMAN TAKEOVER</h3>
-        <div className="takeover-idle">
-          <span className="takeover-lock" aria-hidden="true">◇</span>
-          <div>
-            <p>Human takeover disabled — set CONVEYOR_TAKEOVER_ENABLED=true on the server</p>
-          </div>
-        </div>
-      </section>
-    )
-    return createPortal(disabledCard, target)
-  }
+  // Disabled on the server: nothing to show the owner (no env-var instructions).
+  if (status.enabled === false) return null
 
   const lease = status.takeover
   const route = status.transport?.url || status.transport?.local_url || ''
@@ -144,12 +156,12 @@ export function HumanTakeoverPanel() {
     void mutate('/api/takeover/activate', { session_id: lease.id })
   }
 
-  const card = <section className="context-section takeover-context" aria-label="Human takeover">
-    <h3 className="eyebrow">HUMAN TAKEOVER</h3>
+  const card = <section className={`context-section takeover-context${lease ? ' is-active' : ''}`} aria-label="人工接管">
+    <h3 className="eyebrow">人工接管</h3>
     {!lease ? <>
       <div className="takeover-idle">
         <span className="takeover-lock" aria-hidden="true">◇</span>
-        <div><strong>Agent owns the GUI</strong><p>Pause automation before passwords, payment, CAPTCHA, identity checks, or other human-only steps.</p></div>
+        <div><strong>助手正在使用电脑</strong><p>遇到密码、付款、验证码、身份验证这类需要你亲自操作的步骤，先暂停助手，由你接手。</p></div>
       </div>
       <button
         type="button"
@@ -157,45 +169,45 @@ export function HumanTakeoverPanel() {
         disabled={busy}
         onClick={() => void mutate('/api/takeover/start', { reason: 'operator_requested', ttl_seconds: 300 })}
       >
-        {busy ? 'Opening secure handoff…' : 'Take over'}
+        {busy ? '正在准备安全接手…' : '我来接手'}
       </button>
     </> : <>
       <div className="takeover-active-heading">
         <span className="takeover-lock active" aria-hidden="true">●</span>
-        <div><strong>Privacy mode — Agent paused</strong><p>{labelReason(lease.reason)} · expires in {remaining(lease.remaining_seconds)}</p></div>
+        <div><strong>隐私模式 · 助手已暂停</strong><p>{labelReason(lease.reason)} · {remaining(lease.remaining_seconds)} 后自动结束</p></div>
       </div>
       <div className="takeover-status-grid">
-        <span>Lease</span><strong>{lease.state === 'human_active' ? 'Human active' : 'Waiting for human'}</strong>
-        <span>Transport</span><strong>{closing ? 'Closing safely…' : status.transport?.ready ? 'Ready' : (status.transport?.phase || 'unknown').replaceAll('_', ' ')}</strong>
+        <span>接手状态</span><strong>{lease.state === 'human_active' ? '你正在操作' : '等你接手'}</strong>
+        <span>远程桌面</span><strong>{closing ? '正在安全关闭…' : status.transport?.ready ? '已就绪' : labelPhase(status.transport?.phase)}</strong>
       </div>
-      {status.transport?.error && <p className="takeover-error" role="alert">{status.transport.error}</p>}
+      {status.transport?.error && <p className="takeover-error" role="alert">远程桌面出错<small>{status.transport.error}</small></p>}
       <div className="takeover-actions">
         {route && status.transport?.ready && !closing
-          ? <a className="takeover-open" href={route} target="_blank" rel="noreferrer" onClick={activate}>Open Remote Desktop ↗</a>
-          : <button type="button" disabled>Remote desktop {status.transport?.phase === 'starting' ? 'starting…' : 'not ready'}</button>}
+          ? <a className="takeover-open" href={route} target="_blank" rel="noreferrer" onClick={activate}>打开远程桌面 ↗</a>
+          : <button type="button" disabled>{status.transport?.phase === 'starting' ? '远程桌面启动中…' : '远程桌面还没就绪'}</button>}
         <button
           type="button"
           className="takeover-primary"
           disabled={busy || closing}
           onClick={() => void mutate('/api/takeover/complete', { session_id: lease.id })}
-        >Done, resume Agent</button>
+        >完成，交还助手</button>
         <button
           type="button"
           className="takeover-cancel"
           disabled={busy || closing}
           onClick={() => void mutate('/api/takeover/cancel', { session_id: lease.id })}
-        >Cancel handoff</button>
+        >取消接手</button>
       </div>
-      <p className="takeover-secret-note">Sensitive values stay in the remote desktop. Conveyor never receives the VNC credential, password, card data, or typed secret.</p>
+      <p className="takeover-secret-note">敏感信息只留在远程桌面里。Conveyor 收不到远程桌面密码、账户密码、银行卡信息，也看不到你输入的任何机密。</p>
     </>}
     {error && <p className="takeover-error" role="alert">{error}</p>}
   </section>
 
   return <>
     {status.privacy_mode && <div className="takeover-privacy-banner" role="status">
-      <strong>Privacy mode</strong><span>Agent GUI automation is paused while human takeover is open.</span>
-      {status.closing && <em>Closing transport before Agent resume…</em>}
+      <strong>隐私模式</strong><span>人工接管期间，助手暂停操作电脑。</span>
+      {status.closing && <em>正在关闭远程桌面，随后交还助手…</em>}
     </div>}
-    {createPortal(card, target)}
+    {lease ? target && createPortal(card, target) : idleTarget && createPortal(card, idleTarget)}
   </>
 }

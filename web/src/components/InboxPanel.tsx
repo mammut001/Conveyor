@@ -1,6 +1,10 @@
 import React, { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { applyInboxDecision, isStale } from '../approvalFreshness';
 import { FormattedText } from './FormattedText';
+import {
+  channelLabel, cronClock, describeCron, ErrorNote, formatDateTime, formatUpcoming, formatWhen, friendlyError,
+  presetFor, responseError, SCHEDULE_PRESETS, scheduleLabel, splitCron, withClock, type FriendlyError,
+} from '../ux/knowledgeKit';
 
 export type RoutineHook = {
   hook_id: string;
@@ -24,6 +28,7 @@ export type Routine = {
   last_run_status?: string | null;
   consecutive_failures?: number;
   hook?: RoutineHook | null;
+  agent_id?: string | null;
 };
 
 export type InboxItem = {
@@ -68,18 +73,79 @@ type ConfirmHookAction = {
   action: 'rotate' | 'delete';
 };
 
-function formatLocalTime(val?: string | null) {
-  if (!val) return '—';
-  const d = new Date(val);
-  return Number.isNaN(d.valueOf())
-    ? val
-    : d.toLocaleString([], {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
+type Tone = 'success' | 'danger' | 'warning' | 'muted';
+
+const RUN_STATUS: Record<string, { label: string; tone: Tone }> = {
+  ok: { label: '已完成', tone: 'success' },
+  executed: { label: '已批准并执行', tone: 'success' },
+  approval_pending: { label: '等你批准', tone: 'warning' },
+  error: { label: '失败', tone: 'danger' },
+  escalate: { label: '需要你手动处理', tone: 'warning' },
+  unavailable: { label: '没有运行', tone: 'danger' },
+  denied: { label: '已拒绝', tone: 'muted' },
+  expired: { label: '批准已过期', tone: 'muted' },
+  cancelled: { label: '已取消', tone: 'muted' },
+};
+
+const APPROVAL_STATUS: Record<string, { label: string; tone: Tone }> = {
+  approved: { label: '已批准', tone: 'success' },
+  denied: { label: '已拒绝', tone: 'muted' },
+  cancelled: { label: '已取消', tone: 'muted' },
+  expired: { label: '批准已过期', tone: 'muted' },
+};
+
+function statusOf(status?: string | null) {
+  return RUN_STATUS[status || ''] || { label: status || '未知', tone: 'muted' as Tone };
 }
+
+function itemStatus(item: InboxItem) {
+  const appr = item.approval;
+  if (item.status === 'approval_pending' && appr && appr.status !== 'pending') {
+    return APPROVAL_STATUS[appr.status] || statusOf(appr.status);
+  }
+  return statusOf(item.status);
+}
+
+/** Server text for these outcomes is English; say what happened in Chinese first. */
+function runExplanation(item: InboxItem): string | null {
+  switch (item.status) {
+    case 'escalate':
+      return '这次需要改代码或执行命令，定时任务不会自动去做。需要的话，请在“任务”里手动发起。';
+    case 'unavailable':
+      return '当时对话服务不可用，这次没有运行。';
+    case 'error':
+      return /timed out|运行超时/i.test(item.output || '') ? '运行超时，已自动停止。' : '运行时出错了。';
+    default:
+      return null;
+  }
+}
+
+function deliveryNotes(delivery?: Record<string, string>): string[] {
+  if (!delivery) return [];
+  return Object.entries(delivery)
+    .filter(([channel]) => channel !== 'web')
+    .map(([channel, state]) => {
+      const label = channelLabel(channel);
+      // Space between Chinese and Latin words: "发到 Telegram 失败", "发到飞书失败".
+      const target = /^[\u3400-\u9fff]/.test(label) ? label : ` ${label} `;
+      const value = String(state || '');
+      if (value === 'ok') return `已发到${target}`.trim();
+      if (value.startsWith('skipped')) {
+        const why = /not configured/i.test(value) ? '（未连接）' : /no target/i.test(value) ? '（没有接收对象）' : '';
+        return `没有发到${target}`.trim() + why;
+      }
+      return `发到${target}失败`;
+    });
+}
+
+function hasLongOutput(text: string) {
+  return text.length > 600 || text.split('\n').length > 12;
+}
+
+const DEFAULT_SCHEDULE = '0 9 * * *';
+const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
+const MINUTES = Array.from({ length: 12 }, (_, step) => step * 5);
+const pad2 = (value: number) => String(value).padStart(2, '0');
 
 export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksEnabled, agentId, agentName }: InboxPanelProps) {
   const [disabled, setDisabled] = useState(false);
@@ -87,9 +153,16 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
   const [items, setItems] = useState<InboxItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [routinesList, setRoutinesList] = useState<Routine[]>([]);
-  const [error, setError] = useState('');
-  const [approvalsInProgress, setApprovalsInProgress] = useState<Record<string, boolean>>({});
+  const [loaded, setLoaded] = useState({ inbox: false, routines: false });
+  const [error, setError] = useState<FriendlyError | null>(null);
+  const [notice, setNotice] = useState<{ text: string; showInbox?: boolean } | null>(null);
+  const [approvalsInProgress, setApprovalsInProgress] = useState<Record<string, 'approve' | 'reject' | undefined>>({});
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const fetchGen = useRef(0);
+
+  // Routine actions
+  const [routineBusy, setRoutineBusy] = useState<{ id: number; action: 'run' | 'toggle' | 'delete' } | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
   // Webhook state
   const [confirmHookAction, setConfirmHookAction] = useState<ConfirmHookAction | null>(null);
@@ -101,12 +174,18 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
   // Create form state
   const [formOpen, setFormOpen] = useState(false);
   const [name, setName] = useState('');
-  const [schedule, setSchedule] = useState('');
+  const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
+  const [clock, setClock] = useState('09:00');
   const [prompt, setPrompt] = useState('');
   const [deliverTg, setDeliverTg] = useState(false);
   const [deliverFs, setDeliverFs] = useState(false);
   const [formBusy, setFormBusy] = useState(false);
-  const [formError, setFormError] = useState('');
+  const [formError, setFormError] = useState<FriendlyError | null>(null);
+  const [channels, setChannels] = useState<{ telegram?: boolean; feishu?: boolean } | null>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const inboxRef = useRef<HTMLElement>(null);
+  const newRoutineRef = useRef<HTMLButtonElement>(null);
+  const formWasOpen = useRef(false);
 
   const fetchInbox = useCallback(async () => {
     if (disabledRef.current || !token) return;
@@ -120,19 +199,17 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
         setDisabled(true);
         return;
       }
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Failed to load inbox (${res.status})`);
-      }
+      if (!res.ok) throw await responseError(res);
       const data = await res.json();
       if (isStale(gen, fetchGen.current)) return;
       setItems(data.items || []);
+      setLoaded((prev) => (prev.inbox ? prev : { ...prev, inbox: true }));
       const count = Number(data.unread || 0);
       setUnreadCount(count);
       onUnreadChange?.(count);
     } catch (err) {
       if (isStale(gen, fetchGen.current) || disabledRef.current) return;
-      setError(err instanceof Error ? err.message : 'Failed to fetch inbox');
+      setError(friendlyError(err, '没能读取收件箱，请稍后重试'));
     }
   }, [token, onUnreadChange]);
 
@@ -147,15 +224,13 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
         setDisabled(true);
         return;
       }
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Failed to load routines (${res.status})`);
-      }
+      if (!res.ok) throw await responseError(res);
       const data = await res.json();
       setRoutinesList(data.routines || []);
+      setLoaded((prev) => (prev.routines ? prev : { ...prev, routines: true }));
     } catch (err) {
       if (!disabledRef.current) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch routines');
+        setError(friendlyError(err, '没能读取定时任务，请稍后重试'));
       }
     }
   }, [token]);
@@ -174,6 +249,34 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
     }, 15_000);
     return () => window.clearInterval(timer);
   }, [fetchInbox, fetchRoutines, disabled]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  // Which delivery channels are connected, so the form can say so.
+  useEffect(() => {
+    if (!formOpen || channels || !token) return;
+    let active = true;
+    fetch('/api/system/status', { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!active) return;
+        const known = data?.channels;
+        setChannels(known ? { telegram: Boolean(known.telegram?.configured), feishu: Boolean(known.feishu?.configured) } : {});
+      })
+      .catch(() => { if (active) setChannels({}); });
+    return () => { active = false; };
+  }, [formOpen, channels, token]);
+
+  // Focus moves into the form when it opens and back to its button when it closes.
+  useEffect(() => {
+    if (formOpen) nameRef.current?.focus();
+    else if (formWasOpen.current) newRoutineRef.current?.focus();
+    formWasOpen.current = formOpen;
+  }, [formOpen]);
 
   const handleMarkRead = async (runId: number) => {
     try {
@@ -205,12 +308,12 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
       setUnreadCount(0);
       onUnreadChange?.(0);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to mark all read');
+      setError(friendlyError(err, '没能全部标为已读，请重试'));
     }
   };
 
   const handleApprovalDecision = async (approvalId: string, approve: boolean) => {
-    setApprovalsInProgress((prev) => ({ ...prev, [approvalId]: true }));
+    setApprovalsInProgress((prev) => ({ ...prev, [approvalId]: approve ? 'approve' : 'reject' }));
     try {
       const action = approve ? 'approve' : 'reject';
       const res = await fetch(`/api/approvals/${encodeURIComponent(approvalId)}/${action}`, {
@@ -221,10 +324,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
         },
         body: '{}',
       });
-      if (!res.ok && res.status !== 404) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Approval failed (${res.status})`);
-      }
+      if (!res.ok && res.status !== 404) throw await responseError(res);
       const status = !res.ok ? 'expired' : approve ? 'approved' : 'denied';
       // Drop an in-flight poll, then paint the decision before the refetch returns.
       fetchGen.current += 1;
@@ -232,68 +332,71 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
       await fetchInbox();
       onApprovalDecided?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Approval failed');
+      setError(friendlyError(err, approve ? '批准没有成功，请重试' : '拒绝没有成功，请重试'));
     } finally {
-      setApprovalsInProgress((prev) => ({ ...prev, [approvalId]: false }));
+      setApprovalsInProgress((prev) => ({ ...prev, [approvalId]: undefined }));
     }
   };
 
   const handleToggleRoutine = async (r: Routine) => {
     const action = r.enabled ? 'pause' : 'resume';
+    setRoutineBusy({ id: r.id, action: 'toggle' });
     try {
       const res = await fetch(`/api/routines/${r.id}/${action}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: '{}',
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Failed to ${action} routine`);
-      }
+      if (!res.ok) throw await responseError(res);
       await fetchRoutines();
     } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to ${action} routine`);
+      setError(friendlyError(err, r.enabled ? '暂停失败，请重试' : '恢复失败，请重试'));
+    } finally {
+      setRoutineBusy(null);
     }
   };
 
-  const handleRunNow = async (id: number) => {
+  const handleRunNow = async (r: Routine) => {
+    setRoutineBusy({ id: r.id, action: 'run' });
+    setNotice(null);
     try {
-      const res = await fetch(`/api/routines/${id}/run`, {
+      const res = await fetch(`/api/routines/${r.id}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: '{}',
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || 'Failed to run routine');
-      }
+      if (!res.ok) throw await responseError(res);
+      setNotice({ text: `“${r.name}”已运行完，结果已放进收件箱。`, showInbox: true });
       await fetchInbox();
       await fetchRoutines();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to run routine');
+      setError(friendlyError(err, '运行失败，请稍后重试'));
+    } finally {
+      setRoutineBusy(null);
     }
   };
 
-  const handleDeleteRoutine = async (id: number) => {
-    if (!window.confirm(`Delete routine #${id}?`)) return;
+  const handleDeleteRoutine = async (r: Routine) => {
+    setRoutineBusy({ id: r.id, action: 'delete' });
     try {
-      const res = await fetch(`/api/routines/${id}`, {
+      const res = await fetch(`/api/routines/${r.id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || 'Failed to delete routine');
-      }
+      if (!res.ok) throw await responseError(res);
+      setConfirmDeleteId(null);
+      setNotice({ text: `已删除定时任务“${r.name}”。` });
       await fetchRoutines();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete routine');
+      setError(friendlyError(err, '删除失败，请重试'));
+    } finally {
+      setRoutineBusy(null);
     }
   };
 
   const handleCreateOrRotateHook = async (routine: Routine, action: 'create' | 'rotate') => {
     setHookBusyId(routine.id);
-    setError('');
+    setError(null);
     try {
       const res = await fetch(`/api/routines/${routine.id}/hook`, {
         method: 'POST',
@@ -303,10 +406,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
         },
         body: '{}',
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Failed to ${action} webhook (${res.status})`);
-      }
+      if (!res.ok) throw await responseError(res);
       const data = await res.json();
       setCreatedHookInfo({
         routineId: routine.id,
@@ -320,7 +420,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
       setCopiedCurl(false);
       await fetchRoutines();
     } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to ${action} webhook`);
+      setError(friendlyError(err, action === 'create' ? '创建 Webhook 失败，请重试' : '更换密钥失败，请重试'));
     } finally {
       setHookBusyId(null);
     }
@@ -328,32 +428,43 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
 
   const handleDeleteHook = async (routineId: number) => {
     setHookBusyId(routineId);
-    setError('');
+    setError(null);
     try {
       const res = await fetch(`/api/routines/${routineId}/hook`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok && res.status !== 404) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Failed to delete webhook (${res.status})`);
-      }
+      if (!res.ok && res.status !== 404) throw await responseError(res);
       if (createdHookInfo?.routineId === routineId) {
         setCreatedHookInfo(null);
       }
       setConfirmHookAction(null);
       await fetchRoutines();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete webhook');
+      setError(friendlyError(err, '移除 Webhook 失败，请重试'));
     } finally {
       setHookBusyId(null);
     }
   };
 
+  const resetForm = () => {
+    setName('');
+    setSchedule(DEFAULT_SCHEDULE);
+    setClock('09:00');
+    setPrompt('');
+    setDeliverTg(false);
+    setDeliverFs(false);
+    setFormError(null);
+  };
+
   const handleCreateRoutine = async (e: FormEvent) => {
     e.preventDefault();
+    if (splitCron(schedule).length !== 5) {
+      setFormError({ message: '运行时间的格式不对：cron 需要 5 段，例如 0 9 * * *', detail: '', raw: '' });
+      return;
+    }
     setFormBusy(true);
-    setFormError('');
+    setFormError(null);
     const deliver = ['web'];
     if (deliverTg) deliver.push('telegram');
     if (deliverFs) deliver.push('feishu');
@@ -368,24 +479,19 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
         body: JSON.stringify({
           ...(agentId ? { agent: agentId } : {}),
           name: name.trim(),
-          schedule: schedule.trim(),
+          schedule: splitCron(schedule).join(' '),
           prompt: prompt.trim(),
           deliver,
         }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Create routine failed (${res.status})`);
-      }
-      setName('');
-      setSchedule('');
-      setPrompt('');
-      setDeliverTg(false);
-      setDeliverFs(false);
+      if (!res.ok) throw await responseError(res);
+      const created = await res.json().catch(() => null) as Routine | null;
+      setNotice({ text: `已创建定时任务“${created?.name || name.trim()}”${created?.next_run_at ? `，下次运行：${formatUpcoming(created.next_run_at)}` : ''}。` });
+      resetForm();
       setFormOpen(false);
       await fetchRoutines();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Failed to create routine');
+      setFormError(friendlyError(err, '创建失败，请检查后重试'));
     } finally {
       setFormBusy(false);
     }
@@ -393,475 +499,575 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
 
   if (disabled) {
     return (
-      <div className="stream-body" style={{ padding: '24px 20px' }}>
-        <div className="job-notice" style={{ maxWidth: 640 }}>
-          <strong>Routines are disabled</strong>
-          <span>Set <code>CONVEYOR_ROUTINES_ENABLED=true</code> on the server to enable scheduled routines and inbox.</span>
-        </div>
+      <div className="stream-body kn-page kn-inbox">
+        <p className="kn-off">定时任务功能未开启。</p>
       </div>
     );
   }
 
+  const who = agentId && agentName ? agentName : 'Conveyor';
+  const activePreset = presetFor(schedule);
+  const scheduleClock = cronClock(schedule);
+  const clockEditable = Boolean(scheduleClock) || !schedule.trim();
+  const fieldCount = splitCron(schedule).length;
+  const described = describeCron(schedule);
+  const reading = !schedule.trim()
+    ? { text: '请选一个常用时间，或直接填写 cron 表达式。', bad: false }
+    : fieldCount !== 5
+      ? { text: 'cron 需要 5 段，用空格分开：分 时 日 月 周，例如 0 9 * * *', bad: true }
+      : described
+        ? { text: `${described}${/\d$/.test(described) ? ' ' : ''}运行（服务器时间）`, bad: false }
+        : { text: '自定义时间，创建时会检查格式。', bad: false };
+
+  const applyPreset = (id: string) => {
+    const preset = SCHEDULE_PRESETS.find((p) => p.id === id);
+    if (!preset) return;
+    // Remember the last clock time so 每小时 → 每天 keeps what the user picked.
+    if (scheduleClock) setClock(scheduleClock);
+    const [h, m] = (scheduleClock || clock).split(':').map(Number);
+    setSchedule(preset.build(h, m));
+    if (formError) setFormError(null);
+  };
+
+  const [clockHour, clockMinute] = (scheduleClock || clock).split(':').map(Number);
+  const minuteOptions = MINUTES.includes(clockMinute) ? MINUTES : [...MINUTES, clockMinute].sort((a, b) => a - b);
+
+  const changeClock = (value: string) => {
+    setClock(value);
+    if (!value) return;
+    if (!schedule.trim()) {
+      const [h, m] = value.split(':').map(Number);
+      setSchedule(`${m} ${h} * * *`);
+    } else if (scheduleClock) {
+      setSchedule(withClock(schedule, value));
+    }
+  };
+
+  const fullHookUrl = createdHookInfo
+    ? (typeof window !== 'undefined' ? `${window.location.origin}${createdHookInfo.path}` : createdHookInfo.path)
+    : '';
+  const curlSnippet = createdHookInfo
+    ? `BODY='{"event":"ping"}'\nSECRET='${createdHookInfo.secret}'\nSIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}')\ncurl -X POST "${fullHookUrl}" \\\n  -H "Content-Type: application/json" \\\n  -H "X-Conveyor-Signature: sha256=$SIG" \\\n  -d "$BODY"`
+    : '';
+
   return (
-    <div className="stream-body" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', padding: '16px' }}>
+    <div className="stream-body kn-page kn-inbox">
       {error && (
-        <div className="error-banner global" style={{ margin: '0 0 12px 0' }}>
-          {error}
-          <button type="button" onClick={() => setError('')}>×</button>
+        <ErrorNote
+          error={error}
+          onRetry={() => { setError(null); void fetchInbox(); void fetchRoutines(); }}
+          onDismiss={() => setError(null)}
+        />
+      )}
+      {notice && (
+        <div className="kn-notice" role="status">
+          <span>{notice.text}</span>
+          {notice.showInbox && (
+            <button type="button" className="kn-link" onClick={() => inboxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+              查看收件箱
+            </button>
+          )}
+          <button type="button" className="kn-notice-close" aria-label="关闭提示" onClick={() => setNotice(null)}>×</button>
         </div>
       )}
 
-      {/* Top section: Routines Manager */}
-      <section style={{ marginBottom: 24, padding: 14, background: 'var(--panel, #fff)', borderRadius: 8, border: '1px solid var(--line)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)' }}>
-            Scheduled Routines ({routinesList.length}){agentId && agentName ? ` · new ones belong to ${agentName}` : ''}
-          </h3>
-          <button
-            type="button"
-            className="action-btn"
-            style={{ fontSize: '0.8rem', padding: '4px 8px' }}
-            onClick={() => setFormOpen((o) => !o)}
-          >
-            {formOpen ? 'Cancel' : '＋ New Routine'}
-          </button>
-        </div>
-
-        {createdHookInfo && (
-          <div
-            style={{
-              marginBottom: 16,
-              padding: 14,
-              background: 'var(--panel-2, #f8fafc)',
-              border: '1px solid #bfdbfe',
-              borderRadius: 8,
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-              <div>
-                <strong style={{ fontSize: '0.9rem', color: 'var(--text)' }}>
-                  Webhook credentials for &ldquo;{createdHookInfo.routineName}&rdquo;
-                </strong>
-                <p style={{ margin: '4px 0 0', fontSize: '0.8rem', color: 'var(--yellow)', fontWeight: 600 }}>
-                  ⚠️ The secret is shown only now.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="action-btn"
-                style={{ fontSize: '0.75rem', padding: '3px 8px' }}
-                onClick={() => setCreatedHookInfo(null)}
-              >
-                Dismiss
-              </button>
-            </div>
-
-            <div style={{ display: 'grid', gap: 8, fontSize: '0.82rem', marginTop: 10 }}>
-              <div>
-                <span style={{ color: 'var(--muted)', display: 'block', fontSize: '0.75rem', marginBottom: 2 }}>Webhook URL</span>
-                <code style={{ display: 'block', padding: '6px 8px', background: '#fff', border: '1px solid var(--line)', borderRadius: 4, overflowX: 'auto', color: 'var(--text)' }}>
-                  {typeof window !== 'undefined' ? `${window.location.origin}${createdHookInfo.path}` : createdHookInfo.path}
-                </code>
-              </div>
-
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
-                  <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>Secret</span>
-                  <button
-                    type="button"
-                    className="action-btn"
-                    style={{ fontSize: '0.7rem', padding: '2px 6px' }}
-                    onClick={() => {
-                      void navigator.clipboard.writeText(createdHookInfo.secret);
-                      setCopiedSecret(true);
-                      setTimeout(() => setCopiedSecret(false), 2000);
-                    }}
-                  >
-                    {copiedSecret ? 'Copied!' : 'Copy Secret'}
-                  </button>
-                </div>
-                <code style={{ display: 'block', padding: '6px 8px', background: '#fff', border: '1px solid var(--line)', borderRadius: 4, overflowX: 'auto', wordBreak: 'break-all', color: 'var(--text)' }}>
-                  {createdHookInfo.secret}
-                </code>
-              </div>
-
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
-                  <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>Ready-to-copy curl example</span>
-                  <button
-                    type="button"
-                    className="action-btn"
-                    style={{ fontSize: '0.7rem', padding: '2px 6px' }}
-                    onClick={() => {
-                      const fullUrl = typeof window !== 'undefined' ? `${window.location.origin}${createdHookInfo.path}` : createdHookInfo.path;
-                      const snippet = `BODY='{"event":"ping"}'\nSECRET='${createdHookInfo.secret}'\nSIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}')\ncurl -X POST "${fullUrl}" \\\n  -H "Content-Type: application/json" \\\n  -H "X-Conveyor-Signature: sha256=$SIG" \\\n  -d "$BODY"`;
-                      void navigator.clipboard.writeText(snippet);
-                      setCopiedCurl(true);
-                      setTimeout(() => setCopiedCurl(false), 2000);
-                    }}
-                  >
-                    {copiedCurl ? 'Copied!' : 'Copy curl'}
-                  </button>
-                </div>
-                <pre style={{ margin: 0, padding: '8px 10px', background: '#fff', border: '1px solid var(--line)', borderRadius: 4, fontSize: '0.75rem', overflowX: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.4, color: 'var(--text)' }}>
-{`BODY='{"event":"ping"}'
-SECRET='${createdHookInfo.secret}'
-SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}')
-curl -X POST "${typeof window !== 'undefined' ? window.location.origin : ''}${createdHookInfo.path}" \\
-  -H "Content-Type: application/json" \\
-  -H "X-Conveyor-Signature: sha256=$SIG" \\
-  -d "$BODY"`}
-                </pre>
-              </div>
-            </div>
+      <section className="kn-section" aria-labelledby="kn-inbox-title" ref={inboxRef}>
+        <header className="kn-section-head">
+          <div>
+            {/* The page header already says 收件箱; this section is its list of results. */}
+            <h3 id="kn-inbox-title">
+              运行结果{unreadCount > 0 && <span className="kn-count kn-count-accent">{unreadCount} 条未读</span>}
+            </h3>
+            <p className="kn-section-sub">定时任务每次运行的结果都在这里。</p>
           </div>
-        )}
-
-        {formOpen && (
-          <form onSubmit={handleCreateRoutine} style={{ marginBottom: 16, padding: 12, background: 'var(--panel-2, #f8fafc)', borderRadius: 6, border: '1px solid var(--line)' }}>
-            {formError && <div style={{ color: 'var(--red)', fontSize: '0.85rem', marginBottom: 8 }}>{formError}</div>}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.75rem', color: 'var(--muted)', marginBottom: 2 }}>Routine Name</label>
-                <input
-                  type="text"
-                  placeholder="Daily News Summary"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  style={{ width: '100%', padding: '6px 8px', borderRadius: 4, border: '1px solid var(--line)', background: '#fff', color: 'var(--text)' }}
-                  required
-                />
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.75rem', color: 'var(--muted)', marginBottom: 2 }}>Cron (5-field)</label>
-                <input
-                  type="text"
-                  placeholder="0 8 * * 1-5"
-                  value={schedule}
-                  onChange={(e) => setSchedule(e.target.value)}
-                  style={{ width: '100%', padding: '6px 8px', borderRadius: 4, border: '1px solid var(--line)', background: '#fff', color: 'var(--text)' }}
-                  required
-                />
-              </div>
-            </div>
-            <div style={{ marginBottom: 8 }}>
-              <label style={{ display: 'block', fontSize: '0.75rem', color: 'var(--muted)', marginBottom: 2 }}>Prompt (instructions for chat tier + tools)</label>
-              <textarea
-                placeholder="Check recent issues on GitHub and summarize today's priorities."
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                rows={3}
-                style={{ width: '100%', padding: '6px 8px', borderRadius: 4, border: '1px solid var(--line)', background: '#fff', color: 'var(--text)', resize: 'vertical' }}
-                required
-              />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12 }}>
-              <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>Delivery:</span>
-              <label style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text)' }}>
-                <input type="checkbox" checked disabled /> Web Inbox
-              </label>
-              <label style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text)' }}>
-                <input type="checkbox" checked={deliverTg} onChange={(e) => setDeliverTg(e.target.checked)} /> Telegram
-              </label>
-              <label style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text)' }}>
-                <input type="checkbox" checked={deliverFs} onChange={(e) => setDeliverFs(e.target.checked)} /> Feishu
-              </label>
-            </div>
-            <button type="submit" disabled={formBusy} className="action-btn" style={{ padding: '6px 14px' }}>
-              {formBusy ? 'Creating…' : 'Create Routine'}
-            </button>
-          </form>
-        )}
-
-        {routinesList.length === 0 ? (
-          <p style={{ margin: 0, color: 'var(--muted)', fontSize: '0.85rem' }}>No routines created yet.</p>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {routinesList.map((r) => (
-              <div
-                key={r.id}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '10px 12px',
-                  background: 'var(--panel-2, #f8fafc)',
-                  borderRadius: 6,
-                  border: '1px solid var(--line)',
-                  flexWrap: 'wrap',
-                  gap: 8,
-                }}
-              >
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '0.9rem' }}>{r.enabled ? '🟢' : '⏸️'}</span>
-                    <strong style={{ color: 'var(--text)' }}>{r.name}</strong>
-                    <code style={{ fontSize: '0.8rem', background: '#fff', border: '1px solid var(--line)', padding: '2px 6px', borderRadius: 4, color: 'var(--text)' }}>
-                      {r.schedule_cron || r.schedule}
-                    </code>
-                    {r.consecutive_failures ? (
-                      <span style={{ fontSize: '0.75rem', color: 'var(--red)' }}>
-                        ({r.consecutive_failures} failure{r.consecutive_failures > 1 ? 's' : ''})
-                      </span>
-                    ) : null}
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: 4 }}>
-                    Next run: {r.enabled ? formatLocalTime(r.next_run_at) : 'paused'}
-                    {r.last_run_at ? ` · Last run: ${formatLocalTime(r.last_run_at)} (${r.last_run_status || 'unknown'})` : ''}
-                    {webhooksEnabled && r.hook && (
-                      <span>
-                        {' · Webhook: '}
-                        {r.hook.fire_count} {r.hook.fire_count === 1 ? 'run' : 'runs'}
-                        {r.hook.last_fired_at ? ` · Last fired: ${formatLocalTime(r.hook.last_fired_at)}` : ' (never fired)'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className="action-btn"
-                    style={{ fontSize: '0.75rem', padding: '4px 8px' }}
-                    onClick={() => void handleRunNow(r.id)}
-                    title="Run routine now"
-                  >
-                    Run now
-                  </button>
-                  <button
-                    type="button"
-                    className="action-btn"
-                    style={{ fontSize: '0.75rem', padding: '4px 8px' }}
-                    onClick={() => void handleToggleRoutine(r)}
-                  >
-                    {r.enabled ? 'Pause' : 'Resume'}
-                  </button>
-
-                  {webhooksEnabled && (
-                    <>
-                      {!r.hook ? (
-                        <button
-                          type="button"
-                          className="action-btn"
-                          style={{ fontSize: '0.75rem', padding: '4px 8px' }}
-                          disabled={hookBusyId === r.id}
-                          onClick={() => void handleCreateOrRotateHook(r, 'create')}
-                        >
-                          {hookBusyId === r.id ? 'Creating…' : 'Create webhook'}
-                        </button>
-                      ) : confirmHookAction?.routineId === r.id && confirmHookAction.action === 'rotate' ? (
-                        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                          <span className="memory-confirm-warning" style={{ fontSize: '0.75rem' }}>Rotate?</span>
-                          <button
-                            type="button"
-                            className="action-btn memory-btn-danger"
-                            style={{ fontSize: '0.75rem', padding: '3px 8px' }}
-                            disabled={hookBusyId === r.id}
-                            onClick={() => void handleCreateOrRotateHook(r, 'rotate')}
-                          >
-                            {hookBusyId === r.id ? 'Rotating…' : 'Confirm'}
-                          </button>
-                          <button
-                            type="button"
-                            className="action-btn"
-                            style={{ fontSize: '0.75rem', padding: '3px 8px' }}
-                            disabled={hookBusyId === r.id}
-                            onClick={() => setConfirmHookAction(null)}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : confirmHookAction?.routineId === r.id && confirmHookAction.action === 'delete' ? (
-                        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                          <span className="memory-confirm-warning" style={{ fontSize: '0.75rem' }}>Remove?</span>
-                          <button
-                            type="button"
-                            className="action-btn memory-btn-danger"
-                            style={{ fontSize: '0.75rem', padding: '3px 8px' }}
-                            disabled={hookBusyId === r.id}
-                            onClick={() => void handleDeleteHook(r.id)}
-                          >
-                            {hookBusyId === r.id ? 'Removing…' : 'Confirm'}
-                          </button>
-                          <button
-                            type="button"
-                            className="action-btn"
-                            style={{ fontSize: '0.75rem', padding: '3px 8px' }}
-                            disabled={hookBusyId === r.id}
-                            onClick={() => setConfirmHookAction(null)}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            className="action-btn"
-                            style={{ fontSize: '0.75rem', padding: '4px 8px' }}
-                            disabled={hookBusyId === r.id}
-                            onClick={() => setConfirmHookAction({ routineId: r.id, action: 'rotate' })}
-                          >
-                            Rotate
-                          </button>
-                          <button
-                            type="button"
-                            className="action-btn"
-                            style={{ fontSize: '0.75rem', padding: '4px 8px', color: 'var(--red)' }}
-                            disabled={hookBusyId === r.id}
-                            onClick={() => setConfirmHookAction({ routineId: r.id, action: 'delete' })}
-                          >
-                            Remove
-                          </button>
-                        </>
-                      )}
-                    </>
-                  )}
-
-                  <button
-                    type="button"
-                    className="action-btn"
-                    style={{ fontSize: '0.75rem', padding: '4px 8px', color: 'var(--red)' }}
-                    onClick={() => void handleDeleteRoutine(r.id)}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Bottom section: Inbox Runs */}
-      <section style={{ flex: 1 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)' }}>
-            Inbox {unreadCount > 0 ? `(${unreadCount} unread)` : ''}
-          </h3>
           {unreadCount > 0 && (
-            <button
-              type="button"
-              className="action-btn"
-              style={{ fontSize: '0.8rem', padding: '4px 8px' }}
-              onClick={() => void handleMarkAllRead()}
-            >
-              Mark all read
+            <button type="button" className="kn-btn" onClick={() => void handleMarkAllRead()}>
+              全部标为已读
             </button>
           )}
-        </div>
+        </header>
 
-        {items.length === 0 ? (
-          <p style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>No inbox items yet.</p>
+        {!loaded.inbox ? (
+          !error && <p className="kn-loading">加载中…</p>
+        ) : items.length === 0 ? (
+          <div className="kn-empty">
+            <p className="kn-empty-title">收件箱是空的。</p>
+            <p>{routinesList.length ? '定时任务运行后，结果会出现在这里；也可以点下面的“立即运行”马上试一次。' : '还没有运行结果。先在下面新建一个定时任务吧。'}</p>
+          </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <ul className="kn-inbox-list" aria-label="收件箱">
             {items.map((item) => {
               const isUnread = !item.read_at;
               const appr = item.approval;
-              const inProgress = appr ? Boolean(approvalsInProgress[appr.id]) : false;
-
-              let statusBadgeClass = 'completed';
-              let statusLabel = item.status;
-              if (item.status === 'approval_pending' && appr && appr.status !== 'pending') {
-                statusLabel = `approval ${appr.status}`;
-                statusBadgeClass = appr.status === 'approved' ? 'completed' : 'interrupted';
-              } else if (item.status === 'approval_pending') statusBadgeClass = 'queued';
-              else if (item.status === 'error') statusBadgeClass = 'failed';
-              else if (['escalate', 'denied', 'expired', 'cancelled'].includes(item.status)) statusBadgeClass = 'interrupted';
+              const inProgress = appr ? approvalsInProgress[appr.id] : undefined;
+              const status = itemStatus(item);
+              const explanation = runExplanation(item);
+              const output = item.status === 'approval_pending' && (item.output === 'Approval pending' || item.output === '等你批准') ? '' : (item.output || '');
+              const long = hasLongOutput(output);
+              const open = Boolean(expanded[item.id]);
+              const notes = deliveryNotes(item.delivery);
 
               return (
-                <article
+                <li
                   key={item.id}
+                  className={`kn-card kn-inbox-item${isUnread ? ' is-unread' : ''}`}
                   onClick={() => {
                     if (isUnread) void handleMarkRead(item.id);
                   }}
-                  style={{
-                    padding: 14,
-                    background: isUnread ? '#f0f7ff' : 'var(--panel, #fff)',
-                    borderLeft: isUnread ? '4px solid var(--accent)' : '4px solid transparent',
-                    borderTop: '1px solid var(--line)',
-                    borderRight: '1px solid var(--line)',
-                    borderBottom: '1px solid var(--line)',
-                    borderRadius: 6,
-                    cursor: isUnread ? 'pointer' : 'default',
-                  }}
                 >
-                  <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <strong style={{ color: 'var(--text)' }}>{item.routine_name}</strong>
-                      <span className={`status-badge ${statusBadgeClass}`} style={{ fontSize: '0.75rem', padding: '2px 6px' }}>
-                        {statusLabel}
-                      </span>
-                      {item.trigger === 'webhook' && (
-                        <span className="status-badge webhook" style={{ fontSize: '0.75rem', padding: '2px 8px' }}>
-                          via webhook
-                        </span>
-                      )}
-                      {isUnread && (
-                        <span style={{ fontSize: '0.75rem', color: 'var(--accent)', fontWeight: 600 }}>● New</span>
-                      )}
+                  <header className="kn-inbox-head">
+                    <div className="kn-inbox-title">
+                      <strong>{item.routine_name}</strong>
+                      <span className={`kn-status kn-status-${status.tone}`}>{status.label}</span>
+                      {item.trigger === 'manual' && <span className="kn-tag kn-tag-muted">手动运行</span>}
+                      {item.trigger === 'webhook' && <span className="kn-tag kn-tag-muted">Webhook 触发</span>}
+                      {isUnread && <span className="kn-unread-label">未读</span>}
                     </div>
-                    <time style={{ fontSize: '0.75rem', color: 'var(--muted)' }} dateTime={item.started_at}>
-                      {formatLocalTime(item.started_at)}
+                    <time dateTime={item.started_at} title={formatDateTime(item.started_at)}>
+                      {formatWhen(item.started_at)}
                     </time>
                   </header>
 
-                  <div style={{ fontSize: '0.88rem', lineHeight: 1.5, marginBottom: appr ? 10 : 0, color: 'var(--text)' }}>
-                    <FormattedText content={item.output} />
-                  </div>
+                  {explanation && <p className="kn-inbox-explain">{explanation}</p>}
+                  {output && (explanation ? (
+                    <details className="kn-raw">
+                      <summary>查看原始信息</summary>
+                      <pre>{output}</pre>
+                    </details>
+                  ) : (
+                    <>
+                      <div className={`kn-inbox-output${long && !open ? ' is-clamped' : ''}`}>
+                        <FormattedText content={output} />
+                      </div>
+                      {long && (
+                        <button
+                          type="button"
+                          className="kn-link"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpanded((prev) => ({ ...prev, [item.id]: !open }));
+                          }}
+                        >
+                          {open ? '收起' : '展开全文'}
+                        </button>
+                      )}
+                    </>
+                  ))}
 
                   {appr && (
-                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--line)' }}>
+                    <div className={`kn-approval${appr.status === 'pending' ? ' is-pending' : ''}`}>
                       {appr.status === 'pending' ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: '0.8rem', color: 'var(--yellow)', fontWeight: 600 }}>
-                            ⚠️ Approval Required
-                            {appr.expires_at ? ` (expires ${formatLocalTime(appr.expires_at)})` : ''}
-                          </span>
-                          <button
-                            type="button"
-                            className="action-btn"
-                            style={{ fontSize: '0.8rem', padding: '4px 10px', background: '#389e0d', color: '#fff', border: '1px solid #389e0d' }}
-                            disabled={inProgress}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void handleApprovalDecision(appr.id, true);
-                            }}
-                          >
-                            {inProgress ? 'Executing…' : 'Approve'}
-                          </button>
-                          <button
-                            type="button"
-                            className="action-btn memory-btn-danger"
-                            style={{ fontSize: '0.8rem', padding: '4px 10px' }}
-                            disabled={inProgress}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void handleApprovalDecision(appr.id, false);
-                            }}
-                          >
-                            {inProgress ? 'Rejecting…' : 'Deny'}
-                          </button>
-                        </div>
+                        <>
+                          <p>
+                            <strong>需要你批准才能继续。</strong>
+                            {appr.expires_at ? <span>{formatDateTime(appr.expires_at)} 前有效</span> : null}
+                          </p>
+                          <div className="kn-row-actions">
+                            <button
+                              type="button"
+                              className="kn-btn kn-btn-primary"
+                              disabled={Boolean(inProgress)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleApprovalDecision(appr.id, true);
+                              }}
+                            >
+                              {inProgress === 'approve' ? '执行中…' : '批准'}
+                            </button>
+                            <button
+                              type="button"
+                              className="kn-btn kn-btn-danger"
+                              disabled={Boolean(inProgress)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleApprovalDecision(appr.id, false);
+                              }}
+                            >
+                              {inProgress === 'reject' ? '处理中…' : '拒绝'}
+                            </button>
+                          </div>
+                        </>
                       ) : (
-                        <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
+                        <p className="kn-approval-done">
                           {appr.status === 'approved'
-                            ? '✅ Approved'
+                            ? '已批准并执行。'
                             : appr.status === 'denied'
-                            ? '❌ Denied'
+                            ? '已拒绝，没有执行。'
                             : appr.status === 'cancelled'
-                            ? '🚫 Cancelled (routine deleted)'
-                            : '⌛ Expired — not executed'}
-                        </div>
+                            ? '定时任务已删除，这次批准已作废。'
+                            : '批准已过期，没有执行。'}
+                        </p>
                       )}
                     </div>
                   )}
-                </article>
+
+                  {(notes.length > 0 || isUnread) && (
+                    <footer className="kn-inbox-foot">
+                      {notes.length > 0 && <span className="kn-inbox-delivery">{notes.join(' · ')}</span>}
+                      {isUnread && (
+                        <button
+                          type="button"
+                          className="kn-btn kn-btn-quiet"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleMarkRead(item.id);
+                          }}
+                        >
+                          标为已读
+                        </button>
+                      )}
+                    </footer>
+                  )}
+                </li>
               );
             })}
+          </ul>
+        )}
+      </section>
+
+      <section className="kn-section" aria-labelledby="kn-routines-title">
+        <header className="kn-section-head">
+          <div>
+            <h3 id="kn-routines-title">
+              定时任务{routinesList.length > 0 && <span className="kn-count">{routinesList.length}</span>}
+            </h3>
+            <p className="kn-section-sub">
+              {agentId && agentName
+                ? `新建的定时任务由 ${agentName} 执行，结果放进收件箱，也会发到和 ${agentName} 的对话里。`
+                : '到点后自动执行，结果放进收件箱。'}
+            </p>
           </div>
+          {!formOpen && (
+            <button type="button" ref={newRoutineRef} className="kn-btn kn-btn-primary" onClick={() => { resetForm(); setFormOpen(true); }}>
+              ＋ 新建定时任务
+            </button>
+          )}
+        </header>
+
+        {createdHookInfo && (
+          <section className="kn-card kn-hook-card" aria-label="Webhook 信息">
+            <div className="kn-hook-head">
+              <div>
+                <strong>“{createdHookInfo.routineName}”的 Webhook 信息</strong>
+                <p className="kn-hook-warning">密钥只显示这一次，请现在复制保存。</p>
+              </div>
+              <button type="button" className="kn-btn" onClick={() => setCreatedHookInfo(null)}>关闭</button>
+            </div>
+            <div className="kn-hook-field">
+              <span>Webhook 地址</span>
+              <code>{fullHookUrl}</code>
+            </div>
+            <div className="kn-hook-field">
+              <div className="kn-hook-field-head">
+                <span>密钥</span>
+                <button
+                  type="button"
+                  className="kn-btn kn-btn-small"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(createdHookInfo.secret);
+                    setCopiedSecret(true);
+                    setTimeout(() => setCopiedSecret(false), 2000);
+                  }}
+                >
+                  {copiedSecret ? '已复制' : '复制密钥'}
+                </button>
+              </div>
+              <code>{createdHookInfo.secret}</code>
+            </div>
+            <div className="kn-hook-field">
+              <div className="kn-hook-field-head">
+                <span>curl 示例（可直接复制）</span>
+                <button
+                  type="button"
+                  className="kn-btn kn-btn-small"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(curlSnippet);
+                    setCopiedCurl(true);
+                    setTimeout(() => setCopiedCurl(false), 2000);
+                  }}
+                >
+                  {copiedCurl ? '已复制' : '复制 curl'}
+                </button>
+              </div>
+              <pre>{curlSnippet}</pre>
+            </div>
+          </section>
+        )}
+
+        {formOpen && (
+          <form
+            className="kn-card kn-routine-form"
+            onSubmit={handleCreateRoutine}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && !formBusy && !e.nativeEvent.isComposing) {
+                setFormOpen(false);
+                setFormError(null);
+              }
+            }}
+            aria-label="新建定时任务"
+          >
+            <div className="kn-form-head">
+              <h4>新建定时任务</h4>
+              <p>由 {who} 按你写的内容执行，不会自动改代码或执行命令。</p>
+            </div>
+
+            <div className="kn-field">
+              <label htmlFor="kn-routine-name">名称</label>
+              <input
+                id="kn-routine-name"
+                ref={nameRef}
+                className="kn-input"
+                type="text"
+                placeholder="例如：每日邮件摘要"
+                value={name}
+                maxLength={80}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="kn-field">
+              <label htmlFor="kn-routine-task">要做的事</label>
+              <textarea
+                id="kn-routine-task"
+                className="kn-input"
+                placeholder="像平时交代事情一样写，例如：看看我今天新收到的邮件，挑出需要回复的，用几句话总结给我。"
+                value={prompt}
+                maxLength={2000}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={3}
+                required
+              />
+              <small className="kn-hint">{prompt.length} / 2000</small>
+            </div>
+
+            <fieldset className="kn-field">
+              <legend>什么时候运行</legend>
+              <div className="kn-chips" role="group" aria-label="常用时间">
+                {SCHEDULE_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className="kn-chip-btn"
+                    aria-pressed={activePreset === preset.id}
+                    onClick={() => applyPreset(preset.id)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              <div className="kn-schedule-row">
+                <div className="kn-inline-field">
+                  <span id="kn-routine-time-label">时间</span>
+                  <div className="kn-time" role="group" aria-labelledby="kn-routine-time-label" title={clockEditable ? undefined : '这个运行频率不需要选时间'}>
+                    <select
+                      className="kn-input"
+                      aria-label="小时"
+                      value={clockHour}
+                      disabled={!clockEditable}
+                      onChange={(e) => changeClock(`${pad2(Number(e.target.value))}:${pad2(clockMinute)}`)}
+                    >
+                      {HOURS.map((hour) => <option key={hour} value={hour}>{pad2(hour)}</option>)}
+                    </select>
+                    <span aria-hidden="true">:</span>
+                    <select
+                      className="kn-input"
+                      aria-label="分钟"
+                      value={clockMinute}
+                      disabled={!clockEditable}
+                      onChange={(e) => changeClock(`${pad2(clockHour)}:${pad2(Number(e.target.value))}`)}
+                    >
+                      {minuteOptions.map((minute) => <option key={minute} value={minute}>{pad2(minute)}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <label className="kn-inline-field kn-cron-field">
+                  <span>cron 表达式（高级）</span>
+                  <input
+                    className="kn-input kn-mono"
+                    type="text"
+                    value={schedule}
+                    placeholder="0 9 * * *"
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    onChange={(e) => { setSchedule(e.target.value); if (formError) setFormError(null); }}
+                    aria-describedby="kn-cron-reading"
+                    required
+                  />
+                </label>
+              </div>
+              <p id="kn-cron-reading" className={`kn-cron-reading${reading.bad ? ' is-bad' : ''}`}>{reading.text}</p>
+            </fieldset>
+
+            <fieldset className="kn-field">
+              <legend>结果发送到</legend>
+              <div className="kn-checks">
+                <label><input type="checkbox" checked disabled /> 收件箱（总是）</label>
+                <label>
+                  <input type="checkbox" checked={deliverTg} disabled={channels?.telegram === false} onChange={(e) => setDeliverTg(e.target.checked)} />
+                  {' '}Telegram{channels?.telegram === false ? '（未连接）' : ''}
+                </label>
+                <label>
+                  <input type="checkbox" checked={deliverFs} disabled={channels?.feishu === false} onChange={(e) => setDeliverFs(e.target.checked)} />
+                  {' '}飞书{channels?.feishu === false ? '（未连接）' : ''}
+                </label>
+              </div>
+            </fieldset>
+
+            {formError && <ErrorNote error={formError} className="kn-error-inline" />}
+            <div className="kn-form-actions">
+              <button type="submit" disabled={formBusy || !name.trim() || !prompt.trim() || !schedule.trim()} className="kn-btn kn-btn-primary">
+                {formBusy ? '创建中…' : '创建定时任务'}
+              </button>
+              <button type="button" className="kn-btn" onClick={() => { setFormOpen(false); setFormError(null); }}>
+                取消
+              </button>
+            </div>
+          </form>
+        )}
+
+        {!loaded.routines ? (
+          !error && <p className="kn-loading">加载中…</p>
+        ) : routinesList.length === 0 ? (
+          !formOpen && (
+            <div className="kn-empty">
+              <p className="kn-empty-title">还没有定时任务。</p>
+              <p>例如：每天早上 9 点总结新邮件，或每周一列出本周要做的事。</p>
+            </div>
+          )
+        ) : (
+          <ul className="kn-routine-list" aria-label="定时任务列表">
+            {routinesList.map((r) => {
+              const cron = r.schedule_cron || r.schedule;
+              const failures = r.consecutive_failures || 0;
+              const autoPaused = !r.enabled && failures >= 3;
+              const last = r.last_run_status ? statusOf(r.last_run_status) : null;
+              const extra = (r.deliver || []).filter((c) => c !== 'web').map(channelLabel);
+              const busy = routineBusy?.id === r.id ? routineBusy.action : null;
+              return (
+                <li key={r.id} className={`kn-card kn-routine${r.enabled ? '' : ' is-paused'}`}>
+                  <div className="kn-routine-main">
+                    <div className="kn-routine-title">
+                      <span className={`kn-dot ${r.enabled ? 'is-on' : 'is-off'}`} aria-hidden="true" />
+                      <strong>{r.name}</strong>
+                      {!r.enabled && <span className="kn-tag kn-tag-muted">{autoPaused ? '连续失败，已自动暂停' : '已暂停'}</span>}
+                      {agentId && agentName && r.agent_id === agentId && <span className="kn-tag">属于 {agentName}</span>}
+                    </div>
+                    <p className="kn-routine-when">
+                      <span className="kn-routine-schedule" title={`cron：${cron}`}>{scheduleLabel(cron)}</span>
+                      {r.enabled && r.next_run_at && <span>下次 {formatUpcoming(r.next_run_at)}</span>}
+                    </p>
+                    {r.prompt && <p className="kn-routine-prompt" title={r.prompt}>{r.prompt}</p>}
+                    <p className="kn-routine-last">
+                      {r.last_run_at ? (
+                        <span>
+                          上次 <time dateTime={r.last_run_at} title={formatDateTime(r.last_run_at)}>{formatWhen(r.last_run_at)}</time>
+                          {last && <> · <span className={`kn-tone-${last.tone}`}>{last.label}</span></>}
+                        </span>
+                      ) : (
+                        <span>还没有运行过</span>
+                      )}
+                      {failures > 0 && <span className="kn-tone-danger">连续失败 {failures} 次</span>}
+                      {extra.length > 0 && <span>同时发到 {extra.join('、')}</span>}
+                      {webhooksEnabled && r.hook && (
+                        <span>
+                          Webhook 已触发 {r.hook.fire_count} 次
+                          {r.hook.last_fired_at ? ` · 上次 ${formatWhen(r.hook.last_fired_at)}` : ''}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="kn-routine-actions">
+                    {confirmDeleteId === r.id ? (
+                      <div className="kn-confirm" role="group" aria-label="确认删除">
+                        <span className="kn-confirm-text">删除后不再运行，没处理的批准也会作废。</span>
+                        <div className="kn-row-actions">
+                          <button type="button" className="kn-btn kn-btn-danger" disabled={busy === 'delete'} onClick={() => void handleDeleteRoutine(r)}>
+                            {busy === 'delete' ? '删除中…' : '确定删除'}
+                          </button>
+                          <button type="button" className="kn-btn" disabled={busy === 'delete'} onClick={() => setConfirmDeleteId(null)}>
+                            取消
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="kn-row-actions">
+                        <button
+                          type="button"
+                          className="kn-btn"
+                          disabled={Boolean(busy)}
+                          onClick={() => void handleRunNow(r)}
+                          title="现在就运行一次，不影响原来的时间安排"
+                        >
+                          {busy === 'run' ? '运行中…' : '立即运行'}
+                        </button>
+                        <button type="button" className="kn-btn" disabled={Boolean(busy)} onClick={() => void handleToggleRoutine(r)}>
+                          {busy === 'toggle' ? '处理中…' : r.enabled ? '暂停' : '恢复'}
+                        </button>
+
+                        {webhooksEnabled && (
+                          <>
+                            {!r.hook ? (
+                              <button
+                                type="button"
+                                className="kn-btn"
+                                disabled={hookBusyId === r.id}
+                                onClick={() => void handleCreateOrRotateHook(r, 'create')}
+                              >
+                                {hookBusyId === r.id ? '创建中…' : '创建 Webhook'}
+                              </button>
+                            ) : confirmHookAction?.routineId === r.id ? (
+                              <span className="kn-confirm-inline">
+                                <span className="kn-confirm-text">
+                                  {confirmHookAction.action === 'rotate' ? '旧密钥会立即失效' : '移除后外部系统无法再触发'}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="kn-btn kn-btn-danger"
+                                  disabled={hookBusyId === r.id}
+                                  onClick={() => void (confirmHookAction.action === 'rotate' ? handleCreateOrRotateHook(r, 'rotate') : handleDeleteHook(r.id))}
+                                >
+                                  {hookBusyId === r.id
+                                    ? (confirmHookAction.action === 'rotate' ? '更换中…' : '移除中…')
+                                    : (confirmHookAction.action === 'rotate' ? '确定更换' : '确定移除')}
+                                </button>
+                                <button type="button" className="kn-btn" disabled={hookBusyId === r.id} onClick={() => setConfirmHookAction(null)}>
+                                  取消
+                                </button>
+                              </span>
+                            ) : (
+                              <>
+                                <button type="button" className="kn-btn" disabled={hookBusyId === r.id} onClick={() => setConfirmHookAction({ routineId: r.id, action: 'rotate' })}>
+                                  更换密钥
+                                </button>
+                                <button type="button" className="kn-btn kn-btn-danger-text" disabled={hookBusyId === r.id} onClick={() => setConfirmHookAction({ routineId: r.id, action: 'delete' })}>
+                                  移除 Webhook
+                                </button>
+                              </>
+                            )}
+                          </>
+                        )}
+
+                        <button
+                          type="button"
+                          className="kn-btn kn-btn-danger-text"
+                          disabled={Boolean(busy)}
+                          aria-label={`删除定时任务：${r.name}`}
+                          onClick={() => setConfirmDeleteId(r.id)}
+                        >
+                          删除
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </section>
     </div>
   );
 }
-

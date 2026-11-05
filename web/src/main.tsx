@@ -7,15 +7,16 @@ import './v2.css'
 import './primary.css'
 import './takeover.css'
 import './workflows.css'
+import './ux/shell.css'
+import './ux/chat.css'
+import './ux/tasks.css'
+import './ux/guard.css'
+import './ux/knowledge.css'
+import './ux/manage.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <div className="primary-interface">
-      <div className="workbench-modebar" role="note" aria-label="Conveyor interface roles">
-        <span className="workbench-label">Web Workbench</span>
-        <strong>Serious work · inspect, refine, review, apply</strong>
-        <span className="workbench-channel-note">Telegram / Feishu · quick control from anywhere</span>
-      </div>
       <App />
       <HumanTakeoverPanel />
     </div>

@@ -1,4 +1,10 @@
 import React, { useState } from 'react';
+import { ChatRequestError, describeChatError, formatChatTime } from './chatFormat';
+
+const FIELD_LABELS: Record<string, string> = {
+  to: '收件人', cc: '抄送', bcc: '密送', subject: '主题', body: '正文',
+  repo: '仓库', number: '编号', title: '标题', payload: '内容',
+};
 
 type Card = {
   id: string;
@@ -31,13 +37,13 @@ export function OutboundDraftCard({ item, token, onDone }: {
         body: JSON.stringify({ expected_hash: item.draft_hash, draft, decision }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      if (!response.ok) throw new ChatRequestError(result.error || '', response.status);
       if (result.status === 'needs_reconciliation') {
-        setWarning('Send outcome uncertain. Do not retry; reconcile with the destination first.');
+        setWarning('无法确认是否已经发出。请不要重试，先到对方那里核对一下。');
       }
       onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Draft request failed');
+      setError(describeChatError(e, { fallback: '草稿没有处理成功，请再试一次', network: '网络中断，草稿没有处理成功，请再试一次' }).message);
     } finally {
       setBusy(false);
     }
@@ -45,13 +51,13 @@ export function OutboundDraftCard({ item, token, onDone }: {
 
   return <article className="memory-card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-      <strong>Outbound draft · {item.tool_name}</strong>
-      <span className="memory-secondary">{expiry ? `Expires ${expiry.toLocaleString()}` : ''}</span>
+      <strong>待发送草稿 · {item.tool_name}</strong>
+      <span className="memory-secondary">{expiry ? `${formatChatTime(expiry.getTime())} 前有效` : ''}</span>
     </div>
-    <p className="memory-secondary">Review or edit every field. Nothing will be sent until you press Send. One shot only.</p>
+    <p className="memory-secondary">请检查或修改每一项。按「发送」之前不会发出任何内容，而且只能发送一次。</p>
     {Object.entries(draft).map(([name, value]) => (
       <label key={name} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <span style={{ textTransform: 'uppercase', fontSize: 12, fontWeight: 600 }}>{name}</span>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>{FIELD_LABELS[name] || name}</span>
         {name === 'body' || name === 'payload' ?
           <textarea className="memory-input" style={{ minHeight: 120, width: '100%' }}
             value={value} disabled={busy || expired}
@@ -64,14 +70,14 @@ export function OutboundDraftCard({ item, token, onDone }: {
     ))}
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
       <button type="button" className="action-btn" disabled={busy || expired}
-        onClick={() => void submit('send')}>{busy ? 'Processing…' : 'Send'}</button>
+        onClick={() => void submit('send')}>{busy ? '处理中…' : '发送'}</button>
       {item.save_only && <button type="button" className="action-btn" disabled={busy || expired}
-        onClick={() => void submit('save')}>Save as draft only</button>}
+        onClick={() => void submit('save')}>只保存为草稿</button>}
       <button type="button" className="action-btn memory-btn-danger" disabled={busy || expired}
-        onClick={() => void submit('deny')}>Deny</button>
+        onClick={() => void submit('deny')}>拒绝发送</button>
     </div>
     {error && <div role="alert" className="memory-error">{error}</div>}
     {warning && <div role="alert" className="memory-error">{warning}</div>}
-    {expired && <div role="alert" className="memory-error">Draft expired; request a new one.</div>}
+    {expired && <div role="alert" className="memory-error">草稿已过期，请重新生成。</div>}
   </article>;
 }

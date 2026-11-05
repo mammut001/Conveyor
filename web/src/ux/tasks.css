@@ -1,0 +1,962 @@
+/* UX layer (tasks). Loaded after the legacy layers (styles, v2, primary, takeover, workflows), so rules here win at equal specificity. */
+
+/* ==========================================================================
+   Right-hand context panel
+   Tokens: surface #fff · border #e5e7eb · text #1f2328 · muted #6b7280 ·
+   accent #bd5c40 (hover #a94c34) · danger #b42318 · success #15803d · warning #b54708
+   ========================================================================== */
+
+/* The panel follows DOM order: 人工接管 → 确认卡片 → 改动 → 助手设定 → 运行记录 → 运行详情 → 系统.
+   The legacy :first-of-type / :has() ordering and the sticky 改动 card are neutralised here,
+   so a long diff never covers the rest of the panel. */
+.primary-interface .context-panel > :is(.agent-card, .approval-card, .context-section, .takeover-active-slot) {
+  order: 0 !important;
+}
+.primary-interface .context-panel .takeover-active-slot { display: contents; }
+/* Tablet widths lay the panel out as two columns: headers and decisions span both. */
+.primary-interface .context-panel > :is(.agent-card, .approval-card) { grid-column: 1 / -1; }
+
+.primary-interface .context-panel > .context-section,
+.primary-interface .context-panel .takeover-active-slot > .takeover-context {
+  min-width: 0;
+  margin: 0;
+  padding: 12px 14px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: none;
+  color: #1f2328;
+  font-size: 13px;
+}
+.primary-interface .context-panel > .context-section--changes {
+  position: relative;
+  top: auto;
+  z-index: auto;
+  border-color: #e5e7eb;
+  box-shadow: none;
+}
+
+/* Section titles: plain 12px grey, no caps, no monospace. */
+.primary-interface .context-panel .context-section-header,
+.primary-interface .context-panel .takeover-context > .eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  margin: 0 0 10px;
+  color: #6b7280;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.primary-interface .context-panel .context-section-toggle {
+  justify-content: flex-start;
+  gap: 6px;
+  min-height: 24px;
+  margin: -2px 0;
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+}
+.primary-interface .context-panel .context-section-toggle:hover { opacity: 1; color: #1f2328; }
+.primary-interface .context-panel .context-section-toggle:focus-visible { outline: 2px solid #bd5c40; outline-offset: 2px; }
+.primary-interface .context-panel .context-collapse-icon { margin-left: auto; color: #9ca3af; font-size: 12px; }
+.primary-interface .context-panel .context-section-meta { color: #1f2328; font-weight: 500; }
+.primary-interface .context-panel .context-section-meta::before { content: "·"; margin-right: 6px; color: #9ca3af; }
+.primary-interface .context-panel > .context-section.is-collapsed .context-section-header { margin-bottom: 0; }
+
+.primary-interface .context-panel .empty {
+  padding: 2px 0 0;
+  color: #6b7280;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  white-space: normal;
+}
+
+.primary-interface .context-panel .key-value {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  color: #1f2328;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.primary-interface .context-panel .key-value > span { flex: none; color: #6b7280; }
+.primary-interface .context-panel .key-value > strong {
+  min-width: 0;
+  color: #1f2328;
+  font-weight: 500;
+  text-align: right;
+  text-transform: none;
+  overflow-wrap: anywhere;
+}
+.primary-interface .context-panel .key-value > strong.mono { font-size: 12px; font-weight: 400; }
+
+/* Buttons inside the panel: primary = accent fill, secondary = white + grey border, danger = white + red. */
+.primary-interface .context-panel .action-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.primary-interface .context-panel .action-row button,
+.primary-interface .context-panel .job-stop,
+.primary-interface .context-panel .emergency,
+.primary-interface .context-panel .screen-capture-button {
+  min-height: 32px;
+  padding: 5px 14px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2328;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.primary-interface .context-panel .action-row button:hover:not(:disabled),
+.primary-interface .context-panel .screen-capture-button:hover:not(:disabled) { border-color: #b9c0cb; background: #f9fafb; }
+.primary-interface .context-panel .action-row button.primary {
+  border-color: #bd5c40;
+  background: #bd5c40;
+  color: #fff;
+}
+.primary-interface .context-panel .action-row button.primary:hover:not(:disabled) { border-color: #a94c34; background: #a94c34; }
+.primary-interface .context-panel .action-row button.danger,
+.primary-interface .context-panel .job-stop,
+.primary-interface .context-panel .emergency {
+  border-color: #f1b5ae;
+  background: #fff;
+  color: #b42318;
+}
+.primary-interface .context-panel .action-row button.danger:hover:not(:disabled),
+.primary-interface .context-panel .job-stop:hover:not(:disabled),
+.primary-interface .context-panel .emergency:hover:not(:disabled) { border-color: #b42318; background: #fef3f2; }
+.primary-interface .context-panel :is(button, a, summary, pre):focus-visible { outline: 2px solid #bd5c40; outline-offset: 2px; }
+
+/* ---------- Agent card: compact header + 详情 / 资料 / 电脑 tabs ---------- */
+.primary-interface .context-panel > .agent-card--compact {
+  display: grid;
+  gap: 10px;
+  justify-items: stretch;
+  min-width: 0;
+  padding: 4px 2px 0;
+  text-align: left;
+}
+.primary-interface .agent-card--compact .agent-card-header { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.primary-interface .agent-card--compact .agent-card-title { display: grid; gap: 1px; min-width: 0; }
+.primary-interface .agent-card--compact h2 {
+  margin: 0;
+  overflow: hidden;
+  color: #1f2328;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.primary-interface .agent-card--compact .agent-card-tag {
+  margin: 0;
+  overflow: hidden;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.primary-interface .agent-card--compact .agent-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  margin: 0;
+  padding: 3px;
+  border-radius: 9px;
+  background: #eaecf0;
+}
+.primary-interface .agent-card--compact .agent-tabs button {
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #4b5563;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.primary-interface .agent-card--compact .agent-tabs button:hover { color: #1f2328; }
+.primary-interface .agent-card--compact .agent-tabs button.active {
+  background: #fff;
+  color: #1f2328;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .08);
+}
+
+/* ---------- Approval cards ---------- */
+.primary-interface .context-panel > .approval-card {
+  min-width: 0;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #fedf89;
+  border-radius: 10px;
+  background: #fffcf5;
+  box-shadow: none;
+}
+.primary-interface .context-panel > .approval-card h3 {
+  margin: 0 0 4px;
+  color: #1f2328;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.primary-interface .context-panel > .approval-card p {
+  margin: 0 0 4px;
+  color: #4b5563;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.primary-interface .context-panel > .approval-card p.approval-expiry { color: #6b7280; font-size: 12px; overflow-wrap: anywhere; }
+.primary-interface .context-panel > .approval-card code { font-size: 12px; }
+.primary-interface .context-panel > .approval-card .approval-arg {
+  max-height: 160px;
+  margin: 6px 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid #f5e6c8;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2328;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.primary-interface .context-panel > .approval-card .action-row { margin-top: 10px; }
+
+/* ---------- 改动 ---------- */
+.primary-interface .context-panel .changes-outcome {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.primary-interface .context-panel .changes-outcome.success { background: #ecfdf3; color: #15803d; }
+.primary-interface .context-panel .changes-outcome.warning { background: #fffaeb; color: #b54708; }
+.primary-interface .context-panel .changes-outcome.muted { background: #f3f4f6; color: #4b5563; }
+.primary-interface .context-panel .changes-outcome small {
+  display: block;
+  margin-top: 2px;
+  color: #6b7280;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.primary-interface .context-panel .changes-note { margin: 0 0 8px; color: #6b7280; font-size: 12px; line-height: 1.5; }
+.primary-interface .context-panel .changed-files {
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border-top: 1px solid #f0f1f3;
+  list-style: none;
+}
+.primary-interface .context-panel .changed-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 0;
+  border-bottom: 1px solid #f0f1f3;
+}
+.primary-interface .context-panel .file-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+}
+.primary-interface .context-panel .file-chip--added { background: #ecfdf3; color: #15803d; }
+.primary-interface .context-panel .file-chip--modified { background: #fffaeb; color: #b54708; }
+.primary-interface .context-panel .file-chip--deleted { background: #fef3f2; color: #b42318; }
+.primary-interface .context-panel .file-chip--renamed { background: #eff4ff; color: #3e4784; }
+.primary-interface .context-panel .changed-file-path {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.primary-interface .context-panel .changed-file-name { flex: 0 1 auto; min-width: 0; overflow: hidden; color: #1f2328; text-overflow: ellipsis; }
+.primary-interface .context-panel .changed-file-dir { flex: 1 1 0%; min-width: 0; overflow: hidden; color: #6b7280; text-overflow: ellipsis; }
+.primary-interface .context-panel .diff-stat {
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.primary-interface .context-panel .diff-stat-add { color: #15803d; }
+.primary-interface .context-panel .diff-stat-del { color: #b42318; }
+
+.primary-interface .context-panel .diff-view {
+  margin-top: 10px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+.primary-interface .context-panel .diff-view > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 10px;
+  background: #f9fafb;
+  color: #1f2328;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  list-style: none;
+  cursor: pointer;
+}
+.primary-interface .context-panel .diff-view > summary::-webkit-details-marker { display: none; }
+.primary-interface .context-panel .diff-view > summary::before { content: "▸"; width: 10px; color: #6b7280; font-size: 12px; }
+.primary-interface .context-panel .diff-view[open] > summary::before { content: "▾"; }
+.primary-interface .context-panel .diff-view > summary .diff-stat { margin-left: auto; }
+.primary-interface .context-panel .diff-view pre.diff-body {
+  max-width: 100%;
+  max-height: min(50vh, 440px);
+  margin: 0;
+  padding: 6px 0;
+  overflow: auto;
+  border-top: 1px solid #e5e7eb;
+  border-radius: 0;
+  background: #fff;
+  color: #1f2328;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+  tab-size: 4;
+}
+.primary-interface .context-panel .diff-lines { display: inline-block; min-width: 100%; }
+.primary-interface .context-panel .diff-line { display: block; padding: 0 10px; }
+.primary-interface .context-panel .diff-line--add { background: #ecfdf3; color: #14532d; }
+.primary-interface .context-panel .diff-line--del { background: #fef3f2; color: #7a271a; }
+.primary-interface .context-panel .diff-line--hunk { background: #f5f8ff; color: #3e4784; }
+.primary-interface .context-panel .diff-line--meta { color: #6b7280; }
+.primary-interface .context-panel .diff-line--file {
+  margin-top: 6px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  border-top: 1px solid #eef0f2;
+  background: #f3f4f6;
+  color: #1f2328;
+  font-weight: 600;
+}
+.primary-interface .context-panel .diff-line--file:first-child { margin-top: -6px; border-top: 0; }
+.primary-interface .context-panel .diff-view pre.diff-body--empty {
+  padding: 10px;
+  color: #6b7280;
+  font-family: inherit;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+.primary-interface .context-panel .diff-truncated { display: block; padding: 6px 10px 2px; color: #6b7280; font-family: inherit; }
+.primary-interface .context-panel .changes-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.primary-interface .context-panel .changes-actions button { width: 100%; min-height: 36px; }
+.primary-interface .context-panel .changes-hint { margin: 6px 0 0; color: #6b7280; font-size: 12px; text-align: right; }
+
+/* ---------- 助手设定 ---------- */
+.primary-interface .context-panel .clamp-text { display: grid; justify-items: start; gap: 2px; }
+.primary-interface .context-panel .agent-instructions {
+  margin: 0;
+  color: #1f2328;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.primary-interface .context-panel .agent-instructions.is-clamped {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+}
+.primary-interface .context-panel .text-toggle {
+  min-height: 28px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: #bd5c40;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.primary-interface .context-panel .text-toggle:hover { color: #a94c34; }
+.primary-interface .context-panel .agent-folder {
+  display: grid;
+  gap: 2px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #f0f1f3;
+}
+.primary-interface .context-panel .agent-folder span { color: #6b7280; font-size: 12px; }
+.primary-interface .context-panel .agent-folder code {
+  padding: 0;
+  background: none;
+  color: #1f2328;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.primary-interface .context-panel :is(.screen-privacy-note, .screen-request-status) {
+  margin: 6px 0 0;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.primary-interface .context-panel .screen-request-status.failed { color: #b42318; }
+/* An unknown failure code: a muted technical detail on its own line, never the main message. */
+.primary-interface .context-panel .screen-request-detail {
+  display: block;
+  margin-top: 2px;
+  color: #6b7280;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 运行记录 ---------- */
+.primary-interface .context-panel .session-chain-summary {
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid #f2d7cd;
+  border-radius: 8px;
+  background: #fff9f6;
+}
+.primary-interface .context-panel .session-chain-summary strong { color: #a94c34; font-size: 13px; font-weight: 600; }
+.primary-interface .context-panel .session-chain-summary small { color: #6b7280; font-size: 12px; opacity: 1; }
+.primary-interface .context-panel .session-run-list { gap: 2px; max-height: 280px; }
+.primary-interface .context-panel .session-run { gap: 3px; padding: 8px 10px; border-radius: 8px; }
+.primary-interface .context-panel .session-run:hover { background: #f9fafb; }
+.primary-interface .context-panel .session-run.selected { border-color: #e5e7eb; background: #f3f4f6; }
+.primary-interface .context-panel .session-run:focus-visible { outline: 2px solid #bd5c40; }
+.primary-interface .context-panel .session-run-heading strong { color: #1f2328; font-size: 13px; font-weight: 500; }
+.primary-interface .context-panel .session-run small { color: #6b7280; font-size: 12px; opacity: 1; }
+
+/* ---------- 运行详情 ---------- */
+.primary-interface .context-panel .job-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
+.primary-interface .context-panel .job-mode { color: #4b5563; font-size: 13px; }
+.primary-interface .context-panel .job-stop { margin-left: auto; min-height: 30px; padding: 4px 14px; }
+.primary-interface .status-badge {
+  gap: 6px;
+  padding: 3px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.primary-interface .context-panel .runtime-owner-card {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid #eef0f2;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+.primary-interface .context-panel .runtime-owner-card > div { display: flex; justify-content: space-between; gap: 10px; }
+.primary-interface .context-panel .runtime-owner-card > div > strong { color: #6b7280; font-size: 13px; font-weight: 400; }
+.primary-interface .context-panel .runtime-owner-card span {
+  max-width: 60%;
+  color: #1f2328;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: right;
+}
+.primary-interface .context-panel .runtime-owner-card small { color: #6b7280; font-size: 12px; }
+.primary-interface .context-panel .telemetry-drawer {
+  margin-top: 12px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+.primary-interface .context-panel .telemetry-summary {
+  min-height: 34px;
+  padding: 6px 10px;
+  color: #4b5563;
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 0;
+  list-style: none;
+  text-transform: none;
+}
+.primary-interface .context-panel .telemetry-summary::-webkit-details-marker { display: none; }
+.primary-interface .context-panel .telemetry-summary b { color: #9ca3af; font-weight: 400; transition: transform .15s ease; }
+.primary-interface .context-panel .telemetry-drawer[open] .telemetry-summary b { transform: rotate(180deg); }
+.primary-interface .context-panel .telemetry-list { max-height: 260px; padding: 4px 10px; }
+.primary-interface .context-panel .telemetry-item { font-family: inherit; font-size: 12px; }
+.primary-interface .context-panel .telemetry-pill { padding: 1px 6px; font-size: 12px; }
+.primary-interface .context-panel .telemetry-item time { color: #9ca3af; font-size: 12px; }
+.primary-interface .context-panel :is(.telemetry-text, .telemetry-error) { font-size: 12px; line-height: 1.5; }
+.primary-interface .context-panel .telemetry-error { color: #b42318; overflow-wrap: anywhere; }
+
+/* ---------- 电脑 ---------- */
+.primary-interface .context-panel .computer-status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.primary-interface .context-panel .computer-status-text { flex: 1; display: grid; gap: 1px; min-width: 0; }
+.primary-interface .context-panel .computer-status-text span { color: #6b7280; font-size: 12px; }
+.primary-interface .context-panel .computer-status-text strong { color: #1f2328; font-size: 13px; font-weight: 500; }
+.primary-interface .context-panel .computer-status-text strong.on { color: #15803d; }
+.primary-interface .context-panel .emergency {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  margin: 0;
+  font-weight: 600;
+}
+.primary-interface .context-panel .emergency::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.primary-interface .context-panel .live-screen-card { gap: 8px; margin-bottom: 12px; }
+.primary-interface .context-panel .host-screen-heading strong { color: #1f2328; font-size: 13px; font-weight: 600; }
+.primary-interface .context-panel .host-screen-heading small { color: #6b7280; font-size: 12px; }
+.primary-interface .context-panel .live-screen-pill { font-size: 12px; }
+.primary-interface .context-panel .live-screen-thumb { border-color: #e5e7eb; border-radius: 10px; }
+.primary-interface .context-panel .host-screen-card {
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+}
+.primary-interface .context-panel .screen-capture-button { flex: none; padding: 4px 12px; }
+.primary-interface .context-panel .screen-empty { min-height: 0; gap: 4px; padding: 14px 10px; border-color: #e5e7eb; }
+.primary-interface .context-panel .screen-empty strong { color: #1f2328; font-size: 13px; font-weight: 500; }
+.primary-interface .context-panel .screen-empty p { max-width: 260px; color: #6b7280; font-size: 12px; overflow-wrap: anywhere; }
+.primary-interface .context-panel .screen-image-trigger span { font-size: 12px; }
+.primary-interface .context-panel .host-screen-preview figcaption { color: #6b7280; font-size: 12px; }
+.primary-interface .context-panel .host-screen-off { margin: 0 0 12px; }
+.primary-interface .context-panel .node-list { display: grid; gap: 6px; }
+.primary-interface .context-panel .computer-subhead { margin: 0; color: #6b7280; font-size: 12px; }
+.primary-interface .context-panel .node-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #eef0f2;
+  border-radius: 8px;
+  background: #fff;
+}
+.primary-interface .context-panel .node-card .node-dot { margin: 0; }
+.primary-interface .context-panel .node-card .node-dot.offline,
+.primary-interface .context-panel .node-card .node-dot.unknown { background: #d0d5dd; }
+.primary-interface .context-panel .node-card strong { min-width: 0; overflow: hidden; color: #1f2328; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.primary-interface .context-panel .node-card small { grid-column: 2; margin: 0; color: #6b7280; font-family: inherit; font-size: 12px; line-height: 1.45; }
+
+/* 人工接管: idle card inside 电脑, an open takeover at the top of the panel. */
+.primary-interface .context-panel .takeover-slot > .takeover-context {
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: none;
+}
+.primary-interface .context-panel .takeover-context > .eyebrow { margin-bottom: 8px; color: #1f2328; font-size: 13px; font-weight: 600; }
+.primary-interface .context-panel .takeover-active-slot > .takeover-context { border-color: #fedf89; background: #fffcf5; }
+.primary-interface .context-panel .takeover-idle,
+.primary-interface .context-panel .takeover-active-heading { gap: 8px; margin-bottom: 10px; }
+.primary-interface .context-panel .takeover-idle strong,
+.primary-interface .context-panel .takeover-active-heading strong { color: #1f2328; font-size: 13px; }
+.primary-interface .context-panel :is(.takeover-idle p, .takeover-active-heading p, .takeover-secret-note) { color: #6b7280; font-size: 12px; line-height: 1.5; }
+.primary-interface .context-panel .takeover-status-grid { font-size: 12px; }
+.primary-interface .context-panel .takeover-status-grid span { color: #6b7280; }
+.primary-interface .context-panel :is(.takeover-actions button, .takeover-primary, .takeover-open) {
+  min-height: 36px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+.primary-interface .context-panel .takeover-error { font-size: 12px; }
+.primary-interface .context-panel .takeover-error small { display: block; margin-top: 2px; color: #6b7280; overflow-wrap: anywhere; }
+/* Floating pill instead of a full-width bar pinned under the old 32px strip: it no longer
+   depends on what sits above the top bar. */
+.takeover-privacy-banner {
+  top: 10px;
+  right: auto;
+  left: 50%;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  min-height: 0;
+  padding: 7px 14px;
+  border: 1px solid #f2d7cd;
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(62, 37, 29, .12);
+  font-size: 13px;
+  transform: translateX(-50%);
+}
+
+/* ---------- 系统 ---------- */
+.primary-interface .context-panel .system-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.primary-interface .context-panel .system-stats > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+.primary-interface .context-panel .system-stats span { color: #6b7280; font-size: 12px; white-space: nowrap; }
+.primary-interface .context-panel .system-stats strong {
+  overflow: hidden;
+  color: #1f2328;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.primary-interface .context-panel .system-channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 8px;
+  color: #6b7280;
+  font-size: 12px;
+}
+.primary-interface .context-panel .system-channels span::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #d0d5dd;
+  vertical-align: 1px;
+}
+.primary-interface .context-panel .system-channels span.on { color: #1f2328; }
+.primary-interface .context-panel .system-channels span.on::before { background: #15803d; }
+
+/* ==========================================================================
+   任务 view: notices, live run, tool calls, composer
+   ========================================================================== */
+/* The request bubble matches 对话's: same shape, colour and padding, no shadow. */
+.primary-interface .task-stream .transcript-message.role-user {
+  padding: 10px 14px;
+  border-radius: 16px 16px 4px 16px;
+  background: #f0f1f3;
+  box-shadow: none;
+}
+/* Replies carry the agent's letter avatar, sized as in 对话. */
+.primary-interface .task-stream .transcript-avatar.chat-avatar { width: 28px; height: 28px; border-radius: 50%; font-size: 13px; }
+
+.primary-interface .task-stream .task-notice {
+  position: static;
+  display: grid;
+  gap: 2px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f9fafb;
+  box-shadow: none;
+  color: #4b5563;
+  font-size: 13px;
+  line-height: 1.55;
+  backdrop-filter: none;
+}
+.primary-interface .task-stream .task-notice strong { color: #1f2328; font-weight: 600; }
+.primary-interface .task-stream .task-notice.failed { border-color: #fecdca; background: #fef3f2; }
+.primary-interface .task-stream .task-notice.failed strong { color: #b42318; }
+.primary-interface .task-stream .task-notice--sticky {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  border-color: #f2d7cd;
+  background: rgba(255, 249, 246, .97);
+}
+.primary-interface .task-stream .task-notice--sticky strong { color: #a94c34; }
+.primary-interface .task-stream .task-notice-detail {
+  color: #6b7280;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+.primary-interface .task-stream .task-notice button {
+  justify-self: start;
+  min-height: 32px;
+  margin-top: 4px;
+  padding: 4px 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2328;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.primary-interface .task-stream .live-job-banner {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  max-width: 100%;
+  margin: 12px 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+.primary-interface .task-stream .live-job-count { color: #4b5563; font-size: 12px; }
+/* "● 生成中" already says it is streaming; the block cursor only landed on a line of its own. */
+.primary-interface .task-stream .live-streaming .typing-cursor { display: none; }
+
+.primary-interface .task-stream .live-tools-list,
+.primary-interface .task-stream .completed-tools-body { display: grid; gap: 6px; }
+.primary-interface .task-stream .live-tools-list { margin: 0 0 14px; }
+.primary-interface .task-stream .tool-call {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+}
+.primary-interface .task-stream .tool-call.failed { border-color: #fecdca; }
+.primary-interface .task-stream .tool-call-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px 12px;
+  list-style: none;
+}
+.primary-interface .task-stream details.tool-call > summary { cursor: pointer; }
+.primary-interface .task-stream details.tool-call > summary::-webkit-details-marker { display: none; }
+.primary-interface .task-stream details.tool-call > summary:hover { background: #f9fafb; }
+.primary-interface .task-stream details.tool-call > summary:focus-visible { outline: 2px solid #bd5c40; outline-offset: -2px; }
+.primary-interface .task-stream .tool-call-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #d0d5dd; }
+.primary-interface .task-stream .tool-call-dot.running { background: #bd5c40; animation: tasks-tool-pulse 1.4s ease-in-out infinite; }
+.primary-interface .task-stream .tool-call-dot.completed { background: #15803d; }
+.primary-interface .task-stream .tool-call-dot.failed { background: #b42318; }
+@keyframes tasks-tool-pulse { 50% { opacity: .35; } }
+.primary-interface .task-stream .tool-call-title {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.primary-interface .task-stream .tool-call-title strong { flex: none; color: #1f2328; font-size: 13px; font-weight: 500; }
+.primary-interface .task-stream .tool-call-title code {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  background: none;
+  color: #6b7280;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+.primary-interface .task-stream .tool-call-status { flex: none; color: #6b7280; font-size: 12px; }
+.primary-interface .task-stream .tool-call-status.running { color: #bd5c40; }
+.primary-interface .task-stream .tool-call-status.completed { color: #15803d; }
+.primary-interface .task-stream .tool-call-status.failed { color: #b42318; font-weight: 500; }
+.primary-interface .task-stream .tool-call-time { flex: none; color: #9ca3af; font-size: 12px; font-variant-numeric: tabular-nums; }
+.primary-interface .task-stream .tool-call-chevron { flex: none; width: 12px; color: #9ca3af; font-size: 12px; text-align: center; transition: transform .15s ease; }
+.primary-interface .task-stream details.tool-call[open] .tool-call-chevron { transform: rotate(180deg); }
+.primary-interface .task-stream .tool-call-error {
+  margin: 0;
+  padding: 8px 12px;
+  border-top: 1px solid #fde4e1;
+  background: #fef3f2;
+  color: #b42318;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+.primary-interface .task-stream .tool-call-output {
+  max-height: 320px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-top: 1px solid #eef0f2;
+  background: #f9fafb;
+  color: #1f2328;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.primary-interface .task-stream .completed-tools-drawer {
+  margin: 8px 0 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+}
+.primary-interface .task-stream .completed-tools-summary { gap: 8px; min-height: 40px; padding: 8px 12px; color: #4b5563; font-size: 13px; }
+.primary-interface .task-stream .completed-tools-summary:hover { background: #f9fafb; }
+.primary-interface .task-stream .completed-tools-text { display: flex; flex-wrap: wrap; gap: 2px 8px; min-width: 0; }
+.primary-interface .task-stream .completed-tools-text strong { color: #1f2328; font-weight: 500; }
+.primary-interface .task-stream .completed-tools-failed { color: #b42318; }
+.primary-interface .task-stream .expand-hint { flex: none; color: #6b7280; font-size: 12px; white-space: nowrap; }
+.primary-interface .task-stream .expand-hint::after { content: "▾"; display: inline-block; margin-left: 4px; transition: transform .15s ease; }
+.primary-interface .task-stream .completed-tools-drawer[open] .expand-hint::after { transform: rotate(180deg); }
+.primary-interface .task-stream .completed-tools-drawer .when-open,
+.primary-interface .task-stream .completed-tools-drawer[open] .when-closed { display: none; }
+.primary-interface .task-stream .completed-tools-drawer[open] .when-open { display: inline; }
+.primary-interface .task-stream .completed-tools-body { padding: 10px; border-top: 1px solid #eef0f2; background: #f9fafb; }
+
+.primary-interface .task-stream .task-welcome h2 { color: #1f2328; font-size: 22px; font-weight: 600; letter-spacing: 0; }
+.primary-interface .task-stream .task-welcome p { max-width: 460px; color: #6b7280; font-size: 14px; line-height: 1.7; }
+.primary-interface .task-stream .task-welcome .prompt-chip { min-height: 36px; font-size: 13px; }
+
+/* Composer: textarea full width, then mode switch · hint · 发送 on one row. */
+.primary-interface .composer.task-composer {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: min(860px, calc(100% - 48px));
+  margin: 4px auto 14px;
+  padding: 10px 10px 8px 14px;
+  border: 1px solid #d0d5dd;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .05);
+}
+.primary-interface .composer.task-composer:focus-within { border-color: #bd5c40; box-shadow: 0 0 0 3px rgba(189, 92, 64, .12); }
+.primary-interface .composer.task-composer::after { content: none; display: none; }
+.primary-interface .task-composer .composer-handoff-note { padding: 0 0 2px; color: #6b7280; font-size: 12px; }
+.primary-interface .task-composer textarea {
+  width: 100%;
+  min-height: 48px;
+  max-height: 220px;
+  padding: 2px 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: #1f2328;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  field-sizing: content;
+}
+.primary-interface .task-composer textarea::placeholder { color: #9ca3af; }
+.primary-interface .task-composer-bar { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; }
+.primary-interface .task-composer .task-mode-switch {
+  flex: none;
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 0;
+  border-radius: 8px;
+  background: #f2f4f7;
+}
+.primary-interface .task-composer .task-mode-switch button {
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7280;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.primary-interface .task-composer .task-mode-switch button:hover { color: #1f2328; }
+.primary-interface .task-composer .task-mode-switch button.active { background: #fff; color: #1f2328; box-shadow: 0 1px 2px rgba(16, 24, 40, .1); }
+.primary-interface .task-composer .task-mode-switch button:focus-visible,
+.primary-interface .task-composer .send-button:focus-visible { outline: 2px solid #bd5c40; outline-offset: 2px; }
+.primary-interface .task-composer-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #6b7280;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.primary-interface .task-composer .send-button {
+  flex: none;
+  min-height: 34px;
+  padding: 6px 18px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* The mobile UI flag forces a three-column grid on every composer; keep this one stacked. */
+.primary-interface .mobile-ui .composer.task-composer { align-items: stretch; gap: 6px; }
+
+/* ==========================================================================
+   Narrow screens: 40px tap targets, the hint gets its own line
+   ========================================================================== */
+@media (max-width: 560px) {
+  .primary-interface .composer.task-composer { width: calc(100% - 20px); margin: 6px auto 10px; padding: 8px 8px 8px 12px; }
+  .primary-interface .task-composer-bar { flex-wrap: wrap; row-gap: 6px; }
+  .primary-interface .task-composer-hint { order: -1; flex-basis: 100%; }
+  .primary-interface .task-composer .task-mode-switch button { min-height: 36px; padding: 6px 14px; }
+  .primary-interface .task-composer .send-button { min-height: 40px; margin-left: auto; padding: 8px 20px; }
+  .primary-interface .task-stream .tool-call-time { display: none; }
+  /* Same gutters as 对话 on phones. */
+  .primary-interface .event-stream.task-stream { padding: 16px 12px; }
+  /* As in 对话, replies drop the avatar on phones. */
+  .primary-interface .task-stream .transcript-message.role-assistant > .chat-avatar { display: none; }
+  .primary-interface .task-stream .tool-call-row { min-height: 44px; }
+  .primary-interface .task-stream .task-welcome { margin: 20px auto 12px; }
+  .primary-interface .task-stream .task-welcome .brand-mark { width: 40px; height: 40px; margin-bottom: 12px; }
+  .primary-interface .task-stream .task-welcome h2 { font-size: 19px; }
+  .primary-interface .task-stream .task-welcome p { font-size: 13px; }
+  .primary-interface .task-stream .task-welcome .suggested-prompts { margin-top: 16px; }
+
+  .primary-interface .context-panel .action-row button,
+  .primary-interface .context-panel .changes-actions button,
+  .primary-interface .context-panel .job-stop,
+  .primary-interface .context-panel .emergency,
+  .primary-interface .context-panel .screen-capture-button,
+  .primary-interface .context-panel .context-section-toggle,
+  .primary-interface .context-panel .diff-view > summary,
+  .primary-interface .context-panel .telemetry-summary,
+  .primary-interface .context-panel .text-toggle,
+  .primary-interface .agent-card--compact .agent-tabs button { min-height: 40px; }
+  .primary-interface .context-panel .session-run { min-height: 44px; }
+}

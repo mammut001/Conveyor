@@ -26,15 +26,18 @@ async function openConsole(page: Page, pwa: boolean, mobileUI = false) {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) })
   })
   // A prior scenario can leave an authenticated token in this same page.
-  // Lock explicitly before navigating so we never fill a transient form
-  // that React is about to replace during token restoration.
-  const lock = page.getByRole('button', { name: 'Lock', exact: true })
-  if (await lock.isVisible()) await lock.click()
+  // Lock explicitly (锁定 asks for confirmation) before navigating so we never
+  // fill a transient form that React is about to replace during token restoration.
+  const lock = page.locator('header.topbar').getByRole('button', { name: '锁定', exact: true })
+  if (await lock.isVisible()) {
+    await lock.click()
+    await page.getByRole('alertdialog', { name: '锁定控制台？' }).getByRole('button', { name: '锁定', exact: true }).click()
+  }
   await page.goto('/')
-  const unlock = page.getByLabel('Console token')
+  const unlock = page.getByLabel('访问令牌')
   if (await unlock.isVisible()) {
     await unlock.fill('pwa-test-token-0123456789abcdef0123456789abcdef')
-    await page.getByRole('button', { name: 'Unlock console' }).click()
+    await page.getByRole('button', { name: '解锁', exact: true }).click()
   }
   try {
     await expect(page.locator('main.app-shell')).toBeVisible()
@@ -49,17 +52,17 @@ async function openConsole(page: Page, pwa: boolean, mobileUI = false) {
 test('PWA manifest link preserves mobile mode and push opt-in follows PWA flag', async ({ page }) => {
   await openConsole(page, false)
   await expect(page.locator('link[rel="manifest"]')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /Enable alerts/i })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /开启提醒/ })).toHaveCount(0)
   // Existing mobile UI installs the manifest independently of PWA.
   await page.unroute('**/api/**')
   await openConsole(page, false, true)
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', '/manifest.webmanifest')
-  await expect(page.getByRole('button', { name: /Enable alerts/i })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /开启提醒/ })).toHaveCount(0)
   // Re-load with server PWA feature bit flipped, not a frontend env variable.
   await page.unroute('**/api/**')
   await openConsole(page, true)
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', '/manifest.webmanifest')
-  await expect(page.getByRole('button', { name: /Enable alerts/i })).toBeVisible()
+  await expect(page.getByRole('button', { name: /开启提醒/ })).toBeVisible()
   const manifest = await page.request.get('/manifest.webmanifest')
   expect(manifest.ok()).toBeTruthy()
   expect((await manifest.json()).name).toBe('Conveyor')
@@ -69,5 +72,5 @@ test('notification deep link lands on authenticated approval inbox', async ({ pa
   await openConsole(page, true)
   await page.goto('/?approval=approval123#approvals')
   await expect(page.locator('main.app-shell')).toBeVisible()
-  await expect(page.getByRole('button', { name: /Approvals/i }).first()).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: /审批/ })).toHaveAttribute('aria-current', 'page')
 })

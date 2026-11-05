@@ -7,13 +7,13 @@ export function PwaNotifications({ token }: { token: string }) {
     void setupWorker().catch(() => null)
   }, [])
   return <button className="settings-button" disabled={state === 'busy' || state === 'active'}
-    title="Optional generic approval alerts. Never approves from a notification."
+    title="可选：有事项等你审批时发提醒。通知里不能直接批准。"
     onClick={() => {
       setState('busy')
       void enablePush(token).then(ok => setState(ok ? 'active' : 'unsupported'))
         .catch(() => setState('unsupported'))
     }}>
-    {state === 'active' ? '🔔 Alerts on' : state === 'busy' ? 'Enabling…' :
-      state === 'unsupported' ? 'Push unavailable' : '🔔 Enable alerts'}
+    {state === 'active' ? '🔔 提醒已开启' : state === 'busy' ? '正在开启…' :
+      state === 'unsupported' ? '无法开启提醒' : '🔔 开启提醒'}
   </button>
 }

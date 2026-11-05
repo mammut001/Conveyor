@@ -92,9 +92,9 @@ async function installWorkflowApi(page: Page) {
 
 async function openWorkflows(page: Page) {
   await page.goto('/')
-  await page.getByLabel('Console token').fill('pr107-browser-test-token-not-a-secret-001')
-  await page.getByRole('button', { name: 'Unlock console' }).click()
-  await page.getByRole('button', { name: 'Workflows', exact: true }).click()
+  await page.getByLabel('访问令牌').fill('pr107-browser-test-token-not-a-secret-001')
+  await page.getByRole('button', { name: '解锁', exact: true }).click()
+  await page.getByRole('button', { name: '工作流', exact: true }).click()
   await expect(page.getByText('Durable Workflows · checkpoint preview')).toBeVisible()
 }
 
@@ -127,7 +127,7 @@ test('lost action response persists pending ID across reload and never advances 
   expect(fixture.workflows[0].revision).toBe(1)
 
   await page.reload()
-  await page.getByRole('button', { name: 'Workflows', exact: true }).click()
+  await page.getByRole('button', { name: '工作流', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Retry exactly the same request' })).toBeVisible()
   await page.getByRole('button', { name: 'Retry exactly the same request' }).click()
   await expect(page.getByRole('button', { name: 'Mark step complete' })).toBeVisible()

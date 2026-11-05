@@ -39,20 +39,21 @@ async def main():
             W = wid[-1]
             offx = (info["ow"] - info["iw"]) // 2; offy = info["oh"] - info["ih"] - (info["ow"] - info["iw"]) // 2
             nav = lambda t: f"[...document.querySelectorAll('.mobile-bottom-nav button')].find(b=>b.textContent.includes('{t}'))"
-            item = lambda t: f"[...document.querySelectorAll('.mobile-sheet-item')].find(b=>b.textContent.includes('{t}'))"
+            # The drawers open from the page header (助手 switch on the left, 详情 on the right); the bottom bar's 更多 opens the sheet.
+            opener = {"Sessions": "document.querySelector('.shell-agent-switch')", "Context": "document.querySelector('.shell-context-toggle')"}
             async def click_el(expr):
                 c = await js(f"(()=>{{const e={expr}; if(!e) return null; const b=e.getBoundingClientRect(); return [b.left+b.width/2,b.top+b.height/2]}})()")
                 if not c: raise RuntimeError("no element " + expr)
                 xdo("mousemove", "--window", W, str(int(offx + c[0])), str(int(offy + c[1]))); xdo("click", "1"); time.sleep(0.7)
             def click_at(x, y): xdo("mousemove", "--window", W, str(int(offx + x)), str(int(offy + y))); xdo("click", "1"); time.sleep(0.8)
-            await click_el(nav("More"))
+            await click_el(nav("更多"))
             print("calibration: sheet open after X click =", await js("!!document.querySelector('.mobile-sheet')"))
             xdo("key", "Escape"); time.sleep(0.6)
             print("calibration: sheet closed after X Escape =", not await js("!!document.querySelector('.mobile-sheet')"))
             if await js("!!document.querySelector('.mobile-sheet')"): await js("document.querySelector('.mobile-sheet-overlay').click()")
             for which, sel in (("Sessions", "aside.sessions-panel"), ("Context", "aside.context-panel")):
                 for how in ("outside-click", "escape"):
-                    await click_el(nav("More")); await click_el(item(which))
+                    await click_el(opener[which])
                     r = await js(f"(()=>{{const b=document.querySelector('{sel}').getBoundingClientRect(); return [b.left,b.right]}})()")
                     opened = r[0] >= -1 and r[1] <= info["iw"] + 1
                     if how == "outside-click":

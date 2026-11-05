@@ -85,13 +85,13 @@ async def desktop(a):
     check("expanded persists after reload", await a["js"](f"{TOGGLE}.getAttribute('aria-expanded')") == "true")
 
 def nav_btn(t): return f"[...document.querySelectorAll('.mobile-bottom-nav button')].find(b=>b.textContent.includes('{t}'))"
-def sheet_item(t): return f"[...document.querySelectorAll('.mobile-sheet-item')].find(b=>b.textContent.includes('{t}'))"
+# The drawers open from the page header (助手 switch on the left, 详情 on the right); the bottom bar's 更多 opens the sheet.
+OPENER = {"Sessions": "document.querySelector('.shell-agent-switch')", "Context": "document.querySelector('.shell-context-toggle')"}
 OPEN = {"Sessions": "document.querySelector('aside.sessions-panel.drawer-open')", "Context": "document.querySelector('aside.context-panel.drawer-open')"}
 async def mobile(a):
     for which in ("Sessions", "Context"):
         for how in ("tap", "click", "esc"):
-            x, y = await a["center"](nav_btn("More")); await a["tap"](x, y); await a["sleep"](0.5)
-            x, y = await a["center"](sheet_item(which)); await a["tap"](x, y); await a["sleep"](0.6)
+            x, y = await a["center"](OPENER[which]); await a["tap"](x, y); await a["sleep"](0.6)
             opened = await a["js"](f"!!{OPEN[which]}")
             check(f"{which} drawer opens", opened)
             rect = await a["js"](f"(()=>{{const b={OPEN[which]}.getBoundingClientRect(); return [b.left,b.right]}})()")

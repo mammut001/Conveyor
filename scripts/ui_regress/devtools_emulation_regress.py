@@ -100,7 +100,8 @@ async def main():
             async def center(expr):
                 return await js(f"(()=>{{const e={expr}; if(!e) return null; const b=e.getBoundingClientRect(); return [b.left+b.width/2,b.top+b.height/2]}})()")
             nav = lambda t: f"[...document.querySelectorAll('.mobile-bottom-nav button')].find(b=>b.textContent.includes('{t}'))"
-            item = lambda t: f"[...document.querySelectorAll('.mobile-sheet-item')].find(b=>b.textContent.includes('{t}'))"
+            # The drawers open from the page header (助手 switch on the left, 详情 on the right); the bottom bar's 更多 opens the sheet.
+            opener = {"Sessions": "document.querySelector('.shell-agent-switch')", "Context": "document.querySelector('.shell-context-toggle')"}
 
             for d in ("Runtime.enable", "Page.enable"):
                 await send(d)
@@ -123,19 +124,13 @@ async def main():
                     await shift_drag_pinch(200, 420, 200, 300)
                     z = await js(STATE)
                     check(f"{which}: precondition - page pinch-zoomed before opening", z["scale"] > 1.05, json.dumps(z))
-                m = await center(nav("More"))
+                m = await center(opener[which])
                 if pinch or m is None:
-                    await js(nav("More") + ".click()")  # nav may be off-screen while zoomed
-                    await sleep(0.4)
-                else:
-                    await mouse_tap(*m)
-                if pinch:
-                    await js(item(which) + ".click()")  # the sheet itself may be partly off-screen while zoomed
+                    await js(opener[which] + ".click()")  # the header may be off-screen while zoomed
                     await sleep(0.6)
                 else:
-                    c = await center(item(which))
-                    if c:
-                        await mouse_tap(*c)
+                    await mouse_tap(*m)
+                    await sleep(0.6)
                 return await js(STATE)
             async def reset():
                 # leave a clean state for the next case even when a check failed
@@ -161,7 +156,7 @@ async def main():
                 # 2) Esc after a tap inside the drawer (neutral point: drawer header)
                 await reset()
                 await open_drawer(which)
-                hdr = await center("document.querySelector('aside.drawer-open .mobile-drawer-header strong, aside.drawer-open .mobile-drawer-header span, aside.drawer-open .mobile-drawer-header')")
+                hdr = await center("document.querySelector('aside.drawer-open .mobile-drawer-header strong, aside.drawer-open .mobile-drawer-header span, aside.drawer-open .mobile-drawer-header, aside.drawer-open > .panel-heading')")
                 await mouse_tap(hdr[0] - 40, hdr[1])
                 still = (await js(STATE))["drawer"]
                 await esc()

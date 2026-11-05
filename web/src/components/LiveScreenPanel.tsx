@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { pausedByLabel, screenMessage } from '../taskText'
 
 type ScreenStatus = {
   enabled: boolean
@@ -153,7 +154,7 @@ export function LiveScreenPanel({ token, agentId = '', agentName = '' }: { token
             setError('')
           } else if (response.status !== 204) {
             const data = await response.json().catch(() => ({}))
-            setError(typeof data.error === 'string' ? data.error : 'Screen is unavailable')
+            setError(screenMessage(typeof data.error === 'string' ? data.error : ''))
             await sleep(3000)
           }
         } catch {
@@ -181,7 +182,7 @@ export function LiveScreenPanel({ token, agentId = '', agentName = '' }: { token
           await request('/api/screen/input', { events })
         } catch (reason) {
           queueRef.current = []
-          setError(reason instanceof Error ? reason.message : 'Input failed')
+          setError(screenMessage(reason instanceof Error ? reason.message : '', '输入没有送达主机'))
           request<ScreenStatus>('/api/screen/status').then(setStatus).catch(() => {})
         }
       }
@@ -208,7 +209,7 @@ export function LiveScreenPanel({ token, agentId = '', agentName = '' }: { token
       setError('')
       if (action === 'take') window.setTimeout(() => viewRef.current?.focus(), 0)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not change control')
+      setError(screenMessage(reason instanceof Error ? reason.message : '', '无法切换操作权'))
     } finally {
       setBusy(false)
     }
@@ -272,40 +273,41 @@ export function LiveScreenPanel({ token, agentId = '', agentName = '' }: { token
 
   const canTake = status.available && status.control_enabled && !controlling && !status.blocked_by
 
-  const subtitle = !status.available ? status.reason
-    : controlling ? 'You are in control · Agent paused'
-    : status.blocked_by ? `Agent paused by ${status.blocked_by}`
-    : 'Live · view only'
+  const owner = dedicated && agentName ? `${agentName} 的桌面 · ` : ''
+  const subtitle = !status.available ? screenMessage(status.reason)
+    : controlling ? '你正在操作 · 助手已暂停'
+    : status.blocked_by ? `${owner}助手已暂停（${pausedByLabel(status.blocked_by)}）`
+    : `${owner}实时 · 仅查看`
 
   return (
     <div className="live-screen-card">
       <div className="host-screen-heading">
-        <div><strong>{dedicated && agentName ? `${agentName}'s screen` : 'Live screen'}</strong><small>{subtitle}</small></div>
-        {controlling && <span className="live-screen-pill">In control</span>}
+        <div><strong>实时画面</strong><small>{subtitle}</small></div>
+        {controlling && <span className="live-screen-pill">你在操作</span>}
       </div>
       {status.available
-        ? <button type="button" className="live-screen-thumb" onClick={() => setExpanded(true)} aria-label="Open live host screen">
+        ? <button type="button" className="live-screen-thumb" onClick={() => setExpanded(true)} aria-label="放大实时画面">
             <canvas ref={thumbRef} aria-hidden="true" />
-            {!hasFrame && <span className="live-screen-waiting">Connecting…</span>}
-            <span className="live-screen-open"><span aria-hidden="true">⤢</span> Open</span>
+            {!hasFrame && <span className="live-screen-waiting">连接中…</span>}
+            <span className="live-screen-open"><span aria-hidden="true">⤢</span> 放大</span>
           </button>
-        : <div className="screen-empty"><span aria-hidden="true">▣</span><strong>Screen unavailable</strong><p>{status.reason}</p></div>}
+        : <div className="screen-empty"><span aria-hidden="true">▣</span><strong>{screenMessage(status.reason)}</strong>{status.reason && <p className="screen-empty-detail">{status.reason}</p>}</div>}
       {error && !expanded && <p className="screen-request-status failed" role="alert">{error}</p>}
 
       {expanded && <div className="screen-viewer-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !controlling) close() }}>
         <section className={`screen-viewer live-screen-viewer${controlling ? ' controlling' : ''}`} role="dialog" aria-modal="true" aria-labelledby="live-screen-title">
           <header className="screen-viewer-header">
             <div>
-              <p className="eyebrow">{controlling ? 'YOU ARE IN CONTROL · AGENT PAUSED' : dedicated ? 'AGENT DESKTOP · LIVE VIEW' : 'HOST · LIVE VIEW'}</p>
-              <h2 id="live-screen-title">{dedicated && agentName ? `${agentName}'s screen` : 'Host screen'}</h2>
-              <p>{sizeRef.current.width ? `${sizeRef.current.width} × ${sizeRef.current.height}` : 'Connecting…'}{status.blocked_by ? ` · paused by ${status.blocked_by}` : ''}</p>
+              <p className="eyebrow">{controlling ? '你正在操作 · 助手已暂停' : dedicated ? '助手桌面 · 实时画面' : '主机 · 实时画面'}</p>
+              <h2 id="live-screen-title">{dedicated && agentName ? `${agentName} 的屏幕` : '主机屏幕'}</h2>
+              <p>{sizeRef.current.width ? `${sizeRef.current.width} × ${sizeRef.current.height}` : '连接中…'}{status.blocked_by ? ` · ${pausedByLabel(status.blocked_by)}` : ''}</p>
             </div>
             <div className="live-screen-actions">
-              {dedicated && <button type="button" className="live-screen-secondary" onClick={openBrowser}>Open browser</button>}
+              {dedicated && <button type="button" className="live-screen-secondary" onClick={openBrowser}>打开浏览器</button>}
               {status.control_enabled && (controlling
-                ? <button type="button" className="live-screen-release" disabled={busy} onClick={() => void setControl('release')}>Release to Agent</button>
-                : <button type="button" className="live-screen-take" disabled={busy || Boolean(status.blocked_by)} onClick={() => void setControl('take')}>{busy ? 'Taking over…' : 'Take control'}</button>)}
-              <button type="button" className="close-button" onClick={close} aria-label="Close live screen">×</button>
+                ? <button type="button" className="live-screen-release" disabled={busy} onClick={() => void setControl('release')}>交还给助手</button>
+                : <button type="button" className="live-screen-take" disabled={busy || Boolean(status.blocked_by)} onClick={() => void setControl('take')}>{busy ? '正在接管…' : '接管操作'}</button>)}
+              <button type="button" className="close-button" onClick={close} aria-label="关闭实时画面">×</button>
             </div>
           </header>
           <div className="screen-viewer-image-frame">
@@ -314,7 +316,7 @@ export function LiveScreenPanel({ token, agentId = '', agentName = '' }: { token
               className={`live-screen-canvas${canTake ? ' takeable' : ''}`}
               onClick={() => { if (canTake && !busy) void setControl('take') }}
               tabIndex={controlling ? 0 : -1}
-              aria-label="Live host screen"
+              aria-label="实时画面"
               onContextMenu={event => event.preventDefault()}
               onPointerDown={event => {
                 if (!controlling) return
@@ -364,16 +366,16 @@ export function LiveScreenPanel({ token, agentId = '', agentName = '' }: { token
                 sendText(event.clipboardData.getData('text'))
               }}
             />
-            {canTake && hasFrame && <span className="live-screen-hint">{busy ? 'Taking over…' : 'Click the screen to take control'}</span>}
+            {canTake && hasFrame && <span className="live-screen-hint">{busy ? '正在接管…' : '点击画面即可接管操作'}</span>}
           </div>
           <footer className="screen-viewer-footer live-screen-footer">
             {controlling
               ? <form onSubmit={event => { event.preventDefault(); if (typed) sendText(typed); send({ t: 'key', key: 'Enter', mods: [] }); setTyped('') }}>
-                  <input value={typed} onChange={event => setTyped(event.target.value)} placeholder="Type here to send text + Enter (handy on a phone)" aria-label="Text to send to the host" autoComplete="off" autoCapitalize="off" spellCheck={false} />
-                  <button type="submit">Send</button>
+                  <input value={typed} onChange={event => setTyped(event.target.value)} placeholder="在这里输入文字，发送后自动回车（手机上更方便）" aria-label="发送到主机的文字" autoComplete="off" autoCapitalize="off" spellCheck={false} />
+                  <button type="submit">发送</button>
                 </form>
-              : <span>View only. Take control to use the mouse and keyboard; the Agent pauses until you release.</span>}
-            {error ? <span className="live-screen-error" role="alert">{error}</span> : <span>Frames and keystrokes are not recorded.</span>}
+              : <span>仅查看。接管后可以用鼠标和键盘操作，交还之前助手会一直暂停。</span>}
+            {error ? <span className="live-screen-error" role="alert">{error}</span> : <span>画面和按键都不会被记录。</span>}
           </footer>
         </section>
       </div>}

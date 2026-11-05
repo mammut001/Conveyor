@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 
 export type SentryAlert = {
   source: string;
@@ -43,10 +43,152 @@ export type TeammatePanelProps = {
   onSendToChat?: (command: string) => void;
 };
 
+type Problem = { message: string; detail?: string };
+
+const SOURCE_LABELS: Record<string, string> = {
+  'host.disk': '磁盘空间',
+  'host.cpu': 'CPU 负载',
+  'host.service': '系统服务',
+  'host.logs': '错误日志',
+  'repo.git': 'Git 工作区',
+  'repo.ci': 'GitHub CI',
+};
+
+const SERVICE_LABELS: Record<string, string> = {
+  'conveyor-telegram-bot': 'Telegram 机器人',
+  'conveyor-feishu-bot': '飞书机器人',
+  'conveyor-vps-computer': '远程电脑',
+  'conveyor-scheduler': '定时任务',
+};
+
+const SEVERITY_LABELS: Record<SentryAlert['severity'], string> = {
+  critical: '严重',
+  warning: '警告',
+  info: '提示',
+};
+
+const SEND_HINT = '填入对话输入框，确认后发送';
+
+const sourceLabel = (source: string) => SOURCE_LABELS[source] || source;
+
+const pad = (value: number) => String(value).padStart(2, '0');
+
+function parseTime(iso?: string | null): Date | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** "11月3日 14:05"; the year only when it differs from this year. */
+function absoluteTime(iso?: string | null): string {
+  const date = parseTime(iso);
+  if (!date) return '';
+  const year = date.getFullYear() === new Date().getFullYear() ? '' : `${date.getFullYear()}年`;
+  return `${year}${date.getMonth() + 1}月${date.getDate()}日 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** "刚刚" / "5 分钟前" / "3 小时前" for recent times, otherwise "11月3日 14:05". */
+function relativeTime(iso?: string | null): string {
+  const date = parseTime(iso);
+  if (!date) return '';
+  const elapsed = Date.now() - date.getTime();
+  if (elapsed < 0) return absoluteTime(iso);
+  const minutes = Math.floor(elapsed / 60000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return absoluteTime(iso);
+}
+
+/** 300 → "5 分钟", 7200 → "2 小时". */
+function duration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
+  if (seconds < 60) return `${Math.round(seconds)} 秒`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)} 分钟`;
+  if (seconds < 86400) return `${Number((seconds / 3600).toFixed(1))} 小时`;
+  return `${Number((seconds / 86400).toFixed(1))} 天`;
+}
+
+/** Alert text marks paths and states with backticks; show those as inline code. */
+function inlineCode(text: string): ReactNode[] {
+  return text.split('`').map((part, index) => (index % 2 ? <code key={index}>{part}</code> : part));
+}
+
+async function failure(res: Response, message: string): Promise<Problem> {
+  const body = await res.json().catch(() => null) as { error?: unknown } | null;
+  return { message, detail: typeof body?.error === 'string' ? body.error : `HTTP ${res.status}` };
+}
+
+function AlertItem({ alert, muted, busy, onMute, onSendToChat }: {
+  alert: SentryAlert;
+  muted: boolean;
+  busy: boolean;
+  onMute: (source: string) => void;
+  onSendToChat?: (command: string) => void;
+}) {
+  const severity: SentryAlert['severity'] = alert.severity in SEVERITY_LABELS ? alert.severity : 'info';
+  const summary = alert.summary || '';
+  const headline = summary.split('\n')[0].trim();
+  const hasDetails = summary.includes('\n') || headline.length > 90;
+  return (
+    <li className={`guard-alert is-${severity}`}>
+      <div className="guard-alert-head">
+        <span className={`guard-badge guard-sev-${severity}`}>{SEVERITY_LABELS[severity]}</span>
+        <strong className="guard-alert-title">{alert.title}</strong>
+        <span className="guard-alert-meta">
+          <span>{sourceLabel(alert.source)}</span>
+          {alert.created_at && (
+            <time dateTime={alert.created_at} title={absoluteTime(alert.created_at)}>{relativeTime(alert.created_at)}</time>
+          )}
+          {muted ? (
+            <span className="guard-badge guard-badge-muted">已静音</span>
+          ) : (
+            <button
+              type="button"
+              className="guard-btn guard-btn-small guard-btn-quiet guard-alert-mute"
+              disabled={busy}
+              title={`以后不再推送「${sourceLabel(alert.source)}」类告警`}
+              aria-label={`静音「${sourceLabel(alert.source)}」类告警`}
+              onClick={() => onMute(alert.source)}
+            >
+              静音此类
+            </button>
+          )}
+        </span>
+      </div>
+      {headline && <p className="guard-alert-summary">{inlineCode(headline)}</p>}
+      {hasDetails && (
+        <details className="guard-alert-details">
+          <summary>查看详情</summary>
+          <pre>{summary}</pre>
+        </details>
+      )}
+      {alert.suggested_actions && alert.suggested_actions.length > 0 && (
+        <div className="guard-alert-actions">
+          {alert.suggested_actions.map((act) => (
+            <button
+              key={act.command}
+              type="button"
+              className="guard-btn guard-btn-small"
+              title={SEND_HINT}
+              onClick={() => onSendToChat?.(act.command)}
+            >
+              {act.label}{' '}
+              <code className="guard-cmd">{act.command}</code>
+            </button>
+          ))}
+        </div>
+      )}
+    </li>
+  );
+}
+
 export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
   const [status, setStatus] = useState<TeammateStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [problem, setProblem] = useState<Problem | null>(null);
+  const [notice, setNotice] = useState('');
   const [patrolling, setPatrolling] = useState(false);
   const [patrolResult, setPatrolResult] = useState<PatrolResult | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
@@ -60,13 +202,14 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
-        throw new Error(`Failed to load teammate status (${res.status})`);
+        setProblem(await failure(res, '无法读取值守状态，请稍后重试。'));
+        return;
       }
       const data = (await res.json()) as TeammateStatus;
       setStatus(data);
-      setError('');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error loading teammate status');
+      setProblem(null);
+    } catch {
+      setProblem({ message: '无法连接服务器，值守状态暂时读取不到。' });
     } finally {
       setLoading(false);
     }
@@ -76,10 +219,17 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
     void loadStatus();
   }, [loadStatus]);
 
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(''), 8000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   const handleRunPatrol = async () => {
     if (patrolling || !token) return;
     try {
       setPatrolling(true);
+      setNotice('');
       const res = await fetch('/api/teammate/patrol', {
         method: 'POST',
         headers: {
@@ -89,13 +239,15 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
         body: JSON.stringify({ force: true }),
       });
       if (!res.ok) {
-        throw new Error(`Patrol execution failed (${res.status})`);
+        setProblem(await failure(res, '巡检没有完成，请稍后重试。'));
+        return;
       }
       const data = (await res.json()) as PatrolResult;
       setPatrolResult(data);
+      setProblem(null);
       void loadStatus();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Patrol run failed');
+    } catch {
+      setProblem({ message: '无法连接服务器，巡检没有完成。' });
     } finally {
       setPatrolling(false);
     }
@@ -105,6 +257,7 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
     if (actionBusy || !token) return;
     try {
       setActionBusy(true);
+      setNotice('');
       const res = await fetch('/api/teammate/action', {
         method: 'POST',
         headers: {
@@ -114,594 +267,277 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
         body: JSON.stringify({ action, value }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Action ${action} failed`);
+        setProblem(await failure(res, '操作没有完成，请稍后重试。'));
+        return;
       }
       if (action === 'mute') setNewMuteSource('');
+      setProblem(null);
+      const label = typeof value === 'string' ? sourceLabel(value) : '';
+      setNotice(
+        action === 'pause' ? `已暂停 ${value} 小时，期间不会推送提醒。`
+          : action === 'resume' ? '已恢复值守。'
+          : action === 'mute' ? `已静音「${label}」，这类问题不会再推送提醒。`
+          : `已取消静音「${label}」。`,
+      );
       await loadStatus();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : `Action failed`);
+    } catch {
+      setProblem({ message: '无法连接服务器，操作没有完成。' });
     } finally {
       setActionBusy(false);
     }
   };
 
-  const formatTs = (ts?: string | null) => {
-    if (!ts) return '尚未执行 (Not yet run)';
-    try {
-      return new Date(ts).toLocaleString([], {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      });
-    } catch {
-      return ts;
-    }
+  const muted = status?.muted_sources ?? [];
+  const submitMute = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const typed = newMuteSource.trim();
+    // Accept either the source code (host.disk) or its Chinese name (磁盘空间).
+    const known = Object.entries(SOURCE_LABELS).find(([, label]) => label === typed);
+    const source = (known ? known[0] : typed).toLowerCase();
+    if (source) void handleAction('mute', source);
   };
 
+  const thresholds = status?.thresholds;
+  const services = status?.monitored_services ?? [];
+  const modules = [
+    {
+      key: 'disk', title: '磁盘空间', sources: ['host.disk'], command: '/clean',
+      description: `使用率超过 ${thresholds?.disk_pct ?? 90}% 或剩余空间少于 ${thresholds?.disk_gb ?? 3} GB 时提醒。`,
+    },
+    {
+      key: 'cpu', title: 'CPU 负载', sources: ['host.cpu'], command: '/ps',
+      description: `1 分钟平均负载超过 CPU 核数的 ${thresholds?.load_ratio ?? 2} 倍时提醒，并列出最耗资源的进程。`,
+    },
+    {
+      key: 'services', title: '系统服务', sources: ['host.service'], command: '/status',
+      description: '下面这些后台服务停止运行时立即提醒。',
+    },
+    {
+      key: 'logs', title: '错误日志', sources: ['host.logs'], command: '/diagnose',
+      description: `10 分钟内出现 ${thresholds?.error_burst ?? 5} 条以上错误日志时提醒。`,
+    },
+    {
+      key: 'repo', title: 'Git 与 GitHub CI', sources: ['repo.git', 'repo.ci'], command: '/github_ci',
+      description: '未提交的改动积压过多，或 main 分支的 GitHub CI 构建失败时提醒。',
+    },
+  ];
+
+  const paused = Boolean(status?.is_paused);
+  const enabled = status?.enabled !== false;
+  const stateLabel = !status ? (loading ? '正在读取值守状态…' : '值守状态未知')
+    : !enabled ? '值守未开启'
+    : paused ? '已暂停'
+    : '值守中';
+  const dot = !status || !enabled ? 'is-muted' : paused ? 'is-warn' : 'is-ok';
+  const interval = duration(status?.interval_seconds ?? 300);
+  const cooldown = duration(status?.cooldown_seconds ?? 7200);
+  const lastPatrol = status?.last_patrol_at ? relativeTime(status.last_patrol_at) : '尚未巡检';
+  const statusLine = !status ? ''
+    : !enabled ? `不会自动巡检，可以手动点“立即巡检”。上次巡检：${lastPatrol}`
+    : paused ? `${status.paused_until ? `暂停到 ${absoluteTime(status.paused_until)}` : '暂停中，直到你手动恢复'}，期间不会推送提醒 · 上次巡检：${lastPatrol}`
+    : `每 ${interval}自动巡检一次 · 上次巡检：${lastPatrol}`;
+  const alerts = status?.recent_alerts ?? [];
+  const unmutedKnown = Object.entries(SOURCE_LABELS).filter(([code]) => !muted.includes(code));
+
   return (
-    <div style={{ padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Top Header Card */}
-      <div
-        style={{
-          background: 'var(--card-bg, #1a1b26)',
-          border: '1px solid var(--border-color, #2f354a)',
-          borderRadius: 8,
-          padding: '16px 20px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 12,
-        }}
-      >
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <h3 style={{ margin: 0, fontSize: 18, display: 'flex', alignItems: 'center', gap: 8 }}>
-              🛡️ Always-On Teammate
+    <div className="guard-page guard-teammate">
+      <div className="guard-stack">
+        <p className="guard-intro">值守会定时检查服务器和代码仓库，发现问题时主动提醒你。</p>
+        <section className={`guard-card guard-status-card${paused ? ' is-warn' : ''}`} aria-labelledby="guard-teammate-title">
+          <div className="guard-status-main">
+            <h3 id="guard-teammate-title" className="guard-status-title">
+              <span className={`guard-dot ${dot}`} aria-hidden="true" />
+              {stateLabel}
             </h3>
-            {status?.is_paused ? (
-              <span
-                style={{
-                  background: '#f59e0b22',
-                  color: '#f59e0b',
-                  border: '1px solid #f59e0b55',
-                  padding: '2px 8px',
-                  borderRadius: 4,
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
-              >
-                ⏸️ 已暂停预警 (Paused)
-              </span>
+            {statusLine && <p className="guard-muted">{statusLine}</p>}
+          </div>
+          <div className="guard-actions">
+            <button
+              type="button"
+              className="guard-btn guard-btn-primary"
+              disabled={patrolling || (loading && !status)}
+              aria-busy={patrolling || undefined}
+              onClick={() => void handleRunPatrol()}
+            >
+              {patrolling ? '巡检中…' : '立即巡检'}
+            </button>
+            {paused ? (
+              <button type="button" className="guard-btn" disabled={actionBusy} onClick={() => void handleAction('resume')}>
+                恢复值守
+              </button>
             ) : (
-              <span
-                style={{
-                  background: '#10b98122',
-                  color: '#10b981',
-                  border: '1px solid #10b98155',
-                  padding: '2px 8px',
-                  borderRadius: 4,
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
-              >
-                🟢 24/7 守护活跃中 (Active)
-              </span>
+              <>
+                <button type="button" className="guard-btn" disabled={actionBusy || !status} onClick={() => void handleAction('pause', 4)}>
+                  暂停 4 小时
+                </button>
+                <button type="button" className="guard-btn" disabled={actionBusy || !status} onClick={() => void handleAction('pause', 24)}>
+                  暂停 24 小时
+                </button>
+              </>
+            )}
+            <button type="button" className="guard-btn" disabled={loading} onClick={() => void loadStatus()}>
+              {loading && status ? '刷新中…' : '刷新'}
+            </button>
+          </div>
+        </section>
+
+        {(notice || problem) && (
+          <div className="guard-messages" aria-live="polite">
+            {notice && <p role="status" className="guard-feedback guard-feedback-ok">{notice}</p>}
+            {problem && (
+              <p role="alert" className="guard-feedback guard-feedback-error">
+                {problem.message}
+                {problem.detail && <span className="guard-tech">{problem.detail}</span>}
+              </p>
             )}
           </div>
-          <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--text-secondary, #94a3b8)' }}>
-            自动巡检周期: 每 {status?.interval_seconds ? status.interval_seconds / 60 : 5} 分钟 · 防骚扰冷却:{' '}
-            {status?.cooldown_seconds ? status.cooldown_seconds / 3600 : 2} 小时 · 上次巡检:{' '}
-            {formatTs(status?.last_patrol_at)}
-          </p>
-        </div>
-
-        {/* Action Controls */}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button
-            type="button"
-            className="primary-button"
-            disabled={patrolling || loading}
-            onClick={handleRunPatrol}
-            style={{
-              padding: '6px 14px',
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: patrolling ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {patrolling ? '⚡ 正在巡检中…' : '🛡️ 立即全面巡检 (Run Patrol)'}
-          </button>
-
-          {status?.is_paused ? (
-            <button
-              type="button"
-              disabled={actionBusy}
-              onClick={() => handleAction('resume')}
-              style={{
-                padding: '6px 12px',
-                fontSize: 13,
-                cursor: 'pointer',
-                background: '#10b981',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 4,
-              }}
-            >
-              ▶️ 恢复提醒
-            </button>
-          ) : (
-            <>
-              <button
-                type="button"
-                disabled={actionBusy}
-                onClick={() => handleAction('pause', 4)}
-                style={{
-                  padding: '6px 12px',
-                  fontSize: 13,
-                  cursor: 'pointer',
-                  background: 'transparent',
-                  color: 'var(--text-secondary, #94a3b8)',
-                  border: '1px solid var(--border-color, #2f354a)',
-                  borderRadius: 4,
-                }}
-              >
-                ⏸️ 暂停 4h
-              </button>
-              <button
-                type="button"
-                disabled={actionBusy}
-                onClick={() => handleAction('pause', 24)}
-                style={{
-                  padding: '6px 12px',
-                  fontSize: 13,
-                  cursor: 'pointer',
-                  background: 'transparent',
-                  color: 'var(--text-secondary, #94a3b8)',
-                  border: '1px solid var(--border-color, #2f354a)',
-                  borderRadius: 4,
-                }}
-              >
-                ⏸️ 暂停 24h
-              </button>
-            </>
-          )}
-
-          <button
-            type="button"
-            disabled={loading}
-            onClick={() => loadStatus()}
-            style={{
-              padding: '6px 10px',
-              fontSize: 13,
-              cursor: 'pointer',
-              background: 'transparent',
-              color: 'var(--text-secondary, #94a3b8)',
-              border: '1px solid var(--border-color, #2f354a)',
-              borderRadius: 4,
-            }}
-          >
-            🔄 刷新
-          </button>
-        </div>
-      </div>
-
-      {error && (
-        <div
-          style={{
-            background: '#ef444422',
-            color: '#ef4444',
-            border: '1px solid #ef444455',
-            padding: '8px 12px',
-            borderRadius: 6,
-            fontSize: 13,
-          }}
-        >
-          ⚠️ {error}
-        </div>
-      )}
-
-      {/* Live Inspection Result Banner */}
-      {patrolResult && (
-        <div
-          style={{
-            background: patrolResult.is_healthy ? '#10b98115' : '#ef444415',
-            border: `1px solid ${patrolResult.is_healthy ? '#10b98155' : '#ef444455'}`,
-            borderRadius: 8,
-            padding: '14px 18px',
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h4
-              style={{
-                margin: 0,
-                fontSize: 15,
-                color: patrolResult.is_healthy ? '#10b981' : '#ef4444',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              {patrolResult.is_healthy
-                ? '✅ 实时巡检完成：全系统指标健康正常，未发现任何异常'
-                : `🚨 实时巡检发现 ${patrolResult.alerts.length} 项异常指标`}
-            </h4>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary, #94a3b8)' }}>
-              {formatTs(patrolResult.timestamp)}
-            </span>
-          </div>
-          {patrolResult.alerts.length > 0 && (
-            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {patrolResult.alerts.map((alert, idx) => (
-                <div
-                  key={idx}
-                  style={{
-                    background: 'var(--card-bg, #1a1b26)',
-                    padding: '8px 12px',
-                    borderRadius: 6,
-                    border: '1px solid var(--border-color, #2f354a)',
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: 13 }}>
-                    [{alert.severity.toUpperCase()}] {alert.title}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary, #cbd5e1)', marginTop: 4 }}>
-                    {alert.summary}
-                  </div>
-                  {alert.suggested_actions && alert.suggested_actions.length > 0 && (
-                    <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-                      {alert.suggested_actions.map((act, aIdx) => (
-                        <button
-                          key={aIdx}
-                          type="button"
-                          onClick={() => onSendToChat?.(act.command)}
-                          style={{
-                            fontSize: 12,
-                            padding: '3px 8px',
-                            background: '#3b82f622',
-                            color: '#60a5fa',
-                            border: '1px solid #3b82f655',
-                            borderRadius: 4,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          👉 快捷运行: {act.command} ({act.label})
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Guardian Modules Matrix */}
-      <div>
-        <h4 style={{ margin: '0 0 12px', fontSize: 14, color: 'var(--text-secondary, #94a3b8)' }}>
-          📋 守护巡检模块矩阵 (Guardian Modules)
-        </h4>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
-          {/* Card 1: Disk */}
-          <div
-            style={{
-              background: 'var(--card-bg, #1a1b26)',
-              border: '1px solid var(--border-color, #2f354a)',
-              borderRadius: 8,
-              padding: 14,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 14 }}>
-              💾 磁盘空间守护 (Disk)
-            </div>
-            <p style={{ margin: '8px 0 10px', fontSize: 12, color: 'var(--text-secondary, #94a3b8)' }}>
-              使用率 &gt; {status?.thresholds.disk_pct ?? 90}% 或可用空间 &lt; {status?.thresholds.disk_gb ?? 3} GB
-              时自动告警
-            </p>
-            <button
-              type="button"
-              onClick={() => onSendToChat?.('/clean')}
-              style={{
-                fontSize: 12,
-                padding: '4px 8px',
-                background: 'transparent',
-                color: '#60a5fa',
-                border: '1px solid #3b82f655',
-                borderRadius: 4,
-                cursor: 'pointer',
-              }}
-            >
-              /clean 清理空间
-            </button>
-          </div>
-
-          {/* Card 2: CPU */}
-          <div
-            style={{
-              background: 'var(--card-bg, #1a1b26)',
-              border: '1px solid var(--border-color, #2f354a)',
-              borderRadius: 8,
-              padding: 14,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 14 }}>
-              ⚡ CPU 与高耗能进程守护 (CPU)
-            </div>
-            <p style={{ margin: '8px 0 10px', fontSize: 12, color: 'var(--text-secondary, #94a3b8)' }}>
-              系统 1 分钟平均负载比例 &gt; {status?.thresholds.load_ratio ?? 2.0}x 时抓取前列进程告警
-            </p>
-            <button
-              type="button"
-              onClick={() => onSendToChat?.('/ps')}
-              style={{
-                fontSize: 12,
-                padding: '4px 8px',
-                background: 'transparent',
-                color: '#60a5fa',
-                border: '1px solid #3b82f655',
-                borderRadius: 4,
-                cursor: 'pointer',
-              }}
-            >
-              /ps 查看实时进程
-            </button>
-          </div>
-
-          {/* Card 3: Services */}
-          <div
-            style={{
-              background: 'var(--card-bg, #1a1b26)',
-              border: '1px solid var(--border-color, #2f354a)',
-              borderRadius: 8,
-              padding: 14,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 14 }}>
-              🛠️ 核心系统服务守护 (Services)
-            </div>
-            <p style={{ margin: '8px 0 10px', fontSize: 12, color: 'var(--text-secondary, #94a3b8)' }}>
-              实时监测 systemd 守护单元：{status?.monitored_services.join(', ') || 'Telegram, Feishu, VPS Computer'}
-            </p>
-            <button
-              type="button"
-              onClick={() => onSendToChat?.('/status')}
-              style={{
-                fontSize: 12,
-                padding: '4px 8px',
-                background: 'transparent',
-                color: '#60a5fa',
-                border: '1px solid #3b82f655',
-                borderRadius: 4,
-                cursor: 'pointer',
-              }}
-            >
-              /status 检查服务
-            </button>
-          </div>
-
-          {/* Card 4: Logs */}
-          <div
-            style={{
-              background: 'var(--card-bg, #1a1b26)',
-              border: '1px solid var(--border-color, #2f354a)',
-              borderRadius: 8,
-              padding: 14,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 14 }}>
-              📜 日志突增异常监测 (Logs)
-            </div>
-            <p style={{ margin: '8px 0 10px', fontSize: 12, color: 'var(--text-secondary, #94a3b8)' }}>
-              10 分钟内检测到错误日志 &gt;= {status?.thresholds.error_burst ?? 5} 条时自动触发异常排查
-            </p>
-            <button
-              type="button"
-              onClick={() => onSendToChat?.('/diagnose')}
-              style={{
-                fontSize: 12,
-                padding: '4px 8px',
-                background: 'transparent',
-                color: '#60a5fa',
-                border: '1px solid #3b82f655',
-                borderRadius: 4,
-                cursor: 'pointer',
-              }}
-            >
-              /diagnose 深度诊断
-            </button>
-          </div>
-
-          {/* Card 5: Git & CI */}
-          <div
-            style={{
-              background: 'var(--card-bg, #1a1b26)',
-              border: '1px solid var(--border-color, #2f354a)',
-              borderRadius: 8,
-              padding: 14,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 14 }}>
-              📦 Git 仓库与 GitHub CI 守护
-            </div>
-            <p style={{ margin: '8px 0 10px', fontSize: 12, color: 'var(--text-secondary, #94a3b8)' }}>
-              未提交变更积压预警与 GitHub Actions main 分支构建失败主动拦截
-            </p>
-            <button
-              type="button"
-              onClick={() => onSendToChat?.('/github_ci')}
-              style={{
-                fontSize: 12,
-                padding: '4px 8px',
-                background: 'transparent',
-                color: '#60a5fa',
-                border: '1px solid #3b82f655',
-                borderRadius: 4,
-                cursor: 'pointer',
-              }}
-            >
-              /github_ci 查看构建
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Muted Sources & Noise Filter */}
-      <div
-        style={{
-          background: 'var(--card-bg, #1a1b26)',
-          border: '1px solid var(--border-color, #2f354a)',
-          borderRadius: 8,
-          padding: '14px 18px',
-        }}
-      >
-        <h4 style={{ margin: '0 0 10px', fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-          🔇 静音过滤管理 (Noise Filter)
-        </h4>
-        <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--text-secondary, #94a3b8)' }}>
-          静音的告警源将不会主动推送预警通知。已静音：
-          {status?.muted_sources && status.muted_sources.length > 0 ? '' : ' (暂无)'}
-        </p>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          {status?.muted_sources?.map((source) => (
-            <span
-              key={source}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                background: '#374151',
-                padding: '3px 8px',
-                borderRadius: 4,
-                fontSize: 12,
-              }}
-            >
-              <code>{source}</code>
-              <button
-                type="button"
-                onClick={() => handleAction('unmute', source)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#ef4444',
-                  cursor: 'pointer',
-                  fontSize: 12,
-                  padding: 0,
-                }}
-              >
-                ✕
-              </button>
-            </span>
-          ))}
-
-          <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', marginLeft: 6 }}>
-            <input
-              type="text"
-              placeholder="输入告警源如 host.disk"
-              value={newMuteSource}
-              onChange={(e) => setNewMuteSource(e.target.value)}
-              style={{
-                padding: '3px 8px',
-                fontSize: 12,
-                borderRadius: 4,
-                border: '1px solid var(--border-color, #2f354a)',
-                background: 'var(--input-bg, #0f172a)',
-                color: 'inherit',
-              }}
-            />
-            <button
-              type="button"
-              disabled={!newMuteSource.trim()}
-              onClick={() => handleAction('mute', newMuteSource.trim())}
-              style={{
-                padding: '3px 8px',
-                fontSize: 12,
-                borderRadius: 4,
-                cursor: 'pointer',
-                background: 'transparent',
-                border: '1px solid var(--border-color, #2f354a)',
-                color: 'inherit',
-              }}
-            >
-              + 静音
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Recent Alerts Feed */}
-      <div>
-        <h4 style={{ margin: '0 0 12px', fontSize: 14, color: 'var(--text-secondary, #94a3b8)' }}>
-          🕒 最近触发的守护告警 (Recent Alerts)
-        </h4>
-        {status?.recent_alerts && status.recent_alerts.length > 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {status.recent_alerts.map((alert, idx) => (
-              <div
-                key={idx}
-                style={{
-                  background: 'var(--card-bg, #1a1b26)',
-                  border: '1px solid var(--border-color, #2f354a)',
-                  borderRadius: 8,
-                  padding: '12px 16px',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 16 }}>
-                      {alert.severity === 'critical' ? '🚨' : alert.severity === 'warning' ? '⚠️' : 'ℹ️'}
-                    </span>
-                    <strong style={{ fontSize: 14 }}>{alert.title}</strong>
-                    <span
-                      style={{
-                        fontSize: 11,
-                        padding: '1px 6px',
-                        borderRadius: 3,
-                        background:
-                          alert.severity === 'critical'
-                            ? '#ef444422'
-                            : alert.severity === 'warning'
-                            ? '#f59e0b22'
-                            : '#3b82f622',
-                        color:
-                          alert.severity === 'critical'
-                            ? '#ef4444'
-                            : alert.severity === 'warning'
-                            ? '#f59e0b'
-                            : '#60a5fa',
-                      }}
-                    >
-                      {alert.source}
-                    </span>
-                  </div>
-                  <span style={{ fontSize: 12, color: 'var(--text-secondary, #94a3b8)' }}>
-                    {formatTs(alert.created_at)}
-                  </span>
-                </div>
-                <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--text-secondary, #cbd5e1)' }}>
-                  {alert.summary}
-                </p>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div
-            style={{
-              padding: 24,
-              textAlign: 'center',
-              color: 'var(--text-secondary, #94a3b8)',
-              background: 'var(--card-bg, #1a1b26)',
-              borderRadius: 8,
-              border: '1px solid var(--border-color, #2f354a)',
-              fontSize: 13,
-            }}
-          >
-            🎉 暂无告警记录，智能体队友全天候守护中。
-          </div>
         )}
+
+        {patrolResult && (
+          <section
+            className={`guard-card guard-patrol ${patrolResult.is_healthy ? 'is-ok' : 'is-warn'}`}
+            aria-labelledby="guard-patrol-title"
+            aria-live="polite"
+          >
+            <div className="guard-card-head">
+              <h3 id="guard-patrol-title" className="guard-card-title">
+                {patrolResult.is_healthy ? '巡检完成：一切正常' : `巡检发现 ${patrolResult.alerts.length} 个问题`}
+              </h3>
+              <span className="guard-card-head-side">
+                <time className="guard-muted" dateTime={patrolResult.timestamp} title={absoluteTime(patrolResult.timestamp)}>
+                  {relativeTime(patrolResult.timestamp)}
+                </time>
+                <button type="button" className="guard-btn guard-btn-small guard-btn-quiet" onClick={() => setPatrolResult(null)}>
+                  关闭
+                </button>
+              </span>
+            </div>
+            {patrolResult.alerts.length > 0 && (
+              <ul className="guard-alert-list">
+                {patrolResult.alerts.map((alert, idx) => (
+                  <AlertItem
+                    key={alert.fingerprint || idx}
+                    alert={alert}
+                    muted={muted.includes(alert.source)}
+                    busy={actionBusy}
+                    onMute={(source) => void handleAction('mute', source)}
+                    onSendToChat={onSendToChat}
+                  />
+                ))}
+              </ul>
+            )}
+            {patrolResult.suppressed.length > 0 && (
+              <p className="guard-muted">另有 {patrolResult.suppressed.length} 个问题来自已静音的来源，没有列出。</p>
+            )}
+          </section>
+        )}
+
+        <section className="guard-card" aria-labelledby="guard-teammate-alerts-title">
+          <div className="guard-card-head">
+            <h3 id="guard-teammate-alerts-title" className="guard-card-title">最近告警</h3>
+            {(status?.total_alerts_count ?? 0) > 0 && <span className="guard-count">累计 {status?.total_alerts_count} 次</span>}
+          </div>
+          {!status ? (
+            <p className="guard-empty">{loading ? '加载中…' : '暂时读取不到告警记录。'}</p>
+          ) : alerts.length > 0 ? (
+            <ul className="guard-alert-list">
+              {alerts.map((alert, idx) => (
+                <AlertItem
+                  key={`${alert.fingerprint}-${alert.created_at ?? idx}`}
+                  alert={alert}
+                  muted={muted.includes(alert.source)}
+                  busy={actionBusy}
+                  onMute={(source) => void handleAction('mute', source)}
+                  onSendToChat={onSendToChat}
+                />
+              ))}
+            </ul>
+          ) : (
+            <p className="guard-empty">最近没有告警，一切正常。</p>
+          )}
+        </section>
+
+        <section className="guard-section" aria-labelledby="guard-teammate-modules-title">
+          <h3 id="guard-teammate-modules-title" className="guard-section-title">巡检项目</h3>
+          <div className="guard-module-grid">
+            {modules.map((module) => {
+              const moduleMuted = module.sources.every((source) => muted.includes(source));
+              return (
+                <article key={module.key} className="guard-card guard-module">
+                  <div className="guard-module-head">
+                    <h4 className="guard-module-title">{module.title}</h4>
+                    {moduleMuted && <span className="guard-badge guard-badge-muted">已静音</span>}
+                  </div>
+                  <p className="guard-module-desc">{module.description}</p>
+                  {module.key === 'services' && services.length > 0 && (
+                    <ul className="guard-chips" aria-label="监测的服务">
+                      {services.map((service) => (
+                        <li key={service} className="guard-chip" title={service}>{SERVICE_LABELS[service] || service}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <button
+                    type="button"
+                    className="guard-btn guard-btn-small guard-module-cmd"
+                    title={SEND_HINT}
+                    onClick={() => onSendToChat?.(module.command)}
+                  >
+                    在对话中执行 <code className="guard-cmd">{module.command}</code>
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="guard-card" aria-labelledby="guard-teammate-mute-title">
+          <h3 id="guard-teammate-mute-title" className="guard-card-title">静音的告警来源</h3>
+          <p className="guard-card-desc">
+            静音后，这类问题不会再推送提醒。没有静音的问题，同一个问题 {cooldown}内也只提醒一次。
+          </p>
+          {muted.length > 0 ? (
+            <ul className="guard-chips">
+              {muted.map((source) => (
+                <li key={source} className="guard-chip guard-chip-removable">
+                  <span>{sourceLabel(source)}</span>
+                  {SOURCE_LABELS[source] && <code>{source}</code>}
+                  <button
+                    type="button"
+                    className="guard-chip-remove"
+                    disabled={actionBusy}
+                    aria-label={`取消静音 ${sourceLabel(source)}`}
+                    title="取消静音"
+                    onClick={() => void handleAction('unmute', source)}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="guard-muted">还没有静音任何来源。</p>
+          )}
+          <form className="guard-inline-form" onSubmit={submitMute}>
+            <label htmlFor="guard-mute-source" className="guard-visually-hidden">要静音的告警来源</label>
+            <input
+              id="guard-mute-source"
+              className="guard-input"
+              list="guard-mute-sources"
+              placeholder="输入告警来源，例如 host.disk"
+              value={newMuteSource}
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              onChange={(e) => setNewMuteSource(e.target.value)}
+            />
+            <datalist id="guard-mute-sources">
+              {unmutedKnown.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+            </datalist>
+            <button type="submit" className="guard-btn" disabled={!newMuteSource.trim() || actionBusy}>
+              静音
+            </button>
+          </form>
+        </section>
       </div>
     </div>
   );

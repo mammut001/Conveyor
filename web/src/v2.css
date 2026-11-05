@@ -1,11 +1,3 @@
-.stream-divider {
-  margin: 18px 0 10px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  opacity: .58;
-}
 
 
 .runtime-owner-card {
@@ -33,14 +25,6 @@
   font-size: 11px;
 }
 
-@media (max-width: 760px) {
-  .transcript-message.role-user,
-  .transcript-message.role-assistant {
-    margin-left: 0;
-    margin-right: 0;
-  }
-}
-
 /* White operator console. Keep color reserved for state and primary actions. */
 body, .app-shell, .panel, .context-panel, .composer, .event-stream { background: #fff }
 .top-actions { display: flex; align-items: center; gap: 18px }
@@ -48,12 +32,9 @@ body, .app-shell, .panel, .context-panel, .composer, .event-stream { background:
 .settings-button:hover { background: #f8fafc; border-color: #cfd6e2 }
 .session-item:hover { background: #f8fafc }
 .session-item.active { background: #f1f5f9; box-shadow: inset 0 0 0 1px #e2e8f0 }
-.event-card, .transcript-message, .runtime-owner-card, .node-card { background: #fff }
+.transcript-message, .runtime-owner-card, .node-card { background: #fff }
 .user-event { background: #f8fafc }
-.assistant-event { background: #fff; border-left-color: #2563eb }
-.system-event { color: #526071; background: #fbfcfe }
-.tool-event pre, .diff-view pre { background: #f8fafc; color: #253044 }
-.tool-icon { border-color: #d8dee8 }
+.diff-view pre { background: #f8fafc; color: #253044 }
 .mode-switch { background: #f1f5f9 }
 .mode-switch button.active { background: #fff; color: #172033; box-shadow: 0 1px 3px rgba(16,24,40,.12) }
 .composer textarea { color: #172033 }
@@ -91,16 +72,6 @@ body, .app-shell, .panel, .context-panel, .composer, .event-stream { background:
 .save-status { margin-right: auto; color: #15803d; font-size: 12px; opacity: 0 }.save-status.visible { opacity: 1 }
 .settings-loading { padding: 50px 28px; color: var(--muted); text-align: center }
 
-@media (max-width: 620px) {
-  .settings-backdrop { padding: 0; place-items: stretch }
-  .settings-sheet { width: 100%; max-height: 100vh; border-radius: 0; border: 0 }
-  .form-grid { grid-template-columns: 1fr }
-  .form-grid .wide { grid-column: auto }
-  .top-actions { gap: 8px }
-  .settings-button { padding: 7px 9px }
-}
-
-
 /* Chat-first console polish: familiar AI chat patterns with Conveyor's own warm accent. */
 :root { color-scheme: light; --bg: #f7f7f8; --panel: #fff; --panel-2: #f5f5f6; --line: #e6e7ea; --muted: #737780; --text: #26282d; --accent: #cb6849; --accent-2: #a94c34; --green: #19845d; --yellow: #a97409; --red: #c74651; --blue: #315fba; }
 body { color: var(--text); background: var(--bg); }
@@ -123,8 +94,6 @@ body { color: var(--text); background: var(--bg); }
 .panel-heading, .stream-header { min-height: 76px; padding: 15px 16px; border-bottom-color: #eceef0; }
 .panel-heading h2, .stream-header h2 { margin-top: 5px; color: #25272c; font-size: 15px; font-weight: 620; letter-spacing: -.01em; }
 .eyebrow { color: #858991; font: 10px/1.3 ui-sans-serif, sans-serif; letter-spacing: .09em; }
-.icon-button { width: 34px; height: 34px; border-color: #e1e3e7; border-radius: 10px; color: #454850; background: #fff; }
-.icon-button:hover { border-color: #d1d3d7; background: #fff; }
 .session-list { padding: 9px 8px; }
 .session-item { grid-template-columns: 7px minmax(0, 1fr); align-items: start; gap: 10px; margin-bottom: 4px; padding: 11px 10px; border-radius: 11px; }
 .session-item:hover { background: #f0f0f1; }
@@ -140,7 +109,6 @@ body { color: var(--text); background: var(--bg); }
 .queue-summary .eyebrow { margin-bottom: 8px; }
 .queue-summary div { padding: 4px 0; color: #737780; font: 11px/1.4 ui-sans-serif, sans-serif; text-transform: none; }
 .queue-summary strong { color: #454850; font-weight: 600; }
-.history-note { color: #858991; font: 10px/1.4 ui-sans-serif, sans-serif; }
 .stream-panel { min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; background: #fff; border-right: 1px solid #eceef0; }
 .stream-header { padding: 13px 24px; background: #fff; }
 .stream-header h2 { max-width: 760px; }
@@ -155,25 +123,9 @@ body { color: var(--text); background: var(--bg); }
 .status-badge.completed { border-color: #dce4f4; color: #31558f; background: #f4f7fd; }
 .status-badge.completed i { background: var(--blue); }
 .event-stream { padding: 25px max(22px, calc((100% - 780px) / 2)); background: #fff; overscroll-behavior: contain; }
-.stream-divider { display: flex; align-items: center; gap: 11px; margin: 24px 0 13px; color: #878b92; font: 10px/1.4 ui-sans-serif, sans-serif; letter-spacing: .07em; }
-.stream-divider::after { content: ""; height: 1px; flex: 1; background: #eceef0; }
-.event-card { margin-bottom: 12px; padding: 14px 16px; border: 1px solid #e9eaed; border-radius: 14px; color: #35373c; background: #fbfbfc; box-shadow: none; font-size: 13px; line-height: 1.65; }
-.event-card p { color: #35373c; }
 .user-event { width: fit-content; max-width: min(84%, 650px); margin-left: auto; border: 0; border-radius: 19px; padding: 11px 16px; color: #34363b; background: #f1f1f2; }
 .user-event p { margin: 0; }
-.assistant-event { margin: 3px 0 16px; padding: 1px 0; border: 0; border-radius: 0; background: transparent; }
-.assistant-event .event-meta { color: #858991; letter-spacing: 0; }
-.assistant-event .event-meta span { color: #303238; font: 650 12px/1.4 ui-sans-serif, sans-serif; }
-.assistant-event p { margin-top: 5px; color: #303238; }
-.system-event { border-style: solid; color: #656971; background: #fafbfc; }
-.approval-event { border-color: #f0dfb9; background: #fffaf0; }
-.tool-event { padding: 0; background: #fbfbfc; }
-.tool-event summary { grid-template-columns: 30px minmax(0, 1fr) auto 15px; padding: 12px 14px; }
-.tool-event summary strong { color: #454850; font: 550 12px/1.4 ui-sans-serif, sans-serif; }
-.tool-event summary small { color: #858991; font: 10px/1.4 ui-sans-serif, sans-serif; letter-spacing: .02em; text-transform: none; }
-.tool-event time { color: #858991; font: 10px ui-sans-serif, sans-serif; }
-.tool-icon { border-color: #e1e3e7; border-radius: 9px; color: #59616e; background: #fff; }
-.tool-event pre, .diff-view pre { border-top-color: #e9eaed; color: #46505c; background: #f7f8fa; font-size: 11px; line-height: 1.65; }
+.diff-view pre { border-top-color: #e9eaed; color: #46505c; background: #f7f8fa; font-size: 11px; line-height: 1.65; }
 .job-notice { margin-bottom: 16px; padding: 13px 15px; border: 1px solid #dbe5f4; border-radius: 13px; background: #f6f8fc; color: #505967; font-size: 12px; }
 .job-notice strong { color: #29313d; }
 .job-notice.failed { border-color: #f0d1d4; background: #fff6f6; color: #a43842; }
@@ -197,10 +149,6 @@ body { color: var(--text); background: var(--bg); }
 .key-value strong { color: #35373c; font-weight: 550; }
 .runtime-owner-card { border-color: #e7e9ed; border-radius: 11px; background: #fff; }
 .runtime-owner-card span { color: #5d626b; font-size: 10px; }
-.file-list { max-height: 160px; }
-.file-list > div { font-size: 11px; }
-.file-list code { color: #50555e; }
-.file-status { color: var(--blue); }
 .diff-view { border-color: #e3e5e9; border-radius: 10px; background: #fff; }
 .diff-view summary { color: #585d66; font: 11px ui-sans-serif, sans-serif; }
 .action-row button, .emergency { border-color: #e0e2e6; border-radius: 9px; color: #555a63; background: #fff; font: 11px ui-sans-serif, sans-serif; }
@@ -235,33 +183,11 @@ button, input, textarea { transition: border-color .16s ease, background-color .
 button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid rgba(203, 104, 73, .28); outline-offset: 2px; }
 @media (max-width: 1100px) { .workspace { grid-template-columns: 220px minmax(0, 1fr) 270px; } .context-section { padding-left: 13px; padding-right: 13px; } }
 @media (max-width: 820px) {
-  .app-shell { height: auto; min-height: 100dvh; overflow: visible; }
-  .workspace { height: auto; display: flex; flex-direction: column; }
-  .sessions-panel { order: 0; display: block; }
-  .panel-heading { min-height: 64px; }
-  .session-list { display: flex; gap: 7px; overflow-x: auto; padding: 8px; }
   .session-item { min-width: 220px; margin-bottom: 0; }
-  .queue-summary { display: none; }
-  .stream-panel { order: 1; min-height: 72vh; grid-template-rows: auto minmax(360px, 1fr) auto; border-right: 0; }
-  .context-panel { order: 2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; border-top: 1px solid #e9eaed; }
-  .composer { position: sticky; bottom: 10px; }
 }
 @media (max-width: 560px) {
-  .topbar { padding: 0 13px; }
-  .top-status { font-size: 10px; }
-  .workspace { min-width: 0; }
-  .stream-header { min-height: 70px; padding: 12px 14px; }
-  .stream-header h2 { max-width: 230px; }
-  .event-stream { padding: 18px 13px; }
-  .transcript-message.role-user, .user-event { max-width: 92%; }
-  .context-panel { display: block; }
-  .composer { grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; width: calc(100% - 20px); margin: 8px auto 12px; padding: 8px 9px; border-radius: 17px; }
   .mode-switch { grid-column: auto; justify-self: start; }
-  .composer textarea { grid-column: auto; grid-row: auto; min-height: 40px; padding: 5px 3px; font-size: 13px; }
-  .send-button { grid-column: auto; grid-row: auto; min-height: 34px; padding: 7px 9px; }
   .composer::after { font-size: 9px; }
-  .top-actions { gap: 7px; }
-  .settings-button { padding: 7px 9px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
 
@@ -287,45 +213,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 }
 .action-row { flex-wrap: wrap; }
 
-@media (max-width: 820px) {
-  /* Give the conversation its own scroll area so the prompt never covers a message. */
-  .stream-panel {
-    height: calc(100dvh - 210px);
-    min-height: min(520px, calc(100dvh - 190px));
-    flex: none;
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr) auto;
-  }
-  .event-stream { min-height: 0; padding-bottom: 24px; }
-  .composer {
-    position: relative;
-    bottom: auto;
-    margin-bottom: max(12px, env(safe-area-inset-bottom, 0px));
-  }
-}
-
-@media (max-width: 560px) {
-  .event-stream { padding-bottom: 24px; }
-  .composer { padding-bottom: calc(9px + env(safe-area-inset-bottom, 0px)); }
-}
-
 @media (max-width: 360px) {
-  .topbar { gap: 8px; }
-  .brand small { display: none; }
-  .top-actions { flex: none; gap: 6px; }
   .settings-button {
-    display: grid;
-    width: 36px;
-    min-width: 36px;
-    height: 36px;
     place-items: center;
-    padding: 0;
-    font-size: 0;
   }
-  .settings-button::before { content: "⚙"; font-size: 15px; }
-  .top-status { display: none; }
-  .stream-header > div { min-width: 0; flex: 1; }
-  .stream-header h2 { max-width: 100%; }
+  .stream-header > div { min-width: 0; }
 }
 
 .host-screen-card {
@@ -818,15 +710,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   color: #df7a4e;
 }
 
-.tool-job-pill {
-  padding: 2px 7px;
-  border-radius: 6px;
-  background: #edeef2;
-  color: #636873;
-  font-family: ui-monospace, monospace;
-  font-size: 10.5px;
-}
-
 .expand-hint {
   margin-left: auto;
   font-size: 11px;
@@ -1017,8 +900,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   color: #1d4ed8;
   background: #eff6ff;
 }
-
-
 
 /* Connectors Panel styles */
 .connectors-panel {
@@ -1526,7 +1407,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .agent-item-text { display: grid; flex: 1; gap: 3px; min-width: 0; }
 .agent-item-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .agent-item-title strong { overflow: hidden; color: #25272c; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.agent-tag { flex: none; max-width: 45%; overflow: hidden; padding: 1px 7px; border-radius: 6px; background: #e4e5e8; color: #6b7078; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-item small { overflow: hidden; color: #858991; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-item small.waiting { color: #b4540a; font-weight: 550; }
 .agent-status-dot { position: absolute; top: 50%; right: 34px; width: 9px; height: 9px; border-radius: 50%; transform: translateY(-50%); }

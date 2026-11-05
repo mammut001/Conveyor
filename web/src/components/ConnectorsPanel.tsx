@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { formatWhen, friendlyError } from '../ux/knowledgeKit';
+
+const STATUS_LABEL: Record<string, string> = {
+  ok: '正常', error: '出错', config_error: '配置有误', disabled: '已停用', unknown: '未检查',
+};
 
 export type ToolItem = {
   name: string;
@@ -57,7 +62,7 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
       }
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
-        throw new Error(errBody.error || `Failed to load servers (${res.status})`);
+        throw new Error(errBody.error || `HTTP ${res.status}`);
       }
       const data = (await res.json()) as ServersResponse;
       if (gen !== fetchGen.current) return;
@@ -66,7 +71,7 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
       setError('');
     } catch (err) {
       if (gen !== fetchGen.current) return;
-      setError(err instanceof Error ? err.message : 'Failed to load MCP servers');
+      setError(friendlyError(err, '没能读取 MCP 连接器，请稍后重试').message);
     } finally {
       if (gen === fetchGen.current) {
         setLoading(false);
@@ -102,19 +107,19 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
         if (res.status === 502) {
           setActionError((prev) => ({
             ...prev,
-            [serverName]: body.error || 'Failed to connect to MCP server',
+            [serverName]: body.error ? `连不上这个 MCP 服务：${body.error}` : '连不上这个 MCP 服务',
           }));
         }
       } else {
         setActionError((prev) => ({
           ...prev,
-          [serverName]: body.error || `Refresh failed (${res.status})`,
+          [serverName]: body.error ? `刷新失败：${body.error}` : `刷新失败（HTTP ${res.status}）`,
         }));
       }
     } catch (err) {
       setActionError((prev) => ({
         ...prev,
-        [serverName]: err instanceof Error ? err.message : 'Network error during refresh',
+        [serverName]: friendlyError(err, '刷新时网络出错，请重试').message,
       }));
     } finally {
       setRefreshing((prev) => ({ ...prev, [serverName]: false }));
@@ -137,7 +142,7 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
       if (!res.ok) {
         setActionError((prev) => ({
           ...prev,
-          [serverName]: body.error || `Toggle failed (${res.status})`,
+          [serverName]: body.error ? `切换失败：${body.error}` : `切换失败（HTTP ${res.status}）`,
         }));
         return;
       }
@@ -147,7 +152,7 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
     } catch (err) {
       setActionError((prev) => ({
         ...prev,
-        [serverName]: err instanceof Error ? err.message : 'Network error during toggle',
+        [serverName]: friendlyError(err, '切换时网络出错，请重试').message,
       }));
     } finally {
       setToggling((prev) => ({ ...prev, [serverName]: false }));
@@ -158,7 +163,7 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
     return (
       <div className="connectors-panel">
         <div className="connectors-disabled-banner">
-          MCP connectors are disabled. Set <code>CONVEYOR_MCP_ENABLED=true</code> in your environment to enable them.
+          MCP 连接器未开启。
         </div>
       </div>
     );
@@ -168,20 +173,20 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
     <div className="connectors-panel">
       {configPath && (
         <div className="connectors-config-hint">
-          <strong>Configuration file:</strong> <code>{configPath}</code>
-          <p className="connectors-config-note">Edit the JSON file to add or configure MCP servers (up to 20 servers).</p>
+          <strong>配置文件：</strong> <code>{configPath}</code>
+          <p className="connectors-config-note">在这个 JSON 文件里添加或修改 MCP 服务（最多 20 个）。</p>
         </div>
       )}
 
       {error && <div className="error-banner">{error}</div>}
 
       {loading && servers.length === 0 ? (
-        <div className="connectors-loading">Loading MCP servers…</div>
+        <div className="connectors-loading">加载中…</div>
       ) : servers.length === 0 ? (
         <div className="connectors-empty">
-          <p>No MCP servers configured yet.</p>
+          <p>还没有配置 MCP 服务。</p>
           <p className="connectors-secondary">
-            Add server entries to <code>{configPath || 'mcp_servers.json'}</code> to expose tools to the chat tier.
+            在 <code>{configPath || 'mcp_servers.json'}</code> 里添加服务后，对话就能使用它们的工具。
           </p>
         </div>
       ) : (
@@ -198,7 +203,7 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
                       <h3 className="connectors-server-name">{server.name}</h3>
                       <span className="connectors-transport-badge">{server.transport}</span>
                       <span className={`connectors-status-badge status-${server.status}`}>
-                        {server.status}
+                        {STATUS_LABEL[server.status] || server.status}
                       </span>
                     </div>
                     <div className="connectors-target-row" title={server.target}>
@@ -213,7 +218,7 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
                       disabled={toggling[server.name]}
                       onClick={() => void handleToggle(server.name, server.enabled)}
                     >
-                      {toggling[server.name] ? 'Saving…' : server.enabled ? 'Enabled' : 'Disabled'}
+                      {toggling[server.name] ? '保存中…' : server.enabled ? '已启用' : '已停用'}
                     </button>
                     <button
                       type="button"
@@ -221,7 +226,7 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
                       disabled={refreshing[server.name]}
                       onClick={() => void handleRefresh(server.name)}
                     >
-                      {refreshing[server.name] ? 'Refreshing…' : 'Refresh'}
+                      {refreshing[server.name] ? '刷新中…' : '刷新'}
                     </button>
                   </div>
                 </div>
@@ -234,10 +239,10 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
 
                 <div className="connectors-tools-section">
                   <div className="connectors-tools-header">
-                    <h4>Discovered Tools ({server.tool_count})</h4>
+                    <h4>发现的工具（{server.tool_count}）</h4>
                     {server.checked_at && (
                       <span className="connectors-checked-at">
-                        Checked {new Date(server.checked_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {formatWhen(server.checked_at)} 检查过
                       </span>
                     )}
                   </div>
@@ -245,8 +250,8 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
                   {server.tools.length === 0 ? (
                     <div className="connectors-tools-empty">
                       {server.status === 'unknown'
-                        ? 'Not checked yet. Click "Refresh" to discover tools.'
-                        : 'No tools discovered for this server.'}
+                        ? '还没检查过。点“刷新”查找它提供的工具。'
+                        : '这个服务没有提供工具。'}
                     </div>
                   ) : (
                     <div className="connectors-tools-table">
@@ -261,18 +266,18 @@ export function ConnectorsPanel({ token }: ConnectorsPanelProps) {
                                 tool.read_only ? 'pill-read' : 'pill-write'
                               }`}
                             >
-                              {tool.read_only ? 'Read' : 'Approval required'}
+                              {tool.read_only ? '只读' : '需要批准'}
                             </span>
                             <span
                               className={`connectors-pill ${
                                 tool.exposed ? 'pill-exposed' : 'pill-blocked'
                               }`}
                             >
-                              {tool.exposed ? 'Allowlisted' : 'Not exposed'}
+                              {tool.exposed ? '已允许' : '未开放'}
                             </span>
                           </div>
                           <div className="connectors-tool-desc" title={tool.description}>
-                            {tool.description || <span className="connectors-muted">No description</span>}
+                            {tool.description || <span className="connectors-muted">没有说明</span>}
                           </div>
                         </div>
                       ))}

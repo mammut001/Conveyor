@@ -1,0 +1,608 @@
+/* UX layer (guard). Loaded after the legacy layers (styles, v2, primary, takeover, workflows), so rules here win at equal specificity. */
+
+/* 密钥 · 网站授权 · 值守 — one light page frame shared by the three panels.
+   Every selector is prefixed .guard-* so nothing here leaks into other views. */
+
+.guard-page {
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  padding: 24px clamp(16px, 3vw, 32px) 48px;
+  background: #f5f6f7;
+  color: #1f2328;
+  font-size: 14px;
+  line-height: 1.55;
+  container: guard / inline-size;
+}
+
+.guard-page *,
+.guard-page *::before,
+.guard-page *::after { box-sizing: border-box; }
+
+/* Zero-specificity resets so the component classes below always win. */
+:where(.guard-page, .guard-dialog) :where(h3, h4, p, ul, pre) { margin: 0; }
+:where(.guard-page, .guard-dialog) :where(button, input, select) { font: inherit; }
+:where(.guard-page) :where(code) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.guard-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.guard-intro { color: #4b5563; font-size: 14px; line-height: 1.6; }
+.guard-muted { color: #6b7280; font-size: 13px; line-height: 1.55; }
+.guard-sub { display: block; margin-top: 2px; color: #6b7280; font-size: 12px; line-height: 1.5; }
+.guard-tech {
+  display: block;
+  margin-top: 2px;
+  color: #6b7280;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+.guard-privacy { margin-top: 14px; color: #6b7280; font-size: 12px; line-height: 1.5; }
+
+.guard-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- Cards and headings ---------- */
+
+.guard-card {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.guard-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+.guard-card-head:last-child { margin-bottom: 0; }
+.guard-card-head-side { display: inline-flex; align-items: center; gap: 8px; }
+
+.guard-card-title { color: #1f2328; font-size: 15px; font-weight: 600; line-height: 1.4; }
+.guard-card > .guard-card-title { margin-bottom: 8px; }
+.guard-card > .guard-card-title + .guard-form { margin-top: 10px; }
+.guard-card-desc { margin-bottom: 14px; color: #6b7280; font-size: 13px; line-height: 1.55; }
+.guard-card-head + .guard-card-desc { margin-top: -6px; }
+.guard-count { color: #6b7280; font-size: 13px; white-space: nowrap; }
+
+.guard-section-title { margin: 4px 0 10px; color: #1f2328; font-size: 15px; font-weight: 600; }
+
+.guard-empty { padding: 28px 12px; color: #6b7280; font-size: 14px; text-align: center; }
+div.guard-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+
+/* ---------- Status header (网站授权 / 值守) ---------- */
+
+.guard-status-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.guard-status-card.is-danger { border-color: #f4c7c2; background: #fffbfa; }
+.guard-status-card.is-warn { border-color: #f3d9b1; background: #fffcf5; }
+.guard-status-main { flex: 1 1 300px; min-width: 0; }
+.guard-status-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #1f2328;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.guard-status-main .guard-muted { margin-top: 4px; }
+.guard-status-card.is-danger .guard-status-title { color: #b42318; }
+
+.guard-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9ca3af;
+  box-shadow: 0 0 0 4px rgba(156, 163, 175, .18);
+}
+.guard-dot.is-ok { background: #15803d; box-shadow: 0 0 0 4px rgba(21, 128, 61, .14); }
+.guard-dot.is-warn { background: #b54708; box-shadow: 0 0 0 4px rgba(181, 71, 8, .14); }
+.guard-dot.is-danger { background: #b42318; box-shadow: 0 0 0 4px rgba(180, 35, 24, .14); }
+
+.guard-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.guard-messages { display: flex; flex-direction: column; gap: 8px; }
+
+/* ---------- Buttons ---------- */
+
+.guard-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2328;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.guard-btn:hover:not(:disabled) { border-color: #b9c0cb; background: #f9fafb; }
+.guard-btn:disabled { opacity: .5; cursor: not-allowed; }
+.guard-btn:focus-visible,
+.guard-chip-remove:focus-visible,
+.guard-alert-details > summary:focus-visible {
+  outline: 3px solid rgba(189, 92, 64, .3);
+  outline-offset: 2px;
+}
+.guard-btn-small { min-height: 32px; padding: 4px 10px; font-size: 13px; }
+
+.guard-btn-primary { border-color: #bd5c40; background: #bd5c40; color: #fff; }
+.guard-btn-primary:hover:not(:disabled) { border-color: #a94c34; background: #a94c34; }
+
+.guard-btn-danger { border-color: #f1b8b1; color: #b42318; }
+.guard-btn-danger:hover:not(:disabled) { border-color: #b42318; background: #fef3f2; }
+
+.guard-btn-danger-solid { border-color: #b42318; background: #b42318; color: #fff; }
+.guard-btn-danger-solid:hover:not(:disabled) { border-color: #912018; background: #912018; }
+
+.guard-btn-quiet { border-color: transparent; background: transparent; color: #6b7280; }
+.guard-btn-quiet:hover:not(:disabled) { border-color: transparent; background: #eef0f3; color: #1f2328; }
+
+.guard-cmd { color: #6b7280; font-size: 12px; font-weight: 400; }
+.guard-btn-primary .guard-cmd { color: inherit; }
+
+/* ---------- Feedback lines ---------- */
+
+.guard-feedback {
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.guard-feedback-ok { border-color: #c6ecd4; background: #ecfdf3; color: #15803d; }
+.guard-feedback-error { border-color: #f4c7c2; background: #fef3f2; color: #b42318; }
+.guard-feedback code { font-size: 12px; }
+.guard-card > [aria-live] { margin-bottom: 12px; }
+
+/* ---------- Badges and chips ---------- */
+
+.guard-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 22px;
+  white-space: nowrap;
+}
+.guard-badge-ok { background: #ecfdf3; color: #15803d; }
+.guard-badge-danger { background: #fef3f2; color: #b42318; }
+.guard-badge-muted { background: #f2f4f7; color: #6b7280; }
+.guard-sev-critical { background: #fef3f2; color: #b42318; }
+.guard-sev-warning { background: #fffaeb; color: #b54708; }
+.guard-sev-info { background: #f2f4f7; color: #475467; }
+
+.guard-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0; list-style: none; }
+.guard-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  max-width: 100%;
+  padding: 2px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  background: #f9fafb;
+  color: #374151;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.guard-chip code { color: #6b7280; font-size: 12px; }
+.guard-chip-removable { padding-right: 3px; }
+.guard-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #6b7280;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.guard-chip-remove:hover:not(:disabled) { background: #fee4e2; color: #b42318; }
+.guard-chip-remove:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ---------- Forms ---------- */
+
+.guard-form { display: flex; flex-direction: column; gap: 16px; max-width: 560px; }
+.guard-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.guard-field > label { color: #1f2328; font-size: 14px; font-weight: 500; }
+.guard-hint { color: #6b7280; font-size: 12px; line-height: 1.5; }
+.guard-field-error { color: #b42318; font-size: 12px; line-height: 1.5; }
+
+.guard-input,
+.guard-select {
+  min-width: 0;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2328;
+  font-size: 14px;
+}
+.guard-input { width: 100%; min-height: 40px; padding: 8px 12px; }
+.guard-input-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0; }
+.guard-input::placeholder { color: #9ca3af; font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.guard-input:focus,
+.guard-select:focus {
+  outline: none;
+  border-color: #bd5c40;
+  box-shadow: 0 0 0 3px rgba(189, 92, 64, .15);
+}
+.guard-input[aria-invalid="true"] { border-color: #b42318; }
+.guard-input[aria-invalid="true"]:focus { box-shadow: 0 0 0 3px rgba(180, 35, 24, .14); }
+
+.guard-input-group { display: flex; gap: 8px; min-width: 0; }
+.guard-input-group .guard-input { flex: 1 1 auto; }
+.guard-input-toggle { flex: none; min-width: 64px; min-height: 40px; }
+
+.guard-form-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.guard-form-footer > .guard-btn-primary { min-width: 96px; }
+.guard-form-feedback { flex: 1 1 240px; min-width: 0; }
+
+.guard-select { min-height: 32px; padding: 4px 8px; font-size: 13px; cursor: pointer; }
+.guard-select-label { display: inline-flex; align-items: center; gap: 6px; color: #6b7280; font-size: 13px; white-space: nowrap; }
+
+.guard-inline-form { display: flex; gap: 8px; max-width: 480px; margin-top: 14px; }
+.guard-inline-form .guard-input { flex: 1 1 auto; }
+
+/* ---------- Inline confirmation (delete / revoke) ---------- */
+
+.guard-inline-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 12px 14px;
+  border: 1px solid #f4c7c2;
+  border-radius: 8px;
+  background: #fef3f2;
+  color: #7a271a;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.guard-inline-confirm > p { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
+.guard-inline-confirm-actions { display: flex; flex: none; gap: 8px; }
+
+/* ---------- 密钥 list ---------- */
+
+.guard-secret-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: 16px;
+  padding: 0;
+  list-style: none;
+}
+.guard-secret-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: subgrid;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 12px 0;
+  border-top: 1px solid #f0f1f3;
+}
+.guard-secret-row:first-child { padding-top: 4px; border-top: 0; }
+.guard-secret-row:last-child { padding-bottom: 0; }
+.guard-secret-main { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
+.guard-secret-name { color: #1f2328; font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.guard-secret-row.is-removed .guard-secret-name { color: #6b7280; font-weight: 400; }
+.guard-secret-time { color: #6b7280; font-size: 13px; white-space: nowrap; }
+.guard-row-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* Always the last column, also on a deleted key that has no time (重新填写 lines up with 更换). */
+.guard-secret-row > .guard-row-actions { grid-column: -2 / -1; }
+.guard-secret-row > .guard-inline-confirm { grid-column: 1 / -1; }
+
+/* ---------- Tables (网站授权) ---------- */
+
+.guard-table-wrap { min-width: 0; overflow-x: auto; }
+.guard-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.guard-table th {
+  padding: 8px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
+}
+.guard-table td {
+  padding: 12px;
+  border-bottom: 1px solid #f0f1f3;
+  color: #1f2328;
+  vertical-align: top;
+}
+.guard-table th:first-child,
+.guard-table td:first-child { padding-left: 4px; }
+.guard-table tbody tr:last-child td { border-bottom: 0; }
+.guard-table tr.is-confirming td { border-bottom: 0; }
+.guard-table tr.guard-confirm-row td { padding: 0 4px 14px; }
+.guard-table tr.guard-confirm-row:not(:last-child) td { border-bottom: 1px solid #f0f1f3; }
+
+.guard-cell-host { font-weight: 500; white-space: nowrap; }
+.guard-unknown { color: #6b7280; font-weight: 400; }
+.guard-cell-site { width: 40%; min-width: 180px; }
+.guard-host { display: block; font-weight: 500; white-space: nowrap; }
+.guard-path {
+  display: block;
+  margin-top: 2px;
+  color: #4b5563;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+.guard-cell-perm { min-width: 120px; }
+.guard-cell-approver { white-space: nowrap; }
+.guard-fingerprint { color: #6b7280; font-size: 12px; }
+.guard-cell-time { color: #4b5563; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.guard-cell-expiry { white-space: nowrap; }
+.guard-cell-actions { width: 1%; text-align: right; white-space: nowrap; }
+.guard-cell-outcome { white-space: nowrap; }
+.guard-sub code { font-size: 12px; }
+
+/* Narrow panels: the tables become stacked records instead of scrolling sideways. */
+@container guard (max-width: 640px) {
+  .guard-table,
+  .guard-table tbody,
+  .guard-table tr,
+  .guard-table td { display: block; width: 100%; }
+  .guard-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .guard-table tr { padding: 12px 0; border-bottom: 1px solid #f0f1f3; }
+  .guard-table tbody tr:last-child { padding-bottom: 0; border-bottom: 0; }
+  .guard-table tbody tr:first-child { padding-top: 4px; }
+  .guard-table td,
+  .guard-table td:first-child { min-width: 0; padding: 0; border: 0; }
+  .guard-table .guard-cell-host,
+  .guard-table .guard-host { white-space: normal; overflow-wrap: anywhere; }
+  .guard-table .guard-path { overflow-wrap: anywhere; }
+  .guard-table tr.is-confirming { border-bottom: 0; }
+  .guard-table tr.guard-confirm-row td { padding: 0; border: 0; }
+
+  /* 已批准的网站: host + 撤销 on top, then the details with small labels. */
+  .guard-grants-table tr:not(.guard-confirm-row) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
+  }
+  .guard-grants-table .guard-cell-site { grid-column: 1; grid-row: 1; width: auto; margin-bottom: 4px; }
+  .guard-grants-table .guard-cell-site .guard-host { font-weight: 600; }
+  .guard-grants-table .guard-cell-actions { grid-column: 2; grid-row: 1; width: auto; }
+  .guard-grants-table .guard-cell-perm,
+  .guard-grants-table .guard-cell-expiry,
+  .guard-grants-table .guard-cell-approver {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: 76px minmax(0, 1fr);
+    gap: 8px;
+    white-space: normal;
+  }
+  .guard-grants-table .guard-cell-perm::before,
+  .guard-grants-table .guard-cell-expiry::before,
+  .guard-grants-table .guard-cell-approver::before {
+    content: attr(data-label);
+    color: #6b7280;
+    font-size: 12px;
+    line-height: 21px;
+  }
+  .guard-grants-table td > .guard-sub { grid-column: 2; margin-top: 0; }
+
+  /* 最近访问记录: time + result on one line, then site, then the explanation. */
+  .guard-journal-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+  }
+  .guard-journal-table .guard-cell-time { grid-column: 1; grid-row: 1; align-self: center; font-size: 13px; }
+  .guard-journal-table .guard-cell-outcome { grid-column: 2; grid-row: 1; width: auto; }
+  .guard-journal-table .guard-cell-host { grid-column: 1 / -1; }
+  .guard-journal-table .guard-cell-reason { grid-column: 1 / -1; color: #4b5563; font-size: 13px; }
+}
+
+@container guard (max-width: 560px) {
+  .guard-secret-list { display: block; }
+  .guard-secret-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; }
+  .guard-secret-main { grid-column: 1 / -1; }
+  .guard-secret-time { grid-column: 1; grid-row: 2; white-space: normal; }
+  .guard-secret-row > .guard-row-actions { grid-column: 2; grid-row: 2; }
+  .guard-card-head .guard-select-label { width: 100%; }
+}
+
+/* ---------- 值守 ---------- */
+
+.guard-patrol.is-ok { border-color: #c6ecd4; background: #f6fef9; }
+.guard-patrol.is-ok .guard-card-title { color: #15803d; }
+.guard-patrol.is-warn { border-color: #f3d9b1; background: #fffcf5; }
+.guard-patrol.is-warn .guard-card-title { color: #b54708; }
+.guard-patrol > .guard-muted { margin-top: 10px; }
+
+.guard-alert-list { display: flex; flex-direction: column; gap: 10px; padding: 0; list-style: none; }
+.guard-alert {
+  min-width: 0;
+  padding: 12px 14px 12px 16px;
+  border: 1px solid #e5e7eb;
+  border-left: 3px solid #98a2b3;
+  border-radius: 8px;
+  background: #fff;
+}
+.guard-alert.is-critical { border-left-color: #b42318; }
+.guard-alert.is-warning { border-left-color: #b54708; }
+.guard-alert-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
+.guard-alert-title { min-width: 0; color: #1f2328; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.guard-alert-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  color: #6b7280;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.guard-alert-meta .guard-alert-mute { margin: -4px -6px -4px 0; padding: 4px 8px; font-size: 12px; }
+.guard-alert-summary {
+  display: -webkit-box;
+  margin-top: 6px;
+  overflow: hidden;
+  color: #374151;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.guard-alert-summary code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #f2f4f7;
+  color: #1f2328;
+  font-size: 12px;
+}
+.guard-alert-details { margin-top: 6px; }
+.guard-alert-details > summary {
+  width: fit-content;
+  color: #6b7280;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.guard-alert-details > summary:hover { color: #1f2328; }
+.guard-alert-details pre {
+  max-height: 280px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid #eceef1;
+  border-radius: 8px;
+  background: #f7f8fa;
+  color: #374151;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.guard-alert-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.guard-alert-actions .guard-btn { max-width: 100%; white-space: normal; text-align: left; }
+
+.guard-module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.guard-module { display: flex; flex-direction: column; gap: 8px; padding: 16px; }
+.guard-module-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.guard-module-title { color: #1f2328; font-size: 15px; font-weight: 600; line-height: 1.4; }
+.guard-module-desc { flex: 1 0 auto; color: #6b7280; font-size: 13px; line-height: 1.6; }
+.guard-module-cmd { align-self: flex-start; margin-top: 4px; }
+
+/* Narrow: source and time sit under the title, the mute action on the right. */
+@container guard (max-width: 560px) {
+  .guard-alert-meta { width: 100%; margin-left: 0; }
+  .guard-alert-meta .guard-alert-mute,
+  .guard-alert-meta .guard-badge { margin-left: auto; }
+}
+
+/* ---------- Kill-switch dialog ---------- */
+
+.guard-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-width: none;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: #fff;
+  color: #1f2328;
+  box-shadow: 0 24px 48px rgba(16, 24, 40, .18);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.guard-dialog::backdrop { background: rgba(17, 24, 39, .45); }
+.guard-dialog-body { padding: 24px; }
+.guard-dialog-title { margin-bottom: 10px; color: #1f2328; font-size: 18px; font-weight: 600; line-height: 1.4; }
+.guard-dialog-text { color: #4b5563; }
+.guard-dialog-text p { margin-bottom: 6px; }
+.guard-dialog-text ul { padding-left: 1.2em; }
+.guard-dialog-text li + li { margin-top: 4px; }
+.guard-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+/* ---------- Phone widths and touch screens ---------- */
+
+@media (max-width: 760px), (pointer: coarse) {
+  .guard-btn,
+  .guard-btn-small,
+  .guard-input-toggle { min-height: 40px; }
+  .guard-input { min-height: 44px; font-size: 16px; }
+  .guard-select { min-height: 40px; font-size: 16px; }
+  .guard-chip-removable { min-height: 40px; }
+  .guard-chip-remove { width: 36px; height: 36px; }
+}
+
+@media (max-width: 760px) {
+  .guard-page { padding: 16px 16px 32px; }
+  .guard-stack { gap: 12px; }
+  .guard-card { padding: 16px; }
+  .guard-module { padding: 14px; }
+  .guard-status-card .guard-actions { width: 100%; }
+  .guard-status-card .guard-actions .guard-btn { flex: 1 1 calc(50% - 4px); }
+  .guard-module-grid { grid-template-columns: minmax(0, 1fr); }
+  .guard-inline-form { max-width: none; }
+}
+
+@media (max-width: 480px) {
+  .guard-dialog-body { padding: 20px; }
+  .guard-dialog-actions { flex-direction: column-reverse; }
+  .guard-dialog-actions .guard-btn { width: 100%; }
+  .guard-inline-confirm-actions { width: 100%; }
+  .guard-inline-confirm-actions .guard-btn { flex: 1 1 0; }
+}

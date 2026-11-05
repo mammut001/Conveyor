@@ -880,10 +880,16 @@ class TestSkillsUiReachable(unittest.TestCase):
 
     def test_skills_tab_in_app_tsx(self) -> None:
         app = (Path(__file__).resolve().parents[1] / "web" / "src" / "App.tsx").read_text(encoding="utf-8")
-        switch = app[app.index("onClick={() => setView('tasks')}"):]
-        switch = switch[: switch.index("</div>")]
-        self.assertIn("setView('skills')", switch)
-        self.assertIn("features?.skills", switch)
+        # One ordered primary navigation (top bar, phone bottom bar and Alt+number share it):
+        # 对话, 任务, 收件箱 first; skills only while its feature flag is on.
+        nav = app[app.index("const navItems = useMemo"):]
+        nav = nav[: nav.index("return items")]
+        self.assertLess(nav.index("view: 'chat'"), nav.index("view: 'tasks'"))
+        self.assertLess(nav.index("view: 'tasks'"), nav.index("view: 'inbox'"))
+        self.assertLess(nav.index("view: 'inbox'"), nav.index("view: 'skills'"))
+        self.assertIn("if (features?.skills || view === 'skills') items.push({ view: 'skills'", nav)
+        self.assertIn("mainNav.map(item => navButton(item))", app)
+        self.assertIn("bottomNav.map(item =>", app)
 
 
 if __name__ == "__main__":

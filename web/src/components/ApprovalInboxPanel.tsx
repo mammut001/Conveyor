@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { isStale } from '../approvalFreshness';
 import { OutboundDraftCard } from './OutboundDraftCard';
+import { formatDateTime, friendlyError } from '../ux/knowledgeKit';
 
 export type ApprovalInboxItem = {
   id: string;
@@ -37,16 +38,17 @@ export type ApprovalInboxPanelProps = {
 
 function formatLocalTime(val?: string | number | null) {
   if (!val) return '—';
-  const d = typeof val === 'number' ? new Date(val > 1e11 ? val : val * 1000) : new Date(val);
-  return Number.isNaN(d.valueOf())
-    ? String(val)
-    : d.toLocaleString([], {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
+  return formatDateTime(val) || String(val);
 }
+
+const SOURCE_LABEL: Record<string, string> = {
+  chat: '对话', routine: '定时任务', webhook: 'Webhook', job: '任务', telegram: 'Telegram', feishu: '飞书',
+};
+const DANGER_LABEL: Record<string, string> = { write: '会写入', write_safe: '安全写入' };
+const FIELD_LABEL: Record<string, string> = {
+  to: '收件人', subject: '主题', body: '正文', title: '标题', text: '内容', prompt: '内容',
+  number: '号码', name: '名称', cron: '运行时间（cron）',
+};
 
 function truncateStr(s: string, maxLen = 30): string {
   if (!s) return '""';
@@ -55,25 +57,25 @@ function truncateStr(s: string, maxLen = 30): string {
 }
 
 function getFieldValidationHint(field: string, value: string): string | null {
-  if (typeof value !== 'string') return 'Must be text';
+  if (typeof value !== 'string') return '必须是文字';
   const SINGLE_LINE = ['to', 'subject', 'number', 'title', 'cron', 'name'];
   if (SINGLE_LINE.includes(field)) {
-    if (value.includes('|')) return 'Cannot contain pipes (|)';
-    if (value.includes('\n') || value.includes('\r')) return 'Cannot contain newlines';
+    if (value.includes('|')) return '不能包含竖线 (|)';
+    if (value.includes('\n') || value.includes('\r')) return '不能换行';
   }
   if (field === 'prompt' && value.includes('|')) {
-    return 'Prompt cannot contain pipes (|)';
+    return '内容不能包含竖线 (|)';
   }
   if (field === 'number') {
-    if (!value.trim() || !/^\d+$/.test(value.trim())) return 'Digits only';
+    if (!value.trim() || !/^\d+$/.test(value.trim())) return '只能填数字';
   }
   if (field === 'to') {
     const parts = value.split(',').map((s) => s.trim());
-    if (!parts.length || parts.some((p) => !p)) return 'Comma-separated email addresses required';
+    if (!parts.length || parts.some((p) => !p)) return '请填写邮箱地址，多个用逗号分开';
     const emailPattern = /^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$/;
     for (const p of parts) {
       const clean = p.includes('<') && p.includes('>') ? p.replace(/^.*<([^>]+)>.*$/, '$1') : p;
-      if (!emailPattern.test(clean)) return `Invalid email: ${p}`;
+      if (!emailPattern.test(clean)) return `邮箱地址不对：${p}`;
     }
   }
   const CAPS: Record<string, number> = {
@@ -87,13 +89,13 @@ function getFieldValidationHint(field: string, value: string): string | null {
   };
   const cap = CAPS[field];
   if (cap && value.length > cap) {
-    return `Max ${cap} characters (${value.length})`;
+    return `最多 ${cap} 个字（现在 ${value.length}）`;
   }
   if (['to', 'subject', 'title', 'text', 'cron'].includes(field) && !value.trim()) {
-    return 'Cannot be empty';
+    return '不能为空';
   }
   if (field === 'prompt' && !value.trim()) {
-    return 'Cannot be empty';
+    return '不能为空';
   }
   return null;
 }
@@ -101,7 +103,7 @@ function getFieldValidationHint(field: string, value: string): string | null {
 function getDraftValidationError(draft: Record<string, string>): string | null {
   for (const [field, value] of Object.entries(draft)) {
     const hint = getFieldValidationHint(field, value);
-    if (hint) return `${field}: ${hint}`;
+    if (hint) return `${FIELD_LABEL[field] || field}：${hint}`;
   }
   return null;
 }
@@ -161,13 +163,13 @@ export function ApprovalInboxPanel({
       if (isStale(gen, fetchGen.current)) return;
       if (!res.ok) {
         if (res.status === 409) {
-          setGlobalError('Approval inbox is disabled in settings.');
+          setGlobalError('审批收件箱功能未开启。');
           setItems([]);
           onPendingCountChange?.(0);
           setLoading(false);
           return;
         }
-        throw new Error(`Failed to load approval inbox (HTTP ${res.status})`);
+        throw new Error(`HTTP ${res.status}`);
       }
       const data = await res.json();
       if (isStale(gen, fetchGen.current)) return;
@@ -178,7 +180,7 @@ export function ApprovalInboxPanel({
       setLoading(false);
     } catch (err) {
       if (isStale(gen, fetchGen.current)) return;
-      setGlobalError(err instanceof Error ? err.message : 'Error fetching approvals');
+      setGlobalError(friendlyError(err, '没能读取待批准的事项，请稍后重试').message);
       setLoading(false);
     }
   }, [token, onPendingCountChange]);
@@ -196,7 +198,7 @@ export function ApprovalInboxPanel({
   const handleApproveAsIs = async (item: ApprovalInboxItem) => {
     if (item.tool_name === 'browser.g3_dispatch' &&
         (!item.g3_preview || !item.g3_hash || !item.g3_screenshot)) {
-      setInlineErrors(prev => ({ ...prev, [item.id]: 'G3 preview unavailable; reject' }));
+      setInlineErrors(prev => ({ ...prev, [item.id]: '预览不可用，请拒绝后重新准备' }));
       return;
     }
     setBusyMap((prev) => ({ ...prev, [item.id]: true }));
@@ -224,7 +226,7 @@ export function ApprovalInboxPanel({
     } catch (err) {
       setInlineErrors((prev) => ({
         ...prev,
-        [item.id]: err instanceof Error ? err.message : 'Approval failed',
+        [item.id]: friendlyError(err, '批准没有成功，请重试').message,
       }));
     } finally {
       setBusyMap((prev) => ({ ...prev, [item.id]: false }));
@@ -281,7 +283,7 @@ export function ApprovalInboxPanel({
     } catch (err) {
       setInlineErrors((prev) => ({
         ...prev,
-        [item.id]: err instanceof Error ? err.message : 'Approval failed',
+        [item.id]: friendlyError(err, '批准没有成功，请重试').message,
       }));
     } finally {
       setBusyMap((prev) => ({ ...prev, [item.id]: false }));
@@ -312,7 +314,7 @@ export function ApprovalInboxPanel({
     } catch (err) {
       setInlineErrors((prev) => ({
         ...prev,
-        [item.id]: err instanceof Error ? err.message : 'Rejection failed',
+        [item.id]: friendlyError(err, '拒绝没有成功，请重试').message,
       }));
     } finally {
       setBusyMap((prev) => ({ ...prev, [item.id]: false }));
@@ -351,7 +353,7 @@ export function ApprovalInboxPanel({
   if (loading && items.length === 0) {
     return (
       <div style={{ padding: 24, textAlign: 'center', color: 'var(--muted)' }}>
-        Loading approvals…
+        加载中…
       </div>
     );
   }
@@ -362,7 +364,7 @@ export function ApprovalInboxPanel({
 
       {items.length === 0 && !globalError && (
         <div className="empty" style={{ padding: '36px 12px', textAlign: 'center' }}>
-          No pending approvals at this time.
+          现在没有需要你批准的事项。
         </div>
       )}
 
@@ -403,15 +405,14 @@ export function ApprovalInboxPanel({
                     borderRadius: 4,
                     fontSize: '0.75rem',
                     fontWeight: 600,
-                    textTransform: 'uppercase',
                     ...sourceBadgeStyle(item.source),
                   }}
                 >
-                  {item.source}
+                  {SOURCE_LABEL[item.source] || item.source}
                 </span>
 
                 <strong style={{ fontSize: '0.95rem' }}>
-                  {item.kind === 'tool' || item.kind === 'relay' || item.kind === 'reconciliation' ? item.tool_name : `Job ${item.action || 'Approval'}`}
+                  {item.kind === 'tool' || item.kind === 'relay' || item.kind === 'reconciliation' ? item.tool_name : item.action === 'apply' ? '应用改动' : item.action === 'discard' ? '放弃改动' : `任务${item.action ? ` ${item.action}` : '审批'}`}
                 </strong>
 
                 {item.summary && (
@@ -431,21 +432,21 @@ export function ApprovalInboxPanel({
                       border: '1px solid #e2e8f0',
                     }}
                   >
-                    {item.danger}
+                    {DANGER_LABEL[item.danger] || item.danger}
                   </span>
                 )}
               </div>
 
               <div className="memory-secondary" style={{ fontSize: '0.75rem' }}>
-                <span>Created: {formatLocalTime(item.created_at)}</span>
-                {item.expires_at ? <span> · Expires: {formatLocalTime(item.expires_at)}</span> : null}
+                <span>创建于 {formatLocalTime(item.created_at)}</span>
+                {item.expires_at ? <span> · {formatLocalTime(item.expires_at)} 过期</span> : null}
               </div>
             </div>
 
             {/* Routine details */}
             {item.routine_name && (
               <div style={{ fontSize: '0.82rem', color: '#4338ca' }}>
-                Routine: <strong>{item.routine_name}</strong>
+                定时任务：<strong>{item.routine_name}</strong>
                 {item.routine_id ? ` (#${item.routine_id})` : ''}
               </div>
             )}
@@ -462,7 +463,7 @@ export function ApprovalInboxPanel({
                   borderRadius: 6,
                 }}
               >
-                ⚠️ Triggered by an external webhook - review carefully
+                ⚠️ 由外部 Webhook 触发，请仔细核对
               </div>
             )}
 
@@ -484,21 +485,21 @@ export function ApprovalInboxPanel({
 
             {item.tool_name === 'browser.g3_dispatch' && (
               <div style={{ padding: 12, border: '2px solid #c2410c', borderRadius: 8 }}>
-                <strong>{item.kind === 'reconciliation' ? 'Uncertain submit — manual reconciliation required; never retry' : 'Independent human confirmation required (expires in 5 minutes)'}</strong>
+                <strong>{item.kind === 'reconciliation' ? '提交结果不确定，需要人工核对；不要重试' : '需要你本人单独确认（5 分钟内有效）'}</strong>
                 {!item.g3_preview || !item.g3_hash || !item.g3_screenshot ? (
-                  <p>Preview unavailable. Reject this approval and prepare again.</p>
+                  <p>预览不可用。请拒绝这次审批，再重新准备。</p>
                 ) : (
                   <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
-                    <div><strong>Action:</strong> {item.g3_preview.method} {item.g3_preview.target}</div>
-                    <div><strong>Source:</strong> {item.g3_preview.url}</div>
-                    <div><strong>Exactly transmitted fields:</strong></div>
+                    <div><strong>操作：</strong> {item.g3_preview.method} {item.g3_preview.target}</div>
+                    <div><strong>来源页面：</strong> {item.g3_preview.url}</div>
+                    <div><strong>将原样提交的字段：</strong></div>
                     <table><tbody>
                       {item.g3_preview.fields.map(([name, value], i) => (
                         <tr key={i}><th scope="row" style={{ textAlign: 'left', paddingRight: 12 }}>{name}</th><td>{value}</td></tr>
                       ))}
                     </tbody></table>
                     <div style={{ overflowWrap: 'anywhere' }}><strong>SHA-256:</strong> {item.g3_hash}</div>
-                    <img src={item.g3_screenshot} alt="G3 review screenshot captured before human approval"
+                    <img src={item.g3_screenshot} alt="批准前截取的页面截图"
                          style={{ maxWidth: '100%', maxHeight: 400, objectFit: 'contain' }} />
                   </div>
                 )}
@@ -520,7 +521,7 @@ export function ApprovalInboxPanel({
                             letterSpacing: '0.04em',
                           }}
                         >
-                          {field}
+                          {FIELD_LABEL[field] || field}
                         </span>
                         <pre
                           style={{
@@ -551,7 +552,7 @@ export function ApprovalInboxPanel({
                         textTransform: 'uppercase',
                       }}
                     >
-                      {item.kind === 'tool' ? 'Arguments' : 'Job Details'}
+                      {item.kind === 'tool' ? '参数' : '任务详情'}
                     </span>
                     <pre
                       style={{
@@ -567,14 +568,14 @@ export function ApprovalInboxPanel({
                         fontFamily: 'inherit',
                       }}
                     >
-                      {item.arg || (item.kind === 'job' ? `${item.action} job ${item.job_id}` : '—')}
+                      {item.arg || (item.kind === 'job' ? `${item.action === 'apply' ? '应用改动' : item.action === 'discard' ? '放弃改动' : item.action} · 任务 ${item.job_id}` : '—')}
                     </pre>
                   </div>
                 )}
 
                 {item.redacted && (
                   <div className="memory-secondary" style={{ fontSize: '0.78rem' }}>
-                    🔒 Content was redacted; editing is disabled to protect credentials.
+                    🔒 内容含有敏感信息已被遮盖，为保护密钥不能编辑。
                   </div>
                 )}
               </div>
@@ -598,7 +599,7 @@ export function ApprovalInboxPanel({
                             textTransform: 'uppercase',
                           }}
                         >
-                          {field}
+                          {FIELD_LABEL[field] || field}
                         </label>
                         {hint && <span className="memory-error">{hint}</span>}
                       </div>
@@ -644,7 +645,7 @@ export function ApprovalInboxPanel({
                       gap: 4,
                     }}
                   >
-                    <strong>Changed fields:</strong>
+                    <strong>改动的字段：</strong>
                     {changedFields.map((cf) => (
                       <div key={cf.field}>
                         <code>{cf.field}</code>: {truncateStr(cf.oldVal)} → {truncateStr(cf.newVal)}
@@ -681,7 +682,7 @@ export function ApprovalInboxPanel({
                     disabled={isBusy}
                     onClick={() => void handleApproveAsIs(item)}
                   >
-                    {isBusy ? 'Processing…' : 'Approve'}
+                    {isBusy ? '处理中…' : '批准'}
                   </button>
 
                   {item.editable && (
@@ -691,7 +692,7 @@ export function ApprovalInboxPanel({
                       disabled={isBusy}
                       onClick={() => startEdit(item)}
                     >
-                      Edit
+                      编辑
                     </button>
                   )}
 
@@ -702,18 +703,18 @@ export function ApprovalInboxPanel({
                       disabled={isBusy}
                       onClick={() => setConfirmRejectId(item.id)}
                     >
-                      Reject
+                      拒绝
                     </button>
                   ) : (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span className="memory-confirm-warning">Confirm reject?</span>
+                      <span className="memory-confirm-warning">确定拒绝？</span>
                       <button
                         type="button"
                         className="action-btn memory-btn-danger"
                         disabled={isBusy}
                         onClick={() => void handleReject(item)}
                       >
-                        Confirm reject
+                        确定拒绝
                       </button>
                       <button
                         type="button"
@@ -721,7 +722,7 @@ export function ApprovalInboxPanel({
                         disabled={isBusy}
                         onClick={() => setConfirmRejectId(null)}
                       >
-                        Cancel
+                        取消
                       </button>
                     </div>
                   )}
@@ -737,7 +738,7 @@ export function ApprovalInboxPanel({
                       disabled={isBusy || Boolean(draftError)}
                       onClick={() => setConfirmApproveEditedId(item.id)}
                     >
-                      Approve edited
+                      按修改后的内容批准
                     </button>
                   ) : (
                     <button
@@ -747,7 +748,7 @@ export function ApprovalInboxPanel({
                       disabled={isBusy || Boolean(draftError)}
                       onClick={() => void handleApproveEdited(item)}
                     >
-                      {isBusy ? 'Processing…' : 'Confirm approve edited'}
+                      {isBusy ? '处理中…' : '确定按修改后的内容批准'}
                     </button>
                   )}
 
@@ -757,7 +758,7 @@ export function ApprovalInboxPanel({
                     disabled={isBusy}
                     onClick={cancelEdit}
                   >
-                    Cancel
+                    取消
                   </button>
                 </div>
               )}

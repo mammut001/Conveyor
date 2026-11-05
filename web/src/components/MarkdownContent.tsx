@@ -1,46 +1,19 @@
-import { isValidElement, useEffect, useRef, useState, type ReactNode } from 'react';
+import { isValidElement, type ReactNode } from 'react';
 import Markdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-
-function CopyButton({ code }: { code: string }) {
-  const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(() => {
-    setStatus('idle');
-    return () => clearTimeout(timerRef.current);
-  }, [code]);
-
-  const handleCopy = async () => {
-    clearTimeout(timerRef.current);
-    try {
-      await navigator.clipboard.writeText(code);
-      setStatus('copied');
-    } catch {
-      setStatus('failed');
-    }
-    timerRef.current = setTimeout(() => setStatus('idle'), 2000);
-  };
-
-  return (
-    <button type="button" className="code-copy-btn" onClick={handleCopy}
-      title="Copy code to clipboard" aria-live="polite">
-      {status === 'copied' ? '✓ Copied' : status === 'failed' ? 'Copy failed' : 'Copy'}
-    </button>
-  );
-}
+import { CopyButton } from './CopyButton';
 
 function CodeBlock({ children }: { children?: ReactNode }) {
   const child = isValidElement<{ children?: ReactNode; className?: string }>(children) ? children : null;
   const raw = typeof child?.props.children === 'string' ? child.props.children : '';
   // The markdown renderer adds one terminal newline; retain all code indentation.
   const code = raw.replace(/\n$/, '');
-  const language = /(?:^|\s)language-([^\s]+)/.exec(child?.props.className || '')?.[1] || 'text';
+  const language = /(?:^|\s)language-([^\s]+)/.exec(child?.props.className || '')?.[1] || '';
   return (
     <div className="code-block-container">
       <div className="code-block-header">
-        <span className="code-lang-tag">{language}</span>
-        <CopyButton code={code} />
+        <span className="code-lang-tag">{language && language !== 'text' ? language : '代码'}</span>
+        <CopyButton text={code} className="code-copy-btn" title="复制代码" />
       </div>
       <pre className="code-block-pre"><code>{code}</code></pre>
     </div>
