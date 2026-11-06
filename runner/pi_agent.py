@@ -466,7 +466,8 @@ class PiBackend(CodexRunner):
                         if parsed.result:
                             final_text = truncate(redact_text(parsed.result), 16_000)
                         if parsed.error and not job.error:
-                            job.error = truncate(redact_text(parsed.error), 3_000)
+                            job.error = truncate(
+                                redact_text(self._explain_provider_error(parsed.error)), 3_000)
                         if parsed.kind == "tool.started":
                             streamed_text = ""
                         if parsed.kind == "assistant.delta" and parsed.progress:
@@ -556,6 +557,27 @@ class PiBackend(CodexRunner):
             job.error = "cancelled"
         elif job.return_code is not None and job.return_code < 0 and not job.error:
             job.error = "Pi process terminated unexpectedly."
+
+    def _explain_provider_error(self, error: str) -> str:
+        """Prefix a short Chinese explanation to common provider failures.
+
+        The raw provider text is kept after it: the owner needs it for the
+        provider's console, and rate-limit retry detection matches on it.
+        """
+        text = str(error or "")
+        low = text.lower()
+        provider = self.pi_provider or "provider"
+        if "402" in low or "quota" in low or "insufficient balance" in low or "余额不足" in text:
+            hint = f"模型服务额度已用完（{provider}）：请到服务商控制台充值或检查套餐后重试。"
+        elif "401" in low or "invalid api key" in low or "unauthorized" in low or "authentication" in low:
+            hint = f"模型服务鉴权失败（{provider}）：请检查 {self.pi_api_key_env} 是否正确。"
+        elif ("404" in low or "does not exist" in low) and "model" in low:
+            hint = f"模型 {self.pi_model or '(未设置)'} 不存在或无权访问（{provider}）：请检查 CONVEYOR_PI_MODEL。"
+        elif "429" in low or "rate limit" in low or "too many requests" in low:
+            hint = f"模型服务限流（{provider}）：稍后会自动重试。"
+        else:
+            return text
+        return f"{hint}\n原始信息：{text}"
 
     @staticmethod
     async def _stop_pi(process: asyncio.subprocess.Process) -> int | None:

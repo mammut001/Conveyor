@@ -899,6 +899,22 @@ class PiTimeoutStopTests(unittest.TestCase):
             self.assertIn("Timed out", job.error)
             self.assertEqual(job.return_code, -9)
 
+class PiProviderErrorTextTests(unittest.TestCase):
+    def test_common_provider_errors_get_a_chinese_hint_and_keep_the_raw_text(self) -> None:
+        from runner.operators.run import _is_rate_limited
+        with tempfile.TemporaryDirectory() as raw:
+            with patch.dict(os.environ, {"CONVEYOR_PI_PROVIDER": "stepfun", "CONVEYOR_PI_MODEL": "step-5-preview"}):
+                backend = PiBackend(_make_settings(Path(raw)))
+            quota = backend._explain_provider_error("402 You exceeded your current quota")
+            self.assertTrue(quota.startswith("模型服务额度已用完（stepfun）"))
+            self.assertIn("402 You exceeded your current quota", quota)
+            self.assertIn("STEPFUN_API_KEY", backend._explain_provider_error("401 Invalid API key"))
+            self.assertIn("step-5-preview", backend._explain_provider_error('404 The model "x" does not exist'))
+            limited = backend._explain_provider_error("429 Too Many Requests")
+            job = Job("j", JobMode.RUN, "p", "x", error=limited)
+            self.assertTrue(_is_rate_limited(backend, job))  # retry detection still sees 429
+            self.assertEqual(backend._explain_provider_error("socket hang up"), "socket hang up")
+
 
 if __name__ == "__main__":
     unittest.main()
