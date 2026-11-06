@@ -544,6 +544,13 @@ async def edit_text(
         msg = str(exc)
         if "not modified" in msg.lower():
             return True
+        if name == "RetryAfter" or "flood control" in msg.lower() or "too many requests" in msg.lower():
+            # Flood control on a progress edit only means this frame came too
+            # fast. Skip it; reporting failure latches the caller into its
+            # fallback and silences progress for the rest of the job (fast
+            # Pi tool loops hit this).
+            logger.debug("edit_progress throttled by Telegram: %s", msg)
+            return True
         logger.debug(
             "edit_progress failed (%s): %s; will fall back to send_new",
             name, msg,

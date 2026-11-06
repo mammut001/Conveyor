@@ -190,6 +190,26 @@ class TelegramChatOutboundDeadTopicTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fallback_text, truncate(PREFIX + long_text))
         self.assertLessEqual(len(fallback_text), MAX_TELEGRAM_MESSAGE)
 
+class EditFloodControlTests(unittest.TestCase):
+    def _update(self, exc):
+        from types import SimpleNamespace
+        bot = SimpleNamespace()
+
+        async def edit_message_text(**_kw):
+            raise exc
+
+        bot.edit_message_text = edit_message_text
+        return SimpleNamespace(
+            effective_message=SimpleNamespace(), effective_chat=SimpleNamespace(id=1),
+            get_bot=lambda: bot)
+
+    def test_flood_control_skips_the_frame_instead_of_breaking_progress(self) -> None:
+        import asyncio
+        from telegram.error import BadRequest, RetryAfter
+        from channel.telegram import edit_text
+        self.assertTrue(asyncio.run(edit_text(self._update(RetryAfter(5)), "10", "x")))
+        self.assertFalse(asyncio.run(edit_text(self._update(BadRequest("Message to edit not found")), "10", "x")))
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.WARNING)
