@@ -47,6 +47,10 @@ FAILURE_LIMIT = 3
 DONE_CONFIRMATIONS = 2
 CHECK_TIMEOUT_SECONDS = 900
 ITERATION_TIMEOUT_SECONDS = 2 * 3600
+# An iteration that starts right at the goal deadline still gets this much
+# grace before the driver cancels it (so it is never cancelled instantly).
+ITERATION_MIN_GRACE_SECONDS = 60.0
+GOAL_DEADLINE_ERROR = "goal deadline reached"
 TRANSIENT_RETRY_SECONDS = 120
 MAX_CHECKS = 5
 MAX_OBJECTIVE_CHARS = 4000
@@ -197,6 +201,13 @@ class GoalState:
 
     def deadline_dt(self) -> datetime:
         return datetime.fromisoformat(self.deadline)
+
+    def deadline_budget(self) -> float | None:
+        """Seconds until this goal's own ``--hours`` deadline, or None if unknown."""
+        try:
+            return (self.deadline_dt() - _now()).total_seconds()
+        except (ValueError, TypeError):
+            return None
 
 
 class GoalStore:
@@ -477,10 +488,14 @@ class GoalEngine:
             state.history.append(entry)
             state.detail = result.error[:300]
             self.store.save(state)
-            await self._safe_notify(
-                f"🎯 目标第 {state.iteration} 轮失败（{state.failures}/{FAILURE_LIMIT}）：{result.error[:200]}")
-            if state.failures < FAILURE_LIMIT:
-                await self.sleep(30)
+            if result.error != GOAL_DEADLINE_ERROR:
+                # A goal-deadline stop is not an iteration failure; the loop ends
+                # with "timeout" on the next _stop_reason check, so do not spam the
+                # owner with a "第 N 轮失败" notice or burn the retry sleep.
+                await self._safe_notify(
+                    f"🎯 目标第 {state.iteration} 轮失败（{state.failures}/{FAILURE_LIMIT}）：{result.error[:200]}")
+                if state.failures < FAILURE_LIMIT:
+                    await self.sleep(30)
             return ""
 
         state.failures = 0
@@ -612,7 +627,14 @@ class QueueDriver:
             return IterationResult(False, error=message, transient=transient)
         self.current_job_id = queued.id
         queue = get_job_queue()
-        deadline = time.monotonic() + self.iteration_timeout
+        # The iteration must not outlive the goal's own ``--hours`` deadline: a
+        # 2h iteration cap would let the last iteration run long past it.
+        remaining = state.deadline_budget()
+        goal_budget = (self.iteration_timeout if remaining is None
+                       else max(remaining, ITERATION_MIN_GRACE_SECONDS))
+        budget = min(self.iteration_timeout, goal_budget)
+        goal_limited = budget < self.iteration_timeout
+        deadline = time.monotonic() + budget
         snap: dict[str, Any] | None = None
         while True:
             snap = queue.job_snapshot(queued.id)
@@ -622,7 +644,8 @@ class QueueDriver:
                 break
             if time.monotonic() > deadline:
                 await self.cancel_current()
-                return IterationResult(False, job_id=queued.id, error="iteration timed out")
+                error = GOAL_DEADLINE_ERROR if goal_limited else "iteration timed out"
+                return IterationResult(False, job_id=queued.id, error=error)
             await asyncio.sleep(self.poll_seconds)
         self.current_job_id = ""
         await asyncio.sleep(1.0)  # let the port deliver the final message

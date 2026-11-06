@@ -214,6 +214,21 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((result.status, result.iteration), ("timeout", 0))
         self.assertEqual(driver.prompts, [])
 
+    async def test_goal_deadline_error_stops_without_failure_notice(self):
+        """A driver that ran out of goal deadline ends the goal as a timeout."""
+        start = datetime.now(timezone.utc)
+        state = make_state(self.store)
+        past = state.deadline_dt() + timedelta(seconds=1)
+        clock = iter([start, past])
+        driver = FakeDriver([IterationResult(False, error="goal deadline reached", job_id="q1")])
+        engine = engine_for(self.store, driver, now=lambda: next(clock, past))
+        result = await engine.run(state)
+        self.assertEqual((result.status, result.iteration, result.failures), ("timeout", 1, 1))
+        self.assertTrue(driver.prompts)  # the iteration really started
+        self.assertFalse(any("轮失败" in n for n in driver.notes))
+        self.assertIn("到达时间上限", driver.notes[-1])
+        self.assertEqual(self.store.load(state.id).status, "timeout")
+
     async def test_transient_does_not_consume_an_iteration(self):
         state = make_state(self.store, max_iterations=1)
         driver = FakeDriver([IterationResult(False, error="rate limit", transient=True),
@@ -430,6 +445,20 @@ class QueueDriverTests(unittest.IsolatedAsyncioTestCase):
         result = await driver.run_iteration(GoalState(id="f" * 12, scope="s", objective="x" * 8), "p")
         self.assertFalse(result.ok)
         self.assertIn("timed out", result.error)
+        queue.cancel.assert_awaited_once_with("q1")
+
+    async def test_goal_deadline_ends_the_iteration(self):
+        """A big iteration_timeout must not outlive the goal's own --hours deadline."""
+        from unittest.mock import patch
+        soon = datetime.now(timezone.utc) + timedelta(seconds=1.5)
+        state = GoalState(id="f" * 12, scope="s", objective="x" * 8,
+                          deadline=soon.isoformat(timespec="seconds"))
+        driver, queue, *_ = self._driver([{"state": "running"}] * 1000, timeout=3600.0)
+        with patch.object(goal_loop, "ITERATION_MIN_GRACE_SECONDS", 0.5):
+            result = await driver.run_iteration(state, "p")
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error, "goal deadline reached")
+        self.assertEqual(result.job_id, "q1")
         queue.cancel.assert_awaited_once_with("q1")
 
 
