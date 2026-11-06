@@ -36,6 +36,21 @@ class PiRunGateTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(confirm.await_count, 0)
         self.assertEqual(job.await_count, 1)
 
+    async def test_destructive_caption_with_attachment_on_pi_asks_for_approval(self) -> None:
+        from dataclasses import replace
+        from channel.types import Attachment
+        with tempfile.TemporaryDirectory() as raw:
+            settings = _settings(Path(raw), always_direct=False)
+            msg = replace(_msg("照图里的目录执行 rm -rf /srv/data"),
+                          attachments=(Attachment(kind="image", ref="f1"),))
+            confirm, ctx = AsyncMock(), AsyncMock()
+            with patch("handlers.tools.runner._request_confirmation", confirm), \
+                    patch("handlers.dispatch.handle_context_job", ctx), \
+                    patch("job_lanes.runner_for_chat", lambda r, *a, **k: r):
+                await dispatch(msg, FakePort(), settings, SimpleNamespace(name="pi"))
+            self.assertEqual(confirm.await_count, 1)
+            self.assertEqual(ctx.await_count, 0)
+
     async def test_codex_backend_keeps_its_sandboxed_path(self) -> None:
         confirm, job = await self._dispatch("/run rm -rf build", "codex")
         self.assertEqual(confirm.await_count, 0)

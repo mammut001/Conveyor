@@ -163,6 +163,13 @@ async def dispatch(
         return
 
     if msg.attachments:
+        if getattr(runner, "name", "") == "pi":
+            # Same approval as a plain message; the caption is the request.
+            from handlers.chat import is_destructive_request
+            if is_destructive_request(msg.text):
+                from handlers.tools.runner import _request_confirmation
+                await _request_confirmation(msg, port, settings, "pi.destructive_task", msg.text)
+                return
         await handle_context_job(msg, port, settings, runner)
         return
 
