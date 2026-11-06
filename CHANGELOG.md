@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Web Console: token-protected GET routes were readable without the token** through percent-encoded or doubled paths (`/%61pi/jobs/<id>`, `//api/...`): the auth gate checked the raw path, the router matched decoded segments. Job prompts, events and diffs, sessions, agent libraries, screenshots and artifacts were exposed to anyone who could reach the port. The gate now matches the decoded first segment.
+- **Pi's deletion approval can no longer be forged**: approval is `Job.destructive_confirmed`, set only by the approval executor; the old `[OPERATOR_CONFIRMED_DESTRUCTIVE]` text marker is stripped from every prompt (it could be typed by the user or carried in by quoted/fetched context).
+- **Destructive-request gate hardened**: a question word or an unrelated negation no longer disables the whole check; explicit commands count even inside a question; input is NFKC/zero-width normalised; added git force-push/hard-reset/branch -D, kill/pkill/systemctl stop, chmod/chown -R, mkfs, dd, crontab -r, 重置/清理/抹掉/删了/强推 and more. `/run`, `/fix`, `/deep` and image captions on the Pi backend now go through the same approval.
+- **Untrusted text stays inside its guard blocks**: a stored `</recent-chat-context>` can no longer end the session-context block early, and `/research` wraps fetched page text in `<web-evidence untrusted="true">`.
+- **Forum topics in a group no longer pose as private chats**: the owner's topic message keeps its real `chat_type` (new `owner_topic` flag for routing), so private-chat-only guards such as long-term memory still apply in a group with other members.
+
+### Fixed
+- **Hourly maintain was red on every tick**: doctor only recognised Codex `turn.completed`, never Pi's `assistant.completed`; `command_harness` expected the old `/help` banner.
+- **Pi backend**: injects the selected provider's key (`STEPFUN_API_KEY` for StepFun) instead of always `DEEPSEEK_API_KEY`, so it works under credential isolation and no longer hands a DeepSeek key to other providers (`CONVEYOR_PI_API_KEY_ENV` overrides); records token usage; shows the thinking indicator and pulses long silent tool calls; names the workspace in its system prompt; SIGTERMs pi on timeout so it can kill its tools' process groups; explains quota/auth/model/rate-limit errors in Chinese; no longer writes the `starting` placeholder as a failed job's answer.
+- **Chat tier with reasoning models**: a reply whose hidden reasoning used the whole `max_tokens` (empty content, `finish_reason=length`) is retried once with a wider budget; new `CONVEYOR_CHAT_REASONING_EFFORT`.
+- **Routing model answers in a ```json fence** are accepted (model-arbitrated routing always fell back to "ambiguous").
+- **Job queue**: `/queue resume` no longer marks a running job completed; a new submission no longer runs an older foreign job under its own chat; in-memory job handles are released.
+- **Telegram**: a flood-controlled progress edit no longer silences the rest of the job; sends to a closed/deleted forum topic fall back to the base chat; `/topics` recreates deleted topics and no longer creates duplicates when run twice.
+- **Goal mode**: iPhone smart dashes/quotes in flags are accepted and an unquoted `--check` is rejected instead of silently dropped; an iteration can no longer outlive the goal's `--hours` deadline.
+- **Doctor** checks the Pi backend (binary, `pi-agent/models.json`, key) and the chat provider (`/models` lists the configured model); agent child processes receive `NODE_EXTRA_CA_CERTS`.
+
 ### Added
 - **Goal mode** (`/goal <objective> [--hours N] [--max N] [--check "cmd"]`, `/goal status`, `/goal stop`; web chat and Telegram): an unattended harness for the Coder agent. It repeats FIX jobs in the conversation's isolated worktree, runs your `--check` commands itself after every iteration instead of trusting the agent, stops on success, no progress for 3 iterations, repeated failures, a `blocked` report, the time limit (default 8 h) or the iteration cap (default 60), never merges or deploys, and resumes after a service restart. See `docs/goal_mode.md`.
 - **Host desktop as a service** (`systemd/conveyor-host-desktop.service`, `scripts/run-host-desktop.sh`, `deploy/host-desktop-xorg.conf`): a headless X server plus the user's desktop session, started at boot and restarted if it ends, so computer use, the desktop chat window and the Live screen no longer depend on an RDP login surviving since the last reboot. Input devices are hot-plugged as before, the size is set in the unit and can be changed live, and deploys leave the unit alone. See `docs/host_desktop.md`.
