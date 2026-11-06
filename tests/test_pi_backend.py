@@ -833,6 +833,31 @@ class PiSystemPromptTests(unittest.TestCase):
             self.assertIn(f"The project workspace is {job.worktree_path}", prompt)
             self.assertIn("SAFETY POLICY", prompt)
 
+class PiProviderErrorTests(PiBackendTests):
+    def test_provider_error_with_exit_zero_writes_no_placeholder_final(self) -> None:
+        # Real pi 0.73 exits 0 when the provider answers 404 for an unknown model.
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            backend = PiBackend(settings)
+            err = '404 The model "step-nonexistent" does not exist'
+            events = [
+                {"type": "message_end", "message": {"role": "assistant", "content": [],
+                                                    "stopReason": "error", "errorMessage": err}},
+                {"type": "agent_end", "messages": [{"role": "assistant", "content": [],
+                                                    "stopReason": "error", "errorMessage": err}]},
+            ]
+            backend.pi_bin = str(_write_fake_pi_events(tmp, "fake-pi-404", events))
+            job = self._thinking_job(tmp, settings)
+
+            async def on_progress(text: str) -> None:
+                pass
+
+            asyncio.run(backend._run_codex_attempt(job, on_progress))
+            self.assertEqual(job.return_code, 0)
+            self.assertIn("does not exist", job.error)
+            self.assertFalse(job.final_message_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

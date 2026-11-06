@@ -541,7 +541,10 @@ class PiBackend(CodexRunner):
             job.final_message_path.write_text(
                 truncate(redact_text(final_text), 16_000), encoding="utf-8"
             )
-        elif job.return_code == 0:
+        elif job.return_code == 0 and not job.error and job.last_event != "starting":
+            # pi exits 0 even when the provider rejected the request (e.g. an
+            # unknown model); never record the "starting" placeholder or a
+            # half-streamed line as the final answer of a failed job.
             job.final_message_path.write_text(
                 truncate(redact_text(job.last_event or ""), 16_000), encoding="utf-8"
             )
