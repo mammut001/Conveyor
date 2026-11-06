@@ -863,7 +863,7 @@ async def exec_pi_destructive_task(
 ) -> str:
     """Execute an operator-confirmed destructive/deletion task via PiBackend."""
     import asyncio
-    from runner.pi_agent import DESTRUCTIVE_CONFIRM_TAG, PiBackend
+    from runner.pi_agent import PiBackend
     from runner.types import JobMode, JobState
 
     prompt = (arg or "").strip()
@@ -896,12 +896,14 @@ async def exec_pi_destructive_task(
         except Exception:
             pass
 
-    tagged_prompt = f"{DESTRUCTIVE_CONFIRM_TAG}\n{ctx_prefix}{prompt}"
 
     async def _noop_progress(_text: str) -> None:
         pass
 
-    job = await backend.start(JobMode.RUN, tagged_prompt, _noop_progress, **start_options)
+    job = await backend.start(
+        JobMode.RUN, f"{ctx_prefix}{prompt}", _noop_progress,
+        destructive_confirmed=True, **start_options,
+    )
     while job.state == JobState.RUNNING:
         await asyncio.sleep(0.25)
     result_text = job.summary or (f"执行失败：{job.error}" if job.error else (job.last_event or "已确认并执行完成。"))

@@ -89,18 +89,69 @@ _DESTRUCTIVE_REQUEST_RE = re.compile(
     r"|\b(?:rm|rmdir|unlink|shred|delete|remove|uninstall|drop\s+table|drop\s+database|truncate\s+table|purge|destroy|wipe|git\s+clean)\b)",
     re.IGNORECASE,
 )
-_NEGATED_DESTRUCTIVE_RE = re.compile(
-    r"(不删除|不要删除|别删除|不要删|别删|不卸载|不要卸载|\bdo\s+not\s+(?:delete|remove|rm|uninstall)\b|\bdon't\s+(?:delete|remove|rm|uninstall)\b)",
+# A negation removes only the clause it governs ("别删除日志，把 /srv/data
+# 删除掉" still deletes /srv/data): the negation phrase plus its object, up to
+# the next clause break or sequencing word.
+_NEGATED_DESTRUCTIVE_SPAN_RE = re.compile(
+    r"(?:不删除|不要删除|别删除|不要删|别删|不卸载|不要卸载|不要清空|别清空|不要重置|别重置"
+    r"|\bdo\s+not\s+(?:delete|remove|rm|uninstall|drop)\b|\bdon't\s+(?:delete|remove|rm|uninstall|drop)\b)"
+    r".*?(?=[，,。；;！!？?\n]|然后|再|并且|\band then\b|\bthen\b|$)",
     re.IGNORECASE,
 )
+# Commands and command-like phrasings that are destructive on their own. They
+# count even inside a question ("rm -rf /srv/data 然后告诉我为什么…").
+_EXPLICIT_DESTRUCTIVE_RE = re.compile(
+    r"(\b(?:rm|rmdir|unlink|shred)\s+[-/~.A-Za-z0-9_*]"
+    r"|\b(?:delete|remove|wipe|erase|purge)\s+[/~]"
+    r"|\bgit\s+push\b[^\n]*\s(?:-f|--force(?:-with-lease)?)\b|\bgit\s+push\s+-f\b"
+    r"|\bgit\s+reset\s+--hard\b|\bgit\s+branch\s+-D\b|\bgit\s+checkout\s+--\s|\bgit\s+clean\b"
+    r"|\bgit\s+stash\s+(?:drop|clear)\b"
+    r"|\bdrop\s+(?:table|database|schema)\b|\btruncate\s+(?:table\s+)?\w+\s*;|\btruncate\s+-s\b"
+    r"|\bdd\s+if=|\bmkfs(?:\.\w+)?\b|\bchmod\s+-R\b|\bchown\s+-R\b"
+    r"|\bkill\s+-9\b|\bpkill\b|\bkillall\b|\bsystemctl\s+(?:stop|disable|mask)\b"
+    r"|\bshutdown\b|\breboot\b|\bpoweroff\b|\bcrontab\s+-r\b"
+    r"|\bdocker\s+(?:system|volume|image|container)\s+prune\b"
+    r"|\bmv\s+\S+\s+/dev/null\b|移到\s*/dev/null|/dev/null\s*里"
+    r"|(?:删除|删掉|删了|清空|清除|清理|抹掉|干掉|覆盖|移除|格式化|销毁)\s*(?:一下|掉)?\s*[/~][\w./-]*"
+    r"|[/~][\w./-]+\s*(?:目录|文件夹|文件)?\s*(?:删了|删掉|删除|清空|抹掉|干掉))",
+    re.IGNORECASE,
+)
+_DESTRUCTIVE_PHRASE_RE = re.compile(
+    r"(全删了|都删了|删了\s*[/~.\w]"
+    r"|重置\s*(?:一下\s*)?(?:数据库|仓库|分支|服务器|系统|git|代码|到)|(?:数据库|仓库|分支|git\s*仓库)\s*重置"
+    r"|(?:清理|清除|覆盖|移除|抹掉|干掉).{0,12}(?:日志|数据|数据库|备份|目录|文件|磁盘|缓存|表|镜像|容器|\.env|配置)"
+    r"|用空(?:内容|白)?覆盖|改成空的"
+    r"|强推|强制推送|撤销所有.{0,6}修改|丢弃所有.{0,6}(?:修改|改动)"
+    r"|(?:停掉|关掉|停止|杀掉|kill\s*掉|干掉).{0,10}(?:服务|进程|nginx|conveyor|数据库|容器)"
+    r"|关机)",
+    re.IGNORECASE,
+)
+_ZERO_WIDTH_RE = re.compile("[​-‏⁠﻿]")
+
+
+def _normalize_request(text: str) -> str:
+    import unicodedata
+    return _ZERO_WIDTH_RE.sub("", unicodedata.normalize("NFKC", text or "")).strip()
 
 
 def is_destructive_request(text: str) -> bool:
-    """True when the user prompt requests deleting, removing, or destroying resources."""
-    raw = (text or "").strip()
-    if not raw or _QUESTION_RE.search(raw) or _NEGATED_DESTRUCTIVE_RE.search(raw):
+    """True when the user prompt requests deleting, removing, or destroying resources.
+
+    Fails toward asking: explicit commands count even inside a question, and a
+    negation only removes the clause it governs.
+    """
+    raw = _normalize_request(text)
+    if not raw:
         return False
-    return bool(_DESTRUCTIVE_REQUEST_RE.search(raw))
+    remainder = _NEGATED_DESTRUCTIVE_SPAN_RE.sub(" ", raw)
+    if _EXPLICIT_DESTRUCTIVE_RE.search(remainder):
+        return True
+    if _QUESTION_RE.search(remainder):
+        # A knowledge question ("怎么删除 git 分支") is conversation.
+        return False
+    return bool(_DESTRUCTIVE_REQUEST_RE.search(remainder) or _DESTRUCTIVE_PHRASE_RE.search(remainder))
+
+
 _TIME_SENSITIVE_RE = re.compile(
     r"(最新|今天|今日|现在|目前|当前|最近|昨天|本周|这周|今年|价格|股价|币价|汇率|新闻|天气|比分|赛果|发布了"
     r"|\b(latest|today|tonight|current(ly)?|right now|recent(ly)?|this (week|year)|news|price|weather|score)\b"

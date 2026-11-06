@@ -60,6 +60,13 @@ class JobState(str, Enum):
     CANCELLED = "cancelled"
 
 
+# Legacy text marker that once meant "the operator approved a destructive
+# action". Approval is now carried by Job.destructive_confirmed, which only the
+# approval executor sets; this string is stripped from every prompt so text the
+# user types, or context pulled into the prompt, can never claim approval.
+DESTRUCTIVE_CONFIRM_TAG = "[OPERATOR_CONFIRMED_DESTRUCTIVE]"
+
+
 @dataclass
 class Job:
     id: str
@@ -92,6 +99,9 @@ class Job:
     # id for logs/worktrees; clients correlate through this optional adapter.
     external_id: str | None = None
     worktree_created: bool = False
+    # True only when the operator approved this destructive task through the
+    # approval step (handlers/tools/executors.py). Never derived from prompt text.
+    destructive_confirmed: bool = False
 
 
 @dataclass(frozen=True)
