@@ -134,6 +134,11 @@ class Settings:
     chat_history_turns: int = 6
     chat_timeout_seconds: int = 60
     chat_max_tokens: int = 1500
+    # Reasoning models (StepFun step-3.7-flash, …) spend the token budget on hidden
+    # reasoning first and can finish "length" with an empty reply. "low" keeps
+    # short answers affordable; unset sends no hint (and the client retries once
+    # with a wider budget when a reply comes back empty).
+    chat_reasoning_effort: str | None = None  # none|minimal|low|medium|high
     chat_tools_enabled: bool = False
     chat_tool_max_steps: int = 3
     chat_tools_network_allow: tuple[str, ...] = ()
@@ -342,6 +347,30 @@ def _progress_mode_env(name: str, default: str) -> str:
     return value
 
 
+VALID_CHAT_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
+
+
+def _reasoning_effort_env(name: str = "CONVEYOR_CHAT_REASONING_EFFORT") -> str | None:
+    """Read the chat reasoning-effort hint; unknown values mean "no hint".
+
+    Reasoning models bill hidden reasoning tokens against ``max_tokens``, so a
+    small budget can be spent entirely on reasoning and the operator gets an
+    empty reply. An explicit effort (``low`` for step-3.7-flash) keeps short
+    answers inside the budget. Lenient on purpose: a typo, or a provider that
+    does not know the knob, falls back to None instead of failing a deploy.
+    """
+    value = (os.getenv(name) or "").strip().lower()
+    if not value:
+        return None
+    if value not in VALID_CHAT_REASONING_EFFORTS:
+        logger.warning(
+            "%s=%r is not one of %s; sending no reasoning_effort",
+            name, value, list(VALID_CHAT_REASONING_EFFORTS),
+        )
+        return None
+    return value
+
+
 def _int_list_env(name: str, default: tuple[int, ...] = ()) -> tuple[int, ...]:
     value = os.getenv(name)
     if value is None or value.strip() == "":
@@ -532,6 +561,7 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "chat_history_turns": _int_env("CONVEYOR_CHAT_HISTORY_TURNS", 6),
         "chat_timeout_seconds": _int_env("CONVEYOR_CHAT_TIMEOUT_SECONDS", 60),
         "chat_max_tokens": _int_env("CONVEYOR_CHAT_MAX_TOKENS", 1500),
+        "chat_reasoning_effort": _reasoning_effort_env(),
         "chat_tools_enabled": os.getenv("CONVEYOR_CHAT_TOOLS", "false").strip().lower() in ("true", "1", "yes", "on"),
         "chat_tool_max_steps": _int_env("CONVEYOR_CHAT_TOOL_MAX_STEPS", 3),
         "chat_tools_network_allow": tuple(
