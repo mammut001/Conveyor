@@ -19,6 +19,7 @@ from typing import Any
 from agent_events import emit_event
 from redaction import redact_text, truncate
 from runner.core import CodexRunner
+from runner.operators import run as _run_ops
 from runner.types import Job, JobMode, ProgressCallback
 
 
@@ -73,6 +74,11 @@ class _PiEvent:
     kind: str = ""
     payload: dict[str, Any] | None = None
     tool_call_id: str | None = None
+    # True for pi reasoning events (``thinking_start`` / ``thinking_delta``).
+    # Never carries the reasoning text itself: it only extends the
+    # "💭 thinking..." chain in ``read_stdout`` so a long think still shows
+    # liveness. Reasoning content must never be shown or logged.
+    thinking: bool = False
 
 
 def normalize_pi_model(provider: str, raw_model: str) -> str:
@@ -285,6 +291,24 @@ class PiBackend(CodexRunner):
             # whole job. Mirrors the Codex ``turn.completed`` accumulation in
             # ``runner/streaming.py:_capture_usage``.
             usage_totals: dict[str, int] = {}
+            # Round-5 thinking indicator (Pi). Pi's reasoning models
+            # stream ``thinking_start`` / ``thinking_delta`` for many
+            # seconds before any text or tool event, and those events
+            # carry no progress text, so the placeholder sits still and
+            # the chat looks frozen. After
+            # ``THINKING_THRESHOLD_SECONDS`` of sustained reasoning we
+            # surface a short "💭 thinking..." indicator, at most once per
+            # chain. Any meaningful non-thinking event (prose, tool
+            # indicator, lifecycle, error) breaks the chain so the next
+            # reasoning burst starts a fresh threshold window; pure noise
+            # events that parse to an empty ``_PiEvent`` (``message_start``,
+            # ``turn_start``, ``toolcall_delta``) leave the chain alone
+            # because pi interleaves them with reasoning ticks. The
+            # threshold is read through the module at call time so tests
+            # can monkeypatch ``runner.operators.run`` (the same override
+            # hook the Codex backend uses).
+            thinking_since: float | None = None
+            thinking_indicator_sent = False
             with job.log_path.open("ab") as log_file:
                 while True:
                     try:
@@ -306,6 +330,27 @@ class PiBackend(CodexRunner):
                     if not isinstance(event, dict):
                         continue
                     parsed = self._parse_pi_event(event)
+                    now_mono = time.monotonic()
+                    # Chain management for the thinking indicator. A
+                    # reasoning tick extends the chain (and may fire the
+                    # one-shot "💭 thinking..."); a meaningful non-thinking
+                    # event breaks it. Empty ``_PiEvent``s (pure noise
+                    # interleaved with reasoning) are ignored here so they
+                    # cannot kill a live chain.
+                    if parsed.thinking:
+                        if thinking_since is None:
+                            thinking_since = now_mono
+                        if (
+                            not thinking_indicator_sent
+                            and now_mono - thinking_since
+                            >= _run_ops.THINKING_THRESHOLD_SECONDS
+                        ):
+                            thinking_indicator_sent = True
+                            job.last_event = _run_ops.THINKING_INDICATOR
+                            await on_progress(_run_ops.THINKING_INDICATOR)
+                    elif parsed.kind or parsed.progress or parsed.result or parsed.error:
+                        thinking_since = None
+                        thinking_indicator_sent = False
                     event_usage = self._usage_from_event(event)
                     if event_usage:
                         for key, value in event_usage.items():
@@ -493,6 +538,14 @@ class PiBackend(CodexRunner):
             if ame_type == "text_delta" and isinstance(ame.get("delta"), str) and ame["delta"]:
                 text = redact_text(ame["delta"])[:1200]
                 return _PiEvent(progress=text, kind="assistant.delta", payload={"text": text})
+            # Reasoning ticks: marker only. The reasoning text is dropped on
+            # purpose (never shown, never logged, never streamed as
+            # progress); ``read_stdout`` uses the marker to keep the
+            # "💭 thinking..." chain alive. ``thinking_end`` parses to an
+            # empty event: it sends nothing and leaves the chain to be
+            # broken by the next meaningful (text/tool/result) event.
+            if ame_type in ("thinking_start", "thinking_delta"):
+                return _PiEvent(thinking=True)
             return _PiEvent()
 
         if event_type == "message_end":

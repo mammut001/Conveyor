@@ -19,6 +19,7 @@ from runner.pi_agent import (
     normalize_pi_model,
     pi_api_key_env,
 )
+from runner.operators import run as run_ops
 from runner.providers import create_agent_backend, create_runtime_runner
 from runner.types import Job, JobMode, JobState
 from web_chat import WebChatPort, run_web_chat
@@ -48,6 +49,21 @@ def _write_fake_pi(tmp: Path, name: str, dump_path: Path) -> Path:
         "print(json.dumps({'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': 'ok'}]}]}), flush=True)\n",
         encoding="utf-8",
     )
+    fake_pi.chmod(0o755)
+    return fake_pi
+
+
+def _write_fake_pi_events(tmp: Path, name: str, events: list[dict]) -> Path:
+    """Fake pi CLI that prints the given events as JSONL on stdout."""
+    lines = [
+        "#!/usr/bin/env python3",
+        "import json, sys",
+        "sys.stdin.read()",
+    ]
+    for event in events:
+        lines.append(f"print(json.dumps({event!r}), flush=True)")
+    fake_pi = tmp / name
+    fake_pi.write_text("\n".join(lines) + "\n", encoding="utf-8")
     fake_pi.chmod(0o755)
     return fake_pi
 
@@ -519,6 +535,162 @@ class PiBackendTests(unittest.TestCase):
             wt = asyncio.run(backend._create_worktree(job))
             self.assertEqual(wt, settings.codex_workspace_root.resolve())
             self.assertFalse(job.worktree_created)
+
+    def _thinking_job(self, tmp: Path, settings: Settings) -> Job:
+        return Job(
+            "job-thinking",
+            JobMode.RUN,
+            "帮我分析一下",
+            "unused",
+            state=JobState.RUNNING,
+            worktree_path=settings.codex_workspace_root,
+            log_path=settings.codex_task_root / "job.log",
+            final_message_path=settings.codex_task_root / "final.txt",
+        )
+
+    def test_run_codex_attempt_emits_thinking_indicator_before_text(self) -> None:
+        secret = "SECRET_REASONING"
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            backend = PiBackend(settings)
+            events = [
+                {"type": "message_start", "message": {"role": "assistant"}},
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_start"}},
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": secret}},
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": f"{secret} 继续"}},
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": f"{secret} 结束"}},
+                {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "已想好"}},
+                {
+                    "type": "agent_end",
+                    "messages": [{"role": "assistant", "content": [{"type": "text", "text": "已想好"}]}],
+                },
+            ]
+            fake_pi = _write_fake_pi_events(tmp, "fake-pi-thinking", events)
+            backend.pi_bin = str(fake_pi)
+            job = self._thinking_job(tmp, settings)
+            updates: list[str] = []
+
+            async def on_progress(text: str) -> None:
+                updates.append(text)
+
+            with patch("runner.operators.run.THINKING_THRESHOLD_SECONDS", 0.0):
+                asyncio.run(backend._run_codex_attempt(job, on_progress))
+            self.assertEqual(job.return_code, 0, job.error)
+            # Exactly one indicator for the whole reasoning chain...
+            self.assertEqual(updates.count(run_ops.THINKING_INDICATOR), 1)
+            # ...and it lands before the streamed prose.
+            indicator_at = updates.index(run_ops.THINKING_INDICATOR)
+            text_at = next(i for i, u in enumerate(updates) if "已想好" in u)
+            self.assertLess(indicator_at, text_at)
+            # Reasoning content is never shown or logged.
+            for update in updates:
+                self.assertNotIn(secret, update)
+            self.assertNotIn(secret, job.log_path.read_text(encoding="utf-8"))
+            self.assertNotIn(secret, job.final_message_path.read_text(encoding="utf-8"))
+            self.assertNotIn(secret, job.last_event)
+
+    def test_run_codex_attempt_thinking_indicator_once_per_chain(self) -> None:
+        """Noise events interleaved with reasoning must not break the chain."""
+        secret = "SECRET_REASONING"
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            backend = PiBackend(settings)
+            events = [
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_start"}},
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": secret}},
+                {"type": "turn_start"},
+                {"type": "message_start", "message": {"role": "assistant"}},
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": secret}},
+                {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "完成"}},
+                {
+                    "type": "agent_end",
+                    "messages": [{"role": "assistant", "content": [{"type": "text", "text": "完成"}]}],
+                },
+            ]
+            fake_pi = _write_fake_pi_events(tmp, "fake-pi-thinking-noise", events)
+            backend.pi_bin = str(fake_pi)
+            job = self._thinking_job(tmp, settings)
+            updates: list[str] = []
+
+            async def on_progress(text: str) -> None:
+                updates.append(text)
+
+            with patch("runner.operators.run.THINKING_THRESHOLD_SECONDS", 0.0):
+                asyncio.run(backend._run_codex_attempt(job, on_progress))
+            self.assertEqual(job.return_code, 0, job.error)
+            self.assertEqual(updates.count(run_ops.THINKING_INDICATOR), 1)
+
+    def test_run_codex_attempt_thinking_indicator_sent_per_chain(self) -> None:
+        """A tool call between two reasoning bursts re-arms the indicator."""
+        secret = "SECRET_REASONING"
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            backend = PiBackend(settings)
+            events = [
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_start"}},
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": secret}},
+                {
+                    "type": "tool_execution_start",
+                    "toolName": "bash",
+                    "toolCallId": "call-1",
+                    "args": {"command": "ls"},
+                },
+                {"type": "tool_execution_end", "toolCallId": "call-1"},
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_start"}},
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": secret}},
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_end"}},
+                {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "搞定"}},
+                {
+                    "type": "agent_end",
+                    "messages": [{"role": "assistant", "content": [{"type": "text", "text": "搞定"}]}],
+                },
+            ]
+            fake_pi = _write_fake_pi_events(tmp, "fake-pi-thinking-chains", events)
+            backend.pi_bin = str(fake_pi)
+            job = self._thinking_job(tmp, settings)
+            updates: list[str] = []
+
+            async def on_progress(text: str) -> None:
+                updates.append(text)
+
+            with patch("runner.operators.run.THINKING_THRESHOLD_SECONDS", 0.0):
+                asyncio.run(backend._run_codex_attempt(job, on_progress))
+            self.assertEqual(job.return_code, 0, job.error)
+            self.assertEqual(updates.count(run_ops.THINKING_INDICATOR), 2)
+            for update in updates:
+                self.assertNotIn(secret, update)
+            self.assertNotIn(secret, job.log_path.read_text(encoding="utf-8"))
+
+    def test_parse_pi_event_thinking_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            backend = PiBackend(_make_settings(Path(raw)))
+            for ame_type in ("thinking_start", "thinking_delta"):
+                parsed = backend._parse_pi_event(
+                    {
+                        "type": "message_update",
+                        "assistantMessageEvent": {
+                            "type": ame_type,
+                            "delta": "SECRET_REASONING",
+                        },
+                    }
+                )
+                self.assertTrue(parsed.thinking)
+                self.assertEqual(parsed.progress, "")
+                self.assertEqual(parsed.result, "")
+                self.assertEqual(parsed.error, "")
+                self.assertEqual(parsed.kind, "")
+                self.assertIsNone(parsed.payload)
+                self.assertEqual(backend._pi_event({"type": "message_update", "assistantMessageEvent": {"type": ame_type}}), ("", ""))
+            # thinking_end carries no reasoning either and breaks the chain.
+            end = backend._parse_pi_event(
+                {"type": "message_update", "assistantMessageEvent": {"type": "thinking_end"}}
+            )
+            self.assertFalse(end.thinking)
+            self.assertEqual(end.progress, "")
+            self.assertEqual(end.kind, "")
 
 
 if __name__ == "__main__":
