@@ -56,6 +56,22 @@ class PiRunGateTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(confirm.await_count, 0)
         self.assertEqual(job.await_count, 1)
 
+class DeepGateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_deep_on_a_destructive_last_request_asks_for_approval(self) -> None:
+        from handlers import chat
+        with tempfile.TemporaryDirectory() as raw:
+            settings = _settings(Path(raw), always_direct=False)
+            msg = _msg("/deep")
+            chat.set_last(chat.chat_key(msg, settings),
+                          chat.LastRequest(codex_prompt="把 /srv/data 删了", confirm=True), settings=settings)
+            confirm, job = AsyncMock(), AsyncMock()
+            with patch("handlers.tools.runner._request_confirmation", confirm), \
+                    patch("handlers.jobs.handle_codex_job", job):
+                await chat.handle_deep(msg, FakePort(), SimpleNamespace(name="pi", settings=settings),
+                                       settings=settings)
+            self.assertEqual(confirm.await_count, 1)
+            self.assertEqual(job.await_count, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

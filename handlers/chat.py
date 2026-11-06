@@ -1008,6 +1008,12 @@ async def handle_deep(
     if last is None:
         await port.reply(msg, "没有可以深入的上一个问题。直接发问题，或用 /run <任务>。")
         return
+    if is_destructive_request(last.codex_prompt):
+        # /deep confirms handing the request to the agent, not a deletion.
+        from handlers.tools.runner import _request_confirmation
+        await _request_confirmation(
+            msg, port, settings or runner.settings, "pi.destructive_task", last.codex_prompt)
+        return
     await handle_codex_job(msg, port, runner, mode=JobMode.RUN, prompt=last.codex_prompt)
 
 
