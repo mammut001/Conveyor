@@ -613,11 +613,16 @@ class JobQueue:
                     if row is None:
                         return False, f"未找到队列任务 {job_id}"
                     now_str = datetime.now(timezone.utc).isoformat()
-                    conn.execute(
+                    # Re-check the state in the UPDATE: the SELECT ran before any
+                    # write lock, so another process may have dequeued the job in
+                    # between, and a running job must not be marked cancelled.
+                    cursor = conn.execute(
                         "UPDATE queued_jobs SET state = 'cancelled', finished_at = ?, updated_at = ?, "
-                        "position = 0 WHERE id = ?",
+                        "position = 0 WHERE id = ? AND state = 'queued'",
                         (now_str, now_str, job_id),
                     )
+                    if cursor.rowcount == 0:
+                        return False, f"队列任务 {job_id} 已开始执行，请用 /cancel 停止"
                     self._recalculate_positions(conn)
             finally:
                 conn.close()

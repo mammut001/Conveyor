@@ -199,6 +199,49 @@ class QueueMemoryReferenceTests(unittest.TestCase):
             job = asyncio.run(scenario())
             self.assertNotIn(job.id, queue._memory_references)
 
+class QueueCancelRaceTests(unittest.TestCase):
+    def test_cancel_does_not_mark_a_job_another_process_just_started(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            settings = SimpleNamespace(
+                codex_memory_root=Path(root), conveyor_max_pending_jobs=10,
+                conveyor_event_retention_per_job=100)
+            runner = SimpleNamespace(current_job=None)
+            queue = JobQueue(max_length=10)
+            queue.configure(settings, runner, recover=False)
+            msg = InboundMessage(channel="web", operator_id="w", chat_id="c", message_id=None, text="t")
+            real_get_conn = queue._get_conn
+
+            class RacingConn:
+                """Between the cancel's SELECT and UPDATE, another process claims the job."""
+                def __init__(self, conn, job_id):
+                    self._conn, self._job_id, self._raced = conn, job_id, False
+                def execute(self, sql, *args):
+                    if not self._raced and "SET state = 'cancelled'" in sql:
+                        self._raced = True
+                        other = real_get_conn()
+                        with other:
+                            other.execute("UPDATE queued_jobs SET state='running' WHERE id=?", (self._job_id,))
+                        other.close()
+                    return self._conn.execute(sql, *args)
+                def __getattr__(self, name):
+                    return getattr(self._conn, name)
+                def __enter__(self):
+                    self._conn.__enter__(); return self
+                def __exit__(self, *exc):
+                    return self._conn.__exit__(*exc)
+
+            async def scenario():
+                _, _, job = await queue.enqueue("run", "x", msg, FakeOutbound(), runner)
+                queue._get_conn = lambda: RacingConn(real_get_conn(), job.id)
+                ok, _text = await queue.cancel(job.id)
+                queue._get_conn = real_get_conn
+                return ok, await queue.get_job(job.id)
+
+            ok, job = asyncio.run(scenario())
+            self.assertFalse(ok)
+            self.assertEqual(job.state, QueueJobState.RUNNING)
+
 
 if __name__ == "__main__":
     unittest.main()
