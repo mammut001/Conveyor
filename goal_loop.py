@@ -87,9 +87,17 @@ class GoalCommand:
 
 
 _CMD = re.compile(r"^/goal(?:@\w+)?(?:\s+(.*))?$", re.S)
-_CHECK = re.compile(r"--check(?:=|\s+)(?:\"([^\"]*)\"|'([^']*)'|“([^”]*)”)")
+_CHECK = re.compile(r"--check(?:=|\s+)(?:\"([^\"]*)\"|'([^']*)'|“([^”]*)”|‘([^’]*)’)")
 _HOURS = re.compile(r"--hours(?:=|\s+)([0-9]+(?:\.[0-9]+)?)")
 _MAX = re.compile(r"--max(?:=|\s+)([0-9]+)")
+# iOS/macOS "Smart Punctuation" rewrites "--" into an em/en (or full-width) dash
+# right before a flag name. Rewrite those back to "--" so the flags are not
+# silently swallowed by the objective. A run that contains at least one smart
+# dash is required, so a plain ASCII hyphen ("re-check", "2024—2025") is untouched.
+_SMART_DASH = "\u2014\u2013\u2015\uff0d\u2212"  # — – ― － −
+_FLAG_DASH = re.compile(rf"[-{_SMART_DASH}]*[{_SMART_DASH}][-{_SMART_DASH}]*(?=(?:check|hours|max)\b)")
+
+_UNQUOTED_CHECK_ERROR = '--check 后面的命令需要用引号括起来，例如 --check "npm test"。'
 
 
 def is_goal_command(text: str | None) -> bool:
@@ -109,6 +117,9 @@ def parse_goal_command(text: str | None) -> GoalCommand | None:
     if word in ("stop", "cancel", "停止", "取消"):
         return GoalCommand("stop")
 
+    # iPhone owners type "—hours 2"; accept it as "--hours 2".
+    rest = _FLAG_DASH.sub("--", rest)
+
     checks = tuple(next(g for g in m.groups() if g is not None).strip()
                    for m in _CHECK.finditer(rest))
     checks = tuple(c for c in checks if c)
@@ -118,6 +129,13 @@ def parse_goal_command(text: str | None) -> GoalCommand | None:
     objective = _HOURS.sub(" ", objective)
     objective = _MAX.sub(" ", objective)
     objective = re.sub(r"\s+", " ", objective).strip()
+
+    # A leftover --check means the command was not quoted; the owner would not
+    # notice the acceptance check silently disappearing, so refuse it. A bad
+    # --hours/--max only falls back to the default and may be part of the
+    # objective text ("给 CLI 加上 --max 参数"), so those stay lenient.
+    if re.search(r"--check\b", objective):
+        return GoalCommand("invalid", error=_UNQUOTED_CHECK_ERROR)
 
     if len(objective) < 4:
         return GoalCommand("invalid", error="目标太短，请用一句话说清要达成什么。")

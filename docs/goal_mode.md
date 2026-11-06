@@ -10,6 +10,8 @@ branch in the morning.
 /goal stop
 ```
 
+Flags are forgiving about iPhone/macOS Smart Punctuation: a smart dash before a flag (`—hours 2`, `–max 5`, `——check`, `—-check`) is read as `--`, curly quotes around a check value (`“npm test”`, `‘npm test’`) are accepted, and a `--check` without quotes is rejected instead of being silently dropped.
+
 Works in the web console chat (any agent conversation, including Coder) and in
 Telegram (`/goal`, also inside a forum topic).
 

@@ -89,6 +89,52 @@ class ParseTests(unittest.TestCase):
         many = " ".join(f'--check "c{i}"' for i in range(6))
         self.assertEqual(parse_goal_command(f"/goal do the thing {many}").action, "invalid")
 
+    def test_iphone_smart_dashes_before_flags_are_accepted(self):
+        cmd = parse_goal_command('/goal 修复登录 —hours 2 —max 5 —check “npm test”')
+        self.assertEqual(cmd.action, "start")
+        self.assertEqual(cmd.objective, "修复登录")
+        self.assertEqual(cmd.checks, ("npm test",))
+        self.assertEqual((cmd.hours, cmd.max_iterations), (2.0, 5))
+
+    def test_en_dash_and_doubled_em_dash_flags_are_accepted(self):
+        cmd = parse_goal_command("/goal fix the login page –hours 3 ——check “npm test”")
+        self.assertEqual(cmd.action, "start")
+        self.assertEqual(cmd.objective, "fix the login page")
+        self.assertEqual(cmd.checks, ("npm test",))
+        self.assertEqual((cmd.hours, cmd.max_iterations), (3.0, goal_loop.DEFAULT_MAX_ITERATIONS))
+
+    def test_curly_single_quotes_are_accepted_for_check(self):
+        cmd = parse_goal_command("/goal 修复登录 --hours 1 --check ‘npm test’ --check ‘pytest -q’")
+        self.assertEqual(cmd.action, "start")
+        self.assertEqual(cmd.objective, "修复登录")
+        self.assertEqual(cmd.checks, ("npm test", "pytest -q"))
+
+    def test_smart_dash_inside_objective_is_preserved(self):
+        cmd = parse_goal_command("/goal 迁移 2024—2025 数据 --hours 1")
+        self.assertEqual(cmd.action, "start")
+        self.assertEqual(cmd.objective, "迁移 2024—2025 数据")
+        self.assertEqual(cmd.hours, 1.0)
+        self.assertEqual(cmd.checks, ())
+
+    def test_unquoted_check_is_rejected(self):
+        for text in ("/goal 修复登录 --check npm test",
+                     "/goal 修复登录 —check npm test",
+                     '/goal 修复登录 --check "pytest -q" --check npm test'):
+            cmd = parse_goal_command(text)
+            self.assertEqual(cmd.action, "invalid", text)
+            self.assertIn("--check", cmd.error)
+            self.assertIn("npm test", cmd.error)
+
+    def test_flag_names_in_objective_text_stay_lenient(self):
+        # Describing a feature must not be mistaken for a malformed flag; a bad
+        # --hours/--max value only falls back to the default.
+        cmd = parse_goal_command("/goal 给 CLI 加上 --max 参数")
+        self.assertEqual(cmd.action, "start")
+        self.assertEqual(cmd.max_iterations, 60)
+        cmd = parse_goal_command("/goal 修复登录 —hours abc")
+        self.assertEqual((cmd.action, cmd.hours), ("start", 8.0))
+        self.assertEqual(parse_goal_command("/goal 修复登录 --hours 2 --max 5").action, "start")
+
     def test_verdict(self):
         self.assertEqual(parse_verdict(_verdict("done", "all good")), ("done", "all good"))
         self.assertEqual(parse_verdict("no marker")[0], "continue")
