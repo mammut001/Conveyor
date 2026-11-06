@@ -5,6 +5,7 @@ import dataclasses
 import json
 import os
 import queue
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -62,6 +63,31 @@ def _write_fake_pi_events(tmp: Path, name: str, events: list[dict]) -> Path:
     ]
     for event in events:
         lines.append(f"print(json.dumps({event!r}), flush=True)")
+    fake_pi = tmp / name
+    fake_pi.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    fake_pi.chmod(0o755)
+    return fake_pi
+
+
+def _write_fake_pi_timeline(tmp: Path, name: str, timeline: list) -> Path:
+    """Fake pi CLI replaying a timeline of events and silent gaps.
+
+    Each timeline item is either a dict (printed as one JSONL event) or a
+    float (a silent sleep). stdout is flushed after every line so the parent
+    stream reader observes the real timing.
+    """
+    lines = [
+        "#!/usr/bin/env python3",
+        "import json, sys, time",
+        "sys.stdin.read()",
+        "def emit(obj):",
+        "    print(json.dumps(obj), flush=True)",
+    ]
+    for item in timeline:
+        if isinstance(item, dict):
+            lines.append(f"emit({item!r})")
+        else:
+            lines.append(f"time.sleep({item!r})")
     fake_pi = tmp / name
     fake_pi.write_text("\n".join(lines) + "\n", encoding="utf-8")
     fake_pi.chmod(0o755)
@@ -663,6 +689,109 @@ class PiBackendTests(unittest.TestCase):
             for update in updates:
                 self.assertNotIn(secret, update)
             self.assertNotIn(secret, job.log_path.read_text(encoding="utf-8"))
+
+    def _tool_pulse_job(self, tmp: Path, settings: Settings) -> Job:
+        return Job(
+            "job-tool-pulse",
+            JobMode.RUN,
+            "跑一个长命令",
+            "unused",
+            state=JobState.RUNNING,
+            worktree_path=settings.codex_workspace_root,
+            log_path=settings.codex_task_root / "job.log",
+            final_message_path=settings.codex_task_root / "final.txt",
+        )
+
+    _TOOL_START = {
+        "type": "tool_execution_start",
+        "toolName": "bash",
+        "toolCallId": "call-1",
+        "args": {"command": "sleep 30"},
+    }
+    _TOOL_END = {"type": "tool_execution_end", "toolCallId": "call-1"}
+    _AGENT_END = {
+        "type": "agent_end",
+        "messages": [{"role": "assistant", "content": [{"type": "text", "text": "done"}]}],
+    }
+
+    def test_run_codex_attempt_pulses_during_silent_tool_call(self) -> None:
+        """A silent tool call (pi emits nothing) must pulse on a timer."""
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            backend = PiBackend(settings)
+            fake_pi = _write_fake_pi_timeline(
+                tmp,
+                "fake-pi-tool-pulse",
+                [
+                    self._TOOL_START,
+                    0.6,
+                    self._TOOL_END,
+                    # Silent gap after the tool finished: no pulse may land
+                    # here, the arm is disarmed by tool_execution_end.
+                    0.6,
+                    {
+                        "type": "message_update",
+                        "assistantMessageEvent": {"type": "text_delta", "delta": "done"},
+                    },
+                    self._AGENT_END,
+                ],
+            )
+            backend.pi_bin = str(fake_pi)
+            job = self._tool_pulse_job(tmp, settings)
+            updates: list[str] = []
+
+            async def on_progress(text: str) -> None:
+                updates.append(text)
+
+            with patch("runner.operators.run.TOOL_PULSE_THRESHOLD_SECONDS", 0.1), patch(
+                "runner.operators.run.TOOL_PULSE_INTERVAL_SECONDS", 0.1
+            ):
+                asyncio.run(backend._run_codex_attempt(job, on_progress))
+            self.assertEqual(job.return_code, 0, job.error)
+            pulses = [
+                u for u in updates if re.fullmatch(r"\U0001f527 bash: sleep .* \(\d+s\)\.\.\.", u)
+            ]
+            # The tool runs 0.6s with a 0.1s threshold / 0.1s interval, so a
+            # handful of pulses must reach the chat...
+            self.assertGreaterEqual(len(pulses), 2)
+            # ...and they stop at tool_execution_end. Had the disarm failed
+            # the extra 0.6s of silence would double the count (~12).
+            self.assertLessEqual(len(pulses), 8)
+            start_at = updates.index("\U0001f527 bash: sleep 30")
+            for pulse in pulses:
+                self.assertGreater(updates.index(pulse), start_at)
+            # Nothing pulses after the tool finished and the prose resumed.
+            self.assertEqual(updates[-1], "done \u258d")
+            # Final message / result unaffected by the pulse.
+            self.assertEqual(job.final_message_path.read_text(encoding="utf-8"), "done")
+
+    def test_run_codex_attempt_no_pulse_for_fast_tool_call(self) -> None:
+        """A tool call that completes immediately must not pulse."""
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            backend = PiBackend(settings)
+            fake_pi = _write_fake_pi_timeline(
+                tmp,
+                "fake-pi-tool-fast",
+                [self._TOOL_START, self._TOOL_END, self._AGENT_END],
+            )
+            backend.pi_bin = str(fake_pi)
+            job = self._tool_pulse_job(tmp, settings)
+            updates: list[str] = []
+
+            async def on_progress(text: str) -> None:
+                updates.append(text)
+
+            with patch("runner.operators.run.TOOL_PULSE_THRESHOLD_SECONDS", 0.1), patch(
+                "runner.operators.run.TOOL_PULSE_INTERVAL_SECONDS", 0.1
+            ):
+                asyncio.run(backend._run_codex_attempt(job, on_progress))
+            self.assertEqual(job.return_code, 0, job.error)
+            self.assertEqual(updates, ["\U0001f527 bash: sleep 30"])
+            self.assertEqual(job.final_message_path.read_text(encoding="utf-8"), "done")
+            self.assertEqual(job.error, "")
 
     def test_parse_pi_event_thinking_marker(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

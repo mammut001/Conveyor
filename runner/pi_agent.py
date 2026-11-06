@@ -309,92 +309,190 @@ class PiBackend(CodexRunner):
             # hook the Codex backend uses).
             thinking_since: float | None = None
             thinking_indicator_sent = False
+            # Round-6 tool-call pulse (Pi). The Codex backend can arm its
+            # pulse purely from events because codex keeps streaming while a
+            # tool runs; pi emits NOTHING between ``tool_execution_start``
+            # and ``tool_execution_end`` for a silent command (``sleep 30``),
+            # so the pulse here also has to fire on a timer (the timed
+            # ``readline`` wait below) and not only from events.
+            # ``pending_tool_label`` is the parsed progress label of the
+            # armed tool (e.g. "🔧 bash: sleep 30"), ``pending_tool_since``
+            # is the monotonic time the arm fired and ``last_pulse_at`` is the
+            # most recent pulse tick (None between fires). The thresholds are
+            # read through the ``_run_ops`` module at call time so tests can
+            # monkeypatch ``runner.operators.run`` (the same override hook the
+            # Codex backend and the thinking indicator use).
+            pending_tool_id: str | None = None
+            pending_tool_label = ""
+            pending_tool_since: float | None = None
+            last_pulse_at: float | None = None
+            # Round-10 progress verbosity gate. ``quiet`` drops every
+            # user-facing intermediate progress update, the pulse included
+            # (same rule the Codex stream applies).
+            progress_mode = (
+                getattr(self.settings, "conveyor_progress_mode", "") or "compact"
+            ).lower()
+
+            async def maybe_pulse() -> None:
+                """Send the "still working" pulse for a long-running tool call."""
+                nonlocal last_pulse_at
+                if pending_tool_since is None or progress_mode == "quiet":
+                    return
+                now_mono = time.monotonic()
+                if now_mono - pending_tool_since < float(_run_ops.TOOL_PULSE_THRESHOLD_SECONDS):
+                    return
+                if last_pulse_at is not None and now_mono - last_pulse_at < float(
+                    _run_ops.TOOL_PULSE_INTERVAL_SECONDS
+                ):
+                    return
+                last_pulse_at = now_mono
+                elapsed = int(now_mono - pending_tool_since)
+                msg = f"{pending_tool_label} ({elapsed}s)..."
+                job.last_event = msg
+                await on_progress(msg)
+
             with job.log_path.open("ab") as log_file:
-                while True:
-                    try:
-                        line = await process.stdout.readline()
-                    except (ValueError, asyncio.LimitOverrunError):
-                        job.error = "Pi output event exceeded the safe size limit."
-                        if process.returncode is None:
-                            process.terminate()
-                        return
-                    if not line:
-                        return
-                    text = line.decode("utf-8", errors="replace").strip()
-                    if not text:
-                        continue
-                    try:
-                        event = json.loads(text)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(event, dict):
-                        continue
-                    parsed = self._parse_pi_event(event)
-                    now_mono = time.monotonic()
-                    # Chain management for the thinking indicator. A
-                    # reasoning tick extends the chain (and may fire the
-                    # one-shot "💭 thinking..."); a meaningful non-thinking
-                    # event breaks it. Empty ``_PiEvent``s (pure noise
-                    # interleaved with reasoning) are ignored here so they
-                    # cannot kill a live chain.
-                    if parsed.thinking:
-                        if thinking_since is None:
-                            thinking_since = now_mono
-                        if (
-                            not thinking_indicator_sent
-                            and now_mono - thinking_since
-                            >= _run_ops.THINKING_THRESHOLD_SECONDS
-                        ):
-                            thinking_indicator_sent = True
-                            job.last_event = _run_ops.THINKING_INDICATOR
-                            await on_progress(_run_ops.THINKING_INDICATOR)
-                    elif parsed.kind or parsed.progress or parsed.result or parsed.error:
-                        thinking_since = None
-                        thinking_indicator_sent = False
-                    event_usage = self._usage_from_event(event)
-                    if event_usage:
-                        for key, value in event_usage.items():
-                            usage_totals[key] = usage_totals.get(key, 0) + value
-                        job.usage = dict(usage_totals)
-                    if parsed.result:
-                        final_text = truncate(redact_text(parsed.result), 16_000)
-                    if parsed.error and not job.error:
-                        job.error = truncate(redact_text(parsed.error), 3_000)
-                    if parsed.kind == "tool.started":
-                        streamed_text = ""
-                    if parsed.kind == "assistant.delta" and parsed.progress:
-                        streamed_text += parsed.progress
-                        job.last_event = truncate(redact_text(streamed_text), 1200)
-                        now_mono = time.monotonic()
-                        if now_mono - last_delta_emit >= 0.12:
-                            last_delta_emit = now_mono
-                            await on_progress(f"{redact_text(streamed_text)[-3000:]} ▍")
-                    elif parsed.progress:
-                        job.last_event = truncate(redact_text(parsed.progress), 1200)
-                        await on_progress(job.last_event)
-                    if parsed.kind and job.external_id:
+                # A pending (shielded) readline that survives the tick
+                # timeout, so the stream is consumed by exactly one reader
+                # while the timer keeps firing pulses during silences.
+                read_task = None
+                try:
+                    while True:
+                        if read_task is None:
+                            read_task = asyncio.ensure_future(process.stdout.readline())
+                        # Non-cancelling timed wait: on timeout the shielded
+                        # readline keeps running and we only pulse.
+                        pulse_interval = float(_run_ops.TOOL_PULSE_INTERVAL_SECONDS)
+                        tick = max(0.05, min(1.0, pulse_interval / 2.0))
                         try:
-                            emit_event(
-                                self.settings,
-                                parsed.kind,
-                                str(job.external_id),
-                                parsed.payload or {},
-                                tool_call_id=parsed.tool_call_id,
+                            line = await asyncio.wait_for(
+                                asyncio.shield(read_task), timeout=tick
                             )
-                        except Exception:
-                            pass
-                    safe_record = self._safe_log_record(parsed)
-                    if safe_record and logged_bytes < MAX_PI_LOG_BYTES:
-                        encoded = (
-                            json.dumps(safe_record, ensure_ascii=False, separators=(",", ":")) + "\n"
-                        ).encode("utf-8")
-                        remaining = MAX_PI_LOG_BYTES - logged_bytes
-                        if len(encoded) <= remaining:
-                            log_file.write(encoded)
-                            log_file.flush()
-                            logged_bytes += len(encoded)
-                        else:
-                            logged_bytes = MAX_PI_LOG_BYTES
+                        except asyncio.TimeoutError:
+                            await maybe_pulse()
+                            continue
+                        except (ValueError, asyncio.LimitOverrunError):
+                            job.error = "Pi output event exceeded the safe size limit."
+                            if process.returncode is None:
+                                process.terminate()
+                            return
+                        read_task = None
+                        if not line:
+                            return
+                        text = line.decode("utf-8", errors="replace").strip()
+                        if not text:
+                            continue
+                        try:
+                            event = json.loads(text)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(event, dict):
+                            continue
+                        parsed = self._parse_pi_event(event)
+                        now_mono = time.monotonic()
+                        # Round-6 tool-pulse arm/disarm. Arm on the tool
+                        # start (overwriting any earlier pending tool);
+                        # disarm on the matching completion (or when the end
+                        # event carries no id / nothing is armed, disarm
+                        # anyway) and on any prose / result / error, which
+                        # means the agent moved on from the tool call.
+                        if parsed.kind == "tool.started":
+                            pending_tool_id = parsed.tool_call_id
+                            pending_tool_label = parsed.progress or "🔧 ..."
+                            pending_tool_since = now_mono
+                            last_pulse_at = None
+                        elif parsed.kind in ("tool.completed", "tool.failed") and (
+                            pending_tool_id is None
+                            or parsed.tool_call_id is None
+                            or parsed.tool_call_id == pending_tool_id
+                        ):
+                            pending_tool_id = None
+                            pending_tool_label = ""
+                            pending_tool_since = None
+                            last_pulse_at = None
+                        elif (
+                            parsed.kind == "assistant.delta"
+                            or parsed.result
+                            or parsed.error
+                        ):
+                            pending_tool_id = None
+                            pending_tool_label = ""
+                            pending_tool_since = None
+                            last_pulse_at = None
+                        # Chain management for the thinking indicator. A
+                        # reasoning tick extends the chain (and may fire the
+                        # one-shot "💭 thinking..."); a meaningful non-thinking
+                        # event breaks it. Empty ``_PiEvent``s (pure noise
+                        # interleaved with reasoning) are ignored here so they
+                        # cannot kill a live chain.
+                        if parsed.thinking:
+                            if thinking_since is None:
+                                thinking_since = now_mono
+                            if (
+                                not thinking_indicator_sent
+                                and now_mono - thinking_since
+                                >= _run_ops.THINKING_THRESHOLD_SECONDS
+                            ):
+                                thinking_indicator_sent = True
+                                job.last_event = _run_ops.THINKING_INDICATOR
+                                await on_progress(_run_ops.THINKING_INDICATOR)
+                        elif parsed.kind or parsed.progress or parsed.result or parsed.error:
+                            thinking_since = None
+                            thinking_indicator_sent = False
+                        event_usage = self._usage_from_event(event)
+                        if event_usage:
+                            for key, value in event_usage.items():
+                                usage_totals[key] = usage_totals.get(key, 0) + value
+                            job.usage = dict(usage_totals)
+                        if parsed.result:
+                            final_text = truncate(redact_text(parsed.result), 16_000)
+                        if parsed.error and not job.error:
+                            job.error = truncate(redact_text(parsed.error), 3_000)
+                        if parsed.kind == "tool.started":
+                            streamed_text = ""
+                        if parsed.kind == "assistant.delta" and parsed.progress:
+                            streamed_text += parsed.progress
+                            job.last_event = truncate(redact_text(streamed_text), 1200)
+                            now_mono = time.monotonic()
+                            if now_mono - last_delta_emit >= 0.12:
+                                last_delta_emit = now_mono
+                                await on_progress(f"{redact_text(streamed_text)[-3000:]} ▍")
+                        elif parsed.progress:
+                            job.last_event = truncate(redact_text(parsed.progress), 1200)
+                            await on_progress(job.last_event)
+                        if parsed.kind and job.external_id:
+                            try:
+                                emit_event(
+                                    self.settings,
+                                    parsed.kind,
+                                    str(job.external_id),
+                                    parsed.payload or {},
+                                    tool_call_id=parsed.tool_call_id,
+                                )
+                            except Exception:
+                                pass
+                        safe_record = self._safe_log_record(parsed)
+                        if safe_record and logged_bytes < MAX_PI_LOG_BYTES:
+                            encoded = (
+                                json.dumps(safe_record, ensure_ascii=False, separators=(",", ":")) + "\n"
+                            ).encode("utf-8")
+                            remaining = MAX_PI_LOG_BYTES - logged_bytes
+                            if len(encoded) <= remaining:
+                                log_file.write(encoded)
+                                log_file.flush()
+                                logged_bytes += len(encoded)
+                            else:
+                                logged_bytes = MAX_PI_LOG_BYTES
+                    # Event-driven pulse path: an event that leaves the tool
+                    # armed (e.g. a nested tool start) still gets a chance to
+                    # pulse immediately.
+                    await maybe_pulse()
+                finally:
+                    # Never leak the pending readline when read_stdout exits
+                    # early (limit overrun, EOF, cancellation).
+                    if read_task is not None:
+                        read_task.cancel()
+                        read_task = None
 
         async def read_stderr() -> None:
             nonlocal stderr_bytes
