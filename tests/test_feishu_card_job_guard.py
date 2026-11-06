@@ -43,6 +43,18 @@ class FeishuCardJobGuardTest(unittest.TestCase):
         self.assertEqual(self._check(_runner("x"), "apply", None), "")
         self.assertEqual(self._check(_runner("x"), "status", "job-1"), "")
 
+class FeishuUploadCardButtonsTest(unittest.TestCase):
+    def test_every_button_on_upload_cards_is_accepted(self) -> None:
+        import json
+        from channel.feishu_cards import (
+            action_to_command, desktop_upload_status_card, parse_action)
+        card = json.dumps(desktop_upload_status_card("uploading"))
+        self.assertIn("desktop_upload_status", card)
+        for action in ("desktop_upload_status", "desktop_upload_cancel"):
+            with self.subTest(action=action):
+                self.assertEqual(parse_action({"action": action}), {"action": action})
+                self.assertIsNotNone(action_to_command(action))
+
 
 if __name__ == "__main__":
     unittest.main()
