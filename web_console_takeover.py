@@ -197,6 +197,16 @@ def main() -> None:
         settings.conveyor_web_port,
     )
     start_extra_listeners(server, settings)
+    def _resume_goals() -> None:
+        try:
+            from web_chat import resume_goal_loops
+            count = resume_goal_loops(settings, runner)
+            if count:
+                logger.info("resumed %d /goal run(s)", count)
+        except Exception:
+            logger.exception("could not resume /goal runs")
+
+    loop.call_soon(_resume_goals)
     try:
         loop.run_forever()
     except KeyboardInterrupt:

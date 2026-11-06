@@ -223,6 +223,13 @@ async def run_web_chat(
         if await try_resolve_confirmation(msg, port, settings):
             port.emit("done", {"outcome": "answered"})
             return
+        import goal_loop
+        goal_command = goal_loop.parse_goal_command(prompt)
+        if goal_command is not None:
+            await port.reply(msg, await goal_loop.handle_goal_command(
+                msg, settings, goal_command, goal_loop_web_driver(msg, settings, runner, port)))
+            port.emit("done", {"outcome": "answered"})
+            return
         from overnight_chat import route as nightly_route
         nightly=nightly_route(prompt)
         if nightly is not None:
@@ -448,3 +455,40 @@ def build_history(session: dict[str, Any] | None) -> list[dict[str, Any]]:
             item["approval"] = {"id": "", "tool_name": "", "arg": "", "status": "closed"}
         out.append(item)
     return out
+
+
+def _goal_web_driver(msg: InboundMessage, settings: Any, runner: Any) -> Any:
+    """Queue-backed /goal driver whose iterations and progress land in this web session."""
+    import goal_loop
+    from web_console import WebOutbound
+
+    durable = session_identity(msg.channel, msg.chat_id, msg.operator_id)
+    notifier = WebOutbound(settings, durable)
+
+    async def notify(text: str) -> None:
+        await notifier.reply(msg, text)
+
+    def port_factory(prompt: str) -> Any:
+        return WebOutbound(settings, durable, is_codex=True, prompt=prompt)
+
+    return goal_loop.QueueDriver(msg, runner, settings, port_factory, notify)
+
+
+def goal_loop_web_driver(msg: InboundMessage, settings: Any, runner: Any, _port: Any = None) -> Any:
+    """driver_factory for goal_loop.handle_goal_command on the web channel."""
+    return lambda _state: _goal_web_driver(msg, settings, runner)
+
+
+def resume_goal_loops(settings: Any, runner: Any) -> int:
+    """Continue /goal runs that were active when the web service last stopped."""
+    import goal_loop
+
+    def driver_for(state: Any) -> Any | None:
+        ctx = state.ctx or {}
+        if ctx.get("channel") != "web" or not ctx.get("chat_id"):
+            return None  # other channels resume in their own process
+        msg = InboundMessage(channel="web", operator_id=ctx.get("operator_id", "web-console"),
+                             chat_id=ctx["chat_id"], message_id=None, text="", chat_type="p2p")
+        return _goal_web_driver(msg, settings, runner)
+
+    return goal_loop.resume_all(settings, driver_for)

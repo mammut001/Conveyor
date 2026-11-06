@@ -1214,7 +1214,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 from handlers.chat import chat_enabled
                 from overnight_chat import route as nightly_route
                 nightly_control = os.getenv('CONVEYOR_NIGHTLY_CONTROL') == '1' and nightly_route(message) is not None
-                if not chat_enabled(settings) and not nightly_control:
+                import goal_loop
+                if not chat_enabled(settings) and not nightly_control and not goal_loop.is_goal_command(message):
                     self._feature_off("chat_disabled")
                     return
 
@@ -2064,6 +2065,16 @@ def main() -> None:
     delegation_worker = start_delegation(loop, settings)
     import agent_security
     agent_retention_worker = agent_security.start(loop, settings)
+    def _resume_goals() -> None:
+        try:
+            from web_chat import resume_goal_loops
+            count = resume_goal_loops(settings, runner)
+            if count:
+                logger.info("resumed %d /goal run(s)", count)
+        except Exception:
+            logger.exception("could not resume /goal runs")
+
+    loop.call_soon(_resume_goals)
     try:
         loop.run_forever()
     except KeyboardInterrupt:

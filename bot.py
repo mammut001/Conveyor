@@ -144,6 +144,57 @@ async def fix_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _dispatch_text(update, f"/fix {prompt}")
 
 
+async def goal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/goal <objective> | status | stop — unattended iterate-and-verify loop (goal_loop)."""
+    if not await _guard(update):
+        return
+    import goal_loop
+    message = update.effective_message
+    command = goal_loop.parse_goal_command(message.text if message else "")
+    if command is None:
+        return
+    inbound = _inbound(update, text=message.text)
+    bot = context.bot
+    text = await goal_loop.handle_goal_command(
+        inbound, settings, command,
+        lambda _state: _telegram_goal_driver(inbound, bot))
+    await _reply(update, text)
+
+
+def _telegram_goal_driver(inbound: InboundMessage, bot):
+    import goal_loop
+    from channel.telegram import TelegramChatOutbound
+
+    def port_factory(_prompt: str):
+        return TelegramChatOutbound(bot, inbound.chat_id)
+
+    async def notify(text: str) -> None:
+        await TelegramChatOutbound(bot, inbound.chat_id).send_new(inbound, text)
+
+    return goal_loop.QueueDriver(inbound, runner, settings, port_factory, notify)
+
+
+def _resume_telegram_goals(application: Application) -> None:
+    import goal_loop
+
+    def driver_for(state):
+        ctx = state.ctx or {}
+        if ctx.get("channel") != "telegram" or not ctx.get("chat_id"):
+            return None
+        inbound = InboundMessage(
+            channel="telegram", operator_id=str(ctx.get("operator_id") or settings.telegram_allowed_user_id),
+            chat_id=str(ctx["chat_id"]), message_id=None, text="", chat_type="p2p",
+            thread_id=ctx.get("thread_id"))
+        return _telegram_goal_driver(inbound, application.bot)
+
+    try:
+        count = goal_loop.resume_all(settings, driver_for)
+        if count:
+            logger.info("resumed %d /goal run(s)", count)
+    except Exception:
+        logger.exception("could not resume /goal runs")
+
+
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
@@ -856,6 +907,7 @@ async def post_init(application: Application) -> None:
         [
             ("fix", "改文件：/fix <需求>"),
             ("topics", "同步竖排话题栏（每个助手一个话题）"),
+            ("goal", "无人值守目标模式：反复迭代、测试、修复"),
             ("workers", "查看 Workers 和任务状态"),
             ("sessions", "查看当前会话和历史任务"),
             ("switch", "打开会话导航（只读）"),
@@ -924,6 +976,7 @@ async def post_init(application: Application) -> None:
             return message_id
         configure_telegram_poller(application, lambda: agent_channel_results.run(
             settings, "telegram", send_agent_result))
+    _resume_telegram_goals(application)
     logger.info("Codex Telegram bot ready. Workspace=%s task_root=%s", settings.codex_workspace_root, settings.codex_task_root)
 
 
@@ -944,6 +997,7 @@ def main() -> None:
     )
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CommandHandler("topics", topics_cmd))
+    application.add_handler(CommandHandler("goal", goal_cmd))
     application.add_handler(CommandHandler("workers", workers_cmd))
     application.add_handler(CommandHandler("sessions", sessions_cmd))
     application.add_handler(CommandHandler("switch", sessions_cmd))
