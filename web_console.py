@@ -359,6 +359,19 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
     def _segments(path: str) -> list[str]:
         return [unquote(part) for part in path.strip("/").split("/") if part]
 
+    @classmethod
+    def _is_api_path(cls, path: str) -> bool:
+        """True for anything the router will treat as an /api/ route.
+
+        Routing matches on decoded segments, so the auth gate must too:
+        "/%61pi/jobs/q1" and "//api/jobs/q1" reach the same handlers as
+        "/api/jobs/q1" but slipped past a raw ``startswith("/api/")`` check.
+        """
+        if path.startswith("/api/"):
+            return True
+        parts = cls._segments(path)
+        return bool(parts) and parts[0].lower() == "api"
+
     def _memory_owner(self, settings: Any, agent_id: str) -> str | None:
         """Whose memory a console request is about; answers 404 for an unknown agent.
 
@@ -432,7 +445,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             if not pwa_enabled(getattr(self.server.control, "settings", None)):
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
-        if path.startswith("/api/") and not self._require_auth():
+        if self._is_api_path(path) and not self._require_auth():
             return
         if path == "/api/agent-conversations":
             from web_agent_conversations_api import get
