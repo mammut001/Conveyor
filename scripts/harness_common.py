@@ -131,7 +131,12 @@ def attempt_completed(attempt_file: Path) -> bool:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(event, dict):
+            # Skip non-object lines (e.g. JSON lists or strings) instead of crashing.
+            continue
         if event.get("type") == "turn.completed":
+            return True
+        if event.get("kind") == "assistant.completed":
             return True
     return False
 

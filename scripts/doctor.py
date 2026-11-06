@@ -65,7 +65,8 @@ def check_latest_job(settings) -> list[CheckResult]:
     final = latest_final_file(job_dir)
     if attempt:
         results.append(CheckResult("latest attempt", True, str(attempt)))
-        results.append(CheckResult("latest completed", attempt_completed(attempt), "turn.completed present" if attempt_completed(attempt) else "turn.completed missing"))
+        completed = attempt_completed(attempt)
+        results.append(CheckResult("latest completed", completed, "completion event present" if completed else "completion event missing"))
     else:
         results.append(CheckResult("latest attempt", False, "missing attempt-*.jsonl"))
 
