@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import asyncio
 import os
 from pathlib import Path
 import tempfile
@@ -15,6 +16,7 @@ from agents import AgentStore
 from channel.telegram import TelegramChatOutbound, inbound_from_update, split_chat_thread
 from config import Settings
 from personal_tools.long_term_memory import allowed_for
+from telegram.error import BadRequest
 import telegram_topics
 
 
@@ -280,6 +282,157 @@ class TelegramTopicsTests(unittest.IsolatedAsyncioTestCase):
             text="Topic scoped reply",
             disable_web_page_preview=True,
             message_thread_id=102,
+        )
+
+    def _active_agents(self) -> list[dict]:
+        return [a for a in self.store.list() if not a.get("archived")]
+
+    def _bind_all(self, agents: list[dict], *, base_tid: int = 200) -> list[int]:
+        tids: list[int] = []
+        for i, agent in enumerate(agents):
+            tid = base_tid + i
+            telegram_topics.bind_topic(
+                self.settings,
+                chat_id=-100998877,
+                thread_id=tid,
+                operator="1001",
+                agent_id=agent["id"],
+            )
+            tids.append(tid)
+        return tids
+
+    def _make_create(self, *, start: int = 900, delay: float = 0.0) -> AsyncMock:
+        state = {"tid": start}
+
+        async def create_forum_topic(*, chat_id, name, icon_color):
+            if delay:
+                await asyncio.sleep(delay)
+            state["tid"] += 1
+            return SimpleNamespace(message_thread_id=state["tid"], name=name)
+
+        return AsyncMock(side_effect=create_forum_topic)
+
+    def _make_send(self) -> AsyncMock:
+        sent: list[dict] = []
+
+        async def send_message(**kwargs):
+            mid = 500 + len(sent)
+            sent.append({"message_id": mid, **kwargs})
+            return SimpleNamespace(message_id=mid)
+
+        return AsyncMock(side_effect=send_message)
+
+    def _make_pin(self) -> AsyncMock:
+        async def pin_chat_message(*, chat_id, message_id, disable_notification=True):
+            return True
+
+        return AsyncMock(side_effect=pin_chat_message)
+
+    async def test_dead_topic_binding_is_recreated(self) -> None:
+        """A topic the owner deleted in Telegram is unbound and recreated."""
+        agents = self._active_agents()
+        old_tids = self._bind_all(agents)
+
+        # Sanity: all agents already look bound before the sync runs.
+        self.assertEqual(
+            {row["agent_id"] for row in telegram_topics.list_topic_bindings(self.settings, -100998877)},
+            {a["id"] for a in agents},
+        )
+
+        bot = SimpleNamespace(
+            create_forum_topic=self._make_create(),
+            send_message=self._make_send(),
+            pin_chat_message=self._make_pin(),
+            send_chat_action=AsyncMock(
+                side_effect=BadRequest("Bad Request: message thread not found")
+            ),
+        )
+
+        result = await telegram_topics.sync_forum_topics(bot, -100998877, "1001", self.settings)
+        self.assertTrue(result["ok"])
+        # Every dead binding is dropped and a fresh topic created for it.
+        self.assertEqual(len(result["created"]), len(agents))
+        self.assertEqual(len(result["existing"]), 0)
+        self.assertEqual(bot.create_forum_topic.await_count, len(agents))
+
+        # The old (dead) thread ids are gone and the new ones are stored.
+        rows = telegram_topics.list_topic_bindings(self.settings, -100998877)
+        new_tids = {row["thread_id"] for row in rows}
+        for old in old_tids:
+            self.assertNotIn(old, new_tids)
+        self.assertEqual(
+            {row["agent_id"] for row in rows},
+            {a["id"] for a in agents},
+        )
+        for item in result["created"]:
+            self.assertIn(item["thread_id"], new_tids)
+
+    async def test_transient_probe_error_keeps_binding(self) -> None:
+        """A non-dead probe error keeps the binding and never creates a topic."""
+        agents = self._active_agents()
+        old_tids = self._bind_all(agents)
+
+        bot = SimpleNamespace(
+            create_forum_topic=self._make_create(),
+            send_message=self._make_send(),
+            pin_chat_message=self._make_pin(),
+            send_chat_action=AsyncMock(side_effect=Exception("network")),
+        )
+
+        result = await telegram_topics.sync_forum_topics(bot, -100998877, "1001", self.settings)
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(result["created"]), 0)
+        self.assertEqual(len(result["existing"]), len(agents))
+        bot.create_forum_topic.assert_not_awaited()
+
+        # Bindings are untouched.
+        rows = telegram_topics.list_topic_bindings(self.settings, -100998877)
+        self.assertEqual({row["thread_id"] for row in rows}, set(old_tids))
+
+    async def test_healthy_binding_probed_once_and_reused(self) -> None:
+        """A live topic is probed exactly once and reused without recreating."""
+        agents = self._active_agents()
+        self._bind_all(agents)
+
+        bot = SimpleNamespace(
+            create_forum_topic=self._make_create(),
+            send_message=self._make_send(),
+            pin_chat_message=self._make_pin(),
+            send_chat_action=AsyncMock(return_value=True),
+        )
+
+        result = await telegram_topics.sync_forum_topics(bot, -100998877, "1001", self.settings)
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(result["created"]), 0)
+        self.assertEqual(len(result["existing"]), len(agents))
+        bot.create_forum_topic.assert_not_awaited()
+        # One liveness probe per existing binding.
+        self.assertEqual(bot.send_chat_action.await_count, len(agents))
+
+    async def test_concurrent_sync_creates_one_topic_per_agent(self) -> None:
+        """Concurrent `/topics` runs are serialized: one topic per agent."""
+        agents = self._active_agents()
+
+        bot = SimpleNamespace(
+            create_forum_topic=self._make_create(start=1000, delay=0.05),
+            send_message=self._make_send(),
+            pin_chat_message=self._make_pin(),
+            send_chat_action=AsyncMock(return_value=True),
+        )
+
+        r1, r2 = await asyncio.gather(
+            telegram_topics.sync_forum_topics(bot, -100998877, "1001", self.settings),
+            telegram_topics.sync_forum_topics(bot, -100998877, "1001", self.settings),
+        )
+        # Exactly one topic created per agent across both concurrent runs.
+        self.assertEqual(bot.create_forum_topic.await_count, len(agents))
+        self.assertEqual(len(r1["created"]) + len(r2["created"]), len(agents))
+        # Every agent ends up with exactly one binding.
+        rows = telegram_topics.list_topic_bindings(self.settings, -100998877)
+        self.assertEqual(len(rows), len(agents))
+        self.assertEqual(
+            {row["agent_id"] for row in rows},
+            {a["id"] for a in agents},
         )
 
     async def test_non_forum_chat_returns_setup_guide(self) -> None:

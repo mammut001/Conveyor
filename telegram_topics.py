@@ -14,6 +14,7 @@ Enables Telegram's native Vertical Topics Bar (竖排话题栏) experience:
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 import logging
 from pathlib import Path
@@ -35,6 +36,59 @@ TOPIC_ICON_COLORS: tuple[int, ...] = (
     0xFF93B2,  # rose
     0xFB6F5F,  # red-orange
 )
+
+# Local fallback markers used to detect a dead (closed/deleted) forum topic.
+# The canonical check lives in channel.telegram._is_dead_topic_error; this is
+# only consulted if that import is unavailable.
+_DEAD_TOPIC_MARKERS: tuple[str, ...] = (
+    "thread not found",
+    "topic_deleted",
+    "topic deleted",
+    "topic_closed",
+    "topic closed",
+)
+
+
+def _is_dead_topic_error(exc: BaseException) -> bool:
+    """True when Telegram says the forum topic is closed/deleted.
+
+    Delegates to :func:`channel.telegram._is_dead_topic_error` when it is
+    importable (there is no circular import between the two modules) and
+    falls back to a local marker check otherwise.
+    """
+    impl = None
+    try:
+        from channel.telegram import _is_dead_topic_error as impl
+    except Exception:
+        impl = None
+    if impl is not None:
+        try:
+            return bool(impl(exc))
+        except Exception:
+            return False
+    try:
+        text = str(exc).lower()
+    except Exception:
+        return False
+    return any(marker in text for marker in _DEAD_TOPIC_MARKERS)
+
+
+# Per-base-chat locks that serialize sync_forum_topics so concurrent `/topics`
+# runs cannot both read bindings and then both create duplicate topics.
+_SYNC_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _sync_lock(chat_id: str | int) -> asyncio.Lock:
+    """Return the module-level lock for `chat_id`'s base chat.
+
+    The dict is bounded by the number of base chats the owner syncs.
+    """
+    key = str(base_chat_id(chat_id))
+    lock = _SYNC_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _SYNC_LOCKS[key] = lock
+    return lock
 
 
 def _owner_id(settings: Any) -> str:
@@ -172,6 +226,48 @@ def bind_topic(
     return agent
 
 
+def unbind_topic(settings: Any, *, chat_id: str | int, thread_id: int | str) -> bool:
+    """Remove a Telegram topic binding for `(chat_id, thread_id)`.
+
+    Deletes the `telegram_topic_bindings` row and the scoped
+    `agent_channel_bindings` routing row written by `bind_topic`. Returns True
+    when a binding row was actually removed.
+    """
+    owner = _owner_id(settings)
+    if not owner:
+        return False
+    raw_chat = base_chat_id(chat_id)
+    try:
+        tid = int(thread_id)
+    except (TypeError, ValueError):
+        return False
+    scoped_chat = topic_chat_id(raw_chat, tid)
+    conn = _connect(settings)
+    try:
+        with conn:
+            cur = conn.execute(
+                """DELETE FROM telegram_topic_bindings
+                   WHERE chat_id = ? AND thread_id = ? AND operator = ?""",
+                (raw_chat, tid, owner),
+            )
+            removed = cur.rowcount > 0
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS agent_channel_bindings(
+                       channel TEXT NOT NULL CHECK(channel IN ('telegram','feishu')),
+                       chat_id TEXT NOT NULL,
+                       operator TEXT NOT NULL,
+                       agent_id TEXT NOT NULL,
+                       PRIMARY KEY(channel,chat_id))"""
+            )
+            conn.execute(
+                "DELETE FROM agent_channel_bindings WHERE channel = 'telegram' AND chat_id = ?",
+                (scoped_chat,),
+            )
+    finally:
+        conn.close()
+    return removed
+
+
 def bound_topic_agent(
     settings: Any,
     chat_id: str | int,
@@ -282,6 +378,40 @@ def format_pinned_card(agent: dict[str, Any], *, thread_id: int) -> str:
     return "\n".join(lines)
 
 
+async def _probe_topic_alive(bot: Any, chat_id: int | str, thread_id: int) -> bool:
+    """Probe whether a forum topic still exists in Telegram.
+
+    Returns True when the topic is healthy (the probe succeeded) **or** when
+    the probe failed for a transient reason (network, permissions, missing
+    method on the bot) so the existing binding is kept. Returns False only
+    when Telegram explicitly reports the topic is closed/deleted.
+    """
+    try:
+        await bot.send_chat_action(
+            chat_id=chat_id,
+            action="typing",
+            message_thread_id=thread_id,
+        )
+        return True
+    except Exception as exc:
+        if _is_dead_topic_error(exc):
+            logger.info(
+                "Topic %s on chat %s is closed/deleted (%s); recreating",
+                thread_id,
+                chat_id,
+                exc,
+            )
+            return False
+        logger.debug(
+            "Liveness probe for topic %s on chat %s failed transiently; "
+            "keeping existing binding: %s",
+            thread_id,
+            chat_id,
+            exc,
+        )
+        return True
+
+
 async def sync_forum_topics(
     bot: Any,
     chat_id: int | str,
@@ -292,6 +422,18 @@ async def sync_forum_topics(
     owner = _owner_id(settings)
     if not owner or str(operator_id) != owner:
         raise PermissionError("仅限本人同步 Telegram 话题栏")
+    # Serialize per base chat so concurrent `/topics` runs cannot both read the
+    # bindings and then both create duplicate topics.
+    async with _sync_lock(chat_id):
+        return await _sync_forum_topics_locked(bot, chat_id, owner, settings)
+
+
+async def _sync_forum_topics_locked(
+    bot: Any,
+    chat_id: int | str,
+    owner: str,
+    settings: Any,
+) -> dict[str, Any]:
     from agents import AgentStore
     store = AgentStore(settings)
     agents = [a for a in store.list() if not a.get("archived")]
@@ -310,8 +452,17 @@ async def sync_forum_topics(
 
     for idx, agent in enumerate(agents):
         if agent["id"] in by_agent:
-            reused.append(by_agent[agent["id"]])
-            continue
+            row = by_agent[agent["id"]]
+            thread_id = int(row["thread_id"])
+            # Probe liveness before reusing: if the owner deleted/closed the
+            # topic in Telegram the binding row still exists, so recreate it.
+            if await _probe_topic_alive(bot, target_chat, thread_id):
+                reused.append(row)
+                continue
+            # Dead topic: drop the stale binding and fall through to create a
+            # fresh topic for this agent.
+            unbind_topic(settings, chat_id=target_chat, thread_id=thread_id)
+            by_agent.pop(agent["id"], None)
         icon_color = TOPIC_ICON_COLORS[idx % len(TOPIC_ICON_COLORS)]
         topic_title = f"{agent['name']}"
         try:
