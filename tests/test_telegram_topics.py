@@ -14,6 +14,7 @@ import agent_context as ac
 from agents import AgentStore
 from channel.telegram import TelegramChatOutbound, inbound_from_update, split_chat_thread
 from config import Settings
+from personal_tools.long_term_memory import allowed_for
 import telegram_topics
 
 
@@ -151,8 +152,11 @@ class TelegramTopicsTests(unittest.IsolatedAsyncioTestCase):
         upd_fin = self._fake_update("本月信用卡账单是多少", thread_id=finance_topic["thread_id"])
         msg_fin = telegram_topics.contextualize_inbound(self.settings, inbound_from_update(upd_fin))
         self.assertEqual(msg_fin.chat_id, f"-100998877:topic:{finance_topic['thread_id']}")
-        self.assertEqual(msg_fin.chat_type, "p2p")
+        # Routes like a DM, but the real chat type is preserved (supergroup forum).
+        self.assertTrue(msg_fin.owner_topic)
+        self.assertEqual(msg_fin.chat_type, "group")
         self.assertTrue(msg_fin.mentioned_bot)
+        self.assertTrue(routing.authorized(self.settings, msg_fin))
         self.assertEqual(
             routing.bound(self.settings, "telegram", msg_fin.chat_id),
             self.finance["id"],
@@ -181,6 +185,7 @@ class TelegramTopicsTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(msg_unbound.chat_type, "group")
         self.assertFalse(msg_unbound.mentioned_bot)
+        self.assertFalse(msg_unbound.owner_topic)
         self.assertEqual(msg_unbound.chat_id, "-100998877")
 
         # Bound topic, but non-owner user: never elevated.
@@ -197,7 +202,66 @@ class TelegramTopicsTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(msg_stranger.chat_type, "group")
         self.assertFalse(msg_stranger.mentioned_bot)
+        self.assertFalse(msg_stranger.owner_topic)
         self.assertEqual(msg_stranger.chat_id, "-100998877")
+
+    async def test_bound_group_topic_routes_like_dm_but_stays_a_group(self) -> None:
+        """A bound topic in a supergroup forum: DM routing, group privacy."""
+        telegram_topics.bind_topic(
+            self.settings,
+            chat_id=-100998877,
+            thread_id=42,
+            operator="1001",
+            agent_id="Finance",
+        )
+        upd = self._fake_update("整理一下这个月的预算", thread_id=42)
+        msg = telegram_topics.contextualize_inbound(
+            self.settings, inbound_from_update(upd)
+        )
+        # chat_type is preserved: other members read this topic.
+        self.assertEqual(msg.chat_type, "group")
+        self.assertEqual(msg.chat_id, "-100998877:topic:42")
+        self.assertTrue(msg.owner_topic)
+        self.assertTrue(msg.mentioned_bot)
+        # Still routes to the bound Agent exactly like a DM.
+        self.assertTrue(routing.authorized(self.settings, msg))
+        self.assertEqual(
+            routing.bound(self.settings, "telegram", msg.chat_id),
+            self.finance["id"],
+        )
+        self.assertEqual(
+            ac.resolve(self.settings, "telegram", msg.chat_id, msg.operator_id).agent_id,
+            self.finance["id"],
+        )
+        # Private-chat-only privacy guards still see a group.
+        self.assertFalse(allowed_for(self.settings, msg))
+        self.assertTrue(allowed_for(
+            replace(self.settings, long_term_memory_groups=True), msg
+        ))
+        # A non-owner in the same topic is not elevated, so the group guards
+        # below cannot be bypassed by anybody else.
+        stranger = telegram_topics.contextualize_inbound(
+            self.settings,
+            inbound_from_update(self._fake_update("在吗", user_id=2002, thread_id=42)),
+        )
+        self.assertEqual(stranger.chat_type, "group")
+        self.assertFalse(stranger.owner_topic)
+        self.assertFalse(routing.authorized(self.settings, stranger))
+
+    async def test_private_chat_topic_keeps_p2p_behaviour(self) -> None:
+        """Bot Threaded Mode private chat: scoped like before, chat_type stays p2p."""
+        upd = self._fake_update(
+            "你好", chat_id=1001, chat_type="private", thread_id=7
+        )
+        msg = telegram_topics.contextualize_inbound(
+            self.settings, inbound_from_update(upd)
+        )
+        self.assertEqual(msg.chat_id, "1001:topic:7")
+        self.assertEqual(msg.chat_type, "p2p")
+        self.assertTrue(msg.owner_topic)
+        self.assertTrue(msg.mentioned_bot)
+        self.assertTrue(routing.authorized(self.settings, msg))
+        self.assertTrue(allowed_for(self.settings, msg))
 
     async def test_outbound_passes_message_thread_id(self) -> None:
         self.assertEqual(split_chat_thread("-100998877:topic:102"), (-100998877, 102))

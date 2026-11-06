@@ -235,6 +235,11 @@ def list_topic_bindings(settings: Any, chat_id: str | int) -> list[dict[str, Any
 def contextualize_inbound(settings: Any, msg: InboundMessage) -> InboundMessage:
     """Scope an owner's Telegram topic message to its dedicated `<chat_id>:topic:<thread_id>` session.
 
+    The message routes like a DM: `owner_topic=True` (accepted wherever a
+    private chat is required for routing) and `mentioned_bot=True` so the bot
+    answers without an @mention. `chat_type` is left untouched, so a topic in
+    a supergroup forum keeps reading as a group for privacy guards.
+
     Leaves non-topic messages and unbound group chats completely untouched.
     """
     if msg.channel != "telegram" or not msg.thread_id:
@@ -248,7 +253,11 @@ def contextualize_inbound(settings: Any, msg: InboundMessage) -> InboundMessage:
     return replace(
         msg,
         chat_id=topic_chat_id(msg.chat_id, msg.thread_id),
-        chat_type="p2p",
+        # chat_type is deliberately preserved: a bound topic in a supergroup
+        # forum is still a group other people can read, so privacy guards
+        # (long-term memory, /agentkill, task status) must keep seeing
+        # "group". owner_topic makes it route like a DM instead.
+        owner_topic=True,
         mentioned_bot=True,
     )
 

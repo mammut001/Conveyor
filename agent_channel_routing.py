@@ -29,8 +29,11 @@ def _owner(settings, channel):
 
 def authorized(settings, msg):
     from channel.auth import is_allowed
+    # owner_topic: the owner's own message in a bound Telegram Forum Topic
+    # routes like a private chat even though chat_type stays "group".
     return (enabled(settings) and msg.channel in ("telegram", "feishu")
-            and msg.chat_type == "p2p" and bool(msg.chat_id)
+            and (msg.chat_type == "p2p" or getattr(msg, "owner_topic", False))
+            and bool(msg.chat_id)
             and bool(_owner(settings, msg.channel))
             and msg.operator_id == _owner(settings, msg.channel)
             and is_allowed(msg, settings))

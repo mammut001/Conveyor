@@ -164,7 +164,11 @@ async def choose(settings, msg, *, model=None):
     if msg.text.strip().lower().startswith("!main"):
         return Decision(None, reason="opt_out")
     # Only authenticated, private owner requests on the built-in main agent.
-    if (msg.chat_type not in ("p2p", "unknown") or not is_allowed(msg, settings)
+    # owner_topic = the owner's own message in a bound Telegram Forum Topic:
+    # it routes like a DM although chat_type still says "group".
+    if ((msg.chat_type not in ("p2p", "unknown")
+         and not getattr(msg, "owner_topic", False))
+            or not is_allowed(msg, settings)
             or msg.channel == "feishu" and not getattr(settings, "lark_allowed_open_id", None)):
         return Decision(None, reason="untrusted_owner")
     try:
