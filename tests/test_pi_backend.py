@@ -833,7 +833,9 @@ class PiSystemPromptTests(unittest.TestCase):
             self.assertIn(f"The project workspace is {job.worktree_path}", prompt)
             self.assertIn("SAFETY POLICY", prompt)
 
-class PiProviderErrorTests(PiBackendTests):
+class PiProviderErrorTests(unittest.TestCase):
+    _thinking_job = PiBackendTests._thinking_job
+
     def test_provider_error_with_exit_zero_writes_no_placeholder_final(self) -> None:
         # Real pi 0.73 exits 0 when the provider answers 404 for an unknown model.
         with tempfile.TemporaryDirectory() as raw:
@@ -857,6 +859,45 @@ class PiProviderErrorTests(PiBackendTests):
             self.assertEqual(job.return_code, 0)
             self.assertIn("does not exist", job.error)
             self.assertFalse(job.final_message_path.exists())
+
+class PiTimeoutStopTests(unittest.TestCase):
+    _thinking_job = PiBackendTests._thinking_job
+
+    """On timeout pi must get SIGTERM first so it can kill its tools' process groups."""
+
+    def _run_with_script(self, tmp: Path, body: str):
+        import dataclasses
+        settings = dataclasses.replace(_make_settings(tmp), codex_timeout_seconds=1)
+        backend = PiBackend(settings)
+        script = tmp / "fake-pi-hang"
+        script.write_text("#!/bin/bash\n" + body, encoding="utf-8")
+        script.chmod(0o755)
+        backend.pi_bin = str(script)
+        job = self._thinking_job(tmp, settings)
+
+        async def on_progress(text: str) -> None:
+            pass
+
+        asyncio.run(backend._run_codex_attempt(job, on_progress))
+        return job
+
+    def test_timeout_sends_sigterm_before_kill(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            marker = tmp / "got-term"
+            job = self._run_with_script(
+                tmp, f"trap 'touch {marker}; exit 143' TERM\ncat >/dev/null\nwhile true; do sleep 0.1; done\n")
+            self.assertIn("Timed out", job.error)
+            self.assertTrue(marker.exists(), "pi was killed without a chance to clean up")
+            self.assertEqual(job.return_code, 143)
+
+    def test_timeout_falls_back_to_sigkill(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            with patch("runner.pi_agent.PI_TERMINATE_GRACE_SECONDS", 0.3):
+                job = self._run_with_script(
+                    Path(raw), "trap '' TERM\ncat >/dev/null\nwhile true; do sleep 0.1; done\n")
+            self.assertIn("Timed out", job.error)
+            self.assertEqual(job.return_code, -9)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,8 @@ from runner.types import DESTRUCTIVE_CONFIRM_TAG, Job, JobMode, ProgressCallback
 MAX_PI_STREAM_LINE = 1_000_000
 MAX_PI_LOG_BYTES = 2_000_000
 MAX_PI_STDERR_BYTES = 32_000
+# Time pi gets after SIGTERM to kill the process groups of its running tools.
+PI_TERMINATE_GRACE_SECONDS = 5.0
 
 
 # Env var NAME pi resolves from its own environment for each provider's API
@@ -532,8 +534,7 @@ class PiBackend(CodexRunner):
             )
         except asyncio.TimeoutError:
             job.error = f"Timed out after {self.settings.codex_timeout_seconds} seconds."
-            process.kill()
-            job.return_code = await process.wait()
+            job.return_code = await self._stop_pi(process)
         await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
         job.process = None
 
@@ -555,6 +556,29 @@ class PiBackend(CodexRunner):
             job.error = "cancelled"
         elif job.return_code is not None and job.return_code < 0 and not job.error:
             job.error = "Pi process terminated unexpectedly."
+
+    @staticmethod
+    async def _stop_pi(process: asyncio.subprocess.Process) -> int | None:
+        """Stop pi so that it can clean up the commands it started.
+
+        pi runs each bash tool call in its own detached process group and kills
+        those groups on SIGTERM. SIGKILL cannot be handled, so killing pi
+        outright left a hung build or test running on the server forever.
+        """
+        if process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                return await asyncio.wait_for(process.wait(), PI_TERMINATE_GRACE_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        return await process.wait()
 
     @staticmethod
     def _usage_from_event(event: dict[str, Any]) -> dict[str, int] | None:
