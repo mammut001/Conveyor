@@ -13,6 +13,8 @@ from config import load_settings
 from scripts.harness_common import (
     CheckResult,
     attempt_completed,
+    check_chat_provider,
+    check_pi_backend,
     check_provider_models,
     check_systemd_active,
     latest_attempt_file,
@@ -102,6 +104,11 @@ def main() -> None:
     ]
     results.extend(check_runtime_dirs(settings))
     results.extend(check_latest_job(settings))
+
+    results.extend(check_pi_backend(settings))
+    chat_result = check_chat_provider(settings)
+    if chat_result is not None:
+        results.append(chat_result)
 
     if args.send_test:
         try:
