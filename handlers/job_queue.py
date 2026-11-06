@@ -913,15 +913,13 @@ class JobQueue:
         running_id: str | None = None
         try:
             with conn:
-                if queue_job_id:
-                    row = conn.execute(
-                        "SELECT id FROM queued_jobs WHERE id = ? AND state = 'running'",
-                        (queue_job_id,),
-                    ).fetchone()
-                else:
-                    row = conn.execute(
-                        "SELECT id FROM queued_jobs WHERE state = 'running' LIMIT 1"
-                    ).fetchone()
+                # Only the job that actually finished may be closed. Without an
+                # id, "any running row" closed another lane's (or another
+                # process's) live job and let a second job start beside it.
+                row = conn.execute(
+                    "SELECT id FROM queued_jobs WHERE id = ? AND state = 'running'",
+                    (queue_job_id,),
+                ).fetchone() if queue_job_id else None
                 if row:
                     running_id = str(row[0])
                     conn.execute(
@@ -943,6 +941,10 @@ class JobQueue:
                 {"error": redact_text(error_msg or "")} if error_msg else {},
             )
         await self._start_next_if_owned(now_str)
+
+    async def start_next(self) -> None:
+        """Start queued work if a lane is free (e.g. after /queue resume)."""
+        await self._start_next_if_owned(datetime.now(timezone.utc).isoformat())
 
     async def _start_next_if_owned(self, now_str: str) -> None:
         if self._paused:

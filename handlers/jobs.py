@@ -188,6 +188,13 @@ async def submit_codex_job(
 
     # No job running, execute immediately
     dequeued_job = await queue.dequeue(require_idle=True)
+    if dequeued_job and dequeued_job.id != queued_job.id:
+        # An older job was first in line (enqueued by another process, or left
+        # queued across a restart). Start it with its own chat and port, never
+        # this submitter's; the new job waits its turn.
+        await _start_queued_job_callback(dequeued_job)
+        await port.reply(msg, queue_msg)
+        return True, queue_msg, queued_job
     if dequeued_job:
         execute_msg = dequeued_job._msg or msg
         execute_port = dequeued_job._port or port

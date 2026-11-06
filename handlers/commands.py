@@ -2068,8 +2068,9 @@ async def _queue_resume(msg, port, _runner, _settings, _arg):
     queue = get_job_queue()
     await queue.resume()
     await port.reply(msg, "队列已恢复，将自动执行下一个任务。")
-    # Try to start next job if any
-    await queue.on_job_completed()
+    # Start the next job if a lane is free. Never on_job_completed() here: with
+    # no ids it marks whichever job is running as completed.
+    await queue.start_next()
 
 
 COMMAND_TABLE: dict[str, CommandSpec] = {
