@@ -159,6 +159,46 @@ class QueueSafetyTests(unittest.TestCase):
             self.assertEqual(executed, [])  # nothing ran under chatZ's message
             self.assertNotEqual(mine.id, foreign.id)
 
+class QueueMemoryReferenceTests(unittest.TestCase):
+    def test_handles_of_jobs_closed_elsewhere_are_released(self):
+        with tempfile.TemporaryDirectory() as root:
+            settings = SimpleNamespace(
+                codex_memory_root=Path(root), conveyor_max_pending_jobs=10,
+                conveyor_event_retention_per_job=100)
+            runner = SimpleNamespace(current_job=None)
+            queue = JobQueue(max_length=10)
+            queue.configure(settings, runner, recover=False)
+            msg = InboundMessage(channel="web", operator_id="w", chat_id="c", message_id=None, text="t")
+
+            async def scenario():
+                _, _, live = await queue.enqueue("run", "live", msg, FakeOutbound(), runner)
+                for i in range(queue._MEMORY_REFERENCE_PRUNE_AT):
+                    queue._memory_references[f"gone-{i}"] = {"msg": msg}
+                queue._prune_memory_references()
+                return live
+
+            live = asyncio.run(scenario())
+            self.assertEqual(set(queue._memory_references), {live.id})
+
+    def test_completion_releases_handles_even_if_row_was_closed_by_another_process(self):
+        with tempfile.TemporaryDirectory() as root:
+            settings = SimpleNamespace(
+                codex_memory_root=Path(root), conveyor_max_pending_jobs=10,
+                conveyor_event_retention_per_job=100)
+            runner = SimpleNamespace(current_job=None)
+            queue = JobQueue(max_length=10)
+            queue.configure(settings, runner, recover=False)
+            msg = InboundMessage(channel="web", operator_id="w", chat_id="c", message_id=None, text="t")
+
+            async def scenario():
+                _, _, job = await queue.enqueue("run", "x", msg, FakeOutbound(), runner)
+                await queue.cancel(job.id)               # closed without this completion path
+                await queue.on_job_completed(queue_job_id=job.id)
+                return job
+
+            job = asyncio.run(scenario())
+            self.assertNotIn(job.id, queue._memory_references)
+
 
 if __name__ == "__main__":
     unittest.main()
