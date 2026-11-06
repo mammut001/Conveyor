@@ -322,6 +322,12 @@ def inbound_from_event(
     message_id = getattr(msg, "message_id", None) or getattr(msg, "id", None)
     chat_type = getattr(msg, "chat_type", None) or "unknown"
     text = (getattr(msg, "content_text", None) or "").strip()
+    if not text:
+        # The SDK merges messages that arrive in quick succession
+        # (chat_pipeline.merge_batch) into one whose content.text holds the
+        # joined text but whose content_text is left empty.
+        content = getattr(msg, "content", None)
+        text = str(getattr(content, "text", "") or getattr(content, "title", "") or "").strip()
     attachments = _message_images(msg, message_id)
     if attachments:
         text = _IMAGE_TOKEN_RE.sub(" ", text).strip()
