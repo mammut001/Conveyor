@@ -175,6 +175,22 @@ class PiBackend(CodexRunner):
             return resolved
         return await super()._create_worktree(job)
 
+    @staticmethod
+    def _pi_workspace_line(job: Job) -> str:
+        """Name the project directory explicitly.
+
+        Without it the model only ever saw /srv/conveyor/downloads as a concrete
+        path and occasionally invented sibling paths (e.g. /srv/worker/x.py)
+        for project files.
+        """
+        workspace = job.worktree_path
+        if workspace is None:
+            return ""
+        return (
+            f"The project workspace is {workspace} (your current directory). Create and edit "
+            "project files there, using relative paths, unless the user names another location. "
+        )
+
     def _pi_system_prompt(self, job: Job) -> str:
         confirmed = DESTRUCTIVE_CONFIRM_TAG in (job.prompt or "")
         if confirmed:
@@ -188,7 +204,8 @@ class PiBackend(CodexRunner):
         return (
             "You are Pi, Conveyor's autonomous execution agent on the operator's Linux server. "
             "Reply concisely in the same language as the user (default Simplified Chinese). "
-            "Execute the user's request directly using your bash, read, write, edit, grep, find, "
+            + self._pi_workspace_line(job)
+            + "Execute the user's request directly using your bash, read, write, edit, grep, find, "
             "and ls tools without asking for confirmation on non-destructive tasks. "
             "When downloading files without an explicit target directory, save them under "
             "/srv/conveyor/downloads/ (create the directory if needed) and report the full file path. "

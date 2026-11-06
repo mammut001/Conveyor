@@ -821,6 +821,18 @@ class PiBackendTests(unittest.TestCase):
             self.assertEqual(end.progress, "")
             self.assertEqual(end.kind, "")
 
+class PiSystemPromptTests(unittest.TestCase):
+    def test_system_prompt_names_the_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            settings = _make_settings(Path(raw))
+            backend = PiBackend(settings)
+            job = Job(id="j1", mode=JobMode.RUN, prompt="hi", sandbox="workspace-write")
+            self.assertNotIn("project workspace", backend._pi_system_prompt(job))
+            job.worktree_path = Path(raw) / "workspace"
+            prompt = backend._pi_system_prompt(job)
+            self.assertIn(f"The project workspace is {job.worktree_path}", prompt)
+            self.assertIn("SAFETY POLICY", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
