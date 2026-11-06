@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -27,6 +28,42 @@ MAX_PI_STDERR_BYTES = 32_000
 
 DESTRUCTIVE_CONFIRM_TAG = "[OPERATOR_CONFIRMED_DESTRUCTIVE]"
 
+# Env var NAME pi resolves from its own environment for each provider's API
+# key (see pi's models.json ``apiKey`` entries, e.g. ``"apiKey":
+# "STEPFUN_API_KEY"``). Only the mapped key of the selected provider is ever
+# handed to the child process, so one provider's credential cannot leak into
+# another provider's run.
+PI_PROVIDER_KEY_ENV = {
+    "deepseek": "DEEPSEEK_API_KEY",
+    "stepfun": "STEPFUN_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+    "google": "GEMINI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "xai": "XAI_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+}
+
+# Operators may point Conveyor at a differently named key env var; anything
+# that is not a valid env var name is ignored.
+_PI_API_KEY_ENV_OVERRIDE = "CONVEYOR_PI_API_KEY_ENV"
+_VALID_ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def pi_api_key_env(provider: str) -> str:
+    """Env var name carrying the API key of ``provider`` for the Pi CLI."""
+    override = (os.getenv(_PI_API_KEY_ENV_OVERRIDE) or "").strip()
+    if _VALID_ENV_NAME.fullmatch(override):
+        return override
+    prov = (provider or "").strip().lower()
+    mapped = PI_PROVIDER_KEY_ENV.get(prov)
+    if mapped:
+        return mapped
+    slug = re.sub(r"[^A-Z0-9]+", "_", (prov or "").upper()).strip("_")
+    return f"{slug}_API_KEY"
+
 
 @dataclass(frozen=True)
 class _PiEvent:
@@ -39,6 +76,12 @@ class _PiEvent:
 
 
 def normalize_pi_model(provider: str, raw_model: str) -> str:
+    """Normalize the model name for the selected Pi provider.
+
+    Only DeepSeek aliases are rewritten; every other provider's model name is
+    passed through verbatim (possibly empty, in which case ``--model`` is
+    omitted and pi picks its own default).
+    """
     prov = (provider or "deepseek").strip().lower()
     model = (raw_model or "").strip()
     if prov == "deepseek":
@@ -46,7 +89,7 @@ def normalize_pi_model(provider: str, raw_model: str) -> str:
             return "deepseek-v4-flash"
         if model in {"deepseek-reasoner", "deepseek-r1", "deepseek-pro"}:
             return "deepseek-v4-pro"
-    return model or "deepseek-v4-flash"
+    return model
 
 
 class PiBackend(CodexRunner):
@@ -73,6 +116,7 @@ class PiBackend(CodexRunner):
             or "deepseek-v4-flash"
         ).strip()
         self.pi_model = normalize_pi_model(self.pi_provider, raw_model)
+        self.pi_api_key_env = pi_api_key_env(self.pi_provider)
 
     def _provider_credential_keys(self) -> set[str]:
         return {
@@ -81,7 +125,27 @@ class PiBackend(CodexRunner):
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_AUTH_TOKEN",
             "MINIMAX_API_KEY",
+            self.pi_api_key_env,
         }
+
+    def _console_secret(self, key: str) -> str:
+        """Read one provider key from the Web Console secret store.
+
+        Mirrors ``subprocess_env.build_child_env``'s use of the secrets file so
+        an operator-stored key still reaches pi under credential isolation.
+        Never logs or returns anything but the value; failures are silent.
+        """
+        try:
+            from console_secrets import path_for, read_secret
+            secrets_path = getattr(self.settings, "secrets_file", None)
+            if secrets_path is None and getattr(self.settings, "codex_memory_root", None) is not None:
+                secrets_path = path_for(self.settings)
+            if secrets_path is None:
+                return ""
+            stored = read_secret(secrets_path, key)
+        except Exception:
+            return ""
+        return stored.strip() if isinstance(stored, str) else ""
 
     async def validate(self) -> None:
         await super().validate()
@@ -130,7 +194,7 @@ class PiBackend(CodexRunner):
 
     def _pi_command(self, job: Job) -> list[str]:
         tools = "read,bash,edit,write,grep,find,ls"
-        return [
+        command = [
             self.pi_bin,
             "--mode", "json",
             "-p",
@@ -141,10 +205,14 @@ class PiBackend(CodexRunner):
             "--no-themes",
             "--no-context-files",
             "--provider", self.pi_provider,
-            "--model", self.pi_model,
+        ]
+        if self.pi_model:
+            command += ["--model", self.pi_model]
+        command += [
             "--tools", tools,
             "--append-system-prompt", self._pi_system_prompt(job),
         ]
+        return command
 
     async def _run_codex_attempt(self, job: Job, on_progress: ProgressCallback) -> None:
         """Run one Pi CLI attempt while preserving Conveyor lifecycle APIs."""
@@ -152,16 +220,22 @@ class PiBackend(CodexRunner):
         from runner.operators.run import job_child_env
         env = job_child_env(self, job)
 
-        # Ensure DeepSeek API key is available to Pi.
-        deepseek_key = (
-            env.get("DEEPSEEK_API_KEY")
-            or os.getenv("DEEPSEEK_API_KEY")
-            or os.getenv("CONVEYOR_CHAT_API_KEY")
-            or getattr(self.settings, "chat_api_key", None)
-            or ""
-        ).strip()
-        if deepseek_key:
-            env["DEEPSEEK_API_KEY"] = deepseek_key
+        # Ensure the API key of the selected provider is available to Pi.
+        # Only DeepSeek keeps the legacy Conveyor fallbacks so a non-DeepSeek
+        # provider never receives a credential it cannot use (and DeepSeek
+        # behaviour is unchanged).
+        key_name = self.pi_api_key_env
+        value = str(env.get(key_name) or os.getenv(key_name) or "").strip()
+        if not value and self.pi_provider == "deepseek":
+            value = str(
+                os.getenv("CONVEYOR_CHAT_API_KEY")
+                or getattr(self.settings, "chat_api_key", None)
+                or ""
+            ).strip()
+        if not value:
+            value = self._console_secret(key_name)
+        if value:
+            env[key_name] = value
 
         pi_dir = Path(self.settings.codex_task_root) / "pi-agent"
         try:

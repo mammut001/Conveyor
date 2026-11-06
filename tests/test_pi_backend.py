@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import queue
@@ -12,10 +13,50 @@ from unittest.mock import patch
 from channel.types import InboundMessage
 from config import Settings
 from handlers.chat import is_destructive_request, routes_to_agent
-from runner.pi_agent import PiBackend, normalize_pi_model
+from runner.pi_agent import (
+    PI_PROVIDER_KEY_ENV,
+    PiBackend,
+    normalize_pi_model,
+    pi_api_key_env,
+)
 from runner.providers import create_agent_backend, create_runtime_runner
 from runner.types import Job, JobMode, JobState
 from web_chat import WebChatPort, run_web_chat
+
+
+def _base_env(**extra: str) -> dict[str, str]:
+    env = {
+        "HOME": "/tmp",
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "TERM": "dumb",
+        "TMPDIR": "/tmp",
+    }
+    env.update(extra)
+    return env
+
+
+def _write_fake_pi(tmp: Path, name: str, dump_path: Path) -> Path:
+    """Fake pi CLI that records the environment it was handed."""
+    fake_pi = tmp / name
+    fake_pi.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "sys.stdin.read()\n"
+        f"with open({str(dump_path)!r}, 'w', encoding='utf-8') as fh:\n"
+        "    json.dump(dict(os.environ), fh)\n"
+        "print(json.dumps({'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': 'ok'}]}]}), flush=True)\n",
+        encoding="utf-8",
+    )
+    fake_pi.chmod(0o755)
+    return fake_pi
+
+
+def _run_pi(backend: PiBackend, job: Job) -> None:
+    async def on_progress(text: str) -> None:
+        pass
+
+    asyncio.run(backend._run_codex_attempt(job, on_progress))
 
 
 def _make_settings(tmp: Path) -> Settings:
@@ -324,6 +365,150 @@ class PiBackendTests(unittest.TestCase):
             self.assertEqual(len(approvals), 1)
             self.assertEqual(approvals[0]["tool_name"], "pi.destructive_task")
 
+
+    def test_normalize_pi_model(self) -> None:
+        self.assertEqual(normalize_pi_model("deepseek", "deepseek-flash"), "deepseek-v4-flash")
+        self.assertEqual(normalize_pi_model("deepseek", "deepseek-chat"), "deepseek-v4-flash")
+        self.assertEqual(normalize_pi_model("deepseek", "deepseek-reasoner"), "deepseek-v4-pro")
+        self.assertEqual(normalize_pi_model("openai", "gpt-4o"), "gpt-4o")
+        # Non-DeepSeek providers keep their own model names, including "".
+        self.assertEqual(normalize_pi_model("stepfun", "step-5-preview"), "step-5-preview")
+        self.assertEqual(normalize_pi_model("stepfun", ""), "")
+        self.assertEqual(normalize_pi_model("anthropic", "  "), "")
+        self.assertEqual(normalize_pi_model("stepfun", "  step-5-preview "), "step-5-preview")
+
+    def test_pi_api_key_env_mapping_fallback_and_override(self) -> None:
+        for provider, expected in PI_PROVIDER_KEY_ENV.items():
+            self.assertEqual(pi_api_key_env(provider), expected)
+        # Unknown provider falls back to a derived, valid env var name.
+        self.assertEqual(pi_api_key_env("my-llm"), "MY_LLM_API_KEY")
+        self.assertEqual(pi_api_key_env("my.llm.v2"), "MY_LLM_V2_API_KEY")
+        self.assertEqual(pi_api_key_env(""), "_API_KEY")
+        # A valid override wins for every provider.
+        with patch.dict(os.environ, {"CONVEYOR_PI_API_KEY_ENV": "MY_CUSTOM_KEY"}):
+            self.assertEqual(pi_api_key_env("stepfun"), "MY_CUSTOM_KEY")
+            self.assertEqual(pi_api_key_env("deepseek"), "MY_CUSTOM_KEY")
+            self.assertEqual(pi_api_key_env("whatever"), "MY_CUSTOM_KEY")
+        # An invalid override is ignored.
+        with patch.dict(os.environ, {"CONVEYOR_PI_API_KEY_ENV": "lower_case key"}):
+            self.assertEqual(pi_api_key_env("stepfun"), "STEPFUN_API_KEY")
+        with patch.dict(os.environ, {"CONVEYOR_PI_API_KEY_ENV": "1BAD"}):
+            self.assertEqual(pi_api_key_env("stepfun"), "STEPFUN_API_KEY")
+        with patch.dict(os.environ, {"CONVEYOR_PI_API_KEY_ENV": ""}):
+            self.assertEqual(pi_api_key_env("deepseek"), "DEEPSEEK_API_KEY")
+
+    def test_pi_command_omits_empty_model(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            settings = _make_settings(Path(raw))
+            with patch.dict(os.environ, _base_env(CONVEYOR_PI_PROVIDER="stepfun")):
+                backend = PiBackend(settings)
+            self.assertEqual(backend.pi_provider, "stepfun")
+            self.assertEqual(backend.pi_api_key_env, "STEPFUN_API_KEY")
+            self.assertIn(backend.pi_api_key_env, backend._provider_credential_keys())
+            job = Job("job-cmd", JobMode.RUN, "hi", "unused")
+            command = backend._pi_command(job)
+            self.assertIn("--provider", command)
+            self.assertIn("stepfun", command)
+            if backend.pi_model:
+                self.assertIn("--model", command)
+            # An empty model must not be passed to the CLI at all.
+            backend.pi_model = ""
+            command = backend._pi_command(job)
+            self.assertNotIn("--model", command)
+            self.assertIn("--provider", command)
+
+    def test_run_codex_attempt_stepfun_key_only(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            dump = tmp / "env.json"
+            fake_pi = _write_fake_pi(tmp, "fake-pi-stepfun", dump)
+            with patch.dict(
+                os.environ,
+                _base_env(
+                    CONVEYOR_PI_PROVIDER="stepfun",
+                    CONVEYOR_PI_MODEL="step-5-preview",
+                    STEPFUN_API_KEY="sk-stepfun-test",
+                ),
+                clear=True,
+            ):
+                backend = PiBackend(settings)
+                backend.pi_bin = str(fake_pi)
+                self.assertEqual(backend.pi_model, "step-5-preview")
+                job = Job(
+                    "job-stepfun",
+                    JobMode.RUN,
+                    "hello",
+                    "unused",
+                    state=JobState.RUNNING,
+                    worktree_path=settings.codex_workspace_root,
+                    log_path=settings.codex_task_root / "job.log",
+                    final_message_path=settings.codex_task_root / "final.txt",
+                )
+                _run_pi(backend, job)
+            self.assertEqual(job.return_code, 0, job.error)
+            child_env = json.loads(dump.read_text(encoding="utf-8"))
+            # The StepFun key reaches pi...
+            self.assertEqual(child_env.get("STEPFUN_API_KEY"), "sk-stepfun-test")
+            # ...and the DeepSeek key from settings.chat_api_key is NOT leaked
+            # into a non-DeepSeek provider run.
+            self.assertNotIn("DEEPSEEK_API_KEY", child_env)
+
+    def test_run_codex_attempt_stepfun_key_with_env_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = dataclasses.replace(_make_settings(tmp), env_isolation=True)
+            dump = tmp / "env-isolated.json"
+            fake_pi = _write_fake_pi(tmp, "fake-pi-isolated", dump)
+            with patch.dict(
+                os.environ,
+                _base_env(
+                    CONVEYOR_PI_PROVIDER="stepfun",
+                    STEPFUN_API_KEY="sk-stepfun-isolated",
+                ),
+                clear=True,
+            ):
+                backend = PiBackend(settings)
+                backend.pi_bin = str(fake_pi)
+                job = Job(
+                    "job-stepfun-isolated",
+                    JobMode.RUN,
+                    "hello",
+                    "unused",
+                    state=JobState.RUNNING,
+                    worktree_path=settings.codex_workspace_root,
+                    log_path=settings.codex_task_root / "job.log",
+                    final_message_path=settings.codex_task_root / "final.txt",
+                )
+                _run_pi(backend, job)
+            self.assertEqual(job.return_code, 0, job.error)
+            child_env = json.loads(dump.read_text(encoding="utf-8"))
+            self.assertEqual(child_env.get("STEPFUN_API_KEY"), "sk-stepfun-isolated")
+            self.assertNotIn("DEEPSEEK_API_KEY", child_env)
+
+    def test_run_codex_attempt_deepseek_uses_chat_api_key_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            dump = tmp / "env-deepseek.json"
+            fake_pi = _write_fake_pi(tmp, "fake-pi-deepseek", dump)
+            with patch.dict(os.environ, _base_env(), clear=True):
+                backend = PiBackend(settings)
+                backend.pi_bin = str(fake_pi)
+                job = Job(
+                    "job-deepseek",
+                    JobMode.RUN,
+                    "hello",
+                    "unused",
+                    state=JobState.RUNNING,
+                    worktree_path=settings.codex_workspace_root,
+                    log_path=settings.codex_task_root / "job.log",
+                    final_message_path=settings.codex_task_root / "final.txt",
+                )
+                _run_pi(backend, job)
+            self.assertEqual(job.return_code, 0, job.error)
+            child_env = json.loads(dump.read_text(encoding="utf-8"))
+            self.assertEqual(child_env.get("DEEPSEEK_API_KEY"), "sk-test-deepseek")
 
     def test_run_mode_uses_direct_workspace_without_worktree_churn(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
