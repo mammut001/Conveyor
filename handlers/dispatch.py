@@ -124,6 +124,14 @@ async def dispatch(
                 await port.reply(msg, f"用法：/{cmd_name} <prompt>")
                 return
             mode = JobMode.FIX if cmd_name == "fix" else JobMode.RUN
+            if getattr(runner, "name", "") == "pi":
+                # Pi has no sandbox: /run and /fix go through the same
+                # destructive-request approval as plain messages.
+                from handlers.chat import is_destructive_request
+                if is_destructive_request(arg):
+                    from handlers.tools.runner import _request_confirmation
+                    await _request_confirmation(msg, port, settings, "pi.destructive_task", arg)
+                    return
             if msg.reply_to is not None or msg.attachments:
                 await handle_context_job(
                     msg, port, settings, runner, question=arg, mode=mode,
