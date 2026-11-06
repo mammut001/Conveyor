@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import queue
 from pathlib import Path
@@ -113,6 +114,170 @@ class PiBackendTests(unittest.TestCase):
             self.assertEqual(job.return_code, 0, job.error)
             self.assertEqual(job.final_message_path.read_text(encoding="utf-8"), "GitHub 已登录: mammut001")
             self.assertTrue(any("🔧 bash" in u for u in updates))
+
+    def test_run_codex_attempt_sums_usage_across_assistant_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            backend = PiBackend(settings)
+            fake_pi = tmp / "fake-pi-usage"
+            fake_pi.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, sys\n"
+                "sys.stdin.read()\n"
+                "def emit(obj):\n"
+                "    print(json.dumps(obj), flush=True)\n"
+                "emit({\"type\": \"message_end\", \"message\": {\"role\": \"user\", \"usage\": {\"input\": 50, \"output\": 5, \"cacheRead\": 20}, \"content\": [{\"type\": \"text\", \"text\": \"hi\"}]}})\n"
+                "emit({\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"provider\": \"stepfun\", \"model\": \"step-5-preview\", \"usage\": {\"input\": 100, \"output\": 61, \"cacheRead\": 1024, \"cacheWrite\": 0, \"totalTokens\": 1185}, \"stopReason\": \"stop\", \"content\": [{\"type\": \"text\", \"text\": \"first turn\"}]}})\n"
+                "emit({\"type\": \"message_end\", \"message\": {\"role\": \"toolResult\", \"usage\": {\"input\": 10, \"output\": 2, \"cacheRead\": 7}, \"content\": [{\"type\": \"text\", \"text\": \"ok\"}]}})\n"
+                "emit({\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"usage\": {\"input\": 203, \"output\": 30, \"cacheRead\": 512, \"cacheWrite\": 0, \"totalTokens\": 745}, \"stopReason\": \"stop\", \"content\": [{\"type\": \"text\", \"text\": \"second turn\"}]}})\n"
+                "emit({\"type\": \"agent_end\", \"messages\": [{\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"second turn\"}]}]})\n",
+                encoding="utf-8",
+            )
+            fake_pi.chmod(0o755)
+            backend.pi_bin = str(fake_pi)
+
+            job = Job(
+                "job-usage-1",
+                JobMode.RUN,
+                "帮我总结一下",
+                "unused",
+                state=JobState.RUNNING,
+                worktree_path=settings.codex_workspace_root,
+                log_path=settings.codex_task_root / "job.log",
+                final_message_path=settings.codex_task_root / "final.txt",
+            )
+
+            async def on_progress(text: str) -> None:
+                pass
+
+            with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-test-deepseek"}):
+                asyncio.run(backend._run_codex_attempt(job, on_progress))
+            self.assertEqual(job.return_code, 0, job.error)
+            # Only the two assistant turns count: (100+1024) + (203+512) input,
+            # 1024+512 cacheRead, 61+30 output. The user/toolResult message_end
+            # events carry usage too but must be ignored.
+            self.assertEqual(
+                job.usage,
+                {
+                    "input_tokens": 1124 + 715,
+                    "cached_input_tokens": 1024 + 512,
+                    "output_tokens": 61 + 30,
+                },
+            )
+
+    def test_usage_from_event_requires_assistant_message_and_int_values(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            backend = PiBackend(_make_settings(Path(raw)))
+            self.assertIsNone(backend._usage_from_event({"type": "message_end"}))
+            self.assertIsNone(
+                backend._usage_from_event(
+                    {"type": "message_end", "message": {"role": "user", "usage": {"input": 5, "output": 1}}}
+                )
+            )
+            self.assertIsNone(
+                backend._usage_from_event({"type": "message_end", "message": {"role": "assistant"}})
+            )
+            self.assertIsNone(
+                backend._usage_from_event(
+                    {"type": "message_end", "message": {"role": "assistant", "usage": "nope"}}
+                )
+            )
+            self.assertIsNone(
+                backend._usage_from_event({"type": "message_update", "message": {"role": "assistant", "usage": {"input": 5}}})
+            )
+            # bool / float / string / missing values are all ignored.
+            self.assertEqual(
+                backend._usage_from_event(
+                    {
+                        "type": "message_end",
+                        "message": {
+                            "role": "assistant",
+                            "usage": {
+                                "input": "100",
+                                "cacheRead": True,
+                                "output": 61.5,
+                                "cacheWrite": None,
+                            },
+                        },
+                    }
+                ),
+                {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0},
+            )
+
+    def test_state_from_attempt_file_pi_and_codex_records(self) -> None:
+        from runner import metadata as metadata_module
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+
+            def attempt(name: str, lines: list[str]) -> Path:
+                path = tmp / name
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                return path
+
+            state_of = metadata_module._state_from_attempt_file
+
+            # Pi success log: only the ``kind`` envelope exists.
+            self.assertEqual(
+                state_of(
+                    None,
+                    attempt(
+                        "pi-ok.jsonl",
+                        [
+                            json.dumps({"kind": "tool.started", "payload": {"name": "bash", "status": "running"}}),
+                            json.dumps({"kind": "assistant.completed", "payload": {"text": "done"}}),
+                        ],
+                    ),
+                ),
+                "completed",
+            )
+            # Pi failure log.
+            self.assertEqual(
+                state_of(
+                    None,
+                    attempt(
+                        "pi-fail.jsonl",
+                        [
+                            json.dumps({"kind": "assistant.completed", "payload": {"text": "partial"}}),
+                            json.dumps({"kind": "agent.error", "payload": {"text": "boom"}}),
+                        ],
+                    ),
+                ),
+                "failed",
+            )
+            # Pi log still in flight.
+            self.assertEqual(
+                state_of(
+                    None,
+                    attempt(
+                        "pi-running.jsonl",
+                        [json.dumps({"kind": "tool.completed", "payload": {"status": "completed"}})],
+                    ),
+                ),
+                "running",
+            )
+            # Codex logs keep working, and junk lines are skipped.
+            self.assertEqual(
+                state_of(
+                    None,
+                    attempt(
+                        "codex.jsonl",
+                        [
+                            "not json at all",
+                            json.dumps({"type": "item.completed", "item": {"type": "agent_message"}}),
+                            json.dumps([1, 2, 3]),
+                            json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10}}),
+                        ],
+                    ),
+                ),
+                "completed",
+            )
+            self.assertEqual(
+                state_of(None, attempt("codex-failed.jsonl", [json.dumps({"type": "turn.failed"})])),
+                "failed",
+            )
+            self.assertEqual(state_of(None, attempt("empty.jsonl", [])), "running")
 
     def test_web_chat_auto_executes_non_destructive_and_gates_destructive(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

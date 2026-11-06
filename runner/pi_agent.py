@@ -206,6 +206,11 @@ class PiBackend(CodexRunner):
             logged_bytes = 0
             streamed_text = ""
             last_delta_emit = 0.0
+            # Pi emits one ``message_end`` per assistant turn, each with
+            # per-request usage, so the totals have to be summed across the
+            # whole job. Mirrors the Codex ``turn.completed`` accumulation in
+            # ``runner/streaming.py:_capture_usage``.
+            usage_totals: dict[str, int] = {}
             with job.log_path.open("ab") as log_file:
                 while True:
                     try:
@@ -227,6 +232,11 @@ class PiBackend(CodexRunner):
                     if not isinstance(event, dict):
                         continue
                     parsed = self._parse_pi_event(event)
+                    event_usage = self._usage_from_event(event)
+                    if event_usage:
+                        for key, value in event_usage.items():
+                            usage_totals[key] = usage_totals.get(key, 0) + value
+                        job.usage = dict(usage_totals)
                     if parsed.result:
                         final_text = truncate(redact_text(parsed.result), 16_000)
                     if parsed.error and not job.error:
@@ -308,6 +318,45 @@ class PiBackend(CodexRunner):
             job.error = "cancelled"
         elif job.return_code is not None and job.return_code < 0 and not job.error:
             job.error = "Pi process terminated unexpectedly."
+
+    @staticmethod
+    def _usage_from_event(event: dict[str, Any]) -> dict[str, int] | None:
+        """Per-request token usage carried by one assistant ``message_end``.
+
+        Pi (v0.73) emits one ``message_end`` per assistant turn, and each
+        turn's usage describes a single request, so callers must SUM the
+        returned values across every turn of a job.
+
+        Keys are the Codex-compatible names consumed by
+        ``scripts/metrics_report.py`` and ``scripts/health_snapshot.py``:
+        Codex's ``input_tokens`` already includes cached tokens, so Pi's
+        ``cacheRead`` is folded into ``input_tokens`` as well as reported
+        separately as ``cached_input_tokens``.
+
+        Returns None when the event is not an assistant ``message_end`` or
+        carries no usage object. Non-int (and bool) values are ignored.
+        """
+        if str(event.get("type") or "") != "message_end":
+            return None
+        message = event.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            return None
+        usage = message.get("usage")
+        if not isinstance(usage, dict):
+            return None
+
+        def _int(key: str) -> int:
+            value = usage.get(key)
+            if isinstance(value, bool) or not isinstance(value, int):
+                return 0
+            return value
+
+        cache_read = _int("cacheRead")
+        return {
+            "input_tokens": _int("input") + cache_read,
+            "cached_input_tokens": cache_read,
+            "output_tokens": _int("output"),
+        }
 
     @classmethod
     def _pi_event(cls, event: dict[str, Any]) -> tuple[str, str]:
