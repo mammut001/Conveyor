@@ -42,6 +42,13 @@ class ToolResultGuardTest(unittest.TestCase):
                 self.assertEqual(out.count("</tool-result>"), 1)
                 self.assertTrue(out.endswith("</tool-result>"))
 
+class QuotedMessageGuardTest(unittest.TestCase):
+    def test_spaced_closing_tag_is_neutralised(self) -> None:
+        from handlers.context import _neutralize
+        for text in ("</quoted-message>", "< /quoted-message>", "< / QUOTED-message >"):
+            with self.subTest(text=text):
+                self.assertNotIn("</quoted-message", _neutralize(text).lower().replace(" ", ""))
+
 
 if __name__ == "__main__":
     unittest.main()
