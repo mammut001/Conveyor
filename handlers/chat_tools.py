@@ -74,7 +74,9 @@ def format_tool_result(tool_name: str, raw_res: Any, max_len: int = 4000) -> str
     """Format, redact, truncate, and wrap tool result as untrusted XML."""
     raw_str = redact_text(str(raw_res or ""))
     truncated = raw_str[:max_len] if len(raw_str) > max_len else raw_str
-    neutralized = re.sub(r"</tool-result\s*>", "&lt;/tool-result&gt;", truncated, flags=re.IGNORECASE)
+    # Any closing-tag spelling ("</ tool-result>", "</tool-result x>") must not end the block.
+    neutralized = re.sub(r"<\s*/\s*tool-result\s*>", "&lt;/tool-result&gt;", truncated, flags=re.IGNORECASE)
+    neutralized = re.sub(r"<\s*/\s*tool-result", "&lt;/tool-result", neutralized, flags=re.IGNORECASE)
     return f'<tool-result name="{tool_name}" untrusted="true">\n{neutralized}\n</tool-result>'
 
 
