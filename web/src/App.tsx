@@ -704,8 +704,18 @@ export default function App() {
   useEffect(() => {
     if (!authenticated || !selectedJobId) return
     let stopped = false; let controller: AbortController | null = null; let retry: number | undefined
+    let refreshTimer: number | undefined
+    // Historical deltas can arrive in hundreds of frames during page load.
+    // Coalesce their invalidations instead of issuing seven requests per delta.
+    const scheduleRefresh = () => {
+      if (refreshTimer !== undefined) return
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined
+        if (!stopped) { void refresh(); void refreshTranscript() }
+      }, 250)
+    }
     lastSequence.current = 0; setEvents([]); setRealtimeState('connecting')
-    void api<{ events: EventItem[] }>(`/api/jobs/${selectedJobId}/events`).then(({ events: initial }) => {
+    const replay = api<{ events: EventItem[] }>(`/api/jobs/${selectedJobId}/events`).then(({ events: initial }) => {
       if (stopped) return
       setEvents(previous => mergeJobEvents(previous, initial))
       for (const event of initial) lastSequence.current = Math.max(lastSequence.current, event.sequence)
@@ -732,8 +742,7 @@ export default function App() {
             lastSequence.current = Math.max(lastSequence.current, event.sequence)
             setEvents(previous => mergeJobEvents(previous, [event]))
             if (shouldRefreshForEvent(event.kind)) {
-              void refresh()
-              void refreshTranscript()
+              scheduleRefresh()
             }
           }
         }
@@ -744,8 +753,14 @@ export default function App() {
         retry = window.setTimeout(() => void connect(), 1500)
       }
     }
-    void connect()
-    return () => { stopped = true; controller?.abort(); if (retry) window.clearTimeout(retry) }
+    // Establish the snapshot cursor before subscribing, so replayed events
+    // are not treated as newly arriving invalidations.
+    void replay.then(() => { if (!stopped) void connect() })
+    return () => {
+      stopped = true; controller?.abort()
+      if (retry) window.clearTimeout(retry)
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
+    }
   }, [api, authenticated, refresh, refreshTranscript, selectedJobId, token])
 
   // Old runs may be older than the global /api/jobs page. Their session
