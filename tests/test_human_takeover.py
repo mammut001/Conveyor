@@ -29,6 +29,7 @@ def _computer_settings(root: Path):
         user_timezone="UTC",
         conveyor_computer_use_enabled=True,
         conveyor_computer_direct_enabled=True,
+        conveyor_computer_always_direct=True,
         conveyor_computer_backend="fake",
         conveyor_computer_allowed_actions=("observe", "click", "type", "hotkey", "scroll", "wait"),
         conveyor_computer_blocked_keywords=("password", "payment"),

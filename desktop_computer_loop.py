@@ -8,7 +8,9 @@ backend- and planner-agnostic so it can be exercised end-to-end with a
 Safety enforced here (see docs/desktop_security.md):
 - The task must be created already; the caller gates on enabled +
   direct mode. The loop additionally re-checks the task is still
-  running each step (so ``/computer_stop`` takes effect).
+  running each step (so ``/computer_stop`` takes effect), and that
+  direct mode is still active (so an operator disarm or an expired arm
+  TTL stops a task that is already running).
 - Every action is allow-listed (``is_action_allowed``) and scanned for
   blocked keywords (``contains_blocked_keyword``). Either hit stops
   the task and records why.
@@ -47,6 +49,7 @@ from desktop_computer_requests import (
     create_computer_task,
     get_computer_task,
     is_action_allowed,
+    is_direct_mode_active,
     normalize_action,
     BROWSER_PAGE_STATES,
     browser_page_state_from_title,
@@ -405,7 +408,7 @@ async def run_computer_loop(
 
     Pre-conditions (caller's job): CONVEYOR_COMPUTER_USE_ENABLED and
     direct mode must already be satisfied. This function focuses on the
-    loop + safety enforcement.
+    loop + safety enforcement, and re-checks both each iteration.
     """
     if task_id is None:
         created = create_computer_task(
@@ -468,6 +471,13 @@ async def run_computer_loop(
             task = get_computer_task(settings, task_id)
             if not isinstance(task, dict) or task.get("status") != "running":
                 # Cancelled by /computer_stop.
+                break
+
+            # Direct mode is opt-in and TTL-bounded. The operator disarming it
+            # (or the arm expiring) must stop an already-running task: hands
+            # free is no longer permitted.
+            if direct_mode and not is_direct_mode_active(settings):
+                set_task_status(settings, task_id, "stopped", blocked_reason="direct mode disarmed or expired")
                 break
 
             # Human takeover is an exclusive GUI lease. Do not even observe
