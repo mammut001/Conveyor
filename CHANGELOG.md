@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Reminders understand Chinese time phrases**: 10分钟后 / 2小时后 / 明天早上8点 / 下午3点半 / 今晚九点十五分 / 后天 10:30 (a time already past today means tomorrow).
+- **Pi backend documentation** (`docs/pi_backend.md`) and Pi variables in `.env.example`.
+
 ### Security
+- A typed 确认 with several pending approvals in the chat no longer executes the newest one by guesswork; the owner is asked to use the card's button.
 - **Nightly repair could run Pi-planted commands on the host**: Pi edits the repair worktree (including its `.git` pointer) inside the sandbox, and the coordinator then ran git there outside it; a pointer to a planted git dir with `core.fsmonitor` or a hook executed as the user holding the GitHub credentials. Host git now uses the pinned git dir with fsmonitor/hooks off and refuses a modified pointer; renames (`--no-renames`), symlinks and submodules can no longer slip past the scope rules; the repair branch is created only after Pi succeeded.
 - **`web.fetch` SSRF**: IPv4 addresses inside IPv6 (`[::ffff:127.0.0.1]`, NAT64, 6to4, IPv4-compatible) passed the private-range check, and curl re-resolved names after validation (DNS rebinding). Embedded IPv4 and non-global addresses are refused and each request is pinned with `--resolve`.
 - **Computer use**: the hard-blocked keywords (支付/转账/银行/…) never matched in `/computer_action` (JSON-escaped Chinese) and were evaded by full-width, zero-width or spelled-out letters; matching is now normalised and covers more same-intent words and click labels. Cancelled or expired steps no longer keep typed text on disk, and an action planned before a brief takeover no longer runs after it.
