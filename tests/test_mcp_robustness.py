@@ -1,14 +1,18 @@
 """MCP: a config typo or a slow HTTP server must not take the chat down."""
 from __future__ import annotations
 
+import asyncio
 import http.server
+import json
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from mcp_client.config import load_mcp_servers
+from mcp_client.manager import MCPManager
 
 
 class McpConfigTypoTest(unittest.TestCase):
@@ -56,6 +60,64 @@ class McpHttpDeadlineTest(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 3.0)
         finally:
             server.shutdown()
+
+
+class McpRefreshDedupTest(unittest.IsolatedAsyncioTestCase):
+    """Concurrent ensure_fresh calls must share one in-flight refresh per server."""
+
+    def setUp(self) -> None:
+        from tests.test_mcp import _settings
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.settings = _settings(self.root)
+        # A single enabled server so every ensure_fresh sees it as stale.
+        config = {"servers": {"notes": {"transport": "http", "url": "http://127.0.0.1:9/mcp", "allow_tools": ["*"]}}}
+        self.settings.mcp_config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    async def test_concurrent_ensure_fresh_refreshes_server_once(self) -> None:
+        mgr = MCPManager()
+        calls = 0
+
+        async def slow_refresh(settings, server_name):
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0.2)
+            return {"name": server_name}, 200
+
+        with patch.object(mgr, "refresh_server", new=slow_refresh):
+            await asyncio.gather(*(mgr.ensure_fresh(self.settings) for _ in range(5)))
+        # All five chats shared one refresh instead of spawning five.
+        self.assertEqual(calls, 1)
+        # The in-flight entry is dropped once the refresh completes.
+        self.assertEqual(mgr._refresh_inflight, {})
+
+    async def test_cancelling_one_waiter_does_not_cancel_shared_refresh(self) -> None:
+        mgr = MCPManager()
+        calls = 0
+        finished = asyncio.Event()
+
+        async def slow_refresh(settings, server_name):
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0.3)
+            finished.set()
+            return {"name": server_name}, 200
+
+        with patch.object(mgr, "refresh_server", new=slow_refresh):
+            tasks = [asyncio.ensure_future(mgr.ensure_fresh(self.settings)) for _ in range(3)]
+            await asyncio.sleep(0.05)  # let all three attach to the same in-flight refresh
+            tasks[0].cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await tasks[0]
+            # The shield kept the shared refresh alive: the others still complete.
+            await asyncio.gather(tasks[1], tasks[2])
+        self.assertEqual(calls, 1)
+        self.assertTrue(finished.is_set())
+        self.assertEqual(mgr._refresh_inflight, {})
+
 
 if __name__ == "__main__":
     unittest.main()

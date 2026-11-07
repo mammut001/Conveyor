@@ -65,6 +65,10 @@ def _tool_to_func_name(server_name: str, tool_name: str) -> str:
 class MCPManager:
     def __init__(self) -> None:
         self._cache: dict[str, CachedServerState] = {}
+        # In-flight per-server refreshes, keyed by (id(event loop), server name) so a
+        # task started on one loop is never awaited on another (tests drive the manager
+        # from a fresh loop each time). See _refresh_shared.
+        self._refresh_inflight: dict[tuple[int, str], asyncio.Task] = {}
 
     def prime_cache(self, server_name: str, tools: list[MCPToolSpec], status: str = "ok") -> None:
         """Helper for testing or explicitly caching server tools."""
@@ -122,7 +126,34 @@ class MCPManager:
                 stale.append(name)
         if not stale:
             return
-        await asyncio.gather(*(self.refresh_server(settings, name) for name in stale), return_exceptions=True)
+        await asyncio.gather(*(self._refresh_shared(settings, name) for name in stale), return_exceptions=True)
+
+    async def _refresh_shared(self, settings: Settings, server_name: str) -> tuple[dict[str, Any], int]:
+        """Refresh one server, de-duplicating concurrent in-flight refreshes.
+
+        ensure_fresh runs before every chat, so several concurrent chats can each try to
+        refresh the same server at once; every one of them would then spawn its own
+        process and, if the server hangs, wait out the full timeout. To avoid that, the
+        first caller starts the refresh and records the running task; any other caller
+        in the same event loop that finds it in flight awaits the *same* task (through
+        asyncio.shield, so one caller's cancellation does not cancel the refresh for the
+        others) instead of starting a second one. The entry is dropped once the task
+        finishes so a later refresh can begin anew.
+
+        The dict is keyed by (id(loop), server) so a task created on one event loop is
+        never awaited on another. Caching, failure TTL and logging stay in refresh_server.
+        """
+        loop = asyncio.get_running_loop()
+        key = (id(loop), server_name)
+        task = self._refresh_inflight.get(key)
+        if task is None:
+            task = asyncio.ensure_future(self.refresh_server(settings, server_name))
+            self._refresh_inflight[key] = task
+            # All of the lines above run without awaiting, so no other caller can observe
+            # the dict entry before this callback is registered; it is therefore always the
+            # first done-callback and removes the entry before any waiter is resumed.
+            task.add_done_callback(lambda _t, _k=key: self._refresh_inflight.pop(_k, None))
+        return await asyncio.shield(task)
 
     def get_servers_status(self, settings: Settings) -> dict[str, Any]:
         """Produce the summary dictionary for GET /api/mcp/servers."""
