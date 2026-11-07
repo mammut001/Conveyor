@@ -101,6 +101,37 @@ class BriefingRemindersTest(unittest.TestCase):
         self.assertIn("下午开会", text)
         self.assertNotIn("明天交报告", text)
 
+class ChineseReminderParseTest(unittest.TestCase):
+    def test_common_chinese_time_phrases(self) -> None:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        import personal_tools.reminder_parse as rp
+        tz = ZoneInfo("Asia/Shanghai")
+        fixed = datetime(2026, 11, 6, 14, 0, tzinfo=tz)
+
+        class FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed.astimezone(tz) if tz else fixed
+
+        cases = {
+            "明天早上8点交报告": ("交报告", "11-07 08:00"),
+            "下午3点半开会": ("开会", "11-06 15:30"),
+            "今晚九点十五分 吃药": ("吃药", "11-06 21:15"),
+            "10分钟后 取快递": ("取快递", "11-06 14:10"),
+            "2小时后 回电话": ("回电话", "11-06 16:00"),
+            "下午1点 午会": ("午会", "11-07 13:00"),  # already past today
+            "后天 10:30 体检": ("体检", "11-08 10:30"),
+        }
+        with patch.object(rp, "datetime", FixedDatetime):
+            for text, (body, when) in cases.items():
+                with self.subTest(text=text):
+                    got = rp.parse_reminder_text(text, tz_name="Asia/Shanghai")
+                    self.assertIsNotNone(got)
+                    self.assertEqual((got[0], got[1].astimezone(tz).strftime("%m-%d %H:%M")), (body, when))
+            self.assertIsNone(rp.parse_reminder_text("普通的一句话", tz_name="Asia/Shanghai"))
+            self.assertIsNone(rp.parse_reminder_text("3:30 meeting", tz_name="Asia/Shanghai"))
+
 
 if __name__ == "__main__":
     unittest.main()
