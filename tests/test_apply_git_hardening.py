@@ -75,6 +75,26 @@ class DiscardGuardTest(unittest.TestCase):
                         asyncio.run(_remove_worktree(runner, target))
             self.assertTrue((workspace / "keep.txt").exists())
 
+@unittest.skipUnless(shutil.which("git"), "git required")
+class WorktreeOwnershipTest(unittest.TestCase):
+    def test_worktree_belongs_only_to_its_own_repository(self):
+        from runner.worktree import _worktree_belongs_to
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            for name in ("a", "b"):
+                (root / name).mkdir()
+                git("init", "-q", cwd=root / name)
+                (root / name / "f").write_text("x\n")
+                git("add", "-A", cwd=root / name)
+                git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i", cwd=root / name)
+            git("worktree", "add", "-q", "--detach", str(root / "wt"), "HEAD", cwd=root / "a")
+
+            async def real_git(args, cwd=None, **_k):
+                return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
+            runner = SimpleNamespace(_git=real_git)
+            self.assertTrue(asyncio.run(_worktree_belongs_to(runner, root / "wt", root / "a")))
+            self.assertFalse(asyncio.run(_worktree_belongs_to(runner, root / "wt", root / "b")))
+
 
 if __name__ == "__main__":
     unittest.main()

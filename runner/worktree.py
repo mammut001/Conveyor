@@ -86,6 +86,16 @@ async def _repo_root_for(self, worktree_path: Path | None) -> Path:
     return root if root in _known_workspace_roots(self) else default
 
 
+async def _worktree_belongs_to(self, worktree_path: Path, repo_root: Path) -> bool:
+    """True when ``worktree_path`` is a worktree of ``repo_root`` itself."""
+    try:
+        common = await self._git(["rev-parse", "--git-common-dir"], cwd=Path(worktree_path))
+    except Exception:
+        return False
+    git_dir = _resolve_git_dir(Path(worktree_path), common)
+    return git_dir.name == ".git" and git_dir.parent == Path(repo_root).resolve()
+
+
 async def _validate_reuse_worktree(self, requested: Path) -> Path:
     """Fail closed unless requested is one of this repository's worktrees."""
     raw = Path(requested).expanduser()

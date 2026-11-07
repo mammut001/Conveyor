@@ -178,8 +178,13 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
         return "No job worktree to apply."
     # The repository the worktree belongs to: the configured workspace, or
     # the project folder of the agent whose job this is.
-    from runner.worktree import _repo_root_for
+    from runner.worktree import _repo_root_for, _worktree_belongs_to
     apply_root = await _repo_root_for(self, worktree_path)
+    # _repo_root_for falls back to the configured workspace for a repository
+    # it does not know; applying there would put another repo's changes (an
+    # unregistered agent folder, an edited job.json) into the wrong project.
+    if not await _worktree_belongs_to(self, worktree_path, apply_root):
+        return "This worktree does not belong to a registered repository; refusing to apply."
 
     try:
         store, active = _active_refinement(self, worktree_path)
