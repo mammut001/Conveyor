@@ -125,6 +125,21 @@ class TelegramTopicsTests(unittest.IsolatedAsyncioTestCase):
             await bot.tool_callback(update, SimpleNamespace())
         self.assertEqual(seen, {"chat_id": "-100998877:topic:42", "token": "tok123"})
 
+    async def test_topics_bind_ignores_a_reply_thread_outside_a_forum_topic(self) -> None:
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_ALLOWED_USER_ID": "1001"}):
+            import bot
+        update = self._fake_update("/topics bind Finance", is_forum=False, is_topic_message=False, thread_id=55)
+        replies = []
+
+        async def fake_reply(_update, text, **_k):
+            replies.append(text)
+
+        with patch("bot.settings", self.settings), patch("bot._guard", AsyncMock(return_value=True)), \
+                patch("bot._reply", fake_reply), patch("telegram_topics.bind_topic") as bind:
+            await bot.topics_cmd(update, SimpleNamespace(args=["bind", "Finance"]))
+        bind.assert_not_called()
+        self.assertTrue(replies and "话题" in replies[-1])
+
     async def test_sync_forum_topics_creates_and_pins_per_agent_topics(self) -> None:
         next_tid = 100
 

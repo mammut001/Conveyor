@@ -665,6 +665,10 @@ async def topics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if sub == "bind":
         target = " ".join(args[1:]).strip()
         tid = getattr(msg, "message_thread_id", None) if msg is not None else None
+        # In an ordinary supergroup a reply also carries message_thread_id;
+        # only a message really inside a forum topic can be bound.
+        if not (getattr(msg, "is_topic_message", False) and getattr(chat, "is_forum", False)):
+            tid = None
         if not isinstance(tid, int) or tid <= 0:
             await _reply(update, "请在具体的话题（Topic）内发送 `/topics bind <助手名称>`，或直接发送 `/topics` 自动创建全部助手话题。")
             return
