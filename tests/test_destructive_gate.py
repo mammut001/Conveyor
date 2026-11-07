@@ -125,6 +125,25 @@ class ApprovalExecutorTests(unittest.TestCase):
         self.assertTrue(calls[0][1].get("destructive_confirmed"))
         self.assertNotIn("OPERATOR_CONFIRMED", calls[0][0])
 
+class TypedConfirmAmbiguityTest(unittest.TestCase):
+    def test_typed_confirm_with_two_pending_actions_executes_nothing(self) -> None:
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from channel.types import InboundMessage
+        from handlers.tools.confirm import clear_all_pending, create_pending
+        from handlers.tools.runner import try_resolve_confirmation
+        clear_all_pending()
+        create_pending("notes.add", "first", "op", "chat", "telegram")
+        create_pending("notes.add", "second", "op", "chat", "telegram")
+        msg = InboundMessage(channel="telegram", operator_id="op", chat_id="chat", message_id="m", text="确认")
+        port = type("P", (), {"reply": AsyncMock()})()
+        with patch("handlers.tools.runner.execute_confirmed", new=AsyncMock()) as run:
+            consumed = asyncio.run(try_resolve_confirmation(msg, port, None))
+        clear_all_pending()
+        self.assertTrue(consumed)
+        run.assert_not_awaited()
+        self.assertIn("2 个待确认", port.reply.await_args.args[1])
+
 
 if __name__ == "__main__":
     unittest.main()
