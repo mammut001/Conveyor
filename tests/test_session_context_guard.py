@@ -49,6 +49,18 @@ class QuotedMessageGuardTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertNotIn("</quoted-message", _neutralize(text).lower().replace(" ", ""))
 
+class PrivateReadClassificationTest(unittest.TestCase):
+    def test_personal_data_readers_taint_the_session(self) -> None:
+        from egress_taint import private_read
+        for tool in ("files.read", "calendar.today", "calendar.week", "notes.list_recent",
+                     "briefing.today", "kb.search", "kb.collect_facts", "reminders.list",
+                     "gmail.read", "files.search"):
+            with self.subTest(tool=tool):
+                self.assertTrue(private_read(tool))
+        for tool in ("web.fetch", "calendar.status", "files.list_roots", "notes.add"):
+            with self.subTest(tool=tool):
+                self.assertFalse(private_read(tool))
+
 
 if __name__ == "__main__":
     unittest.main()

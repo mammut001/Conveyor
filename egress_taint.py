@@ -34,7 +34,15 @@ def private_read(tool: str) -> bool:
             or name in ("email.inbox", "email.read", "email.search",
                         "email.recent", "file.search_private",
                         "calendar.search", "contacts.search", "notes.search",
-                        "files.search"))
+                        "files.search",
+                        # These read the same personal data and were missing,
+                        # so reading with them and then web.fetch-ing skipped
+                        # the outbound approval.
+                        "files.read", "calendar.today", "calendar.tomorrow",
+                        "calendar.week", "calendar.freebusy", "notes.list_recent",
+                        "briefing.today", "briefing.tomorrow", "kb.search",
+                        "kb.collect_facts", "reminders.list", "reminders.due",
+                        "project.export", "project.export_all"))
 
 
 def outbound(settings: Any, tool: str) -> bool:
