@@ -605,7 +605,7 @@ test('phone layout does not depend on features.mobile_ui', async ({ page }) => {
 })
 
 
-test('refreshing a long run coalesces replay invalidations and resumes after the snapshot', async ({ page }) => {
+test('refreshing a long run coalesces replay invalidations without blocking live progress', async ({ page }) => {
   await installShellApi(page, { replayBurst: true })
   let statusRequests = 0
   const streamCursors: number[] = []
@@ -616,7 +616,9 @@ test('refreshing a long run coalesces replay invalidations and resumes after the
   await page.goto('/#chat')
   await expect.poll(() => streamCursors.length).toBeGreaterThan(0)
   await expect.poll(() => statusRequests).toBeGreaterThan(1)
-  expect(streamCursors[0]).toBe(500)
+  expect(streamCursors[0]).toBe(0)
+  // Let the 250 ms coalescing window flush before measuring fan-out.
+  await page.waitForTimeout(750)
   // 400 historical assistant deltas must not fan out into 400 status polls.
   expect(statusRequests).toBeLessThan(10)
   await expect(page.getByText('无法连接到服务器，正在自动重试…', { exact: true })).toHaveCount(0)

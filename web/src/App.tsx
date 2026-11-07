@@ -715,7 +715,7 @@ export default function App() {
       }, 250)
     }
     lastSequence.current = 0; setEvents([]); setRealtimeState('connecting')
-    const replay = api<{ events: EventItem[] }>(`/api/jobs/${selectedJobId}/events`).then(({ events: initial }) => {
+    void api<{ events: EventItem[] }>(`/api/jobs/${selectedJobId}/events`).then(({ events: initial }) => {
       if (stopped) return
       setEvents(previous => mergeJobEvents(previous, initial))
       for (const event of initial) lastSequence.current = Math.max(lastSequence.current, event.sequence)
@@ -753,9 +753,7 @@ export default function App() {
         retry = window.setTimeout(() => void connect(), 1500)
       }
     }
-    // Establish the snapshot cursor before subscribing, so replayed events
-    // are not treated as newly arriving invalidations.
-    void replay.then(() => { if (!stopped) void connect() })
+    void connect()
     return () => {
       stopped = true; controller?.abort()
       if (retry) window.clearTimeout(retry)
