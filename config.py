@@ -281,6 +281,31 @@ class Settings:
     background_subagents_steps: int = 3
     background_subagents_tokens: int = 1800
     background_subagents_timeout: int = 90
+    # Generic agent supervisor (multi-role, pluggable executors). Off by default.
+    agent_supervisor_enabled: bool = False
+    agent_supervisor_chat_model: str | None = None
+    agent_supervisor_analysis_model: str | None = None
+    agent_supervisor_implementation_executor: str = "claude"
+    agent_supervisor_max_repair_rounds: int = 3
+    agent_supervisor_task_timeout_seconds: int = 3600
+    # Per-role executor/model/location overrides.
+    agent_supervisor_antigravity_bin: str = "agy"
+    agent_supervisor_coordinator_executor: str = "chat"
+    agent_supervisor_coordinator_model: str | None = None
+    agent_supervisor_coordinator_location: str | None = None
+    agent_supervisor_analyst_executor: str | None = None
+    agent_supervisor_analyst_model: str | None = None
+    agent_supervisor_analyst_location: str | None = None
+    agent_supervisor_implementer_executor: str | None = None
+    agent_supervisor_implementer_model: str | None = None
+    agent_supervisor_implementer_location: str | None = None
+    agent_supervisor_reviewer_executor: str | None = None
+    agent_supervisor_reviewer_model: str | None = None
+    agent_supervisor_reviewer_location: str | None = None
+    # Immutable operator-configured validation commands (never browser/API-settable).
+    agent_supervisor_validation_commands: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    agent_supervisor_validation_timeout_seconds: int = 300
+
     # Always-On Teammate & Proactive Sentry
     teammate_enabled: bool = True
     sentry_interval_seconds: int = 300
@@ -295,6 +320,19 @@ class Settings:
         "conveyor-vps-computer",
         "conveyor-scheduler",
     )
+
+    def __getattr__(self, name: str) -> Any:
+        _aliases = {
+            "antigravity_supervisor_enabled": "agent_supervisor_enabled",
+            "supervisor_chat_model": "agent_supervisor_chat_model",
+            "supervisor_analysis_model": "agent_supervisor_analysis_model",
+            "supervisor_implementation_executor": "agent_supervisor_implementation_executor",
+            "supervisor_max_repair_rounds": "agent_supervisor_max_repair_rounds",
+            "supervisor_task_timeout_seconds": "agent_supervisor_task_timeout_seconds",
+        }
+        if name in _aliases:
+            return getattr(self, _aliases[name])
+        raise AttributeError(name)
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -792,6 +830,37 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "background_subagents_steps": max(1, min(10, _int_env("CONVEYOR_SUBAGENTS_MAX_STEPS", 3))),
         "background_subagents_tokens": max(128, min(16000, _int_env("CONVEYOR_SUBAGENTS_MAX_TOKENS", 1800))),
         "background_subagents_timeout": max(1, min(600, _int_env("CONVEYOR_SUBAGENTS_TIMEOUT_SECONDS", 90))),
+        "agent_supervisor_enabled": (
+            os.getenv("CONVEYOR_AGENT_SUPERVISOR_ENABLED", os.getenv("CONVEYOR_ANTIGRAVITY_SUPERVISOR_ENABLED", "false"))
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "agent_supervisor_chat_model": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_CHAT_MODEL") or os.getenv("CONVEYOR_SUPERVISOR_CHAT_MODEL") or None),
+        "agent_supervisor_analysis_model": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_ANALYSIS_MODEL") or os.getenv("CONVEYOR_SUPERVISOR_ANALYSIS_MODEL") or None),
+        "agent_supervisor_implementation_executor": (
+            os.getenv("CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR")
+            or os.getenv("CONVEYOR_SUPERVISOR_IMPLEMENTATION_EXECUTOR")
+            or "claude"
+        ).strip() or "claude",
+        "agent_supervisor_max_repair_rounds": max(1, min(10, _int_env("CONVEYOR_AGENT_SUPERVISOR_MAX_REPAIR_ROUNDS", 3))),
+        "agent_supervisor_task_timeout_seconds": max(60, min(86400, _int_env("CONVEYOR_AGENT_SUPERVISOR_TASK_TIMEOUT_SECONDS", 3600))),
+        "agent_supervisor_antigravity_bin": (
+            os.getenv("CONVEYOR_ANTIGRAVITY_BIN") or os.getenv("CONVEYOR_AGY_BIN") or "agy"
+        ).strip() or "agy",
+        "agent_supervisor_coordinator_executor": os.getenv("CONVEYOR_AGENT_SUPERVISOR_COORDINATOR_EXECUTOR", "chat").strip() or "chat",
+        "agent_supervisor_coordinator_model": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_COORDINATOR_MODEL") or "").strip() or None,
+        "agent_supervisor_coordinator_location": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_COORDINATOR_LOCATION") or "").strip() or None,
+        "agent_supervisor_analyst_executor": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_ANALYST_EXECUTOR") or "").strip() or None,
+        "agent_supervisor_analyst_model": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_ANALYST_MODEL") or "").strip() or None,
+        "agent_supervisor_analyst_location": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_ANALYST_LOCATION") or "").strip() or None,
+        "agent_supervisor_implementer_executor": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_EXECUTOR") or "").strip() or None,
+        "agent_supervisor_implementer_model": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_MODEL") or "").strip() or None,
+        "agent_supervisor_implementer_location": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_LOCATION") or "").strip() or None,
+        "agent_supervisor_reviewer_executor": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_REVIEWER_EXECUTOR") or "").strip() or None,
+        "agent_supervisor_reviewer_model": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_REVIEWER_MODEL") or "").strip() or None,
+        "agent_supervisor_reviewer_location": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_REVIEWER_LOCATION") or "").strip() or None,
+        "agent_supervisor_validation_commands": _parse_supervisor_validation_commands_env(),
+        "agent_supervisor_validation_timeout_seconds": max(
+            5, min(3600, _int_env("CONVEYOR_AGENT_SUPERVISOR_VALIDATION_TIMEOUT_SECONDS", 300))
+        ),
         "teammate_enabled": os.getenv(
             "CONVEYOR_TEAMMATE_ENABLED", "true"
         ).strip().lower() in ("true", "1", "yes", "on"),
@@ -808,6 +877,39 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
             ).split(",") if s.strip()
         ),
     }
+
+
+def _parse_supervisor_validation_commands_env() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Parse immutable operator-configured validation commands from JSON env.
+
+    Accepts JSON array of ``{"name": "...", "argv": ["..."]}`` or ``["name", ["..."]]``.
+    Explicit argv lists only; never accepts shell command strings.
+    """
+    raw = (os.getenv("CONVEYOR_AGENT_SUPERVISOR_VALIDATION_COMMANDS_JSON") or "").strip()
+    if not raw:
+        return ()
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        logger.warning("CONVEYOR_AGENT_SUPERVISOR_VALIDATION_COMMANDS_JSON is not valid JSON; ignored")
+        return ()
+    if not isinstance(parsed, list):
+        logger.warning("CONVEYOR_AGENT_SUPERVISOR_VALIDATION_COMMANDS_JSON must be a JSON list; ignored")
+        return ()
+    specs: list[tuple[str, tuple[str, ...]]] = []
+    for idx, item in enumerate(parsed):
+        name, argv = "", None
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            argv = item.get("argv")
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            name = str(item[0] or "").strip()
+            argv = item[1]
+        if not name or not isinstance(argv, (list, tuple)) or not argv or any(not isinstance(a, str) or not a for a in argv):
+            logger.warning("Invalid supervisor validation command entry at index %d; ignored", idx)
+            continue
+        specs.append((name, tuple(argv)))
+    return tuple(specs)
 
 
 def is_subagents_enabled(settings: Any) -> bool:
