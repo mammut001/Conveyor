@@ -1132,11 +1132,10 @@ class Round2CanonicalLocksSqliteAndRecoveryTests(unittest.TestCase):
             ro.close()
 
     def test_durable_process_identity_and_startup_recovery_safety(self) -> None:
-        p1 = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
-        p2 = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+        procs: list[subprocess.Popen] = []
 
         def _cleanup_procs() -> None:
-            for p in (p1, p2):
+            for p in reversed(procs):
                 if p.poll() is None:
                     with patch.object(os, "killpg", os.killpg):
                         try:
@@ -1147,8 +1146,23 @@ class Round2CanonicalLocksSqliteAndRecoveryTests(unittest.TestCase):
 
         self.addCleanup(_cleanup_procs)
 
+        p1 = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+        procs.append(p1)
         id1 = ags._process_identity(p1.pid)
+
+        # Arrange real helper processes with explicitly separated birth times across OS clock ticks
+        # (Linux /proc/<pid>/stat starttime is measured in clock ticks; concurrent spawns can share a birth token).
+        try:
+            clk_tck = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else None
+        except (AttributeError, ValueError, OSError):
+            clk_tck = None
+        tick_delay = min(max(2.0 / clk_tck, 0.05), 1.0) if (clk_tck and clk_tck > 0) else 0.05
+        time.sleep(tick_delay)
+
+        p2 = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+        procs.append(p2)
         id2 = ags._process_identity(p2.pid)
+
         self.assertTrue(id1)
         self.assertTrue(id2)
         self.assertNotEqual(id1, id2)
