@@ -325,6 +325,23 @@ class WebChatTests(unittest.TestCase):
         self.assertIn("后台任务完成：42", texts)
         self.assertEqual(texts[0], "跑一个很久的任务")
 
+    def test_request_is_in_history_as_soon_as_a_job_exists(self):
+        """A dropped phone stream must not lead to resending a request the server already runs."""
+        from web_chat import WebChatPort
+        import asyncio, queue as _queue
+        sid = "web:web-console:submitted-1"
+        port = WebChatPort(_queue.Queue(), self.settings, sid, prompt="跑全部测试")
+        port.on_job_submitted(SimpleNamespace(id="q9", channel="web", operator_id="web-console",
+                                              chat_id="submitted-1", prompt="跑全部测试"))
+        _, body = self.request("GET", f"/api/chat/history?session_id={sid}")
+        self.assertEqual([(m["role"], m["text"]) for m in body["messages"]], [("user", "跑全部测试")])
+        msg = InboundMessage(channel="web", operator_id="web-console", chat_id="submitted-1",
+                             message_id=None, text="跑全部测试")
+        asyncio.run(port.send_new(msg, "全部通过"))
+        _, body = self.request("GET", f"/api/chat/history?session_id={sid}")
+        self.assertEqual([(m["role"], m["text"]) for m in body["messages"]],
+                         [("user", "跑全部测试"), ("assistant", "全部通过")])
+
     def test_queued_notice_does_not_swallow_the_later_answer(self):
         from web_chat import WebChatPort
         import asyncio, queue as _queue

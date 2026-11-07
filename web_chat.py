@@ -86,6 +86,21 @@ class WebChatPort(OutboundPort):
 
     def on_job_submitted(self, queued_job: Any) -> None:
         self.job_id = str(getattr(queued_job, "id", "") or "")
+        # Record the request as soon as a job exists: if the phone loses the
+        # stream, history shows the server has it, so the client does not
+        # resend it and start a second job.
+        if self._user_persisted or not self.settings or not self.durable_session_id:
+            return
+        try:
+            get_transcript_store(self.settings).append(
+                self.durable_session_id, "user", self.prompt or str(getattr(queued_job, "prompt", "")),
+                kind="chat", channel=str(getattr(queued_job, "channel", "") or "web"),
+                operator_id=str(getattr(queued_job, "operator_id", "") or ""),
+                source_chat_id=str(getattr(queued_job, "chat_id", "") or ""),
+            )
+            self._user_persisted = True
+        except Exception:
+            logger.exception("Failed to persist web chat request to TranscriptStore")
 
     async def note_queued(self, msg: InboundMessage, text: str) -> None:
         """Show the queue notice without making it this turn's final answer.
