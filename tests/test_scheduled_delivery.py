@@ -83,6 +83,24 @@ class TimezoneConfigTest(unittest.TestCase):
         with patch.dict(os.environ, {"USER_TIMEZONE": "Asia/Shanghai"}):
             self.assertEqual(load_settings(".env.test.example").user_timezone, "Asia/Shanghai")
 
+class BriefingRemindersTest(unittest.TestCase):
+    def test_reminders_due_later_today_are_listed(self) -> None:
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        from personal_tools.briefing import _build_reminders_section
+        from personal_tools.store import PersonalToolsStore
+        from tests.test_long_term_memory import _settings
+        with tempfile.TemporaryDirectory() as raw:
+            settings = _settings(Path(raw))
+            tz = ZoneInfo(settings.user_timezone)
+            morning = datetime.now(tz).replace(hour=8, minute=0, second=0, microsecond=0)
+            store = PersonalToolsStore(settings)
+            store.create_reminder("o", "下午开会", morning + timedelta(hours=7))
+            store.create_reminder("o", "明天交报告", morning + timedelta(days=1, hours=2))
+            text = _build_reminders_section(settings, "o", morning)
+        self.assertIn("下午开会", text)
+        self.assertNotIn("明天交报告", text)
+
 
 if __name__ == "__main__":
     unittest.main()

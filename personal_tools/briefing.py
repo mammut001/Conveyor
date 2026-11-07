@@ -289,7 +289,11 @@ def _build_reminders_section(settings: Settings, operator_id: str, target: datet
     """Build reminders section for the target date."""
     try:
         store = PersonalToolsStore(settings)
-        reminders = store.list_due_reminders(operator_id, now=target)
+        # Everything due by the end of the target day (local time). Passing the
+        # target itself left out reminders due later today - and, for a date
+        # given as YYYY-MM-DD (midnight), every reminder of that day.
+        end_of_day = target.replace(hour=23, minute=59, second=59, microsecond=0)
+        reminders = store.list_due_reminders(operator_id, now=end_of_day)
 
         if not reminders:
             return "⏰ 提醒: 无到期提醒"
