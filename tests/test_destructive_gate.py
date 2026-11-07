@@ -104,7 +104,7 @@ class ApprovalExecutorTests(unittest.TestCase):
         from pathlib import Path
         from unittest.mock import patch
         from handlers.tools.executors import exec_pi_destructive_task
-        from runner.types import Job, JobMode, JobState
+        from runner.types import Job, JobState
         from tests.test_pi_backend import _make_settings
 
         calls = []

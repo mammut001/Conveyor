@@ -124,7 +124,7 @@ class QueueSafetyTests(unittest.TestCase):
     def test_foreign_queued_job_keeps_its_own_chat(self):
         """An older job this process did not enqueue must not run under the new submitter's chat."""
         import handlers.jobs as jobs
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
         from runner.types import JobMode
 
         with tempfile.TemporaryDirectory() as root:
@@ -201,7 +201,6 @@ class QueueMemoryReferenceTests(unittest.TestCase):
 
 class QueueCancelRaceTests(unittest.TestCase):
     def test_cancel_does_not_mark_a_job_another_process_just_started(self):
-        import sqlite3
         with tempfile.TemporaryDirectory() as root:
             settings = SimpleNamespace(
                 codex_memory_root=Path(root), conveyor_max_pending_jobs=10,

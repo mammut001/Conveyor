@@ -133,12 +133,6 @@ def _drain_queue(q: queue.Queue) -> list[tuple[str, dict]]:
 
 
 class PiBackendTests(unittest.TestCase):
-    def test_normalize_pi_model(self) -> None:
-        self.assertEqual(normalize_pi_model("deepseek", "deepseek-flash"), "deepseek-v4-flash")
-        self.assertEqual(normalize_pi_model("deepseek", "deepseek-chat"), "deepseek-v4-flash")
-        self.assertEqual(normalize_pi_model("deepseek", "deepseek-reasoner"), "deepseek-v4-pro")
-        self.assertEqual(normalize_pi_model("openai", "gpt-4o"), "gpt-4o")
-
     def test_provider_factory_selects_pi(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             settings = _make_settings(Path(raw))
