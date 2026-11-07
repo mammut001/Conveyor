@@ -38,6 +38,15 @@ DENYLIST_PATTERNS = [
 # High-risk project patterns
 HIGH_RISK_PATTERNS = [
     ".github/workflows/**",
+    # Files that run code automatically on the operator's machine (git hooks,
+    # direnv): an agent's change must not install them silently.
+    ".husky/**",
+    "**/.husky/**",
+    ".githooks/**",
+    "**/.githooks/**",
+    ".envrc",
+    "**/.envrc",
+    ".pre-commit-config.yaml",
     "scripts/install.sh",
     "scripts/deploy.sh",
     "scripts/deploy_vps.sh",

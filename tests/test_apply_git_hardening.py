@@ -95,6 +95,16 @@ class WorktreeOwnershipTest(unittest.TestCase):
             self.assertTrue(asyncio.run(_worktree_belongs_to(runner, root / "wt", root / "a")))
             self.assertFalse(asyncio.run(_worktree_belongs_to(runner, root / "wt", root / "b")))
 
+class AutoRunFilesPolicyTest(unittest.TestCase):
+    def test_git_hooks_and_direnv_files_are_high_risk(self):
+        from config import load_settings
+        from runner.apply_policy import validate_apply_paths
+        settings = load_settings(".env.test.example")
+        for path in (".husky/pre-commit", ".githooks/post-checkout", ".envrc", "web/.envrc",
+                     ".pre-commit-config.yaml"):
+            with self.subTest(path=path):
+                self.assertFalse(validate_apply_paths([path], kind="tracked", settings=settings).allowed)
+
 
 if __name__ == "__main__":
     unittest.main()
