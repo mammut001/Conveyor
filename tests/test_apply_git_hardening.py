@@ -105,6 +105,16 @@ class AutoRunFilesPolicyTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(validate_apply_paths([path], kind="tracked", settings=settings).allowed)
 
+class ApplyRunningJobTest(unittest.TestCase):
+    def test_a_running_job_cannot_be_applied(self):
+        from runner.operators.jobs import _apply_job_locked
+        from runner.types import JobState
+        with tempfile.TemporaryDirectory() as raw:
+            wt = Path(raw)
+            runner = SimpleNamespace(current_job=SimpleNamespace(id="j1", state=JobState.RUNNING))
+            out = asyncio.run(_apply_job_locked(runner, "j1", wt))
+        self.assertIn("still running", out)
+
 
 if __name__ == "__main__":
     unittest.main()

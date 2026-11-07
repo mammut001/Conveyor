@@ -176,6 +176,13 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
 
     if not worktree_path or not worktree_path.exists():
         return "No job worktree to apply."
+    # The paths are validated first and the patch is generated afterwards; an
+    # agent still writing to this worktree could slip unchecked changes in
+    # between. Apply only finished jobs.
+    current = getattr(self, "current_job", None)
+    if (current is not None and job_id and str(getattr(current, "id", "")) == str(job_id)
+            and getattr(getattr(current, "state", None), "value", "") == "running"):
+        return f"Job {job_id} is still running; wait for it to finish (or /cancel it) before applying."
     # The repository the worktree belongs to: the configured workspace, or
     # the project folder of the agent whose job this is.
     from runner.worktree import _repo_root_for, _worktree_belongs_to
