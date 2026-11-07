@@ -387,7 +387,10 @@ def load_mcp_servers(config_path: Path) -> tuple[dict[str, ServerConfig], str | 
             try:
                 raw_cfg, levels = normalize_toml_server(str(name), raw_cfg)
             except ValueError as exc:
-                servers[str(name)] = ServerConfig(name=str(name), transport=str(raw_cfg.get("transport", "stdio")), validation_error=str(exc))
+                # raw_cfg may not even be a table ("notes = \"oops\""); this
+                # handler must not raise, or one typo breaks every tool chat.
+                transport = raw_cfg.get("transport", "stdio") if isinstance(raw_cfg, dict) else "stdio"
+                servers[str(name)] = ServerConfig(name=str(name), transport=str(transport), validation_error=str(exc))
                 continue
         cfg = validate_server(str(name), raw_cfg, idx)
         servers[cfg.name] = strict_server(cfg, levels) if config_path.suffix.lower() == ".toml" else cfg

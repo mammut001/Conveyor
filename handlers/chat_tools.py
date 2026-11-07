@@ -261,7 +261,12 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
 
     if settings and getattr(settings, "mcp_enabled", False):
         from mcp_client import get_mcp_manager
-        mcp_schemas = get_mcp_manager().get_exposed_schemas(settings)
+        try:
+            mcp_schemas = get_mcp_manager().get_exposed_schemas(settings)
+        except Exception:
+            # A broken MCP config must cost the MCP tools, not every chat.
+            logger.exception("MCP tool schemas unavailable; continuing without MCP tools")
+            mcp_schemas = []
         if named_agents.enabled(settings):
             mcp_schemas = [s for s in mcp_schemas if named_agents.tool_allowed(
                 settings, channel, chat_id, func_to_tool_name(s["function"]["name"]),
