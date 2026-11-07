@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- **Nightly repair could run Pi-planted commands on the host**: Pi edits the repair worktree (including its `.git` pointer) inside the sandbox, and the coordinator then ran git there outside it; a pointer to a planted git dir with `core.fsmonitor` or a hook executed as the user holding the GitHub credentials. Host git now uses the pinned git dir with fsmonitor/hooks off and refuses a modified pointer; renames (`--no-renames`), symlinks and submodules can no longer slip past the scope rules; the repair branch is created only after Pi succeeded.
+- **`web.fetch` SSRF**: IPv4 addresses inside IPv6 (`[::ffff:127.0.0.1]`, NAT64, 6to4, IPv4-compatible) passed the private-range check, and curl re-resolved names after validation (DNS rebinding). Embedded IPv4 and non-global addresses are refused and each request is pinned with `--resolve`.
+- `files.search` no longer follows symlinks out of its roots; every closing-tag spelling is neutralised inside `<tool-result>` and `<quoted-message>`.
 - **Web Console: token-protected GET routes were readable without the token** through percent-encoded or doubled paths (`/%61pi/jobs/<id>`, `//api/...`): the auth gate checked the raw path, the router matched decoded segments. Job prompts, events and diffs, sessions, agent libraries, screenshots and artifacts were exposed to anyone who could reach the port. The gate now matches the decoded first segment.
 - **Pi's deletion approval can no longer be forged**: approval is `Job.destructive_confirmed`, set only by the approval executor; the old `[OPERATOR_CONFIRMED_DESTRUCTIVE]` text marker is stripped from every prompt (it could be typed by the user or carried in by quoted/fetched context).
 - **Destructive-request gate hardened**: a question word or an unrelated negation no longer disables the whole check; explicit commands count even inside a question; input is NFKC/zero-width normalised; added git force-push/hard-reset/branch -D, kill/pkill/systemctl stop, chmod/chown -R, mkfs, dd, crontab -r, 重置/清理/抹掉/删了/强推 and more. `/run`, `/fix`, `/deep` and image captions on the Pi backend now go through the same approval.
@@ -22,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Job queue**: `/queue resume` no longer marks a running job completed; a new submission no longer runs an older foreign job under its own chat; in-memory job handles are released.
 - **Telegram**: a flood-controlled progress edit no longer silences the rest of the job; sends to a closed/deleted forum topic fall back to the base chat; `/topics` recreates deleted topics and no longer creates duplicates when run twice.
 - **Goal mode**: iPhone smart dashes/quotes in flags are accepted and an unquoted `--check` is rejected instead of silently dropped; an iteration can no longer outlive the goal's `--hours` deadline.
+- **Telegram and Feishu: a running job blocked `/cancel`, `/status` and buttons in its chat** until it had finished (both SDKs handle one update per chat at a time and the handler waited for the job); jobs now continue in the background like the web console's.
+- **Web chat: agent answers were lost** when the turn hit its 180 s budget or the phone dropped (the waiter's cancellation also cancelled the job's result delivery), and when the chat job was queued (the queue notice was saved as the final answer). Delivery is shielded, a timed-out handoff says the job continues instead of offering a duplicate retry, and the request is recorded as soon as it becomes a job.
+- **Feishu**: card Apply/Discard/Diff/Cancel refuse to act on a different job than the card's; messages sent in quick succession (merged by the SDK) are no longer dropped; upload cards' buttons work.
+- **Job queue**: cancelling a queued job never marks a just-started job cancelled; in-memory job handles of jobs closed elsewhere are released.
+- **Goal mode** reads `GOAL_STATUS`/`NEXT` written with Chinese colons or Markdown (they read as "continue", so a goal without checks never finished).
+- `/web_fetch`, `/web_text`, `/web_headers`, `/web_search` and CLI `.env` discovery no longer crash with `NameError`.
 - **Doctor** checks the Pi backend (binary, `pi-agent/models.json`, key) and the chat provider (`/models` lists the configured model); agent child processes receive `NODE_EXTRA_CA_CERTS`.
 
 ### Added
