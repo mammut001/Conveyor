@@ -161,6 +161,11 @@ def _search_files_internal(
                 continue
             if _is_blocked_pattern(rel_path):
                 continue
+            # A symlink inside a root can point anywhere (notes.md -> ~/.ssh/id_rsa):
+            # judge the file it resolves to, like read_file does.
+            if path.is_symlink():
+                if not _is_path_allowed(path, allowed_roots) or _is_blocked_pattern(str(path.resolve())):
+                    continue
 
             # Check binary
             if _is_binary_file(path):

@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from channel.types import InboundMessage
 from handlers.job_queue import JobQueue
 from handlers.tools.confirm import clear_all_pending, create_pending
 from web_console import WebConsoleHandler, WebConsoleServer
@@ -285,6 +286,83 @@ class WebChatTests(unittest.TestCase):
         self.assertEqual(messages[0]["text"], "Hi there")
         self.assertEqual(messages[1]["role"], "assistant")
         self.assertEqual(messages[1]["text"], "Hello from Conveyor!")
+
+    def test_agent_answer_after_turn_timeout_is_saved_and_not_retryable(self):
+        """A handed-off job outlives the 180s turn; its answer must still land in history."""
+        import asyncio
+
+        async def slow_agent(msg, port, settings, runner, prompt):
+            port.on_job_submitted(SimpleNamespace(id="q-slow"))
+            await port.reply(msg, "⏳ 收到，处理中...")
+            try:
+                await asyncio.sleep(0.6)
+            except asyncio.CancelledError:
+                # What the shielded job delivery does after the waiter is gone.
+                async def finish():
+                    await asyncio.sleep(0.3)
+                    await port.send_new(msg, "后台任务完成：42")
+                asyncio.get_running_loop().create_task(finish())
+                raise
+
+        with patch("web_chat.run_web_chat", new=slow_agent), \
+                patch("handlers.intent.computer_chat_budget_seconds", return_value=0.2):
+            status, events = self.request_sse("/api/chat", {"message": "跑一个很久的任务"})
+        self.assertEqual(status, 200)
+        names = [name for name, _ in events]
+        self.assertNotIn("error", names)
+        note = [data["text"] for name, data in events if name == "message"]
+        self.assertTrue(note and "后台执行" in note[-1], events)
+        session_id = next(data["session_id"] for name, data in events if name == "session")
+        import time
+        deadline = time.time() + 3
+        texts = []
+        while time.time() < deadline:
+            _, body = self.request("GET", f"/api/chat/history?session_id={session_id}")
+            texts = [m["text"] for m in body["messages"]]
+            if "后台任务完成：42" in texts:
+                break
+            time.sleep(0.1)
+        self.assertIn("后台任务完成：42", texts)
+        self.assertEqual(texts[0], "跑一个很久的任务")
+
+    def test_request_is_in_history_as_soon_as_a_job_exists(self):
+        """A dropped phone stream must not lead to resending a request the server already runs."""
+        from web_chat import WebChatPort
+        import asyncio, queue as _queue
+        sid = "web:web-console:submitted-1"
+        port = WebChatPort(_queue.Queue(), self.settings, sid, prompt="跑全部测试")
+        port.on_job_submitted(SimpleNamespace(id="q9", channel="web", operator_id="web-console",
+                                              chat_id="submitted-1", prompt="跑全部测试"))
+        _, body = self.request("GET", f"/api/chat/history?session_id={sid}")
+        self.assertEqual([(m["role"], m["text"]) for m in body["messages"]], [("user", "跑全部测试")])
+        msg = InboundMessage(channel="web", operator_id="web-console", chat_id="submitted-1",
+                             message_id=None, text="跑全部测试")
+        asyncio.run(port.send_new(msg, "全部通过"))
+        _, body = self.request("GET", f"/api/chat/history?session_id={sid}")
+        self.assertEqual([(m["role"], m["text"]) for m in body["messages"]],
+                         [("user", "跑全部测试"), ("assistant", "全部通过")])
+
+    def test_approve_refuses_when_the_shown_argument_changed(self):
+        from handlers.tools.confirm import create_pending, get_pending
+        action = create_pending("notes.add", "the real note", "web-console", "web-x", "web")
+        status, body = self.request("POST", f"/api/approvals/{action.token}/approve",
+                                    {"expected_arg": "what the card showed earlier"})
+        self.assertEqual(status, 409, body)
+        self.assertIsNotNone(get_pending(action.token))  # still pending, nothing ran
+
+    def test_queued_notice_does_not_swallow_the_later_answer(self):
+        from web_chat import WebChatPort
+        import asyncio, queue as _queue
+        port = WebChatPort(_queue.Queue(), self.settings, "web:web-console:queued-1", prompt="排队的问题")
+        msg = InboundMessage(channel="web", operator_id="web-console", chat_id="queued-1",
+                             message_id=None, text="排队的问题")
+        asyncio.run(port.note_queued(msg, "已排队，前面还有 1 个任务"))
+        asyncio.run(port.send_new(msg, "真正的答案"))
+        _, body = self.request("GET", "/api/chat/history?session_id=web:web-console:queued-1")
+        texts = [(m["role"], m["text"]) for m in body["messages"]]
+        self.assertEqual(texts[0], ("user", "排队的问题"))
+        self.assertIn(("assistant", "真正的答案"), texts)
+        self.assertEqual(sum(1 for role, _ in texts if role == "user"), 1)
 
     def test_task_suggestion_roundtrip_and_explicit_execution(self):
         for outcome in ("escalate", "unavailable"):

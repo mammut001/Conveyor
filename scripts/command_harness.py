@@ -355,7 +355,7 @@ async def run_command_harness() -> int:
             ("health", "/health", True, "Offline: none"),
             ("smoke", "/smoke", True, "smoke 通过"),
             ("editcheck", "/editcheck", True, "EDITCHECK_OK"),
-            ("help", "/help", True, "Codex Bot"),
+            ("help", "/help", True, "Conveyor · 常用操作"),
             ("unknown", "/nonsense", True, "未知命令"),
         ]
         results: list[CheckResult] = []

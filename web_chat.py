@@ -77,8 +77,39 @@ class WebChatPort(OutboundPort):
         self.durable_session_id = durable_session_id
         self.prompt = prompt
         self._delivered_final = False
+        self._user_persisted = False
         self.placeholder_id = "web-chat-placeholder"
         self._approval_emitted = False
+        # Set when this turn handed the request to an agent job; the job can
+        # outlive the HTTP stream, and its answer is still saved to history.
+        self.job_id = ""
+
+    def on_job_submitted(self, queued_job: Any) -> None:
+        self.job_id = str(getattr(queued_job, "id", "") or "")
+        # Record the request as soon as a job exists: if the phone loses the
+        # stream, history shows the server has it, so the client does not
+        # resend it and start a second job.
+        if self._user_persisted or not self.settings or not self.durable_session_id:
+            return
+        try:
+            get_transcript_store(self.settings).append(
+                self.durable_session_id, "user", self.prompt or str(getattr(queued_job, "prompt", "")),
+                kind="chat", channel=str(getattr(queued_job, "channel", "") or "web"),
+                operator_id=str(getattr(queued_job, "operator_id", "") or ""),
+                source_chat_id=str(getattr(queued_job, "chat_id", "") or ""),
+            )
+            self._user_persisted = True
+        except Exception:
+            logger.exception("Failed to persist web chat request to TranscriptStore")
+
+    async def note_queued(self, msg: InboundMessage, text: str) -> None:
+        """Show the queue notice without making it this turn's final answer.
+
+        The job runs later through this same port; its answer must still be
+        saved, which a final-marked notice used to prevent.
+        """
+        self.emit("message", {"text": text})
+        self._persist_turn(msg, text, kind="status", final=False)
 
     def emit(self, event: str, data: dict[str, Any]) -> None:
         self.queue.put((event, data))
@@ -185,15 +216,19 @@ class WebChatPort(OutboundPort):
         *,
         kind: str = "chat",
         metadata: dict[str, Any] | None = None,
+        final: bool = True,
     ) -> None:
         if self._delivered_final or not self.settings or not self.durable_session_id:
             return
-        self._delivered_final = True
+        if final:
+            self._delivered_final = True
         user_text = self.prompt or msg.text
         ident = dict(channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id)
         try:
             store = get_transcript_store(self.settings)
-            store.append(self.durable_session_id, "user", user_text, kind="chat", **ident)
+            if not self._user_persisted:
+                store.append(self.durable_session_id, "user", user_text, kind="chat", **ident)
+                self._user_persisted = True
             store.append(
                 self.durable_session_id, "assistant", text, kind=kind, metadata=metadata, **ident,
             )

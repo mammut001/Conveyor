@@ -114,7 +114,7 @@ def _clip(text: str, limit: int) -> str:
 
 def _neutralize(text: str) -> str:
     """Stop quoted text from closing the wrapper tag early."""
-    return re.sub(r"</?\s*quoted-message", "<​quoted-message", text, flags=re.IGNORECASE)
+    return re.sub(r"<\s*/?\s*quoted-message", "<​quoted-message", text, flags=re.IGNORECASE)
 
 
 def _author_label(reply: ReplyContext) -> str:

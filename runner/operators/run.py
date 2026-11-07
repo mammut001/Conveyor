@@ -120,8 +120,12 @@ async def start(
     on_progress: ProgressCallback,
     *,
     workspace_root: Path | None = None,
+    destructive_confirmed: bool = False,
 ) -> Job:
-    prompt = prompt.strip()
+    from runner.types import DESTRUCTIVE_CONFIRM_TAG
+    # Approval travels as a flag; a marker typed by the user (or carried in by
+    # quoted context) must not read as an approval.
+    prompt = prompt.replace(DESTRUCTIVE_CONFIRM_TAG, "").strip()
     if not prompt:
         raise ValueError("Prompt is empty.")
     if len(prompt) > 8000:
@@ -146,6 +150,7 @@ async def start(
             sandbox = mode.sandbox
             job = Job(id=self._new_job_id(), mode=mode, prompt=prompt, sandbox=sandbox)
             job.workspace_root = workspace_root
+            job.destructive_confirmed = bool(destructive_confirmed)
             job.lane = getattr(self, "lane", "default")
             job.max_attempts = 1 + len(self.settings.codex_retry_429_delays_seconds)
             

@@ -359,6 +359,19 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
     def _segments(path: str) -> list[str]:
         return [unquote(part) for part in path.strip("/").split("/") if part]
 
+    @classmethod
+    def _is_api_path(cls, path: str) -> bool:
+        """True for anything the router will treat as an /api/ route.
+
+        Routing matches on decoded segments, so the auth gate must too:
+        "/%61pi/jobs/q1" and "//api/jobs/q1" reach the same handlers as
+        "/api/jobs/q1" but slipped past a raw ``startswith("/api/")`` check.
+        """
+        if path.startswith("/api/"):
+            return True
+        parts = cls._segments(path)
+        return bool(parts) and parts[0].lower() == "api"
+
     def _memory_owner(self, settings: Any, agent_id: str) -> str | None:
         """Whose memory a console request is about; answers 404 for an unknown agent.
 
@@ -432,7 +445,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             if not pwa_enabled(getattr(self.server.control, "settings", None)):
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
-        if path.startswith("/api/") and not self._require_auth():
+        if self._is_api_path(path) and not self._require_auth():
             return
         if path == "/api/agent-conversations":
             from web_agent_conversations_api import get
@@ -1304,6 +1317,14 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         if reason:
                             self._json(HTTPStatus.CONFLICT, {"error": reason})
                             return
+                        # Same optimistic check as /api/approval-inbox: when the
+                        # client says what it showed, refuse if the action changed.
+                        expected_arg = body.get("expected_arg") if isinstance(body, dict) else None
+                        if expected_arg is not None:
+                            from redaction import redact_text as _redact
+                            if expected_arg not in (pending.arg, _redact(pending.arg)):
+                                self._json(HTTPStatus.CONFLICT, {"error": "approval changed, reload"})
+                                return
                     from web_chat import decide_tool_approval
                     result = self._await(decide_tool_approval(pending, is_approve, settings), timeout=120)
                     self._json(HTTPStatus.OK, result)
@@ -1814,6 +1835,17 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 now = time.monotonic()
                 if now > deadline:
                     future.cancel()
+                    if getattr(port, "job_id", ""):
+                        # The agent job keeps running and its answer is saved
+                        # to this conversation when it ends. A retryable error
+                        # here made the owner resend and start a duplicate job.
+                        note = json.dumps({"text": (
+                            "任务还在后台执行，完成后结果会出现在这段对话里（刷新即可看到），不用重发。"
+                        )}, ensure_ascii=False)
+                        done_data = json.dumps({"outcome": "background"}, ensure_ascii=False)
+                        self.wfile.write(f"event: message\ndata: {note}\n\nevent: done\ndata: {done_data}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                        break
                     err_data = json.dumps({"error": "Request timed out"}, ensure_ascii=False)
                     done_data = json.dumps({"outcome": "timeout"}, ensure_ascii=False)
                     self.wfile.write(f"event: error\ndata: {err_data}\n\nevent: done\ndata: {done_data}\n\n".encode("utf-8"))

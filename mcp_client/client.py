@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import signal
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -358,9 +359,23 @@ class HttpSession:
                     return None
 
                 content_type = resp.headers.get("Content-Type", "")
-                raw_body = resp.read(MAX_TOTAL_READ_BYTES + 1)
-                if len(raw_body) > MAX_TOTAL_READ_BYTES:
-                    raise MCPClientError("Response exceeded 4 MB limit")
+                # urllib's timeout is per socket read, so a server dripping one
+                # byte at a time kept this worker thread busy for hours after the
+                # caller had given up. Enforce the timeout over the whole body.
+                deadline = time.monotonic() + timeout
+                chunks: list[bytes] = []
+                total = 0
+                while True:
+                    if time.monotonic() > deadline:
+                        raise MCPTimeoutError("MCP HTTP response body timed out")
+                    chunk = resp.read1(65536) if hasattr(resp, "read1") else resp.read(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total > MAX_TOTAL_READ_BYTES:
+                        raise MCPClientError("Response exceeded 4 MB limit")
+                raw_body = b"".join(chunks)
 
                 body_text = raw_body.decode("utf-8", errors="replace")
 

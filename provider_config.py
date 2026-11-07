@@ -115,6 +115,17 @@ def get_provider_config(settings: Any) -> dict[str, Any]:
     return result
 
 
+_CREDENTIAL_SUFFIXES = ("_API_KEY", "_KEY", "_TOKEN")
+_RUNTIME_PREFIXES = ("LD_", "PYTHON", "CONVEYOR_", "CODEX_", "GIT_", "NODE_", "PI_", "SSL_",
+                     "REQUESTS_", "CURL_", "HTTP", "NO_PROXY", "PATH", "HOME", "SHELL", "TELEGRAM_", "LARK_")
+
+
+def _is_credential_name(name: str) -> bool:
+    """Only provider credential variables may be written from the console;
+    LD_PRELOAD, PATH, CONVEYOR_* and the like change how the host runs."""
+    return name.endswith(_CREDENTIAL_SUFFIXES) and not name.startswith(_RUNTIME_PREFIXES)
+
+
 def _validate(payload: dict[str, Any]) -> dict[str, str]:
     provider_id = str(payload.get("provider_id") or "").strip().lower()
     provider_name = str(payload.get("provider_name") or provider_id).strip()
@@ -139,10 +150,14 @@ def _validate(payload: dict[str, Any]) -> dict[str, str]:
         raise ValueError("wire_api must be responses or chat")
     if reasoning not in ("none", "minimal", "low", "medium", "high", "xhigh"):
         raise ValueError("unsupported reasoning effort")
-    if not _ENV_KEY_RE.fullmatch(env_key):
-        raise ValueError("invalid environment key name")
-    if api_key and (len(api_key) < 8 or len(api_key) > 4096 or "\n" in api_key or "\r" in api_key):
-        raise ValueError("api_key must be 8-4096 characters on one line")
+    if not _ENV_KEY_RE.fullmatch(env_key) or not _is_credential_name(env_key):
+        raise ValueError("env_key must be a provider credential name such as OPENAI_API_KEY")
+    # splitlines() (used by every .env reader) also breaks on \u2028, \x85,
+    # \x0b ... so any control or line-separator character could smuggle a
+    # second VAR=value line into .env.
+    if api_key and (len(api_key) < 8 or len(api_key) > 4096
+                    or any(ord(ch) < 0x20 or ord(ch) == 0x7F or ch in "\x85\u2028\u2029" for ch in api_key)):
+        raise ValueError("api_key must be 8-4096 printable characters on one line")
     return {
         "provider_id": provider_id, "provider_name": provider_name, "model": model,
         "base_url": base_url, "wire_api": wire_api, "reasoning_effort": reasoning,
@@ -212,7 +227,8 @@ def _update_env(path: Path, key: str, value: str) -> None:
         updated.append(line)
     if not replaced:
         updated.append(prefix + value)
-    existing_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
+    # The file now holds a secret: never keep group/world access it may have had.
+    existing_mode = stat.S_IMODE(path.stat().st_mode) & 0o600 if path.exists() else 0o600
     _atomic_write(path, "\n".join(updated) + "\n", existing_mode)
 
 

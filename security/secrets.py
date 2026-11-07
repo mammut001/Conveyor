@@ -54,7 +54,9 @@ SECRET_VALUE_PATTERNS = [
 
 # Env variables allowed to pass through to child processes exactly
 ALLOWED_CHILD_ENV_EXACT = {
-    "HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "SHELL", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"
+    "HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "SHELL", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE",
+    # Node-based agents (pi) ignore SSL_CERT_FILE; this is a CA bundle path, not a secret.
+    "NODE_EXTRA_CA_CERTS",
 }
 
 # Env prefix variables allowed to pass through

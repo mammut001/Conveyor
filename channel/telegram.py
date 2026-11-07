@@ -24,6 +24,36 @@ from redaction import truncate
 
 logger = logging.getLogger("conveyor.channel.telegram")
 
+# Telegram reports a dead forum topic (closed / deleted) in several
+# phrasings depending on the API version; all of them mean the topic can
+# no longer receive messages.
+_DEAD_TOPIC_MARKERS = (
+    "message thread not found",
+    "topic_closed",
+    "topic_deleted",
+    "topic closed",
+    "topic deleted",
+    "thread not found",
+)
+
+# Prepended when a topic-scoped send falls back to the base chat so the
+# reader knows why the message arrived outside the topic.
+_DEAD_TOPIC_FALLBACK_PREFIX = "（原话题已关闭或删除，改发到群聊）\n"
+
+
+def _is_dead_topic_error(exc: BaseException) -> bool:
+    """True when Telegram says the forum topic is closed/deleted.
+
+    Sending to ``<chat>:topic:<thread>`` fails with ``BadRequest`` once
+    the topic is gone; callers use this to fall back to the base chat
+    instead of silently dropping the message.
+    """
+    try:
+        text = str(exc).lower()
+    except Exception:
+        return False
+    return any(marker in text for marker in _DEAD_TOPIC_MARKERS)
+
 
 # ---- Inbound conversion ----------------------------------------------------
 
@@ -247,6 +277,11 @@ class TelegramOutbound:
     """
     supports_inline_buttons: bool = True
     supports_attachments: bool = True
+    # Return from the update handler once the job is queued; it keeps running
+    # in the background and reports through this port. Both SDKs handle one
+    # update per chat at a time, so waiting here held /cancel, /status and
+    # button clicks in that chat until the job had already finished.
+    wait_for_job: bool = False
 
     def __init__(self, update: Update) -> None:
         self._update = update
@@ -385,8 +420,36 @@ class TelegramChatOutbound(OutboundPort):
                 **extra,
             )
             return str(getattr(sent, "message_id", "") or "")
-        except Exception:
+        except Exception as exc:
+            if thread_id is not None and _is_dead_topic_error(exc):
+                return await self._resend_to_base_chat(text, reply_markup=None)
             logger.exception("Failed to send Telegram message from TelegramChatOutbound")
+            return None
+
+    async def _resend_to_base_chat(
+        self, text: str, reply_markup: InlineKeyboardMarkup | None = None
+    ) -> str | None:
+        """Retry a topic send in the base chat without message_thread_id.
+
+        Used when the forum topic is closed or deleted, so goal-loop
+        notices / approval relays / agent results are not lost. The
+        text is prefixed to explain the redirection.
+        """
+        target_chat, _ = split_chat_thread(self.chat_id)
+        logger.warning(
+            "Telegram topic is closed/deleted; resending to base chat %s...",
+            str(target_chat)[:8],
+        )
+        try:
+            sent = await self.bot.send_message(
+                chat_id=target_chat,
+                text=truncate(_DEAD_TOPIC_FALLBACK_PREFIX + text),
+                disable_web_page_preview=True,
+                reply_markup=reply_markup,
+            )
+            return str(getattr(sent, "message_id", "") or "")
+        except Exception:
+            logger.exception("Telegram base-chat fallback send failed too")
             return None
 
     async def edit_progress(self, msg: InboundMessage, placeholder_id: str, text: str) -> bool:
@@ -415,7 +478,11 @@ class TelegramChatOutbound(OutboundPort):
                 **extra,
             )
             return str(getattr(sent, "message_id", "") or "")
-        except Exception:
+        except Exception as exc:
+            if thread_id is not None and _is_dead_topic_error(exc):
+                return await self._resend_to_base_chat(
+                    text, reply_markup=InlineKeyboardMarkup(keyboard)
+                )
             logger.exception("Failed to send Telegram message with buttons")
             return None
 
@@ -481,6 +548,13 @@ async def edit_text(
         name = exc.__class__.__name__
         msg = str(exc)
         if "not modified" in msg.lower():
+            return True
+        if name == "RetryAfter" or "flood control" in msg.lower() or "too many requests" in msg.lower():
+            # Flood control on a progress edit only means this frame came too
+            # fast. Skip it; reporting failure latches the caller into its
+            # fallback and silences progress for the rest of the job (fast
+            # Pi tool loops hit this).
+            logger.debug("edit_progress throttled by Telegram: %s", msg)
             return True
         logger.debug(
             "edit_progress failed (%s): %s; will fall back to send_new",

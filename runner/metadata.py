@@ -152,15 +152,28 @@ def _latest_file(self, directory: Path, pattern: str) -> Path | None:
 
 
 def _state_from_attempt_file(self, attempt_file: Path) -> str:
+    """Best-effort job state inferred from an attempt log.
+
+    Recognises both the Codex JSONL envelope (``turn.completed`` /
+    ``turn.failed``) and the Pi attempt records written by
+    ``PiBackend._safe_log_record`` (``kind`` of ``assistant.completed`` /
+    ``agent.error``). Last event wins; blank and non-JSON-object lines are
+    skipped.
+    """
     state = "running"
     for line in attempt_file.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(event, dict):
+            continue
         event_type = event.get("type")
-        if event_type == "turn.completed":
+        kind = event.get("kind")
+        if event_type == "turn.completed" or kind == "assistant.completed":
             state = "completed"
-        elif event_type == "turn.failed":
+        elif event_type == "turn.failed" or kind == "agent.error":
             state = "failed"
     return state

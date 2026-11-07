@@ -124,6 +124,60 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
             self.settings, self.msg("finance money"))).agent_id,
             self.finance["id"])
 
+    async def test_model_fenced_json_answer_routes_to_agent(self):
+        m = self.msg("finance investments")
+        payload = json.dumps({"agent_id": self.finance["id"], "confidence": 0.95})
+        async def fenced_lower(prompt):
+            return {"content": "```json\n" + payload + "\n```"}
+        decision = await router.choose(self.settings, m, model=fenced_lower)
+        self.assertEqual(decision.agent_id, self.finance["id"])
+        self.assertEqual(decision.reason, "model")
+        async def fenced_upper(prompt):
+            return {"content": "```JSON\n" + payload + "\n```"}
+        self.assertEqual((await router.choose(
+            self.settings, m, model=fenced_upper)).reason, "model")
+        async def bare(prompt):
+            return {"content": payload}
+        self.assertEqual((await router.choose(
+            self.settings, m, model=bare)).reason, "model")
+        # Fence plus prose is not a machine answer: never routes.
+        async def prose(prompt):
+            return {"content": "Sure! " + payload}
+        self.assertEqual((await router.choose(
+            self.settings, m, model=prose)).reason, "ambiguous")
+        async def trailing_after_fence(prompt):
+            return {"content": "```json\n" + payload + "\n``` Let me know!"}
+        self.assertEqual((await router.choose(
+            self.settings, m, model=trailing_after_fence)).reason, "ambiguous")
+        async def unclosed(prompt):
+            return {"content": "```json\n" + payload}
+        self.assertEqual((await router.choose(
+            self.settings, m, model=unclosed)).reason, "ambiguous")
+
+    def test_parse_model_json_fence_handling(self):
+        payload = {"agent_id": None, "confidence": 0.5}
+        self.assertEqual(router._parse_model_json(json.dumps(payload)), payload)
+        self.assertEqual(router._parse_model_json(
+            "```json\n" + json.dumps(payload) + "\n```"), payload)
+        self.assertEqual(router._parse_model_json(
+            "```JSON\n" + json.dumps(payload) + "\n```"), payload)
+        self.assertEqual(router._parse_model_json(
+            "```\n" + json.dumps(payload) + "\n```"), payload)
+        self.assertEqual(router._parse_model_json(
+            "\n  " + json.dumps(payload) + "  \n"), payload)
+        for bad in (None, 42, b"{}", {"agent_id": None}, ["x"]):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    router._parse_model_json(bad)
+        for bad in ("Sure! " + json.dumps(payload),
+                    json.dumps(payload) + " trailing prose",
+                    "```json\n" + json.dumps(payload),
+                    "```json\n" + json.dumps(payload) + "\n``` extra",
+                    "```"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    router._parse_model_json(bad)
+
     async def test_missing_dependency_fails_closed(self):
         for flag in ("CONVEYOR_AGENT_CONTEXT", "CONVEYOR_AGENT_MAILBOX",
                      "CONVEYOR_AGENT_DELEGATION"):

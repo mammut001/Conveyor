@@ -260,8 +260,11 @@ for (const width of [1440, 390]) {
 
     test('error state is short Chinese with retry and the draft kept', async ({ page }) => {
       let attempts = 0
-      const composer = await openChat(page, width, { chat: route => {
+      const composer = await openChat(page, width, { chat: async route => {
         attempts++
+        // Hold the retry open so the in-flight state (one bubble) is observable
+        // deterministically instead of racing the failure that removes it.
+        if (attempts === 2) await new Promise(resolve => setTimeout(resolve, 1500))
         return route.fulfill({ status: 409, contentType: 'application/json',
           body: JSON.stringify({ error: 'chat tier is disabled (set CONVEYOR_CHAT_MODE and CONVEYOR_CHAT_*)' }) })
       } })
