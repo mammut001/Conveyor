@@ -74,6 +74,15 @@ class RoutineDstTest(unittest.TestCase):
             t = next_fire("0 * * * *", t, "America/Toronto"); fires.append(t.hour)
         self.assertEqual(fires, [5, 6, 7])
 
+class TimezoneConfigTest(unittest.TestCase):
+    def test_invalid_user_timezone_falls_back_to_utc_everywhere(self) -> None:
+        import os
+        from config import load_settings
+        with patch.dict(os.environ, {"USER_TIMEZONE": "Mars/Olympus"}):
+            self.assertEqual(load_settings(".env.test.example").user_timezone, "UTC")
+        with patch.dict(os.environ, {"USER_TIMEZONE": "Asia/Shanghai"}):
+            self.assertEqual(load_settings(".env.test.example").user_timezone, "Asia/Shanghai")
+
 
 if __name__ == "__main__":
     unittest.main()

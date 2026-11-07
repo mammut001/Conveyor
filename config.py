@@ -470,7 +470,15 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
     (memory_root / "JOURNAL").mkdir(parents=True, exist_ok=True)
     (memory_root / "snapshots").mkdir(parents=True, exist_ok=True)
     (memory_root / "state").mkdir(parents=True, exist_ok=True)
-    user_timezone = os.getenv("USER_TIMEZONE", "America/Toronto")
+    user_timezone = os.getenv("USER_TIMEZONE", "America/Toronto").strip() or "America/Toronto"
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(user_timezone)
+    except Exception:
+        # Some paths fell back to UTC on a bad name while routines crashed on it;
+        # pick one behaviour and say so.
+        logger.warning("USER_TIMEZONE=%r is not a valid IANA zone; using UTC", user_timezone)
+        user_timezone = "UTC"
 
     # Operator profile (onboarding-C). Resolution order:
     # 1. operator.json (explicit operator choice from /onboard)
