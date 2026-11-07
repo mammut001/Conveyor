@@ -342,6 +342,14 @@ class WebChatTests(unittest.TestCase):
         self.assertEqual([(m["role"], m["text"]) for m in body["messages"]],
                          [("user", "跑全部测试"), ("assistant", "全部通过")])
 
+    def test_approve_refuses_when_the_shown_argument_changed(self):
+        from handlers.tools.confirm import create_pending, get_pending
+        action = create_pending("notes.add", "the real note", "web-console", "web-x", "web")
+        status, body = self.request("POST", f"/api/approvals/{action.token}/approve",
+                                    {"expected_arg": "what the card showed earlier"})
+        self.assertEqual(status, 409, body)
+        self.assertIsNotNone(get_pending(action.token))  # still pending, nothing ran
+
     def test_queued_notice_does_not_swallow_the_later_answer(self):
         from web_chat import WebChatPort
         import asyncio, queue as _queue

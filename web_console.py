@@ -1317,6 +1317,14 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         if reason:
                             self._json(HTTPStatus.CONFLICT, {"error": reason})
                             return
+                        # Same optimistic check as /api/approval-inbox: when the
+                        # client says what it showed, refuse if the action changed.
+                        expected_arg = body.get("expected_arg") if isinstance(body, dict) else None
+                        if expected_arg is not None:
+                            from redaction import redact_text as _redact
+                            if expected_arg not in (pending.arg, _redact(pending.arg)):
+                                self._json(HTTPStatus.CONFLICT, {"error": "approval changed, reload"})
+                                return
                     from web_chat import decide_tool_approval
                     result = self._await(decide_tool_approval(pending, is_approve, settings), timeout=120)
                     self._json(HTTPStatus.OK, result)
