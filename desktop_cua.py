@@ -518,12 +518,14 @@ class LocalCuaTransport(CuaTransport):
             suffix = f":{detail}" if detail else ""
             return {"ok": False, "error": f"driver_exit_{proc.returncode}{suffix}"}
         try:
-            out = json.loads(proc.stdout or "{}")
-        except Exception:
-            out = {"raw_stdout_len": len(proc.stdout or "")}
-        if isinstance(out, dict) and out.get("isError") is True:
+            out = json.loads(proc.stdout or "")
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "driver_invalid_response"}
+        if not isinstance(out, dict):
+            return {"ok": False, "error": "driver_invalid_response"}
+        if out.get("isError") is True:
             return {"ok": False, "error": _safe_error_from_tool_result(out)}
-        return {"ok": True, "data": out if isinstance(out, dict) else {}}
+        return {"ok": True, "data": out}
 
     def _observe(self, action: dict, node_id: str) -> dict:
         called = self._call_tool("screenshot", timeout=60)

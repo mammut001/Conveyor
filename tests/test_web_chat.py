@@ -228,6 +228,60 @@ class WebChatTests(unittest.TestCase):
         self.assertEqual(messages[1]["role"], "assistant")
         self.assertEqual(messages[1]["text"], "Hello from Conveyor!")
 
+    def test_streaming_preserves_markdown_whitespace(self):
+        self.settings.chat_tools_enabled = False
+        chunks = ["| Name | Value |\n", "| --- | --- |\n", "| Pi | ", "42 |\n\n", "```python\n", "    print('ok')\n", "```"]
+
+        async def fake_stream_chat(_config, _messages):
+            for chunk in chunks:
+                yield chunk
+
+        with patch("runner.chat_client.stream_chat", side_effect=fake_stream_chat), \
+                patch("handlers.chat.EDIT_INTERVAL_SECONDS", 0):
+            status, events = self.request_sse("/api/chat", {"message": "Show a table and code"})
+
+        self.assertEqual(status, 200)
+        deltas = [data["text"] for name, data in events if name == "delta"]
+        self.assertEqual(deltas, ["".join(chunks[:i]) for i in range(1, len(chunks) + 1)])
+        final = next(data["text"] for name, data in events if name == "message")
+        self.assertEqual(final, "".join(chunks))
+
+    def test_task_suggestion_roundtrip_and_explicit_execution(self):
+        for outcome in ("escalate", "unavailable"):
+            with self.subTest(outcome=outcome):
+                prompt = f"修复项目测试并说明结果 ({outcome})"
+                with patch("handlers.chat.ask_chat", new=AsyncMock(return_value=(outcome, None))), \
+                        patch("web_console.submit_codex_job", new=AsyncMock()) as submit:
+                    status, events = self.request_sse("/api/chat", {"message": prompt})
+                    submit.assert_not_called()
+                self.assertEqual(status, 200)
+                session_id = next(data["session_id"] for name, data in events if name == "session")
+                suggestion = next(data["task_suggestion"] for name, data in events if name == "message")
+                self.assertEqual(suggestion, {"prompt": prompt, "session_id": session_id})
+
+                status, body = self.request("GET", f"/api/chat/history?session_id={session_id}")
+                self.assertEqual(status, 200)
+                self.assertEqual(body["messages"][-1]["task_suggestion"], suggestion)
+                self.assertEqual(body["messages"][-1]["kind"], "task_suggestion")
+
+                submit = AsyncMock(return_value=(True, "queued", SimpleNamespace(id="handoff-job")))
+                with patch("web_console.submit_codex_job", new=submit), \
+                        patch("web_console.WebConsoleHandler._handle_task", new=AsyncMock()) as dispatch:
+                    status, body = self.request("POST", "/api/tasks", {
+                        "prompt": suggestion["prompt"], "session_id": suggestion["session_id"],
+                        "mode": "run", "execution_only": True,
+                    })
+                self.assertEqual(status, 202)
+                self.assertEqual(body["job_id"], "handoff-job")
+                self.assertEqual(body["session_id"], session_id)
+                dispatch.assert_not_called()
+                submit.assert_awaited_once()
+                msg = submit.await_args.args[0]
+                self.assertEqual(msg.channel, "web")
+                self.assertEqual(msg.chat_id, session_id.split(":", 2)[2])
+                self.assertEqual(submit.await_args.kwargs["prompt"], prompt)
+                self.assertFalse(submit.await_args.kwargs["wait"])
+
     def test_read_tool_roundtrip(self):
         self.settings.chat_tools_enabled = True
 
@@ -270,6 +324,10 @@ class WebChatTests(unittest.TestCase):
         messages = [e[1] for e in events if e[0] == "message"]
         self.assertTrue(len(messages) >= 1)
         self.assertEqual(messages[0]["text"], "Conveyor service is running smoothly.")
+        statuses = [data["text"] for name, data in events if name == "status"]
+        self.assertTrue(any("正在读取" in text for text in statuses))
+        self.assertTrue(any("正在整理回答" in text for text in statuses))
+        self.assertLess(event_names.index("status"), event_names.index("message"))
 
     def test_write_tool_approval_lifecycle(self):
         self.settings.chat_tools_enabled = True

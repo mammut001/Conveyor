@@ -538,13 +538,13 @@ def _held_back(head: str) -> bool:
     return False
 
 
-def visible_partial(buf: str) -> str:
-    """Streaming view: hide control tokens, including a half-written one."""
+def visible_partial(buf: str, *, preserve_whitespace: bool = False) -> str:
+    """Hide control tokens, optionally retaining whitespace for rich rendering."""
     text = _CONTROL_RE.sub("", buf)
     cut = text.rfind("[[")
     if cut != -1 and "]]" not in text[cut:]:
         text = text[:cut]
-    return text.strip()
+    return text if preserve_whitespace else text.strip()
 
 
 def finalize(checked: Checked, *, time_sensitive_unverified: bool) -> str:
@@ -765,7 +765,9 @@ async def ask_chat(
                     if _held_back(buf.lstrip()):
                         continue  # might be an escalation / search request
                     now = time.monotonic()
-                    view = visible_partial(buf)
+                    view = visible_partial(
+                        buf, preserve_whitespace=getattr(port, "preserve_stream_whitespace", False),
+                    )
                     if placeholder and view and view != shown and now - last_edit >= EDIT_INTERVAL_SECONDS:
                         if await port.edit_progress(msg, placeholder, view + " ▍"):
                             shown = view

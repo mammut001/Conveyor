@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -509,6 +510,26 @@ class WindowListTest(unittest.TestCase):
         self.assertEqual(click_args["session"], state_args["session"])
         self.assertNotIn("element_index", click_args)
         self.assertNotEqual(click_args["element_token"], "s00000001:23")
+
+    def test_driver_rejects_invalid_success_responses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transport = LocalCuaTransport("cua-driver call", settings=_settings(Path(tmp)))
+            for stdout in ("", "   ", "private broken response", '{"partial":', "null", "[]", "true", "42", '"text"'):
+                with self.subTest(stdout=stdout):
+                    proc = subprocess.CompletedProcess([], 0, stdout, "")
+                    with patch("desktop_cua.subprocess.run", return_value=proc):
+                        result = transport._call_tool("click", {"x": 1, "y": 2})
+                    self.assertEqual(result, {"ok": False, "error": "driver_invalid_response"})
+
+    def test_driver_preserves_valid_success_responses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transport = LocalCuaTransport("cua-driver call", settings=_settings(Path(tmp)))
+            for stdout, data in (("{}", {}), ('{"clicked": true}', {"clicked": True})):
+                with self.subTest(stdout=stdout):
+                    proc = subprocess.CompletedProcess([], 0, stdout, "")
+                    with patch("desktop_cua.subprocess.run", return_value=proc):
+                        result = transport._call_tool("click", {"x": 1, "y": 2})
+                    self.assertEqual(result, {"ok": True, "data": data})
 
     def test_driver_exit_reports_stdout_code(self) -> None:
         settings = _settings(Path(tempfile.mkdtemp()))

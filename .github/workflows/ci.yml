@@ -82,5 +82,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Install Chromium for interaction checks
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify chat interactions
+        run: npm run test:chat
+
       - name: Dependency audit
         run: npm audit --audit-level=high

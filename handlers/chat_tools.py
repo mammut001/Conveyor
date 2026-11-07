@@ -227,6 +227,15 @@ def _parse_tool_arg(raw_args: Any) -> str:
     return ""
 
 
+async def _tool_progress(port, msg, placeholder, text: str) -> None:
+    if not placeholder:
+        return
+    try:
+        await port.edit_progress(msg, placeholder, text)
+    except Exception:
+        logger.debug("Could not update chat tool progress", exc_info=True)
+
+
 async def run_tool_loop(
     msg: InboundMessage,
     port: OutboundPort,
@@ -338,6 +347,7 @@ async def run_tool_loop(
             if danger == DangerLevel.READ:
                 logger.info("Chat tier tool call executed: %s", real_tool_name)
                 tools_called.append(real_tool_name)
+                await _tool_progress(port, msg, placeholder, f"🧩 正在读取：{spec.summary}…")
                 if real_tool_name == "agents.parallel":
                     raw_res = await run_tool(
                         settings,
@@ -360,6 +370,7 @@ async def run_tool_loop(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
                     )
+                await _tool_progress(port, msg, placeholder, "🧩 已收到工具结果，正在整理回答…")
                 max_tasks = int(getattr(settings, "subagents_max_tasks", 4))
                 max_output = int(getattr(settings, "subagents_max_output_chars", 2500))
                 # Tool result cap: bounded at 16000 chars for agents.parallel specifically, else 4000

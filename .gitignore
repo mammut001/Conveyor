@@ -68,3 +68,9 @@ web/node_modules/
 
 # Stray sqlite files from tests that pass a mock as a db path
 <MagicMock*
+
+# macOS metadata
+.DS_Store
+
+# Machine-local Claude settings
+.claude/settings.local.json
