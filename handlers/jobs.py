@@ -209,9 +209,20 @@ async def submit_codex_job(
         if wait:
             await execution
         else:
-            import asyncio
-            asyncio.create_task(execution)
+            _run_in_background(execution)
     return True, queue_msg, queued_job
+
+
+# The event loop only keeps weak references to tasks; a job started in the
+# background must be held until it finishes or it can be collected mid-run.
+_BACKGROUND_JOBS: set = set()
+
+
+def _run_in_background(coro) -> None:
+    import asyncio
+    task = asyncio.create_task(coro)
+    _BACKGROUND_JOBS.add(task)
+    task.add_done_callback(_BACKGROUND_JOBS.discard)
 
 
 from agent_conversations import scoped_job
@@ -605,7 +616,7 @@ async def _start_queued_job_callback(queued_job: QueuedJob) -> None:
         
     mode = JobMode.FIX if queued_job.mode == "fix" else JobMode.RUN
     
-    asyncio.create_task(_execute_codex_job(
+    _run_in_background(_execute_codex_job(
         msg, port, runner, mode, queued_job.prompt, queue_job_id=queued_job.id,
         **({"conversation_id": queued_job.conversation_id,
             "conversation_context": queued_job.conversation_context}

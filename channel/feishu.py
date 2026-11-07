@@ -55,6 +55,11 @@ class FeishuOutbound:
     """
     supports_inline_buttons: bool = False
     supports_attachments: bool = True
+    # Return from the update handler once the job is queued; it keeps running
+    # in the background and reports through this port. Both SDKs handle one
+    # update per chat at a time, so waiting here held /cancel, /status and
+    # button clicks in that chat until the job had already finished.
+    wait_for_job: bool = False
 
     def __init__(self, channel: FeishuChannel) -> None:
         self._channel = channel
