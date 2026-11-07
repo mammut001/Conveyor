@@ -33,6 +33,7 @@ single-concurrency.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import defaultdict
@@ -183,7 +184,7 @@ async def submit_codex_job(
     # separate processes sharing one queue.
     if queue.has_running_job and not queue.can_start(queued_job.id):
         # Its lane is busy (or the parallel limit is reached): it stays queued.
-        await port.reply(msg, queue_msg)
+        await _note_queued(port, msg, queue_msg)
         return True, queue_msg, queued_job
 
     # No job running, execute immediately
@@ -193,7 +194,7 @@ async def submit_codex_job(
         # queued across a restart). Start it with its own chat and port, never
         # this submitter's; the new job waits its turn.
         await _start_queued_job_callback(dequeued_job)
-        await port.reply(msg, queue_msg)
+        await _note_queued(port, msg, queue_msg)
         return True, queue_msg, queued_job
     if dequeued_job:
         execute_msg = dequeued_job._msg or msg
@@ -206,11 +207,22 @@ async def submit_codex_job(
                 "conversation_context": dequeued_job.conversation_context}
                if getattr(dequeued_job, "conversation_id", "") else {}),
         )
+        task = _run_in_background(execution)
         if wait:
-            await execution
-        else:
-            _run_in_background(execution)
+            # A cancelled waiter (web turn timeout, client gone) must not cancel
+            # the job's own result delivery: the runner job keeps going either
+            # way, and its answer still has to reach the chat history.
+            await asyncio.shield(task)
     return True, queue_msg, queued_job
+
+
+async def _note_queued(port: OutboundPort, msg: InboundMessage, text: str) -> None:
+    """Tell the user the job is queued without treating that as the final reply."""
+    note = getattr(port, "note_queued", None)
+    if note is not None:
+        await note(msg, text)
+    else:
+        await port.reply(msg, text)
 
 
 # The event loop only keeps weak references to tasks; a job started in the
@@ -218,11 +230,11 @@ async def submit_codex_job(
 _BACKGROUND_JOBS: set = set()
 
 
-def _run_in_background(coro) -> None:
-    import asyncio
+def _run_in_background(coro) -> "asyncio.Task":
     task = asyncio.create_task(coro)
     _BACKGROUND_JOBS.add(task)
     task.add_done_callback(_BACKGROUND_JOBS.discard)
+    return task
 
 
 from agent_conversations import scoped_job

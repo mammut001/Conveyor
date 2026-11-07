@@ -1827,6 +1827,17 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 now = time.monotonic()
                 if now > deadline:
                     future.cancel()
+                    if getattr(port, "job_id", ""):
+                        # The agent job keeps running and its answer is saved
+                        # to this conversation when it ends. A retryable error
+                        # here made the owner resend and start a duplicate job.
+                        note = json.dumps({"text": (
+                            "任务还在后台执行，完成后结果会出现在这段对话里（刷新即可看到），不用重发。"
+                        )}, ensure_ascii=False)
+                        done_data = json.dumps({"outcome": "background"}, ensure_ascii=False)
+                        self.wfile.write(f"event: message\ndata: {note}\n\nevent: done\ndata: {done_data}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                        break
                     err_data = json.dumps({"error": "Request timed out"}, ensure_ascii=False)
                     done_data = json.dumps({"outcome": "timeout"}, ensure_ascii=False)
                     self.wfile.write(f"event: error\ndata: {err_data}\n\nevent: done\ndata: {done_data}\n\n".encode("utf-8"))
