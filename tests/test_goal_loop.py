@@ -135,6 +135,18 @@ class ParseTests(unittest.TestCase):
         self.assertEqual((cmd.action, cmd.hours), ("start", 8.0))
         self.assertEqual(parse_goal_command("/goal 修复登录 --hours 2 --max 5").action, "start")
 
+    def test_verdict_tolerates_chinese_colons_and_markdown(self):
+        # Pi answers in Chinese/Markdown; these all used to read as "continue".
+        cases = {
+            "GOAL_STATUS：done\nNEXT：总结": ("done", "总结"),
+            "**GOAL_STATUS:** done\n**NEXT:** 总结": ("done", "总结"),
+            "GOAL_STATUS: **done**\nNEXT: x": ("done", "x"),
+            "- **GOAL_STATUS**：`blocked`\n- **NEXT**：需要 API key": ("blocked", "需要 API key"),
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(parse_verdict(text), expected)
+
     def test_verdict(self):
         self.assertEqual(parse_verdict(_verdict("done", "all good")), ("done", "all good"))
         self.assertEqual(parse_verdict("no marker")[0], "continue")

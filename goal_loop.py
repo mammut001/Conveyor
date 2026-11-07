@@ -253,8 +253,10 @@ class GoalStore:
 # Prompt + verdict
 # --------------------------------------------------------------------------
 
-_STATUS_RE = re.compile(r"GOAL_STATUS:\s*(continue|done|blocked)", re.I)
-_NEXT_RE = re.compile(r"^NEXT:\s*(.+)$", re.M)
+# The agent replies in Chinese and often in Markdown: accept a full-width colon
+# and bold/backtick markup around the key or the value ("**GOAL_STATUS：** `done`").
+_STATUS_RE = re.compile(r"GOAL_STATUS[*_`]*\s*[:：]\s*[*_`]*\s*(continue|done|blocked)\b", re.I)
+_NEXT_RE = re.compile(r"^[\s>*_`-]*NEXT[*_`]*\s*[:：]\s*[*_`]*\s*(.+?)\s*$", re.M)
 
 
 def parse_verdict(text: str | None) -> tuple[str, str]:
