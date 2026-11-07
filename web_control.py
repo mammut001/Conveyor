@@ -739,6 +739,7 @@ class WebControl:
                 "teammate": bool(getattr(self.settings, "teammate_enabled", True)),
                 "live_screen": bool(getattr(self.settings, "live_screen_enabled", False)),
                 "agents": getattr(self.settings, "agents_enabled", False) is True,
+                "agent_supervisor": bool(__import__("supervisor_service").is_enabled(self.settings)),
             },
         }
 

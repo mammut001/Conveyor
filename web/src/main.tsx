@@ -13,6 +13,7 @@ import './ux/tasks.css'
 import './ux/guard.css'
 import './ux/knowledge.css'
 import './ux/manage.css'
+import './ux/supervisor.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
