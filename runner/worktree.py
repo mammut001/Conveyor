@@ -314,6 +314,17 @@ async def _ensure_today_worktree(self) -> Path:
 
 
 async def _remove_worktree(self, worktree_path: Path) -> None:
+    # The path can come from job.json, which an unsandboxed agent can edit.
+    # 'git worktree remove' fails on a non-worktree and the rmtree below used
+    # to delete it anyway (even the main workspace). Only ever remove
+    # directories inside <task root>/worktrees.
+    root = (self.settings.codex_task_root / "worktrees").resolve()
+    try:
+        resolved = Path(worktree_path).resolve()
+    except (OSError, RuntimeError):
+        raise RuntimeError("refusing to remove an unresolvable worktree path") from None
+    if resolved == root or root not in resolved.parents:
+        raise RuntimeError(f"refusing to remove {resolved}: not a Conveyor worktree")
     await self._git(
         ["worktree", "remove", "--force", str(worktree_path)],
         cwd=await _repo_root_for(self, worktree_path),
