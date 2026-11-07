@@ -37,6 +37,21 @@ class KeywordGateTest(unittest.TestCase):
                     settings, '{"action":"type","text":"转账 交易密码 123456"}'))
         self.assertIn("受限关键词", out)
 
+class StepPlaintextTest(unittest.TestCase):
+    def test_cancelled_step_does_not_keep_typed_text_on_disk(self) -> None:
+        import desktop_computer_requests as dcr
+        from tests.test_computer_dispatch import _settings
+        with tempfile.TemporaryDirectory() as raw:
+            settings = _settings(Path(raw), always_direct=True)
+            created = dcr.create_computer_task(settings, "fill the form", direct_mode=True,
+                                               max_steps=5, max_seconds=60)
+            task_id = (created.get("task") or created).get("id") or created.get("task_id")
+            dcr.create_computer_step(settings, task_id, {"action": "type", "text": "hunter2-SECRET"})
+            stored = dcr.computer_requests_path(settings).read_text()
+            self.assertIn("hunter2-SECRET", stored)  # needed until the executor claims it
+            dcr.cancel_pending_computer_steps(settings, "human_takeover_active")
+            self.assertNotIn("hunter2-SECRET", dcr.computer_requests_path(settings).read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

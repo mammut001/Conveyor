@@ -858,6 +858,7 @@ def cancel_computer_task(settings: Settings, task_id: str, reason: str = "operat
                 if isinstance(step, dict) and step.get("status") in ("pending", "claimed"):
                     step["status"] = "cancelled"
                     step["updated_at"] = _iso_z(_utc_now())
+                    _redact_stored_action(step)
             _save_unlocked(settings, store)
     return {"ok": True, "task": dict(record)}
 
@@ -984,6 +985,17 @@ def create_computer_step(settings: Settings, task_id: str, action: dict) -> dict
     return {"ok": True, "step_id": step_id, "step": dict(step)}
 
 
+def _redact_stored_action(step: dict) -> None:
+    """A step that will never run must not keep typed text on disk.
+
+    Only claiming used to redact the stored action, so steps cancelled by a
+    takeover or left to expire kept their plaintext (possibly a password).
+    """
+    action = step.get("action")
+    if isinstance(action, dict):
+        step["action"] = redact_computer_action(action)
+
+
 def cancel_pending_computer_steps(
     settings: Settings, reason: str = "human_takeover_active", *, scope: str = HOST_SCOPE,
 ) -> int:
@@ -1010,6 +1022,7 @@ def cancel_pending_computer_steps(
                     step["status"] = "cancelled"
                     step["updated_at"] = now
                     step["error"] = reason
+                    _redact_stored_action(step)
                     changed += 1
             if changed:
                 _save_unlocked(settings, store)
@@ -1033,6 +1046,7 @@ def cancel_pending_computer_step(
             step["status"] = "cancelled"
             step["updated_at"] = _iso_z(_utc_now())
             step["error"] = reason
+            _redact_stored_action(step)
             _save_unlocked(settings, store)
             return True
 
@@ -1359,6 +1373,7 @@ def expire_old_computer(settings: Settings, now: datetime | None = None) -> int:
                     if task_expired or (expires_at is not None and current > expires_at):
                         step["status"] = "expired"
                         step["updated_at"] = _iso_z(current)
+                        _redact_stored_action(step)
                         changed += 1
             if changed:
                 _save_unlocked(settings, store)
