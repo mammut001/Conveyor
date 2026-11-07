@@ -614,7 +614,8 @@ async def exec_computer_action(settings: Settings, arg: str) -> str:
         return "缺少 action 字段。"
     if not is_action_allowed(settings, action):
         return f"不允许的动作: {action.get('action')}"
-    if contains_blocked_keyword(settings, json.dumps(action)):
+    # ensure_ascii=False: escaped as \uXXXX, no Chinese keyword could ever match.
+    if contains_blocked_keyword(settings, json.dumps(action, ensure_ascii=False)):
         return "⛔ 含受限关键词，已拒绝。"
 
     backend = build_backend(settings)

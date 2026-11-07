@@ -1100,7 +1100,7 @@ def _action_text(action: dict) -> str:
     if not isinstance(action, dict):
         return ""
     parts = [str(action.get("action", ""))]
-    for key in ("text", "keys", "summary", "reason"):
+    for key in ("text", "keys", "summary", "reason", "label", "target", "target_app", "app", "title", "url"):
         v = action.get(key)
         if isinstance(v, str):
             parts.append(v)

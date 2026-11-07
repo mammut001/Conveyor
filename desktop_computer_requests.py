@@ -219,6 +219,9 @@ _ALLOWLIST_EXEMPT_ACTIONS = frozenset({"observe", "wait", "done", "stop"})
 _HARD_BLOCKED_KEYWORDS = (
     "bank", "payment", "crypto", "keychain", "system settings", "delete account",
     "支付", "转账", "付款", "交易密码", "收银台", "银行",
+    # Same intent, different words: these slipped through the list above.
+    "system preferences", "wire transfer", "delete my account",
+    "汇款", "充值", "提现", "系统设置",
 )
 
 _LOGIN_PASSWORD_KEYWORDS = frozenset({
@@ -324,9 +327,22 @@ def _blocked_keywords(settings: Settings) -> tuple[str, ...]:
     return tuple(combined)
 
 
+_ZERO_WIDTH = re.compile("[\u200b-\u200f\u2060\ufeff\u00ad]")
+_SPACED_LETTERS = re.compile(r"(?<=\b\w) (?=\w\b)")
+
+
+def _normalize_for_keywords(text: str) -> str:
+    """Fold the spellings that slipped past a plain lowercase match:
+    full-width letters (ｂａｎｋ), zero-width characters (b\u200bank, 银\u200b行)
+    and letters spelled out with single spaces (b a n k)."""
+    import unicodedata
+    folded = _ZERO_WIDTH.sub("", unicodedata.normalize("NFKC", text or "")).lower()
+    return _SPACED_LETTERS.sub("", folded)
+
+
 def contains_blocked_keyword(settings: Settings, text: str) -> str | None:
-    """Return the first blocked keyword found in ``text`` (lowercased), else None."""
-    text = (text or "").lower()
+    """Return the first blocked keyword found in ``text`` (normalised), else None."""
+    text = _normalize_for_keywords(text)
     if not text:
         return None
     for kw in _blocked_keywords(settings):
