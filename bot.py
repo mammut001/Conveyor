@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import re
 import warnings
@@ -438,16 +439,10 @@ async def tool_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if parsed is None:
         return
     action, token = parsed
-    user = update.effective_user
-    chat = update.effective_chat
-    inbound = InboundMessage(
-        channel="telegram",
-        operator_id=str(getattr(user, "id", "") or ""),
-        chat_id=str(getattr(chat, "id", "") or ""),
-        message_id=str(getattr(query.message, "message_id", "") or "") if query.message else None,
-        text="",
-        raw=update,
-    )
+    # Same chat scoping as typed messages: in an owner-bound forum topic the
+    # pending action is stored under "<chat>:topic:<thread>", so the plain chat
+    # id made every confirm button there answer "Unauthorized."
+    inbound = dataclasses.replace(_inbound(update, text=""), raw=update)
     port = make_outbound(update)
     if action == "confirm":
         await execute_confirmed(inbound, port, settings, token)

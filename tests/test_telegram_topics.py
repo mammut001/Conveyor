@@ -105,6 +105,26 @@ class TelegramTopicsTests(unittest.IsolatedAsyncioTestCase):
             get_bot=lambda: bot,
         )
 
+    async def test_confirm_button_in_bound_topic_uses_the_topic_session(self) -> None:
+        """Pending actions in a bound topic live under <chat>:topic:<tid>; the
+        confirm button must resolve to that same scope, not the bare chat."""
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_ALLOWED_USER_ID": "1001"}):
+            import bot
+        telegram_topics.bind_topic(self.settings, chat_id=-100998877, thread_id=42,
+                                   operator="1001", agent_id=self.finance["id"])
+        update = self._fake_update("", thread_id=42)
+        update.callback_query = SimpleNamespace(data="tool:confirm:tok123", answer=AsyncMock(),
+                                                message=update.effective_message)
+        seen = {}
+
+        async def fake_execute(inbound, port, settings, token):
+            seen["chat_id"], seen["token"] = inbound.chat_id, token
+
+        with patch("bot.settings", self.settings), patch("bot._guard", AsyncMock(return_value=True)), \
+                patch("bot.execute_confirmed", fake_execute), patch("bot.make_outbound", lambda u: None):
+            await bot.tool_callback(update, SimpleNamespace())
+        self.assertEqual(seen, {"chat_id": "-100998877:topic:42", "token": "tok123"})
+
     async def test_sync_forum_topics_creates_and_pins_per_agent_topics(self) -> None:
         next_tid = 100
 
