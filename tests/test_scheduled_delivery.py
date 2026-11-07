@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -39,6 +40,59 @@ class ReminderDeliveryTest(unittest.TestCase):
         ok, info = _deliver_one(settings, SimpleNamespace(id=1, channel="web", chat_id="x", text="t"), dry_run=False)
         self.assertFalse(ok)
         self.assertIn("web", info)
+
+
+class BriefingRetryTest(unittest.TestCase):
+    """A failed briefing is retried the same day, but only a few times."""
+
+    def setUp(self) -> None:
+        from personal_tools.store import PersonalToolsStore
+        from tests.test_long_term_memory import _settings
+        self.tmp = tempfile.TemporaryDirectory()
+        self.settings = _settings(Path(self.tmp.name))
+        self.store = PersonalToolsStore(self.settings)
+        self.op = "op-1"
+        self.store.update_briefing_settings(
+            self.op, enabled=True, local_time="09:00", channel="telegram", chat_id="42"
+        )
+        self.now = datetime(2026, 6, 15, 10, 0, tzinfo=timezone.utc)
+        self.date = "2026-06-15"
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _send_fails(self):
+        return patch("personal_tools.briefing._send_briefing", side_effect=RuntimeError("telegram down"))
+
+    def _send_works(self):
+        return patch("personal_tools.briefing._send_briefing")
+
+    def test_failed_briefing_is_retried_the_same_day(self) -> None:
+        from personal_tools.briefing import briefing_check_and_send
+        with self._send_fails():
+            self.assertEqual(briefing_check_and_send(self.settings, now_utc=self.now), 0)
+        self.assertEqual(self.store.briefing_attempts_for_date(self.op, self.date), (False, 1))
+        # A later tick the same day still tries, and then succeeds.
+        with self._send_works():
+            self.assertEqual(briefing_check_and_send(self.settings, now_utc=self.now), 1)
+        self.assertEqual(self.store.briefing_attempts_for_date(self.op, self.date), (True, 0))
+
+    def test_sent_day_is_not_retried(self) -> None:
+        from personal_tools.briefing import briefing_check_and_send
+        self.store.record_briefing_run(self.op, self.date, status="sent")
+        with self._send_works() as send:
+            self.assertEqual(briefing_check_and_send(self.settings, now_utc=self.now), 0)
+        send.assert_not_called()
+
+    def test_after_three_failures_no_more_attempts(self) -> None:
+        from personal_tools.briefing import briefing_check_and_send
+        for _ in range(3):
+            with self._send_fails():
+                self.assertEqual(briefing_check_and_send(self.settings, now_utc=self.now), 0)
+        self.assertEqual(self.store.briefing_attempts_for_date(self.op, self.date), (False, 3))
+        with self._send_works() as send:
+            self.assertEqual(briefing_check_and_send(self.settings, now_utc=self.now), 0)
+        send.assert_not_called()
 
 
 class PastReminderTest(unittest.TestCase):

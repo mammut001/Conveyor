@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 # Default user timezone if not configured
 DEFAULT_TZ = "America/Toronto"
 
+# A day counts as done once the briefing was sent; failed attempts are retried
+# at most this many times before giving up until the next day.
+BRIEFING_MAX_FAILURES_PER_DAY = 3
+
 
 def _get_user_tz(settings: Settings) -> ZoneInfo:
     """Get user timezone from settings."""
@@ -209,7 +213,10 @@ def briefing_check_and_send(settings: Settings, now_utc: datetime | None = None)
         local_now = now.astimezone(tz)
         local_date = local_now.strftime("%Y-%m-%d")
 
-        if store.has_briefing_run_for_date(bs.operator_id, local_date):
+        # Only a "sent" run counts as done; a failed attempt is retried later the
+        # same day, but no more than BRIEFING_MAX_FAILURES_PER_DAY times.
+        sent, failures = store.briefing_attempts_for_date(bs.operator_id, local_date)
+        if sent or failures >= BRIEFING_MAX_FAILURES_PER_DAY:
             continue
 
         # Check if it's time to send

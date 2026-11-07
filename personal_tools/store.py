@@ -31,6 +31,7 @@ BRIEFING_SETTINGS_COLUMNS = {
 }
 BRIEFING_RUNS_COLUMNS = {
     "id", "operator_id", "local_date", "status", "sent_at", "error",
+    "failure_count",
 }
 
 
@@ -71,6 +72,18 @@ def _migrate_reminders(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE reminders ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     logger.info("Migrated reminders table: added %s", sorted(needed))
+
+
+def _migrate_briefing_runs(conn: sqlite3.Connection) -> None:
+    """Add failure_count to an existing briefing_runs table if missing."""
+    existing = _existing_columns(conn, "briefing_runs")
+    if not existing or "failure_count" in existing:
+        return
+    conn.execute(
+        "ALTER TABLE briefing_runs ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0"
+    )
+    conn.commit()
+    logger.info("Migrated briefing_runs table: added failure_count")
 
 
 def init_db(settings: Settings) -> None:
@@ -124,6 +137,7 @@ def init_db(settings: Settings) -> None:
                 status TEXT NOT NULL DEFAULT 'sent',
                 sent_at TEXT NOT NULL,
                 error TEXT,
+                failure_count INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(operator_id, local_date)
             );
             CREATE INDEX IF NOT EXISTS idx_briefing_runs_operator_date
@@ -177,6 +191,7 @@ def init_db(settings: Settings) -> None:
         )
         conn.commit()
         _migrate_reminders(conn)
+        _migrate_briefing_runs(conn)
         # Delivery index must exist after migration adds the column.
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_reminders_delivery "
@@ -508,6 +523,22 @@ class PersonalToolsStore:
             ).fetchone()
         return row is not None
 
+    def briefing_attempts_for_date(self, operator_id: str, local_date: str) -> tuple[bool, int]:
+        """Return (sent, failures) for one operator on one local date.
+
+        Only a run with status 'sent' counts as delivered; failures is the number
+        of failed attempts recorded for that date.
+        """
+        with _connect(self._settings) as conn:
+            row = conn.execute(
+                "SELECT status, failure_count FROM briefing_runs "
+                "WHERE operator_id = ? AND local_date = ?",
+                (operator_id, local_date),
+            ).fetchone()
+        if row is None:
+            return False, 0
+        return row["status"] == "sent", int(row["failure_count"] or 0)
+
     def record_briefing_run(
         self,
         operator_id: str,
@@ -520,14 +551,18 @@ class PersonalToolsStore:
         with _connect(self._settings) as conn:
             cur = conn.execute(
                 """
-                INSERT INTO briefing_runs (operator_id, local_date, status, sent_at, error)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO briefing_runs (operator_id, local_date, status, sent_at, error, failure_count)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(operator_id, local_date) DO UPDATE SET
                     status = excluded.status,
                     sent_at = excluded.sent_at,
-                    error = excluded.error
+                    error = excluded.error,
+                    failure_count = CASE
+                        WHEN excluded.status = 'sent' THEN 0
+                        ELSE failure_count + 1
+                    END
                 """,
-                (operator_id, local_date, status, sent_at, error),
+                (operator_id, local_date, status, sent_at, error, 1 if status == "failed" else 0),
             )
             conn.commit()
             return int(cur.lastrowid)
