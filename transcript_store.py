@@ -124,30 +124,80 @@ class TranscriptStore:
         operator_id: str | None = None,
         source_chat_id: str | None = None,
         title: str | None = None,
+        touch: bool = True,
+        create_only: bool = False,
+        insert_if_absent: bool = False,
     ) -> dict[str, Any]:
         if not session_id:
             raise ValueError("session_id is required")
         now = _utc_now()
         safe_title = truncate(redact_text(title or "New session"), 120)
+        do_touch = bool(touch and not create_only and not insert_if_absent)
         conn = self._connect()
         try:
             with conn:
-                conn.execute(
-                    """INSERT INTO sessions
-                       (id, channel, operator_id, source_chat_id, title, created_at, updated_at, archived)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-                       ON CONFLICT(id) DO UPDATE SET
-                         channel = COALESCE(excluded.channel, sessions.channel),
-                         operator_id = COALESCE(excluded.operator_id, sessions.operator_id),
-                         source_chat_id = COALESCE(excluded.source_chat_id, sessions.source_chat_id),
-                         archived = 0,
-                         updated_at = excluded.updated_at""",
-                    (session_id, channel, operator_id, source_chat_id, safe_title, now, now),
-                )
+                if do_touch:
+                    conn.execute(
+                        """INSERT INTO sessions
+                           (id, channel, operator_id, source_chat_id, title, created_at, updated_at, archived)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                           ON CONFLICT(id) DO UPDATE SET
+                             channel = COALESCE(excluded.channel, sessions.channel),
+                             operator_id = COALESCE(excluded.operator_id, sessions.operator_id),
+                             source_chat_id = COALESCE(excluded.source_chat_id, sessions.source_chat_id),
+                             archived = 0,
+                             updated_at = excluded.updated_at""",
+                        (session_id, channel, operator_id, source_chat_id, safe_title, now, now),
+                    )
+                else:
+                    conn.execute(
+                        """INSERT INTO sessions
+                           (id, channel, operator_id, source_chat_id, title, created_at, updated_at, archived)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                           ON CONFLICT(id) DO NOTHING""",
+                        (session_id, channel, operator_id, source_chat_id, safe_title, now, now),
+                    )
             row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
             return dict(row)
         finally:
             conn.close()
+
+    def insert_session_if_absent(
+        self,
+        session_id: str,
+        *,
+        channel: str | None = None,
+        operator_id: str | None = None,
+        source_chat_id: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        return self.ensure_session(
+            session_id,
+            channel=channel,
+            operator_id=operator_id,
+            source_chat_id=source_chat_id,
+            title=title,
+            touch=False,
+            create_only=True,
+            insert_if_absent=True,
+        )
+
+    def ensure_session_if_missing(
+        self,
+        session_id: str,
+        *,
+        channel: str | None = None,
+        operator_id: str | None = None,
+        source_chat_id: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        return self.insert_session_if_absent(
+            session_id,
+            channel=channel,
+            operator_id=operator_id,
+            source_chat_id=source_chat_id,
+            title=title,
+        )
 
     def append(
         self,
@@ -288,6 +338,97 @@ class TranscriptStore:
             sql += " ORDER BY created_at ASC, id ASC LIMIT ?"
             params.append(min(max(1, int(limit)), 2_000))
             return [self._message_dict(row) for row in conn.execute(sql, params).fetchall()]
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _apply_kind_filter(
+        sql: str,
+        params: list[Any],
+        *,
+        kinds: tuple[str | None, ...] | list[str | None] | set[str | None] | None = None,
+        exclude_kinds: tuple[str, ...] | list[str] | set[str] | None = None,
+    ) -> str:
+        if kinds is not None:
+            kinds_list = list(kinds)
+            include_null = None in kinds_list
+            non_null_kinds = [k for k in kinds_list if k is not None]
+            if include_null and non_null_kinds:
+                placeholders = ",".join("?" for _ in non_null_kinds)
+                sql += f" AND (kind IN ({placeholders}) OR kind IS NULL)"
+                params.extend(non_null_kinds)
+            elif include_null:
+                sql += " AND kind IS NULL"
+            elif non_null_kinds:
+                placeholders = ",".join("?" for _ in non_null_kinds)
+                sql += f" AND kind IN ({placeholders})"
+                params.extend(non_null_kinds)
+            else:
+                sql += " AND 1=0"
+        if exclude_kinds is not None:
+            ex_list = list(exclude_kinds)
+            include_null = None in ex_list
+            non_null_ex = [k for k in ex_list if k is not None]
+            if non_null_ex:
+                placeholders = ",".join("?" for _ in non_null_ex)
+                sql += f" AND (kind IS NULL OR kind NOT IN ({placeholders}))"
+                params.extend(non_null_ex)
+            if include_null:
+                sql += " AND kind IS NOT NULL"
+        return sql
+
+    def recent_messages(
+        self,
+        session_id: str,
+        *,
+        limit: int = 50,
+        roles: tuple[str, ...] | list[str] | set[str] | None = None,
+        kinds: tuple[str | None, ...] | list[str | None] | set[str | None] | None = None,
+        exclude_kinds: tuple[str, ...] | list[str] | set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the newest messages for a session in chronological order (ASC).
+
+        Queries descending by created_at to efficiently capture the latest-N
+        messages even in very long sessions, then returns them in chronological order.
+        """
+        conn = self._connect()
+        try:
+            params: list[Any] = [session_id]
+            sql = "SELECT * FROM session_messages WHERE session_id = ?"
+            if roles:
+                role_list = list(roles)
+                placeholders = ",".join("?" for _ in role_list)
+                sql += f" AND role IN ({placeholders})"
+                params.extend(role_list)
+            sql = self._apply_kind_filter(sql, params, kinds=kinds, exclude_kinds=exclude_kinds)
+            sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
+            params.append(min(max(1, int(limit)), 2_000))
+            rows = conn.execute(sql, params).fetchall()
+            return [self._message_dict(row) for row in reversed(rows)]
+        finally:
+            conn.close()
+
+    def count_messages(
+        self,
+        session_id: str,
+        *,
+        roles: tuple[str, ...] | list[str] | set[str] | None = None,
+        kinds: tuple[str | None, ...] | list[str | None] | set[str | None] | None = None,
+        exclude_kinds: tuple[str, ...] | list[str] | set[str] | None = None,
+    ) -> int:
+        """Count total messages for a session, optionally filtered by roles and kinds."""
+        conn = self._connect()
+        try:
+            params: list[Any] = [session_id]
+            sql = "SELECT COUNT(*) FROM session_messages WHERE session_id = ?"
+            if roles:
+                role_list = list(roles)
+                placeholders = ",".join("?" for _ in role_list)
+                sql += f" AND role IN ({placeholders})"
+                params.extend(role_list)
+            sql = self._apply_kind_filter(sql, params, kinds=kinds, exclude_kinds=exclude_kinds)
+            row = conn.execute(sql, params).fetchone()
+            return int(row[0]) if row else 0
         finally:
             conn.close()
 
