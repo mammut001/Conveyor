@@ -690,6 +690,38 @@ class FailedStepContinuesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(planner.calls, 1)
         self.assertEqual(result.get("status"), "done")
 
+    async def test_takeover_during_planning_discards_the_planned_action(self) -> None:
+        """A takeover that opens and closes while the model plans must not let
+        the pre-takeover action run on the screen the human left."""
+        from human_takeover import HumanTakeoverStore
+
+        class TakeoverWhilePlanning:
+            def __init__(self, settings) -> None:
+                self.settings, self.calls = settings, 0
+
+            async def next_action(self, **_kwargs: object) -> dict:
+                self.calls += 1
+                if self.calls == 1:
+                    store = HumanTakeoverStore(self.settings)
+                    session = store.start(reason="login", task_id=None, requested_by="owner")
+                    sid = (session or {}).get("id") or (session or {}).get("session_id")
+                    store.complete(sid)
+                    return {"action": "type", "text": "planned before the takeover"}
+                return {"action": "done", "summary": "ok"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            planner = TakeoverWhilePlanning(settings)
+            result = await run_computer_loop(
+                settings, "在电脑上打开文件管理器", planner=planner,
+                backend=FakeComputerBackend(settings), max_steps=6, max_seconds=30,
+                direct_mode=True, open_with_observe=True,
+            )
+            task = get_computer_task(settings, result["task_id"]) or {}
+        types = [step.get("action_type") for step in task.get("trajectory") or []]
+        self.assertNotIn("type", types, types)
+        self.assertEqual(result.get("status"), "done", result)
+
     def test_planner_allows_window_pixels(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             settings = _settings(Path(tmp))

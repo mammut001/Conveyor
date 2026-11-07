@@ -480,6 +480,8 @@ async def run_computer_loop(
                     pause_started = time.monotonic()
                 await asyncio.sleep(0.25)
                 continue
+            # Anything planned from here on was planned against this screen.
+            iteration_started = time.time()
             if pause_started is not None:
                 start += time.monotonic() - pause_started
                 pause_started = None
@@ -680,6 +682,13 @@ async def run_computer_loop(
             if takeover_store.current(scope) is not None:
                 if pause_started is None:
                     pause_started = time.monotonic()
+                continue
+            # A takeover that opened *and closed* while the planner was thinking
+            # is invisible to the check above, but the human may have changed
+            # the screen: drop this action and go through the post-takeover reset.
+            latest_takeover = takeover_store.latest_started_at(scope)
+            if latest_takeover is not None and latest_takeover >= iteration_started:
+                pause_started = time.monotonic()
                 continue
 
             # Create + execute the step.
