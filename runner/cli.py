@@ -28,6 +28,10 @@ import argparse
 import sys
 
 
+# Stop walking up at these (a .env above a virtualenv is not this project's).
+MEMO_ENV_SKIP_DIRS = (".venv", "venv", "env", "node_modules", "__pycache__")
+
+
 def _find_env_file(start: Path | None = None) -> Path | None:
     """Walk up from `start` (or cwd) looking for the first .env file.
 

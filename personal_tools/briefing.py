@@ -36,10 +36,6 @@ def _get_user_tz(settings: Settings) -> ZoneInfo:
         return ZoneInfo(DEFAULT_TZ)
 
 
-def _local_date_str(settings: Settings, dt: datetime | None = None) -> str:
-    """Get local date string in YYYY-MM-DD format."""
-    tz = _get_user_tz(dt.astimezone(tz) if dt else datetime.now(tz))
-    return dt.strftime("%Y-%m-%d")
 
 
 def briefing_status(settings: Settings, operator_id: str) -> ToolResult:

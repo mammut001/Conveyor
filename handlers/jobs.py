@@ -589,7 +589,6 @@ class RecoveredOutboundPort:
 
 
 async def _start_queued_job_callback(queued_job: QueuedJob) -> None:
-    import asyncio
     from handlers.job_queue import get_job_queue
     queue = get_job_queue()
     runner = queued_job._runner or queue._runner
