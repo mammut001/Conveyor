@@ -32,6 +32,11 @@ async def reminders_create(
     body, due_at = parsed
     if not body:
         return ToolResult(False, REMIND_USAGE)
+    # A time already in the past (a typo'd year, "in 0m") used to be stored and
+    # fire on the next tick as if it were due now.
+    from datetime import datetime, timezone
+    if due_at <= datetime.now(timezone.utc):
+        return ToolResult(False, f"提醒时间 {due_at.isoformat()} 已经过去，请给一个将来的时间。\n\n{REMIND_USAGE}")
     store = PersonalToolsStore(settings)
     row = store.create_reminder(operator_id, body, due_at, channel=channel, chat_id=chat_id)
     dest = f" → {channel}" if channel else ""

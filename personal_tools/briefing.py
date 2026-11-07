@@ -240,27 +240,26 @@ def briefing_check_and_send(settings: Settings, now_utc: datetime | None = None)
     return sent_count
 
 
+def telegram_base_chat(chat_id: str) -> int:
+    """Telegram chat id without a forum-topic suffix ("<chat>:topic:<id>")."""
+    return int(str(chat_id).split(":", 1)[0])
+
+
 def _send_briefing(channel: str, chat_id: str, text: str, settings: Settings) -> None:
     """Send briefing via the appropriate channel.
 
     Currently only Telegram is implemented. Feishu can be added later.
     """
+    # This used to import channel.telegram_adapter, which does not exist, so
+    # every briefing was recorded as failed and never sent.
+    from scripts.telegram_api import send_message
+    if not settings.telegram_bot_token:
+        raise RuntimeError("Telegram is not configured (TELEGRAM_BOT_TOKEN is empty)")
     if channel == "telegram":
-        if not settings.telegram_bot_token:
-            raise RuntimeError("Telegram is not configured (TELEGRAM_BOT_TOKEN is empty)")
-        # Import here to avoid circular imports
-        import asyncio
-        try:
-            from channel.telegram_adapter import send_telegram_message
-            asyncio.get_event_loop().run_until_complete(
-                send_telegram_message(chat_id, text, settings.telegram_bot_token)
-            )
-        except Exception as exc:
-            logger.error("Failed to send Telegram briefing: %s", exc)
-            raise
+        send_message(settings, text, chat_id=telegram_base_chat(chat_id))
     else:
-        logger.warning("Briefing channel %s not implemented yet", channel)
-        raise NotImplementedError(f"Channel {channel} not implemented")
+        # Only Telegram can push; deliver other channels' briefings to the owner there.
+        send_message(settings, f"（{channel} 订阅的简报）\n{text}")
 
 
 def _build_calendar_section(settings: Settings, target: datetime) -> str:
