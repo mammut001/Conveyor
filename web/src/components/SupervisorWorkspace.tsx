@@ -1,0 +1,2377 @@
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ChatPanel, type TaskSuggestion } from './ChatPanel'
+import { ChangedFileList } from './TaskParts'
+import { useMediaQuery } from '../ux/shellNav'
+
+export type SupervisorExecutorModel = { id: string; name: string }
+
+export type SupervisorExecutorInfo = {
+  name: string
+  label: string
+  available: boolean
+  reason?: string
+  models?: SupervisorExecutorModel[]
+}
+
+export type SupervisorRoleConfig = {
+  executor: string
+  model: string | null
+  available: boolean
+  reason?: string
+}
+
+export type SupervisorRoleKey = 'analyst' | 'implementer' | 'reviewer'
+
+export type SupervisorCapabilities = {
+  enabled: boolean
+  coordinator: { executor: string; model: string | null }
+  roles: Record<SupervisorRoleKey, SupervisorRoleConfig>
+  executors: SupervisorExecutorInfo[]
+  deployment: {
+    configured: boolean
+    can_start: boolean
+    reason?: string
+    source_machine?: string
+    target_machine?: string
+  }
+  source_machine?: string
+}
+
+export type SupervisorWorktree = {
+  id: string
+  path: string
+  branch: string
+  head: string
+  is_main: boolean
+  managed: boolean
+  locked: boolean
+  active_task_id?: string
+  chat_session_id?: string
+}
+
+export type SupervisorRepo = {
+  id: string
+  name: string
+  path: string
+  worktrees: SupervisorWorktree[]
+  source_machine?: string
+}
+
+export type SupervisorTask = {
+  id: string
+  goal: string
+  repo_path?: string
+  worktree_path?: string
+  branch?: string
+  base_sha?: string
+  current_sha?: string
+  state: string
+  stage?: string
+  repair_round?: number
+  max_repair_rounds?: number
+  created_at?: string
+  updated_at?: string
+  error?: string | null
+  metadata?: {
+    repo_id?: string
+    worktree_id?: string
+    acceptance_criteria?: string
+    roles?: Record<string, { executor?: string; model?: string | null } | string>
+    session_id?: string
+    result_summary?: string
+    changed_files?: { status: string; path: string }[]
+    pr_status?: string
+    [key: string]: unknown
+  } | null
+}
+
+export type SupervisorHandoff = {
+  id?: string | number
+  from_role?: string
+  to_role?: string
+  stage?: string
+  summary?: string
+  created_at?: string
+  [key: string]: unknown
+}
+
+export type SupervisorExecution = {
+  id?: string | number
+  role?: string
+  executor?: string
+  model?: string
+  stage?: string
+  status?: string
+  output?: string
+  error?: string
+  started_at?: string
+  finished_at?: string
+  [key: string]: unknown
+}
+
+export type SupervisorAcceptance = {
+  passed?: boolean
+  status?: string
+  criteria?: string
+  summary?: string
+  checks?: Array<{ name?: string; status?: string; detail?: string }>
+  [key: string]: unknown
+}
+
+export type SupervisorTaskDetail = SupervisorTask & {
+  handoffs?: SupervisorHandoff[]
+  acceptance?: SupervisorAcceptance | null
+  executions?: SupervisorExecution[]
+  summary?: string
+}
+
+export type DeploymentStageKey = 'local_ci' | 'tailscale_transfer' | 'vps_verify' | 'service_switch' | 'health_check'
+
+export type SupervisorDeploymentStage = {
+  stage: string
+  status: string
+  detail?: string
+  started_at?: string
+  finished_at?: string
+}
+
+export type SupervisorDeployment = {
+  id: string
+  task_id?: string | null
+  source_machine?: string | null
+  target_machine?: string | null
+  build_version?: string | null
+  live_version?: string | null
+  stage?: string | null
+  status: string
+  started_at?: string | null
+  finished_at?: string | null
+  error?: string | null
+  metadata?: Record<string, unknown> | null
+  stages?: SupervisorDeploymentStage[]
+}
+
+export type RoleOverrideEntry = {
+  executor: string
+  model: string
+}
+
+export type RoleOverrides = Record<SupervisorRoleKey, RoleOverrideEntry>
+
+type WorktreeDraft = {
+  goal: string
+  acceptanceCriteria: string
+  preparedSessionId?: string
+  fromSuggestion?: boolean
+  roleOverrides?: Partial<RoleOverrides>
+}
+
+type PendingDispatch = {
+  fingerprint: string
+  requestId: string
+  taskId?: string
+}
+
+type WorktreeDataSnapshot = {
+  tasks: SupervisorTask[]
+  selectedTaskId: string
+  userSelected?: boolean
+  taskDetail: SupervisorTaskDetail | null
+  deployments: SupervisorDeployment[]
+  loaded: boolean
+  error: string
+}
+
+const CONTEXT_STORAGE_KEY = 'conveyor-supervisor-context-v1'
+const PENDING_DISPATCH_PREFIX = 'conveyor-supervisor-pending-dispatch:v1:'
+
+const ROLE_META: { key: SupervisorRoleKey; label: string; hint: string }[] = [
+  { key: 'analyst', label: '分析角色', hint: '拆解目标与边界' },
+  { key: 'implementer', label: '实现角色', hint: '在隔离目录编写与自测' },
+  { key: 'reviewer', label: '审查角色', hint: '独立审查与验收判定' },
+]
+
+export const DEPLOY_STAGE_ORDER: { key: DeploymentStageKey; label: string }[] = [
+  { key: 'local_ci', label: '构建与测试' },
+  { key: 'tailscale_transfer', label: '传输产物' },
+  { key: 'vps_verify', label: '校验版本' },
+  { key: 'service_switch', label: '切换服务' },
+  { key: 'health_check', label: '健康检查' },
+]
+
+const SUP_STATE_LABELS: Record<string, string> = {
+  created: '待派发',
+  pending_dispatch: '待派发',
+  pending: '等待中',
+  queued: '排队中',
+  dispatching: '派发中',
+  dispatched: '已派发',
+  running: '执行中',
+  analyzing: '分析中',
+  implementing: '实现中',
+  reviewing: '审查中',
+  verifying: '验收中',
+  repair_pending: '待修复',
+  repairing: '修复中',
+  waiting_user: '等待确认',
+  waiting_for_user: '等待确认',
+  waiting_for_human: '等待人工',
+  needs_attention: '需要处理',
+  blocked: '受阻',
+  cancelling: '取消中',
+  cancelled: '已取消',
+  completed: '已完成',
+  succeeded: '已完成',
+  ok: '已通过',
+  passed: '已通过',
+  failed: '失败',
+  error: '失败',
+  interrupted: '已中断',
+  skipped: '已跳过',
+  unknown: '未知',
+}
+
+const SUP_STAGE_LABELS: Record<string, string> = {
+  created: '准备中',
+  pending_dispatch: '待派发',
+  queued: '排队等待',
+  dispatching: '派发中',
+  analysis: '需求分析',
+  analyzing: '需求分析',
+  analyst: '需求分析',
+  plan: '规划方案',
+  planning: '规划方案',
+  implementation: '代码实现',
+  implementing: '代码实现',
+  implementer: '代码实现',
+  coding: '代码实现',
+  code: '代码实现',
+  review: '代码审查',
+  reviewing: '代码审查',
+  reviewer: '代码审查',
+  acceptance: '验收检查',
+  verify: '验收检查',
+  verification: '验收检查',
+  repair_pending: '待修复',
+  repair: '问题修复',
+  repairing: '问题修复',
+  waiting_user: '等待确认',
+  waiting_for_user: '等待确认',
+  completed: '已完成',
+  done: '已完成',
+  cancelled: '已取消',
+  failed: '执行失败',
+  interrupted: '已中断',
+  local_ci: '构建与测试',
+  tailscale_transfer: '传输产物',
+  vps_verify: '校验版本',
+  service_switch: '切换服务',
+  health_check: '健康检查',
+}
+
+export function supStateLabel(state?: string | null): string {
+  const key = (state || 'unknown').trim().toLowerCase()
+  return SUP_STATE_LABELS[key] || state || '未知'
+}
+
+export function supStageLabel(stage?: string | null, fallbackState?: string | null): string {
+  if (stage && stage.trim()) {
+    const key = stage.trim().toLowerCase()
+    return SUP_STAGE_LABELS[key] || stage
+  }
+  if (fallbackState && fallbackState.trim()) {
+    const stateKey = fallbackState.trim().toLowerCase()
+    if (SUP_STAGE_LABELS[stateKey]) return SUP_STAGE_LABELS[stateKey]
+  }
+  return '未指定阶段'
+}
+
+export function isTerminalTaskState(state?: string | null): boolean {
+  const key = (state || '').trim().toLowerCase()
+  return ['completed', 'succeeded', 'failed', 'cancelled', 'interrupted'].includes(key)
+}
+
+export function isAttentionTask(task: SupervisorTask): boolean {
+  const key = (task.state || '').trim().toLowerCase()
+  return (
+    ['failed', 'blocked', 'waiting_user', 'waiting_for_user', 'waiting_for_human', 'needs_attention', 'interrupted'].includes(key)
+    || Boolean(task.error && String(task.error).trim())
+  )
+}
+
+export function isTaskInWorktreeContext(
+  task: SupervisorTask,
+  repo: SupervisorRepo,
+  worktree: SupervisorWorktree,
+): boolean {
+  const raw = task as SupervisorTask & { repo_id?: string; worktree_id?: string }
+  const taskWtId = raw.worktree_id || task.metadata?.worktree_id
+  const taskRepoId = raw.repo_id || task.metadata?.repo_id
+  if (taskWtId && taskWtId !== worktree.id) return false
+  if (taskRepoId && taskRepoId !== repo.id) return false
+  const taskWtPath = task.worktree_path || (typeof task.metadata?.worktree_path === 'string' ? task.metadata.worktree_path : '')
+  if (taskWtPath && worktree.path && taskWtPath !== worktree.path) return false
+  const taskRepoPath = task.repo_path || (typeof task.metadata?.repo_path === 'string' ? task.metadata.repo_path : '')
+  if (taskRepoPath && repo.path && taskRepoPath !== repo.path && (!worktree.path || taskRepoPath !== worktree.path)) {
+    return false
+  }
+  return true
+}
+
+function generateRequestId(): string {
+  const bytes = new Uint8Array(16)
+  window.crypto.getRandomValues(bytes)
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
+}
+
+function computeFingerprint(value: unknown): string {
+  const text = JSON.stringify(value)
+  let hash = 2166136261
+  for (let i = 0; i < text.length; i += 1) {
+    hash = Math.imul(hash ^ text.charCodeAt(i), 16777619)
+  }
+  return `${text.length}:${(hash >>> 0).toString(16)}`
+}
+
+function loadPendingDispatch(contextKey: string): PendingDispatch | null {
+  try {
+    const raw = window.sessionStorage.getItem(`${PENDING_DISPATCH_PREFIX}${contextKey}`)
+    return raw ? (JSON.parse(raw) as PendingDispatch) : null
+  } catch {
+    return null
+  }
+}
+
+function savePendingDispatch(contextKey: string, pending: PendingDispatch | null): void {
+  try {
+    const key = `${PENDING_DISPATCH_PREFIX}${contextKey}`
+    if (!pending) window.sessionStorage.removeItem(key)
+    else window.sessionStorage.setItem(key, JSON.stringify(pending))
+  } catch {
+    // Ignore storage quota / privacy errors; in-memory ref still protects retry.
+  }
+}
+
+function loadSavedContext(): { repoId: string; worktreeId: string } {
+  try {
+    const raw = window.localStorage.getItem(CONTEXT_STORAGE_KEY)
+    if (!raw) return { repoId: '', worktreeId: '' }
+    const parsed = JSON.parse(raw) as { repoId?: string; worktreeId?: string }
+    return { repoId: parsed.repoId || '', worktreeId: parsed.worktreeId || '' }
+  } catch {
+    return { repoId: '', worktreeId: '' }
+  }
+}
+
+function saveContext(repoId: string, worktreeId: string): void {
+  try {
+    if (!repoId && !worktreeId) window.localStorage.removeItem(CONTEXT_STORAGE_KEY)
+    else window.localStorage.setItem(CONTEXT_STORAGE_KEY, JSON.stringify({ repoId, worktreeId }))
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function shortSha(sha?: string | null): string {
+  if (!sha) return ''
+  return sha.trim().slice(0, 7)
+}
+
+function formatShortTime(value?: string | null): string {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.valueOf())) return value
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+export function MachineIcon({ kind }: { kind: 'laptop' | 'network' | 'server' }) {
+  if (kind === 'laptop') {
+    return (
+      <svg className="sup-machine-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="4" y="5" width="16" height="11" rx="2" />
+        <path d="M2.5 19h19" />
+        <path d="M9.5 10l-1.5 1.5 1.5 1.5M14.5 10l1.5 1.5-1.5 1.5" />
+      </svg>
+    )
+  }
+  if (kind === 'network') {
+    return (
+      <svg className="sup-machine-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="7" cy="12" r="2.2" />
+        <circle cx="12" cy="7" r="2.2" />
+        <circle cx="17" cy="12" r="2.2" />
+        <circle cx="12" cy="17" r="2.2" />
+        <path d="M8.8 10.5l1.6-1.8M13.6 8.7l1.6 1.8M15.2 13.5l-1.6 1.8M10.4 15.3l-1.6-1.8" />
+      </svg>
+    )
+  }
+  return (
+    <svg className="sup-machine-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="4" y="4" width="16" height="7" rx="1.8" />
+      <rect x="4" y="13" width="16" height="7" rx="1.8" />
+      <circle cx="8" cy="7.5" r="0.9" fill="currentColor" />
+      <circle cx="8" cy="16.5" r="0.9" fill="currentColor" />
+      <path d="M12 7.5h5M12 16.5h5" />
+    </svg>
+  )
+}
+
+function worktreeBadgeInfo(wt: SupervisorWorktree): { label: string; tone: 'readonly' | 'locked' | 'ready' } {
+  if (wt.is_main) return { label: '默认分支 · 只读', tone: 'readonly' }
+  if (!wt.managed) return { label: '未托管 · 只读', tone: 'readonly' }
+  if (wt.locked || wt.active_task_id) return { label: '执行中 · 已锁定', tone: 'locked' }
+  return { label: '托管 · 可派发', tone: 'ready' }
+}
+
+function SupervisorRepoSidebar({
+  repositories,
+  selectedRepoId,
+  selectedWorktreeId,
+  expandedRepos,
+  searchQuery,
+  onSearchChange,
+  onToggleRepo,
+  onSelectWorktree,
+  onRegisterRepo,
+  onCreateWorktree,
+  registerBusy,
+  registerError,
+  createWorktreeBusyRepoId,
+  createWorktreeError,
+  openCreateForRepoId,
+  onOpenCreateWorktree,
+  mobileCloseButton,
+}: {
+  repositories: SupervisorRepo[]
+  selectedRepoId: string
+  selectedWorktreeId: string
+  expandedRepos: Record<string, boolean>
+  searchQuery: string
+  onSearchChange: (q: string) => void
+  onToggleRepo: (repoId: string) => void
+  onSelectWorktree: (repoId: string, worktreeId: string) => void
+  onRegisterRepo: (path: string, name?: string) => Promise<boolean>
+  onCreateWorktree: (repoId: string, branch?: string, baseRef?: string) => Promise<boolean>
+  registerBusy: boolean
+  registerError: string
+  createWorktreeBusyRepoId: string
+  createWorktreeError: string
+  openCreateForRepoId: string
+  onOpenCreateWorktree: (repoId: string) => void
+  mobileCloseButton?: React.ReactNode
+}) {
+  const [registerOpen, setRegisterOpen] = useState(false)
+  const [repoPath, setRepoPath] = useState('')
+  const [repoName, setRepoName] = useState('')
+  const [newBranch, setNewBranch] = useState('')
+  const [newBaseRef, setNewBaseRef] = useState('')
+
+  const filteredRepos = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return repositories
+    return repositories.filter(repo =>
+      repo.name.toLowerCase().includes(q)
+      || repo.path.toLowerCase().includes(q)
+      || (repo.worktrees || []).some(wt => wt.branch.toLowerCase().includes(q) || wt.path.toLowerCase().includes(q)),
+    )
+  }, [repositories, searchQuery])
+
+  const submitRegister = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!repoPath.trim() || registerBusy) return
+    const ok = await onRegisterRepo(repoPath.trim(), repoName.trim() || undefined)
+    if (ok) {
+      setRepoPath('')
+      setRepoName('')
+      setRegisterOpen(false)
+    }
+  }
+
+  const submitCreateWorktree = async (event: FormEvent, repoId: string) => {
+    event.preventDefault()
+    if (createWorktreeBusyRepoId) return
+    const ok = await onCreateWorktree(repoId, newBranch.trim() || undefined, newBaseRef.trim() || undefined)
+    if (ok) {
+      setNewBranch('')
+      setNewBaseRef('')
+      onOpenCreateWorktree('')
+    }
+  }
+
+  return (
+    <div className="sup-sidebar-inner">
+      <div className="sup-sidebar-header">
+        <h2>仓库</h2>
+        <div className="sup-sidebar-header-actions">
+          <button
+            type="button"
+            className="agent-new-btn sup-register-toggle"
+            aria-expanded={registerOpen}
+            aria-label="注册仓库"
+            onClick={() => setRegisterOpen(prev => !prev)}
+          >
+            <span aria-hidden="true">+</span> 注册仓库
+          </button>
+          {mobileCloseButton}
+        </div>
+      </div>
+
+      <div className="sup-search-box">
+        <input
+          type="search"
+          aria-label="搜索仓库"
+          placeholder="搜索仓库或分支…"
+          value={searchQuery}
+          onChange={e => onSearchChange(e.target.value)}
+        />
+      </div>
+
+      {registerOpen && (
+        <form className="sup-inline-form" aria-label="注册仓库表单" onSubmit={e => void submitRegister(e)}>
+          <div className="sup-form-field">
+            <label htmlFor="sup-repo-path-input">仓库路径</label>
+            <input
+              id="sup-repo-path-input"
+              type="text"
+              required
+              placeholder="/path/to/git/repo"
+              value={repoPath}
+              onChange={e => setRepoPath(e.target.value)}
+              disabled={registerBusy}
+            />
+          </div>
+          <div className="sup-form-field">
+            <label htmlFor="sup-repo-name-input">显示名称（可选）</label>
+            <input
+              id="sup-repo-name-input"
+              type="text"
+              placeholder="例如：Conveyor"
+              value={repoName}
+              onChange={e => setRepoName(e.target.value)}
+              disabled={registerBusy}
+            />
+          </div>
+          {registerError && (
+            <p className="sup-inline-error" role="alert">{registerError}</p>
+          )}
+          <div className="sup-form-actions">
+            <button type="button" className="shell-button" onClick={() => setRegisterOpen(false)} disabled={registerBusy}>
+              取消
+            </button>
+            <button type="submit" className="shell-button primary" disabled={!repoPath.trim() || registerBusy}>
+              {registerBusy ? '正在添加…' : '确认添加'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      <div className="sup-repo-tree" role="tree" aria-label="仓库与工作目录列表">
+        {filteredRepos.map(repo => {
+          const isExpanded = expandedRepos[repo.id] ?? (repo.id === selectedRepoId || repositories.length <= 3)
+          const isCreatingHere = openCreateForRepoId === repo.id
+          return (
+            <div key={repo.id} className={`sup-repo-node ${repo.id === selectedRepoId ? 'is-selected-repo' : ''}`} role="treeitem" aria-expanded={isExpanded}>
+              <div className="sup-repo-row">
+                <button
+                  type="button"
+                  className="sup-repo-toggle"
+                  aria-expanded={isExpanded}
+                  onClick={() => onToggleRepo(repo.id)}
+                >
+                  <span className="sup-tree-chevron" aria-hidden="true">{isExpanded ? '▾' : '▸'}</span>
+                  <span className="sup-repo-info">
+                    <strong>{repo.name}</strong>
+                    <small title={repo.path}>{repo.path}</small>
+                  </span>
+                  <span className="sup-worktree-count">{(repo.worktrees || []).length}</span>
+                </button>
+              </div>
+
+              {isExpanded && (
+                <div className="sup-worktree-list" role="group" aria-label={`${repo.name} 的工作目录`}>
+                  {(repo.worktrees || []).map(wt => {
+                    const active = repo.id === selectedRepoId && wt.id === selectedWorktreeId
+                    const badge = worktreeBadgeInfo(wt)
+                    return (
+                      <button
+                        key={wt.id}
+                        type="button"
+                        className={`sup-worktree-item ${active ? 'active' : ''}`}
+                        aria-current={active ? 'true' : undefined}
+                        onClick={() => onSelectWorktree(repo.id, wt.id)}
+                      >
+                        <div className="sup-worktree-item-top">
+                          <span className="sup-worktree-branch" title={wt.branch || wt.path}>
+                            <span className="sup-branch-glyph" aria-hidden="true">⑂</span>
+                            <strong>{wt.branch || 'detached'}</strong>
+                          </span>
+                          <span className={`sup-wt-badge sup-wt-badge--${badge.tone}`}>{badge.label}</span>
+                        </div>
+                        <div className="sup-worktree-item-meta">
+                          {wt.head && <code>{shortSha(wt.head)}</code>}
+                          <span title={wt.path}>{wt.path}</span>
+                        </div>
+                      </button>
+                    )
+                  })}
+
+                  {isCreatingHere ? (
+                    <form
+                      className="sup-inline-form sup-worktree-create-form"
+                      aria-label={`为 ${repo.name} 新建 Worktree`}
+                      onSubmit={e => void submitCreateWorktree(e, repo.id)}
+                    >
+                      <div className="sup-form-field">
+                        <label htmlFor={`sup-wt-branch-${repo.id}`}>分支名称（可选）</label>
+                        <input
+                          id={`sup-wt-branch-${repo.id}`}
+                          type="text"
+                          placeholder="例如：feat/supervisor-ui"
+                          value={newBranch}
+                          onChange={e => setNewBranch(e.target.value)}
+                          disabled={Boolean(createWorktreeBusyRepoId)}
+                        />
+                      </div>
+                      <div className="sup-form-field">
+                        <label htmlFor={`sup-wt-base-${repo.id}`}>基准分支或提交（可选）</label>
+                        <input
+                          id={`sup-wt-base-${repo.id}`}
+                          type="text"
+                          placeholder="默认：main / HEAD"
+                          value={newBaseRef}
+                          onChange={e => setNewBaseRef(e.target.value)}
+                          disabled={Boolean(createWorktreeBusyRepoId)}
+                        />
+                      </div>
+                      {createWorktreeError && (
+                        <p className="sup-inline-error" role="alert">{createWorktreeError}</p>
+                      )}
+                      <div className="sup-form-actions">
+                        <button
+                          type="button"
+                          className="shell-button"
+                          onClick={() => onOpenCreateWorktree('')}
+                          disabled={Boolean(createWorktreeBusyRepoId)}
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="submit"
+                          className="shell-button primary"
+                          disabled={Boolean(createWorktreeBusyRepoId)}
+                        >
+                          {createWorktreeBusyRepoId === repo.id ? '创建中…' : '创建 Worktree'}
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <button
+                      type="button"
+                      className="sup-create-wt-btn"
+                      onClick={() => {
+                        setNewBranch('')
+                        setNewBaseRef('')
+                        onOpenCreateWorktree(repo.id)
+                      }}
+                    >
+                      + 新建 Worktree
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+
+        {!filteredRepos.length && (
+          <div className="sup-empty-tree">
+            {repositories.length === 0
+              ? '还没有已注册的仓库，点击上方「+ 注册仓库」添加本地 Git 仓库路径。'
+              : '没有匹配的仓库或分支。'}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SupervisorRoleBar({
+  capabilities,
+  effectiveRoles,
+  onChangeRole,
+  disabled,
+}: {
+  capabilities: SupervisorCapabilities | null
+  effectiveRoles: RoleOverrides
+  onChangeRole: (role: SupervisorRoleKey, patch: Partial<RoleOverrideEntry>) => void
+  disabled?: boolean
+}) {
+  const executors = capabilities?.executors || []
+  const coordinatorExec = capabilities?.coordinator?.executor || '当前主对话'
+  const coordinatorModel = capabilities?.coordinator?.model || '默认模型'
+
+  const getExecutorInfo = (execName: string): SupervisorExecutorInfo | undefined =>
+    executors.find(item => item.name === execName)
+
+  const getRoleAvailability = (role: SupervisorRoleKey, selectedExecutor: string): { available: boolean; reason?: string } => {
+    const execInfo = getExecutorInfo(selectedExecutor)
+    const defaultRole = capabilities?.roles?.[role]
+    if (execInfo) {
+      return {
+        available: execInfo.available,
+        reason: execInfo.reason || (defaultRole?.executor === selectedExecutor ? defaultRole.reason : undefined),
+      }
+    }
+    if (defaultRole && defaultRole.executor === selectedExecutor) {
+      return { available: defaultRole.available, reason: defaultRole.reason }
+    }
+    return { available: Boolean(capabilities), reason: capabilities ? undefined : '能力元数据未就绪' }
+  }
+
+  return (
+    <div className="sup-roles-panel" aria-label="角色与执行器配置">
+      <div className="sup-roles-grid">
+        <div className="sup-role-card sup-role-card--coordinator">
+          <div className="sup-role-head">
+            <span className="sup-role-title">协调对话</span>
+            <span className="sup-role-badge is-ok">主会话</span>
+          </div>
+          <div className="sup-role-Static">
+            <strong>{coordinatorExec}</strong>
+            <small>{coordinatorModel}</small>
+          </div>
+        </div>
+
+        {ROLE_META.map(({ key, label, hint }) => {
+          const current = effectiveRoles[key]
+          const status = getRoleAvailability(key, current.executor)
+          const optionNames = new Set(executors.map(e => e.name))
+          const extraOption = current.executor && !optionNames.has(current.executor) ? current.executor : null
+          return (
+            <div key={key} className={`sup-role-card ${!status.available ? 'is-unavailable' : ''}`}>
+              <div className="sup-role-head">
+                <label htmlFor={`sup-role-exec-${key}`} className="sup-role-title" title={hint}>{label}</label>
+                <span className={`sup-role-badge ${status.available ? 'is-ok' : 'is-err'}`}>
+                  {status.available ? '已就绪' : '不可用'}
+                </span>
+              </div>
+              <select
+                id={`sup-role-exec-${key}`}
+                aria-label={`${label}执行器`}
+                value={current.executor}
+                disabled={disabled || (!executors.length && !extraOption)}
+                onChange={e => {
+                  const nextExec = e.target.value
+                  const defaultRole = capabilities?.roles?.[key]
+                  const nextModel = defaultRole && defaultRole.executor === nextExec ? (defaultRole.model || '') : ''
+                  onChangeRole(key, { executor: nextExec, model: nextModel })
+                }}
+              >
+                {extraOption && (
+                  <option value={extraOption}>{extraOption}{!status.available ? '（不可用）' : ''}</option>
+                )}
+                {executors.map(exec => (
+                  <option key={exec.name} value={exec.name}>
+                    {exec.label || exec.name}{!exec.available ? '（不可用）' : ''}
+                  </option>
+                ))}
+                {!extraOption && executors.length === 0 && (
+                  <option value="">未配置执行器</option>
+                )}
+              </select>
+              {!status.available && status.reason && (
+                <small className="sup-role-reason" role="status">{status.reason}</small>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <details className="sup-role-advanced">
+        <summary>模型与角色高级配置（可选）</summary>
+        <div className="sup-role-advanced-body">
+          <p className="sup-quota-disclaimer">
+            说明：执行器显示「已就绪」仅代表本地适配器或命令已配置，不承诺远程模型配额一定可用；执行失败时不会静默回退到其他服务商。
+          </p>
+          <div className="sup-model-overrides-grid">
+            {ROLE_META.map(({ key, label }) => {
+              const current = effectiveRoles[key]
+              const execInfo = getExecutorInfo(current.executor)
+              const fetchedModels = execInfo?.models && execInfo.models.length > 0 ? execInfo.models : null
+              return (
+                <div key={key} className="sup-form-field">
+                  <label htmlFor={`sup-role-model-${key}`}>{label}模型（{current.executor || '未选'}）</label>
+                  {fetchedModels ? (
+                    <select
+                      id={`sup-role-model-${key}`}
+                      aria-label={`${label}模型`}
+                      value={current.model}
+                      disabled={disabled}
+                      onChange={e => onChangeRole(key, { model: e.target.value })}
+                    >
+                      <option value="">默认模型{capabilities?.roles?.[key]?.model ? `（${capabilities.roles[key].model}）` : ''}</option>
+                      {fetchedModels.map(m => (
+                        <option key={m.id} value={m.id}>{m.name || m.id}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      id={`sup-role-model-${key}`}
+                      aria-label={`${label}模型`}
+                      type="text"
+                      placeholder={capabilities?.roles?.[key]?.model ? `默认：${capabilities.roles[key].model}` : '留空使用默认模型，或输入模型名称'}
+                      value={current.model}
+                      disabled={disabled}
+                      onChange={e => onChangeRole(key, { model: e.target.value })}
+                    />
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </details>
+    </div>
+  )
+}
+
+function SupervisorRunHistory({
+  worktreeId,
+  tasks,
+  selectedTaskId,
+  onSelectTask,
+}: {
+  worktreeId: string
+  tasks: SupervisorTask[]
+  selectedTaskId: string
+  onSelectTask: (taskId: string) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const lastWorktreeRef = useRef(worktreeId)
+  const seenAlertKeysRef = useRef<Set<string>>(new Set())
+
+  const attentionKeys = useMemo(
+    () =>
+      tasks
+        .filter(t => isAttentionTask(t))
+        .map(t => `${worktreeId}:${t.id}:${(t.state || '').trim().toLowerCase()}:${(t.error || '').trim()}`),
+    [tasks, worktreeId],
+  )
+
+  if (lastWorktreeRef.current !== worktreeId) {
+    lastWorktreeRef.current = worktreeId
+    const hasUnseen = attentionKeys.some(k => !seenAlertKeysRef.current.has(k))
+    if (hasUnseen) {
+      for (const k of attentionKeys) seenAlertKeysRef.current.add(k)
+      if (!expanded) setExpanded(true)
+    } else if (expanded) {
+      setExpanded(false)
+    }
+  } else {
+    const hasUnseen = attentionKeys.some(k => !seenAlertKeysRef.current.has(k))
+    if (hasUnseen) {
+      for (const k of attentionKeys) seenAlertKeysRef.current.add(k)
+      if (!expanded) setExpanded(true)
+    }
+  }
+
+  const latestTask = tasks[0]
+  const attentionCount = tasks.filter(t => isAttentionTask(t)).length
+
+  return (
+    <section className={`sup-run-history ${expanded ? 'is-expanded' : 'is-collapsed'}`} aria-label="运行记录">
+      <button
+        type="button"
+        className="sup-run-history-bar"
+        aria-expanded={expanded}
+        onClick={() => setExpanded(prev => !prev)}
+      >
+        <span className="sup-run-history-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
+        <strong>运行记录 · {tasks.length} 条</strong>
+        {latestTask && (
+          <span className="sup-run-history-latest">
+            最近：{supStateLabel(latestTask.state)}
+          </span>
+        )}
+        {attentionCount > 0 ? (
+          <span className="sup-run-history-alert">{attentionCount} 条需处理或失败</span>
+        ) : (
+          <span className="sup-run-history-hint">失败或等待确认时自动展开</span>
+        )}
+      </button>
+
+      {expanded && (
+        <div className="sup-run-history-list" role="group" aria-label="当前工作目录运行记录列表">
+          {tasks.length === 0 ? (
+            <p className="sup-muted-note">这个 Worktree 还没有任务运行记录。</p>
+          ) : (
+            tasks.map(task => {
+              const isSelected = task.id === selectedTaskId
+              const attention = isAttentionTask(task)
+              return (
+                <button
+                  key={task.id}
+                  type="button"
+                  className={`sup-run-row ${isSelected ? 'selected' : ''} ${attention ? 'is-attention' : ''}`}
+                  aria-pressed={isSelected}
+                  onClick={() => onSelectTask(task.id)}
+                >
+                  <div className="sup-run-row-main">
+                    <strong>{task.goal || task.id}</strong>
+                    <span className={`status-badge ${task.state}`}>
+                      <i />
+                      {supStateLabel(task.state)}
+                    </span>
+                  </div>
+                  <div className="sup-run-row-meta">
+                    <span>阶段：{supStageLabel(task.stage, task.state)}</span>
+                    {typeof task.repair_round === 'number' && typeof task.max_repair_rounds === 'number' && task.max_repair_rounds > 0 && (
+                      <span>修复轮次：{task.repair_round}/{task.max_repair_rounds}</span>
+                    )}
+                    <span>{formatShortTime(task.updated_at || task.created_at)}</span>
+                    <code>{task.id}</code>
+                  </div>
+                  {task.error && <small className="sup-run-row-error">{task.error}</small>}
+                </button>
+              )
+            })
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function SupervisorTechnicalDetails({
+  task,
+  taskDetail,
+}: {
+  task: SupervisorTask | null
+  taskDetail: SupervisorTaskDetail | null
+}) {
+  const changedFiles = taskDetail?.metadata?.changed_files || task?.metadata?.changed_files || []
+  const handoffs = taskDetail?.handoffs || []
+  const executions = taskDetail?.executions || []
+  const countLabel = [
+    changedFiles.length ? `${changedFiles.length} 个改动文件` : '',
+    handoffs.length ? `${handoffs.length} 次角色交接` : '',
+    executions.length ? `${executions.length} 条执行记录` : '',
+  ].filter(Boolean).join(' · ') || '默认收起'
+
+  return (
+    <details className="sup-tech-details">
+      <summary className="sup-tech-summary">
+        <span>技术细节（可选查看：改动文件、交接记录与执行输出）</span>
+        <span className="sup-tech-meta">{countLabel}</span>
+      </summary>
+      <div className="sup-tech-body">
+        {task ? (
+          <div className="sup-tech-kv-row">
+            {task.branch && <span>分支：<code>{task.branch}</code></span>}
+            {task.base_sha && <span>基准提交：<code>{shortSha(task.base_sha)}</code></span>}
+            {task.current_sha && <span>当前提交：<code>{shortSha(task.current_sha)}</code></span>}
+          </div>
+        ) : null}
+
+        <div className="sup-tech-block">
+          <h4>改动文件</h4>
+          {changedFiles.length > 0 ? (
+            <ChangedFileList files={changedFiles} />
+          ) : (
+            <p className="sup-muted-note">暂无已记录的改动文件。</p>
+          )}
+        </div>
+
+        {handoffs.length > 0 && (
+          <div className="sup-tech-block">
+            <h4>角色交接记录</h4>
+            <ul className="sup-handoff-list">
+              {handoffs.map((h, idx) => (
+                <li key={h.id ?? idx} className="sup-handoff-item">
+                  <strong>{h.from_role || '上一阶段'} → {h.to_role || h.stage || '下一阶段'}</strong>
+                  {h.created_at && <time>{formatShortTime(h.created_at)}</time>}
+                  {h.summary && <p>{h.summary}</p>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {executions.length > 0 && (
+          <div className="sup-tech-block">
+            <h4>执行与终端输出</h4>
+            <div className="sup-execution-list">
+              {executions.map((ex, idx) => (
+                <details key={ex.id ?? idx} className="sup-execution-item">
+                  <summary>
+                    <strong>{ex.role || ex.stage || '执行'}</strong>
+                    {ex.executor && <span> · {ex.executor}{ex.model ? ` (${ex.model})` : ''}</span>}
+                    {ex.status && <span className="sup-exec-status"> · {supStateLabel(ex.status)}</span>}
+                  </summary>
+                  {ex.error && <p className="sup-inline-error">{ex.error}</p>}
+                  {ex.output ? <pre className="sup-exec-output">{ex.output}</pre> : <p className="sup-muted-note">无标准输出内容。</p>}
+                </details>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </details>
+  )
+}
+
+export function supPrStatusLabel(rawStatus?: string | null): string {
+  if (!rawStatus) return '未核验'
+  const s = String(rawStatus).trim()
+  if (!s || s.toLowerCase() === 'unknown' || s.toLowerCase() === 'unverified') return '未核验'
+  const lower = s.toLowerCase()
+  if (lower === 'merged') return '已合并'
+  if (lower === 'open') return '开放中'
+  if (lower === 'closed') return '已关闭'
+  if (lower === 'draft') return '草稿'
+  return s
+}
+
+function resolveStageStatus(deployment: SupervisorDeployment | null, stageKey: DeploymentStageKey): {
+  status: string
+  detail?: string
+  started_at?: string
+  finished_at?: string
+} {
+  if (!deployment) return { status: 'unknown' }
+  const matched = (deployment.stages || []).find(s => s.stage === stageKey)
+  if (matched && matched.status) {
+    return {
+      status: matched.status,
+      detail: matched.detail,
+      started_at: matched.started_at,
+      finished_at: matched.finished_at,
+    }
+  }
+  // Never infer completed/success for missing or unrecorded stages.
+  if (deployment.stage === stageKey && deployment.status) {
+    return { status: deployment.status }
+  }
+  return { status: 'unknown' }
+}
+
+function stageTone(status: string): 'ok' | 'running' | 'failed' | 'pending' | 'unknown' {
+  const key = (status || 'unknown').trim().toLowerCase()
+  if (['completed', 'succeeded', 'ok', 'passed'].includes(key)) return 'ok'
+  if (['running', 'in_progress', 'dispatched', 'claimed'].includes(key)) return 'running'
+  if (['failed', 'error', 'cancelled', 'rejected'].includes(key)) return 'failed'
+  if (['pending', 'queued', 'ready'].includes(key)) return 'pending'
+  return 'unknown'
+}
+
+function SupervisorDeployView({
+  repo,
+  worktree,
+  selectedTask,
+  capabilities,
+  deployments,
+  deployBusy,
+  deployError,
+  onStartDeploy,
+}: {
+  repo: SupervisorRepo | null
+  worktree: SupervisorWorktree | null
+  selectedTask: SupervisorTask | null
+  capabilities: SupervisorCapabilities | null
+  deployments: SupervisorDeployment[]
+  deployBusy: boolean
+  deployError: string
+  onStartDeploy: () => void
+}) {
+  const activeDeployment = deployments[0] || null
+  const deployCaps = capabilities?.deployment
+  const canStart = Boolean(deployCaps?.configured && deployCaps?.can_start)
+
+  const isUnconfigured = !deployCaps || !deployCaps.configured
+  const unconfiguredPrimaryText = '尚未配置部署目标和传输流程'
+
+  let disableReason = ''
+  let technicalDetail = ''
+
+  if (isUnconfigured) {
+    disableReason = unconfiguredPrimaryText
+    if (deployCaps?.reason && deployCaps.reason.trim() !== unconfiguredPrimaryText) {
+      technicalDetail = deployCaps.reason.trim()
+    }
+  } else if (!deployCaps.can_start) {
+    disableReason = deployCaps.reason?.trim() || '部署运行器当前处于不可用状态，暂不能发起部署。'
+  } else if (!selectedTask) {
+    disableReason = '请先在当前 Worktree 中选择或完成一项任务后再发起部署。'
+  }
+
+  const sourceMachine =
+    activeDeployment?.source_machine?.trim()
+    || deployCaps?.source_machine?.trim()
+    || repo?.source_machine?.trim()
+    || capabilities?.source_machine?.trim()
+    || '未指定来源主机'
+
+  const targetMachine =
+    activeDeployment?.target_machine?.trim()
+    || deployCaps?.target_machine?.trim()
+    || '未指定目标服务器'
+
+  const buildVersion = activeDeployment?.build_version?.trim() || '未知'
+  const liveVersion = activeDeployment?.live_version?.trim() || '未知'
+  const activeStageText = activeDeployment?.stage ? supStageLabel(activeDeployment.stage) : '未知'
+  const deploymentRunning = Boolean(activeDeployment && ['running', 'queued', 'pending', 'in_progress'].includes((activeDeployment.status || '').toLowerCase()))
+
+  const stageLogItems = (activeDeployment?.stages || []).filter(
+    s => Boolean(s.detail || s.started_at || s.finished_at || (s.status && s.status !== 'unknown')),
+  )
+
+  return (
+    <div className="sup-deploy-view" aria-label="部署视图">
+      <div className="sup-deploy-header-card">
+        <div>
+          <h3>部署流水线</h3>
+          <p className="sup-deploy-subtitle">
+            来源：{sourceMachine} → Tailscale 传输通道 → 目标：{targetMachine}
+          </p>
+        </div>
+        <div className="sup-deploy-cta-group">
+          {canStart ? (
+            <button
+              type="button"
+              className="shell-button primary"
+              disabled={deployBusy || !selectedTask || deploymentRunning}
+              onClick={onStartDeploy}
+            >
+              {deployBusy ? '正在启动部署…' : deploymentRunning ? '部署进行中…' : '开始部署'}
+            </button>
+          ) : (
+            <button type="button" className="shell-button" disabled aria-disabled="true">
+              部署不可用
+            </button>
+          )}
+        </div>
+      </div>
+
+      {disableReason && (
+        <div className="sup-banner sup-banner--muted" role="status">
+          <div className="sup-banner-text">
+            <strong>当前无法启动部署</strong>
+            <span>{disableReason}</span>
+          </div>
+          {technicalDetail && (
+            <details className="sup-tech-details sup-deploy-tech-details">
+              <summary className="sup-tech-summary">
+                <span>技术诊断信息（运维查看）</span>
+              </summary>
+              <div className="sup-tech-body">
+                <code>{technicalDetail}</code>
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+
+      {deployError && (
+        <div className="sup-banner sup-banner--error" role="alert">
+          <strong>部署请求失败</strong>
+          <span>{deployError}</span>
+        </div>
+      )}
+
+      {activeDeployment?.error && (
+        <div className="sup-banner sup-banner--error" role="alert">
+          <strong>部署阶段执行失败</strong>
+          <span>{activeDeployment.error}</span>
+        </div>
+      )}
+
+      <div className="sup-topology-card" role="region" aria-label="部署拓扑与传输路径">
+        <div className="sup-topology-node">
+          <div className="sup-topology-icon-wrap">
+            <MachineIcon kind="laptop" />
+          </div>
+          <strong>{sourceMachine}</strong>
+          <small>来源构建机</small>
+          <span className="sup-topology-meta">构建版本：{shortSha(buildVersion) || buildVersion}</span>
+        </div>
+
+        <div className="sup-topology-connector" aria-hidden="true">
+          <span className="sup-topology-line" />
+        </div>
+
+        <div className="sup-topology-node sup-topology-node--transport">
+          <div className="sup-topology-icon-wrap">
+            <MachineIcon kind="network" />
+          </div>
+          <strong>Tailscale</strong>
+          <small>私有网络连接与传输</small>
+        </div>
+
+        <div className="sup-topology-connector" aria-hidden="true">
+          <span className="sup-topology-line" />
+        </div>
+
+        <div className="sup-topology-node">
+          <div className="sup-topology-icon-wrap">
+            <MachineIcon kind="server" />
+          </div>
+          <strong>{targetMachine}</strong>
+          <small>目标服务器</small>
+          <span className="sup-topology-meta">当前线上：{shortSha(liveVersion) || liveVersion}</span>
+        </div>
+      </div>
+
+      <ol className="sup-stage-stepper" aria-label="部署五阶段状态">
+        {DEPLOY_STAGE_ORDER.map((item, idx) => {
+          const resolved = resolveStageStatus(activeDeployment, item.key)
+          const tone = stageTone(resolved.status)
+          const isCurrent = activeDeployment?.stage === item.key
+          return (
+            <li
+              key={item.key}
+              className={`sup-stage-step sup-stage-step--${tone} ${isCurrent ? 'is-active-stage' : ''}`}
+              data-stage={item.key}
+              data-status={resolved.status}
+            >
+              <div className="sup-stage-step-indicator">
+                <span className="sup-stage-step-num">{idx + 1}</span>
+                <span className="sup-stage-step-status">{supStateLabel(resolved.status)}</span>
+              </div>
+              <strong className="sup-stage-step-label">{item.label}</strong>
+              {resolved.detail && <small className="sup-stage-step-detail">{resolved.detail}</small>}
+            </li>
+          )
+        })}
+      </ol>
+
+      <div className="sup-deploy-meta-grid">
+        <div className="sup-meta-card">
+          <h4>本次部署上下文</h4>
+          <div className="sup-kv-list">
+            <div><span>仓库</span><strong>{repo?.name || '未选'}</strong></div>
+            <div><span>Worktree</span><strong>{worktree?.branch || '未选'}</strong></div>
+            <div><span>关联任务</span><strong>{selectedTask?.id || activeDeployment?.task_id || '无'}</strong></div>
+            <div><span>当前阶段</span><strong>{activeStageText}</strong></div>
+            <div><span>总体状态</span><strong>{activeDeployment ? supStateLabel(activeDeployment.status) : '未开始'}</strong></div>
+          </div>
+        </div>
+
+        <div className="sup-meta-card">
+          <h4>版本与状态边界</h4>
+          <div className="sup-kv-list">
+            <div><span>构建版本</span><code>{buildVersion}</code></div>
+            <div><span>线上版本</span><code>{liveVersion}</code></div>
+            <div><span>任务完成状态</span><strong>{selectedTask ? supStateLabel(selectedTask.state) : '未执行'}</strong></div>
+            <div><span>PR 合并状态</span><strong>{supPrStatusLabel(selectedTask?.metadata?.pr_status)}</strong></div>
+            <div><span>生产部署状态</span><strong>{activeDeployment ? supStateLabel(activeDeployment.status) : '未部署'}</strong></div>
+          </div>
+          <p className="sup-separation-note">
+            状态说明：任务完成 ≠ PR 已合并 ≠ 已部署上线。缺失或未上报的阶段保持「未知」，不会推断为成功。
+          </p>
+        </div>
+      </div>
+
+      <details className="sup-tech-details sup-deploy-logs">
+        <summary className="sup-tech-summary">
+          <span>查看阶段日志与详情（可选展开）</span>
+          <span className="sup-tech-meta">{stageLogItems.length ? `${stageLogItems.length} 个阶段记录` : '暂无记录'}</span>
+        </summary>
+        <div className="sup-tech-body">
+          {stageLogItems.length === 0 ? (
+            <p className="sup-muted-note">暂无阶段日志输出。</p>
+          ) : (
+            <ul className="sup-stage-log-list">
+              {DEPLOY_STAGE_ORDER.map(stageMeta => {
+                const info = resolveStageStatus(activeDeployment, stageMeta.key)
+                if (info.status === 'unknown' && !info.detail && !info.started_at && !info.finished_at) return null
+                return (
+                  <li key={stageMeta.key} className="sup-stage-log-item">
+                    <div className="sup-stage-log-head">
+                      <strong>{stageMeta.label}（{stageMeta.key}）</strong>
+                      <span>{supStateLabel(info.status)}</span>
+                      {info.started_at && <time>{formatShortTime(info.started_at)}</time>}
+                    </div>
+                    {info.detail && <pre className="sup-exec-output">{info.detail}</pre>}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+      </details>
+    </div>
+  )
+}
+
+export function SupervisorWorkspace({
+  token,
+  active,
+  coordinatorFallbackName,
+}: {
+  token: string
+  active: boolean
+  coordinatorFallbackName?: string
+}) {
+  const narrowViewport = useMediaQuery('(max-width: 900px)')
+  const [capabilities, setCapabilities] = useState<SupervisorCapabilities | null>(null)
+  const [capabilitiesError, setCapabilitiesError] = useState('')
+  const [repositories, setRepositories] = useState<SupervisorRepo[]>([])
+  const [reposError, setReposError] = useState('')
+  const [initialLoading, setInitialLoading] = useState(true)
+
+  const savedContext = useMemo(() => loadSavedContext(), [])
+  const [selectedRepoId, setSelectedRepoId] = useState(savedContext.repoId)
+  const [selectedWorktreeId, setSelectedWorktreeId] = useState(savedContext.worktreeId)
+  const [expandedRepos, setExpandedRepos] = useState<Record<string, boolean>>({})
+  const [searchQuery, setSearchQuery] = useState('')
+  const [subTab, setSubTab] = useState<'workspace' | 'chat' | 'deploy'>('workspace')
+  const [mobileRepoDrawerOpen, setMobileRepoDrawerOpen] = useState(false)
+
+  // Repository registration & worktree creation states
+  const [registerBusy, setRegisterBusy] = useState(false)
+  const [registerError, setRegisterError] = useState('')
+  const [openCreateForRepoId, setOpenCreateForRepoId] = useState('')
+  const [createWorktreeBusyRepoId, setCreateWorktreeBusyRepoId] = useState('')
+  const [createWorktreeError, setCreateWorktreeError] = useState('')
+
+  // Per-context isolated drafts and data snapshots
+  const [draftsByContext, setDraftsByContext] = useState<Record<string, WorktreeDraft>>({})
+  const [dataByContext, setDataByContext] = useState<Record<string, WorktreeDataSnapshot>>({})
+  const [pendingByContext, setPendingByContext] = useState<Record<string, PendingDispatch | null>>({})
+
+  // Action busy/error states scoped to current context
+  const [dispatchBusy, setDispatchBusy] = useState(false)
+  const [dispatchError, setDispatchError] = useState('')
+  const [cancelBusyTaskId, setCancelBusyTaskId] = useState('')
+  const [deployBusy, setDeployBusy] = useState(false)
+  const [deployError, setDeployError] = useState('')
+
+  const contextGenRef = useRef(0)
+  const contextAbortRef = useRef<AbortController | null>(null)
+  const pollInFlightRef = useRef(false)
+  const goalInputRef = useRef<HTMLTextAreaElement>(null)
+
+  const selectedRepo = useMemo(
+    () => repositories.find(r => r.id === selectedRepoId) || null,
+    [repositories, selectedRepoId],
+  )
+  const selectedWorktree = useMemo(
+    () => (selectedRepo?.worktrees || []).find(wt => wt.id === selectedWorktreeId) || null,
+    [selectedRepo, selectedWorktreeId],
+  )
+  const contextKey = selectedRepo && selectedWorktree ? `${selectedRepo.id}:${selectedWorktree.id}` : ''
+  const activeContextKeyRef = useRef(contextKey)
+  activeContextKeyRef.current = contextKey
+
+  const apiCall = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
+    const res = await fetch(path, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...(init?.headers || {}),
+      },
+    })
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const err = new Error(body.error || body.message || `请求失败 (${res.status})`) as Error & { status?: number; code?: string }
+      err.status = res.status
+      err.code = body.code
+      throw err
+    }
+    return body as T
+  }, [token])
+
+  // Choose sensible initial repo/worktree when repositories arrive
+  const reconcileSelection = useCallback((repos: SupervisorRepo[], currentRepoId: string, currentWtId: string) => {
+    if (!repos.length) return { repoId: '', worktreeId: '' }
+    const repo = repos.find(r => r.id === currentRepoId) || repos[0]
+    const wts = repo.worktrees || []
+    const matchedWt = wts.find(w => w.id === currentWtId)
+    if (matchedWt) return { repoId: repo.id, worktreeId: matchedWt.id }
+    // Prefer a managed unlocked worktree first, else first worktree
+    const preferred = wts.find(w => w.managed && !w.is_main && !w.locked)
+      || wts.find(w => w.managed && !w.is_main)
+      || wts[0]
+    return { repoId: repo.id, worktreeId: preferred?.id || '' }
+  }, [])
+
+  const loadBootstrap = useCallback(async () => {
+    if (!token) return
+    const [capRes, repoRes] = await Promise.allSettled([
+      apiCall<SupervisorCapabilities>('/api/supervisor/capabilities'),
+      apiCall<{ repositories: SupervisorRepo[] }>('/api/supervisor/repositories'),
+    ])
+    if (capRes.status === 'fulfilled') {
+      setCapabilities(capRes.value)
+      setCapabilitiesError('')
+    } else {
+      setCapabilitiesError(capRes.reason instanceof Error ? capRes.reason.message : '无法读取监工能力配置')
+    }
+
+    if (repoRes.status === 'fulfilled') {
+      const repos = Array.isArray(repoRes.value.repositories) ? repoRes.value.repositories : []
+      setRepositories(repos)
+      setReposError('')
+      setSelectedRepoId(prevRepoId => {
+        const next = reconcileSelection(repos, prevRepoId, selectedWorktreeId)
+        if (next.worktreeId !== selectedWorktreeId) {
+          setSelectedWorktreeId(next.worktreeId)
+        }
+        saveContext(next.repoId, next.worktreeId)
+        return next.repoId
+      })
+    } else {
+      setReposError(repoRes.reason instanceof Error ? repoRes.reason.message : '无法读取仓库列表')
+    }
+    setInitialLoading(false)
+  }, [apiCall, reconcileSelection, selectedWorktreeId, token])
+
+  // Load tasks, task detail, and deployments for the active (repoId, worktreeId) context with race protection
+  const loadContextData = useCallback(async (repo: SupervisorRepo, worktree: SupervisorWorktree, isPoll = false) => {
+    if (!token) return
+    if (isPoll && pollInFlightRef.current) return
+    const targetKey = `${repo.id}:${worktree.id}`
+    const gen = isPoll ? contextGenRef.current : ++contextGenRef.current
+    if (!isPoll) {
+      contextAbortRef.current?.abort()
+    }
+    const controller = new AbortController()
+    if (!isPoll) contextAbortRef.current = controller
+    if (isPoll) pollInFlightRef.current = true
+
+    try {
+      const query = `repo_id=${encodeURIComponent(repo.id)}&worktree_id=${encodeURIComponent(worktree.id)}`
+      const taskRes = await apiCall<{ tasks: SupervisorTask[]; count?: number }>(
+        `/api/supervisor/tasks?${query}`,
+        { signal: controller.signal },
+      )
+      if (controller.signal.aborted || gen !== contextGenRef.current || activeContextKeyRef.current !== targetKey) return
+
+      const rawTasks = Array.isArray(taskRes.tasks) ? taskRes.tasks : []
+      // Ensure client-side context isolation even if a backend ignores query filters
+      const scopedTasks = rawTasks.filter(t => isTaskInWorktreeContext(t, repo, worktree))
+
+      const defaultTaskId =
+        (worktree.active_task_id && scopedTasks.some(t => t.id === worktree.active_task_id) ? worktree.active_task_id : '')
+        || scopedTasks[0]?.id
+        || ''
+
+      let targetTaskId = defaultTaskId
+      setDataByContext(prev => {
+        const existing = prev[targetKey]
+        const keepUserSelection = Boolean(
+          existing?.userSelected
+          && existing.selectedTaskId
+          && scopedTasks.some(t => t.id === existing.selectedTaskId),
+        )
+        const preferredTaskId = keepUserSelection ? existing!.selectedTaskId : defaultTaskId
+        targetTaskId = preferredTaskId
+        return {
+          ...prev,
+          [targetKey]: {
+            tasks: scopedTasks,
+            selectedTaskId: preferredTaskId,
+            userSelected: keepUserSelection,
+            taskDetail: existing?.taskDetail?.id === preferredTaskId ? existing.taskDetail : null,
+            deployments: existing?.deployments || [],
+            loaded: true,
+            error: '',
+          },
+        }
+      })
+
+      const [detailRes, deployRes] = await Promise.allSettled([
+        targetTaskId
+          ? apiCall<SupervisorTaskDetail>(`/api/supervisor/tasks/${encodeURIComponent(targetTaskId)}`, { signal: controller.signal })
+          : Promise.resolve(null),
+        apiCall<{ deployments: SupervisorDeployment[] }>(
+          `/api/supervisor/deployments${targetTaskId ? `?task_id=${encodeURIComponent(targetTaskId)}` : ''}`,
+          { signal: controller.signal },
+        ),
+      ])
+
+      if (controller.signal.aborted || gen !== contextGenRef.current || activeContextKeyRef.current !== targetKey) return
+
+      setDataByContext(prev => {
+        const current = prev[targetKey]
+        if (!current) return prev
+        return {
+          ...prev,
+          [targetKey]: {
+            ...current,
+            taskDetail: detailRes.status === 'fulfilled' && detailRes.value ? detailRes.value : current.taskDetail,
+            deployments: deployRes.status === 'fulfilled' && Array.isArray(deployRes.value.deployments)
+              ? deployRes.value.deployments
+              : current.deployments,
+          },
+        }
+      })
+    } catch (err) {
+      if (controller.signal.aborted || gen !== contextGenRef.current || activeContextKeyRef.current !== targetKey) return
+      const msg = err instanceof Error ? err.message : '读取工作目录任务失败'
+      setDataByContext(prev => ({
+        ...prev,
+        [targetKey]: {
+          tasks: prev[targetKey]?.tasks || [],
+          selectedTaskId: prev[targetKey]?.selectedTaskId || '',
+          taskDetail: prev[targetKey]?.taskDetail || null,
+          deployments: prev[targetKey]?.deployments || [],
+          loaded: true,
+          error: msg,
+        },
+      }))
+    } finally {
+      if (isPoll) pollInFlightRef.current = false
+    }
+  }, [apiCall, token])
+
+  useEffect(() => {
+    if (!active) return
+    void loadBootstrap()
+  }, [active, loadBootstrap])
+
+  useEffect(() => {
+    if (!active || !selectedRepo || !selectedWorktree) return
+    const key = `${selectedRepo.id}:${selectedWorktree.id}`
+    setPendingByContext(prev => (key in prev ? prev : { ...prev, [key]: loadPendingDispatch(key) }))
+    void loadContextData(selectedRepo, selectedWorktree, false)
+    return () => {
+      contextAbortRef.current?.abort()
+    }
+  }, [active, loadContextData, selectedRepo, selectedWorktree])
+
+  // Clean background polling while Code workspace is visible
+  useEffect(() => {
+    if (!active || !selectedRepo || !selectedWorktree) return
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      void loadContextData(selectedRepo, selectedWorktree, true)
+    }, 4_000)
+    return () => window.clearInterval(timer)
+  }, [active, loadContextData, selectedRepo, selectedWorktree])
+
+  const selectWorktreeContext = useCallback((repoId: string, worktreeId: string) => {
+    contextGenRef.current += 1
+    contextAbortRef.current?.abort()
+    setDispatchError('')
+    setDeployError('')
+    setSelectedRepoId(repoId)
+    setSelectedWorktreeId(worktreeId)
+    setExpandedRepos(prev => ({ ...prev, [repoId]: true }))
+    saveContext(repoId, worktreeId)
+    setMobileRepoDrawerOpen(false)
+  }, [])
+
+  const toggleRepo = useCallback((repoId: string) => {
+    setExpandedRepos(prev => {
+      const current = prev[repoId] ?? (repoId === selectedRepoId || repositories.length <= 3)
+      return { ...prev, [repoId]: !current }
+    })
+    if (repoId !== selectedRepoId) {
+      const repo = repositories.find(r => r.id === repoId)
+      const firstWt = repo?.worktrees?.[0]
+      if (repo && firstWt) {
+        selectWorktreeContext(repo.id, firstWt.id)
+      }
+    }
+  }, [repositories, selectWorktreeContext, selectedRepoId])
+
+  const handleRegisterRepo = useCallback(async (path: string, name?: string): Promise<boolean> => {
+    setRegisterBusy(true)
+    setRegisterError('')
+    try {
+      const created = await apiCall<SupervisorRepo>('/api/supervisor/repositories', {
+        method: 'POST',
+        body: JSON.stringify({ path, ...(name ? { name } : {}) }),
+      })
+      setRepositories(prev => {
+        const exists = prev.some(r => r.id === created.id)
+        return exists ? prev.map(r => (r.id === created.id ? created : r)) : [...prev, created]
+      })
+      const firstWt = (created.worktrees || []).find(w => w.managed && !w.is_main) || created.worktrees?.[0]
+      selectWorktreeContext(created.id, firstWt?.id || '')
+      return true
+    } catch (err) {
+      setRegisterError(err instanceof Error ? err.message : '注册仓库失败')
+      return false
+    } finally {
+      setRegisterBusy(false)
+    }
+  }, [apiCall, selectWorktreeContext])
+
+  const handleCreateWorktree = useCallback(async (repoId: string, branch?: string, baseRef?: string): Promise<boolean> => {
+    setCreateWorktreeBusyRepoId(repoId)
+    setCreateWorktreeError('')
+    try {
+      const createdWt = await apiCall<SupervisorWorktree>(
+        `/api/supervisor/repositories/${encodeURIComponent(repoId)}/worktrees`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            ...(branch ? { branch } : {}),
+            ...(baseRef ? { base_ref: baseRef } : {}),
+          }),
+        },
+      )
+      setRepositories(prev =>
+        prev.map(repo => {
+          if (repo.id !== repoId) return repo
+          const wts = repo.worktrees || []
+          const exists = wts.some(w => w.id === createdWt.id)
+          return {
+            ...repo,
+            worktrees: exists ? wts.map(w => (w.id === createdWt.id ? createdWt : w)) : [...wts, createdWt],
+          }
+        }),
+      )
+      selectWorktreeContext(repoId, createdWt.id)
+      return true
+    } catch (err) {
+      setCreateWorktreeError(err instanceof Error ? err.message : '创建 Worktree 失败')
+      return false
+    } finally {
+      setCreateWorktreeBusyRepoId('')
+    }
+  }, [apiCall, selectWorktreeContext])
+
+  const currentDraft: WorktreeDraft = useMemo(() => {
+    if (!contextKey) return { goal: '', acceptanceCriteria: '' }
+    return draftsByContext[contextKey] || { goal: '', acceptanceCriteria: '' }
+  }, [contextKey, draftsByContext])
+
+  const updateCurrentDraft = useCallback((patch: Partial<WorktreeDraft>) => {
+    if (!contextKey) return
+    setDraftsByContext(prev => ({
+      ...prev,
+      [contextKey]: {
+        ...(prev[contextKey] || { goal: '', acceptanceCriteria: '' }),
+        ...patch,
+      },
+    }))
+  }, [contextKey])
+
+  // Effective roles for the current worktree (combining capability defaults + per-worktree overrides, NEVER silently falling back to a different provider)
+  const effectiveRoles: RoleOverrides = useMemo(() => {
+    const overrides = currentDraft.roleOverrides || {}
+    const buildRole = (key: SupervisorRoleKey): RoleOverrideEntry => {
+      const override = overrides[key]
+      const capRole = capabilities?.roles?.[key]
+      return {
+        executor: override?.executor !== undefined ? override.executor : (capRole?.executor || ''),
+        model: override?.model !== undefined ? override.model : (capRole?.model || ''),
+      }
+    }
+    return {
+      analyst: buildRole('analyst'),
+      implementer: buildRole('implementer'),
+      reviewer: buildRole('reviewer'),
+    }
+  }, [capabilities?.roles, currentDraft.roleOverrides])
+
+  const handleRoleChange = useCallback((role: SupervisorRoleKey, patch: Partial<RoleOverrideEntry>) => {
+    if (!contextKey) return
+    setDraftsByContext(prev => {
+      const cur = prev[contextKey] || { goal: '', acceptanceCriteria: '' }
+      const prevRole = cur.roleOverrides?.[role] || effectiveRoles[role]
+      return {
+        ...prev,
+        [contextKey]: {
+          ...cur,
+          roleOverrides: {
+            ...(cur.roleOverrides || {}),
+            [role]: { ...prevRole, ...patch },
+          },
+        },
+      }
+    })
+  }, [contextKey, effectiveRoles])
+
+  const currentSnapshot: WorktreeDataSnapshot = useMemo(() => {
+    if (!contextKey) {
+      return { tasks: [], selectedTaskId: '', taskDetail: null, deployments: [], loaded: false, error: '' }
+    }
+    return dataByContext[contextKey] || {
+      tasks: [],
+      selectedTaskId: '',
+      taskDetail: null,
+      deployments: [],
+      loaded: false,
+      error: '',
+    }
+  }, [contextKey, dataByContext])
+
+  const selectedTask = useMemo(() => {
+    const tasks = currentSnapshot.tasks
+    return tasks.find(t => t.id === currentSnapshot.selectedTaskId) || tasks[0] || null
+  }, [currentSnapshot.selectedTaskId, currentSnapshot.tasks])
+
+  const selectedTaskDetail = useMemo(() => {
+    if (!selectedTask) return null
+    return currentSnapshot.taskDetail?.id === selectedTask.id ? currentSnapshot.taskDetail : null
+  }, [currentSnapshot.taskDetail, selectedTask])
+
+  const handleSelectTask = useCallback(async (taskId: string) => {
+    if (!contextKey || !selectedRepo || !selectedWorktree) return
+    const targetKey = contextKey
+    setDataByContext(prev => ({
+      ...prev,
+      [targetKey]: {
+        ...(prev[targetKey] || { tasks: [], deployments: [], loaded: true, error: '', taskDetail: null }),
+        selectedTaskId: taskId,
+        userSelected: true,
+      },
+    }))
+    try {
+      const [detail, deployRes] = await Promise.all([
+        apiCall<SupervisorTaskDetail>(`/api/supervisor/tasks/${encodeURIComponent(taskId)}`),
+        apiCall<{ deployments: SupervisorDeployment[] }>(`/api/supervisor/deployments?task_id=${encodeURIComponent(taskId)}`).catch(() => ({ deployments: [] })),
+      ])
+      if (activeContextKeyRef.current !== targetKey) return
+      setDataByContext(prev => {
+        const cur = prev[targetKey]
+        if (!cur) return prev
+        return {
+          ...prev,
+          [targetKey]: {
+            ...cur,
+            taskDetail: detail,
+            deployments: Array.isArray(deployRes.deployments) ? deployRes.deployments : cur.deployments,
+          },
+        }
+      })
+    } catch {
+      // Keep summary row selected even if detail fetch fails
+    }
+  }, [apiCall, contextKey, selectedRepo, selectedWorktree])
+
+  // Check if any selected role is marked unavailable
+  const unavailableRoleReasons = useMemo(() => {
+    if (!capabilities) return []
+    const reasons: string[] = []
+    for (const { key, label } of ROLE_META) {
+      const chosen = effectiveRoles[key].executor
+      const execInfo = (capabilities.executors || []).find(e => e.name === chosen)
+      const capRole = capabilities.roles?.[key]
+      const available = execInfo ? execInfo.available : (capRole?.executor === chosen ? capRole.available : true)
+      const reason = execInfo?.reason || (capRole?.executor === chosen ? capRole.reason : undefined)
+      if (!available) {
+        reasons.push(`${label}（${chosen || '未指定'}）不可用${reason ? `：${reason}` : ''}`)
+      }
+    }
+    return reasons
+  }, [capabilities, effectiveRoles])
+
+  const isReadOnlyWorktree = Boolean(selectedWorktree && (selectedWorktree.is_main || !selectedWorktree.managed))
+  const hasRunningTaskInWorktree = useMemo(
+    () =>
+      currentSnapshot.tasks.some(t => {
+        const st = (t.state || '').trim().toLowerCase()
+        return !isTerminalTaskState(st) && st !== 'created' && st !== 'pending_dispatch'
+      }),
+    [currentSnapshot.tasks],
+  )
+  const isLockedWorktree = Boolean(selectedWorktree && (selectedWorktree.locked || hasRunningTaskInWorktree))
+
+  const currentPending = contextKey ? (pendingByContext[contextKey] || null) : null
+
+  const handleCreateAndDispatch = useCallback(async (event: FormEvent) => {
+    event.preventDefault()
+    if (!selectedRepo || !selectedWorktree || !contextKey || dispatchBusy) return
+    const goal = currentDraft.goal.trim()
+    if (!goal || isReadOnlyWorktree || isLockedWorktree || unavailableRoleReasons.length > 0) return
+
+    const criteria = currentDraft.acceptanceCriteria.trim()
+    const sessionId = currentDraft.preparedSessionId || selectedWorktree.chat_session_id || undefined
+    const rolesPayload: Record<SupervisorRoleKey, { executor: string; model?: string }> = {
+      analyst: {
+        executor: effectiveRoles.analyst.executor,
+        ...(effectiveRoles.analyst.model.trim() ? { model: effectiveRoles.analyst.model.trim() } : {}),
+      },
+      implementer: {
+        executor: effectiveRoles.implementer.executor,
+        ...(effectiveRoles.implementer.model.trim() ? { model: effectiveRoles.implementer.model.trim() } : {}),
+      },
+      reviewer: {
+        executor: effectiveRoles.reviewer.executor,
+        ...(effectiveRoles.reviewer.model.trim() ? { model: effectiveRoles.reviewer.model.trim() } : {}),
+      },
+    }
+
+    const fp = computeFingerprint({
+      repoId: selectedRepo.id,
+      worktreeId: selectedWorktree.id,
+      goal,
+      criteria,
+      roles: rolesPayload,
+    })
+
+    const existingPending = pendingByContext[contextKey] || loadPendingDispatch(contextKey)
+    let pending: PendingDispatch
+    if (existingPending && existingPending.fingerprint === fp) {
+      pending = { ...existingPending }
+    } else {
+      pending = { fingerprint: fp, requestId: generateRequestId() }
+    }
+    savePendingDispatch(contextKey, pending)
+    setPendingByContext(prev => ({ ...prev, [contextKey]: pending }))
+
+    setDispatchBusy(true)
+    setDispatchError('')
+    try {
+      let taskId = pending.taskId
+      if (!taskId) {
+        const created = await apiCall<SupervisorTask>('/api/supervisor/tasks', {
+          method: 'POST',
+          body: JSON.stringify({
+            goal,
+            repo_id: selectedRepo.id,
+            worktree_id: selectedWorktree.id,
+            ...(criteria ? { acceptance_criteria: criteria } : {}),
+            ...(sessionId ? { session_id: sessionId } : {}),
+            request_id: pending.requestId,
+          }),
+        })
+        taskId = created.id
+        pending = { ...pending, taskId }
+        savePendingDispatch(contextKey, pending)
+        setPendingByContext(prev => ({ ...prev, [contextKey]: pending }))
+      }
+
+      const dispatched = await apiCall<SupervisorTask>(
+        `/api/supervisor/tasks/${encodeURIComponent(taskId)}/dispatch`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            ...(criteria ? { acceptance_criteria: criteria } : {}),
+            roles: rolesPayload,
+          }),
+        },
+      )
+
+      // Clear pending record & goal draft on successful dispatch
+      savePendingDispatch(contextKey, null)
+      setPendingByContext(prev => ({ ...prev, [contextKey]: null }))
+      updateCurrentDraft({ goal: '', acceptanceCriteria: '', fromSuggestion: false, preparedSessionId: undefined })
+
+      setDataByContext(prev => {
+        const cur = prev[contextKey]
+        const prevTasks = cur?.tasks || []
+        const updatedTasks = [dispatched, ...prevTasks.filter(t => t.id !== dispatched.id)]
+        return {
+          ...prev,
+          [contextKey]: {
+            tasks: updatedTasks,
+            selectedTaskId: dispatched.id,
+            taskDetail: dispatched,
+            deployments: cur?.deployments || [],
+            loaded: true,
+            error: '',
+          },
+        }
+      })
+
+      void loadContextData(selectedRepo, selectedWorktree, false)
+    } catch (err) {
+      setDispatchError(err instanceof Error ? err.message : '任务派发失败，请点击重试')
+    } finally {
+      setDispatchBusy(false)
+    }
+  }, [
+    apiCall,
+    contextKey,
+    currentDraft.acceptanceCriteria,
+    currentDraft.goal,
+    currentDraft.preparedSessionId,
+    dispatchBusy,
+    effectiveRoles,
+    isLockedWorktree,
+    isReadOnlyWorktree,
+    loadContextData,
+    pendingByContext,
+    selectedRepo,
+    selectedWorktree,
+    unavailableRoleReasons.length,
+    updateCurrentDraft,
+  ])
+
+  const handleCancelTask = useCallback(async (task: SupervisorTask) => {
+    if (!contextKey || cancelBusyTaskId) return
+    setCancelBusyTaskId(task.id)
+    setDispatchError('')
+    try {
+      // Show backend-returned actual state (e.g. cancelling or cancelled), NEVER optimistic done
+      const updated = await apiCall<SupervisorTask>(
+        `/api/supervisor/tasks/${encodeURIComponent(task.id)}/cancel`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ reason: '用户手动请求取消任务' }),
+        },
+      )
+      setDataByContext(prev => {
+        const cur = prev[contextKey]
+        if (!cur) return prev
+        return {
+          ...prev,
+          [contextKey]: {
+            ...cur,
+            tasks: cur.tasks.map(t => (t.id === updated.id ? { ...t, ...updated } : t)),
+            taskDetail: cur.taskDetail?.id === updated.id ? { ...cur.taskDetail, ...updated } : cur.taskDetail,
+          },
+        }
+      })
+    } catch (err) {
+      setDispatchError(err instanceof Error ? err.message : '取消任务请求失败')
+    } finally {
+      setCancelBusyTaskId('')
+    }
+  }, [apiCall, cancelBusyTaskId, contextKey])
+
+  const handleStartDeploy = useCallback(async () => {
+    if (!contextKey || !selectedTask || deployBusy) return
+    if (!capabilities?.deployment?.configured || !capabilities?.deployment?.can_start) return
+    setDeployBusy(true)
+    setDeployError('')
+    try {
+      const created = await apiCall<SupervisorDeployment>('/api/supervisor/deployments', {
+        method: 'POST',
+        body: JSON.stringify({ task_id: selectedTask.id }),
+      })
+      setDataByContext(prev => {
+        const cur = prev[contextKey]
+        if (!cur) return prev
+        return {
+          ...prev,
+          [contextKey]: {
+            ...cur,
+            deployments: [created, ...cur.deployments.filter(d => d.id !== created.id)],
+          },
+        }
+      })
+    } catch (err) {
+      setDeployError(err instanceof Error ? err.message : '启动部署失败')
+    } finally {
+      setDeployBusy(false)
+    }
+  }, [apiCall, capabilities?.deployment?.can_start, capabilities?.deployment?.configured, contextKey, deployBusy, selectedTask])
+
+  // Task suggestion from ChatPanel fills reviewable goal without auto-dispatching
+  const handlePrepareTask = useCallback((suggestion: TaskSuggestion) => {
+    updateCurrentDraft({
+      goal: suggestion.prompt,
+      preparedSessionId: suggestion.session_id,
+      fromSuggestion: true,
+    })
+    if (narrowViewport) setSubTab('workspace')
+    window.setTimeout(() => {
+      goalInputRef.current?.focus()
+    }, 50)
+  }, [narrowViewport, updateCurrentDraft])
+
+  const coordinatorLabel = useMemo(() => {
+    if (capabilities?.coordinator?.executor) {
+      return capabilities.coordinator.model
+        ? `${capabilities.coordinator.executor} · ${capabilities.coordinator.model}`
+        : capabilities.coordinator.executor
+    }
+    return coordinatorFallbackName || '当前主对话'
+  }, [capabilities?.coordinator, coordinatorFallbackName])
+
+  const activeWorktreeBadge = selectedWorktree ? worktreeBadgeInfo(selectedWorktree) : null
+
+  return (
+    <div className="sup-workspace">
+      <aside
+        className={`sup-repo-sidebar ${mobileRepoDrawerOpen ? 'is-drawer-open' : ''}`}
+        aria-label="仓库与工作目录"
+      >
+        <SupervisorRepoSidebar
+          repositories={repositories}
+          selectedRepoId={selectedRepoId}
+          selectedWorktreeId={selectedWorktreeId}
+          expandedRepos={expandedRepos}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          onToggleRepo={toggleRepo}
+          onSelectWorktree={selectWorktreeContext}
+          onRegisterRepo={handleRegisterRepo}
+          onCreateWorktree={handleCreateWorktree}
+          registerBusy={registerBusy}
+          registerError={registerError}
+          createWorktreeBusyRepoId={createWorktreeBusyRepoId}
+          createWorktreeError={createWorktreeError}
+          openCreateForRepoId={openCreateForRepoId}
+          onOpenCreateWorktree={setOpenCreateForRepoId}
+          mobileCloseButton={
+            narrowViewport ? (
+              <button
+                type="button"
+                className="drawer-close-btn"
+                aria-label="关闭仓库列表"
+                onClick={() => setMobileRepoDrawerOpen(false)}
+              >
+                ×
+              </button>
+            ) : undefined
+          }
+        />
+      </aside>
+
+      {narrowViewport && mobileRepoDrawerOpen && (
+        <div
+          className="sup-mobile-backdrop"
+          role="button"
+          tabIndex={-1}
+          aria-label="关闭仓库抽屉"
+          onClick={() => setMobileRepoDrawerOpen(false)}
+        />
+      )}
+
+      <div className="sup-main-column">
+        <header className="sup-context-bar">
+          <div className="sup-context-title-group">
+            {narrowViewport && (
+              <button
+                type="button"
+                className="shell-header-button sup-mobile-repo-btn"
+                aria-label="选择仓库与 Worktree"
+                onClick={() => setMobileRepoDrawerOpen(true)}
+              >
+                <span>仓库</span>
+              </button>
+            )}
+            <div className="sup-context-heading">
+              <h3>
+                {selectedRepo && selectedWorktree
+                  ? `${selectedRepo.name} / ${selectedWorktree.branch || 'detached'}`
+                  : selectedRepo
+                    ? selectedRepo.name
+                    : '请选择或注册 Git 仓库'}
+              </h3>
+              <div className="sup-context-sub">
+                {selectedWorktree && activeWorktreeBadge && (
+                  <span className={`sup-wt-badge sup-wt-badge--${activeWorktreeBadge.tone}`}>
+                    {activeWorktreeBadge.label}
+                  </span>
+                )}
+                {selectedWorktree?.head && <code>{shortSha(selectedWorktree.head)}</code>}
+                {(selectedRepo?.source_machine || capabilities?.source_machine) && (
+                  <span>主机：{selectedRepo?.source_machine || capabilities?.source_machine}</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="sup-subnav" role="tablist" aria-label="Code 工作区视图">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={subTab === 'workspace'}
+              className={`sup-subnav-tab ${subTab === 'workspace' ? 'active' : ''}`}
+              onClick={() => setSubTab('workspace')}
+            >
+              任务与结果
+            </button>
+            {narrowViewport && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={subTab === 'chat'}
+                className={`sup-subnav-tab ${subTab === 'chat' ? 'active' : ''}`}
+                onClick={() => setSubTab('chat')}
+              >
+                工作目录对话
+              </button>
+            )}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={subTab === 'deploy'}
+              className={`sup-subnav-tab ${subTab === 'deploy' ? 'active' : ''}`}
+              onClick={() => setSubTab('deploy')}
+            >
+              部署
+            </button>
+          </div>
+        </header>
+
+        {(capabilitiesError || reposError) && (
+          <div className="sup-banner sup-banner--warning" role="status">
+            <strong>部分监工接口暂未就绪</strong>
+            <span>{[capabilitiesError, reposError].filter(Boolean).join(' · ')}</span>
+          </div>
+        )}
+
+        {!selectedRepo || !selectedWorktree ? (
+          <div className="sup-empty-workspace">
+            <div className="brand-mark">C</div>
+            <h3>{initialLoading ? '正在加载仓库与工作目录…' : '选择或创建一个托管 Worktree'}</h3>
+            <p>
+              在左侧选择仓库并进入独立 Worktree，即可与主对话模型讨论方案、明确派发给分析/实现/审查角色执行，并查看结果与部署状态。
+            </p>
+          </div>
+        ) : subTab === 'deploy' ? (
+          <div className="sup-deploy-scroll">
+            <SupervisorDeployView
+              repo={selectedRepo}
+              worktree={selectedWorktree}
+              selectedTask={selectedTask}
+              capabilities={capabilities}
+              deployments={currentSnapshot.deployments}
+              deployBusy={deployBusy}
+              deployError={deployError}
+              onStartDeploy={() => void handleStartDeploy()}
+            />
+          </div>
+        ) : (
+          <div className="sup-workbench-split">
+            <div
+              className="sup-task-pane"
+              style={narrowViewport && subTab === 'chat' ? { display: 'none' } : undefined}
+            >
+              {isReadOnlyWorktree && (
+                <div className="sup-banner sup-banner--readonly" role="status">
+                  <div className="sup-banner-text">
+                    <strong>当前为只读工作目录（{selectedWorktree.is_main ? '主分支' : '未托管目录'}）</strong>
+                    <span>主工作目录与未托管目录仅支持只读查看。请新建托管 Worktree 以在隔离目录中派发任务。</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="shell-button primary"
+                    onClick={() => {
+                      setExpandedRepos(prev => ({ ...prev, [selectedRepo.id]: true }))
+                      setOpenCreateForRepoId(selectedRepo.id)
+                      if (narrowViewport) setMobileRepoDrawerOpen(true)
+                    }}
+                  >
+                    + 新建托管 Worktree
+                  </button>
+                </div>
+              )}
+
+              {!isReadOnlyWorktree && isLockedWorktree && (
+                <div className="sup-banner sup-banner--locked" role="status">
+                  <strong>当前 Worktree 已锁定（任务执行中）</strong>
+                  <span>同一托管 Worktree 同一时间只允许一个写入任务运行，当前任务结束或取消后可派发新任务。</span>
+                </div>
+              )}
+
+              <section className="sup-card sup-dispatch-card" aria-label="任务目标与派发">
+                <div className="sup-card-head">
+                  <h4>当前任务目标</h4>
+                  <span className="sup-card-hint">普通对话不会自动派发，确认目标后点击「开始执行」</span>
+                </div>
+
+                {currentDraft.fromSuggestion && (
+                  <div className="sup-suggestion-notice" role="status">
+                    已从右侧对话填入建议目标，请检查或修改后点击「开始执行」。
+                  </div>
+                )}
+
+                <form className="composer sup-goal-composer" onSubmit={e => void handleCreateAndDispatch(e)}>
+                  <label htmlFor="sup-goal-textarea" className="sr-only">任务目标</label>
+                  <textarea
+                    id="sup-goal-textarea"
+                    ref={goalInputRef}
+                    aria-label="任务目标"
+                    placeholder={
+                      isReadOnlyWorktree
+                        ? '只读工作目录不可直接派发，请先新建托管 Worktree…'
+                        : '输入要在这个 Worktree 完成的目标（例如：为 Code 页面补充仓库搜索与错误提示）…'
+                    }
+                    rows={3}
+                    value={currentDraft.goal}
+                    disabled={isReadOnlyWorktree || dispatchBusy}
+                    onChange={e => updateCurrentDraft({ goal: e.target.value })}
+                  />
+
+                  <div className="sup-criteria-row">
+                    <label htmlFor="sup-criteria-input">验收标准（可选）</label>
+                    <input
+                      id="sup-criteria-input"
+                      aria-label="验收标准"
+                      type="text"
+                      placeholder="例如：通过单元测试与构建检查，不改动后端接口"
+                      value={currentDraft.acceptanceCriteria}
+                      disabled={isReadOnlyWorktree || dispatchBusy}
+                      onChange={e => updateCurrentDraft({ acceptanceCriteria: e.target.value })}
+                    />
+                  </div>
+
+                  <SupervisorRoleBar
+                    capabilities={capabilities}
+                    effectiveRoles={effectiveRoles}
+                    onChangeRole={handleRoleChange}
+                    disabled={isReadOnlyWorktree || dispatchBusy}
+                  />
+
+                  {unavailableRoleReasons.length > 0 && (
+                    <div className="sup-banner sup-banner--error" role="alert">
+                      <strong>角色执行器不可用</strong>
+                      <span>{unavailableRoleReasons.join('；')}</span>
+                    </div>
+                  )}
+
+                  {dispatchError && (
+                    <div className="sup-banner sup-banner--error" role="alert">
+                      <strong>派发未完成</strong>
+                      <span>{dispatchError}</span>
+                      {currentPending && (
+                        <small>已保留请求标识（{currentPending.taskId ? `任务 ${currentPending.taskId}` : `请求 ${currentPending.requestId.slice(0, 8)}`}），重试不会重复创建任务。</small>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="sup-dispatch-footer">
+                    <span className="sup-dispatch-context-tag">
+                      作用范围：<code>{selectedRepo.name}</code> / <code>{selectedWorktree.branch}</code>
+                    </span>
+                    <button
+                      type="submit"
+                      className="send-button primary"
+                      disabled={
+                        !currentDraft.goal.trim()
+                        || dispatchBusy
+                        || isReadOnlyWorktree
+                        || isLockedWorktree
+                        || unavailableRoleReasons.length > 0
+                      }
+                    >
+                      {dispatchBusy
+                        ? '正在派发…'
+                        : currentPending
+                          ? '重试派发'
+                          : '开始执行'}
+                    </button>
+                  </div>
+                </form>
+              </section>
+
+              {selectedTask && (
+                <section className="sup-card sup-active-task-card" aria-label="当前任务进度与结果">
+                  <div className="sup-active-task-header">
+                    <div className="sup-active-task-title">
+                      <span className={`status-badge ${selectedTask.state}`}>
+                        <i />
+                        {supStateLabel(selectedTask.state)}
+                      </span>
+                      <h4>{selectedTask.goal}</h4>
+                    </div>
+                    {!isTerminalTaskState(selectedTask.state) && (
+                      <button
+                        type="button"
+                        className="shell-button shell-button--danger"
+                        disabled={cancelBusyTaskId === selectedTask.id}
+                        onClick={() => void handleCancelTask(selectedTask)}
+                      >
+                        {cancelBusyTaskId === selectedTask.id ? '正在请求取消…' : '取消任务'}
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="sup-task-progress-strip">
+                    <div className="sup-progress-pill">
+                      <span>当前阶段</span>
+                      <strong>{supStageLabel(selectedTask.stage, selectedTask.state)}</strong>
+                    </div>
+                    {typeof selectedTask.repair_round === 'number' && typeof selectedTask.max_repair_rounds === 'number' && selectedTask.max_repair_rounds > 0 && (
+                      <div className="sup-progress-pill">
+                        <span>自动修复轮次</span>
+                        <strong>{selectedTask.repair_round} / {selectedTask.max_repair_rounds}</strong>
+                      </div>
+                    )}
+                    <div className="sup-progress-pill">
+                      <span>任务编号</span>
+                      <code>{selectedTask.id}</code>
+                    </div>
+                  </div>
+
+                  {selectedTask.error && (
+                    <div className="sup-banner sup-banner--error" role="alert">
+                      <strong>受阻原因 / 错误详情</strong>
+                      <span>{selectedTask.error}</span>
+                    </div>
+                  )}
+
+                  {(selectedTaskDetail?.summary || selectedTask.metadata?.result_summary) && (
+                    <div className="sup-result-summary">
+                      <h5>执行结果摘要</h5>
+                      <p>{selectedTaskDetail?.summary || selectedTask.metadata?.result_summary}</p>
+                    </div>
+                  )}
+
+                  {selectedTaskDetail?.acceptance && (
+                    <div className="sup-acceptance-box">
+                      <h5>
+                        验收结果：
+                        <strong>
+                          {selectedTaskDetail.acceptance.passed === true
+                            ? '已通过'
+                            : selectedTaskDetail.acceptance.passed === false
+                              ? '未通过'
+                              : supStateLabel(selectedTaskDetail.acceptance.status)}
+                        </strong>
+                      </h5>
+                      {selectedTaskDetail.acceptance.summary && <p>{selectedTaskDetail.acceptance.summary}</p>}
+                    </div>
+                  )}
+
+                  <p className="sup-separation-note">
+                    状态边界：任务完成 ≠ PR 已合并 ≠ 已部署上线。需要部署时请切换至「部署」标签页操作。
+                  </p>
+                </section>
+              )}
+
+              <SupervisorRunHistory
+                worktreeId={selectedWorktree.id}
+                tasks={currentSnapshot.tasks}
+                selectedTaskId={selectedTask?.id || ''}
+                onSelectTask={id => void handleSelectTask(id)}
+              />
+
+              <SupervisorTechnicalDetails task={selectedTask} taskDetail={selectedTaskDetail} />
+            </div>
+
+            <div
+              className="sup-chat-pane"
+              style={narrowViewport && subTab !== 'chat' ? { display: 'none' } : undefined}
+              aria-label="当前工作目录对话"
+            >
+              <div className="sup-chat-pane-header">
+                <div>
+                  <strong>当前 Worktree 对话</strong>
+                  <small>协调模型：{coordinatorLabel}</small>
+                </div>
+                <span className="sup-chat-pane-badge">讨论不自动执行</span>
+              </div>
+
+              {selectedWorktree.chat_session_id ? (
+                <div className="sup-chat-pane-body">
+                  <ChatPanel
+                    key={selectedWorktree.chat_session_id}
+                    token={token}
+                    active={active && (!narrowViewport || subTab === 'chat')}
+                    agentSessionId={selectedWorktree.chat_session_id}
+                    agentName={coordinatorLabel}
+                    onPrepareTask={handlePrepareTask}
+                    discussionOnly
+                  />
+                </div>
+              ) : (
+                <div className="sup-chat-unbound" role="status">
+                  <strong>当前工作目录尚未绑定对话会话</strong>
+                  <p>
+                    后端尚未为该 Worktree 分配 <code>chat_session_id</code>。为避免伪造虚构会话，此处不显示模拟聊天；你仍可在左侧直接填写「当前任务目标」并点击「开始执行」。
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default SupervisorWorkspace
