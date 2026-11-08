@@ -594,31 +594,65 @@ def deliver_sentry_alerts(
             delivered += 1
             continue
 
-        # Deliver to Telegram
-        tg_chat_id = getattr(settings, "telegram_allowed_user_id", None)
-        if tg_chat_id and getattr(settings, "telegram_bot_token", None):
-            try:
-                from scripts.telegram_api import send_message
-                send_message(settings, text, chat_id=int(tg_chat_id))
-                delivered += 1
-                logger.info("Delivered proactive alert to Telegram user %s: %s", tg_chat_id, alert.title)
-            except Exception as exc:
-                logger.error("Failed to send sentry alert to Telegram: %s", exc)
-
-        # Deliver to Feishu if configured
-        feishu_open_id = getattr(settings, "lark_allowed_open_id", None)
-        if feishu_open_id and getattr(settings, "lark_app_id", None):
-            try:
-                _deliver_feishu_alert(settings, feishu_open_id, alert)
-                logger.info("Delivered proactive alert to Feishu user %s: %s", feishu_open_id, alert.title)
-            except Exception as exc:
-                logger.debug("Feishu alert delivery fallback/skip: %s", exc)
+        # Same channels, same helpers as every other owner-facing message.
+        delivered += send_owner_message(settings, text, label=alert.title)
 
     return delivered
 
 
-def _deliver_feishu_alert(settings: Settings, open_id: str, alert: SentryAlert) -> None:
-    """Deliver alert to Feishu via OpenAPI."""
+def _label_suffix(label: str) -> str:
+    return f": {label}" if label else ""
+
+
+def send_owner_telegram(settings: Settings, text: str, *, label: str = "") -> bool:
+    """Deliver one plain message to the owner on Telegram. Never raises.
+
+    Shared by the sentry alerts, the goal notifications and anything else that
+    only needs to tell the operator something in Chinese.
+    """
+    chat_id = getattr(settings, "telegram_allowed_user_id", None)
+    if not chat_id or not getattr(settings, "telegram_bot_token", None):
+        return False
+    try:
+        from scripts.telegram_api import send_message
+        send_message(settings, text, chat_id=int(chat_id))
+        logger.info("Delivered message to Telegram user %s%s", chat_id, _label_suffix(label))
+        return True
+    except Exception as exc:
+        logger.error("Failed to send message to Telegram: %s", exc)
+        return False
+
+
+def send_owner_feishu(settings: Settings, text: str, *, label: str = "") -> bool:
+    """Deliver one plain message to the owner on Feishu. Never raises."""
+    open_id = getattr(settings, "lark_allowed_open_id", None)
+    if not open_id or not getattr(settings, "lark_app_id", None):
+        return False
+    try:
+        _send_feishu_text(settings, open_id, text)
+        logger.info("Delivered message to Feishu user %s%s", open_id, _label_suffix(label))
+        return True
+    except Exception as exc:
+        logger.debug("Feishu message delivery fallback/skip: %s", exc)
+        return False
+
+
+def send_owner_message(settings: Settings, text: str, *, label: str = "") -> int:
+    """Deliver one plain message on every configured owner channel.
+
+    Returns how many channels accepted it (0..2); a failing channel is logged and
+    skipped, never raised, so one broken channel cannot stop the others.
+    """
+    delivered = 0
+    if send_owner_telegram(settings, text, label=label):
+        delivered += 1
+    if send_owner_feishu(settings, text, label=label):
+        delivered += 1
+    return delivered
+
+
+def _send_feishu_text(settings: Settings, open_id: str, text: str) -> None:
+    """Send a plain text message to one Feishu open_id via OpenAPI."""
     import urllib.request
     token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
     req_data = json.dumps({
@@ -633,8 +667,8 @@ def _deliver_feishu_alert(settings: Settings, open_id: str, alert: SentryAlert) 
     if not token:
         return
 
-    msg_url = f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id"
-    content = json.dumps({"text": format_alert_text(alert)})
+    msg_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id"
+    content = json.dumps({"text": text})
     payload = json.dumps({
         "receive_id": open_id,
         "msg_type": "text",

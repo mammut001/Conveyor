@@ -291,7 +291,7 @@ operator stops it, or a decision is needed from the operator.
 ```
 
 - Storage: `supervisor_goals.sqlite3` (sibling of `supervisor_web.sqlite3` under the same state root),
-  tables `supervisor_goals` and `supervisor_goal_iterations`.
+  tables `supervisor_goals`, `supervisor_goal_iterations` and `supervisor_goal_notifications`.
 - Every round's task is created and dispatched through the normal service functions
   (`create_scoped_task` / `dispatch_scoped_task`), so scope, role-override and worktree-lock validation is
   reused, never bypassed. Only one task of a goal runs at a time, and a new task is never started while the
@@ -369,6 +369,28 @@ operator stops it, or a decision is needed from the operator.
 - Budget: `max_iterations` still applies, with one documented exception — when the budget is used up, an
   explicit operator reply buys **exactly one** extra iteration; anything beyond that is refused with
   `409 goal_iterations_exhausted`.
+
+### Telling the owner (goal_notify.py)
+
+A goal that stops needing the agent is useless if nobody notices it, so every transition into
+`waiting_user` / `achieved` / `exhausted` / `failed` calls `goal_notify.notify_goal_change` (from
+`_finish_goal`, and from `reply` when the operator confirms achievement). `stopped` is silent: the
+owner stopped the goal themselves.
+
+- Delivery is non-blocking (own bounded queue + one daemon thread, like `web_push`), never raises and
+  never logs a message body.
+- One Simplified-Chinese message per state, always ending with 「打开 Conveyor 的「项目」页查看。」:
+  `waiting_user` → 「目标「<title>」需要你回复：<question 前 200 字>」, `achieved` →
+  「目标「<title>」已达成（第 N 轮）。」, `exhausted` → 「目标「<title>」用完了 M 轮还没达成。」,
+  `failed` → 「目标「<title>」没能完成：<stop_reason 前 200 字>」.
+- Channels: **Web Push** with kind `goal` — the payload is only `{"title": "Conveyor：目标需要你看一下",
+  "id": <goal id>, "kind": "goal"}` (push payloads are stored and rendered by the browser vendor, so
+  the goal text never leaves the machine) and `sw.js` deep-links the click to `/#code`; **Telegram**
+  and **Feishu** get the full text through the shared `personal_tools.sentry.send_owner_*` helpers the
+  sentry alerts use.
+- Idempotent: the goals DB keeps `(goal_id, state, updated_at)` in `supervisor_goal_notifications`
+  (atomic claim), so a restart or a second loop tick never repeats a notification.
+- Off switch: `CONVEYOR_GOAL_NOTIFY=false` (`Settings.goal_notify_enabled`, default on).
 
 ---
 

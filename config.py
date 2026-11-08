@@ -326,6 +326,9 @@ class Settings:
         "conveyor-vps-computer",
         "conveyor-scheduler",
     )
+    # Tell the owner when a goal needs them or finishes (goal_notify.py).
+    # Off switch: CONVEYOR_GOAL_NOTIFY=false.
+    goal_notify_enabled: bool = True
 
     def __getattr__(self, name: str) -> Any:
         _aliases = {
@@ -894,6 +897,10 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
                 "conveyor-telegram-bot,conveyor-feishu-bot,conveyor-vps-computer,conveyor-scheduler"
             ).split(",") if s.strip()
         ),
+        # Owner notifications for goals that need them or finished (goal_notify.py).
+        "goal_notify_enabled": os.getenv(
+            "CONVEYOR_GOAL_NOTIFY", "true"
+        ).strip().lower() in ("true", "1", "yes", "on"),
     }
 
 
