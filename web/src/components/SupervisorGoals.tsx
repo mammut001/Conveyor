@@ -341,7 +341,8 @@ export default function SupervisorGoals({
   const hasActiveGoal = Boolean(activeGoal)
   const shownGoal: Goal | null = activeGoal || (pinnedGoalId ? goals.find(g => g.id === pinnedGoalId) || null : null)
   const shownDetail: GoalDetail | null = detail && shownGoal && detail.id === shownGoal.id ? detail : null
-  const finishedGoals = useMemo(() => goals.filter(g => !isActiveGoalState(g.state)), [goals])
+  // 最上面结果卡里那个目标不再重复出现在「以前的目标」里。
+  const finishedGoals = useMemo(() => goals.filter(g => !isActiveGoalState(g.state) && g.id !== shownGoal?.id), [goals, shownGoal])
   // 目标跑完之后（达成 / 用完轮数 / 失败 / 停止）结果卡继续挂在最上面，表单藏起来。
   const goalFinished = shownGoal ? !isActiveGoalState(shownGoal.state) : false
   const showForm = !hasActiveGoal && !shownGoal
@@ -551,6 +552,12 @@ export default function SupervisorGoals({
   const roundsTotal = shownGoal?.max_iterations || DEFAULT_MAX_ROUNDS
   const canStop = Boolean(activeGoal) && !stopping
   const iterations = shownDetail?.iterations || []
+  // 「查看改动」要去的那一轮：最近一个真的跑出任务的一轮（和「查看这一轮的任务」同一套跳转）。
+  const lastTaskId = useMemo(() => {
+    const withTask = iterations.filter(round => round.task_id.trim())
+    if (withTask.length === 0) return ''
+    return withTask.reduce((latest, round) => (round.n > latest.n ? round : latest)).task_id
+  }, [iterations])
   // 跑完之后的结果卡文案（标题 + 白话结论 + 补充说明）。
   const resultCopy = goalFinished && shownGoal ? goalResultCopy(shownGoal, shownDetail) : null
 
@@ -612,14 +619,26 @@ export default function SupervisorGoals({
             {!shownDetail && <p className="sup-muted-note">正在读取这一目标…</p>}
 
             {resultCopy ? (
-              // 跑完了：结果卡说清楚这一步是怎么结束的，并给一个「开始新目标」的出口。
+              // 跑完了：结果卡说清楚这一步是怎么结束的、改动在哪，并给出去看改动 / 开始新目标的出口。
               <div className="sup-goal-result">
                 <strong>{resultCopy.headline}</strong>
                 <p>{resultCopy.main}</p>
                 {resultCopy.extra && <p className="sup-goal-result-note">{resultCopy.extra}</p>}
-                <button type="button" className="shell-button primary sup-goal-new-button" onClick={handleStartNew}>
-                  开始新目标
-                </button>
+                {lastTaskId && (
+                  <p className="sup-goal-result-where">
+                    改动在工作目录 <code>{worktree.branch}</code> 里{worktree.is_main ? '。' : '（还没有合并到主分支）。'}
+                  </p>
+                )}
+                <div className="sup-goal-result-actions">
+                  {lastTaskId && (
+                    <button type="button" className="shell-button" onClick={() => onOpenTask(lastTaskId)}>
+                      查看改动
+                    </button>
+                  )}
+                  <button type="button" className="shell-button primary sup-goal-new-button" onClick={handleStartNew}>
+                    开始新目标
+                  </button>
+                </div>
               </div>
             ) : (
               shownDetail?.summary.trim() && <p className="sup-goal-summary">{shownDetail.summary.trim()}</p>

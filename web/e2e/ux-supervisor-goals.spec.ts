@@ -218,6 +218,70 @@ const EXHAUSTED_GOAL: GoalDetail = {
   ],
 }
 
+// 跑失败的目标：结果卡也要说清楚改动在哪、能点「查看改动」。
+const FAILED_GOAL: GoalDetail = {
+  id: 'goal-mock-failed-1',
+  repo_id: 'repo-conveyor',
+  worktree_id: 'wt-fix-console',
+  title: '把首页加载时间降到 1 秒以内',
+  outcome: '把首页加载时间降到 1 秒以内，并且所有测试通过',
+  max_iterations: 5,
+  role_overrides: {},
+  state: 'failed',
+  created_at: '2026-11-12T09:00:00+00:00',
+  updated_at: '2026-11-12T09:20:00+00:00',
+  question: '',
+  summary: '第 1 轮没有跑成功。',
+  stop_reason: '这一轮的任务失败了，目标已经停止',
+  last_next_prompt: '',
+  iterations_used: 1,
+  iterations: [
+    {
+      n: 1,
+      task_id: 'goal-task-1',
+      prompt: '把首页加载时间降到 1 秒以内，并保证所有测试通过',
+      decision: 'give_up',
+      decision_reason: '任务失败，无法继续',
+      started_at: '2026-11-12T09:00:30+00:00',
+      finished_at: '2026-11-12T09:19:00+00:00',
+      task_final_state: 'failed',
+      task_state: 'failed',
+    },
+  ],
+}
+
+// 手动停止的目标。
+const STOPPED_GOAL: GoalDetail = {
+  id: 'goal-mock-stopped-1',
+  repo_id: 'repo-conveyor',
+  worktree_id: 'wt-fix-console',
+  title: '把构建时间压到 30 秒以内',
+  outcome: '把构建时间压到 30 秒以内，并不让任何测试变慢',
+  max_iterations: 3,
+  role_overrides: {},
+  state: 'stopped',
+  created_at: '2026-11-13T08:00:00+00:00',
+  updated_at: '2026-11-13T09:10:00+00:00',
+  question: '',
+  summary: '第 2 轮已结束。',
+  stop_reason: '用户手动停止了目标',
+  last_next_prompt: '',
+  iterations_used: 2,
+  iterations: [
+    {
+      n: 2,
+      task_id: 'goal-task-2',
+      prompt: '继续压缩构建时间',
+      decision: 'continue',
+      decision_reason: '还有一点空间',
+      started_at: '2026-11-13T09:00:00+00:00',
+      finished_at: '2026-11-13T09:09:00+00:00',
+      task_final_state: 'completed',
+      task_state: 'completed',
+    },
+  ],
+}
+
 // 正在跑的目标：第 1 轮失败后继续，第 2 轮已经跑完、结论还没写出来。
 const RUNNING_GOAL_MID_EVAL: GoalDetail = {
   id: 'goal-mock-running-mid-eval',
@@ -261,7 +325,7 @@ const RUNNING_GOAL_MID_EVAL: GoalDetail = {
   ],
 }
 
-const GOAL_TASK: SupervisorTaskDetail = {
+const GOAL_TASK_1: SupervisorTaskDetail = {
   id: 'goal-task-1',
   goal: '第 1 轮：把首页加载时间降到 1 秒以内',
   repo_path: '/srv/repos/conveyor',
@@ -278,6 +342,20 @@ const GOAL_TASK: SupervisorTaskDetail = {
   executions: [],
   acceptance: null,
   summary: '',
+}
+
+// 「查看改动」要能落到最近一轮的任务上：每一轮各有一个已结束的任务。
+const GOAL_TASK_2: SupervisorTaskDetail = {
+  ...GOAL_TASK_1,
+  id: 'goal-task-2',
+  goal: '第 2 轮：复验加载时间并补上移动端验收步骤',
+  state: 'completed',
+}
+const GOAL_TASK_3: SupervisorTaskDetail = {
+  ...GOAL_TASK_1,
+  id: 'goal-task-3',
+  goal: '第 3 轮：继续压缩构建时间',
+  state: 'completed',
 }
 
 async function installGoalsMockFixture(
@@ -624,12 +702,19 @@ test('mock fixture: 已经达成了 posts achieved:true and the chip becomes 已
   await expect(card).toContainText('第 2 轮已跑完，等待你确认结果。')
   await expect(card).toContainText('开始新目标')
   await expect(page.getByRole('region', { name: '描述你想要的结果' })).toHaveCount(0)
+  // 最上面结果卡里那一个就是全部历史，「以前的目标」不把它自己重复列一遍。
+  await expect(page.locator('.sup-goal-history')).toHaveCount(0)
+
+  // 「开始新目标」收起结果卡：这个目标不再显示在最上面，于是回到「以前的目标」里。
   await card.getByRole('button', { name: '开始新目标' }).click()
   await expect(page.getByRole('region', { name: '描述你想要的结果' })).toBeVisible()
   await expect(page.getByRole('region', { name: '目标进度' })).toHaveCount(0)
-
   const history = page.locator('.sup-goal-history')
   await expect(history).toContainText('以前的目标 · 1 个')
+  // 收起时只有标题行；点开后才列出这一个目标。
+  await history.locator('.sup-run-history-bar').click()
+  await expect(history.locator('.sup-goal-history-row')).toHaveCount(1)
+  await expect(history).toContainText('首页加载时间降到 1 秒以内')
 })
 
 test('mock fixture: a finished 目标 stays on top with a readable title and a collapsed timeline', async ({
@@ -700,7 +785,8 @@ test('mock fixture: 以前的目标 rows are clickable and show that goal\'s tim
   await expect(card).toContainText('已达成')
 
   const history = page.locator('.sup-goal-history')
-  await expect(history).toContainText('以前的目标 · 2 个')
+  // 最上面的结果卡那一个不算「以前的」：只剩另一个。
+  await expect(history).toContainText('以前的目标 · 1 个')
   await history.locator('.sup-run-history-bar').click()
 
   const olderRow = history.locator('.sup-goal-history-row').filter({ hasText: '已用完轮数' })
@@ -763,7 +849,7 @@ test('mock fixture: 查看这一轮的任务 switches to 任务与结果 with th
   await page.setViewportSize(DESKTOP)
   await installGoalsMockFixture(page, {
     initialGoalsByWt: { 'wt-fix-console': [RUNNING_GOAL] },
-    initialTasksByWt: { 'wt-fix-console': [GOAL_TASK] },
+    initialTasksByWt: { 'wt-fix-console': [GOAL_TASK_1] },
   })
   await page.goto('/#code')
 
@@ -774,6 +860,67 @@ test('mock fixture: 查看这一轮的任务 switches to 任务与结果 with th
   const taskCard = page.getByRole('region', { name: '当前任务进度与结果' })
   await expect(taskCard).toContainText('第 1 轮：把首页加载时间降到 1 秒以内')
   await expect(taskCard).toContainText('执行中')
+})
+
+test('mock fixture: an achieved 目标 says where the changes are and 查看改动 opens the last 轮\'s task', async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP)
+  await installGoalsMockFixture(page, {
+    initialGoalsByWt: { 'wt-fix-console': [FINISHED_GOAL, EXHAUSTED_GOAL] },
+    initialTasksByWt: { 'wt-fix-console': [GOAL_TASK_2, GOAL_TASK_3] },
+  })
+  await page.goto('/#code')
+  await page.getByRole('tab', { name: '目标' }).click()
+
+  const card = page.getByRole('region', { name: '目标进度' })
+  await expect(card).toContainText('已达成')
+  await expect(card).toContainText('第 2 轮跑完，首页加载时间已经降到 0.8 秒，所有测试通过。')
+
+  // 一句话说清楚改动在哪：选中的工作目录的分支，并提醒还没合并到主分支。
+  const where = card.locator('.sup-goal-result-where')
+  await expect(where).toContainText('改动在工作目录 fix/console 里（还没有合并到主分支）。')
+  await expect(where.locator('code')).toHaveText('fix/console')
+
+  // 最上面这一个不再重复出现在「以前的目标」里。
+  await expect(page.locator('.sup-goal-history')).toContainText('以前的目标 · 1 个')
+
+  // 「查看改动」= 任务与结果 + 这个目标最近一轮（第 2 轮）的任务。
+  await card.getByRole('button', { name: '查看改动' }).click()
+  await expect(page.getByRole('tab', { name: '任务与结果' })).toHaveAttribute('aria-selected', 'true')
+  const taskCard = page.getByRole('region', { name: '当前任务进度与结果' })
+  await expect(taskCard).toContainText('第 2 轮：复验加载时间并补上移动端验收步骤')
+  await expect(taskCard).not.toContainText('第 3 轮：继续压缩构建时间')
+})
+
+// 失败 / 用完轮数 / 停止：结果卡同样要给出「查看改动」（只要有某一轮跑出了任务）。
+const FINISHED_WITH_TASK: Array<{ chip: string; goal: GoalDetail; task: SupervisorTaskDetail }> = [
+  { chip: '失败', goal: FAILED_GOAL, task: GOAL_TASK_1 },
+  { chip: '已用完轮数', goal: EXHAUSTED_GOAL, task: GOAL_TASK_3 },
+  { chip: '已停止', goal: STOPPED_GOAL, task: GOAL_TASK_2 },
+]
+
+test('mock fixture: 失败 / 用完轮数 / 停止 的结果卡 also offers 查看改动', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installGoalsMockFixture(page, {
+    initialGoalsByWt: { 'wt-fix-console': [FINISHED_GOAL, ...FINISHED_WITH_TASK.map(item => item.goal)] },
+    initialTasksByWt: { 'wt-fix-console': [GOAL_TASK_1, GOAL_TASK_2, GOAL_TASK_3] },
+  })
+  await page.goto('/#code')
+  await page.getByRole('tab', { name: '目标' }).click()
+
+  for (const item of FINISHED_WITH_TASK) {
+    // 翻到 任务与结果 再回来会重开这一页，「以前的目标」是收起状态，重新点开。
+    const history = page.locator('.sup-goal-history')
+    await history.locator('.sup-run-history-bar').click()
+    await history.locator('.sup-goal-history-row').filter({ hasText: item.chip }).click()
+    const card = page.getByRole('region', { name: '目标进度' })
+    await expect(card).toContainText(item.chip)
+    await card.getByRole('button', { name: '查看改动' }).click()
+    await expect(page.getByRole('tab', { name: '任务与结果' })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('region', { name: '当前任务进度与结果' })).toContainText(item.task.goal)
+    await page.getByRole('tab', { name: '目标' }).click()
+  }
 })
 
 test('mock fixture: an English backend error becomes one Chinese line, never the raw message', async ({ page }) => {
@@ -850,7 +997,7 @@ test('mock fixture: the 目标 tab shows no English goal/iteration words', async
   await page.setViewportSize(DESKTOP)
   await installGoalsMockFixture(page, {
     initialGoalsByWt: { 'wt-fix-console': [WAITING_GOAL] },
-    initialTasksByWt: { 'wt-fix-console': [GOAL_TASK] },
+    initialTasksByWt: { 'wt-fix-console': [GOAL_TASK_1] },
   })
   await page.goto('/#code')
 
