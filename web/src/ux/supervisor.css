@@ -1669,6 +1669,40 @@
   overflow-wrap: anywhere;
 }
 
+/* 跑完之后的结果卡：一句白话结论 + 「开始新目标」出口 */
+.sup-goal-result {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+
+.sup-goal-result strong {
+  font-size: 15px;
+  color: #1f2328;
+}
+
+.sup-goal-result p {
+  margin: 0;
+  color: #1f2328;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.sup-goal-result-note {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.sup-goal-new-button {
+  min-height: 40px;
+}
+
 .sup-goal-confirm-actions {
   flex: none;
   display: flex;
@@ -1782,6 +1816,11 @@
   font-weight: 500;
 }
 
+/* 任务已经结束、结论还没写出来时的提示 */
+.sup-goal-iteration-decision--pending {
+  color: #92400e;
+}
+
 .sup-goal-iteration-prompt {
   display: flex;
   flex-direction: column;
@@ -1814,6 +1853,12 @@
   color: #a94c34;
   font-size: 12px;
   cursor: pointer;
+}
+
+/* 「查看每一轮」在标题行里，要够大好点 */
+.sup-goal-timeline-head .sup-goal-expand-button {
+  min-height: 32px;
+  padding: 0 2px;
 }
 .sup-goal-iteration-reason {
   margin: 0;

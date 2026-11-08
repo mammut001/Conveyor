@@ -1403,7 +1403,7 @@ export default function App() {
               <p>当前服务器未开启 <code>agent_supervisor</code> 功能开关。</p>
             </div>
           ) : (
-            <Suspense fallback={<div className="empty">正在加载 Code 工作台…</div>}>
+            <Suspense fallback={<div className="empty">正在加载项目…</div>}>
               <SupervisorWorkspace
                 token={token}
                 active={view === 'code'}

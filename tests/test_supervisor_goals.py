@@ -27,6 +27,14 @@ from config import Settings
 
 OUTCOME = "在 managed worktree 里新增 feature.txt，内容为 hello-goal，并干净提交"
 
+# A Chinese sentence long enough to exercise the 40-character title cut.
+TITLE_BASE = "把首页加载时间降到一秒以内并且保证所有测试都通过"
+
+
+def _chinese_outcome(length: int) -> str:
+    """A single-line Simplified-Chinese outcome of exactly `length` characters."""
+    return (TITLE_BASE * ((length // len(TITLE_BASE)) + 1))[:length]
+
 
 def _make_settings(root: Path) -> Settings:
     workspace = root / "workspace"
@@ -238,7 +246,10 @@ class SupervisorGoalTests(unittest.TestCase):
         goal = self._create_goal()
         self.assertEqual(goal["state"], "running")
         self.assertEqual(goal["iterations"], [])
-        self.assertEqual(goal["title"], OUTCOME.splitlines()[0][:80])
+        self.assertEqual(
+            goal["title"], OUTCOME[: goals.MAX_TITLE_CHARS] + goals.TITLE_ELLIPSIS
+        )
+        self.assertNotIn("[truncated]", goal["title"])
         self.assertEqual(goal["max_iterations"], 5)
 
         self._advance()
@@ -272,6 +283,54 @@ class SupervisorGoalTests(unittest.TestCase):
         task = ags.get_task(self.settings, task_id) or {}
         roles = (task.get("metadata") or {}).get("roles") or {}
         self.assertEqual(roles.get("implementer", {}).get("executor"), "claude")
+
+    # ------------------------------------------------------------------
+    # 1b. title: first non-empty line, whitespace collapsed, 40 chars + 「…」
+    # ------------------------------------------------------------------
+
+    def test_title_cuts_81_char_chinese_outcome_at_40_with_ellipsis(self) -> None:
+        outcome = _chinese_outcome(81)
+        self.assertEqual(len(outcome), 81)
+        goal = self._create_goal(outcome=outcome)
+        self.assertEqual(goal["title"], outcome[: goals.MAX_TITLE_CHARS] + goals.TITLE_ELLIPSIS)
+        self.assertEqual(len(goal["title"]), goals.MAX_TITLE_CHARS + 1)
+        self.assertTrue(goal["title"].endswith(goals.TITLE_ELLIPSIS))
+        # The old `truncate()` marker must never reach the owner.
+        self.assertNotIn("[truncated]", goal["title"])
+        self.assertNotIn("\n", goal["title"])
+
+    def test_title_uses_first_non_empty_line_of_multiline_outcome(self) -> None:
+        outcome = "把首页加载时间降到一秒以内\n顺便把所有测试跑过\n第三行只是补充说明"
+        goal = self._create_goal(outcome=outcome)
+        self.assertEqual(goal["title"], "把首页加载时间降到一秒以内")
+
+    def test_title_keeps_short_outcome_untouched(self) -> None:
+        goal = self._create_goal(outcome="修好登录页的报错")
+        self.assertEqual(goal["title"], "修好登录页的报错")
+
+    def test_title_from_outcome_skips_blank_lines_and_collapses_whitespace(self) -> None:
+        self.assertEqual(
+            goals._title_from_outcome("\n\n  把   构建  时间\n压到 30 秒以内"),
+            "把 构建 时间",
+        )
+        self.assertEqual(goals._title_from_outcome("   "), "")
+        self.assertEqual(
+            goals._title_from_outcome(_chinese_outcome(81)),
+            _chinese_outcome(81)[: goals.MAX_TITLE_CHARS] + goals.TITLE_ELLIPSIS,
+        )
+
+    def test_clean_title_falls_back_to_outcome_and_never_emits_truncate_marker(self) -> None:
+        long_outcome = _chinese_outcome(81)
+        for raw in (None, "", "   "):
+            title = goals._clean_title(raw, long_outcome)
+            self.assertEqual(title, long_outcome[: goals.MAX_TITLE_CHARS] + goals.TITLE_ELLIPSIS)
+            self.assertNotIn("[truncated]", title)
+        # An explicit title is collapsed the same way instead of being truncated.
+        self.assertEqual(goals._clean_title("  手动   标题  ", long_outcome), "手动 标题")
+        self.assertEqual(
+            goals._clean_title(_chinese_outcome(81), long_outcome),
+            _chinese_outcome(81)[: goals.MAX_TITLE_CHARS] + goals.TITLE_ELLIPSIS,
+        )
 
     # ------------------------------------------------------------------
     # 2. completed + achieved → achieved

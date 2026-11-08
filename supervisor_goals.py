@@ -51,7 +51,10 @@ DECISION_ASK_USER = "ask_user"
 DECISION_GIVE_UP = "give_up"
 DECISIONS = (DECISION_CONTINUE, DECISION_ACHIEVED, DECISION_ASK_USER, DECISION_GIVE_UP)
 
-MAX_TITLE_CHARS = 80
+# 目标标题：取结果描述的第一行，超过 40 个字就截断并加「…」。
+# 绝不用 `truncate()` 的 `...[truncated]` 标记——老板只看中文，看不懂那种标记。
+MAX_TITLE_CHARS = 40
+TITLE_ELLIPSIS = "…"
 MAX_OUTCOME_CHARS = 4000
 MAX_QUESTION_CHARS = 1000
 MAX_SUMMARY_CHARS = 1200
@@ -243,9 +246,26 @@ def _clean_outcome(raw: Any) -> str:
     return outcome
 
 
+def _display_title(text: str) -> str:
+    """One-line title: whitespace collapsed, cut at `MAX_TITLE_CHARS` with 「…」.
+
+    Never the `...[truncated]` marker from `truncate()` (an 81-character single-line
+    outcome used to collapse into nothing but that marker).
+    """
+    collapsed = " ".join(redact_text(str(text or "")).split())
+    if len(collapsed) > MAX_TITLE_CHARS:
+        return collapsed[:MAX_TITLE_CHARS] + TITLE_ELLIPSIS
+    return collapsed
+
+
 def _title_from_outcome(outcome: str) -> str:
-    first_line = outcome.splitlines()[0].strip() if outcome.splitlines() else outcome.strip()
-    return truncate(first_line or outcome.strip(), MAX_TITLE_CHARS)
+    """Title = first non-empty line of the outcome (whitespace collapsed)."""
+    raw = str(outcome or "")
+    for line in raw.splitlines():
+        title = _display_title(line)
+        if title:
+            return title
+    return _display_title(raw)
 
 
 def _clean_title(raw: Any, outcome: str) -> str:
@@ -256,7 +276,7 @@ def _clean_title(raw: Any, outcome: str) -> str:
     cleaned = raw.strip()
     if not cleaned:
         return _title_from_outcome(outcome)
-    return truncate(cleaned, MAX_TITLE_CHARS)
+    return _display_title(cleaned)
 
 
 def _get_goal_row(settings: Any, goal_id: Any) -> dict[str, Any]:

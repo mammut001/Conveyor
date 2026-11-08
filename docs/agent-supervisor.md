@@ -228,7 +228,7 @@ operator stops it, or a decision is needed from the operator.
 | --- | --- |
 | `id` | `goal-<hex>` |
 | `repo_id` / `worktree_id` | same scope fields `create_scoped_task` accepts |
-| `title` | first line of the outcome, ≤ 80 chars |
+| `title` | first non-empty line of the outcome, whitespace collapsed, ≤ 40 chars + 「…」 (never the `...[truncated]` marker) |
 | `outcome` | the operator's description, 1–4000 chars |
 | `max_iterations` | default 5, clamped 1–20 |
 | `role_overrides` | same shape dispatch accepts (`executor`/`model` on analyst/implementer/reviewer), optional |

@@ -140,6 +140,127 @@ const WAITING_GOAL: GoalDetail = {
   ],
 }
 
+// 81 个中文单行 outcome：真实那次跑崩的标题就是这么来的。
+const LONG_OUTCOME = '把首页加载时间降到一秒以内，并且保证所有测试都通过'.repeat(4).slice(0, 81)
+
+// 已经跑完的目标：标题是老数据留下的 `[truncated]` 标记，要靠 outcome 现算。
+const FINISHED_GOAL: GoalDetail = {
+  id: 'goal-mock-finished-1',
+  repo_id: 'repo-conveyor',
+  worktree_id: 'wt-fix-console',
+  title: '\n...[truncated]',
+  outcome: LONG_OUTCOME,
+  max_iterations: 3,
+  role_overrides: {},
+  state: 'achieved',
+  created_at: '2026-11-11T09:00:00+00:00',
+  updated_at: '2026-11-11T09:40:00+00:00',
+  question: '',
+  summary: '第 2 轮跑完，首页加载时间已经降到 0.8 秒，所有测试通过。',
+  stop_reason: '评估器判断目标已达成',
+  last_next_prompt: '',
+  iterations_used: 2,
+  iterations: [
+    {
+      n: 2,
+      task_id: 'goal-task-2',
+      prompt: '复验加载时间并补上移动端验收步骤',
+      decision: 'achieved',
+      decision_reason: '加载时间已达标，测试全部通过',
+      started_at: '2026-11-09T09:20:00+00:00',
+      finished_at: '2026-11-09T09:39:00+00:00',
+      task_final_state: 'completed',
+      task_state: 'completed',
+    },
+    {
+      n: 1,
+      task_id: 'goal-task-1',
+      prompt: '把首页加载时间降到一秒以内，并保证所有测试通过',
+      decision: 'continue',
+      decision_reason: '首屏时间有下降，但测试还没跑完',
+      started_at: '2026-11-09T09:00:30+00:00',
+      finished_at: '2026-11-09T09:09:00+00:00',
+      task_final_state: 'failed',
+      task_state: 'failed',
+    },
+  ],
+}
+
+// 轮数用完：结果卡要说清楚「为什么停了」。
+const EXHAUSTED_GOAL: GoalDetail = {
+  id: 'goal-mock-exhausted-1',
+  repo_id: 'repo-conveyor',
+  worktree_id: 'wt-fix-console',
+  title: '把构建时间压到 30 秒以内',
+  outcome: '把构建时间压到 30 秒以内，并不让任何测试变慢',
+  max_iterations: 3,
+  role_overrides: {},
+  state: 'exhausted',
+  created_at: '2026-11-10T08:00:00+00:00',
+  updated_at: '2026-11-10T10:30:00+00:00',
+  question: '',
+  summary: '第 3 轮已结束，构建时间还有 41 秒。',
+  stop_reason: '迭代预算已用完（3 轮），目标尚未达成',
+  last_next_prompt: '',
+  iterations_used: 3,
+  iterations: [
+    {
+      n: 3,
+      task_id: 'goal-task-3',
+      prompt: '继续压缩构建时间',
+      decision: 'continue',
+      decision_reason: '还有一点空间',
+      started_at: '2026-11-10T10:00:00+00:00',
+      finished_at: '2026-11-10T10:29:00+00:00',
+      task_final_state: 'completed',
+      task_state: 'completed',
+    },
+  ],
+}
+
+// 正在跑的目标：第 1 轮失败后继续，第 2 轮已经跑完、结论还没写出来。
+const RUNNING_GOAL_MID_EVAL: GoalDetail = {
+  id: 'goal-mock-running-mid-eval',
+  repo_id: 'repo-conveyor',
+  worktree_id: 'wt-fix-console',
+  title: '把首页加载时间降到一秒以内',
+  outcome: '把首页加载时间降到一秒以内，并保证所有测试通过',
+  max_iterations: 3,
+  role_overrides: {},
+  state: 'running',
+  created_at: '2026-11-10T09:00:00+00:00',
+  updated_at: '2026-11-10T09:30:00+00:00',
+  question: '',
+  summary: '第 1 轮失败，已继续第 2 轮。',
+  stop_reason: '',
+  last_next_prompt: '',
+  iterations_used: 2,
+  iterations: [
+    {
+      n: 2,
+      task_id: 'goal-task-2',
+      prompt: '补充移动端验收步骤，并复验加载时间',
+      decision: '',
+      decision_reason: '',
+      started_at: '2026-11-10T09:10:00+00:00',
+      finished_at: '2026-11-10T09:29:00+00:00',
+      task_final_state: 'completed',
+      task_state: 'completed',
+    },
+    {
+      n: 1,
+      task_id: 'goal-task-1',
+      prompt: '把首页加载时间降到一秒以内，并保证所有测试通过',
+      decision: 'continue',
+      decision_reason: '测试还没跑完，继续改',
+      started_at: '2026-11-10T09:00:30+00:00',
+      finished_at: '2026-11-10T09:09:00+00:00',
+      task_final_state: 'failed',
+      task_state: 'failed',
+    },
+  ],
+}
+
 const GOAL_TASK: SupervisorTaskDetail = {
   id: 'goal-task-1',
   goal: '第 1 轮：把首页加载时间降到 1 秒以内',
@@ -276,7 +397,7 @@ async function installGoalsMockFixture(
         id: `goal-mock-created-${goalCreateCalls.length}`,
         repo_id: String(body.repo_id || 'repo-conveyor'),
         worktree_id: wtId,
-        title: outcome.slice(0, 24) || '新目标',
+        title: outcome.length > 40 ? `${outcome.slice(0, 40)}…` : outcome || '新目标',
         outcome,
         max_iterations: Number(body.max_iterations || 5),
         role_overrides: (body.role_overrides as Record<string, unknown>) || {},
@@ -499,10 +620,127 @@ test('mock fixture: 已经达成了 posts achieved:true and the chip becomes 已
   expect(fixture.goalReplyCalls).toHaveLength(1)
   expect(fixture.goalReplyCalls[0].body.achieved).toBe(true)
 
-  // The finished goal stays readable above the create form and is listed under 以前的目标.
+  // 跑完了：结果卡留在最上面（带摘要），表单藏起来，点「开始新目标」才露出来。
+  await expect(card).toContainText('第 2 轮已跑完，等待你确认结果。')
+  await expect(card).toContainText('开始新目标')
+  await expect(page.getByRole('region', { name: '描述你想要的结果' })).toHaveCount(0)
+  await card.getByRole('button', { name: '开始新目标' }).click()
   await expect(page.getByRole('region', { name: '描述你想要的结果' })).toBeVisible()
+  await expect(page.getByRole('region', { name: '目标进度' })).toHaveCount(0)
+
   const history = page.locator('.sup-goal-history')
   await expect(history).toContainText('以前的目标 · 1 个')
+})
+
+test('mock fixture: a finished 目标 stays on top with a readable title and a collapsed timeline', async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP)
+  await installGoalsMockFixture(page, {
+    initialGoalsByWt: { 'wt-fix-console': [FINISHED_GOAL, EXHAUSTED_GOAL] },
+  })
+  await page.goto('/#code')
+  // 只有已跑完的目标时，目标页不是默认子页，需要手动点开。
+  await page.getByRole('tab', { name: '目标' }).click()
+
+  const card = page.getByRole('region', { name: '目标进度' })
+  await expect(card).toBeVisible()
+  // 老数据里的 `[truncated]` 标题绝不出现，标题从 outcome 现算：40 个字 + 一个省略号。
+  const titleLocator = card.locator('.sup-goal-header-main h3')
+  const titleText = (await titleLocator.innerText()).trim()
+  expect(titleText).toHaveLength(41)
+  expect(titleText.startsWith(LONG_OUTCOME.slice(0, 40))).toBe(true)
+  expect(titleText.slice(40)).toMatch(/^[….]$/)
+  await expect(card).not.toContainText('[truncated]')
+  await expect(card).toContainText('已达成')
+  await expect(card).toContainText('第 2 / 3 轮')
+  await expect(card).toContainText('第 2 轮跑完，首页加载时间已经降到 0.8 秒，所有测试通过。')
+
+  // 每一轮默认收起，点「查看每一轮」才展开。
+  await expect(card.getByRole('button', { name: '查看每一轮' })).toBeVisible()
+  await expect(card).not.toContainText('继续下一轮')
+  await card.getByRole('button', { name: '查看每一轮' }).click()
+  await expect(card).toContainText('继续下一轮')
+  await expect(card).toContainText('第 1 轮')
+  await expect(card).toContainText('第 2 轮')
+
+  // 目标跑完之后表单先藏起来。
+  await expect(page.getByRole('region', { name: '描述你想要的结果' })).toHaveCount(0)
+})
+
+test('mock fixture: an exhausted 目标 explains itself in plain Chinese and offers 开始新目标', async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP)
+  await installGoalsMockFixture(page, { initialGoalsByWt: { 'wt-fix-console': [EXHAUSTED_GOAL] } })
+  await page.goto('/#code')
+  await page.getByRole('tab', { name: '目标' }).click()
+
+  const card = page.getByRole('region', { name: '目标进度' })
+  await expect(card).toContainText('轮数用完了，还没有达成')
+  await expect(card).toContainText('迭代预算已用完（3 轮），目标尚未达成')
+  await expect(card).toContainText('开始新目标')
+  await expect(page.getByRole('region', { name: '描述你想要的结果' })).toHaveCount(0)
+
+  await card.getByRole('button', { name: '开始新目标' }).click()
+  await expect(page.getByRole('region', { name: '描述你想要的结果' })).toBeVisible()
+  await expect(page.getByRole('region', { name: '目标进度' })).toHaveCount(0)
+})
+
+test('mock fixture: 以前的目标 rows are clickable and show that goal\'s timeline', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installGoalsMockFixture(page, {
+    initialGoalsByWt: { 'wt-fix-console': [FINISHED_GOAL, EXHAUSTED_GOAL] },
+  })
+  await page.goto('/#code')
+  await page.getByRole('tab', { name: '目标' }).click()
+
+  // 最新一个目标的结果卡在最上面。
+  const card = page.getByRole('region', { name: '目标进度' })
+  await expect(card).toContainText('已达成')
+
+  const history = page.locator('.sup-goal-history')
+  await expect(history).toContainText('以前的目标 · 2 个')
+  await history.locator('.sup-run-history-bar').click()
+
+  const olderRow = history.locator('.sup-goal-history-row').filter({ hasText: '已用完轮数' })
+  await olderRow.click()
+
+  await expect(card).toContainText('轮数用完了，还没有达成')
+  await expect(card).toContainText('迭代预算已用完（3 轮），目标尚未达成')
+  await expect(card).not.toContainText('已达成')
+  // 点开的老目标也带着收起来的每一轮。
+  await expect(card.getByRole('button', { name: '查看每一轮' })).toBeVisible()
+  await card.getByRole('button', { name: '查看每一轮' }).click()
+  await expect(card).toContainText('继续压缩构建时间')
+})
+
+test('mock fixture: a round row shows the task state, and 正在判断下一步… only while deciding', async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP)
+  await installGoalsMockFixture(page, {
+    initialGoalsByWt: { 'wt-fix-console': [RUNNING_GOAL_MID_EVAL] },
+  })
+  await page.goto('/#code')
+
+  const card = page.getByRole('region', { name: '目标进度' })
+  await expect(card).toContainText('第 2 / 3 轮')
+  // 「未开始」和「进行中」绝不会同时出现在一轮里。
+  await expect(card).not.toContainText('未开始')
+
+  const secondRound = card.locator('.sup-goal-iteration').first()
+  await expect(secondRound).toContainText('第 2 轮')
+  await expect(secondRound.locator('.sup-goal-iteration-task-state')).toHaveText('已完成')
+  await expect(secondRound).toContainText('正在判断下一步…')
+  await expect(secondRound).not.toContainText('继续下一轮')
+  await expect(secondRound).not.toContainText('已达成')
+
+  const firstRound = card.locator('.sup-goal-iteration').nth(1)
+  await expect(firstRound).toContainText('第 1 轮')
+  await expect(firstRound.locator('.sup-goal-iteration-task-state')).toHaveText('失败')
+  await expect(firstRound).toContainText('继续下一轮')
+  await expect(firstRound).not.toContainText('正在判断下一步…')
 })
 
 test('mock fixture: 停止 asks for confirmation before posting stop', async ({ page }) => {

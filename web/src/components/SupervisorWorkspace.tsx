@@ -2226,7 +2226,7 @@ export function SupervisorWorkspace({
             </div>
           </div>
 
-          <div className="sup-subnav" role="tablist" aria-label="Code 工作区视图">
+          <div className="sup-subnav" role="tablist" aria-label="项目视图">
             <button
               type="button"
               role="tab"
