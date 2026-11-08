@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatPanel, type TaskSuggestion } from './ChatPanel'
 import { ChangedFileList } from './TaskParts'
 import { useMediaQuery } from '../ux/shellNav'
@@ -272,6 +272,49 @@ const SUP_STAGE_LABELS: Record<string, string> = {
 export function supStateLabel(state?: string | null): string {
   const key = (state || 'unknown').trim().toLowerCase()
   return SUP_STATE_LABELS[key] || state || '未知'
+}
+
+const SUP_EXECUTOR_LABELS: Record<string, string> = {
+  claude: 'Claude Code',
+  antigravity: 'Antigravity',
+  'command-code': 'Command Code',
+  codex: 'Codex CLI',
+  pool: '执行者池',
+}
+
+export function supExecutorLabel(name?: string | null): string {
+  const raw = (name || '').trim()
+  if (!raw) return '未指定执行者'
+  return SUP_EXECUTOR_LABELS[raw.toLowerCase()] || raw
+}
+
+const SUP_QUOTA_PATTERN = /quota|usage limit|rate limit|resource_exhausted|429|credit balance|额度|配额/i
+
+export function supIsQuotaFailure(text?: string | null): boolean {
+  return SUP_QUOTA_PATTERN.test(String(text || ''))
+}
+
+function supIsFailedExecution(ex: SupervisorExecution): boolean {
+  const key = (ex.status || '').trim().toLowerCase()
+  return key === 'failed' || key === 'timeout'
+}
+
+// Derived from consecutive execution rows only (no extra persistence): when the row before
+// row i failed for the same role on a different executor, row i gets a Chinese switch note.
+export function supExecutionSwitchNotes(executions: SupervisorExecution[]): Map<number, string> {
+  const notes = new Map<number, string>()
+  for (let i = 1; i < executions.length; i += 1) {
+    const prev = executions[i - 1]
+    const cur = executions[i]
+    if (!supIsFailedExecution(prev)) continue
+    if ((prev.role || '') !== (cur.role || '')) continue
+    if (!prev.executor || !cur.executor || prev.executor === cur.executor) continue
+    const from = supExecutorLabel(prev.executor)
+    const to = supExecutorLabel(cur.executor)
+    const cause = supIsQuotaFailure(prev.error) ? `${from} 额度用完` : `${from} 执行失败`
+    notes.set(i, `${cause}，已换成 ${to}`)
+  }
+  return notes
 }
 
 export function supStageLabel(stage?: string | null, fallbackState?: string | null): string {
@@ -773,7 +816,7 @@ function SupervisorRoleBar({
                 )}
                 {executors.map(exec => (
                   <option key={exec.name} value={exec.name}>
-                    {exec.label || exec.name}{!exec.available ? '（不可用）' : ''}
+                    {exec.label || exec.name}{exec.name === 'pool' && exec.available ? '（推荐）' : ''}{!exec.available ? '（不可用）' : ''}
                   </option>
                 ))}
                 {!extraOption && executors.length === 0 && (
@@ -953,6 +996,7 @@ function SupervisorTechnicalDetails({
   const changedFiles = taskDetail?.metadata?.changed_files || task?.metadata?.changed_files || []
   const handoffs = taskDetail?.handoffs || []
   const executions = taskDetail?.executions || []
+  const switchNotes = supExecutionSwitchNotes(executions)
   const countLabel = [
     changedFiles.length ? `${changedFiles.length} 个改动文件` : '',
     handoffs.length ? `${handoffs.length} 次角色交接` : '',
@@ -1002,17 +1046,39 @@ function SupervisorTechnicalDetails({
           <div className="sup-tech-block">
             <h4>执行与终端输出</h4>
             <div className="sup-execution-list">
-              {executions.map((ex, idx) => (
-                <details key={ex.id ?? idx} className="sup-execution-item">
-                  <summary>
-                    <strong>{ex.role || ex.stage || '执行'}</strong>
-                    {ex.executor && <span> · {ex.executor}{ex.model ? ` (${ex.model})` : ''}</span>}
-                    {ex.status && <span className="sup-exec-status"> · {supStateLabel(ex.status)}</span>}
-                  </summary>
-                  {ex.error && <p className="sup-inline-error">{ex.error}</p>}
-                  {ex.output ? <pre className="sup-exec-output">{ex.output}</pre> : <p className="sup-muted-note">无标准输出内容。</p>}
-                </details>
-              ))}
+              {executions.map((ex, idx) => {
+                const switchNote = switchNotes.get(idx)
+                const roleLabel = ROLE_META.find(m => m.key === ex.role)?.label || ex.role || ex.stage || '执行'
+                return (
+                  <Fragment key={ex.id ?? idx}>
+                    {switchNote && (
+                      <p className="sup-exec-switch-note" role="note">
+                        <time>{formatShortTime(ex.started_at)}</time>
+                        {switchNote}
+                      </p>
+                    )}
+                    <details className="sup-execution-item">
+                      <summary>
+                        <strong>{roleLabel}</strong>
+                        {ex.executor && <span> · {supExecutorLabel(ex.executor)}{ex.model ? ` (${ex.model})` : ''}</span>}
+                        {ex.status && <span className="sup-exec-status"> · {supStateLabel(ex.status)}</span>}
+                      </summary>
+                      {ex.error && (
+                        <>
+                          <p className="sup-inline-error">
+                            {supIsQuotaFailure(ex.error) ? '额度用完，本次执行未完成' : '本次执行失败'}
+                          </p>
+                          <details className="sup-exec-raw-error">
+                            <summary>技术详情</summary>
+                            <pre>{ex.error}</pre>
+                          </details>
+                        </>
+                      )}
+                      {ex.output ? <pre className="sup-exec-output">{ex.output}</pre> : <p className="sup-muted-note">无标准输出内容。</p>}
+                    </details>
+                  </Fragment>
+                )
+              })}
             </div>
           </div>
         )}

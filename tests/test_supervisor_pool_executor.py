@@ -262,6 +262,13 @@ class PoolWiringTests(unittest.TestCase):
     def test_pool_is_exposed_in_ui_executors(self) -> None:
         self.assertIn("pool", [name for name, _label in _UI_EXPOSED_EXECUTORS])
 
+    def test_pool_is_listed_first_with_chinese_label_and_plain_executor_names(self) -> None:
+        exposed = dict(_UI_EXPOSED_EXECUTORS)
+        self.assertEqual(_UI_EXPOSED_EXECUTORS[0][0], "pool")
+        self.assertEqual(exposed["pool"], "执行者池（自动轮换）")
+        self.assertEqual(exposed["claude"], "Claude Code")
+        self.assertEqual(exposed["antigravity"], "Antigravity")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -962,3 +962,137 @@ test('mock fixture: App right context 运行记录 section collapses by default,
   await page.clock.fastForward(3_500)
   await expect(toggleBtn).toHaveAttribute('aria-expanded', 'false')
 })
+
+// ---------------------------------------------------------------------------
+// 执行者池（自动轮换）: executor list, which worker ran each step, and quota switch notes.
+// ---------------------------------------------------------------------------
+
+const POOL_REASON_UNAVAILABLE = '执行者池里没有可用的 Claude Code / Antigravity / Command Code'
+
+function createPoolCapabilities(poolAvailable: boolean): SupervisorCapabilities {
+  return createMockCapabilities({
+    executors: [
+      poolAvailable
+        ? { name: 'pool', label: '执行者池（自动轮换）', available: true }
+        : { name: 'pool', label: '执行者池（自动轮换）', available: false, reason: POOL_REASON_UNAVAILABLE },
+      { name: 'claude', label: 'Claude Code', available: true },
+      { name: 'antigravity', label: 'Antigravity', available: true },
+    ],
+  })
+}
+
+const SWITCH_TASK: SupervisorTaskDetail = {
+  id: 'sup-task-pool-switch',
+  goal: '补充执行者池切换说明',
+  state: 'completed',
+  stage: 'completed',
+  summary: '已完成，执行者池切换记录可在技术细节中查看。',
+  metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+  handoffs: [],
+  executions: [
+    {
+      id: 'exec-claude-quota',
+      role: 'implementer',
+      executor: 'claude',
+      status: 'failed',
+      error: 'Claude usage limit reached, resets in 2h',
+      started_at: '2026-11-08T10:00:00Z',
+      finished_at: '2026-11-08T10:01:00Z',
+    },
+    {
+      id: 'exec-antigravity-ok',
+      role: 'implementer',
+      executor: 'antigravity',
+      status: 'completed',
+      output: 'build ok',
+      started_at: '2026-11-08T10:02:00Z',
+      finished_at: '2026-11-08T10:05:00Z',
+    },
+  ],
+}
+
+test('mock fixture: 执行者池 is first in the executor list, marked 推荐 when available, and shows a Chinese reason when unavailable', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, { capabilities: createPoolCapabilities(true) })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const analystSelect = page.getByLabel('分析角色执行器')
+  const optionTexts = await analystSelect.locator('option').allTextContents()
+  expect(optionTexts[0]).toBe('执行者池（自动轮换）（推荐）')
+  expect(optionTexts).toContain('Claude Code')
+  await analystSelect.selectOption('pool')
+  await expect(page.locator('.sup-role-reason')).toHaveCount(0)
+})
+
+test('mock fixture: unavailable 执行者池 explains the reason in Chinese on the role card', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, { capabilities: createPoolCapabilities(false) })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const analystSelect = page.getByLabel('分析角色执行器')
+  await expect(analystSelect.locator('option').first()).toHaveText('执行者池（自动轮换）（不可用）')
+  await analystSelect.selectOption('pool')
+  await expect(page.locator('.sup-role-reason').first()).toHaveText(POOL_REASON_UNAVAILABLE)
+})
+
+test('mock fixture: task detail shows Chinese executor names and a quota switch note between execution rows', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    capabilities: createPoolCapabilities(true),
+    initialTasksByWt: { 'wt-fix-console': [SWITCH_TASK] },
+  })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const techDetails = page.locator('details.sup-tech-details').first()
+  await techDetails.locator(':scope > summary').click()
+  await expect(techDetails).toHaveAttribute('open', '')
+
+  const switchNote = page.locator('.sup-exec-switch-note')
+  await expect(switchNote).toHaveCount(1)
+  await expect(switchNote).toBeVisible()
+  await expect(switchNote).toContainText('Claude Code 额度用完，已换成 Antigravity')
+
+  const rows = page.locator('.sup-execution-item')
+  await expect(rows).toHaveCount(2)
+  await expect(rows.nth(0)).toBeVisible()
+  await expect(rows.nth(0).locator(':scope > summary')).toContainText('Claude Code')
+  await expect(rows.nth(1).locator(':scope > summary')).toContainText('Antigravity')
+  await expect(rows.nth(0).locator(':scope > summary')).not.toContainText('claude')
+
+  // Raw English error stays behind 技术详情; the visible main text is Chinese.
+  await expect(rows.nth(0)).toContainText('额度用完，本次执行未完成')
+  const rawError = rows.nth(0).locator('details.sup-exec-raw-error')
+  await expect(rawError).not.toHaveAttribute('open', '')
+  await expect(rawError.locator('pre')).toHaveText('Claude usage limit reached, resets in 2h')
+  await switchNote.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: test.info().outputPath('sup-pool-1440.png') })
+})
+
+test('mock fixture: task detail with execution switch note has no horizontal overflow at 390px', async ({ page }) => {
+  await page.setViewportSize(PHONE)
+  await installSupervisorMockFixture(page, {
+    capabilities: createPoolCapabilities(true),
+    initialTasksByWt: { 'wt-fix-console': [SWITCH_TASK] },
+  })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const techDetails = page.locator('details.sup-tech-details:visible').first()
+  await techDetails.evaluate(el => { (el as HTMLDetailsElement).open = true })
+  await expect(page.locator('.sup-exec-switch-note:visible')).toBeVisible()
+  // Open the failed run row and its 技术详情 so the longest raw content is laid out at 390px.
+  await page.locator('.sup-execution-item').first().evaluate(el => { (el as HTMLDetailsElement).open = true })
+  await page.locator('.sup-exec-raw-error').first().evaluate(el => { (el as HTMLDetailsElement).open = true })
+  await expect(page.locator('.sup-exec-raw-error pre').first()).toBeVisible()
+
+  const overflow = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }))
+  expect(overflow.scroll).toBeLessThanOrEqual(overflow.client)
+  await page.locator('.sup-exec-switch-note').first().scrollIntoViewIfNeeded()
+  await page.screenshot({ path: test.info().outputPath('sup-pool-390.png') })
+})
