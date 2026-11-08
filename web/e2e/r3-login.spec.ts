@@ -555,17 +555,15 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     await modelSelect.selectOption('claude-sonnet-5-5')
 
     // Assert POST /api/workers/claude-code/model
-    const saveCall = api.calls.find(c => c.path === '/api/workers/claude-code/model')
-    expect(saveCall).toBeTruthy()
-    expect(saveCall?.body).toEqual({ model: 'claude-sonnet-5-5' })
+    const lastModelBody = () => api.calls.filter(c => c.path === '/api/workers/claude-code/model').at(-1)?.body
+    await expect.poll(lastModelBody).toEqual({ model: 'claude-sonnet-5-5' })
 
     // Small saved tick is displayed
     await expect(claudeCard.getByText('✓ 已保存')).toBeVisible()
 
     // Choose "使用默认" (value = null)
     await modelSelect.selectOption('')
-    const saveDefaultCall = api.calls.filter(c => c.path === '/api/workers/claude-code/model').at(-1)
-    expect(saveDefaultCall?.body).toEqual({ model: null })
+    await expect.poll(lastModelBody).toEqual({ model: null })
 
     // Snapshots
     await shoot(page, 'worker-model-select-desktop')
