@@ -263,6 +263,7 @@ async def _run_supervisor_chat(
     from handlers.chat import (
         chat_key,
         check_answer,
+        deep_hint,
         finalize,
         history,
         host_edit_imperative,
@@ -349,7 +350,8 @@ async def _run_supervisor_chat(
         port.emit("done", {"outcome": "escalate"})
         return
 
-    final_text = redact_text(finalize(checked, time_sensitive_unverified=False))
+    deep = await deep_hint(msg.channel, settings) if checked.confidence == "low" else ""
+    final_text = redact_text(finalize(checked, time_sensitive_unverified=False, deep=deep))
     remember(key, prompt, checked.body, turns_limit, settings=settings)
 
     if host_edit_imperative(prompt):

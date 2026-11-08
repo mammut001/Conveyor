@@ -17,7 +17,9 @@ export function SetupChecklist({
   onOpenSettings,
   onDismiss,
 }: SetupChecklistProps) {
-  const step1Done = Boolean(hasEligibleWorker)
+  // ① asks for an executor only when the 执行者 feature is on; with it off the owner
+  // cannot act on the step, so it does not keep the checklist open.
+  const step1Done = !workersEnabled || Boolean(hasEligibleWorker)
   const step2Done = Boolean(modelConfigured)
   const step3Done = Boolean(hasSentFirstMessage)
 

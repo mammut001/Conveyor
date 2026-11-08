@@ -54,6 +54,37 @@ MAX_SEARCH_QUERY_CHARS = 200
 HISTORY_TTL_SECONDS = 30 * 60
 EDIT_INTERVAL_SECONDS = 1.2
 DEEP_HINT = "发 /deep 让 Codex 深入查证。"
+# The web console has no slash commands: name the surface, not a command, and never
+# promise a deeper check when no executor can actually run one.
+WEB_DEEP_HINT = "想更深入地查证，可以让执行者再查一遍。"
+
+
+async def _executor_can_run(settings: "Settings | None") -> bool:
+    """Whether an executor is installed, logged in and usable right now."""
+    if settings is None:
+        return False
+    try:
+        import workers
+
+        payload = await workers.async_get_workers_payload(settings)
+    except Exception:
+        return False
+    if not payload.get("enabled"):
+        return False
+    return any(
+        worker.get("enabled") and worker.get("installed") and worker.get("runnable")
+        and worker.get("auth") != "needs_login"
+        and (worker.get("quota") or {}).get("state") != "cooling"
+        for worker in payload.get("workers") or []
+    )
+
+
+async def deep_hint(channel: str, settings: "Settings | None") -> str:
+    """The "dig deeper" line for an answer, or "" when nobody can dig."""
+    if not await _executor_can_run(settings):
+        return ""
+    return WEB_DEEP_HINT if channel == "web" else DEEP_HINT
+
 
 _CONFIDENCE_RE = re.compile(r"\[\[\s*CONFIDENCE\s*:\s*(high|medium|low)\s*\]\]", re.IGNORECASE)
 _CONTROL_RE = re.compile(
@@ -627,14 +658,14 @@ def visible_partial(buf: str) -> str:
     return text.strip()
 
 
-def finalize(checked: Checked, *, time_sensitive_unverified: bool) -> str:
+def finalize(checked: Checked, *, time_sensitive_unverified: bool, deep: str = DEEP_HINT) -> str:
     notes: list[str] = []
     if checked.removed_links:
         notes.append(f"⚠️ 已移除 {checked.removed_links} 个无法核实来源的链接。")
     if checked.confidence == "low":
-        notes.append("⚠️ 把握不大，别直接当真。" + DEEP_HINT)
+        notes.append("⚠️ 把握不大，别直接当真。" + deep)
     elif time_sensitive_unverified:
-        notes.append("ℹ️ 未联网核实，信息可能过时。" + DEEP_HINT)
+        notes.append("ℹ️ 未联网核实，信息可能过时。" + deep)
     return checked.body + ("\n\n" + "\n".join(notes) if notes else "")
 
 
@@ -934,7 +965,10 @@ async def ask_chat(
         key, checked.confidence, checked.removed_links, bool(evidence), bool(searched),
         len(checked.body),
     )
-    final = finalize(checked, time_sensitive_unverified=unverified)
+    # Only ask whether an executor can run when a note is actually going to be added.
+    needs_deep = checked.confidence == "low" or unverified
+    deep = await deep_hint(msg.channel, settings) if needs_deep else ""
+    final = finalize(checked, time_sensitive_unverified=unverified, deep=deep)
     delivered = bool(placeholder) and await port.edit_progress(msg, placeholder, final)
     if not delivered:
         await port.send_new(msg, final)
