@@ -1699,6 +1699,26 @@
   font-size: 12px;
 }
 
+/* 改动在哪：一句白话 + 分支名，紧跟在结论下面。 */
+.sup-goal-result-where {
+  color: #344054;
+  font-size: 12px;
+}
+
+.sup-goal-result-where code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: #f2f4f7;
+  font-size: 12px;
+}
+
+/* 结果卡出口：查看改动 / 开始新目标 并排，窄屏换行。 */
+.sup-goal-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .sup-goal-new-button {
   min-height: 40px;
 }

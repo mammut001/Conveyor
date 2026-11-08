@@ -18,7 +18,7 @@ from redaction import redact_text, truncate
 from runtime_control import COMMAND_CANCEL, get_runtime_control
 from transcript_store import get_transcript_store, session_identity
 from refinement_store import RefinementStore
-from provider_config import get_provider_config, save_provider_config
+from provider_config import chat_model_configured, get_provider_config, save_provider_config
 
 
 class WebControl:
@@ -757,6 +757,9 @@ class WebControl:
                 "skills": bool(getattr(self.settings, "skills_enabled", False)),
                 "workflows": bool(getattr(self.settings, "workflows_enabled", False)),
                 "provider_key_scoping": bool(getattr(self.settings, "child_env_scope_provider_keys", False)),
+                # A chat model the server already has (saved or from .env), so the console
+                # does not keep asking for 模型设置 when one is configured by env vars.
+                "chat_model_configured": chat_model_configured(self.settings),
                 "mobile_ui": bool(getattr(self.settings, "web_mobile_ui", False)),
                 "pwa": bool(getattr(self.settings, "pwa_enabled", False)),
                 "mcp": bool(getattr(self.settings, "mcp_enabled", False)),

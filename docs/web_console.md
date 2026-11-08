@@ -53,6 +53,8 @@ CONVEYOR_EVENT_RETENTION_PER_JOB=2000
 ```
 
 > **Zero-config onboarding**: On fresh installs, the worker pool (`CONVEYOR_WORKERS_ENABLED`) and worker install (`CONVEYOR_WORKERS_INSTALL`) default to enabled. Setting a model provider via the Web Console "设置" dialog automatically powers both the runner and the chat tier without requiring manual edits to `.env` or setting `CONVEYOR_CHAT_*` variables. Explicit `CONVEYOR_CHAT_MODE=off` or `CONVEYOR_WORKERS_ENABLED=false` still disables them.
+>
+> `GET /api/config/provider` and `features` in `GET /api/system/status` both report `chat_model_configured`: true when the server can already run a chat model, whether it was saved in "设置" or configured from the environment (`CONVEYOR_CHAT_MODEL` + `CONVEYOR_CHAT_API_KEY`). The first-run checklist ticks ② from it, so an env-configured model does not keep asking for "设置".
 
 The standard installer installs both `conveyor-web.service` and
 `conveyor-handoff.service`. For a manual source deployment:

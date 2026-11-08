@@ -79,6 +79,22 @@ def _config_revision(values: dict[str, str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+def chat_model_configured(settings: Any) -> bool:
+    """True when the server can already run a chat model without 模型设置.
+
+    The chat tier reads its model and key straight from the environment
+    (``CONVEYOR_CHAT_MODEL`` / ``CONVEYOR_CHAT_API_KEY``, or the ``MINIMAX_*``
+    names the loader maps onto them), so a server configured that way answers
+    questions without anything saved in 模型设置. An explicit
+    ``CONVEYOR_CHAT_MODE=off`` turns the tier off again.
+    """
+    if str(getattr(settings, "chat_mode", "") or "").strip().lower() == "off":
+        return False
+    model = str(getattr(settings, "chat_model", "") or "").strip()
+    key = str(getattr(settings, "chat_api_key", "") or "").strip()
+    return bool(model and key)
+
+
 def get_provider_config(settings: Any) -> dict[str, Any]:
     path = config_path(settings)
     text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
@@ -103,6 +119,8 @@ def get_provider_config(settings: Any) -> dict[str, Any]:
         "api_key_configured": bool(secret),
         "api_key_hint": f"••••{secret[-4:]}" if secret and len(secret) >= 4 else ("••••" if secret else ""),
         "config_path": str(path),
+        # Any usable chat model, not only the one saved through 模型设置.
+        "chat_model_configured": bool(secret and effective["model"]) or chat_model_configured(settings),
     }
     try:
         from provider_health import get_provider_health

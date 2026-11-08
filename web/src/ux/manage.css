@@ -673,6 +673,10 @@
 .primary-interface .unlock-card h1 { margin: 0; color: #1f2328; font-size: 22px; font-weight: 650; letter-spacing: 0; line-height: 1.35; }
 .primary-interface .unlock-card > p.unlock-lead { margin: 6px 0 22px; color: #6b7280; font-size: 14px; line-height: 1.6; text-wrap: pretty; }
 .primary-interface .unlock-card label.unlock-label { display: block; margin: 0 0 6px; color: #1f2328; font-size: 13px; font-weight: 600; }
+/* 令牌确认中的那一秒：居中一个牌子，没有输入框，键盘落不到任何地方。 */
+.primary-interface .unlock-card--opening { display: grid; justify-items: center; padding: 34px 28px 30px; text-align: center; }
+.primary-interface .unlock-card--opening .brand-mark { margin: 0 0 14px; }
+.primary-interface .unlock-card--opening > p.unlock-lead { margin: 0; }
 .primary-interface .unlock-card .token-field {
   display: flex;
   align-items: stretch;

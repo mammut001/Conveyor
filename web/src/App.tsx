@@ -98,6 +98,8 @@ type SystemStatus = {
     agents?: boolean
     workers?: boolean
     agent_supervisor?: boolean
+    /** The server already has a usable chat model (saved in 模型设置 or from .env). */
+    chat_model_configured?: boolean
   }
 }
 type ComputerStatus = {
@@ -112,6 +114,8 @@ type ProviderConfig = {
   provider_id: string; provider_name: string; model: string; reasoning_effort: string
   base_url: string; wire_api: 'responses' | 'chat'; env_key: string
   api_key_configured: boolean; api_key_hint: string; config_path: string
+  /** Any usable chat model on the server, including one configured by env vars. */
+  chat_model_configured?: boolean
 }
 
 const statusOrder = ['running', 'queued', 'interrupted', 'failed', 'cancelled', 'completed']
@@ -216,6 +220,10 @@ export default function App() {
   }, [agentState.enabled])
   const [tokenDraft, setTokenDraft] = useState('')
   const [authenticated, setAuthenticated] = useState(false)
+  // 刷新时带着记住的令牌（或这个标签页里已经存过的令牌）先别亮出解锁表单：先显示一个
+  // 没有输入框的「正在打开…」，等服务器确认令牌有效再进应用。否则表单会先闪一秒，
+  // 老板这期间打的字全都落到光标底下突然出现的输入框里。
+  const [checkingStoredToken, setCheckingStoredToken] = useState(() => Boolean(sessionStorage.getItem('conveyor-token') || storedToken()))
   const [sessions, setSessions] = useState<Session[]>([])
   // 对话 sidebar rows: web conversations that already have messages (chat-only ones included).
   const [chatSessions, setChatSessions] = useState<Session[]>([])
@@ -648,6 +656,8 @@ export default function App() {
       if (isStale(gen, refreshGen.current)) return
       setInitialLoaded(true)
       setPollFailed(false)
+      // 服务器认下了这个令牌：解锁表单再也不需要出现。
+      setCheckingStoredToken(false)
       const taskSessions = taskSessionsOnly(sessionData.sessions)
       // 对话 (webchat) sessions are filtered out of the 任务 list, but a message there still counts as the first message.
       setAnySessionHasMessages(sessionData.sessions.some(s => (s.message_count || 0) > 0 || (s.job_count || 0) > 0))
@@ -698,6 +708,8 @@ export default function App() {
     } catch (reason) {
       if (reason instanceof Error && reason.name === 'AbortError') return
       setPollFailed(true)
+      // 令牌被拒（或网络不通）：落回解锁表单，连同它的错误提示。
+      setCheckingStoredToken(false)
       setError(reason instanceof Error ? reason.message : 'Could not connect')
     }
   }, [api, creatingSession, selectedJobId, selectedSessionId, token])
@@ -1138,7 +1150,13 @@ export default function App() {
     setToken(''); setAuthenticated(false); setRememberToken(false)
   }
 
-  const modelConfigured = Boolean(providerConfig && providerConfig.api_key_configured && providerConfig.model)
+  // ② 算的是「服务器上任何一个能用的对话模型」：模型设置里存下来的，或者服务器用环境
+  // 变量自己配好的（GET /api/config/provider 与 /api/system/status 都会说明这件事）。
+  const modelConfigured = Boolean(
+    (providerConfig && providerConfig.api_key_configured && providerConfig.model)
+    || providerConfig?.chat_model_configured
+    || system?.features?.chat_model_configured
+  )
   const workersEnabled = Boolean(system?.features?.workers)
   const hasEligibleWorker = Boolean(
     workersData?.active ||
@@ -1187,17 +1205,22 @@ export default function App() {
     } catch { /* ignore */ }
   }, [])
 
-  if (!authenticated) return <UnlockScreen
-    tokenDraft={tokenDraft} onTokenDraftChange={value => { setTokenDraft(value); if (error) setError('') }}
-    rememberToken={rememberToken} onRememberTokenChange={setRememberToken}
-    error={error} canRetry={Boolean(token)} onRetry={() => { setError(''); void refresh() }}
-    onSubmit={event => {
-      // Submitting the same token again (e.g. after a network error) must retry, not do nothing.
-      const retry = Boolean(tokenDraft.trim()) && tokenDraft.trim() === token
-      setError(''); unlock(event)
-      if (retry) void refresh()
-    }}
-  />
+  // 带着记住的令牌刷新时，先显示「正在打开…」；只有真的没有令牌、或者令牌被拒了，
+  // 才亮出解锁表单（连同它的错误提示）。
+  if (!authenticated) {
+    if (checkingStoredToken) return <OpeningScreen />
+    return <UnlockScreen
+      tokenDraft={tokenDraft} onTokenDraftChange={value => { setTokenDraft(value); if (error) setError('') }}
+      rememberToken={rememberToken} onRememberTokenChange={setRememberToken}
+      error={error} canRetry={Boolean(token)} onRetry={() => { setError(''); void refresh() }}
+      onSubmit={event => {
+        // Submitting the same token again (e.g. after a network error) must retry, not do nothing.
+        const retry = Boolean(tokenDraft.trim()) && tokenDraft.trim() === token
+        setError(''); unlock(event)
+        if (retry) void refresh()
+      }}
+    />
+  }
 
   // Derived from server state on every load (no in-memory flag): the checklist stays until every step is done or it is dismissed.
   const showChecklist = initialLoaded && !checklistDismissed && onboardingStepsOpen
@@ -1922,6 +1945,16 @@ function keepTabInside(event: React.KeyboardEvent<HTMLElement>) {
   const first = items[0]; const last = items[items.length - 1]
   if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) { event.preventDefault(); last.focus() }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+}
+
+/** 令牌正在被服务器确认时的那一秒：只有一个牌子，没有任何输入框。 */
+function OpeningScreen() {
+  return <main className="unlock-shell">
+    <div className="unlock-card unlock-card--opening">
+      <div className="brand-mark" aria-hidden="true">C</div>
+      <p className="unlock-lead" role="status">正在打开…</p>
+    </div>
+  </main>
 }
 
 function UnlockScreen({ tokenDraft, onTokenDraftChange, rememberToken, onRememberTokenChange, error, canRetry, onRetry, onSubmit }: {
