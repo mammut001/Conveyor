@@ -3,17 +3,20 @@
 
 Drives the real supervisor flow (queue_task -> claim_task -> run_supervisor_flow)
 where every analyst/implementer/reviewer role uses executor "pool". The pool
-delegates through the real ClaudeExecutor / AntigravityExecutor and the real
-``_spawn_cli`` subprocess path. Only the two binaries are fakes, written into a
-temp dir and pointed at via CONVEYOR_CLAUDE_BIN / CONVEYOR_AGY_BIN:
+delegates through the real ClaudeExecutor / AntigravityExecutor / PiExecutor and
+the real ``_spawn_cli`` subprocess path. Only the binaries are fakes, written
+into a temp dir and pointed at via CONVEYOR_CLAUDE_BIN / CONVEYOR_AGY_BIN /
+CONVEYOR_PI_BIN:
 
 - ``claude`` always hits a usage limit (stream-json error envelope on stdout,
   message on stderr, exit 1).
 - ``agy`` emits valid ``--output-format stream-json`` result envelopes and
   behaves per role (analyst: plan, implementer: writes feature.txt, reviewer:
   returns a verdict for the Current SHA / Target fingerprint in its prompt).
+- ``pi`` emits valid ``-p --mode json`` NDJSON events and verifies read-only vs
+  write tool allowlists when the pool rotates to ``pi``.
 
-Worker detection is stubbed in-process so no real ``claude``/``agy``/``cmd``
+Worker detection is stubbed in-process so no real ``claude``/``agy``/``cmd``/``pi``
 binary is ever resolved from PATH. Nothing is committed or pushed.
 
 Prints PASS/FAIL lines; exits non-zero on any failure.
@@ -113,6 +116,23 @@ else:
     emit(dict(base, response="ok"))
 '''
 
+_FAKE_PI = r'''#!__PY__
+import json, os, sys
+LOG = __LOG__
+prompt = sys.stdin.read()
+argv = sys.argv[1:]
+tools = argv[argv.index("--tools") + 1] if "--tools" in argv else ""
+role = "implementer" if "write" in tools.split(",") else "analyst"
+with open(LOG, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps({"bin": "pi", "argv": argv, "cwd": os.getcwd(), "role": role}) + "\n")
+text = f"pi {role} completed"
+print(json.dumps({"type": "message_end", "message": {"role": "assistant",
+    "usage": {"input": 8, "output": 4, "cacheRead": 0},
+    "content": [{"type": "text", "text": text}]}}), flush=True)
+print(json.dumps({"type": "agent_end", "messages": [
+    {"role": "assistant", "content": [{"type": "text", "text": text}]}]}), flush=True)
+'''
+
 
 def _write_fake(path: Path, template: str, log: Path) -> None:
     body = (
@@ -153,18 +173,23 @@ def main() -> int:
     invocations.touch()
     claude_bin = bins / "claude"
     agy_bin = bins / "agy"
+    pi_bin = bins / "pi"
     _write_fake(claude_bin, _FAKE_CLAUDE, invocations)
     _write_fake(agy_bin, _FAKE_AGY, invocations)
+    _write_fake(pi_bin, _FAKE_PI, invocations)
 
     # Point the real executors at the fakes. ANTIGRAVITY_BIN wins over AGY_BIN,
     # so both are set to avoid a stray user override.
     os.environ["CONVEYOR_CLAUDE_BIN"] = str(claude_bin)
     os.environ["CONVEYOR_AGY_BIN"] = str(agy_bin)
     os.environ["CONVEYOR_ANTIGRAVITY_BIN"] = str(agy_bin)
+    os.environ["CONVEYOR_PI_BIN"] = str(pi_bin)
+    os.environ["CONVEYOR_PI_PROVIDER"] = "deepseek"
+    os.environ["CONVEYOR_PI_MODEL"] = "deepseek-chat"
 
     # Detection would otherwise resolve real binaries from PATH (and run them).
     original_detect = workers.detect_all_workers
-    installed = {"claude-code": str(claude_bin), "agy": str(agy_bin)}
+    installed = {"claude-code": str(claude_bin), "agy": str(agy_bin), "pi": str(pi_bin)}
 
     def fake_detect(force: bool = False) -> dict:
         out = {}
@@ -217,10 +242,10 @@ def main() -> int:
         )
         (settings.codex_memory_root / "state").mkdir(parents=True, exist_ok=True)
 
-        # Pool order: claude-code first, then agy.
+        # Pool order: claude-code first, then agy, then pi.
         state = workers.load_workers_state(settings)
-        state["order"] = ["claude-code", "agy"] + [
-            w for w in state["order"] if w not in ("claude-code", "agy")
+        state["order"] = ["claude-code", "agy", "pi"] + [
+            w for w in state["order"] if w not in ("claude-code", "agy", "pi")
         ]
         workers.save_workers_state(settings, state)
 
@@ -336,6 +361,51 @@ def main() -> int:
                 checks.check("agy implementer ran inside the worktree",
                              os.path.realpath(c["cwd"]) == os.path.realpath(wt),
                              f"cwd={c['cwd']} wt={wt}")
+
+        # 8. Cool agy and verify PoolExecutor delegates read and write roles to PiExecutor.
+        workers.mark_cooling(settings, "agy", 3600, reason="smoke")
+        state_pi = workers.load_workers_state(settings)
+        state_pi.setdefault("models", {})["pi"] = "pool-model-pi-cannot-use"
+        workers.save_workers_state(settings, state_pi)
+        pool_ex = ags.get_executor(settings, "pool")
+        pi_read = asyncio.run(pool_ex.run(
+            role=ags.RoleConfig(
+                name="analyst", executor="pool", tools=["read"], location="worktree", model="role-model",
+            ),
+            prompt="You are the analyst",
+            worktree_path=wt,
+            timeout_seconds=30,
+        ))
+        pi_write = asyncio.run(pool_ex.run(
+            role=ags.RoleConfig(
+                name="implementer", executor="pool", tools=["read", "write"], location="worktree", model="role-model",
+            ),
+            prompt="You are the implementer",
+            worktree_path=wt,
+            timeout_seconds=30,
+        ))
+        checks.check("pool delegated read role to pi when claude-code and agy are cooling",
+                     pi_read.success and pi_read.evidence.get("pool", {}).get("worker_id") == "pi",
+                     f"pi_read={pi_read}")
+        checks.check("pool delegated write role to pi when claude-code and agy are cooling",
+                     pi_write.success and pi_write.evidence.get("pool", {}).get("worker_id") == "pi",
+                     f"pi_write={pi_write}")
+        all_calls = [json.loads(line) for line in invocations.read_text(encoding="utf-8").splitlines() if line.strip()]
+        pi_calls = [c for c in all_calls if c["bin"] == "pi"]
+        checks.check("pi invoked for both analyst (read) and implementer (write)",
+                     [c["role"] for c in pi_calls] == ["analyst", "implementer"],
+                     f"pi_calls={pi_calls}")
+        if len(pi_calls) == 2:
+            read_argv, write_argv = pi_calls[0]["argv"], pi_calls[1]["argv"]
+            checks.check("pi read role uses read,grep,find,ls tools only",
+                         _opt(read_argv, "--tools") == "read,grep,find,ls",
+                         f"read_argv={read_argv}")
+            checks.check("pi write role uses read,bash,edit,write,grep,find,ls tools",
+                         _opt(write_argv, "--tools") == "read,bash,edit,write,grep,find,ls",
+                         f"write_argv={write_argv}")
+            checks.check("pool worker model is never passed to pi",
+                         "pool-model-pi-cannot-use" not in read_argv and "pool-model-pi-cannot-use" not in write_argv,
+                         f"read_argv={read_argv} write_argv={write_argv}")
     except Exception as exc:  # surface any flow crash as a failed check
         checks.check("smoke flow completed without exception", False, f"{type(exc).__name__}: {exc}")
     finally:
