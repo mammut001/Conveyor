@@ -1989,6 +1989,9 @@ class SupervisorWorkerManager:
       without falsely interrupting in-flight flows on subsequent poll ticks.
     - Claims queued tasks via `ags.claim_task(settings)` and runs
       `ags.run_supervisor_flow(settings, task_id)` up to `ags.MAX_CONCURRENT_FLOWS`.
+    - Advances the goal-driven loop (`supervisor_goals.advance_goals`) once per tick,
+      after claiming available tasks, as a single-flight background task so a slow
+      evaluator chat call never blocks task claiming.
     - Supports immediate wakeup on `POST /api/supervisor/tasks/:id/dispatch` and
       clean cancellation/shutdown when `WebConsoleServer.server_close()` runs.
     """
@@ -1997,19 +2000,23 @@ class SupervisorWorkerManager:
         self.loop = loop
         self._lock = threading.Lock()
         self._settings: Any = None
+        self._server: Any = None
         self._worker_task: asyncio.Task[None] | None = None
         self._wake_event: asyncio.Event | None = None
         self._active_flows: dict[str, asyncio.Task[Any]] = {}
+        self._goals_task: asyncio.Task[None] | None = None
         self._recovered_once = False
         self._closed = False
 
-    def ensure_started(self, settings: Any, *, wake: bool = False) -> None:
+    def ensure_started(self, settings: Any, *, wake: bool = False, server: Any = None) -> None:
         if not is_enabled(settings):
             return
         with self._lock:
             if self._closed:
                 return
             self._settings = settings
+            if server is not None:
+                self._server = server
         try:
             running_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -2060,6 +2067,11 @@ class SupervisorWorkerManager:
                 except Exception:
                     log.exception("supervisor worker claim cycle failed")
 
+                # Goal-driven loop: one single-flight background pass per tick. Never
+                # awaited inline — an evaluator chat call can take minutes, and blocking
+                # here would stall task claiming for the whole server.
+                self._start_goals_pass(settings)
+
             if self._wake_event is None:
                 self._wake_event = asyncio.Event()
             try:
@@ -2069,6 +2081,39 @@ class SupervisorWorkerManager:
                 pass
             except asyncio.CancelledError:
                 break
+
+    def _start_goals_pass(self, settings: Any) -> None:
+        """Start `advance_goals` in the background unless the previous pass is still
+        running (single-flight). Called from the worker loop only."""
+        if self._closed:
+            return
+        with self._lock:
+            goals_task = self._goals_task
+            if goals_task is not None and not goals_task.done():
+                return
+        try:
+            from supervisor_goals import advance_goals
+
+            task = self.loop.create_task(
+                advance_goals(self._server, settings),
+                name="conveyor-supervisor-goals",
+            )
+        except Exception:
+            log.exception("supervisor goal pass could not be started")
+            return
+        with self._lock:
+            self._goals_task = task
+        task.add_done_callback(self._on_goals_pass_done)
+
+    def _on_goals_pass_done(self, task: "asyncio.Future[Any]") -> None:
+        with self._lock:
+            if self._goals_task is task:
+                self._goals_task = None
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("supervisor goal advance cycle failed: %s", redact_text(f"{type(exc).__name__}: {exc}"))
 
     def _on_flow_done(self, settings: Any, task_id: str, flow_task: asyncio.Future[Any]) -> None:
         # Remove entry ONLY if map still points to this done future
@@ -2232,7 +2277,14 @@ class SupervisorWorkerManager:
             for f in flows:
                 if not f.done():
                     f.cancel()
-            pending = [t for t in ([worker] if worker else []) + flows if t is not None and not t.done()]
+            goals_task = self._goals_task
+            if goals_task is not None and not goals_task.done():
+                goals_task.cancel()
+            pending = [
+                t
+                for t in ([worker] if worker else []) + flows + ([goals_task] if goals_task else [])
+                if t is not None and not t.done()
+            ]
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
 
@@ -2275,7 +2327,7 @@ def ensure_server_worker(server: Any, settings: Any, *, wake: bool = False) -> S
         return None
     mgr = _worker_manager_for_server(server)
     if mgr is not None:
-        mgr.ensure_started(settings, wake=wake)
+        mgr.ensure_started(settings, wake=wake, server=server)
     return mgr
 
 

@@ -199,6 +199,97 @@ Supervisor actions are accessible over authenticated HTTP endpoints. Dispatch wa
 
 ---
 
+## 目标闭环（goals）
+
+A **goal** sits above tasks: the operator describes the *outcome* they want, and the goal loop runs task
+after task on the same managed worktree until the outcome is reached, the iteration budget runs out, the
+operator stops it, or a decision is needed from the operator.
+
+```
+用户描述结果 → 目标（goal）→ 第 1 轮任务 → 评估 → 第 2 轮任务 → … → 达成 / 停止 / 预算用尽 / 等待用户 / 失败
+```
+
+- Storage: `supervisor_goals.sqlite3` (sibling of `supervisor_web.sqlite3` under the same state root),
+  tables `supervisor_goals` and `supervisor_goal_iterations`.
+- Every round's task is created and dispatched through the normal service functions
+  (`create_scoped_task` / `dispatch_scoped_task`), so scope, role-override and worktree-lock validation is
+  reused, never bypassed. Only one task of a goal runs at a time, and a new task is never started while the
+  worktree still has an active task (`has_active_task_for_worktree`) — the loop simply waits for the next tick.
+- `advance_goals(server, settings)` runs on every `SupervisorWorkerManager` loop tick (after
+  `_claim_available`) as a **single-flight background task**: while a previous goal pass is still running
+  (e.g. an evaluator chat call that can take minutes) no new pass is started, and the worker loop keeps
+  claiming queued tasks. The pass task is cancelled together with the flows on shutdown, and its
+  exception is logged instead of killing the loop.
+
+### Goal fields
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `goal-<hex>` |
+| `repo_id` / `worktree_id` | same scope fields `create_scoped_task` accepts |
+| `title` | first line of the outcome, ≤ 80 chars |
+| `outcome` | the operator's description, 1–4000 chars |
+| `max_iterations` | default 5, clamped 1–20 |
+| `role_overrides` | same shape dispatch accepts (`executor`/`model` on analyst/implementer/reviewer), optional |
+| `state` | `running` \| `waiting_user` \| `achieved` \| `stopped` \| `exhausted` \| `failed` |
+| `question` | text shown to the operator while `waiting_user` |
+| `summary` | latest one-paragraph status (Chinese) |
+| `stop_reason` | why the goal left `running` |
+
+### Loop
+
+1. No iteration yet → create iteration 1: task goal text = outcome + `这是目标的第 1 轮。`, then create + dispatch.
+2. Current iteration's task still active (queued/dispatching/analyzing/implementing/reviewing/repair_pending) → wait.
+3. Task reached a terminal state or `waiting_user` → evaluate: build a Chinese evaluator prompt containing the
+   outcome and every previous iteration (prompt + final state + a ≤3000-char excerpt of task summary /
+   acceptance / reviewer issues), and ask the coordinator chat model
+   (`agent_supervisor.get_executor(settings, "chat")` with the coordinator `RoleConfig` from `load_roles`) to
+   reply with ONLY a JSON object:
+   `{"decision": "continue"|"achieved"|"ask_user"|"give_up", "reason": "...", "next_prompt": "...", "question": "...", "summary": "..."}`.
+   Parsing strips ``` fences and decodes the first `{...}`; on parse failure or chat unavailable the goal goes
+   to `waiting_user` with a Chinese question explaining that the evaluator could not decide.
+4. Evaluation is idempotent: an iteration that already carries a decision is never re-evaluated, and the
+   iteration is marked `evaluating` (atomic DB claim) before the await, so two ticks never evaluate the same
+   iteration concurrently.
+
+### Hard rules (enforced in code, never trusted from the model)
+
+- `achieved` is allowed **only** when the latest task state is `completed`. Otherwise it is downgraded:
+  task `waiting_user` → `ask_user`, any other terminal state → `continue` (still budget-capped).
+- Task `waiting_user` (e.g. stage `needs_validation`, meaning no host validation commands are configured) →
+  goal `waiting_user`; the question states plainly what the operator must do:
+  `这一轮的改动已经做完，但没有配置自动验证命令，请检查结果后告诉我是否达成或还要改什么`.
+- Task `cancelled` → goal `stopped` (unless the operator already stopped the goal).
+- `continue` when iterations used == `max_iterations` → `exhausted`.
+- `continue` requires a non-empty `next_prompt` (≤ `MAX_GOAL_CHARS`); otherwise → `ask_user`.
+- `give_up` → `failed` with the model's reason.
+- Crash safety: a goal whose current task row is missing → `failed` with the reason.
+- A `continue` round is dispatched with the prompt prefix
+  `这是目标「<title>」的第 N 轮。目标：<outcome>\n\n本轮要做：` + `next_prompt`.
+
+### HTTP API (same auth, same `SupervisorServiceError` JSON shape, same feature-flag gating)
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /api/supervisor/goals` | list goals (`{goals: [...], count: n}`) |
+| `GET /api/supervisor/goals/<id>` | goal detail incl. iterations and each task's current state |
+| `POST /api/supervisor/goals` | create a goal (`201`) |
+| `POST /api/supervisor/goals/<id>/stop` | stop the goal and cancel its active task (`200`) |
+| `POST /api/supervisor/goals/<id>/reply` | answer a `waiting_user` goal (`200`) |
+
+`POST /reply` body: `{"message": str, "achieved": bool}`, allowed only while the goal is `waiting_user`
+(otherwise `409 goal_not_waiting_user`).
+
+- `achieved: true` → state `achieved`, `stop_reason` `用户确认已达成` (the operator's judgment overrides).
+- Otherwise: if the current task is still `waiting_user` it is cancelled first (to release the worktree lock),
+  then the next iteration is started with the evaluator's last `next_prompt` (when present) plus
+  `\n\n用户补充：` + `message`.
+- Budget: `max_iterations` still applies, with one documented exception — when the budget is used up, an
+  explicit operator reply buys **exactly one** extra iteration; anything beyond that is refused with
+  `409 goal_iterations_exhausted`.
+
+---
+
 ## Deployment Truth: Store Tracking Only
 
 The supervisor tracks deployment progress across 5 stages:

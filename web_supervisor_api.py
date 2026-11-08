@@ -6,6 +6,7 @@ from http import HTTPStatus
 from typing import Any
 
 import supervisor_service as svc
+import supervisor_goals as goals_mod
 from redaction import redact_text, truncate
 
 logger = logging.getLogger("conveyor.web_supervisor_api")
@@ -61,6 +62,16 @@ def handle_get(
 
         if len(parts) == 4 and parts[:3] == ["api", "supervisor", "tasks"]:
             detail = svc.get_scoped_task(settings, parts[3])
+            handler._json(HTTPStatus.OK, detail)
+            return True
+
+        if path == "/api/supervisor/goals":
+            goals = goals_mod.list_goals(settings)
+            handler._json(HTTPStatus.OK, {"goals": goals, "count": len(goals)})
+            return True
+
+        if len(parts) == 4 and parts[:3] == ["api", "supervisor", "goals"]:
+            detail = goals_mod.get_goal(settings, parts[3])
             handler._json(HTTPStatus.OK, detail)
             return True
 
@@ -121,6 +132,23 @@ def handle_post(
             task, created = svc.create_scoped_task(settings, body)
             handler._json(HTTPStatus.CREATED if created else HTTPStatus.OK, task)
             return True
+
+        if path == "/api/supervisor/goals":
+            goal = goals_mod.create_goal(handler.server, settings, body)
+            handler._json(HTTPStatus.CREATED, goal)
+            return True
+
+        if len(parts) == 5 and parts[:3] == ["api", "supervisor", "goals"]:
+            goal_id = parts[3]
+            action = parts[4]
+            if action == "stop":
+                stopped = goals_mod.stop_goal(handler.server, settings, goal_id)
+                handler._json(HTTPStatus.OK, stopped)
+                return True
+            if action == "reply":
+                replied = goals_mod.reply_goal(handler.server, settings, goal_id, body)
+                handler._json(HTTPStatus.OK, replied)
+                return True
 
         if len(parts) == 5 and parts[:3] == ["api", "supervisor", "tasks"]:
             task_id = parts[3]
