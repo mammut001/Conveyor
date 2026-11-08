@@ -474,8 +474,8 @@ async def _invoke_tool(
 
 
 def _memory_blocked(settings: Settings, msg: InboundMessage, tool_name: str) -> bool:
-    """memory.* is refused in group chats (shared memory must not leak there)."""
-    if not tool_name.startswith("memory."):
+    """memory.* and session.search are refused in group chats (shared memory must not leak there)."""
+    if not (tool_name.startswith("memory.") or tool_name == "session.search"):
         return False
     from personal_tools.long_term_memory import allowed_for
     return not allowed_for(settings, msg)

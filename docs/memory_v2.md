@@ -182,6 +182,16 @@ available to the operator/agents by default. They remain available in their
 original source stores even if not imported, and may contain private or
 low-trust text. No operation removes or modifies original sources.
 
+## 搜索过去的对话
+
+`transcript_store.py` 在 `job_queue.sqlite3` 中为过去的会话消息提供全文检索：
+
+- **索引与同步**：使用 SQLite FTS5 虚拟表 `session_messages_fts (content, session_id UNINDEXED, message_id UNINDEXED)`，通过 `session_messages` 上的 `AFTER INSERT`、`AFTER DELETE`、`AFTER UPDATE` 触发器自动同步；首次初始化时以分批（chunked）且幂等的方式回填既有消息行。所有连接均启用 `PRAGMA secure_delete = ON`，调用 `delete_session()` 时同步清除索引并执行 FTS `optimize` 擦除残留块。
+- **中文与回退（LIKE）**：由于 FTS5 默认 `unicode61` 分词器不会切分中文词语，包含中日韩（CJK）字符的查询以及 SQLite 未编译 FTS5 的环境会自动回退到 `LIKE` 子串与二元分词匹配。
+- **`TranscriptStore.search(query, *, limit=20, channel=None, include_archived=False, operator_id=None)`**：返回 `{session_id, title, channel, created_at, message_id, role, snippet, score}` 列表，其中 `snippet` 为命中位置附近不超过 200 字符的摘要。默认排除归档会话与 Supervisor 工作树会话（`supwt-`），除非 `channel` 过滤条件显式指定；若指定或区分 `operator_id`，绝不返回其他操作者的消息。
+- **聊天工具 `session.search`**：注册在个人工具注册表中（`READ`，无需审批），接受 `{query, limit?}`，将前排命中包裹在 `<past-sessions role="untrusted-data">…</past-sessions>` 中并对所有字段进行 HTML 转义，总输出不超过 2000 字符。当主人提到以前聊过的内容时，聊天层可通过 `session.search` 检索历史对话。
+- **HTTP 接口**：`GET /api/memory/sessions/search?q=&limit=`，与 `/api/memory` 使用相同的 Bearer Token 鉴权；`q` 为 1–200 字符，`limit` 为 1–50（默认 20），返回 `{"results": [...], "query": q}`，参数校验错误返回简体中文提示。
+
 ## Verification
 
 Run python -m unittest tests.test_memory_v2 -v, then the usual

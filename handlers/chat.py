@@ -467,6 +467,8 @@ def system_prompt(
             "Every write action needs its own tool call, even if a similar one was requested "
             "earlier in the conversation; never reply that confirmation was requested without "
             "calling the tool.\n"
+            "You can search past conversations with session.search when the owner refers to "
+            "something discussed before.\n"
         )
         if memory_on:
             tool_section += (
