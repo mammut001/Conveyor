@@ -1185,6 +1185,24 @@ export default function App() {
     setView('chat')
     setSessionsDrawerOpen(false)
   }
+  // A conversation found by 记忆 → 「搜索过去的对话」 opens where the 对话 / 任务 lists
+  // would open it: an agent's conversation on its 对话 page, a web chat in 对话,
+  // anything else (task runs, Telegram, 飞书) in 任务.
+  const openSearchedSession = (sessionId: string) => {
+    if (!sessionId) return
+    historyModeRef.current = 'push'
+    if (isSupervisorWorktreeSessionId(sessionId)) { setView('code'); return }
+    const agent = agentState.enabled ? agentState.agents.find(item => item.session_id === sessionId) : undefined
+    if (agent) { selectAgent(agent); return }
+    if (isChatSessionId(sessionId) && !agentState.enabled) {
+      setChatOpenRequest(previous => ({ id: sessionId, nonce: (previous?.nonce ?? 0) + 1 }))
+      setView('chat')
+      return
+    }
+    const known = sessions.find(item => item.id === sessionId)
+    selectSession(sessionId, known?.latest_job?.id)
+    setView('tasks')
+  }
   const saveAgent = async (draft: AgentDraft, agent?: Agent) => {
     const saved = await api<Agent>(agent ? `/api/agents/${encodeURIComponent(agent.id)}` : '/api/agents', {
       method: agent ? 'PUT' : 'POST', body: JSON.stringify(draft),
@@ -1534,7 +1552,7 @@ export default function App() {
         ) : view === 'workers' ? (
           <WorkersPanel token={token} />
         ) : view === 'memory' ? (
-          <MemoryPanel key={selectedAgent?.id || 'operator'} token={token} agentId={selectedAgent && !selectedAgent.is_default ? selectedAgent.id : undefined} agentName={selectedAgent?.name} />
+          <MemoryPanel key={selectedAgent?.id || 'operator'} token={token} agentId={selectedAgent && !selectedAgent.is_default ? selectedAgent.id : undefined} agentName={selectedAgent?.name} onOpenSession={openSearchedSession} />
         ) : view === 'inbox' ? (
           <InboxPanel
             agentId={selectedAgent && !selectedAgent.is_default ? selectedAgent.id : undefined}

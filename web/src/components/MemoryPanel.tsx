@@ -1,5 +1,7 @@
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { channelLabel, ErrorNote, formatDateTime, formatWhen, friendlyError, responseError, readJson, BadShapeError, useLoadingTimeout, type FriendlyError } from '../ux/knowledgeKit';
+import { NotesEditor } from './NotesEditor';
+import { SessionSearch } from './SessionSearch';
 
 export type MemoryItem = {
   id: number;
@@ -33,9 +35,15 @@ function fromChannel(channel: string) {
 }
 
 /** With `agentId` the panel shows that agent's own memory; without, the operator's. */
-export type MemoryPanelProps = { token: string; agentId?: string; agentName?: string };
+export type MemoryPanelProps = {
+  token: string;
+  agentId?: string;
+  agentName?: string;
+  /** Opens a past conversation found by 「搜索过去的对话」 (same as the 对话 / 任务 lists). */
+  onOpenSession?: (sessionId: string) => void;
+};
 
-export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanelProps) {
+export function MemoryPanel({ token, agentId = '', agentName = '', onOpenSession }: MemoryPanelProps) {
   const [disabled, setDisabled] = useState(false);
   const disabledRef = useRef(false);
   const [data, setData] = useState<MemoryList | null>(null);
@@ -195,10 +203,31 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
     setActiveQuery('');
   };
 
+  // The agent's own notes and the past-conversation search belong to the main
+  // assistant, so a named agent's memory page leaves them out.
+  const extraSections = agentId ? null : (
+    <>
+      <section className="kn-card kn-extra-section" aria-label="它自己记下的笔记">
+        <p className="kn-extra-title">它自己记下的笔记</p>
+        <NotesEditor
+          token={token}
+          scope="global"
+          label="它自己记下的笔记"
+          explain="对话开始时它会带上这些笔记；改动从下一次对话起生效。"
+        />
+      </section>
+      <section className="kn-card kn-extra-section" aria-label="搜索过去的对话">
+        <p className="kn-extra-title">搜索过去的对话</p>
+        <SessionSearch token={token} onOpenSession={onOpenSession} />
+      </section>
+    </>
+  );
+
   if (disabled) {
     return (
       <div className="stream-body kn-page kn-memory">
         <p className="kn-off">记忆功能未开启。</p>
+        {extraSections}
       </div>
     );
   }
@@ -457,6 +486,8 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
       {data && !hasFacts && total > 0 && (
         <p className="kn-footnote">最先记住的 {data.profile_cap} 条是常用档案，每次对话都会参考；之后的存进记忆日志，需要时再查。</p>
       )}
+
+      {extraSections}
     </div>
   );
 }

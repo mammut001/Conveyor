@@ -4,6 +4,7 @@
    Every class here starts with kn- except the legacy agent-library ones it refines. */
 
 .kn-page,
+.kn-notes,
 .kn-library,
 .kn-library-empty,
 .kn-library-error {
@@ -653,6 +654,7 @@ fieldset.kn-field > legend { margin-bottom: 8px; }
 
 /* Narrow panel (phones, or a slim middle column). */
 @container kn-page (max-width: 600px) {
+  .kn-extra-section { padding: 14px; }
   .kn-memory-toolbar { flex-direction: column; align-items: stretch; }
   .kn-segmented { display: flex; }
   .primary-interface .kn-segmented button { flex: 1 1 auto; padding: 4px 8px; }
@@ -797,4 +799,82 @@ fieldset.kn-field > legend { margin-bottom: 8px; }
   .primary-interface .kn-section-head > .kn-btn, .primary-interface .kn-chip-btn { min-height: 40px; }
   .primary-interface .kn-inline-select select { min-height: 40px; }
   .kn-checks label { min-height: 40px; }
+}
+
+/* ---- Agent notes (NotesEditor: 记忆 「它自己记下的笔记」 and 项目 「项目笔记」) ---- */
+
+.kn-extra-section { display: flex; flex-direction: column; gap: 10px; padding: 16px 20px; min-width: 0; }
+.kn-extra-title { margin: 0; color: var(--kn-text); font-size: 15px; font-weight: 600; }
+
+.kn-notes { display: flex; flex-direction: column; gap: 10px; min-width: 0; color: var(--kn-text); font-size: 14px; line-height: 1.55; }
+.kn-notes-explain { margin: 0; color: var(--kn-muted); font-size: 13px; line-height: 1.6; }
+
+.kn-notes-usage { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--kn-muted); font-size: 12px; }
+.kn-notes-bar { flex: 1 1 auto; min-width: 60px; max-width: 280px; height: 6px; border-radius: 999px; background: #eceef0; overflow: hidden; }
+.kn-notes-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--kn-accent); }
+.kn-notes-usage.is-near .kn-notes-bar > span { background: var(--kn-warning); }
+.kn-notes-usage.is-full .kn-notes-bar > span { background: var(--kn-danger); }
+.kn-notes-usage.is-near .kn-notes-usage-text { color: var(--kn-warning); }
+.kn-notes-usage.is-full .kn-notes-usage-text { color: var(--kn-danger); font-weight: 500; }
+.kn-notes-usage-text { flex: none; font-variant-numeric: tabular-nums; }
+
+.kn-notes-add { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin: 0; }
+.kn-notes-add-row { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+.primary-interface .kn-notes-textarea { min-height: 56px; }
+.primary-interface .kn-notes-add-row .kn-notes-textarea { flex: 1 1 auto; min-width: 0; }
+.primary-interface .kn-notes-add-row .kn-btn { flex: none; min-height: 40px; padding: 0 16px; }
+
+.kn-notes-error { margin: 0; color: var(--kn-danger); font-size: 13px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
+.kn-notes-load-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--kn-danger); font-size: 13px; }
+.kn-notes-empty { margin: 0; color: var(--kn-muted); font-size: 13px; line-height: 1.6; }
+
+.kn-notes-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; min-width: 0; }
+.kn-note-item { min-width: 0; padding: 10px 12px; border: 1px solid var(--kn-border); border-radius: 8px; background: var(--kn-surface); }
+.kn-note-item.kn-note-untrusted { border-style: dashed; background: #fcfcfd; }
+.kn-note-text { margin: 0; color: var(--kn-text); font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.kn-note-foot { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; margin-top: 6px; }
+.kn-note-foot.is-confirming { grid-template-columns: minmax(0, 1fr); }
+.kn-note-foot .kn-row-actions { justify-content: flex-end; }
+.kn-note-edit { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.kn-note-edit .kn-row-actions { align-items: center; }
+.kn-note-source-agent { background: #eef2ff; color: #3e3fb0; }
+.kn-note-source-owner { background: var(--kn-accent-soft); color: #9a4630; }
+.kn-note-source-untrusted { background: var(--kn-warning-soft); color: var(--kn-warning); white-space: normal; }
+
+/* ---- 搜索过去的对话 (SessionSearch) ---- */
+
+.kn-session-search { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.kn-session-search-form { display: flex; gap: 8px; min-width: 0; margin: 0; }
+.primary-interface .kn-session-search-form .kn-input { flex: 1 1 auto; min-width: 0; min-height: 40px; }
+.primary-interface .kn-session-search-form .kn-btn { flex: none; min-height: 40px; padding: 0 18px; }
+.kn-session-search .kn-counter { margin: 0; }
+.kn-session-search .kn-result-line { margin: 0; }
+.kn-session-search-empty { margin: 0; color: var(--kn-muted); font-size: 13px; }
+.kn-session-hits { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.primary-interface .kn-session-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--kn-border);
+  border-radius: 8px;
+  background: var(--kn-surface);
+  color: var(--kn-text);
+  font: inherit;
+  text-align: left;
+}
+.primary-interface button.kn-session-hit { cursor: pointer; }
+.primary-interface button.kn-session-hit:hover { border-color: var(--kn-border-strong); background: #fafbfc; }
+.primary-interface button.kn-session-hit:focus-visible { outline: 2px solid var(--kn-accent); outline-offset: 2px; }
+.kn-session-hit-title { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.kn-session-hit-snippet { color: #4b5563; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.kn-hit { padding: 0 1px; border-radius: 3px; background: #fff1b8; color: inherit; }
+
+@media (max-width: 520px) {
+  .kn-notes-add-row { flex-direction: column; align-items: stretch; }
+  .kn-note-foot { grid-template-columns: minmax(0, 1fr); }
+  .kn-note-foot .kn-row-actions { justify-content: flex-start; }
 }
