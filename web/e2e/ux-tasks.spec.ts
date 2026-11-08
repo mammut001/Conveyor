@@ -446,7 +446,7 @@ for (const size of WIDTHS) {
       await expect(notice).toContainText('已连续修改 2 轮，3 个文件有改动')
       await expect(page.getByPlaceholder('继续说明要怎么改…')).toBeVisible()
       await openPanel(page)
-      await expect(page.getByText('正在继续修改 · 第 2 轮', { exact: true })).toBeVisible()
+      await expect(page.getByText('修改待应用 · 第 2 轮', { exact: true })).toBeVisible()
       await expect(page.locator('.context-section--changes')).toContainText('改动都累积在同一个隔离副本里')
       await expectNoHorizontalOverflow(page)
       await shoot(page, 'refinement', size.width)

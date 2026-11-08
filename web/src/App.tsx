@@ -919,6 +919,12 @@ export default function App() {
   }, [api, authenticated, changesJobId, changedFilesJob?.updated_at, selectedSessionId])
   const changedFiles = changedFilesJob?.changed_files || []
   const changesBusy = Boolean(changedFilesJob && !terminalJobState(changedFilesJob.state))
+  // A chain only reads as "in progress" while its latest run is still going.
+  // Once that run finishes, the chain is either waiting for Apply/Discard or
+  // produced nothing to apply; neither is an in-progress refinement.
+  const refinementRunning = Boolean(activeRefinement && changesBusy)
+  const refinementAwaitingApply = Boolean(activeRefinement && !changesBusy && activeChangedFiles > 0)
+  const refinementNoChanges = Boolean(activeRefinement && !changesBusy && activeChangedFiles === 0)
   const changeApprovalPending = pendingForJob.some(item => item.job_id === changesJobId)
   // What happened to the last Apply/Discard: the decision reply, or the job's own events after a reload.
   const changesEventOutcome = useMemo(() => {
@@ -948,6 +954,28 @@ export default function App() {
       (m.role === 'user' && m.content.trim() === selectedJob.prompt_preview.trim())
     )
   }, [selectedJob, transcript])
+  // Task runs written before the transcript kept them have no rows; show the
+  // request and the run's final event from the run itself, so the session
+  // still reads correctly after completion and after a reload.
+  const runReplyText = useMemo(() => {
+    if (!selectedJobId) return ''
+    const done = [...events].reverse().find(item => item.job_id === selectedJobId && (item.kind === 'assistant.completed' || item.kind === 'assistant.failed'))
+    return done ? String(done.payload.text || '') : ''
+  }, [events, selectedJobId])
+  const runTurnFallback = useMemo<TranscriptMessage[]>(() => {
+    if (!selectedJob || selectedJob.state !== 'completed' || staleTerminalRun) return []
+    if (transcript.some(m => m.job_id === selectedJob.id)) return []
+    const at = selectedJob.finished_at || selectedJob.updated_at || selectedJob.created_at
+    const base = { session_id: selectedSessionId, job_id: selectedJob.id, kind: 'codex', created_at: at }
+    const out: TranscriptMessage[] = []
+    if (!promptAlreadyInTranscript && selectedJob.prompt_preview) {
+      out.push({ ...base, id: `run-${selectedJob.id}-request`, role: 'user', content: selectedJob.prompt_preview })
+    }
+    if (runReplyText.trim()) {
+      out.push({ ...base, id: `run-${selectedJob.id}-reply`, role: 'assistant', content: runReplyText })
+    }
+    return out
+  }, [promptAlreadyInTranscript, runReplyText, selectedJob, selectedSessionId, staleTerminalRun, transcript])
 
   useEffect(() => {
     const node = streamRef.current
@@ -1396,13 +1424,16 @@ export default function App() {
           <>
             <div className="event-stream task-stream" ref={streamRef}>
               {view === 'tasks' && checklistNode}
-              {activeRefinement && <div className="job-notice task-notice task-notice--sticky"><strong>改动还没应用</strong><span>已连续修改 {refinementTurn} 轮，{activeChangedFiles} 个文件有改动。继续输入会在同一个隔离副本里接着改；满意后在右侧「改动」里应用或放弃。</span></div>}
+              {refinementRunning && <div className="job-notice task-notice task-notice--sticky" role="status"><strong>正在继续修改</strong><span>第 {refinementTurn} 轮还在运行。继续输入会在同一个隔离副本里接着改。</span></div>}
+              {refinementAwaitingApply && <div className="job-notice task-notice task-notice--sticky"><strong>改动还没应用</strong><span>已连续修改 {refinementTurn} 轮，{activeChangedFiles} 个文件有改动。继续输入会在同一个隔离副本里接着改；满意后在右侧「改动」里应用或放弃。</span></div>}
+              {refinementNoChanges && <div className="job-notice task-notice" role="status"><strong>这次没有改动文件</strong><span>可以在下方重新描述要做的事，再试一次。</span></div>}
               {selectedJob && !terminalJobState(selectedJob.state) && realtimeState === 'reconnecting' && <div className="job-notice task-notice" role="status"><strong>正在重新连接任务进度</strong><span>已收到的记录会保留，连接恢复后继续同步。</span></div>}
-              {selectedJob?.state === 'completed' && !transcript.length && <div className="job-notice task-notice" role="status"><strong>任务已完成</strong><span>对话记录暂不可用，可以在右侧「运行日志」里查看结果。</span></div>}
+              {selectedJob?.state === 'completed' && !transcript.length && !runTurnFallback.length && <div className="job-notice task-notice" role="status"><strong>任务已完成</strong><span>这次运行没有保存文字回复，可以在右侧「运行日志」里查看结果。</span></div>}
 
               {transcriptError && <div className="job-notice task-notice" role="status"><strong>暂时无法更新会话记录</strong><span>已收到的内容会保留。</span><button type="button" onClick={() => void refreshTranscript()}>重试读取</button></div>}
 
               {transcript.length > 0 && <TranscriptPanel messages={transcript} agent={selectedAgent} />}
+              {runTurnFallback.length > 0 && <TranscriptPanel messages={runTurnFallback} agent={selectedAgent} />}
 
               {selectedJob && selectedJob.prompt_preview && selectedJob.state !== 'completed' && !staleTerminalRun && !promptAlreadyInTranscript && (
                 <article className="transcript-message role-user pending-turn">
@@ -1625,8 +1656,8 @@ export default function App() {
           autoExpandKey={runsAutoExpandKey}
           meta={sessionDetail?.runs?.length ? `${sessionDetail.runs.length} 条` : (!sessionDetailError ? '这个会话还没有运行' : undefined)}
         >
-          {activeRefinement && <div className="session-chain-summary">
-            <strong>正在继续修改 · 第 {refinementTurn} 轮</strong>
+          {(refinementRunning || refinementAwaitingApply) && <div className="session-chain-summary">
+            <strong>{refinementRunning ? `正在继续修改 · 第 ${refinementTurn} 轮` : `修改待应用 · 第 ${refinementTurn} 轮`}</strong>
             <small>这些运行共用一个隔离副本，应用或放弃改动后结束。</small>
           </div>}
           <div className="session-run-list" role="group" aria-label="本会话的运行记录">
@@ -1660,7 +1691,7 @@ export default function App() {
             </div>
             <KeyValue label="开始时间" value={formatTime(selectedJob.started_at || selectedJob.created_at)} />
             {selectedJob.finished_at && <KeyValue label="结束时间" value={formatTime(selectedJob.finished_at)} />}
-            {activeRefinement && <KeyValue label="继续修改" value={`第 ${refinementTurn} 轮 · 进行中`} />}
+            {activeRefinement && <KeyValue label="继续修改" value={`第 ${refinementTurn} 轮 · ${refinementRunning ? '进行中' : refinementAwaitingApply ? '待应用' : '没有改动'}`} />}
             <KeyValue label="运行编号" value={selectedJob.id} mono />
             {!terminalJobState(selectedJob.state) && <RuntimeOwnerCard owner={runtimeOwner} state={selectedJob.state} />}
             {events.length > 0 && (
