@@ -585,11 +585,10 @@ test('mock fixture: role overrides, unavailable executor blocker, explicit creat
   await page.screenshot({ path: `${EVIDENCE_DIR}/code-mobile-390.png` })
   await page.setViewportSize(DESKTOP)
 
-  // Selecting an unavailable executor blocks dispatch and displays the exact backend reason
+  // Unavailable executors that the role does not use are not offered (see the dropdown tests below)
   const implSelect = page.getByLabel('实现角色执行器')
-  await implSelect.selectOption('cursor_unavailable')
-  await expect(page.getByText(/本地未安装 cursor-agent 可执行文件/).first()).toBeVisible()
-  await expect(page.getByRole('button', { name: '开始执行' })).toBeDisabled()
+  await expect(implSelect.locator('option', { hasText: 'Cursor Agent' })).toHaveCount(0)
+  await expect(page.getByText(/本地未安装 cursor-agent 可执行文件/)).toHaveCount(0)
 
   // Switch back to Antigravity and configure optional model overrides
   await implSelect.selectOption('antigravity')
@@ -1027,13 +1026,15 @@ test('mock fixture: 执行者池 is first in the executor list, marked 推荐 wh
 
 test('mock fixture: unavailable 执行者池 explains the reason in Chinese on the role card', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
-  await installSupervisorMockFixture(page, { capabilities: createPoolCapabilities(false) })
+  // Pool is the analyst's current selection, so it stays visible (marked 不可用) with its reason.
+  const capabilities = createPoolCapabilities(false)
+  capabilities.roles.analyst = { executor: 'pool', model: null, available: false, reason: POOL_REASON_UNAVAILABLE }
+  await installSupervisorMockFixture(page, { capabilities })
   await page.goto('/#code')
   await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
 
   const analystSelect = page.getByLabel('分析角色执行器')
   await expect(analystSelect.locator('option').first()).toHaveText('执行者池（自动轮换）（不可用）')
-  await analystSelect.selectOption('pool')
   await expect(page.locator('.sup-role-reason').first()).toHaveText(POOL_REASON_UNAVAILABLE)
 })
 
@@ -1096,3 +1097,202 @@ test('mock fixture: task detail with execution switch note has no horizontal ove
   await page.locator('.sup-exec-switch-note').first().scrollIntoViewIfNeeded()
   await page.screenshot({ path: test.info().outputPath('sup-pool-390.png') })
 })
+
+// ---------------------------------------------------------------------------
+// Owner-facing polish: always-visible executor line, Chinese failure reasons, and
+// unavailable executors hidden from role dropdowns unless the role currently uses them.
+// ---------------------------------------------------------------------------
+
+const CURSOR_REASON = '本地未安装 cursor-agent 可执行文件'
+
+test('mock fixture: role executor dropdowns hide unavailable executors the role does not use', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page)
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  for (const label of ['分析角色执行器', '实现角色执行器', '审查角色执行器']) {
+    const optionTexts = await page.getByLabel(label).locator('option').allTextContents()
+    expect(optionTexts.join('|')).not.toContain('Cursor Agent')
+    expect(optionTexts.join('|')).not.toContain('（不可用）')
+  }
+  await expect(page.getByText(CURSOR_REASON)).toHaveCount(0)
+})
+
+test('mock fixture: a role still using an unavailable executor keeps it visible with the reason and blocks dispatch', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  const base = createMockCapabilities()
+  const capabilities = createMockCapabilities({
+    roles: {
+      ...base.roles,
+      implementer: { executor: 'cursor_unavailable', model: null, available: false, reason: CURSOR_REASON },
+    },
+  })
+  await installSupervisorMockFixture(page, { capabilities })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const implSelect = page.getByLabel('实现角色执行器')
+  await expect(implSelect).toHaveValue('cursor_unavailable')
+  await expect(implSelect.locator('option', { hasText: 'Cursor Agent' })).toHaveText('Cursor Agent（不可用）')
+  await expect(page.locator('.sup-role-reason')).toHaveText(CURSOR_REASON)
+
+  await page.getByRole('textbox', { name: '任务目标' }).fill('修复 supervisor 任务取消时的状态同步')
+  await expect(page.getByRole('button', { name: '开始执行' })).toBeDisabled()
+})
+
+const EXEC_SUMMARY_TASK: SupervisorTaskDetail = {
+  id: 'sup-task-exec-summary',
+  goal: '三角色执行者摘要与切换说明',
+  state: 'completed',
+  stage: 'completed',
+  summary: '已完成。',
+  metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+  handoffs: [],
+  executions: [
+    { id: 'exec-analyst', role: 'analyst', executor: 'claude', status: 'completed', started_at: '2026-11-08T09:50:00Z' },
+    {
+      id: 'exec-impl-quota',
+      role: 'implementer',
+      executor: 'claude',
+      status: 'failed',
+      error: 'Claude usage limit reached, resets in 2h',
+      started_at: '2026-11-08T10:00:00Z',
+    },
+    { id: 'exec-impl-ok', role: 'implementer', executor: 'antigravity', status: 'completed', output: 'build ok', started_at: '2026-11-08T10:02:00Z' },
+    { id: 'exec-reviewer', role: 'reviewer', executor: 'claude', status: 'completed', started_at: '2026-11-08T10:06:00Z' },
+  ],
+}
+
+test('mock fixture: task card shows which worker ran each role and the switch note without opening 技术细节', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    capabilities: createPoolCapabilities(true),
+    initialTasksByWt: { 'wt-fix-console': [EXEC_SUMMARY_TASK] },
+  })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const summary = page.locator('.sup-task-executors')
+  await expect(summary).toBeVisible()
+  await expect(summary.locator('.sup-task-executors-line')).toHaveText('分析：Claude Code · 实现：Antigravity · 审阅：Claude Code')
+  await expect(summary.locator('.sup-task-switch-note')).toHaveCount(1)
+  await expect(summary.locator('.sup-task-switch-note')).toHaveText('Claude Code 额度用完，已换成 Antigravity')
+  // The full execution list remains in the collapsed 技术细节 section.
+  await expect(page.locator('details.sup-tech-details').first()).not.toHaveAttribute('open', '')
+  await page.screenshot({ path: test.info().outputPath('sup-polish-card-switch-1440.png') })
+})
+
+test('mock fixture: task card executor summary fits at 390px without horizontal overflow', async ({ page }) => {
+  await page.setViewportSize(PHONE)
+  await installSupervisorMockFixture(page, {
+    capabilities: createPoolCapabilities(true),
+    initialTasksByWt: { 'wt-fix-console': [EXEC_SUMMARY_TASK] },
+  })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const summary = page.locator('.sup-task-executors:visible')
+  await expect(summary).toBeVisible()
+  await expect(summary.locator('.sup-task-switch-note')).toBeVisible()
+  await summary.scrollIntoViewIfNeeded()
+  const overflow = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }))
+  expect(overflow.scroll).toBeLessThanOrEqual(overflow.client)
+  await page.screenshot({ path: test.info().outputPath('sup-polish-card-switch-390.png') })
+})
+
+test('mock fixture: a task without executions shows no executor summary', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: {
+      'wt-fix-console': [{
+        id: 'sup-task-no-exec',
+        goal: '尚未执行的任务',
+        state: 'pending_dispatch',
+        metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+      }],
+    },
+  })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+  await expect(page.locator('.sup-task-executors')).toHaveCount(0)
+})
+
+const FAILED_QUOTA_TASK: SupervisorTaskDetail = {
+  id: 'sup-task-failed-quota',
+  goal: '实现失败任务的中文原因展示',
+  state: 'failed',
+  stage: 'implementation',
+  error: 'Claude usage limit reached, resets in 2h',
+  metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+  handoffs: [],
+  executions: [],
+}
+
+test('mock fixture: failed task shows the Chinese reason, and the raw English error stays behind 技术详情 until clicked', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, { initialTasksByWt: { 'wt-fix-console': [FAILED_QUOTA_TASK] } })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const banner = page.locator('.sup-banner--error', { hasText: '受阻原因' })
+  await expect(banner).toBeVisible()
+  await expect(banner.locator('span').first()).toHaveText('执行者的额度或用量已用完，任务没有完成')
+  await expect(banner.locator('pre')).toBeHidden()
+
+  await banner.getByText('技术详情', { exact: true }).click()
+  await expect(banner.locator('pre')).toHaveText('Claude usage limit reached, resets in 2h')
+  await page.screenshot({ path: test.info().outputPath('sup-polish-failed-1440.png') })
+})
+
+test('mock fixture: failed task banner reads well at 390px and the 技术详情 disclosure opens with a real tap', async ({ page }) => {
+  await page.setViewportSize(PHONE)
+  await installSupervisorMockFixture(page, { initialTasksByWt: { 'wt-fix-console': [FAILED_QUOTA_TASK] } })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const banner = page.locator('.sup-banner--error', { hasText: '受阻原因' })
+  await expect(banner).toBeVisible()
+  await banner.scrollIntoViewIfNeeded()
+  await banner.getByText('技术详情', { exact: true }).click()
+  await expect(banner.locator('pre')).toBeVisible()
+
+  const overflow = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }))
+  expect(overflow.scroll).toBeLessThanOrEqual(overflow.client)
+  await page.screenshot({ path: test.info().outputPath('sup-polish-failed-390.png') })
+})
+
+const RAW_ERROR_CASES: Array<{ raw: string; expected: string }> = [
+  { raw: 'timed out after 1800s; process group killed', expected: '执行超时，任务没有完成' },
+  { raw: 'antigravity (agy) binary not found: /usr/local/bin/agy', expected: '执行器不可用（未安装或暂时无法使用）' },
+  { raw: 'invalid review evidence: malformed JSON in review verdict', expected: '审查结果无效或审查失败，任务没有通过审查' },
+  { raw: 'operator validation failed: unit (exit 1): 3 tests failed', expected: '自动验收检查没有通过' },
+  { raw: 'max repair rounds exceeded; remaining issues reported', expected: '自动修复次数已用完，仍有问题未解决' },
+  { raw: 'git worktree add failed: fatal: already exists', expected: '代码工作区（git worktree）出现问题' },
+  { raw: 'cancelled by user', expected: '任务已被取消' },
+  { raw: 'supervisor restarted while task was in implementing', expected: '执行过程被意外中断' },
+  { raw: 'something nobody anticipated happened', expected: '执行没有完成' },
+]
+
+for (const { raw, expected } of RAW_ERROR_CASES) {
+  test(`mock fixture: raw backend error "${raw.slice(0, 40)}" maps to a Chinese reason`, async ({ page }) => {
+    await page.setViewportSize(DESKTOP)
+    await installSupervisorMockFixture(page, {
+      initialTasksByWt: {
+        'wt-fix-console': [{ ...FAILED_QUOTA_TASK, id: 'sup-task-raw-map', error: raw }],
+      },
+    })
+    await page.goto('/#code')
+    await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+    const banner = page.locator('.sup-banner--error', { hasText: '受阻原因' })
+    await expect(banner.locator('span').first()).toHaveText(expected)
+    await expect(banner.locator('pre')).toHaveText(raw)
+  })
+}
