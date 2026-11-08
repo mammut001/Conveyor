@@ -3,20 +3,20 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent }
 /* App frame helpers (shell area): views and URL routing, media queries, keyboard
  * helpers, error wording, icons and the lock confirmation. */
 
-export type ShellView = 'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'browser' | 'skills' | 'workflows' | 'connectors' | 'secrets' | 'teammate' | 'workers'
+export type ShellView = 'tasks' | 'chat' | 'code' | 'inbox' | 'memory' | 'approvals' | 'browser' | 'skills' | 'workflows' | 'connectors' | 'secrets' | 'teammate' | 'workers'
 
 export const SHELL_VIEWS: readonly ShellView[] = [
-  'chat', 'tasks', 'inbox', 'approvals', 'memory', 'teammate', 'skills', 'workflows', 'connectors', 'browser', 'secrets', 'workers',
+  'chat', 'tasks', 'code', 'inbox', 'approvals', 'memory', 'teammate', 'skills', 'workflows', 'connectors', 'browser', 'secrets', 'workers',
 ]
 
 export const VIEW_LABELS: Record<ShellView, string> = {
-  chat: '对话', tasks: '任务', inbox: '收件箱', approvals: '审批', memory: '记忆', teammate: '值守',
+  chat: '对话', tasks: '任务', code: '项目', inbox: '收件箱', approvals: '审批', memory: '记忆', teammate: '值守',
   skills: '技能', workflows: '工作流', connectors: '连接器', browser: '网站授权', secrets: '密钥', workers: '执行者',
 }
 
 /** One muted line under the page title. */
 export const VIEW_SUBTITLES: Record<ShellView, string> = {
-  chat: '与 Conveyor 直接对话', tasks: '任务', inbox: '定时任务的结果和通知', approvals: '等待你确认的操作',
+  chat: '与 Conveyor 直接对话', tasks: '任务', code: '仓库、工作目录与任务监工', inbox: '定时任务的结果和通知', approvals: '等待你确认的操作',
   memory: '助手长期记住的信息', teammate: '全天候值守，发现问题及时提醒', skills: '可在对话中使用的技能',
   workflows: '分步骤推进的长任务', connectors: '连接外部工具和服务', browser: '允许助手访问的网站',
   secrets: '只供助手使用的私密凭据', workers: '谁来替你干活：检测、登录、按额度自动轮换',
@@ -112,6 +112,7 @@ export type ShellIconName = ShellView | 'more' | 'settings' | 'lock' | 'panel' |
 const ICON_PATHS: Record<ShellIconName, string> = {
   chat: 'M20 11.5a7.5 7.5 0 0 1-10.9 6.7L4.5 19.5l1.3-4.1A7.5 7.5 0 1 1 20 11.5z',
   tasks: 'M9.5 6.5H20M9.5 12H20M9.5 17.5H20M4 6.5l1.2 1.2L7.4 5.5M4 12l1.2 1.2 2.2-2.2M4 17.5l1.2 1.2 2.2-2.2',
+  code: 'M8 9l-4 3 4 3M16 9l4 3-4 3M13.5 6l-3 12',
   inbox: 'M3.5 13.5h5l1.5 2.5h4l1.5-2.5h5M6 5h12l2.5 8.5V19h-17v-5.5L6 5z',
   approvals: 'M12 20.5a8.5 8.5 0 1 0 0-17 8.5 8.5 0 0 0 0 17zM8.2 12.2l2.6 2.6 5-5.6',
   memory: 'M6 4.5h10.5A2.5 2.5 0 0 1 19 7v12.5H8.5A2.5 2.5 0 0 1 6 17V4.5zM6 17a2.5 2.5 0 0 1 2.5-2.5H19M10 8.5h5',

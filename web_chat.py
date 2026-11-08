@@ -41,6 +41,10 @@ def resolve_or_create_session(
                 from agent_conversations import for_web_chat
                 if not for_web_chat(getattr(control, "settings", None), source_chat_id):
                     return None
+            if channel == "web" and source_chat_id.startswith("supwt-"):
+                from supervisor_service import resolve_supervisor_chat_session
+                if not resolve_supervisor_chat_session(getattr(control, "settings", None), source_chat_id):
+                    return None
             return channel, operator_id, source_chat_id, requested_session_id
         # A durable web id handed out by a previous /api/chat call whose turn
         # has not been persisted yet: keep using it instead of rejecting it.
@@ -54,6 +58,10 @@ def resolve_or_create_session(
     if source_chat_id.startswith("topic-"):
         from agent_conversations import for_web_chat
         if not for_web_chat(getattr(control, "settings", None), source_chat_id):
+            return None
+    if source_chat_id.startswith("supwt-"):
+        from supervisor_service import resolve_supervisor_chat_session
+        if not resolve_supervisor_chat_session(getattr(control, "settings", None), source_chat_id):
             return None
     durable_session_id = session_identity(channel, source_chat_id, operator_id)
     return channel, operator_id, source_chat_id, durable_session_id
@@ -77,8 +85,39 @@ class WebChatPort(OutboundPort):
         self.durable_session_id = durable_session_id
         self.prompt = prompt
         self._delivered_final = False
+        self._user_persisted = False
         self.placeholder_id = "web-chat-placeholder"
         self._approval_emitted = False
+        # Set when this turn handed the request to an agent job; the job can
+        # outlive the HTTP stream, and its answer is still saved to history.
+        self.job_id = ""
+
+    def on_job_submitted(self, queued_job: Any) -> None:
+        self.job_id = str(getattr(queued_job, "id", "") or "")
+        # Record the request as soon as a job exists: if the phone loses the
+        # stream, history shows the server has it, so the client does not
+        # resend it and start a second job.
+        if self._user_persisted or not self.settings or not self.durable_session_id:
+            return
+        try:
+            get_transcript_store(self.settings).append(
+                self.durable_session_id, "user", self.prompt or str(getattr(queued_job, "prompt", "")),
+                kind="chat", channel=str(getattr(queued_job, "channel", "") or "web"),
+                operator_id=str(getattr(queued_job, "operator_id", "") or ""),
+                source_chat_id=str(getattr(queued_job, "chat_id", "") or ""),
+            )
+            self._user_persisted = True
+        except Exception:
+            logger.exception("Failed to persist web chat request to TranscriptStore")
+
+    async def note_queued(self, msg: InboundMessage, text: str) -> None:
+        """Show the queue notice without making it this turn's final answer.
+
+        The job runs later through this same port; its answer must still be
+        saved, which a final-marked notice used to prevent.
+        """
+        self.emit("message", {"text": text})
+        self._persist_turn(msg, text, kind="status", final=False)
 
     def emit(self, event: str, data: dict[str, Any]) -> None:
         self.queue.put((event, data))
@@ -185,15 +224,19 @@ class WebChatPort(OutboundPort):
         *,
         kind: str = "chat",
         metadata: dict[str, Any] | None = None,
+        final: bool = True,
     ) -> None:
         if self._delivered_final or not self.settings or not self.durable_session_id:
             return
-        self._delivered_final = True
+        if final:
+            self._delivered_final = True
         user_text = self.prompt or msg.text
         ident = dict(channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id)
         try:
             store = get_transcript_store(self.settings)
-            store.append(self.durable_session_id, "user", user_text, kind="chat", **ident)
+            if not self._user_persisted:
+                store.append(self.durable_session_id, "user", user_text, kind="chat", **ident)
+                self._user_persisted = True
             store.append(
                 self.durable_session_id, "assistant", text, kind=kind, metadata=metadata, **ident,
             )
@@ -205,6 +248,119 @@ from agent_context import scoped_inbound
 from agent_conversations import scoped as scoped_conversation
 
 
+async def _run_supervisor_chat(
+    msg: InboundMessage,
+    port: WebChatPort,
+    settings: Any,
+    prompt: str,
+) -> None:
+    """Read-only coordinator discussion bound to a verified repository + worktree.
+
+    Never invokes Pi, Codex, desktop automation, workflows, /goal, or host/write
+    tools. Uses only the configured main chat model with real repository/worktree
+    context; code writes start exclusively via explicit supervisor task dispatch.
+    """
+    from handlers.chat import (
+        chat_key,
+        check_answer,
+        finalize,
+        history,
+        host_edit_imperative,
+        remember,
+        visible_partial,
+    )
+    from runner.chat_client import ChatError, config_from_settings, stream_chat
+    from supervisor_service import (
+        build_supervisor_chat_context,
+        resolve_supervisor_chat_session,
+    )
+
+    binding = resolve_supervisor_chat_session(settings, msg.chat_id)
+    if binding is None:
+        port.emit("error", {"error": "Supervisor worktree session is invalid or no longer available."})
+        port.emit("done", {"outcome": "error"})
+        return
+
+    config = config_from_settings(settings)
+    if config is None:
+        port.emit("error", {"error": "对话模型未配置或未启用，当前无法进行讨论。"})
+        port.emit("done", {"outcome": "unavailable"})
+        return
+
+    ws_context = build_supervisor_chat_context(settings, binding)
+    lang = getattr(settings, "operator_language", "zh-CN") or "zh-CN"
+    system_prompt = (
+        "You are Conveyor's read-only Code Supervisor Coordinator.\n"
+        f"Reply concisely in {lang}.\n\n"
+        f"{ws_context}\n\n"
+        "Rules:\n"
+        "1. This chat is strictly READ-ONLY discussion for the bound repository and worktree above.\n"
+        "2. You cannot edit files, run commands, or start execution jobs from chat. "
+        "Code execution only begins when the operator explicitly reviews the Goal on the left panel and clicks 「开始执行」.\n"
+        "3. Never pretend to have modified files, created commits, or run tests.\n"
+        "4. Help the operator clarify requirements, scope, edge cases, and concrete acceptance criteria for this branch/worktree.\n"
+        "5. Do not output [[SEARCH: ...]] tokens. End answers with [[CONFIDENCE: high|medium|low]]."
+    )
+
+    key = chat_key(msg, settings)
+    turns_limit = int(getattr(settings, "chat_history_turns", 10) or 10)
+    past = history(key, turns_limit, settings=settings)
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": system_prompt},
+        *past,
+        {"role": "user", "content": prompt},
+    ]
+
+    buf_parts: list[str] = []
+    last_emit = 0.0
+    try:
+        async for piece in stream_chat(config, messages):
+            if not piece:
+                continue
+            buf_parts.append(piece)
+            now = time.monotonic()
+            if now - last_emit >= 0.06:
+                partial = visible_partial("".join(buf_parts))
+                if partial:
+                    port.emit("delta", {"text": partial})
+                    last_emit = now
+    except ChatError as exc:
+        safe_err = redact_text(str(exc))
+        logger.warning("Supervisor chat provider unavailable: %s", safe_err)
+        port.emit("error", {"error": f"对话模型暂时不可用：{safe_err}"})
+        port.emit("done", {"outcome": "unavailable"})
+        return
+
+    raw = "".join(buf_parts).strip()
+    if not raw:
+        port.emit("error", {"error": "对话模型未返回内容，请稍后重试或直接在左侧填写任务目标。"})
+        port.emit("done", {"outcome": "unavailable"})
+        return
+
+    checked = check_answer(raw, set())
+    if checked.escalate or not checked.body.strip():
+        msg_text = (
+            f"当前对话绑定在仓库 `{binding['repo_name']}` 分支 `{binding['branch']}`，仅用于只读需求讨论，不会自动修改代码。"
+            "你可以将下方整理好的需求填入左侧「当前任务目标」，确认后点击「开始执行」。"
+        )
+        suggestion = {"prompt": prompt, "session_id": port.durable_session_id}
+        port.emit("message", {"text": msg_text, "task_suggestion": suggestion})
+        port._persist_turn(msg, msg_text, kind="task_suggestion", metadata={"prompt": prompt})
+        port.emit("done", {"outcome": "escalate"})
+        return
+
+    final_text = redact_text(finalize(checked, time_sensitive_unverified=False))
+    remember(key, prompt, checked.body, turns_limit, settings=settings)
+
+    if host_edit_imperative(prompt):
+        suggestion = {"prompt": prompt, "session_id": port.durable_session_id}
+        port.emit("message", {"text": final_text, "task_suggestion": suggestion})
+        port._persist_turn(msg, final_text, kind="task_suggestion", metadata={"prompt": prompt})
+    else:
+        await port.reply(msg, final_text)
+    port.emit("done", {"outcome": "answered"})
+
+
 @scoped_inbound
 @scoped_conversation
 async def run_web_chat(
@@ -214,6 +370,15 @@ async def run_web_chat(
     runner: Any,
     prompt: str,
 ) -> None:
+    if msg.channel == "web" and str(msg.chat_id or "").startswith("supwt-"):
+        try:
+            await _run_supervisor_chat(msg, port, settings, prompt)
+        except Exception:
+            logger.exception("Error in _run_supervisor_chat")
+            port.emit("error", {"error": "Internal error"})
+            port.emit("done", {"outcome": "error"})
+        return
+
     from handlers.chat import ask_chat, is_destructive_request, readonly_host_tool, routes_to_agent
     from handlers.intent import RouteResult, computer_chat_route
     from handlers.jobs import handle_codex_job

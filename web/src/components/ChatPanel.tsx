@@ -70,6 +70,9 @@ export type ChatPanelProps = {
   agentColor?: string;
   onBusyChange?: (busy: boolean) => void;
   setupChecklist?: ReactNode;
+  /** When true, this conversation is a worktree-scoped planning/discussion surface
+   *  that prepares task goals rather than directly running commands or nightly jobs. */
+  discussionOnly?: boolean;
 };
 
 const VOICE_PLACEHOLDER = '🎤 正在识别语音…';
@@ -169,7 +172,7 @@ function approvalLabel(status: string): string {
     : '已处理';
 }
 
-export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist }: ChatPanelProps) {
+export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, discussionOnly = false }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const draftKey = `conveyor-chat-draft:v1:${agentSessionId || 'free-chat'}`;
@@ -719,19 +722,28 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
             <div className="chat-welcome-avatar" aria-hidden="true" style={agentColor ? { background: agentColor } : undefined}>
               {(displayName.trim()[0] || 'C').toUpperCase()}
             </div>
-            <h2>{agentName ? `和 ${agentName} 聊点什么？` : '想聊点什么？'}</h2>
-            <p>可以帮你查资料、跑命令、改代码，删除等危险操作会先问你。</p>
-            <details className="welcome-nightly-commands">
-              <summary>夜间任务怎么用？</summary>
-              <p>夜间任务只在预览环境运行，不碰生产；默认运行 1 小时，最多处理 12 个任务，达到时间限制或任务配额会自动停止，发现的 Issue 会保留，方便之后继续处理。</p>
-              <p>示例：<code>{'/nightly_start 检查预览环境并修复失败的测试'}</code></p>
-              <ul>
-                <li><code>{'/nightly_start <objective>'}</code> 启动夜间任务</li>
-                <li><code>{'/nightly_status <run ID>'}</code> 查看运行状态</li>
-                <li><code>{'/nightly_cancel <run ID>'}</code> 取消运行中的任务</li>
-              </ul>
-              <p>请保留 <code>/nightly_start</code> 返回的 run ID，之后用它查询运行状态或取消任务。</p>
-            </details>
+            {discussionOnly ? (
+              <>
+                <h2>{agentName ? `与 ${agentName} 讨论当前目录方案` : '讨论当前工作目录方案'}</h2>
+                <p>此处仅用于需求梳理、方案讨论与任务拆解，不会直接执行命令或修改代码。确认方案后，可填入左侧「当前任务目标」并点击「开始执行」。</p>
+              </>
+            ) : (
+              <>
+                <h2>{agentName ? `和 ${agentName} 聊点什么？` : '想聊点什么？'}</h2>
+                <p>可以帮你查资料、跑命令、改代码，删除等危险操作会先问你。</p>
+                <details className="welcome-nightly-commands">
+                  <summary>夜间任务怎么用？</summary>
+                  <p>夜间任务只在预览环境运行，不碰生产；默认运行 1 小时，最多处理 12 个任务，达到时间限制或任务配额会自动停止，发现的 Issue 会保留，方便之后继续处理。</p>
+                  <p>示例：<code>{'/nightly_start 检查预览环境并修复失败的测试'}</code></p>
+                  <ul>
+                    <li><code>{'/nightly_start <objective>'}</code> 启动夜间任务</li>
+                    <li><code>{'/nightly_status <run ID>'}</code> 查看运行状态</li>
+                    <li><code>{'/nightly_cancel <run ID>'}</code> 取消运行中的任务</li>
+                  </ul>
+                  <p>请保留 <code>/nightly_start</code> 返回的 run ID，之后用它查询运行状态或取消任务。</p>
+                </details>
+              </>
+            )}
           </div>
         )}
 

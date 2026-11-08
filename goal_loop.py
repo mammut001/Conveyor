@@ -47,6 +47,10 @@ FAILURE_LIMIT = 3
 DONE_CONFIRMATIONS = 2
 CHECK_TIMEOUT_SECONDS = 900
 ITERATION_TIMEOUT_SECONDS = 2 * 3600
+# An iteration that starts right at the goal deadline still gets this much
+# grace before the driver cancels it (so it is never cancelled instantly).
+ITERATION_MIN_GRACE_SECONDS = 60.0
+GOAL_DEADLINE_ERROR = "goal deadline reached"
 TRANSIENT_RETRY_SECONDS = 120
 MAX_CHECKS = 5
 MAX_OBJECTIVE_CHARS = 4000
@@ -87,9 +91,17 @@ class GoalCommand:
 
 
 _CMD = re.compile(r"^/goal(?:@\w+)?(?:\s+(.*))?$", re.S)
-_CHECK = re.compile(r"--check(?:=|\s+)(?:\"([^\"]*)\"|'([^']*)'|“([^”]*)”)")
+_CHECK = re.compile(r"--check(?:=|\s+)(?:\"([^\"]*)\"|'([^']*)'|“([^”]*)”|‘([^’]*)’)")
 _HOURS = re.compile(r"--hours(?:=|\s+)([0-9]+(?:\.[0-9]+)?)")
 _MAX = re.compile(r"--max(?:=|\s+)([0-9]+)")
+# iOS/macOS "Smart Punctuation" rewrites "--" into an em/en (or full-width) dash
+# right before a flag name. Rewrite those back to "--" so the flags are not
+# silently swallowed by the objective. A run that contains at least one smart
+# dash is required, so a plain ASCII hyphen ("re-check", "2024—2025") is untouched.
+_SMART_DASH = "\u2014\u2013\u2015\uff0d\u2212"  # — – ― － −
+_FLAG_DASH = re.compile(rf"[-{_SMART_DASH}]*[{_SMART_DASH}][-{_SMART_DASH}]*(?=(?:check|hours|max)\b)")
+
+_UNQUOTED_CHECK_ERROR = '--check 后面的命令需要用引号括起来，例如 --check "npm test"。'
 
 
 def is_goal_command(text: str | None) -> bool:
@@ -109,6 +121,9 @@ def parse_goal_command(text: str | None) -> GoalCommand | None:
     if word in ("stop", "cancel", "停止", "取消"):
         return GoalCommand("stop")
 
+    # iPhone owners type "—hours 2"; accept it as "--hours 2".
+    rest = _FLAG_DASH.sub("--", rest)
+
     checks = tuple(next(g for g in m.groups() if g is not None).strip()
                    for m in _CHECK.finditer(rest))
     checks = tuple(c for c in checks if c)
@@ -118,6 +133,13 @@ def parse_goal_command(text: str | None) -> GoalCommand | None:
     objective = _HOURS.sub(" ", objective)
     objective = _MAX.sub(" ", objective)
     objective = re.sub(r"\s+", " ", objective).strip()
+
+    # A leftover --check means the command was not quoted; the owner would not
+    # notice the acceptance check silently disappearing, so refuse it. A bad
+    # --hours/--max only falls back to the default and may be part of the
+    # objective text ("给 CLI 加上 --max 参数"), so those stay lenient.
+    if re.search(r"--check\b", objective):
+        return GoalCommand("invalid", error=_UNQUOTED_CHECK_ERROR)
 
     if len(objective) < 4:
         return GoalCommand("invalid", error="目标太短，请用一句话说清要达成什么。")
@@ -180,6 +202,13 @@ class GoalState:
     def deadline_dt(self) -> datetime:
         return datetime.fromisoformat(self.deadline)
 
+    def deadline_budget(self) -> float | None:
+        """Seconds until this goal's own ``--hours`` deadline, or None if unknown."""
+        try:
+            return (self.deadline_dt() - _now()).total_seconds()
+        except (ValueError, TypeError):
+            return None
+
 
 class GoalStore:
     """One JSON file per goal under ``<root>/goals``; atomic writes."""
@@ -224,8 +253,10 @@ class GoalStore:
 # Prompt + verdict
 # --------------------------------------------------------------------------
 
-_STATUS_RE = re.compile(r"GOAL_STATUS:\s*(continue|done|blocked)", re.I)
-_NEXT_RE = re.compile(r"^NEXT:\s*(.+)$", re.M)
+# The agent replies in Chinese and often in Markdown: accept a full-width colon
+# and bold/backtick markup around the key or the value ("**GOAL_STATUS：** `done`").
+_STATUS_RE = re.compile(r"GOAL_STATUS[*_`]*\s*[:：]\s*[*_`]*\s*(continue|done|blocked)\b", re.I)
+_NEXT_RE = re.compile(r"^[\s>*_`-]*NEXT[*_`]*\s*[:：]\s*[*_`]*\s*(.+?)\s*$", re.M)
 
 
 def parse_verdict(text: str | None) -> tuple[str, str]:
@@ -459,10 +490,14 @@ class GoalEngine:
             state.history.append(entry)
             state.detail = result.error[:300]
             self.store.save(state)
-            await self._safe_notify(
-                f"🎯 目标第 {state.iteration} 轮失败（{state.failures}/{FAILURE_LIMIT}）：{result.error[:200]}")
-            if state.failures < FAILURE_LIMIT:
-                await self.sleep(30)
+            if result.error != GOAL_DEADLINE_ERROR:
+                # A goal-deadline stop is not an iteration failure; the loop ends
+                # with "timeout" on the next _stop_reason check, so do not spam the
+                # owner with a "第 N 轮失败" notice or burn the retry sleep.
+                await self._safe_notify(
+                    f"🎯 目标第 {state.iteration} 轮失败（{state.failures}/{FAILURE_LIMIT}）：{result.error[:200]}")
+                if state.failures < FAILURE_LIMIT:
+                    await self.sleep(30)
             return ""
 
         state.failures = 0
@@ -594,7 +629,14 @@ class QueueDriver:
             return IterationResult(False, error=message, transient=transient)
         self.current_job_id = queued.id
         queue = get_job_queue()
-        deadline = time.monotonic() + self.iteration_timeout
+        # The iteration must not outlive the goal's own ``--hours`` deadline: a
+        # 2h iteration cap would let the last iteration run long past it.
+        remaining = state.deadline_budget()
+        goal_budget = (self.iteration_timeout if remaining is None
+                       else max(remaining, ITERATION_MIN_GRACE_SECONDS))
+        budget = min(self.iteration_timeout, goal_budget)
+        goal_limited = budget < self.iteration_timeout
+        deadline = time.monotonic() + budget
         snap: dict[str, Any] | None = None
         while True:
             snap = queue.job_snapshot(queued.id)
@@ -604,7 +646,8 @@ class QueueDriver:
                 break
             if time.monotonic() > deadline:
                 await self.cancel_current()
-                return IterationResult(False, job_id=queued.id, error="iteration timed out")
+                error = GOAL_DEADLINE_ERROR if goal_limited else "iteration timed out"
+                return IterationResult(False, job_id=queued.id, error=error)
             await asyncio.sleep(self.poll_seconds)
         self.current_job_id = ""
         await asyncio.sleep(1.0)  # let the port deliver the final message

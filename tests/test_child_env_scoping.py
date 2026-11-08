@@ -171,5 +171,22 @@ class ChildEnvScopingTests(unittest.TestCase):
             self.assertNotIn("disk unreadable", log_output)
 
 
+
+
+class NodeCaBundlePassthroughTests(unittest.TestCase):
+    """pi is a Node program: it trusts private CAs only via NODE_EXTRA_CA_CERTS."""
+
+    def test_default_child_env_keeps_node_extra_ca_certs(self) -> None:
+        from security.secrets import child_env_from
+        env = child_env_from({"PATH": "/bin", "NODE_EXTRA_CA_CERTS": "/etc/ca.pem"})
+        self.assertEqual(env.get("NODE_EXTRA_CA_CERTS"), "/etc/ca.pem")
+
+    def test_isolated_child_env_keeps_node_extra_ca_certs(self) -> None:
+        from subprocess_env import build_child_env
+        env = build_child_env({"PATH": "/bin", "NODE_EXTRA_CA_CERTS": "/etc/ca.pem", "STRAY_API_KEY": "x"})
+        self.assertEqual(env.get("NODE_EXTRA_CA_CERTS"), "/etc/ca.pem")
+        self.assertNotIn("STRAY_API_KEY", env)
+
+
 if __name__ == "__main__":
     unittest.main()

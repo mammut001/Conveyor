@@ -129,6 +129,17 @@ def test_apply_policy() -> list[CheckResult]:
         
         return results
 
+
+def _git_mock(workspace):
+    from unittest import mock
+    """Answer only what apply needs from git: the worktree's real repository."""
+    async def fake(args, *a, **k):
+        if "--git-common-dir" in args:
+            return str(Path(workspace).resolve() / ".git")
+        return ""
+    return mock.AsyncMock(side_effect=fake)
+
+
 async def test_apply_policy_hardening() -> list[CheckResult]:
     from runner import CodexRunner
     from runner.types import Job, JobMode
@@ -222,7 +233,7 @@ async def test_apply_policy_hardening() -> list[CheckResult]:
         runner._last_worktree_path = mock.MagicMock(return_value=wt_path)
         
         # Mock _git call to return dirty status or clean status
-        runner._git = mock.AsyncMock(return_value="")
+        runner._git = _git_mock(workspace)
         
         # Test 3a: Tracked collection failure
         with mock.patch("runner.apply_policy.collect_tracked_changed_files") as mock_collect_tracked:
@@ -250,7 +261,7 @@ async def test_apply_policy_hardening() -> list[CheckResult]:
         # Test 4: if a new untracked file appears after validation, apply refuses
         # -------------------------------------------------------------
         # Reset the mock of _git to return status summary
-        runner._git = mock.AsyncMock(return_value="")
+        runner._git = _git_mock(workspace)
         
         with mock.patch("runner.apply_policy.collect_tracked_changed_files") as mock_collect_tracked, \
              mock.patch("runner.apply_policy.collect_untracked_files") as mock_collect_untracked, \

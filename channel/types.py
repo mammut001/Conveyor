@@ -61,6 +61,11 @@ class InboundMessage:
     # Handlers must not branch on this; it is purely for adapter handoff.
     raw: Any = None
     thread_id: str | None = None
+    # Set by telegram_topics.contextualize_inbound for the OWNER's message in
+    # a bound Telegram Forum Topic: routes like a private chat (DM-style agent
+    # binding, no @mention needed) while `chat_type` keeps the REAL chat type,
+    # so private-chat-only privacy guards still see the group it really is.
+    owner_topic: bool = False
 
 
 class OutboundPort(Protocol):

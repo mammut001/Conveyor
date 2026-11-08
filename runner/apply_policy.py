@@ -38,6 +38,15 @@ DENYLIST_PATTERNS = [
 # High-risk project patterns
 HIGH_RISK_PATTERNS = [
     ".github/workflows/**",
+    # Files that run code automatically on the operator's machine (git hooks,
+    # direnv): an agent's change must not install them silently.
+    ".husky/**",
+    "**/.husky/**",
+    ".githooks/**",
+    "**/.githooks/**",
+    ".envrc",
+    "**/.envrc",
+    ".pre-commit-config.yaml",
     "scripts/install.sh",
     "scripts/deploy.sh",
     "scripts/deploy_vps.sh",
@@ -281,8 +290,12 @@ def collect_tracked_changed_files(worktree_path: Path) -> CollectResult:
     if not worktree_path or not Path(worktree_path).exists():
         return CollectResult.failure("worktree not available")
     try:
+        # --raw -z --no-renames: -z keeps non-ASCII paths unquoted (a quoted
+        # path matched no deny pattern); without renames a moved protected file
+        # shows up as its deleted old path, not only the harmless new one; the
+        # raw modes expose symlinks and submodules the agent staged itself.
         res = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD", "--", ".", ":(exclude)MEMORY.md"],
+            ["git", "diff", "--raw", "-z", "--no-renames", "HEAD", "--", ".", ":(exclude)MEMORY.md"],
             cwd=str(worktree_path),
             env=__import__("subprocess_env").utility_env(),
             capture_output=True,
@@ -295,7 +308,21 @@ def collect_tracked_changed_files(worktree_path: Path) -> CollectResult:
         return CollectResult.failure("git diff failed")
     except Exception:
         return CollectResult.failure("git diff failed")
-    paths = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+    fields = res.stdout.split("\0")
+    paths: list[str] = []
+    i = 0
+    while i < len(fields) - 1:
+        meta = fields[i]
+        if not meta.startswith(":"):
+            i += 1
+            continue
+        parts = meta[1:].split()
+        path = fields[i + 1]
+        i += 2
+        if len(parts) >= 2 and parts[1] in ("120000", "160000"):
+            return CollectResult.failure(f"symlink or submodule in changes: {path}")
+        if path:
+            paths.append(path)
     return CollectResult.success(paths)
 
 def collect_untracked_files(worktree_path: Path) -> CollectResult:

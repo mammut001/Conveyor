@@ -16,6 +16,7 @@ logger = logging.getLogger("conveyor.security")
 BASE = frozenset({
     "PATH", "HOME", "LANG", "TERM", "TMPDIR", "USER", "LOGNAME", "SHELL",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
     "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
 })
 CODEX = frozenset({

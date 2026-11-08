@@ -232,6 +232,14 @@ class WebConsoleServer(ThreadingHTTPServer):
             return
         super().handle_error(request, client_address)
 
+    def server_close(self) -> None:
+        try:
+            import supervisor_service
+            supervisor_service.stop_server_worker(self)
+        except Exception:
+            logger.debug("Supervisor worker stop during server_close failed", exc_info=True)
+        super().server_close()
+
 
 class WebConsoleHandler(BaseHTTPRequestHandler):
     server_version = "Conveyor"
@@ -359,6 +367,19 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
     def _segments(path: str) -> list[str]:
         return [unquote(part) for part in path.strip("/").split("/") if part]
 
+    @classmethod
+    def _is_api_path(cls, path: str) -> bool:
+        """True for anything the router will treat as an /api/ route.
+
+        Routing matches on decoded segments, so the auth gate must too:
+        "/%61pi/jobs/q1" and "//api/jobs/q1" reach the same handlers as
+        "/api/jobs/q1" but slipped past a raw ``startswith("/api/")`` check.
+        """
+        if path.startswith("/api/"):
+            return True
+        parts = cls._segments(path)
+        return bool(parts) and parts[0].lower() == "api"
+
     def _memory_owner(self, settings: Any, agent_id: str) -> str | None:
         """Whose memory a console request is about; answers 404 for an unknown agent.
 
@@ -432,7 +453,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             if not pwa_enabled(getattr(self.server.control, "settings", None)):
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
-        if path.startswith("/api/") and not self._require_auth():
+        if self._is_api_path(path) and not self._require_auth():
             return
         if path == "/api/agent-conversations":
             from web_agent_conversations_api import get
@@ -688,6 +709,29 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if not session_id:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "session_id is required"})
                     return
+                import supervisor_service as sup_svc
+                if sup_svc.is_supervisor_session_id(session_id):
+                    settings = getattr(self.server.control, "settings", None)
+                    if settings is None:
+                        from config import load_runtime_settings
+                        try:
+                            settings = load_runtime_settings()
+                        except Exception:
+                            settings = None
+                    if not sup_svc.is_enabled(settings):
+                        self._json(HTTPStatus.CONFLICT, {
+                            "error": "agent supervisor is disabled (set CONVEYOR_AGENT_SUPERVISOR_ENABLED=true)",
+                            "code": "agent_supervisor_disabled",
+                        })
+                        return
+                    binding = sup_svc.resolve_supervisor_chat_session(settings, session_id)
+                    if binding is None:
+                        self._json(HTTPStatus.NOT_FOUND, {
+                            "error": "supervisor worktree session not found",
+                            "code": "session_not_found",
+                        })
+                        return
+                    session_id = binding["session_id"]
                 from web_chat import build_history
                 # Unknown (e.g. brand-new, not yet persisted) sessions are simply empty.
                 session = self.server.control.get_session(session_id)
@@ -701,6 +745,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, self.server.control.computer_status())
             elif path == "/api/teammate/status":
                 self._json(HTTPStatus.OK, self.server.control.teammate_status())
+            elif path == "/api/supervisor" or path.startswith("/api/supervisor/"):
+                import web_supervisor_api
+                web_supervisor_api.handle_get(self, path, parts, query)
             elif path == "/api/agents":
                 self._json(HTTPStatus.OK, self.server.control.list_agents())
             elif len(parts) == 4 and parts[:2] == ["api", "agents"] and parts[3] == "library":
@@ -1245,6 +1292,22 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "message must be 1-8000 characters"})
                     return
                 requested_session_id = str(body.get("session_id") or "")
+                import supervisor_service as sup_svc
+                is_sup_session = sup_svc.is_supervisor_session_id(requested_session_id)
+                if is_sup_session:
+                    sup_settings = getattr(self.server.control, "settings", None)
+                    if sup_settings is None:
+                        from config import load_runtime_settings
+                        try:
+                            sup_settings = load_runtime_settings()
+                        except Exception:
+                            sup_settings = None
+                    if not sup_svc.is_enabled(sup_settings):
+                        self._json(HTTPStatus.CONFLICT, {
+                            "error": "agent supervisor is disabled (set CONVEYOR_AGENT_SUPERVISOR_ENABLED=true)",
+                            "code": "agent_supervisor_disabled",
+                        })
+                        return
                 from web_chat import WEB_CHAT_PREFIX, resolve_or_create_session
                 session_info = resolve_or_create_session(
                     self.server.control, requested_session_id, new_prefix=WEB_CHAT_PREFIX,
@@ -1265,12 +1328,17 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     settings = load_runtime_settings()
 
                 from handlers.chat import chat_enabled
-                from overnight_chat import route as nightly_route
-                nightly_control = os.getenv('CONVEYOR_NIGHTLY_CONTROL') == '1' and nightly_route(message) is not None
-                import goal_loop
-                if not chat_enabled(settings) and not nightly_control and not goal_loop.is_goal_command(message):
-                    self._feature_off("chat_disabled")
-                    return
+                if is_sup_session or source_chat_id.startswith("supwt-"):
+                    if not chat_enabled(settings):
+                        self._feature_off("chat_disabled")
+                        return
+                else:
+                    from overnight_chat import route as nightly_route
+                    nightly_control = os.getenv('CONVEYOR_NIGHTLY_CONTROL') == '1' and nightly_route(message) is not None
+                    import goal_loop
+                    if not chat_enabled(settings) and not nightly_control and not goal_loop.is_goal_command(message):
+                        self._feature_off("chat_disabled")
+                        return
 
                 msg = InboundMessage(
                     channel=channel, operator_id=operator_id, chat_id=source_chat_id,
@@ -1284,6 +1352,26 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "prompt must be 1-8000 characters"})
                     return
                 requested_session_id = str(body.get("session_id") or "")
+                import supervisor_service as sup_svc
+                if sup_svc.is_supervisor_session_id(requested_session_id):
+                    sup_settings = getattr(self.server.control, "settings", None)
+                    if sup_settings is None:
+                        from config import load_runtime_settings
+                        try:
+                            sup_settings = load_runtime_settings()
+                        except Exception:
+                            sup_settings = None
+                    if not sup_svc.is_enabled(sup_settings):
+                        self._json(HTTPStatus.CONFLICT, {
+                            "error": "agent supervisor is disabled (set CONVEYOR_AGENT_SUPERVISOR_ENABLED=true)",
+                            "code": "agent_supervisor_disabled",
+                        })
+                        return
+                    self._json(HTTPStatus.CONFLICT, {
+                        "error": "supervisor worktree sessions are read-only in chat; dispatch tasks via /api/supervisor/tasks",
+                        "code": "supervisor_session_read_only",
+                    })
+                    return
                 from web_chat import resolve_or_create_session
                 session_info = resolve_or_create_session(self.server.control, requested_session_id)
                 if not session_info:
@@ -1370,6 +1458,14 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         if reason:
                             self._json(HTTPStatus.CONFLICT, {"error": reason})
                             return
+                        # Same optimistic check as /api/approval-inbox: when the
+                        # client says what it showed, refuse if the action changed.
+                        expected_arg = body.get("expected_arg") if isinstance(body, dict) else None
+                        if expected_arg is not None:
+                            from redaction import redact_text as _redact
+                            if expected_arg not in (pending.arg, _redact(pending.arg)):
+                                self._json(HTTPStatus.CONFLICT, {"error": "approval changed, reload"})
+                                return
                     from web_chat import decide_tool_approval
                     result = self._await(decide_tool_approval(pending, is_approve, settings), timeout=120)
                     self._json(HTTPStatus.OK, result)
@@ -1734,6 +1830,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
+            elif parsed.path == "/api/supervisor" or parsed.path.startswith("/api/supervisor/"):
+                import web_supervisor_api
+                web_supervisor_api.handle_post(self, parsed.path, parts, body)
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         except KeyError:
@@ -2034,6 +2133,17 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 now = time.monotonic()
                 if now > deadline:
                     future.cancel()
+                    if getattr(port, "job_id", ""):
+                        # The agent job keeps running and its answer is saved
+                        # to this conversation when it ends. A retryable error
+                        # here made the owner resend and start a duplicate job.
+                        note = json.dumps({"text": (
+                            "任务还在后台执行，完成后结果会出现在这段对话里（刷新即可看到），不用重发。"
+                        )}, ensure_ascii=False)
+                        done_data = json.dumps({"outcome": "background"}, ensure_ascii=False)
+                        self.wfile.write(f"event: message\ndata: {note}\n\nevent: done\ndata: {done_data}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                        break
                     err_data = json.dumps({"error": "Request timed out"}, ensure_ascii=False)
                     done_data = json.dumps({"outcome": "timeout"}, ensure_ascii=False)
                     self.wfile.write(f"event: error\ndata: {err_data}\n\nevent: done\ndata: {done_data}\n\n".encode("utf-8"))
@@ -2287,6 +2397,9 @@ def main() -> None:
     agent_retention_worker = agent_security.start(loop, settings)
     import worker_usage
     usage_refresh = worker_usage.start_background_refresh(loop, settings)
+    import supervisor_service
+    if supervisor_service.is_enabled(settings):
+        loop.call_soon(lambda: supervisor_service.ensure_server_worker(server, settings, wake=True))
     def _resume_goals() -> None:
         try:
             from web_chat import resume_goal_loops

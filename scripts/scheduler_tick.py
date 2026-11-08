@@ -23,8 +23,9 @@ logger = logging.getLogger("scheduler_tick")
 
 
 def _send_telegram(settings, chat_id: str, text: str) -> None:
+    from personal_tools.briefing import telegram_base_chat
     from scripts.telegram_api import send_message
-    send_message(settings, text, chat_id=int(chat_id))
+    send_message(settings, text, chat_id=telegram_base_chat(chat_id))
 
 
 def _deliver_one(settings, reminder, *, dry_run: bool) -> tuple[bool, str]:
@@ -44,11 +45,17 @@ def _deliver_one(settings, reminder, *, dry_run: bool) -> tuple[bool, str]:
             return True, "ok"
         except Exception as exc:
             return False, f"{type(exc).__name__}: {exc}"
-    elif channel == "feishu":
-        logger.warning("Feishu delivery not yet implemented for reminder #%d", reminder.id)
-        return False, "feishu_not_implemented"
-    else:
-        return False, f"unknown_channel:{channel}"
+    # Web and Feishu cannot push a reminder from here. They used to fail three
+    # times and then sit as failed forever without the owner ever hearing of
+    # them; deliver them to the owner's Telegram DM instead when it exists.
+    if getattr(settings, "telegram_bot_token", None) and getattr(settings, "telegram_allowed_user_id", None):
+        try:
+            from scripts.telegram_api import send_message
+            send_message(settings, f"⏰ 提醒 #{reminder.id}（在 {channel} 创建）\n{reminder.text}")
+            return True, "ok"
+        except Exception as exc:
+            return False, f"{type(exc).__name__}: {exc}"
+    return False, f"undeliverable_channel:{channel}"
 
 
 def run_tick(*, dry_run: bool = False) -> tuple[int, int]:

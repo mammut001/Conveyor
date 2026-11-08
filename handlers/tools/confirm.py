@@ -65,6 +65,16 @@ def create_pending(
     return action
 
 
+def count_pending_for_context(operator_id: str, chat_id: str, channel: str) -> int:
+    """Unexpired pending actions that belong to this operator/chat/channel."""
+    with _lock:
+        return sum(
+            1 for a in _pending.values()
+            if not a.is_expired() and a.operator_id == operator_id
+            and a.chat_id == chat_id and a.channel == channel
+        )
+
+
 def get_pending(token: str) -> PendingToolAction | None:
     with _lock:
         action = _pending.get(token)

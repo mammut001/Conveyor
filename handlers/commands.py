@@ -1053,7 +1053,7 @@ async def _kb_collect_facts(msg, port, runner, settings, arg):
 # Web Fetch / Search / Research (P4.1)
 
 async def _web_fetch(msg, port, _runner, settings, arg):
-    from handlers.tools.runner import run_tool
+    from handlers.tools.runner import _invoke_tool
     if not arg.strip():
         await port.reply(msg, "用法: /web_fetch <url>")
         return
@@ -1061,7 +1061,7 @@ async def _web_fetch(msg, port, _runner, settings, arg):
 
 
 async def _web_text(msg, port, _runner, settings, arg):
-    from handlers.tools.runner import run_tool
+    from handlers.tools.runner import _invoke_tool
     if not arg.strip():
         await port.reply(msg, "用法: /web_text <url>")
         return
@@ -1069,7 +1069,7 @@ async def _web_text(msg, port, _runner, settings, arg):
 
 
 async def _web_headers(msg, port, _runner, settings, arg):
-    from handlers.tools.runner import run_tool
+    from handlers.tools.runner import _invoke_tool
     if not arg.strip():
         await port.reply(msg, "用法: /web_headers <url>")
         return
@@ -1077,7 +1077,7 @@ async def _web_headers(msg, port, _runner, settings, arg):
 
 
 async def _web_search(msg, port, _runner, settings, arg):
-    from handlers.tools.runner import run_tool
+    from handlers.tools.runner import _invoke_tool
     if not arg.strip():
         await port.reply(msg, "用法: /web_search <查询词>")
         return
@@ -2068,8 +2068,9 @@ async def _queue_resume(msg, port, _runner, _settings, _arg):
     queue = get_job_queue()
     await queue.resume()
     await port.reply(msg, "队列已恢复，将自动执行下一个任务。")
-    # Try to start next job if any
-    await queue.on_job_completed()
+    # Start the next job if a lane is free. Never on_job_completed() here: with
+    # no ids it marks whichever job is running as completed.
+    await queue.start_next()
 
 
 COMMAND_TABLE: dict[str, CommandSpec] = {

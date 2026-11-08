@@ -59,8 +59,9 @@ def _fail(name: str, detail: str) -> None:
 def _mk_settings(**over) -> "Settings":
     """Build a Settings with a fresh temp memory root + computer overrides.
 
-    Defaults enable both USE and DIRECT so existing smokes exercise the
-    armed/always-direct paths. Override either flag to test gating.
+    Defaults enable USE, DIRECT and ALWAYS_DIRECT so existing smokes
+    exercise the hands-free path (the loop requires active direct mode on
+    every iteration). Override either flag to test gating.
     """
     from config import Settings
 
@@ -80,7 +81,7 @@ def _mk_settings(**over) -> "Settings":
         conveyor_computer_use_enabled=True,
         conveyor_computer_direct_enabled=True,
         conveyor_computer_backend="fake",
-        conveyor_computer_always_direct=False,
+        conveyor_computer_always_direct=True,
         conveyor_computer_allow_login_passwords=False,
         conveyor_computer_max_steps=20,
         conveyor_computer_max_seconds=600,

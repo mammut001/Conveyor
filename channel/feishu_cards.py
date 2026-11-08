@@ -57,6 +57,10 @@ ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "desktop_screenshot_status",
     "desktop_observe_status",
     "desktop_observe_cancel",
+    # Upload cards render these buttons; without them here the click was
+    # rejected as malformed and the button did nothing.
+    "desktop_upload_status",
+    "desktop_upload_cancel",
 })
 
 #: Maximum number of action buttons rendered in a single card row.
@@ -149,6 +153,7 @@ def parse_action(value: Any) -> dict[str, Any] | None:
         # (no token, no job_id, no extra state).
         "nodes_status", "computer_status", "desktop_screenshot_status",
         "desktop_observe_status", "desktop_observe_cancel",
+        "desktop_upload_status", "desktop_upload_cancel",
     )
     if action in slash_actions and "token" in payload:
         return None

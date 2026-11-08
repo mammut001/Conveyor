@@ -27,6 +27,9 @@ CONVEYOR_CHAT_BASE_URL=https://api.minimaxi.com/v1   # any OpenAI-compatible end
 CONVEYOR_CHAT_API_KEY=...
 CONVEYOR_CHAT_MODEL=...
 CONVEYOR_CHAT_VISION=false   # true if the model accepts images
+# Reasoning models (StepFun step-3.7-flash and friends) spend max_tokens on hidden
+# reasoning first and can answer finish_reason=length with an EMPTY reply:
+CONVEYOR_CHAT_REASONING_EFFORT=low   # none|minimal|low|medium|high
 WEB_SEARCH_BACKEND=brave     # recommended: grounds time-sensitive answers
 ```
 
@@ -34,6 +37,23 @@ Unset chat values fall back to `MINIMAX_BASE_URL` / `MINIMAX_API_KEY` /
 `MINIMAX_CHAT_MODEL`. With the mode `off`, or without a key and model,
 behavior is exactly the previous one. Any chat failure (network, timeout,
 HTTP error, empty answer) falls back to Codex.
+
+### Reasoning models and the token budget
+
+Reasoning models (StepFun `step-3.7-flash`, and any endpoint that reports
+`reasoning` / `reasoning_content`) spend `max_tokens` on hidden reasoning
+tokens first, so a small budget can be consumed entirely by them: the reply
+arrives with `finish_reason=length` and an **empty** content, which used to
+reach the operator as a blank answer (and fell back to the slower agent).
+Two mitigations:
+
+* `CONVEYOR_CHAT_REASONING_EFFORT=low` (or `minimal`) tells the provider to keep
+  the reasoning short; recommended for such models.
+* Without the hint, `runner/chat_client.py` detects the exhausted reply
+  (finish_reason `length`, no content, no tool calls, reasoning present) and
+  replays the request **once** with a wider budget (4x, floored at 4096 and
+  capped at 16384 tokens) — for streaming and non-streaming calls alike.
+  Reasoning text is never shown to the operator.
 
 ## Routing rules (`handlers/chat.py`)
 

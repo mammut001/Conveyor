@@ -204,6 +204,14 @@ def next_fire(
 
         # Check hour
         if local.hour not in hours:
+            # Spring forward: wall-clock hours that do not exist today. A job
+            # due in them runs right after the jump (as cron does) instead of
+            # being skipped for the whole day.
+            before = (curr_utc - timedelta(minutes=1)).astimezone(tz)
+            if before.utcoffset() != local.utcoffset() and local.utcoffset() > before.utcoffset():
+                skipped = {(before.hour + step) % 24 for step in range(1, (local.hour - before.hour) % 24)}
+                if skipped & set(hours) and minutes:
+                    return curr_utc.astimezone(timezone.utc)
             next_hour_utc = (
                 (local.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
                 .astimezone(tz)
@@ -216,6 +224,13 @@ def next_fire(
 
         # Check minute
         if local.minute not in minutes:
+            curr_utc = curr_utc + timedelta(minutes=1)
+            continue
+
+        # Fall back: the same wall-clock minute happens twice. Fire on the
+        # first occurrence only, so a 01:30 job runs once that night.
+        # (Jobs with "*" in the hour field keep running hourly, as in cron.)
+        if local.fold == 1 and len(set(hours)) < 24:
             curr_utc = curr_utc + timedelta(minutes=1)
             continue
 

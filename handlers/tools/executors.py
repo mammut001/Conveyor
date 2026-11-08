@@ -614,7 +614,8 @@ async def exec_computer_action(settings: Settings, arg: str) -> str:
         return "缺少 action 字段。"
     if not is_action_allowed(settings, action):
         return f"不允许的动作: {action.get('action')}"
-    if contains_blocked_keyword(settings, json.dumps(action)):
+    # ensure_ascii=False: escaped as \uXXXX, no Chinese keyword could ever match.
+    if contains_blocked_keyword(settings, json.dumps(action, ensure_ascii=False)):
         return "⛔ 含受限关键词，已拒绝。"
 
     backend = build_backend(settings)
@@ -863,7 +864,7 @@ async def exec_pi_destructive_task(
 ) -> str:
     """Execute an operator-confirmed destructive/deletion task via PiBackend."""
     import asyncio
-    from runner.pi_agent import DESTRUCTIVE_CONFIRM_TAG, PiBackend
+    from runner.pi_agent import PiBackend
     from runner.types import JobMode, JobState
 
     prompt = (arg or "").strip()
@@ -896,12 +897,14 @@ async def exec_pi_destructive_task(
         except Exception:
             pass
 
-    tagged_prompt = f"{DESTRUCTIVE_CONFIRM_TAG}\n{ctx_prefix}{prompt}"
 
     async def _noop_progress(_text: str) -> None:
         pass
 
-    job = await backend.start(JobMode.RUN, tagged_prompt, _noop_progress, **start_options)
+    job = await backend.start(
+        JobMode.RUN, f"{ctx_prefix}{prompt}", _noop_progress,
+        destructive_confirmed=True, **start_options,
+    )
     while job.state == JobState.RUNNING:
         await asyncio.sleep(0.25)
     result_text = job.summary or (f"执行失败：{job.error}" if job.error else (job.last_event or "已确认并执行完成。"))

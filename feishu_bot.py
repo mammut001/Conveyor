@@ -168,12 +168,43 @@ async def _handle_card_action(msg: Any) -> None:
         if cmd is None:
             await port.send_new(inbound, f"未知卡片操作: {action}")
             return
+        stale = _stale_card_job(runner, inbound, action, payload.get("job_id"))
+        if stale:
+            await port.send_new(inbound, stale)
+            return
         # Synthesize a typed slash command and re-enter the regular
         # dispatch path. parse_command will recognize it.
         inbound.text = f"/{cmd}"
         await dispatch(inbound, port, settings, runner)
     except Exception:
         logger.exception("Card action handler failed: action=%s", action)
+
+
+def _stale_card_job(runner: Any, inbound: Any, action: str, card_job_id: Any) -> str:
+    """Refuse a card button that would act on a different job than its card.
+
+    /apply, /discard and /diff act on the chat's latest job and /cancel on the
+    running one; a button on an older card used to apply or discard whatever
+    job came last. Returns the refusal text, or "" when the card is current.
+    """
+    if action not in ("apply", "discard", "diff", "cancel") or not card_job_id:
+        return ""
+    try:
+        from job_lanes import runner_for_chat
+        lane_runner = runner_for_chat(runner, settings, inbound.channel, inbound.chat_id)
+        if action == "cancel":
+            current = getattr(getattr(lane_runner, "current_job", None), "id", None)
+        else:
+            current = lane_runner._last_job_id()
+    except Exception:
+        logger.debug("Could not resolve the chat's current job for a card action", exc_info=True)
+        return "无法确认这张卡片对应的任务，请发送命令操作。"
+    if str(current or "") == str(card_job_id):
+        return ""
+    if action == "cancel":
+        return f"任务 {card_job_id} 已不在运行，未执行取消。"
+    return (f"这张卡片对应任务 {card_job_id}，但最近的任务是 {current}。"
+            "为避免操作错任务，已拒绝；请在最新任务的卡片上操作，或先用 /jobs 查看。")
 
 
 # ---- Shared channel holder -------------------------------------------------

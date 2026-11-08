@@ -894,6 +894,15 @@ async def try_resolve_confirmation(
     if pending is None:
         return False
     if is_confirmation_text(msg.text):
+        # A typed "确认" always meant the newest pending action, even when the
+        # owner was answering an earlier card. With several open it is
+        # ambiguous: ask for the card's own button instead of guessing.
+        from handlers.tools.confirm import count_pending_for_context
+        open_count = count_pending_for_context(msg.operator_id, msg.chat_id, msg.channel)
+        if open_count > 1:
+            await port.reply(msg, f"现在有 {open_count} 个待确认操作，回复「确认」分不清是哪一个，"
+                                  "请点对应卡片上的「确认执行」按钮。")
+            return True
         return await execute_confirmed(msg, port, settings, pending.token)
     if is_cancellation_text(msg.text):
         return await cancel_pending(msg, port, settings, pending.token)

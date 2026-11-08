@@ -133,6 +133,28 @@ def _selection(text, agents_by_name):
     return None, text, False
 
 
+# A model answer must be exactly one JSON value, optionally wrapped in a
+# single markdown code fence. We never search for JSON inside surrounding
+# prose: "Sure! {\"agent_id\": ...}" is not a valid machine answer.
+_FENCE_OPEN = re.compile(r"^```[ \t]*[A-Za-z0-9_+.-]*[ \t]*\r?\n")
+
+
+def _parse_model_json(text):
+    """Parse a model answer as JSON, tolerating one surrounding ``` fence."""
+    if not isinstance(text, str):
+        raise ValueError("model answer must be a string")
+    body = text.strip()
+    if body.startswith("```"):
+        opening = _FENCE_OPEN.match(body)
+        if not opening:
+            raise ValueError("malformed opening fence")
+        body = body[opening.end():].rstrip()
+        if not body.endswith("```"):
+            raise ValueError("missing closing fence")
+        body = body[:-3]
+    return json.loads(body)
+
+
 async def choose(settings, msg, *, model=None):
     """Return only validated decisions; None means existing main flow."""
     import agents
@@ -142,7 +164,11 @@ async def choose(settings, msg, *, model=None):
     if msg.text.strip().lower().startswith("!main"):
         return Decision(None, reason="opt_out")
     # Only authenticated, private owner requests on the built-in main agent.
-    if (msg.chat_type not in ("p2p", "unknown") or not is_allowed(msg, settings)
+    # owner_topic = the owner's own message in a bound Telegram Forum Topic:
+    # it routes like a DM although chat_type still says "group".
+    if ((msg.chat_type not in ("p2p", "unknown")
+         and not getattr(msg, "owner_topic", False))
+            or not is_allowed(msg, settings)
             or msg.channel == "feishu" and not getattr(settings, "lark_allowed_open_id", None)):
         return Decision(None, reason="untrusted_owner")
     try:
@@ -210,7 +236,7 @@ async def choose(settings, msg, *, model=None):
     ]
     try:
         answer = await model(prompt)
-        choice = json.loads(answer["content"])
+        choice = _parse_model_json(answer["content"])
         if (not isinstance(choice, dict) or set(choice) != {"agent_id", "confidence"}
                 or type(choice["confidence"]) not in (float, int)
                 or not _MIN_CONFIDENCE <= choice["confidence"] <= 1):

@@ -33,6 +33,7 @@ single-concurrency.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import defaultdict
@@ -183,11 +184,18 @@ async def submit_codex_job(
     # separate processes sharing one queue.
     if queue.has_running_job and not queue.can_start(queued_job.id):
         # Its lane is busy (or the parallel limit is reached): it stays queued.
-        await port.reply(msg, queue_msg)
+        await _note_queued(port, msg, queue_msg)
         return True, queue_msg, queued_job
 
     # No job running, execute immediately
     dequeued_job = await queue.dequeue(require_idle=True)
+    if dequeued_job and dequeued_job.id != queued_job.id:
+        # An older job was first in line (enqueued by another process, or left
+        # queued across a restart). Start it with its own chat and port, never
+        # this submitter's; the new job waits its turn.
+        await _start_queued_job_callback(dequeued_job)
+        await _note_queued(port, msg, queue_msg)
+        return True, queue_msg, queued_job
     if dequeued_job:
         execute_msg = dequeued_job._msg or msg
         execute_port = dequeued_job._port or port
@@ -199,12 +207,34 @@ async def submit_codex_job(
                 "conversation_context": dequeued_job.conversation_context}
                if getattr(dequeued_job, "conversation_id", "") else {}),
         )
+        task = _run_in_background(execution)
         if wait:
-            await execution
-        else:
-            import asyncio
-            asyncio.create_task(execution)
+            # A cancelled waiter (web turn timeout, client gone) must not cancel
+            # the job's own result delivery: the runner job keeps going either
+            # way, and its answer still has to reach the chat history.
+            await asyncio.shield(task)
     return True, queue_msg, queued_job
+
+
+async def _note_queued(port: OutboundPort, msg: InboundMessage, text: str) -> None:
+    """Tell the user the job is queued without treating that as the final reply."""
+    note = getattr(port, "note_queued", None)
+    if note is not None:
+        await note(msg, text)
+    else:
+        await port.reply(msg, text)
+
+
+# The event loop only keeps weak references to tasks; a job started in the
+# background must be held until it finishes or it can be collected mid-run.
+_BACKGROUND_JOBS: set = set()
+
+
+def _run_in_background(coro) -> "asyncio.Task":
+    task = asyncio.create_task(coro)
+    _BACKGROUND_JOBS.add(task)
+    task.add_done_callback(_BACKGROUND_JOBS.discard)
+    return task
 
 
 from agent_conversations import scoped_job
@@ -605,7 +635,6 @@ class RecoveredOutboundPort:
 
 
 async def _start_queued_job_callback(queued_job: QueuedJob) -> None:
-    import asyncio
     from handlers.job_queue import get_job_queue
     queue = get_job_queue()
     runner = queued_job._runner or queue._runner
@@ -632,7 +661,7 @@ async def _start_queued_job_callback(queued_job: QueuedJob) -> None:
         
     mode = JobMode.FIX if queued_job.mode == "fix" else JobMode.RUN
     
-    asyncio.create_task(_execute_codex_job(
+    _run_in_background(_execute_codex_job(
         msg, port, runner, mode, queued_job.prompt, queue_job_id=queued_job.id,
         **({"conversation_id": queued_job.conversation_id,
             "conversation_context": queued_job.conversation_context}

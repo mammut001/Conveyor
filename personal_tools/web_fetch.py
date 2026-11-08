@@ -72,7 +72,48 @@ _BLOCKED_HOSTNAMES = frozenset({
 })
 
 
+def _embedded_ipv4(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> list[ipaddress.IPv4Address]:
+    """IPv4 addresses an IPv6 address can carry and that a host may route to."""
+    if ip.version != 6:
+        return []
+    found: list[ipaddress.IPv4Address] = []
+    if ip.ipv4_mapped is not None:                       # ::ffff:a.b.c.d
+        found.append(ip.ipv4_mapped)
+    if ip.sixtofour is not None:                         # 2002:aabb:ccdd::/48
+        found.append(ip.sixtofour)
+    if ip.teredo is not None:                            # 2001::/32
+        found.extend(ip.teredo)
+    low32 = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    if int(ip) >> 32 == 0 and int(ip) > 1:              # ::a.b.c.d (IPv4-compatible)
+        found.append(low32)
+    if ip in ipaddress.ip_network("64:ff9b::/96"):       # NAT64 well-known prefix
+        found.append(low32)
+    return found
+
+
 def validate_url(url: str) -> tuple[bool, str]:
+    ok, err, _pin = validate_and_pin(url)
+    return ok, err
+
+
+def validate_and_pin(url: str) -> tuple[bool, str, list[str]]:
+    """Like validate_url, plus curl ``--resolve`` args pinning the checked address.
+
+    Without pinning curl resolved the name again, so a short-TTL record could
+    pass the check and then point at a private address (DNS rebinding); the
+    HEAD + GET in fetch_text gave it two chances.
+    """
+    ok, err, ips, host = _validate(url)
+    if not ok or not ips:
+        return ok, err, []
+    parsed = urlparse(url.strip())
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    ip = ips[0]
+    target = f"[{ip}]" if ip.version == 6 else str(ip)
+    return True, "", ["--resolve", f"{host}:{port}:{target}"]
+
+
+def _validate(url: str) -> tuple[bool, str, list, str]:
     """Validate URL for safe fetching. Returns (ok, error_msg).
     
     Validates:
@@ -82,32 +123,32 @@ def validate_url(url: str) -> tuple[bool, str]:
     - Metadata endpoints (explicitly blocked)
     """
     if not url or not isinstance(url, str):
-        return False, "URL 不能为空"
+        return False, "URL 不能为空", [], ""
 
     url = url.strip()
 
     try:
         parsed = urlparse(url)
     except Exception:
-        return False, "URL 格式无效"
+        return False, "URL 格式无效", [], ""
 
     # Only http/https
     if parsed.scheme not in ("http", "https"):
-        return False, f"不支持的协议: {parsed.scheme}（仅支持 http/https）"
+        return False, f"不支持的协议: {parsed.scheme}（仅支持 http/https）", [], ""
 
     hostname = parsed.hostname
     if not hostname:
-        return False, "URL 缺少主机名"
+        return False, "URL 缺少主机名", [], ""
 
     # Blocked hostnames
     if hostname.lower() in _BLOCKED_HOSTNAMES:
-        return False, f"拒绝访问: {hostname}"
+        return False, f"拒绝访问: {hostname}", [], ""
 
     # Check if hostname is a metadata endpoint IP
     try:
         ip = ipaddress.ip_address(hostname)
         if str(ip) in _METADATA_BLOCKED:
-            return False, f"拒绝访问: 元数据端点 {hostname}"
+            return False, f"拒绝访问: 元数据端点 {hostname}", [], ""
     except ValueError:
         pass  # Not an IP address, continue with DNS resolution
 
@@ -115,8 +156,9 @@ def validate_url(url: str) -> tuple[bool, str]:
     try:
         addrinfos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
     except socket.gaierror:
-        return False, f"无法解析主机名: {hostname}"
+        return False, f"无法解析主机名: {hostname}", [], ""
 
+    approved = []
     for family, _, _, _, sockaddr in addrinfos:
         ip_str = sockaddr[0]
         try:
@@ -124,19 +166,32 @@ def validate_url(url: str) -> tuple[bool, str]:
         except ValueError:
             continue
 
-        # Check against all blocked networks
-        for net in _BLOCKED_NETWORKS:
-            if ip in net:
-                return False, f"拒绝访问: {hostname} 解析到私有/保留 IP {ip}"
+        # Check against all blocked networks, including an IPv4 address carried
+        # inside an IPv6 one (::ffff:127.0.0.1 reached the console and cloud
+        # metadata because v6 addresses never match the v4 ranges).
+        for candidate in (ip, *_embedded_ipv4(ip)):
+            for net in _BLOCKED_NETWORKS:
+                if candidate.version == net.version and candidate in net:
+                    return False, f"拒绝访问: {hostname} 解析到私有/保留 IP {ip}", [], ""
+            if not candidate.is_global:
+                return False, f"拒绝访问: {hostname} 解析到非公网 IP {ip}", [], ""
 
         # Explicit check for metadata endpoint IPs
         if str(ip) in _METADATA_BLOCKED:
-            return False, f"拒绝访问: 元数据端点 {hostname} ({ip})"
+            return False, f"拒绝访问: 元数据端点 {hostname} ({ip})", [], ""
+        approved.append(ip)
 
-    return True, ""
+    try:
+        ipaddress.ip_address(hostname)
+        literal = True
+    except ValueError:
+        literal = False
+    # An IP literal needs no pinning; a name is pinned to an address just checked.
+    return True, "", ([] if literal else approved), hostname
 
 
-def _curl_argv(url: str, settings: Settings, *, headers_only: bool = False) -> list[str]:
+def _curl_argv(url: str, settings: Settings, *, headers_only: bool = False,
+               pin: list[str] | None = None) -> list[str]:
     """Build safe curl argv. Always uses shell=False.
     
     MVP safety: no automatic redirects. Each redirect hop must be
@@ -154,6 +209,8 @@ def _curl_argv(url: str, settings: Settings, *, headers_only: bool = False) -> l
         "--proto", "=http,https",
         "--user-agent", settings.web_user_agent,
     ]
+    if pin:
+        argv.extend(pin)
     if headers_only:
         argv.append("--head")
     argv.append(url)
@@ -212,11 +269,11 @@ def fetch_headers(settings: Settings, url: str) -> ToolResult:
     if not settings.web_fetch_enabled:
         return ToolResult(ok=False, text="⚠️ Web Fetch 已禁用")
 
-    ok, err = validate_url(url)
+    ok, err, pin = validate_and_pin(url)
     if not ok:
         return ToolResult(ok=False, text=f"⚠️ URL 验证失败: {err}")
 
-    argv = _curl_argv(url, settings, headers_only=True)
+    argv = _curl_argv(url, settings, headers_only=True, pin=pin)
     rc, stdout, stderr = _run_curl(argv)
     if rc != 0:
         return ToolResult(ok=False, text=f"⚠️ 获取 headers 失败: {redact_text(stderr)}")
@@ -233,12 +290,12 @@ def fetch_text(settings: Settings, url: str) -> ToolResult:
     if not settings.web_fetch_enabled:
         return ToolResult(ok=False, text="⚠️ Web Fetch 已禁用")
 
-    ok, err = validate_url(url)
+    ok, err, pin = validate_and_pin(url)
     if not ok:
         return ToolResult(ok=False, text=f"⚠️ URL 验证失败: {err}")
 
     # First, check Content-Type via HEAD (pre-flight)
-    head_argv = _curl_argv(url, settings, headers_only=True)
+    head_argv = _curl_argv(url, settings, headers_only=True, pin=pin)
     rc, head_out, head_err = _run_curl(head_argv)
     if rc == 0:
         ct_ok, ct_err = _check_content_type(head_out)
@@ -246,7 +303,7 @@ def fetch_text(settings: Settings, url: str) -> ToolResult:
             return ToolResult(ok=False, text=f"⚠️ {ct_err}")
 
     # Fetch content with headers included
-    argv = _curl_argv(url, settings, headers_only=False)
+    argv = _curl_argv(url, settings, headers_only=False, pin=pin)
     # Add --include to get headers in output for Content-Type validation
     argv.insert(-1, "--include")  # Insert before URL
     rc, stdout, stderr = _run_curl(argv)

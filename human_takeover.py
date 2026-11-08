@@ -178,6 +178,18 @@ class HumanTakeoverStore:
         finally:
             conn.close()
 
+    def latest_started_at(self, scope: str = DEFAULT_SCOPE) -> float | None:
+        """When the most recent takeover of ``scope`` began, open or not."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT MAX(created_at) FROM human_takeovers WHERE scope = ?",
+                (_safe_text(scope, 64) or DEFAULT_SCOPE,),
+            ).fetchone()
+            return float(row[0]) if row and row[0] is not None else None
+        finally:
+            conn.close()
+
     def activate(self, session_id: str) -> dict[str, Any] | None:
         return self._transition(session_id, from_states=("waiting_for_human",), to_state="human_active")
 

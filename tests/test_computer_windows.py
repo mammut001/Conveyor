@@ -690,6 +690,38 @@ class FailedStepContinuesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(planner.calls, 1)
         self.assertEqual(result.get("status"), "done")
 
+    async def test_takeover_during_planning_discards_the_planned_action(self) -> None:
+        """A takeover that opens and closes while the model plans must not let
+        the pre-takeover action run on the screen the human left."""
+        from human_takeover import HumanTakeoverStore
+
+        class TakeoverWhilePlanning:
+            def __init__(self, settings) -> None:
+                self.settings, self.calls = settings, 0
+
+            async def next_action(self, **_kwargs: object) -> dict:
+                self.calls += 1
+                if self.calls == 1:
+                    store = HumanTakeoverStore(self.settings)
+                    session = store.start(reason="login", task_id=None, requested_by="owner")
+                    sid = (session or {}).get("id") or (session or {}).get("session_id")
+                    store.complete(sid)
+                    return {"action": "type", "text": "planned before the takeover"}
+                return {"action": "done", "summary": "ok"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            planner = TakeoverWhilePlanning(settings)
+            result = await run_computer_loop(
+                settings, "在电脑上打开文件管理器", planner=planner,
+                backend=FakeComputerBackend(settings), max_steps=6, max_seconds=30,
+                direct_mode=True, open_with_observe=True,
+            )
+            task = get_computer_task(settings, result["task_id"]) or {}
+        types = [step.get("action_type") for step in task.get("trajectory") or []]
+        self.assertNotIn("type", types, types)
+        self.assertEqual(result.get("status"), "done", result)
+
     def test_planner_allows_window_pixels(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             settings = _settings(Path(tmp))
@@ -844,6 +876,61 @@ class BlockedKeywordsPolicyTest(unittest.TestCase):
         self.assertIsNone(contains_blocked_keyword(settings, "enter password to continue"))
         self.assertEqual(contains_blocked_keyword(settings, "open bank app"), "bank")
         self.assertEqual(contains_blocked_keyword(settings, "向该账户转账"), "转账")
+
+
+class DirectModeDisarmTest(unittest.IsolatedAsyncioTestCase):
+    """Direct mode is a lease, not a start-time gate.
+
+    A task started while hands-free was armed must stop as soon as the
+    operator disarms it (or the arm TTL expires), even mid-run.
+    """
+
+    async def test_disarmed_direct_mode_stops_the_task_mid_run(self) -> None:
+        checks = {"count": 0}
+
+        def direct_mode(settings, now=None):
+            # Active for the first iteration only. The operator disarmed
+            # direct mode while the loop was already working.
+            checks["count"] += 1
+            return checks["count"] == 1
+
+        class RecordingBackend:
+            def __init__(self, inner) -> None:
+                self.inner = inner
+                self.actions: list[str] = []
+
+            async def execute_step(self, settings, task_id, step_id, action):
+                self.actions.append(str(action.get("action")))
+                return await self.inner.execute_step(settings, task_id, step_id, action)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            backend = RecordingBackend(FakeComputerBackend(settings))
+            planner = ScriptedPlanner([
+                {"action": "click", "x": 10, "y": 20, "pid": 4, "window_id": 40},
+                {"action": "type", "text": "never typed"},
+                {"action": "done", "summary": "never reached"},
+            ])
+            with patch("desktop_computer_loop.is_direct_mode_active", side_effect=direct_mode):
+                result = await run_computer_loop(
+                    settings,
+                    "在电脑上打开文件管理器",
+                    planner=planner,
+                    backend=backend,
+                    max_steps=8,
+                    max_seconds=30,
+                    direct_mode=True,
+                )
+            task = get_computer_task(settings, result["task_id"]) or {}
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result.get("status"), "stopped", result)
+        self.assertEqual(result.get("blocked_reason"), "direct mode disarmed or expired")
+        self.assertEqual((task.get("status"), task.get("blocked_reason")),
+                         ("stopped", "direct mode disarmed or expired"))
+        # Only the step that was already in flight ran; nothing else mutated.
+        self.assertEqual(backend.actions, ["click"])
+        self.assertEqual([e.get("action_type") for e in task.get("trajectory") or []], ["click"])
+        self.assertGreaterEqual(checks["count"], 2)
 
 
 if __name__ == "__main__":

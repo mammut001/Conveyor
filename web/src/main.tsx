@@ -13,6 +13,7 @@ import './ux/tasks.css'
 import './ux/guard.css'
 import './ux/knowledge.css'
 import './ux/manage.css'
+import './ux/supervisor.css'
 
 /** Last line of defence: a render error shows a Chinese page instead of a blank screen. */
 class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null; attempt: number }> {

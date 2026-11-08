@@ -132,6 +132,25 @@ class WebApiTests(unittest.TestCase):
         status, _ = self.request("GET", "/api/jobs", authorized=False)
         self.assertEqual(status, 401)
 
+    def test_encoded_or_doubled_api_paths_still_need_the_token(self):
+        # Routing matches decoded segments; the auth gate must as well.
+        for path in ("/%61pi/jobs/q1", "/%61pi/jobs/q1/diff", "/%61pi/jobs/q1/events",
+                     "//api/jobs/q1", "/%41PI/jobs/q1"):
+            with self.subTest(path=path):
+                status, body = self.request("GET", path, authorized=False)
+                self.assertIn(status, (401, 404), body)
+                self.assertNotIn("diff", body)
+                self.assertNotIn("prompt", json.dumps(body))
+        status, _ = self.request("GET", "/%61pi/jobs/q1", authorized=True)
+        self.assertEqual(status, 200)
+        # An encoded slash never matches an API route (it falls through to the
+        # static app shell); it must not return job data either.
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        connection.request("GET", "/api%2Fjobs/q1")
+        raw = connection.getresponse().read().decode("utf-8", "replace")
+        connection.close()
+        self.assertNotIn("q1", raw)
+
     def test_sessions_jobs_event_replay_and_diff(self):
         self.assertEqual(self.request("GET", "/api/sessions")[0], 200)
         self.assertEqual(self.request("DELETE", "/api/sessions/web-a")[0], 200)

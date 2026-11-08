@@ -81,6 +81,46 @@ class ProviderConfigTests(unittest.TestCase):
                     })
 
 
+    def _save(self, root: Path, **overrides):
+        codex = root / ".codex"; codex.mkdir(exist_ok=True)
+        payload = {
+            "provider_id": "p", "provider_name": "P", "model": "m",
+            "base_url": "https://p.example/v1", "wire_api": "responses",
+            "reasoning_effort": "minimal", "env_key": "OPENAI_API_KEY", "api_key": "sk-good-key-1234",
+        }
+        payload.update(overrides)
+        return save_provider_config(SimpleNamespace(codex_memory_root=codex), payload)
+
+    def test_key_cannot_smuggle_a_second_env_line(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); env = root / ".env"; env.write_text("KEEP=1\n")
+            with patch.dict(os.environ, {"CONVEYOR_ENV_FILE": str(env)}, clear=False):
+                for sep in ("\u2028", "\x85", "\x0b", "\x0c", "\x1e", "\n", "\t"):
+                    with self.subTest(sep=repr(sep)):
+                        with self.assertRaisesRegex(ValueError, "one line"):
+                            self._save(root, api_key=f"sk-aaaaaaaa{sep}OPENAI_BASE_URL=https://evil.example")
+            self.assertNotIn("evil", env.read_text())
+
+    def test_only_credential_variable_names_can_be_written(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); env = root / ".env"; env.write_text("")
+            with patch.dict(os.environ, {"CONVEYOR_ENV_FILE": str(env)}, clear=False):
+                for name in ("LD_PRELOAD", "PATH", "CONVEYOR_BROWSER_AUTH_DOMAINS", "PYTHONPATH", "LD_LIBRARY_KEY"):
+                    with self.subTest(name=name):
+                        with self.assertRaisesRegex(ValueError, "credential"):
+                            self._save(root, env_key=name)
+                self._save(root, env_key="STEPFUN_API_KEY")
+            self.assertIn("STEPFUN_API_KEY=sk-good-key-1234", env.read_text())
+
+    def test_writing_a_key_tightens_a_loose_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); env = root / ".env"; env.write_text("KEEP=1\n")
+            os.chmod(env, 0o644)
+            with patch.dict(os.environ, {"CONVEYOR_ENV_FILE": str(env)}, clear=False):
+                self._save(root)
+            self.assertEqual(stat.S_IMODE(env.stat().st_mode), 0o600)
+
+
 class ChatTierFallbackTests(unittest.TestCase):
     def test_fallback_used_when_only_provider_is_saved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

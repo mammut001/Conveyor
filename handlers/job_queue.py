@@ -509,6 +509,7 @@ class JobQueue:
                 except Exception:
                     pass
             self._memory_references[job_id] = {"msg": msg, "port": port, "runner": runner}
+            self._prune_memory_references()
             logger.info(
                 "Job %s queued at position %d (channel=%s, operator=%s, refinement=%s)",
                 job_id, queued_job.position, msg.channel, msg.operator_id, refinement_intent,
@@ -612,11 +613,16 @@ class JobQueue:
                     if row is None:
                         return False, f"未找到队列任务 {job_id}"
                     now_str = datetime.now(timezone.utc).isoformat()
-                    conn.execute(
+                    # Re-check the state in the UPDATE: the SELECT ran before any
+                    # write lock, so another process may have dequeued the job in
+                    # between, and a running job must not be marked cancelled.
+                    cursor = conn.execute(
                         "UPDATE queued_jobs SET state = 'cancelled', finished_at = ?, updated_at = ?, "
-                        "position = 0 WHERE id = ?",
+                        "position = 0 WHERE id = ? AND state = 'queued'",
                         (now_str, now_str, job_id),
                     )
+                    if cursor.rowcount == 0:
+                        return False, f"队列任务 {job_id} 已开始执行，请用 /cancel 停止"
                     self._recalculate_positions(conn)
             finally:
                 conn.close()
@@ -913,15 +919,17 @@ class JobQueue:
         running_id: str | None = None
         try:
             with conn:
+                # Only the job that actually finished may be closed. Without an
+                # id, "any running row" closed another lane's (or another
+                # process's) live job and let a second job start beside it.
+                row = conn.execute(
+                    "SELECT id FROM queued_jobs WHERE id = ? AND state = 'running'",
+                    (queue_job_id,),
+                ).fetchone() if queue_job_id else None
                 if queue_job_id:
-                    row = conn.execute(
-                        "SELECT id FROM queued_jobs WHERE id = ? AND state = 'running'",
-                        (queue_job_id,),
-                    ).fetchone()
-                else:
-                    row = conn.execute(
-                        "SELECT id FROM queued_jobs WHERE state = 'running' LIMIT 1"
-                    ).fetchone()
+                    # Release the handles even when another process already
+                    # closed the row.
+                    self._memory_references.pop(queue_job_id, None)
                 if row:
                     running_id = str(row[0])
                     conn.execute(
@@ -944,6 +952,37 @@ class JobQueue:
             )
         await self._start_next_if_owned(now_str)
 
+    _MEMORY_REFERENCE_PRUNE_AT = 64
+
+    def _prune_memory_references(self) -> None:
+        """Drop in-memory msg/port/runner handles of jobs that already ended.
+
+        Only the process that closes a job removes its entry, so jobs finished
+        by another process (or recovered after a restart) leaked them.
+        """
+        if len(self._memory_references) < self._MEMORY_REFERENCE_PRUNE_AT:
+            return
+        ids = list(self._memory_references)
+        conn = self._get_conn()
+        try:
+            live = {
+                str(row[0]) for row in conn.execute(
+                    f"SELECT id FROM queued_jobs WHERE state IN ('queued', 'running') "
+                    f"AND id IN ({','.join('?' * len(ids))})", ids,
+                ).fetchall()
+            }
+        except sqlite3.Error:
+            return
+        finally:
+            conn.close()
+        for job_id in ids:
+            if job_id not in live:
+                self._memory_references.pop(job_id, None)
+
+    async def start_next(self) -> None:
+        """Start queued work if a lane is free (e.g. after /queue resume)."""
+        await self._start_next_if_owned(datetime.now(timezone.utc).isoformat())
+
     async def _start_next_if_owned(self, now_str: str) -> None:
         if self._paused:
             logger.debug("Queue paused, not starting next job")
@@ -961,6 +1000,7 @@ class JobQueue:
                 await self._start_callback(next_job)
             except Exception as exc:
                 logger.exception("Failed to start queued job %s", next_job.id)
+                self._memory_references.pop(next_job.id, None)
                 conn = self._get_conn()
                 try:
                     with conn:

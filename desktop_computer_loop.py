@@ -8,7 +8,9 @@ backend- and planner-agnostic so it can be exercised end-to-end with a
 Safety enforced here (see docs/desktop_security.md):
 - The task must be created already; the caller gates on enabled +
   direct mode. The loop additionally re-checks the task is still
-  running each step (so ``/computer_stop`` takes effect).
+  running each step (so ``/computer_stop`` takes effect), and that
+  direct mode is still active (so an operator disarm or an expired arm
+  TTL stops a task that is already running).
 - Every action is allow-listed (``is_action_allowed``) and scanned for
   blocked keywords (``contains_blocked_keyword``). Either hit stops
   the task and records why.
@@ -47,6 +49,7 @@ from desktop_computer_requests import (
     create_computer_task,
     get_computer_task,
     is_action_allowed,
+    is_direct_mode_active,
     normalize_action,
     BROWSER_PAGE_STATES,
     browser_page_state_from_title,
@@ -405,7 +408,7 @@ async def run_computer_loop(
 
     Pre-conditions (caller's job): CONVEYOR_COMPUTER_USE_ENABLED and
     direct mode must already be satisfied. This function focuses on the
-    loop + safety enforcement.
+    loop + safety enforcement, and re-checks both each iteration.
     """
     if task_id is None:
         created = create_computer_task(
@@ -470,6 +473,13 @@ async def run_computer_loop(
                 # Cancelled by /computer_stop.
                 break
 
+            # Direct mode is opt-in and TTL-bounded. The operator disarming it
+            # (or the arm expiring) must stop an already-running task: hands
+            # free is no longer permitted.
+            if direct_mode and not is_direct_mode_active(settings):
+                set_task_status(settings, task_id, "stopped", blocked_reason="direct mode disarmed or expired")
+                break
+
             # Human takeover is an exclusive GUI lease. Do not even observe
             # the desktop while a human may be typing secrets/payment data.
             # The store has its own TTL, so a lost browser session cannot
@@ -480,6 +490,8 @@ async def run_computer_loop(
                     pause_started = time.monotonic()
                 await asyncio.sleep(0.25)
                 continue
+            # Anything planned from here on was planned against this screen.
+            iteration_started = time.time()
             if pause_started is not None:
                 start += time.monotonic() - pause_started
                 pause_started = None
@@ -680,6 +692,13 @@ async def run_computer_loop(
             if takeover_store.current(scope) is not None:
                 if pause_started is None:
                     pause_started = time.monotonic()
+                continue
+            # A takeover that opened *and closed* while the planner was thinking
+            # is invisible to the check above, but the human may have changed
+            # the screen: drop this action and go through the post-takeover reset.
+            latest_takeover = takeover_store.latest_started_at(scope)
+            if latest_takeover is not None and latest_takeover >= iteration_started:
+                pause_started = time.monotonic()
                 continue
 
             # Create + execute the step.
@@ -1100,7 +1119,7 @@ def _action_text(action: dict) -> str:
     if not isinstance(action, dict):
         return ""
     parts = [str(action.get("action", ""))]
-    for key in ("text", "keys", "summary", "reason"):
+    for key in ("text", "keys", "summary", "reason", "label", "target", "target_app", "app", "title", "url"):
         v = action.get(key)
         if isinstance(v, str):
             parts.append(v)

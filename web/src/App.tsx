@@ -1,5 +1,6 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FormEvent, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatPanel, type ChatPanelProps } from './components/ChatPanel'
+const SupervisorWorkspace = lazy(() => import('./components/SupervisorWorkspace'))
 import { AgentWorkspace } from './components/AgentWorkspace'
 import { FormattedText } from './components/FormattedText'
 import { InboxPanel } from './components/InboxPanel'
@@ -91,6 +92,7 @@ type SystemStatus = {
     teammate?: boolean
     agents?: boolean
     workers?: boolean
+    agent_supervisor?: boolean
   }
 }
 type ComputerStatus = {
@@ -320,8 +322,9 @@ export default function App() {
     const items: { view: ShellView; group: 'main' | 'more'; badge?: number }[] = [
       { view: 'chat', group: 'main' },
       { view: 'tasks', group: 'main' },
-      { view: 'inbox', group: 'main', badge: inboxUnread },
     ]
+    if (features?.agent_supervisor) items.push({ view: 'code', group: 'main' })
+    items.push({ view: 'inbox', group: 'main', badge: inboxUnread })
     if (features?.approval_inbox) items.push({ view: 'approvals', group: 'main', badge: approvalInboxCount })
     if (features?.long_term_memory || view === 'memory') items.push({ view: 'memory', group: 'main' })
     if ((features?.teammate ?? true) || view === 'teammate') items.push({ view: 'teammate', group: 'main' })
@@ -331,7 +334,7 @@ export default function App() {
     if (features?.workflows || view === 'workflows') items.push({ view: 'workflows', group: 'more' })
     if (features?.mcp || view === 'connectors') items.push({ view: 'connectors', group: 'more' })
     return items
-  }, [features?.approval_inbox, features?.long_term_memory, features?.teammate, features?.skills, features?.workflows, features?.mcp, features?.workers, view, inboxUnread, approvalInboxCount])
+  }, [features?.agent_supervisor, features?.approval_inbox, features?.long_term_memory, features?.teammate, features?.skills, features?.workflows, features?.mcp, features?.workers, view, inboxUnread, approvalInboxCount])
   const shortcutViewsRef = useRef<ShellView[]>([])
   shortcutViewsRef.current = navItems.slice(0, 9).map(item => item.view)
 
@@ -783,6 +786,16 @@ export default function App() {
   useEffect(() => {
     if (!authenticated || !selectedJobId) return
     let stopped = false; let controller: AbortController | null = null; let retry: number | undefined
+    let refreshTimer: number | undefined
+    // Historical deltas can arrive in hundreds of frames during page load.
+    // Coalesce their invalidations instead of issuing seven requests per delta.
+    const scheduleRefresh = () => {
+      if (refreshTimer !== undefined) return
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined
+        if (!stopped) { void refresh(); void refreshTranscript() }
+      }, 250)
+    }
     lastSequence.current = 0; setEvents([]); setRealtimeState('connecting')
     void api<{ events: EventItem[] }>(`/api/jobs/${selectedJobId}/events`).then(({ events: initial }) => {
       if (stopped) return
@@ -811,8 +824,7 @@ export default function App() {
             lastSequence.current = Math.max(lastSequence.current, event.sequence)
             setEvents(previous => mergeJobEvents(previous, [event]))
             if (shouldRefreshForEvent(event.kind)) {
-              void refresh()
-              void refreshTranscript()
+              scheduleRefresh()
             }
           }
         }
@@ -824,7 +836,11 @@ export default function App() {
       }
     }
     void connect()
-    return () => { stopped = true; controller?.abort(); if (retry) window.clearTimeout(retry) }
+    return () => {
+      stopped = true; controller?.abort()
+      if (retry) window.clearTimeout(retry)
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
+    }
   }, [api, authenticated, refresh, refreshTranscript, selectedJobId, token])
 
   // Old runs may be older than the global /api/jobs page. Their session
@@ -867,6 +883,22 @@ export default function App() {
   // events. Viewing turn 1 must not make an already-applied chain look active.
   const activeRefinement = sessionDetail?.active_refinement || selectedSession?.active_refinement || null
   const refinementTurn = activeRefinement?.turn_count || 0
+  const runsAutoExpandKey = useMemo(() => {
+    if (sessionDetailError) return `err:${selectedSessionId}`
+    if (activeRefinement) return `refinement:${selectedSessionId}:${activeRefinement.chain_id}:${activeRefinement.turn_count}`
+    const attentionRuns = (sessionDetail?.runs || []).filter(r => ['failed', 'interrupted', 'waiting_for_human', 'waiting_user'].includes(r.state))
+    if (attentionRuns.length > 0) {
+      return `action:${selectedSessionId}:${attentionRuns.map(r => `${r.id}:${r.state}`).join(',')}`
+    }
+    if (selectedJob && ['failed', 'interrupted', 'waiting_for_human', 'waiting_user'].includes(selectedJob.state)) {
+      return `action:${selectedSessionId}:${selectedJob.id}:${selectedJob.state}`
+    }
+    if (pendingForJob.length > 0 || pendingToolApprovals.length > 0) {
+      const ids = [...pendingForJob, ...pendingToolApprovals].map(a => a.id).join(',')
+      return `approval:${selectedSessionId}:${ids}`
+    }
+    return null
+  }, [activeRefinement, pendingForJob, pendingToolApprovals, selectedJob, selectedSessionId, sessionDetail?.runs, sessionDetailError])
   const changedFilesJob = activeRefinement
     ? (sessionDetail?.jobs?.find(job => job.id === activeRefinement.latest_queue_job_id)
       || selectedSession?.latest_job || selectedJob)
@@ -1332,7 +1364,23 @@ export default function App() {
               void fetchApprovalInboxCount()
             }}
           />
-        ) : view === 'chat' ? null : view === 'teammate' ? (
+        ) : view === 'chat' ? null : view === 'code' ? (
+          system && !system.features?.agent_supervisor ? (
+            <div className="welcome-state">
+              <div className="brand-mark">C</div>
+              <h2>Code 工作台尚未启用</h2>
+              <p>当前服务器未开启 <code>agent_supervisor</code> 功能开关。</p>
+            </div>
+          ) : (
+            <Suspense fallback={<div className="empty">正在加载 Code 工作台…</div>}>
+              <SupervisorWorkspace
+                token={token}
+                active={view === 'code'}
+                coordinatorFallbackName={providerConfig ? `${providerConfig.provider_name} · ${providerConfig.model}` : selectedAgent?.name}
+              />
+            </Suspense>
+          )
+        ) : view === 'teammate' ? (
           <TeammatePanel
             token={token}
             onSendToChat={(cmd) => {
@@ -1563,7 +1611,15 @@ export default function App() {
           {!selectedAgent.workspace_path && !selectedAgent.is_default && <p className="screen-privacy-note">没有设置项目文件夹，任务会在共享工作区里运行。</p>}
           <div className="action-row"><button type="button" onClick={() => setAgentDialog({ agent: selectedAgent })}>编辑助手</button></div>
         </ContextSection>}
-        <ContextSection title="运行记录" className="context-section--runs">
+        <ContextSection
+          title="运行记录"
+          className="context-section--runs"
+          collapsible
+          defaultCollapsed
+          resetKey={selectedSessionId}
+          autoExpandKey={runsAutoExpandKey}
+          meta={sessionDetail?.runs?.length ? `${sessionDetail.runs.length} 条` : (!sessionDetailError ? '这个会话还没有运行' : undefined)}
+        >
           {activeRefinement && <div className="session-chain-summary">
             <strong>正在继续修改 · 第 {refinementTurn} 轮</strong>
             <small>这些运行共用一个隔离副本，应用或放弃改动后结束。</small>
@@ -2252,6 +2308,8 @@ function ContextSection({
   collapsible = false,
   storageKey,
   defaultCollapsed = false,
+  resetKey,
+  autoExpandKey,
   className = '',
   meta,
   hideTitle = false,
@@ -2264,11 +2322,14 @@ function ContextSection({
   collapsible?: boolean
   storageKey?: string
   defaultCollapsed?: boolean
+  resetKey?: string
+  autoExpandKey?: string | null
   /** The selected tab already names this section (资料 / 电脑): label it for screen readers only. */
   hideTitle?: boolean
 }) {
   const [collapsed, setCollapsed] = useState(() => {
-    if (!collapsible || !storageKey) return defaultCollapsed
+    if (!collapsible) return false
+    if (!storageKey) return defaultCollapsed
     try {
       const stored = localStorage.getItem(storageKey)
       return stored !== null ? stored === 'true' : defaultCollapsed
@@ -2276,6 +2337,23 @@ function ContextSection({
       return defaultCollapsed
     }
   })
+  const lastResetRef = useRef(resetKey)
+  const seenAutoExpandRef = useRef<Set<string>>(new Set())
+
+  if (collapsible) {
+    if (resetKey !== undefined && lastResetRef.current !== resetKey) {
+      lastResetRef.current = resetKey
+      if (autoExpandKey) {
+        seenAutoExpandRef.current.add(autoExpandKey)
+        if (collapsed) setCollapsed(false)
+      } else if (!storageKey && defaultCollapsed && !collapsed) {
+        setCollapsed(true)
+      }
+    } else if (autoExpandKey && !seenAutoExpandRef.current.has(autoExpandKey)) {
+      seenAutoExpandRef.current.add(autoExpandKey)
+      if (collapsed) setCollapsed(false)
+    }
+  }
 
   const toggle = () => {
     setCollapsed(prev => {

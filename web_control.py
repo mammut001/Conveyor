@@ -740,6 +740,7 @@ class WebControl:
                 "live_screen": bool(getattr(self.settings, "live_screen_enabled", False)),
                 "agents": getattr(self.settings, "agents_enabled", False) is True,
                 "workers": bool(getattr(self.settings, "workers_enabled", False)),
+                "agent_supervisor": bool(__import__("supervisor_service").is_enabled(self.settings)),
             },
         }
 

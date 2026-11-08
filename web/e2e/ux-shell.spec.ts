@@ -61,20 +61,28 @@ function systemStatus(mobileUI: boolean, moreFeatures: boolean) {
 
 type Fixture = { failJobs: boolean; failStatus: boolean }
 
-async function installShellApi(page: Page, options: { mobileUI?: boolean; moreFeatures?: boolean } = {}): Promise<Fixture> {
+async function installShellApi(page: Page, options: { mobileUI?: boolean; moreFeatures?: boolean; replayBurst?: boolean } = {}): Promise<Fixture> {
   const fixture: Fixture = { failJobs: false, failStatus: false }
-  await page.addInitScript(token => {
+  await page.addInitScript(({ token, replayBurst }) => {
     sessionStorage.setItem('conveyor-token', token)
     // A job's live progress stream stays open, as it does on the real server.
     const original = window.fetch.bind(window)
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
       if (url.includes('/api/events/stream')) {
-        return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200, headers: { 'content-type': 'text/event-stream' } }))
+        const after = Number(new URL(url, location.origin).searchParams.get('after'))
+        console.info('test-stream-after', after)
+        return Promise.resolve(new Response(new ReadableStream({ start(controller) {
+          if (replayBurst && after < 900) {
+            for (let sequence = Math.max(501, after + 1); sequence <= 900; sequence++) {
+              controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ event_id: `event-${sequence}`, sequence, kind: 'assistant.delta', job_id: 'q-7f3a91', payload: {} })}\n\n`))
+            }
+          }
+        } }), { status: 200, headers: { 'content-type': 'text/event-stream' } }))
       }
       return original(input, init)
     }
-  }, TOKEN)
+  }, { token: TOKEN, replayBurst: Boolean(options.replayBurst) })
   await page.route('**/api/**', async (route: Route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -89,7 +97,7 @@ async function installShellApi(page: Page, options: { mobileUI?: boolean; moreFe
     if (path === '/api/approvals') return json({ approvals: [] })
     if (path === '/api/nodes') return json({ nodes: [{ id: 'mac-mini', name: 'Mac mini', type: 'desktop', status: 'online', last_seen_at: ago(1), capabilities: ['screen'] }] })
     if (path === '/api/computer/status') return json({ armed: false, arm_remaining_seconds: 0, screenshots: [], screen_preview_enabled: false })
-    if (/^\/api\/jobs\/[^/]+\/events$/.test(path)) return json({ events: [] })
+    if (/^\/api\/jobs\/[^/]+\/events$/.test(path)) return json({ events: options.replayBurst ? Array.from({ length: 500 }, (_, i) => ({ event_id: `event-${i + 1}`, sequence: i + 1, kind: 'assistant.delta', job_id: job.id, payload: {} })) : [] })
     if (/^\/api\/jobs\/[^/]+\/diff$/.test(path)) return json({ diff: 'diff --git a/web/src/LoginPage.tsx b/web/src/LoginPage.tsx\n-  Invalid password\n+  密码不正确，请重新输入' })
     if (path === '/api/agent-screens/config') return json({ error: 'not found' }, 404)
     if (path === '/api/agent-conversations') {
@@ -594,4 +602,24 @@ test('phone layout does not depend on features.mobile_ui', async ({ page }) => {
   await expect(page.locator('aside.context-panel')).toBeHidden()
   expect(await noSidewaysScroll(page)).toBe(true)
   await shot(page, `tasks-800`)
+})
+
+
+test('refreshing a long run coalesces replay invalidations without blocking live progress', async ({ page }) => {
+  await installShellApi(page, { replayBurst: true })
+  let statusRequests = 0
+  const streamCursors: number[] = []
+  page.on('request', request => { if (new URL(request.url()).pathname === '/api/system/status') statusRequests++ })
+  page.on('console', message => {
+    if (message.text().startsWith('test-stream-after ')) streamCursors.push(Number(message.text().split(' ').pop()))
+  })
+  await page.goto('/#chat')
+  await expect.poll(() => streamCursors.length).toBeGreaterThan(0)
+  await expect.poll(() => statusRequests).toBeGreaterThan(1)
+  expect(streamCursors[0]).toBe(0)
+  // Let the 250 ms coalescing window flush before measuring fan-out.
+  await page.waitForTimeout(750)
+  // 400 historical assistant deltas must not fan out into 400 status polls.
+  expect(statusRequests).toBeLessThan(10)
+  await expect(page.getByText('无法连接到服务器，正在自动重试…', { exact: true })).toHaveCount(0)
 })
