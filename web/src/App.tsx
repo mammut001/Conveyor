@@ -2045,12 +2045,16 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
   // The app polls /api/config/provider and hands back a new object each time. Adopt the server values only
   // while nothing here is edited, so a poll never wipes what the owner is typing or has just picked.
   const baselineRef = useRef<ProviderDraft | null>(null)
+  // After a successful save the server's copy wins, even if it normalised a field differently.
+  const adoptServerRef = useRef(false)
   useEffect(() => {
     if (!config) return
     const next = providerDraft(config)
     const previous = baselineRef.current
     baselineRef.current = next
-    setDraft(current => (previous === null || PROVIDER_FIELDS.every(field => current[field] === previous[field]) ? next : current))
+    const adopt = adoptServerRef.current
+    adoptServerRef.current = false
+    setDraft(current => (adopt || previous === null || PROVIDER_FIELDS.every(field => current[field] === previous[field]) ? next : current))
   }, [config])
   const baseline = providerDraft(config)
   const dirty = Boolean(config) && PROVIDER_FIELDS.some(field => draft[field] !== baseline[field])
@@ -2189,6 +2193,7 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
   }, [confirmDiscard, dirty, onClose, saving])
 
   function update(name: ProviderField, value: string) {
+    adoptServerRef.current = false
     setSaved(false)
     setDraft(previous => ({ ...previous, [name]: value }))
     if (fieldErrors[name]) setFieldErrors(previous => ({ ...previous, [name]: undefined }))
@@ -2206,6 +2211,7 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
       return
     }
     setSaving(true)
+    adoptServerRef.current = true
     try {
       await onSave({
         ...draft, provider_id: draft.provider_id.trim().toLowerCase(), provider_name: draft.provider_name.trim(),
@@ -2214,6 +2220,7 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
       setSaved(true)
       setDraft(previous => ({ ...previous, api_key: '' }))
     } catch (reason) {
+      adoptServerRef.current = false
       const described = describeProviderError(reason instanceof Error ? reason.message : '')
       if (described.field) {
         const field = described.field
