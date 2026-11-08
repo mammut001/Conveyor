@@ -1105,6 +1105,43 @@ test('mock fixture: task detail with execution switch note has no horizontal ove
 
 const CURSOR_REASON = '本地未安装 cursor-agent 可执行文件'
 
+test('N6: with no usable role executor the 项目 page gives one guidance line that links to 执行者', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  const unavailable = 'claude binary not found: claude'
+  const capabilities = createMockCapabilities({
+    roles: {
+      analyst: { executor: 'claude', model: null, available: false, reason: unavailable },
+      implementer: { executor: 'claude', model: null, available: false, reason: unavailable },
+      reviewer: { executor: 'claude', model: null, available: false, reason: unavailable },
+    },
+    executors: [
+      { name: 'pool', label: '执行者池（自动轮换）', available: false, reason: '没有可用的执行者' },
+      { name: 'claude', label: 'Claude Code', available: false, reason: unavailable },
+      { name: 'antigravity', label: 'Antigravity', available: false, reason: 'agy binary not found' },
+    ],
+  })
+  await installSupervisorMockFixture(page, { capabilities })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const guidance = page.locator('.sup-role-guidance')
+  await expect(guidance).toHaveCount(1)
+  await expect(guidance).toContainText('项目需要 Claude Code、Antigravity 或 Command Code 至少一个已安装并登录')
+  await expect(guidance).toContainText('Pi 只用于对话和任务')
+  await expect(guidance).not.toContainText('Supervisor')
+  await page.screenshot({ path: 'test-results/r5a/n6-project-no-executor.png' })
+  // The 执行者 page is off in this fixture, so there is no link to a page that would be empty.
+  await expect(guidance.getByRole('button', { name: '去执行者页' })).toHaveCount(0)
+})
+
+test('N6: the guidance line is absent once one role executor is usable', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page)
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+  await expect(page.locator('.sup-role-guidance')).toHaveCount(0)
+})
+
 test('mock fixture: role executor dropdowns hide unavailable executors the role does not use', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await installSupervisorMockFixture(page)

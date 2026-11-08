@@ -766,14 +766,18 @@ function SupervisorRoleBar({
   capabilities,
   effectiveRoles,
   onChangeRole,
+  onOpenWorkers,
   disabled,
 }: {
   capabilities: SupervisorCapabilities | null
   effectiveRoles: RoleOverrides
   onChangeRole: (role: SupervisorRoleKey, patch: Partial<RoleOverrideEntry>) => void
+  onOpenWorkers?: () => void
   disabled?: boolean
 }) {
   const executors = capabilities?.executors || []
+  // Pi (built-in) only serves 对话 and 任务, so it never appears here; say what the Supervisor needs instead.
+  const noRoleExecutorReady = capabilities !== null && !executors.some(exec => exec.available)
   const coordinatorExec = capabilities?.coordinator?.executor || '当前主对话'
   const coordinatorModel = capabilities?.coordinator?.model || '默认模型'
 
@@ -797,6 +801,13 @@ function SupervisorRoleBar({
 
   return (
     <div className="sup-roles-panel" aria-label="角色与执行器配置">
+      {noRoleExecutorReady && (
+        <p className="sup-role-guidance" role="status">
+          项目需要 Claude Code、Antigravity 或 Command Code 至少一个已安装并登录。
+          {onOpenWorkers && <> <button type="button" className="sup-role-guidance-link" onClick={onOpenWorkers}>去执行者页</button></>}
+          Pi 只用于对话和任务。
+        </p>
+      )}
       <div className="sup-roles-grid">
         <div className="sup-role-card sup-role-card--coordinator">
           <div className="sup-role-head">
@@ -1431,10 +1442,12 @@ export function SupervisorWorkspace({
   token,
   active,
   coordinatorFallbackName,
+  onOpenWorkers,
 }: {
   token: string
   active: boolean
   coordinatorFallbackName?: string
+  onOpenWorkers?: () => void
 }) {
   const narrowViewport = useMediaQuery('(max-width: 900px)')
   const [capabilities, setCapabilities] = useState<SupervisorCapabilities | null>(null)
@@ -2326,6 +2339,7 @@ export function SupervisorWorkspace({
                     capabilities={capabilities}
                     effectiveRoles={effectiveRoles}
                     onChangeRole={handleRoleChange}
+                    onOpenWorkers={onOpenWorkers}
                     disabled={isReadOnlyWorktree || dispatchBusy}
                   />
 

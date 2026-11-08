@@ -212,6 +212,7 @@ export default function App() {
   const [tokenDraft, setTokenDraft] = useState('')
   const [authenticated, setAuthenticated] = useState(false)
   const [sessions, setSessions] = useState<Session[]>([])
+  const [anySessionHasMessages, setAnySessionHasMessages] = useState(false)
   const [jobs, setJobs] = useState<Job[]>([])
   const [selectedSessionId, setSelectedSessionId] = useState(() => sessionStorage.getItem('conveyor-selected-session') || '')
   const [selectedJobId, setSelectedJobId] = useState('')
@@ -621,6 +622,8 @@ export default function App() {
       setInitialLoaded(true)
       setPollFailed(false)
       const taskSessions = taskSessionsOnly(sessionData.sessions)
+      // 对话 (webchat) sessions are filtered out of the 任务 list, but a message there still counts as the first message.
+      setAnySessionHasMessages(sessionData.sessions.some(s => (s.message_count || 0) > 0 || (s.job_count || 0) > 0))
       setSessions(taskSessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setTokenDraft(''); setError('')
       setAgentState(agentData)
@@ -1077,6 +1080,7 @@ export default function App() {
     ))
   )
   const hasSentFirstMessage = Boolean(
+    anySessionHasMessages ||
     (sessions && sessions.length > 0 && sessions.some(s => (s.message_count || 0) > 0 || (s.job_count || 0) > 0)) ||
     (jobs && jobs.length > 0) ||
     (transcript && transcript.length > 0)
@@ -1376,6 +1380,7 @@ export default function App() {
                 token={token}
                 active={view === 'code'}
                 coordinatorFallbackName={providerConfig ? `${providerConfig.provider_name} · ${providerConfig.model}` : selectedAgent?.name}
+                onOpenWorkers={workersEnabled ? () => { historyModeRef.current = 'push'; setView('workers') } : undefined}
               />
             </Suspense>
           )
@@ -1413,7 +1418,7 @@ export default function App() {
                   <div className="job-notice failed task-notice" role="alert">
                     <strong>任务执行失败</strong>
                     <span>{info.message}</span>
-                    <small className="task-notice-hint">这段内容已留在下方输入框，修改后可以重新发送。</small>
+                    {info.retryable !== false && <small className="task-notice-hint">这段内容已留在下方输入框，修改后可以重新发送。</small>}
                     {info.action === 'workers' && (
                       <button
                         type="button"
@@ -1952,6 +1957,38 @@ function validateProvider(draft: ProviderDraft, keyConfigured: boolean): Partial
   return errors
 }
 
+// Name prefixes the server refuses for 密钥名称 (provider_config.py _RUNTIME_PREFIXES).
+const RESERVED_ENV_PREFIXES = ['LD_', 'PYTHON', 'CONVEYOR_', 'CODEX_', 'GIT_', 'NODE_', 'PI_', 'SSL_', 'REQUESTS_', 'CURL_', 'HTTP', 'NO_PROXY', 'PATH', 'HOME', 'SHELL', 'TELEGRAM_', 'LARK_']
+
+/** 服务商代号 for a custom provider: from 显示名称, else from the 接口地址 host. Always [a-z][a-z0-9-]{0,39}. */
+function deriveProviderCode(name: string, address: string): string {
+  const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  let code = slug(name)
+  if (!code) {
+    let host = ''
+    try { host = new URL(address.trim()).hostname } catch {
+      try { host = new URL(`https://${address.trim()}`).hostname } catch { host = '' }
+    }
+    code = slug(host.replace(/^www\./, ''))
+  }
+  if (!code) return 'custom'
+  if (!/^[a-z]/.test(code)) code = `p-${code}`
+  return code.slice(0, 40).replace(/-+$/, '')
+}
+
+/** 密钥名称 default: <CODE>_API_KEY, moved under PROVIDER_ when the plain name would hit a reserved prefix. */
+function deriveEnvKey(code: string): string {
+  const name = `${code.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`
+  return RESERVED_ENV_PREFIXES.some(prefix => name.startsWith(prefix)) ? `PROVIDER_${name}` : name
+}
+
+/** A custom provider can be saved without opening 高级: fill only the two hidden fields that are still empty. */
+function withDerivedIdentity(draft: ProviderDraft): ProviderDraft {
+  const providerId = draft.provider_id.trim() ? draft.provider_id : deriveProviderCode(draft.provider_name, draft.base_url)
+  const envKey = draft.env_key.trim() ? draft.env_key : deriveEnvKey(providerId.trim().toLowerCase())
+  return { ...draft, provider_id: providerId, env_key: envKey }
+}
+
 /** Server messages (English) → a Chinese sentence, attached to the field it is about. */
 function describeProviderError(message: string): { field?: ProviderField; text: string; detail?: string } {
   const rules: [RegExp, ProviderField, string][] = [
@@ -2114,6 +2151,7 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
   }
 
   async function fetchProviderModels() {
+    const filled = withDerivedIdentity(draft)
     setFetchingModels(true)
     setFetchModelsError('')
     setFetchModelsNote('')
@@ -2126,11 +2164,11 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          provider_id: draft.provider_id.trim().toLowerCase(),
-          base_url: draft.base_url.trim(),
-          wire_api: draft.wire_api,
-          env_key: draft.env_key.trim().toUpperCase(),
-          api_key: draft.api_key.trim(),
+          provider_id: filled.provider_id.trim().toLowerCase(),
+          base_url: filled.base_url.trim(),
+          wire_api: filled.wire_api,
+          env_key: filled.env_key.trim().toUpperCase(),
+          api_key: filled.api_key.trim(),
         }),
       })
       if (!response.ok) {
@@ -2204,8 +2242,12 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (saving || !config) return
-    const errors = validateProvider(draft, config.api_key_configured)
+    const filled = withDerivedIdentity(draft)
+    const errors = validateProvider(filled, config.api_key_configured)
     setFieldErrors(errors); setError(null); setSaved(false)
+    if (filled.provider_id !== draft.provider_id || filled.env_key !== draft.env_key) {
+      setDraft(previous => ({ ...previous, provider_id: filled.provider_id, env_key: filled.env_key }))
+    }
     const first = PROVIDER_FIELDS.find(field => errors[field])
     if (first) {
       // A field inside the collapsed 高级 section must be opened before it can take focus.
@@ -2217,8 +2259,8 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
     adoptServerRef.current = true
     try {
       await onSave({
-        ...draft, provider_id: draft.provider_id.trim().toLowerCase(), provider_name: draft.provider_name.trim(),
-        base_url: draft.base_url.trim(), model: draft.model.trim(), env_key: draft.env_key.trim().toUpperCase(), api_key: draft.api_key.trim(),
+        ...filled, provider_id: filled.provider_id.trim().toLowerCase(), provider_name: filled.provider_name.trim(),
+        base_url: filled.base_url.trim(), model: filled.model.trim(), env_key: filled.env_key.trim().toUpperCase(), api_key: filled.api_key.trim(),
       })
       setSaved(true)
       setDraft(previous => ({ ...previous, api_key: '' }))
@@ -2362,7 +2404,7 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
           <footer>
             {error && <div className="error-banner dialog-error" role="alert"><span>{error.text}</span>{error.detail && <small>{error.detail}</small>}</div>}
             <span className={`save-status ${saved ? 'visible' : ''}`} role="status">{saved ? '✓ 已保存，新任务会使用这个配置。' : ''}</span>
-            <button type="button" onClick={requestClose}>{saved && !dirty ? '完成' : '取消'}</button>
+            <button type="button" onClick={requestClose}>{saved && !dirty ? '完成' : dirty ? '取消' : '关闭'}</button>
             <button type="submit" className="primary" disabled={saving}>{saving ? '正在保存…' : '保存'}</button>
           </footer>
         )}

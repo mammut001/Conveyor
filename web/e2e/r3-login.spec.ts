@@ -743,14 +743,15 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     await expect(dialog.getByLabel('服务商代号', { exact: true })).toHaveValue('mycorp')
   })
 
-  test('saving with a blank 服务商代号 opens 高级 and shows the error there (QA F9)', async ({ page }) => {
+  test('saving an empty 自定义 form reports the visible fields and never needs 高级 (N1)', async ({ page }) => {
     await installApi(page)
     const dialog = await openSettings(page, SIZES[0])
     await dialog.getByRole('group', { name: '服务商预设' }).getByRole('button', { name: '自定义', exact: true }).click()
     await dialog.getByRole('button', { name: '保存', exact: true }).click()
-    const advanced = dialog.locator('details.provider-advanced')
-    await expect(advanced).toHaveAttribute('open', '')
-    await expect(dialog.getByText('请填写服务商代号')).toBeVisible()
+    // 服务商代号 and 密钥名称 are derived at save time, so the first error is the visible 显示名称.
+    await expect(dialog.getByText('请填写显示名称')).toBeVisible()
+    await expect(dialog.getByText('请填写服务商代号')).toHaveCount(0)
+    await expect(dialog.locator('details.provider-advanced')).not.toHaveAttribute('open', '')
   })
 
   test('r4 screenshots: 模型设置 at 1440 and 390 (QA fix evidence)', async ({ page, context }) => {

@@ -953,6 +953,11 @@ export function WorkersPanel({ token }: { token: string }) {
       return '第一步：先装好至少一个执行者。执行者就是替你干活的 AI 工具（比如 Codex、Claude Code），装好并登录后 Conveyor 才能用它。'
     }
     if (usable.length === 0) {
+      // Pi is installed and enabled; its only missing piece is the provider saved in 模型设置, not a login.
+      const piNeedsProvider = workers.some(w => w.id === 'pi' && w.installed && w.enabled && w.auth === 'needs_login')
+      if (piNeedsProvider) {
+        return '第一步：Pi 已安装，还差一步：去「设置 → 模型设置」填好服务商（服务商、接口地址、模型和密钥），Pi 就能用了。'
+      }
       return '第一步：现在还没有能用的执行者。请先登录标着「需要登录」的执行者，或者打开「已停用」的开关。'
     }
     return '任务会交给排在最前面、能用的执行者；它的用量到了换班线，就自动换下一个。拖动 ⠿ 可以调整顺序，调完点「保存顺序」。'

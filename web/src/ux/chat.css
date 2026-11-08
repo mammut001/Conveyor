@@ -378,6 +378,10 @@
   cursor: pointer;
 }
 .primary-interface .copy-button:hover { background: #f2f4f7; color: #1f2328; }
+/* Phone: a 40px-high touch target without changing the desktop look. */
+@media (max-width: 600px), (pointer: coarse) {
+  .primary-interface .copy-button { min-height: 40px; min-width: 40px; justify-content: center; }
+}
 .primary-interface .copy-button:focus-visible { outline: 2px solid #bd5c40; outline-offset: 1px; }
 .primary-interface .copy-button.is-copied { color: #15803d; }
 .primary-interface .copy-button.is-failed { color: #b42318; }

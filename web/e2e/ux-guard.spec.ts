@@ -487,7 +487,9 @@ for (const size of SIZES) {
     await expect(panel.getByRole('button', { name: '取消静音 Git 工作区' })).toHaveCount(0)
 
     // Module quick commands keep the send-to-chat behaviour: the command lands in the chat composer.
-    await panel.getByRole('button', { name: '在对话中执行 /ps' }).click()
+    // The button names the check in plain words; the slash command is only under 详情.
+    await expect(panel.getByRole('button', { name: '在对话中执行 /ps' })).toHaveCount(0)
+    await panel.getByRole('button', { name: '查看 CPU 占用' }).click()
     await expect(panel).toHaveCount(0)
     await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('textarea')].some(t => t.value === '/ps'))).toBe(true)
   })

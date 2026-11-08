@@ -2,7 +2,9 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 
 const SHOTS = 'test-results/r5-onboarding'
+const R5A = 'test-results/r5a'
 mkdirSync(SHOTS, { recursive: true })
+mkdirSync(R5A, { recursive: true })
 
 const SIZES = [
   { width: 1440, height: 900 },
@@ -18,6 +20,8 @@ type MockOptions = {
   sessions?: any[]
   jobs?: any[]
   submittedTasks?: any[]
+  providerPosts?: any[]
+  workerOverride?: any[]
 }
 
 function makeDefaultWorkerList() {
@@ -135,7 +139,8 @@ async function setupMocks(page: Page, opts: MockOptions = {}) {
         provider_name: apiKeyConfigured ? 'OpenAI' : '',
         model,
         reasoning_effort: 'minimal',
-        base_url: 'https://api.openai.com/v1',
+        // Like the server on a fresh install: no address yet, and the default key name.
+        base_url: apiKeyConfigured ? 'https://api.openai.com/v1' : '',
         wire_api: 'responses',
         env_key: 'OPENAI_API_KEY',
         api_key_configured: apiKeyConfigured,
@@ -145,6 +150,7 @@ async function setupMocks(page: Page, opts: MockOptions = {}) {
     }
     if (path === '/api/config/provider' && method === 'POST') {
       const body = request.postDataJSON()
+      opts.providerPosts?.push(body)
       return json({
         config: {
           provider_id: body.provider_id || 'openai',
@@ -498,5 +504,145 @@ test.describe('Round 5 Onboarding & First-run (e2e/r5-onboarding.spec.ts)', () =
     await shoot(page, 'task-failure-missing-model')
     await page.setViewportSize(SIZES[1])
     await shoot(page, 'task-failure-missing-model')
+  })
+
+  test('N1: a custom provider saves from the visible fields without opening 高级', async ({ page }) => {
+    const providerPosts: any[] = []
+    await setupMocks(page, { apiKeyConfigured: false, model: '', providerPosts })
+
+    await page.goto('/#tasks')
+    await page.locator('.setup-checklist-card li[data-step="2"] .setup-checklist-action-btn').click()
+    const dialog = page.locator('.settings-sheet.provider-settings')
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole('button', { name: '自定义', exact: true }).click()
+
+    // Only the visible fields are filled: no 服务商代号 and no 密钥名称.
+    await dialog.locator('#provider-provider_name').fill('我的模型')
+    await dialog.locator('#provider-base_url').fill('https://api.example.com/v1')
+    await dialog.locator('#provider-model').fill('my-model-1')
+    await dialog.locator('#provider-api_key').fill('sk-custom-secret-9999')
+    await dialog.getByRole('button', { name: '保存', exact: true }).click()
+
+    await expect(dialog.getByText('✓ 已保存，新任务会使用这个配置。')).toBeVisible()
+    await expect(dialog.getByRole('alert')).toHaveCount(0)
+    // 服务商代号 comes from the 接口地址 host (the display name has no Latin letters); 密钥名称 is <CODE>_API_KEY.
+    expect(providerPosts.at(-1)).toMatchObject({
+      provider_id: 'api-example-com',
+      provider_name: '我的模型',
+      env_key: 'API_EXAMPLE_COM_API_KEY',
+      base_url: 'https://api.example.com/v1',
+      api_key: 'sk-custom-secret-9999',
+    })
+    // The 高级 section stays collapsed: the owner never had to open it.
+    await expect(dialog.locator('details').first()).not.toHaveAttribute('open', '')
+    await page.screenshot({ path: `${R5A}/n1-custom-saved-1440.png` })
+  })
+
+  test('N1: a display name with Latin letters becomes 服务商代号, and a reserved prefix is kept out of the key name', async ({ page }) => {
+    const providerPosts: any[] = []
+    await setupMocks(page, { apiKeyConfigured: false, model: '', providerPosts })
+
+    await page.goto('/#tasks')
+    await page.locator('.setup-checklist-card li[data-step="2"] .setup-checklist-action-btn').click()
+    const dialog = page.locator('.settings-sheet.provider-settings')
+    await dialog.getByRole('button', { name: '自定义', exact: true }).click()
+    await dialog.locator('#provider-provider_name').fill('Pi Local')
+    await dialog.locator('#provider-base_url').fill('http://127.0.0.1:18795/v1')
+    await dialog.locator('#provider-model').fill('fake-model')
+    await dialog.locator('#provider-api_key').fill('sk-local-test-1234')
+    await dialog.getByRole('button', { name: '保存', exact: true }).click()
+
+    await expect(dialog.getByText('✓ 已保存，新任务会使用这个配置。')).toBeVisible()
+    // "PI_" is a runtime prefix the server refuses for credentials, so the key moves under PROVIDER_.
+    expect(providerPosts.at(-1)).toMatchObject({ provider_id: 'pi-local', env_key: 'PROVIDER_PI_LOCAL_API_KEY' })
+  })
+
+  test('N2: a 对话 message ticks checklist step 3 even though 对话 sessions are not in the 任务 list', async ({ page }) => {
+    const now = new Date().toISOString()
+    await setupMocks(page, {
+      apiKeyConfigured: false,
+      model: '',
+      sessions: [{ id: 'webchat-abc123', channel: 'web', title: '对话 1', created_at: now, last_activity: now, job_count: 0, message_count: 2 }],
+    })
+
+    await page.goto('/#tasks')
+    const checklist = page.locator('.setup-checklist-card')
+    await expect(checklist).toBeVisible()
+    await expect(checklist.locator('li[data-step="3"]')).toHaveClass(/is-done/)
+    await expect(checklist.locator('li[data-step="3"] .setup-checklist-badge')).toHaveText('✓')
+  })
+
+  test('F3: a workspace configuration failure names the setting to fix and does not ask the owner to resend', async ({ page }) => {
+    const failedJob = {
+      id: 'job-fail-workspace',
+      state: 'failed',
+      mode: 'fix',
+      channel: 'web',
+      chat_id: 'default',
+      created_at: new Date(Date.now() - 60_000).toISOString(),
+      updated_at: new Date(Date.now() - 30_000).toISOString(),
+      prompt_preview: '在 README 末尾加一行说明',
+      error: 'CODEX_WORKSPACE_ROOT does not exist or is not a directory: /srv/conveyor/data/ws',
+      changed_files: [],
+      metadata: {},
+    }
+    await setupMocks(page, {
+      workersFeature: true,
+      jobs: [failedJob],
+      sessions: [{
+        id: 'sess-workspace',
+        channel: 'web',
+        title: '会话 1',
+        created_at: new Date().toISOString(),
+        last_activity: new Date().toISOString(),
+        job_count: 1,
+        message_count: 1,
+        latest_job: failedJob,
+      }],
+    })
+
+    await page.goto('/#tasks')
+    const notice = page.locator('.job-notice.failed.task-notice')
+    await expect(notice).toBeVisible()
+    await expect(notice).toContainText('项目文件夹没有设置好')
+    await expect(notice).not.toContainText('可以补充说明后重新发送')
+    await expect(notice).not.toContainText('重新发送')
+    await expect(notice.locator('.task-notice-hint')).toHaveCount(0)
+    await expect(notice.locator('button.task-notice-action')).toHaveCount(0)
+
+    // The raw English error stays one click away under 详情.
+    await notice.locator('details.task-notice-raw summary').click()
+    await expect(notice.locator('.task-notice-detail')).toContainText('CODEX_WORKSPACE_ROOT does not exist')
+  })
+
+  test('N5: after installing Pi without a provider, the execution banner points to 模型设置 instead of login', async ({ page }) => {
+    const piOnly = [
+      ...makeDefaultWorkerList().map(worker => ({ ...worker, installed: false })),
+      {
+        id: 'pi',
+        label: 'Pi（内置）',
+        installed: true,
+        version: '0.5.0',
+        path: null,
+        auth: 'needs_login',
+        auth_hint: null,
+        login_command: '',
+        install_command: null,
+        install_supported: false,
+        runnable: true,
+        enabled: true,
+        priority: 0,
+        provider: { configured: false, provider_name: '', model: '' },
+        quota: { state: 'available', reset_at: null, reason: null },
+      },
+    ]
+    await setupMocks(page, { workers: piOnly, workersFeature: true })
+
+    await page.goto('/#workers')
+    const banner = page.locator('.guard-workers')
+    await expect(banner).toBeVisible()
+    await expect(banner).toContainText('Pi 已安装，还差一步')
+    await expect(banner).toContainText('去「设置 → 模型设置」填好服务商')
+    await expect(banner).not.toContainText('请先登录标着「需要登录」的执行者')
   })
 })

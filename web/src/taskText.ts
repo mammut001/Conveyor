@@ -258,6 +258,8 @@ export type JobErrorInfo = {
   message: string
   action?: 'workers' | 'settings'
   actionLabel?: string
+  /** False for configuration errors: sending the same text again cannot fix them. */
+  retryable?: boolean
 }
 
 export function describeJobError(error?: string | null): JobErrorInfo {
@@ -299,6 +301,22 @@ export function describeJobError(error?: string | null): JobErrorInfo {
   }
   if (providerStatus && providerStatus.startsWith('5')) {
     return { message: `模型服务暂时出错（${providerStatus}），可以稍后再试` }
+  }
+
+  // Server setup problems (workspace folder, environment variables). Resending the same request cannot fix them.
+  const isServerConfigError = /CODEX_WORKSPACE_ROOT|CODEX_TASK_ROOT|workspace root|git repo root|not a git (repo|repository)|is not a directory|does not exist or is not a directory/i.test(raw)
+  const isMissingEnvVar = /\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b[^\n]{0,40}\b(is not set|is required|must be set|missing)\b/.test(raw)
+  if (isServerConfigError) {
+    return {
+      message: '项目文件夹没有设置好，任务无法在里面运行。请在服务器上检查项目文件夹设置，修好后再重新发起任务。',
+      retryable: false,
+    }
+  }
+  if (isMissingEnvVar) {
+    return {
+      message: '服务器配置缺少必要的设置，任务无法运行。请检查服务器配置，修好后再重新发起任务。',
+      retryable: false,
+    }
   }
 
   const isModelProviderError = /chat tier is disabled|no model configured|provider|api[-_]?key|OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY|model_providers/i.test(raw)

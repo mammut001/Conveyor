@@ -308,23 +308,23 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
   const services = status?.monitored_services ?? [];
   const modules = [
     {
-      key: 'disk', title: '磁盘空间', sources: ['host.disk'], command: '/clean',
+      key: 'disk', title: '磁盘空间', sources: ['host.disk'], command: '/clean', action: '查看磁盘',
       description: `使用率超过 ${thresholds?.disk_pct ?? 90}% 或剩余空间少于 ${thresholds?.disk_gb ?? 3} GB 时提醒。`,
     },
     {
-      key: 'cpu', title: 'CPU 负载', sources: ['host.cpu'], command: '/ps',
+      key: 'cpu', title: 'CPU 负载', sources: ['host.cpu'], command: '/ps', action: '查看 CPU 占用',
       description: `1 分钟平均负载超过 CPU 核数的 ${thresholds?.load_ratio ?? 2} 倍时提醒，并列出最耗资源的进程。`,
     },
     {
-      key: 'services', title: '系统服务', sources: ['host.service'], command: '/status',
+      key: 'services', title: '系统服务', sources: ['host.service'], command: '/status', action: '查看系统服务',
       description: '下面这些后台服务停止运行时立即提醒。',
     },
     {
-      key: 'logs', title: '错误日志', sources: ['host.logs'], command: '/diagnose',
+      key: 'logs', title: '错误日志', sources: ['host.logs'], command: '/diagnose', action: '查看错误日志',
       description: `10 分钟内出现 ${thresholds?.error_burst ?? 5} 条以上错误日志时提醒。`,
     },
     {
-      key: 'repo', title: 'Git 与 GitHub CI', sources: ['repo.git', 'repo.ci'], command: '/github_ci',
+      key: 'repo', title: 'Git 与 GitHub CI', sources: ['repo.git', 'repo.ci'], command: '/github_ci', action: '查看代码与构建',
       description: '未提交的改动积压过多，或 main 分支的 GitHub CI 构建失败时提醒。',
     },
   ];
@@ -489,8 +489,12 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
                     title={SEND_HINT}
                     onClick={() => onSendToChat?.(module.command)}
                   >
-                    在对话中执行 <code className="guard-cmd">{module.command}</code>
+                    {module.action}
                   </button>
+                  <details className="guard-module-detail">
+                    <summary>详情</summary>
+                    <small>点按钮会在对话中发送 <code className="guard-cmd">{module.command}</code></small>
+                  </details>
                 </article>
               );
             })}
