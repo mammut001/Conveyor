@@ -1,6 +1,6 @@
 # Conveyor 架构总览：当前代码与演进方向
 
-本文按本工作区源码整理，而非线上部署清单。该说明参考了本地尚未提交的 Supervisor 代码快照；这些代码不包含在本次文档提交中。是否部署、启用以及实际选用的模型，需要以运行环境为准。历史文档中的 Codex 通路仍留在代码中，但不能据此推断用户当前仍在使用 Codex。
+本文按本分支的源码整理，而非线上部署清单。Supervisor 相关代码已提交在本分支（`work/docs-pool`），但尚未合并到 `main`。是否部署、启用以及实际选用的模型，需要以运行环境为准。历史文档中的 Codex 通路仍留在代码中，但不能据此推断用户当前仍在使用 Codex。
 
 ## 产品方向：可配置的 Agent 协作
 
@@ -19,26 +19,41 @@ flowchart LR
     IM --> EX[可配置执行器]
 ```
 
-这是目标协作形态，不代表整条链路已在网页上运行。本地角色定义位于 `skills/agent-supervisor.md`，运行时代码位于 `agent_supervisor.py`；两者尚未包含在本次文档提交中。模型和执行器按角色配置，不应将任何单一模型或产品写成项目必需的“大脑”。
+Supervisor 已接入 Web：在「项目」页派发任务后，服务端的后台 worker 会运行下面的流程（见下一节）。真实执行器与真实任务的端到端验证仍未完成。角色定义位于 `skills/agent-supervisor.md`，运行时代码位于 `agent_supervisor.py` 与 `supervisor_service.py`。模型和执行器按角色配置，不应将任何单一模型或产品写成项目必需的“大脑”。
 
 ## 本地 Supervisor 代码：实际边界
 
 ```mermaid
 flowchart LR
-    API[Web Supervisor API] --> STATE[创建 / 查询任务与状态]
-    STATE --> DB[(Supervisor SQLite)]
-    DB --> RECORD[工作树锁、交接、验收与部署阶段记录]
-    FLOW[run_supervisor_flow 函数] --> ANALYST[分析执行器]
+    API[Web /api/supervisor 派发] --> QUEUE[queue_task：校验并排队]
+    QUEUE --> DB[(Supervisor SQLite)]
+    API --> WAKE[SupervisorWorkerManager 唤醒后台 worker]
+    WAKE --> CLAIM[claim_task 领取任务]
+    CLAIM --> FLOW[run_supervisor_flow]
+    FLOW --> ANALYST[分析执行器]
     ANALYST --> IMPLEMENTER[实现执行器]
     IMPLEMENTER --> REVIEWER[审阅执行器]
     REVIEWER -->|未通过且未达上限| IMPLEMENTER
     FLOW --> DB
 ```
 
-- `run_supervisor_flow` 实现了分析、实现、审阅及有限修复循环；仓库中的 smoke 使用假执行器验证该流程。当前搜索到的调用位于测试脚本，不能把它描述为已接入 Web 的生产闭环。
-- Web 的 `/api/supervisor/tasks` 等接口管理任务、状态与部署记录；`dispatch` 更新状态及锁，本身不启动上述执行循环。部署阶段接口记录状态，不等于自动完成部署。
-- 当前代码实现了 Claude CLI 执行器；Antigravity 适配器明确返回未实现，Supervisor 内的 Codex 适配器也尚未完成。实际可用性仍取决于环境和配置。不能从角色示例推断线上使用哪家模型。
+- `run_supervisor_flow` 实现分析、实现、审阅及有限修复循环，并把状态与交接记录写入 Supervisor SQLite。Web 派发后，`supervisor_service.py` 中的 `SupervisorWorkerManager` 会唤醒后台 worker，由它领取任务并调用该函数；同时最多运行 2 个流程（`MAX_CONCURRENT_FLOWS`）。worker 首次启动时会执行一次 `recover_on_startup`。
+- 仓库中的 smoke（如 `scripts/supervisor_pool_smoke.py`）用假 CLI 走通这一流程。真实模型只在 `scripts/agent_supervisor_live.py --run-real-models` 下运行。
+- 接口行为：`dispatch` 返回 202 并唤醒 worker；`cancel` 返回 200 并终止进程组；直接 `transition` 返回 409；部署阶段的浏览器修改返回 409。部署阶段只是数据库记录，不等于自动完成部署。
+- 网页入口：「项目」页（`code` 视图，在 `features.agent_supervisor` 开启时显示）；「执行者」页（`workers` 视图）管理执行者池。见 `web/src/App.tsx` 与 `web/src/ux/shellNav.tsx`。
+- 当前实现的执行器：`claude`（Claude CLI）、`command-code`、`antigravity`（agy，只读角色使用权限拒绝规则）、`chat`（协调者）和 `pool`（执行者池，见下节）。`codex` 仍是未实现的桩，选用时明确报不可用，不会静默替换。实际可用性仍取决于本机二进制、登录和额度；角色示例不能推断线上使用哪家模型。
 - 验收记录按 `current_sha` 匹配，不能仅凭同一个 commit SHA 证明未提交工作区内容没有变化；取消、恢复与审阅隔离也不应当描述成已经完整闭环。
+
+## 执行者池与用量
+
+执行者池（`agent_supervisor_pool.py`）只决定由哪个执行者运行，实际执行仍交给对应的 Supervisor 适配器。
+
+- 池里能映射到 Supervisor 适配器的只有 Claude Code、Antigravity（agy）和 Command Code（cmd）。Pi、Super Grok 和 Codex 不参与 Supervisor 执行。
+- 候选顺序取页面上的拖动优先级；超过用量阈值（默认 95%）的执行者排到后面。运行中不会因阈值而切换。
+- 只有额度类失败才会换下一个执行者。失败的执行者进入冷却，时长取解析到的重置时间，否则为 45 分钟。其他失败直接结束，不轮换。
+- 实现角色如果已经改动了工作树，不会在另一个执行者上重跑。
+- 用量由 `worker_usage.py` 读取。Claude 使用本机凭据；Antigravity 需要本机正在运行的 Antigravity 语言服务进程。
+- 冷却状态与聊天使用的执行者池共享（`runner/pooled.py`）。
 
 ## 现存 Web 与历史任务路径
 

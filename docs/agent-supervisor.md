@@ -19,7 +19,7 @@ The supervisor is controlled by the following environment variables. The feature
 | Environment Variable | Type | Default | Description |
 | --- | --- | --- | --- |
 | `CONVEYOR_AGENT_SUPERVISOR_ENABLED` | bool | `false` | Master feature flag. Alias: `CONVEYOR_ANTIGRAVITY_SUPERVISOR_ENABLED`. |
-| `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR` | string | `claude` | Default implementation executor name (`antigravity`, `claude`, `command-code`). |
+| `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR` | string | `claude` | Default executor for analyst, implementer and reviewer (`pool`, `antigravity`, `claude`, `command-code`). `codex` is not implemented. |
 | `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_EXECUTOR` | string | `None` | Role-specific override for implementer executor. |
 | `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_MODEL` | string | `None` | Model identifier for implementer (e.g., `gemini-3.8-flash-medium`). |
 | `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_LOCATION` | string | `worktree` | Execution working directory binding (`worktree` or `control_plane`). |
@@ -70,7 +70,7 @@ The supervisor decouples model selection from role execution:
 
 ## Configuring Antigravity (AGY) as Implementer & Read Roles
 
-Antigravity (`agy`) is the recommended implementer in Conveyor:
+Antigravity (`agy`) can be set directly as the implementer, without the pool (see the pool section below):
 
 ```bash
 CONVEYOR_AGENT_SUPERVISOR_ENABLED=true
@@ -92,10 +92,41 @@ AGY read roles use a session-scoped permission deny profile; these tool permissi
 
 - **Claude (`claude`)**: Local CLI adapter with `--permission-mode` and tools allowlist.
 - **Command-Code (`command-code`)**: Local CLI adapter with `--permission-mode` (`plan` for read, `accept-edits` for write).
+- **Pool (`pool`)**: Picks one of the Claude Code, Antigravity or Command Code workers per role call and delegates to that worker's adapter. See the pool section below.
 - **Codex (`codex`)**: Intentionally unsupported in this build; reports unavailable before dispatch.
 - **Provider Quota Notice**: Executor `available()` checks verify local binary presence on the host. Upstream provider quota exhaustion, rate limits, or network failures are runtime execution errors, not availability guarantees.
 
 ---
+
+## 执行者池 / pool executor
+
+`pool` is a Supervisor executor that chooses a worker from the 执行者 pool (`workers.py`) for each role call. It does not run an agent of its own. It hands the call to the matching Supervisor adapter, so that adapter's read-only and sandbox rules still apply.
+
+### Selecting it
+
+- In the Code (项目) page, each analyst, implementer and reviewer role has an executor dropdown. The first entry, 执行者池（自动轮换）, is marked 推荐 when a pool worker is usable. The choice is sent with the dispatch request and applies to that task only.
+- Only `analyst`, `implementer` and `reviewer` can be overridden from the browser. The coordinator stays on `chat`.
+- In config, set `CONVEYOR_AGENT_SUPERVISOR_<ROLE>_EXECUTOR=pool` for one role, or `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR=pool` for analyst, implementer and reviewer together.
+- Or create `supervisor_roles.json` in the Conveyor memory root (`codex_memory_root`, default `~/.codex`, set by `CODEX_MEMORY_ROOT`), keyed by role:
+
+  ```json
+  {"implementer": {"executor": "pool"}}
+  ```
+
+- Precedence in `load_roles`: the role's `CONVEYOR_AGENT_SUPERVISOR_<ROLE>_EXECUTOR` variable, then `supervisor_roles.json`, then the implementation executor default. A dispatch-time override beats all of them.
+
+### Rules
+
+- Candidates are pool workers that are enabled, installed, not `needs_login`, not cooling, and whose Supervisor adapter reports available. Mapping: Claude Code to `claude`, Antigravity to `antigravity`, Command Code to `command-code`. Pi, Super Grok and Codex never run through the pool.
+- Read roles (analyst, reviewer) need a worker eligible for RUN. The implementer needs a worker eligible for FIX. Command Code is excluded from FIX unless `CONVEYOR_WORKERS_UNSANDBOXED=true`.
+- Order follows the owner's drag order. Workers over their usage threshold (default 95%, set per worker from 1 to 100) are tried last. The threshold does not stop a run that has already started.
+- Rotation happens only after a quota failure (quota wording, or a "resets in" reset time). The failed worker is cooled until the reported reset, or for 45 minutes when none is parsed. Any other failure ends the call without rotating.
+- An implementer that has already changed its worktree is not re-run on another worker.
+- Each attempt is a separate execution record with its own executor and model. The web console shows a switch note between a failed attempt and the next one.
+- Each worker runs with its own saved model (`/api/workers/<id>/model`). The Supervisor role model is never passed to pool workers.
+- Cooling is shared with the chat pool (`runner/pooled.py`). If every candidate hits a quota, the error starts with "执行者池里的执行者额度都用完了：".
+- Usage readers live in `worker_usage.py`. Antigravity usage needs a running local Antigravity language server; without one, the pool relies on quota errors alone. See also the [worker pool notes](workers.md).
+- `scripts/supervisor_pool_smoke.py` runs the real flow with fake `claude` and `agy` binaries and stubbed detection.
 
 ## Host Validation Commands (`CONVEYOR_AGENT_SUPERVISOR_VALIDATION_COMMANDS_JSON`)
 
@@ -149,7 +180,7 @@ python3 scripts/seed_antigravity_supervisor_skill.py --state-dir /tmp/isolated-s
 
 ## Web API, 202 Dispatch & Cancellation UI
 
-Supervisor actions are accessible over authenticated HTTP endpoints:
+Supervisor actions are accessible over authenticated HTTP endpoints. Dispatch wakes a server-owned worker (`SupervisorWorkerManager` in `supervisor_service.py`). The worker claims queued tasks and runs `run_supervisor_flow`, at most 2 flows at a time:
 
 - `POST /api/supervisor/tasks`: Creates a task in `pending_dispatch`.
 - `POST /api/supervisor/tasks/<id>/dispatch`: Claims the task, acquires worktree lock, and enqueues supervisor execution. Returns `202 Accepted`:
@@ -194,7 +225,7 @@ $$\text{local\_ci} \longrightarrow \text{tailscale\_transfer} \longrightarrow \t
 To evaluate real Antigravity model execution end-to-end against live LLM providers, refer to the opt-in harness:
 
 - Script: `scripts/agent_supervisor_live.py`
-- Documentation: [agent-supervisor-live.md](file:///private/tmp/conveyor-supervisor-runtime/docs/agent-supervisor-live.md)
+- Documentation: [agent-supervisor-live.md](agent-supervisor-live.md)
 
 Run preflight (no model spend):
 ```bash
