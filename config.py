@@ -241,6 +241,9 @@ class Settings:
     memory_v2_enabled: bool = False
     memory_v2_recall_k: int = 5
     memory_v2_token_cap: int = 1000
+    # Hermes-style agent notes (agent_memory.py). None = automatic: on exactly
+    # when long-term memory or memory v2 is on. CONVEYOR_AGENT_NOTES overrides.
+    agent_notes_enabled: bool | None = None
     long_term_memory_shared: bool = True
     long_term_memory_groups: bool = False
     approval_inbox_enabled: bool = False
@@ -771,6 +774,11 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "memory_v2_enabled": os.getenv("CONVEYOR_MEMORY_V2", "false").lower() in ("1", "true", "yes", "on"),
         "memory_v2_recall_k": max(0, min(20, _int_env("CONVEYOR_MEMORY_V2_RECALL_K", 5))),
         "memory_v2_token_cap": max(128, min(4000, _int_env("CONVEYOR_MEMORY_V2_TOKEN_CAP", 1000))),
+        # Agent notes: unset/empty = follow the memory flags (see agent_memory.enabled).
+        "agent_notes_enabled": (
+            None if not os.getenv("CONVEYOR_AGENT_NOTES", "").strip()
+            else os.getenv("CONVEYOR_AGENT_NOTES", "").strip().lower() in ("1", "true", "yes", "on")
+        ),
         # Durable cross-chat memory. Off: tools hidden, prompts unchanged.
         "long_term_memory_enabled": os.getenv(
             "CONVEYOR_LONG_TERM_MEMORY", "false"

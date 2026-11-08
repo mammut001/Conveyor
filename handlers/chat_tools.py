@@ -143,6 +143,10 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
         return spec.danger in (DangerLevel.READ, DangerLevel.WRITE, DangerLevel.DESTRUCTIVE)
     if name.startswith("memory.") and not memory_allowed:
         return False
+    if name == "memory.note":
+        # Agent notes have their own flag (default: follows the memory flags).
+        import agent_memory
+        return agent_memory.enabled(settings) and spec.danger == DangerLevel.WRITE_SAFE
     if name.startswith("routine.") and not getattr(settings, "routines_enabled", False):
         return False
     if name.startswith("hook.") and not (getattr(settings, "hooks_enabled", False) and getattr(settings, "routines_enabled", False)):
@@ -257,6 +261,21 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
                     "tier": {"type": "string", "enum": ["profile", "facts", "log"]},
                 }, "required": ["text", "tier"],
             }
+        if name == "memory.note":
+            schema["function"]["description"] = (
+                "Keep, rewrite or delete one brief note of your own about the environment or the "
+                "owner's projects (one paragraph, max 500 characters; all notes together max 2200). "
+                "Runs without approval; notes reach future sessions as untrusted data. "
+                "Never store secrets, passwords, tokens or keys. [write_safe]"
+            )
+            schema["function"]["parameters"] = {
+                "type": "object", "properties": {
+                    "action": {"type": "string", "enum": ["add", "replace", "remove"]},
+                    "text": {"type": "string", "description": "Note text (add / replace)"},
+                    "id": {"type": "integer", "description": "Note id (replace / remove)"},
+                    "scope": {"type": "string", "enum": ["global"]},
+                }, "required": ["action"],
+            }
         schemas.append(schema)
 
     if settings and getattr(settings, "mcp_enabled", False):
@@ -344,6 +363,57 @@ async def _tool_progress(port, msg, placeholder, text: str) -> None:
         await port.edit_progress(msg, placeholder, text)
     except Exception:
         logger.debug("Could not update chat tool progress", exc_info=True)
+
+
+# Markers build_user_content / routines put around untrusted text in the turn.
+_UNTRUSTED_USER_MARKERS = ("<quoted-message", "Web evidence (untrusted", "<webhook-event")
+
+
+def turn_has_untrusted(messages: list[dict]) -> bool:
+    """True when the current turn already carries untrusted content.
+
+    That is any tool result after the operator's latest message, an image, or a
+    quoted message / web evidence / webhook payload inside that message.
+    """
+    last_user = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    if last_user < 0:
+        return True
+    if any(m.get("role") == "tool" for m in messages[last_user + 1:]):
+        return True
+    content = messages[last_user].get("content")
+    if not isinstance(content, str):
+        return True  # images / multi-part content
+    return any(marker in content for marker in _UNTRUSTED_USER_MARKERS)
+
+
+async def _run_memory_note(msg, settings, messages: list[dict], arg: str,
+                           tool_call_id: str, tools_called: list[str]) -> None:
+    try:
+        requested = json.loads(arg) if arg else {}
+    except (TypeError, ValueError):
+        requested = {}
+    if not isinstance(requested, dict):
+        requested = {}
+    if "action" not in requested and isinstance(requested.get("arg"), str):
+        # A model that ignored the schema and sent {"arg": "..."}.
+        import agent_memory
+        try:
+            requested = agent_memory.parse_tool_arg(requested["arg"])
+        except agent_memory.AgentMemoryError:
+            requested = {}
+    # The loop decides provenance; the model can never pick it.
+    requested["source"] = "untrusted" if turn_has_untrusted(messages) else "agent"
+    tools_called.append("memory.note")
+    logger.info("Chat tier tool call executed: memory.note (%s)", requested["source"])
+    raw_res = await run_tool(
+        settings, "memory.note", json.dumps(requested, ensure_ascii=False),
+        operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id,
+    )
+    messages.append({
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "content": format_tool_result("memory.note", raw_res),
+    })
 
 
 async def run_tool_loop(
@@ -436,7 +506,8 @@ async def run_tool_loop(
                     })
                     continue
                 arg = json.dumps(arg_dict, sort_keys=True, ensure_ascii=False)
-            elif real_tool_name == "memory.remember" and getattr(settings, "memory_v2_enabled", False):
+            elif (real_tool_name == "memory.remember" and getattr(settings, "memory_v2_enabled", False)) \
+                    or real_tool_name == "memory.note":
                 raw = fn_info.get("arguments")
                 try:
                     value = json.loads(raw) if isinstance(raw, str) else raw
@@ -459,6 +530,13 @@ async def run_tool_loop(
                 continue
 
             danger = spec.danger
+            if real_tool_name == "memory.note":
+                # Hermes model: agent notes run without approval, because they
+                # only ever reach a model as untrusted data and the owner can
+                # see and edit them. A turn that already holds untrusted content
+                # (tool results, quoted or fetched text) marks the note untrusted.
+                await _run_memory_note(msg, settings, messages, arg, tool_call_id, tools_called)
+                continue
             if real_tool_name == "memory.remember" and getattr(settings, "memory_v2_enabled", False):
                 # Only a verbatim explicit user request is a trusted manual
                 # fact. Rephrased facts and tool/web-derived text remain untrusted,

@@ -737,6 +737,16 @@ def register_personal_tools() -> None:
         memory_tools.memory_search,
         keywords=("搜索记忆",),
     )
+    # Hermes-style agent notes (flag CONVEYOR_AGENT_NOTES; see agent_memory.py).
+    # WRITE_SAFE, and the chat tool loop runs it without approval: notes are
+    # only ever injected as untrusted data and the owner can edit them.
+    import agent_memory
+    _register(
+        "memory.note",
+        "代理自己的简短笔记：环境与主人项目（JSON {action: add|replace|remove, text, id?}；不存密钥）",
+        DangerLevel.WRITE_SAFE,
+        agent_memory.memory_note,
+    )
 
     # Reusable skills library (flagged off in is_exposed / chat_tools).
     _register(
