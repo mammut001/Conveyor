@@ -533,6 +533,15 @@ async def _execute_codex_job(
         final_answer,
         mirror_transcript=not skip_transcript,
     )
+    # Task runs (e.g. web 改代码) never stream through the chat transcript path.
+    # Let the port record the request and the final answer against this run,
+    # so the session shows them after completion and after a reload.
+    record_task_turn = getattr(port, "record_task_turn", None)
+    if record_task_turn is not None and queue_job_id:
+        try:
+            record_task_turn(msg, queue_job_id, user_text_for_session, final_answer)
+        except Exception:
+            logger.exception("Could not persist task turn to transcript store")
 
     # Bridge job summary to Flash chat memory so follow-up conversations have full context.
     try:

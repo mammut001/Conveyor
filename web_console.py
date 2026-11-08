@@ -86,6 +86,17 @@ class WebOutbound:
     def on_job_submitted(self, job: Any) -> None:
         self.last_job = job
 
+    def record_task_turn(self, msg: InboundMessage, job_id: str, user_text: str, assistant_text: str) -> None:
+        """Keep a finished task run's request and final answer in the session transcript."""
+        if not self.settings or not self.durable_session_id:
+            return
+        from transcript_store import get_transcript_store
+        get_transcript_store(self.settings).append_turn(
+            self.durable_session_id, user_text or "", assistant_text or "",
+            job_id=job_id, kind="codex", channel=msg.channel,
+            operator_id=msg.operator_id, source_chat_id=msg.chat_id,
+        )
+
     async def reply(self, msg: InboundMessage, text: str) -> str | None:
         if text in ("💭 …", "⏳ 收到，处理中...", "⏳ 收到, 处理中..."):
             return "web-placeholder"

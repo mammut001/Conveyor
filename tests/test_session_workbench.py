@@ -123,6 +123,53 @@ class SessionWorkbenchTests(unittest.TestCase):
         self.assertEqual(grouped[self.web_session]["chain_id"], active["id"])
         self.assertNotIn("worktree_path", grouped[self.web_session])
 
+    def insert_job_in(self, job_id, channel, chat_id, updated_at):
+        """A finished task run whose session has no transcript row yet."""
+        conn = self.queue._get_conn()
+        try:
+            with conn:
+                conn.execute(
+                    """INSERT INTO queued_jobs
+                       (id, operator_id, channel, chat_id, mode, prompt, state,
+                        created_at, updated_at, position, metadata_json, session_id)
+                       VALUES (?, 'alice', ?, ?, 'fix', ?, 'completed', ?, ?, 0, '{}', ?)""",
+                    (job_id, channel, chat_id, "task " + job_id, updated_at, updated_at,
+                     session_identity(channel, chat_id, "alice")),
+                )
+        finally:
+            conn.close()
+
+    def test_job_only_sessions_join_transcript_sessions_once_newest_first(self):
+        task_session = session_identity("web", "task-only", "alice")
+        self.insert_job_in("task-1", "web", "task-only", "2099-01-01T00:00:00+00:00")
+        # Same identity as a transcript session: must not be listed twice.
+        self.insert_job("web-1", "web", turn=1)
+        sessions = self.control.list_sessions()
+        ids = [item["id"] for item in sessions]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(ids.count(self.web_session), 1)
+        self.assertIn(self.telegram_session, ids)
+        self.assertEqual(ids[0], task_session)
+        self.assertEqual(sessions[0]["latest_job"]["id"], "task-1")
+        self.assertEqual(sessions[0]["job_count"], 1)
+
+    def test_task_run_request_and_reply_are_kept_in_its_session(self):
+        from web_console import WebOutbound
+        task_session = session_identity("web", "task-only", "alice")
+        self.insert_job_in("task-2", "web", "task-only", "2099-01-02T00:00:00+00:00")
+        port = WebOutbound(self.settings, task_session, is_codex=True, prompt="改代码：加一行说明")
+        msg = SimpleNamespace(channel="web", operator_id="alice", chat_id="task-only")
+        port.record_task_turn(msg, "task-2", "改代码：加一行说明", "已在 README 末尾加了一行说明。")
+
+        detail = self.control.get_session(task_session)
+        self.assertEqual([m["role"] for m in detail["messages"]], ["user", "assistant"])
+        self.assertEqual([m["job_id"] for m in detail["messages"]], ["task-2", "task-2"])
+        self.assertEqual(detail["messages"][0]["content"], "改代码：加一行说明")
+        self.assertEqual(detail["messages"][1]["content"], "已在 README 末尾加了一行说明。")
+        # The session now comes from its transcript row and is still listed once.
+        ids = [item["id"] for item in self.control.list_sessions()]
+        self.assertEqual(ids.count(task_session), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
