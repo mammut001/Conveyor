@@ -965,3 +965,12 @@
 @media (pointer: coarse) {
   .primary-interface .task-composer .task-mode-switch button { min-height: 40px; }
 }
+
+/* r4 onboarding QA: touch targets on phones are at least 40px; the idle emergency stop reads as secondary. */
+@media (pointer: coarse) {
+  .primary-interface .session-archive-btn,
+  .primary-interface .task-notice-action,
+  .primary-interface .setup-checklist-action-btn { min-width: 40px; min-height: 40px; }
+}
+.primary-interface .emergency.is-idle { color: #6b7280; border-color: #d7dde7; background: transparent; }
+.primary-interface .task-notice-hint { display: block; margin-top: 4px; color: #6b7280; font-size: 12px; }

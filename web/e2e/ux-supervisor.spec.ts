@@ -511,7 +511,7 @@ test('mock fixture: ordinary conversation never auto-dispatches; task suggestion
   const chatPane = page.locator('.sup-chat-pane')
   await expect(chatPane.getByText('此处仅用于需求梳理、方案讨论与任务拆解，不会直接执行命令或修改代码。')).toBeVisible()
   await expect(chatPane.getByText('可以帮你查资料、跑命令、改代码，删除等危险操作会先问你。')).toHaveCount(0)
-  await expect(chatPane.getByText('夜间任务怎么用？')).toHaveCount(0)
+  await expect(chatPane.getByText('高级：夜间任务（不用也能正常使用）')).toHaveCount(0)
 
   // Ordinary chat message in the Worktree ChatPanel must NOT create or dispatch a supervisor task
   const chatInput = page.locator('.sup-chat-pane .chat-composer textarea')
@@ -544,7 +544,7 @@ test('mock fixture: ordinary conversation never auto-dispatches; task suggestion
   // Ordinary top-level 对话 view remains completely unaffected (retains standard welcome & nightly help)
   await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '对话' }).click()
   await expect(page.getByText('可以帮你查资料、跑命令、改代码，删除等危险操作会先问你。')).toBeVisible()
-  await expect(page.getByText('夜间任务怎么用？')).toBeVisible()
+  await expect(page.getByText('高级：夜间任务（不用也能正常使用）')).toBeVisible()
 })
 
 test('mock fixture: role overrides, unavailable executor blocker, explicit create+dispatch with scoped IDs, and idempotent retry', async ({ page }) => {

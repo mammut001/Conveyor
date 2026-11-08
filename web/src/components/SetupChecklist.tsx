@@ -46,6 +46,7 @@ export function SetupChecklist({
           </span>
           <div className="setup-checklist-body">
             {workersEnabled ? (
+              <div className="setup-checklist-text-wrap">
               <a
                 href="#workers"
                 className="setup-checklist-link"
@@ -56,6 +57,8 @@ export function SetupChecklist({
               >
                 选一个执行者并登录
               </a>
+              <span className="setup-checklist-muted">提问不需要执行者；改代码需要</span>
+              </div>
             ) : (
               <div className="setup-checklist-text-wrap">
                 <span className="setup-checklist-label">选一个执行者并登录</span>

@@ -315,13 +315,14 @@ for (const size of WIDTHS) {
       await openSettings(page)
       const dialog = page.getByRole('dialog', { name: '模型设置' })
       await expect(dialog).toBeVisible()
-      for (const label of ['显示名称', '接口地址', '模型', '接口类型', '推理强度', 'API 密钥']) {
+      for (const label of ['显示名称', '接口地址', '模型', '接口类型', 'API 密钥']) {
         await expect(dialog.getByLabel(label, { exact: true })).toBeVisible()
       }
-      // 服务商代号 and 密钥名称 sit under the collapsed 高级 section (QA F9).
+      // 服务商代号, 密钥名称 and 推理强度 sit under the collapsed 高级 section (QA F7, F9).
       await expect(dialog.getByLabel('服务商代号', { exact: true })).toBeHidden()
+      await expect(dialog.getByLabel('推理强度', { exact: true })).toBeHidden()
       await dialog.locator('.provider-advanced > summary').click()
-      for (const label of ['服务商代号', '密钥名称']) {
+      for (const label of ['服务商代号', '密钥名称', '推理强度']) {
         await expect(dialog.getByLabel(label, { exact: true })).toBeVisible()
       }
       await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveAttribute('placeholder', '已配置 ••••8a34，留空则保持不变')

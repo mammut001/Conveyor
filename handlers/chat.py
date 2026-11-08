@@ -41,7 +41,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ChatOutcome = Literal["answered", "escalate", "unavailable"]
+#   answered    - the reply was delivered
+#   escalate    - the model asked for the agent (Codex/Pi) to act
+#   unavailable - no chat model is configured or the reply was unusable; the caller may hand over to an agent
+#   error       - the chat provider failed (HTTP error, cut stream); the owner gets a Chinese error and
+#                 NO agent run starts. Checked.body holds the Chinese sentence, Checked.reason the raw text.
+ChatOutcome = Literal["answered", "escalate", "unavailable", "error"]
 
 ESCALATE_TOKEN = "[[ESCALATE]]"
 SEARCH_TOKEN = "[[SEARCH:"
@@ -689,6 +694,21 @@ def _extract_skill_invocation(text: str) -> tuple[str, str, str, str] | None:
     return None
 
 
+async def _chat_tier_failed(
+    msg: InboundMessage, port: OutboundPort, placeholder: str | None, exc: Exception,
+) -> tuple[ChatOutcome, "Checked"]:
+    """The chat provider failed: say so in Chinese and stop. No agent run is started behind the owner's back."""
+    from runner.chat_client import owner_chat_error_text
+
+    raw = str(exc)
+    text = owner_chat_error_text(raw)
+    logger.warning("chat tier failed (no agent fallback): %s", raw)
+    # Bot ports show the sentence in the placeholder; the web port renders it from the returned Checked.
+    if placeholder and not getattr(port, "handles_transcript_directly", False):
+        await port.edit_progress(msg, placeholder, text)
+    return "error", Checked(body=text, confidence="low", removed_links=0, escalate=False, reason=raw)
+
+
 async def ask_chat(
     msg: InboundMessage,
     port: OutboundPort,
@@ -793,10 +813,7 @@ async def ask_chat(
         try:
             loop_res = await run_tool_loop(msg, port, settings, tool_messages, config, placeholder=placeholder)
         except ChatError as exc:
-            logger.warning("chat tier failed, falling back to agent: %s", exc)
-            if placeholder:
-                await port.edit_progress(msg, placeholder, "↪️ 对话模型暂不可用，转交 Codex…")
-            return "unavailable", None
+            return await _chat_tier_failed(msg, port, placeholder, exc)
 
         if loop_res.confirmation_requested:
             note = loop_res.text.strip() or "已请求确认"
@@ -839,31 +856,26 @@ async def ask_chat(
         searched = ""
         search_failed = False
     else:
-        async def _stream(messages: list[dict]) -> str | None:
+        async def _stream(messages: list[dict]) -> str:
             buf = ""
             shown = ""
             last_edit = 0.0
-            try:
-                async for chunk in stream_chat(config, messages):
-                    buf += chunk
-                    if _held_back(buf.lstrip()):
-                        continue  # might be an escalation / search request
-                    now = time.monotonic()
-                    view = visible_partial(buf)
-                    if placeholder and view and view != shown and now - last_edit >= EDIT_INTERVAL_SECONDS:
-                        if await port.edit_progress(msg, placeholder, view + " ▍"):
-                            shown = view
-                        last_edit = now
-            except ChatError as exc:
-                logger.warning("chat tier failed, falling back to agent: %s", exc)
-                if placeholder:
-                    await port.edit_progress(msg, placeholder, "↪️ 对话模型暂不可用，转交 Codex…")
-                return None
+            async for chunk in stream_chat(config, messages):
+                buf += chunk
+                if _held_back(buf.lstrip()):
+                    continue  # might be an escalation / search request
+                now = time.monotonic()
+                view = visible_partial(buf)
+                if placeholder and view and view != shown and now - last_edit >= EDIT_INTERVAL_SECONDS:
+                    if await port.edit_progress(msg, placeholder, view + " ▍"):
+                        shown = view
+                    last_edit = now
             return buf
 
-        buf = await _stream(_messages(user_content, has_evidence=bool(evidence), may_search=can_search))
-        if buf is None:
-            return "unavailable", None
+        try:
+            buf = await _stream(_messages(user_content, has_evidence=bool(evidence), may_search=can_search))
+        except ChatError as exc:
+            return await _chat_tier_failed(msg, port, placeholder, exc)
 
         # One model-requested web search, then a second round with the results.
         searched = ""
@@ -886,9 +898,10 @@ async def ask_chat(
                     "\n\n(Web search returned nothing usable. Answer from what you know and "
                     "say clearly that it is unverified.)"
                 )
-            buf = await _stream(_messages(user_content, has_evidence=bool(evidence), may_search=False))
-            if buf is None:
-                return "unavailable", None
+            try:
+                buf = await _stream(_messages(user_content, has_evidence=bool(evidence), may_search=False))
+            except ChatError as exc:
+                return await _chat_tier_failed(msg, port, placeholder, exc)
 
     allowed = evidence_urls(evidence) | extract_urls(question)
     if reply is not None:
@@ -979,6 +992,13 @@ async def chat_or_agent(
         set_last(key, LastRequest(codex_prompt=codex_prompt, confirm=False), settings=settings)
         if checked is not None and checked.confidence == "low":
             await _offer_deep(msg, port, "要让 Codex 用工具深入查一下吗？")
+        return
+    if outcome == "error":
+        # The chat provider failed and the owner has been told why; an agent run is not a silent retry.
+        # Bot channels get a button so the owner can still hand the request to an agent on purpose.
+        set_last(key, LastRequest(codex_prompt=codex_prompt, confirm=False), settings=settings)
+        if getattr(port, "supports_inline_buttons", False):
+            await _offer_deep(msg, port, "对话模型这次没回上来。要直接交给执行者处理吗？")
         return
     if outcome == "escalate" and untrusted:
         # The model read someone else's content; do not let that start an
