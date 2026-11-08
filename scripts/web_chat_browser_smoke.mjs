@@ -358,6 +358,7 @@ try {
   queuedTask = {...queuedTask,state:'failed',error:'Controlled task failure'};
   liveTaskStream.write(frame('event',taskEvent(4,'Controlled task failure','task.failed')));
   await page.getByRole('alert').filter({hasText:'任务执行失败'}).waitFor();
+  await page.getByRole('alert').filter({hasText:'任务执行失败'}).getByText('详情',{exact:true}).click(); // raw reason sits under a muted 详情 toggle
   assert.equal(await page.getByText('Controlled task failure',{exact:true}).first().isVisible(),true);
   assert.equal(await page.locator('.transcript-panel').count(),1,'failure remains visible with an existing transcript');
   assert.equal(await page.locator('.task-welcome').count(),0,'failed jobs must not show the empty welcome state');

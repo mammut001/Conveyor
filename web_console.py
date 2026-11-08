@@ -498,6 +498,16 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, self.server.control.system_status())
             elif path == "/api/config/provider":
                 self._json(HTTPStatus.OK, self.server.control.provider_config())
+            elif path == "/api/config/provider/models":
+                from provider_config import fetch_provider_models, ProviderModelsError
+                try:
+                    models = fetch_provider_models(self.server.control.settings)
+                    self._json(HTTPStatus.OK, {"models": models})
+                except ProviderModelsError as exc:
+                    self._json(HTTPStatus.BAD_GATEWAY, {"code": "models_fetch_failed", "error": str(exc)})
+                except Exception as exc:
+                    logger.exception("Failed to fetch provider models")
+                    self._json(HTTPStatus.BAD_GATEWAY, {"code": "models_fetch_failed", "error": "获取模型列表失败"})
             elif path == "/api/sessions":
                 self._json(HTTPStatus.OK, {"sessions": self.server.control.list_sessions()})
             elif len(parts) == 3 and parts[:2] == ["api", "sessions"]:
@@ -604,6 +614,49 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     logger.warning("MCP discovery for status failed", exc_info=True)
                 result = manager.get_servers_status(settings)
                 self._json(HTTPStatus.OK, result)
+            elif parts[:2] == ["api", "workers"]:
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                if not getattr(settings, "workers_enabled", False):
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                    return
+                import workers
+                if len(parts) == 2:
+                    payload = workers.get_workers_payload(settings)
+                    self._json(HTTPStatus.OK, payload)
+                    return
+                if len(parts) == 4 and parts[3] == "models":
+                    worker_id = parts[2]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    try:
+                        models, cached_at = workers.get_worker_models(worker_id)
+                        self._json(HTTPStatus.OK, {"models": models, "cached_at": cached_at})
+                    except workers.ModelsUnsupportedError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "models unsupported", "code": "models_unsupported"})
+                    except workers.ModelsFetchError as exc:
+                        self._json(HTTPStatus.BAD_GATEWAY, {"error": str(exc), "code": "models_fetch_failed"})
+                    return
+                if len(parts) == 5 and parts[3] == "login":
+                    worker_id = parts[2]
+                    session_id = parts[4]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    import workers_login
+                    try:
+                        session_info = workers_login.get_login_session(settings, worker_id, session_id)
+                        self._json(HTTPStatus.OK, session_info)
+                    except workers_login.SessionNotFoundError:
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "session not found", "code": "session_not_found"})
+                    return
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
             elif path == "/api/routines" or path.startswith("/api/routines"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
@@ -1514,6 +1567,133 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 val = body.get("value")
                 result = self.server.control.teammate_action(action, val)
                 self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
+            elif parts[:2] == ["api", "workers"]:
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                if not getattr(settings, "workers_enabled", False):
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                    return
+                import workers
+                if len(parts) == 3 and parts[2] == "detect":
+                    payload = workers.get_workers_payload(settings, force_detect=True)
+                    self._json(HTTPStatus.OK, payload)
+                    return
+                if len(parts) == 3 and parts[2] == "order":
+                    order = body.get("order") if isinstance(body, dict) else None
+                    enabled = body.get("enabled") if isinstance(body, dict) else None
+                    if not isinstance(order, list) or not isinstance(enabled, list):
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "order and enabled must be lists", "code": "invalid_format"})
+                        return
+                    catalog_ids = set(workers.get_catalog_ids())
+                    for wid in order:
+                        if wid not in catalog_ids:
+                            self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{wid}'", "code": "unknown_worker"})
+                            return
+                    for wid in enabled:
+                        if wid not in catalog_ids:
+                            self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{wid}'", "code": "unknown_worker"})
+                            return
+                    payload = workers.update_order_and_enabled(settings, order, enabled)
+                    self._json(HTTPStatus.OK, payload)
+                    return
+                if len(parts) == 4 and parts[3] == "install":
+                    worker_id = parts[2]
+                    if not getattr(settings, "workers_install_enabled", False):
+                        self._json(HTTPStatus.FORBIDDEN, {"error": "install disabled", "code": "install_disabled"})
+                        return
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    if not isinstance(body, dict) or body.get("confirm") is not True:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "confirmation required", "code": "confirm_required"})
+                        return
+                    if not catalog_worker.get("install_command"):
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "install unsupported", "code": "install_unsupported"})
+                        return
+                    result = workers.install_worker(settings, worker_id)
+                    self._json(HTTPStatus.OK, result)
+                    return
+                if len(parts) == 4 and parts[3] == "reset-quota":
+                    worker_id = parts[2]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    workers.reset_quota(settings, worker_id)
+                    payload = workers.get_workers_payload(settings)
+                    self._json(HTTPStatus.OK, payload)
+                    return
+                if len(parts) == 4 and parts[3] == "model":
+                    worker_id = parts[2]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    if not isinstance(body, dict) or "model" not in body:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "model field is required", "code": "missing_model"})
+                        return
+                    model = body.get("model")
+                    try:
+                        payload = workers.set_worker_model(settings, worker_id, model)
+                        self._json(HTTPStatus.OK, payload)
+                    except workers.ModelsUnsupportedError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "models unsupported", "code": "models_unsupported"})
+                    except workers.UnknownModelError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown model '{model}'", "code": "unknown_model"})
+                    except workers.ModelsFetchError as exc:
+                        self._json(HTTPStatus.BAD_GATEWAY, {"error": str(exc), "code": "models_fetch_failed"})
+                    return
+                if len(parts) == 5 and parts[3] == "login" and parts[4] == "start":
+                    worker_id = parts[2]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    import workers_login
+                    try:
+                        session_info = workers_login.start_login_session(settings, worker_id)
+                        self._json(HTTPStatus.OK, session_info)
+                    except workers_login.LoginUnsupportedError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "login unsupported", "code": "login_unsupported"})
+                    return
+                if len(parts) == 6 and parts[3] == "login" and parts[5] == "code":
+                    worker_id = parts[2]
+                    session_id = parts[4]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    code = body.get("code") if isinstance(body, dict) else None
+                    import workers_login
+                    try:
+                        session_info = workers_login.send_login_code(settings, worker_id, session_id, code)
+                        self._json(HTTPStatus.OK, session_info)
+                    except workers_login.BadCodeError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid code", "code": "bad_code"})
+                    except workers_login.SessionNotFoundError:
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "session not found", "code": "session_not_found"})
+                    except workers_login.SessionInactiveError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "session inactive", "code": "session_inactive"})
+                    return
+                if len(parts) == 6 and parts[3] == "login" and parts[5] == "cancel":
+                    worker_id = parts[2]
+                    session_id = parts[4]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    import workers_login
+                    try:
+                        session_info = workers_login.cancel_login_session(settings, worker_id, session_id)
+                        self._json(HTTPStatus.OK, session_info)
+                    except workers_login.SessionNotFoundError:
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "session not found", "code": "session_not_found"})
+                    return
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         except KeyError:

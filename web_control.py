@@ -739,8 +739,13 @@ class WebControl:
                 "teammate": bool(getattr(self.settings, "teammate_enabled", True)),
                 "live_screen": bool(getattr(self.settings, "live_screen_enabled", False)),
                 "agents": getattr(self.settings, "agents_enabled", False) is True,
+                "workers": bool(getattr(self.settings, "workers_enabled", False)),
             },
         }
+
+    def workers_payload(self, force_detect: bool = False) -> dict[str, Any]:
+        import workers
+        return workers.get_workers_payload(self.settings, force_detect=force_detect)
 
     # ---- agents -----------------------------------------------------------
 

@@ -14,43 +14,46 @@ CONVEYOR_WEB_MOBILE_UI=true
 - In `Settings`: `settings.web_mobile_ui: bool = False` (default is `False`)
 - In `system_status()`: reported as `features.mobile_ui: bool`
 
-When enabled, `App.tsx` attaches the `mobile-ui` class to `.app-shell`. All responsive enhancements are scoped strictly under `.mobile-ui` inside `@media (max-width: 760px)`. Desktop viewports (>760px) and deployments with the flag turned off remain completely unchanged.
+When enabled or when viewport width is ≤820px, `App.tsx` attaches the `mobile-ui` class to `.app-shell`. All responsive enhancements are scoped under `.mobile-ui` and `@media (max-width: 820px)`. Desktop viewports (>820px) with the flag turned off remain completely unchanged.
 
-## What Changes on Mobile (≤760px)
+## What Changes on Mobile (≤820px)
 
 1. **Fluid Single-Column Layout & Zero Horizontal Scroll**:
-   - The desktop 3-column grid is neutralized; content fits comfortably within 360–430px widths without page-level horizontal scroll (`document.documentElement.scrollWidth <= innerWidth`).
+   - The desktop multi-column layout is adapted for mobile; content fits comfortably within 360–430px widths without page-level horizontal scroll (`document.documentElement.scrollWidth <= innerWidth`).
    - Long lines in logs, markdown code blocks, tables, and unified diffs scroll horizontally inside their own containers.
 
 2. **Fixed Bottom Navigation Bar**:
    - Replaces the desktop top view tabs with an accessible bottom navigation bar:
-     - **Tasks**: Primary task and job stream view.
-     - **Chat**: Direct chat tier.
-     - **Approvals**: Unified tool and job approval inbox, including pending count badge.
-     - **Skills**: Reusable operator procedures (shown when `skills` feature is enabled).
-     - **More**: Opens a slide-up sheet for additional tools.
+     - **对话 (Chat)**: Direct conversation stream with the assistant.
+     - **任务 (Tasks)**: Task queue and job execution stream.
+     - **收件箱 (Inbox)**: Scheduled routine results and notifications, with unread count badge.
+     - **记忆 (Memory)**: Long-term memory management (or **审批 (Approvals)** when the unified approval inbox is enabled).
+     - **更多 (More)**: Opens the slide-up sheet for secondary views and system controls.
    - All tap targets meet or exceed 44×44px, and safe-area insets (`env(safe-area-inset-bottom)`) are respected on notched displays.
 
-3. **"More" Sheet**:
-   - Provides quick access to secondary views and overlays:
-     - **Inbox & Routines** (with unread count badge)
-     - **Long-term Memory**
-     - **Sessions Drawer**
-     - **Context & Changes Drawer**
-     - **Settings** (modal provider configuration)
+3. **"更多" (More) Sheet**:
+   - Provides quick access to secondary views and system operations:
+     - **值守 (Teammate)**: System monitoring and alert sentinel.
+     - **网站授权 (Browser)**: Approved websites and egress access records.
+     - **密钥 (Secrets)**: Private credentials for assistant use.
+     - Additional enabled views (**技能 (Skills)**, **工作流 (Workflows)**, **连接器 (Connectors)**).
+     - **设置 (Settings)**: AI provider configuration modal.
+     - **锁定 (Lock)**: Console lock with confirmation dialog (`LockConfirmDialog`).
 
-4. **Slide-over Drawers for Sessions and Context**:
-   - The Sessions sidebar and right Context & Changes panel do not stack under the main stream.
-   - Instead, they open as slide-over drawers with touch-friendly backdrops, top close buttons, and Escape-key dismissal.
+4. **Slide-over Drawers for Agents/Sessions and Details**:
+   - The left sidebar and right details panel do not stack under the main stream.
+   - Instead, they open as slide-over drawers with touch-friendly backdrops, top close buttons (`×`), and Escape-key dismissal:
+     - **助手 / 会话 (Agents / Sessions) Drawer**: Opened via the top bar's left button; shows the conversation list, "+ 新建" button to start a fresh conversation, and queue status.
+     - **详情 (Context & Details) Drawer**: Opened via the top bar's right "详情" button; displays the agent panel tabs ("详情", "资料", "电脑"), pending approvals, "改动" (code diff with "应用改动" / "放弃改动"), run history, and telemetry logs.
 
 5. **Optimized Chat & Composer**:
    - Messages expand to full viewport width for readability.
    - The composer is sticky above the bottom navigation bar.
    - The textarea uses a font size of 16px to prevent automatic zooming on iOS Safari when focused.
-   - Cards (approval requests, memory items, skills) use single-column layouts with wrapping action buttons.
+   - Cards (approval requests, memory items, routine items) use single-column layouts with wrapping action buttons.
 
 6. **Condensed Top Bar**:
-   - The top bar is condensed into the brand mark + Conveyor label, real-time connection status dot, and Settings icon button.
+   - The top bar displays the brand mark "C Conveyor 控制台", real-time connection status dot (`在线`/`连接中`/`重连中`), running job count, and queue count, with action buttons to open the "助手/会话" and "详情" drawers in the stream header.
 
 ## PWA Installation
 
@@ -96,7 +99,7 @@ Conveyor explicitly **does not register a Service Worker** for the Web Console:
 
 Two browser scripts under `scripts/ui_regress/` exercise the things unit tests cannot (they are not run in CI):
 
-- `cdp_regress.py <url> <token_file> <outdir>` — headless Chrome over CDP with real input events (`Input.dispatchMouseEvent` / `dispatchTouchEvent` / `dispatchKeyEvent`). Desktop 1280x800: collapse CHANGES, `Page.reload`, check it is still collapsed **and still the top section of the panel**, survives polling, re-expand persists. Mobile 390x844 with touch emulation: open Sessions / Context drawers from More and close each by an outside tap, an outside mouse click and a real Escape key, checking both the state and that the drawer is visually off-screen.
+- `cdp_regress.py <url> <token_file> <outdir>` — headless Chrome over CDP with real input events (`Input.dispatchMouseEvent` / `dispatchTouchEvent` / `dispatchKeyEvent`). Desktop 1280x800: collapse CHANGES (改动), `Page.reload`, check it is still collapsed **and still the top section of the panel**, survives polling, re-expand persists. Mobile 390x844 with touch emulation: open Sessions / Context (助手/会话与详情) drawers and close each by an outside tap, an outside mouse click and a real Escape key, checking both the state and that the drawer is visually off-screen.
 - `x11_regress.py <url> <token_file> [outdir]` — headful Chrome on `$DISPLAY` (~500px window) driven by real X11 mouse/keyboard events via `xdotool`.
 
 Both read the Web token from a file and never print it.

@@ -28,6 +28,9 @@ def create_agent_backend(settings: Any, provider: str | None = None):
 
 
 def create_runtime_runner(settings: Any, provider: str | None = None) -> CodexRunner:
+    if getattr(settings, "workers_enabled", False) and not provider:
+        from runner.pooled import PooledRunner
+        return PooledRunner(settings)
     selected = (provider or os.getenv("CONVEYOR_AGENT_BACKEND", "codex")).strip().lower()
     if selected in {"", "codex"}:
         return CodexRunner(settings)

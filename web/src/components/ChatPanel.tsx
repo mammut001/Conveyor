@@ -213,7 +213,15 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     </div>
   );
 
-  useEffect(() => () => { requestRef.current?.abort(); }, []);
+  useEffect(() => {
+    // A reload or tab close cancels the request too; mark it as ours so the pending message is kept for next time.
+    const leaving = () => { requestRef.current?.abort(); };
+    window.addEventListener('pagehide', leaving);
+    return () => {
+      window.removeEventListener('pagehide', leaving);
+      requestRef.current?.abort();
+    };
+  }, []);
 
   // A message sent while the reply was still streaming is remembered per conversation until the
   // reply ends. Leaving mid-reply (switching assistant, reload) aborts the request and the server
@@ -229,6 +237,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     }
   }, [inflightKey]);
   const restoreInterrupted = useCallback((pending: string, stored: HistoryMessage[] | null) => {
+    // A new message was already sent while history loaded: that is not an interrupted one.
     if (!pending || sendingRef.current) return;
     // The server did keep that turn after all: nothing was lost, so do not offer it again.
     const lastUser = [...(stored || [])].reverse().find(m => m.role === 'user');
@@ -983,6 +992,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
             <button className="chat-send-button" type="submit" disabled={!input.trim() || busy || input.length > MAX_LENGTH}
               // Tapping 发送 must not pull focus off the message box: on a phone that closes the
               // keyboard, the layout shifts and the tap misses the button.
+              onPointerDown={e => e.preventDefault()}
               onMouseDown={e => e.preventDefault()}>
               发送
             </button>
