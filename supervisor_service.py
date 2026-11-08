@@ -56,6 +56,7 @@ _FORBIDDEN_REF_SUBSTRINGS = ("..", "@{", "\\", "\x00", "\r", "\n", "\t", " ")
 _UI_EXPOSED_EXECUTORS: tuple[tuple[str, str], ...] = (
     # Pool first: it is the recommended choice whenever a pool worker is usable.
     ("pool", "执行者池（自动轮换）"),
+    ("pi", "Pi（内置）"),
     ("claude", "Claude Code"),
     ("command-code", "Command Code"),
     ("codex", "Codex CLI"),

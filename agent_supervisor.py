@@ -3433,17 +3433,55 @@ def _evidence_write(record: dict[str, Any], path: str) -> None:
 def _child_env(settings: Any, *, executors: str) -> dict[str, str]:
     import subprocess_env
     from egress_proxy import proxy_env
+    pi_selection = None
     if executors in ("antigravity", "operator-validation"):
         grants: set[str] = set()
+    elif executors == "pi":
+        # Grant nothing up front; only the single resolved Pi provider key is
+        # injected below (see _apply_pi_child_env), so no other provider key
+        # can leak into the child.
+        from runner.pi_agent import resolve_pi_provider
+        pi_selection = resolve_pi_provider(settings, model_fallback="", chat_model=False)
+        grants = set()
     else:
         grants = set(subprocess_env.model_grants(settings, claude=executors == "claude"))
         if executors == "command-code":
             grants = grants | {"DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"}
     env = proxy_env(subprocess_env.build_child_env(grants=grants), settings)
+    if pi_selection is not None:
+        _apply_pi_child_env(env, settings, pi_selection)
     if executors == "operator-validation":
         env = dict(env)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
+
+
+def _apply_pi_child_env(env: dict[str, str], settings: Any, selection: Any) -> None:
+    """Give a Pi child exactly its one provider key and nothing else.
+
+    A saved 模型设置 provider is bridged through a private PI_CODING_AGENT_DIR
+    models.json (so ``--provider <id>`` resolves); only that provider's key is
+    injected, and every other name in ``PI_PROVIDER_KEY_ENV`` is stripped so
+    one provider's credential can never reach another provider's run.
+    """
+    from runner.pi_agent import PI_PROVIDER_KEY_ENV
+    if selection.models_json is not None:
+        try:
+            from provider_config import _atomic_write
+            task_root = getattr(settings, "codex_task_root", None)
+            if task_root is not None:
+                pi_dir = Path(task_root) / "pi-agent"
+                pi_dir.mkdir(parents=True, exist_ok=True)
+                _atomic_write(pi_dir / "models.json", selection.models_json, 0o600)
+                env["PI_CODING_AGENT_DIR"] = str(pi_dir)
+        except OSError:
+            pass
+    if selection.api_key:
+        env[selection.api_key_env] = selection.api_key
+    for other_key in set(PI_PROVIDER_KEY_ENV.values()) - {selection.api_key_env}:
+        env.pop(other_key, None)
+    env["PI_OFFLINE"] = "1"
+    env["PI_TELEMETRY"] = "0"
 
 
 # ---------------------------------------------------------------------------
@@ -3817,6 +3855,76 @@ class AntigravityExecutor:
         return cancel_execution(self.settings, execution_id)
 
 
+class PiExecutor:
+    """Built-in Pi coding agent (``pi``) as a Supervisor executor.
+
+    Pi runs headlessly (``-p --mode json --no-session``); its NDJSON events are
+    parsed by the shared runner.pi_agent logic (``_parse_pi_stream``), so the
+    reviewer's JSON verdict flows through the same ``parse_review_verdict``
+    path used for command-code (Pi has no ``--json-schema``).
+
+    Read-only roles (analyst, reviewer) are constrained by the CLI tool
+    allowlist alone: ``--tools read,grep,find,ls`` (no bash/edit/write). The
+    implementer uses ``read,bash,edit,write,grep,find,ls``. Isolation flags
+    keep the run away from the operator's global Pi setup, and
+    provider/model/credential follow the same precedence as the Pi worker
+    (explicit CONVEYOR_PI_* > saved 模型设置 > Pi default); only the one chosen
+    provider key reaches the child, and ``--api-key`` is never on the argv.
+    """
+    name = "pi"
+
+    def __init__(self, settings: Any) -> None:
+        self.settings = settings
+        from runner.pi_agent import resolve_pi_bin
+        self.binary = resolve_pi_bin(settings)
+
+    def available(self) -> tuple[bool, str]:
+        if not _executable_exists(self.binary):
+            return False, f"pi binary not found: {self.binary}"
+        return True, "ok"
+
+    def _argv(self, role: RoleConfig, _cwd: str | None = None) -> list[str]:
+        ok_pol, reason_pol = _validate_role_policy(role)
+        if not ok_pol:
+            raise SupervisorStateError(reason_pol)
+        write = "write" in role.tools
+        tools = "read,bash,edit,write,grep,find,ls" if write else "read,grep,find,ls"
+        from runner.pi_agent import resolve_pi_provider
+        selection = resolve_pi_provider(self.settings, model_fallback="", chat_model=False)
+        cmd = [
+            self.binary,
+            "-p",
+            "--mode", "json",
+            "--no-session",
+            "--no-extensions",
+            "--no-mcp",
+            "--no-skills",
+            "--no-prompt-templates",
+            "--no-themes",
+            "--offline",
+            "--no-approve",
+        ]
+        # pi requires --model whenever --provider is given, so pass both or
+        # neither. With no model configured, omit both and let Pi pick its own
+        # default provider/model.
+        if selection.model:
+            cmd.extend(["--provider", selection.provider, "--model", selection.model])
+        cmd.extend(["--tools", tools])
+        return cmd
+
+    async def run(self, *, role: RoleConfig, prompt: str, worktree_path: str,
+                  timeout_seconds: int, task_id: str = "",
+                  context: ExecutionContext | None = None) -> ExecutionResult:
+        return await _spawn_cli(
+            self.settings, role=role, prompt=prompt,
+            worktree_path=worktree_path, timeout_seconds=timeout_seconds,
+            argv_builder=self._argv, executors="pi",
+            parser=_parse_pi_stream, task_id=task_id, context=context)
+
+    async def cancel(self, execution_id: str) -> bool:
+        return cancel_execution(self.settings, execution_id)
+
+
 def get_executor(settings: Any, name: str) -> Executor:
     name = (name or "").strip().lower()
     if name == "claude":
@@ -3829,6 +3937,8 @@ def get_executor(settings: Any, name: str) -> Executor:
         return ChatExecutor(settings)
     if name == "antigravity":
         return AntigravityExecutor(settings)
+    if name == "pi":
+        return PiExecutor(settings)
     if name == "pool":
         from agent_supervisor_pool import PoolExecutor
 
@@ -4126,6 +4236,55 @@ def _parse_ndjson_result(stdout: str) -> tuple[str, dict[str, Any]]:
         "session_id": final_obj.get("sessionId") if isinstance(final_obj.get("sessionId"), str) else "",
         "stop_reason": final_obj.get("stopReason") if isinstance(final_obj.get("stopReason"), str) else "",
     }
+
+
+def _parse_pi_stream(stdout: str) -> tuple[str, dict[str, Any]]:
+    """Parse Pi ``-p --mode json`` NDJSON output.
+
+    Reuses runner.pi_agent's event parsing (``PiBackend._parse_pi_event``) and
+    per-turn usage (``PiBackend._usage_from_event``) so the Supervisor and the
+    Pi worker agree on what a result / error is. Returns the final assistant
+    text like ``_parse_ndjson_result``; because Pi has no ``--json-schema`` the
+    reviewer's JSON verdict flows through the same ``parse_review_verdict``
+    path used for command-code. Usage is summed across assistant turns and
+    reported in ``meta['usage']`` when present. A provider error event fails
+    closed even when the process exits 0 (Pi exits 0 on rejected requests).
+    """
+    from runner.pi_agent import PiBackend
+    if not isinstance(stdout, str):
+        return "", {"is_error": True, "subtype": "missing_result", "error": "missing pi output"}
+    final_text = ""
+    error_text = ""
+    has_result = False
+    usage_totals: dict[str, int] = {}
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_usage = PiBackend._usage_from_event(event)
+        if event_usage:
+            for key, value in event_usage.items():
+                usage_totals[key] = usage_totals.get(key, 0) + value
+        parsed = PiBackend._parse_pi_event(event)
+        if parsed.error and not error_text:
+            error_text = parsed.error
+        if parsed.result:
+            final_text = parsed.result
+            has_result = True
+    if error_text:
+        return "", {"is_error": True, "subtype": "agent_error", "error": error_text}
+    if not has_result:
+        return "", {"is_error": True, "subtype": "missing_result", "error": "missing final pi result"}
+    meta: dict[str, Any] = {"is_error": False, "subtype": "success", "error": ""}
+    if usage_totals:
+        meta["usage"] = usage_totals
+    return final_text, meta
 
 
 def _build_argv_for_spawn(argv_builder: Any, role: RoleConfig, cwd: str | None) -> list[str]:
