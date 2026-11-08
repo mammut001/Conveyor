@@ -274,6 +274,8 @@ export default function App() {
   const historyModeRef = useRef<'push' | 'replace'>('replace')
   const [inboxUnread, setInboxUnread] = useState(0)
   const [approvalInboxCount, setApprovalInboxCount] = useState(0)
+  // 项目 badge and title prefix: goals (目标) waiting for the owner's reply.
+  const [goalsWaiting, setGoalsWaiting] = useState(0)
   const [chatDraft, setChatDraft] = useState('')
   // 对话: which conversation the panel shows, and the one a sidebar row asked it to open.
   const [chatSessionId, setChatSessionId] = useState('')
@@ -312,6 +314,7 @@ export default function App() {
   const pollTimerRef = useRef<number | null>(null)
   const approvalTimerRef = useRef<number | null>(null)
   const inboxTimerRef = useRef<number | null>(null)
+  const goalsTimerRef = useRef<number | null>(null)
   const staleTimerRef = useRef<number | null>(null)
   const navMoreRef = useRef<HTMLDivElement>(null)
   const moreSheetRef = useRef<HTMLDivElement>(null)
@@ -348,11 +351,13 @@ export default function App() {
   // ("更多" when space is short). Alt+1…9 follow this order.
   const features = system?.features
   const navItems = useMemo(() => {
-    const items: { view: ShellView; group: 'main' | 'more'; badge?: number }[] = [
+    const items: { view: ShellView; group: 'main' | 'more'; badge?: number; badgeLabel?: string }[] = [
       { view: 'chat', group: 'main' },
       { view: 'tasks', group: 'main' },
     ]
-    if (features?.agent_supervisor) items.push({ view: 'code', group: 'main' })
+    if (features?.agent_supervisor) {
+      items.push({ view: 'code', group: 'main', badge: goalsWaiting, badgeLabel: goalsWaiting > 0 ? `有 ${goalsWaiting} 个目标在等你回复` : undefined })
+    }
     items.push({ view: 'inbox', group: 'main', badge: inboxUnread })
     if (features?.approval_inbox) items.push({ view: 'approvals', group: 'main', badge: approvalInboxCount })
     if (features?.long_term_memory || view === 'memory') items.push({ view: 'memory', group: 'main' })
@@ -363,7 +368,7 @@ export default function App() {
     if (features?.workflows || view === 'workflows') items.push({ view: 'workflows', group: 'more' })
     if (features?.mcp || view === 'connectors') items.push({ view: 'connectors', group: 'more' })
     return items
-  }, [features?.agent_supervisor, features?.approval_inbox, features?.long_term_memory, features?.teammate, features?.skills, features?.workflows, features?.mcp, features?.workers, view, inboxUnread, approvalInboxCount])
+  }, [features?.agent_supervisor, features?.approval_inbox, features?.long_term_memory, features?.teammate, features?.skills, features?.workflows, features?.mcp, features?.workers, view, inboxUnread, approvalInboxCount, goalsWaiting])
   const shortcutViewsRef = useRef<ShellView[]>([])
   shortcutViewsRef.current = navItems.slice(0, 9).map(item => item.view)
 
@@ -469,15 +474,19 @@ export default function App() {
   // URL ⇄ view: a view change writes #view (a new history entry; redirects replace it),
   // back/forward and edited hashes switch the view. The query string (?agent=, ?approval=) is kept.
   useEffect(() => {
-    if (!authenticated) { document.title = 'Conveyor 控制台'; return }
+    if (!authenticated) return
     const target = urlForView(view)
     if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== target) {
       if (historyModeRef.current === 'push') window.history.pushState(window.history.state, '', target)
       else window.history.replaceState(window.history.state, '', target)
     }
     historyModeRef.current = 'push'
-    document.title = `${VIEW_LABELS[view]} · Conveyor 控制台`
   }, [authenticated, view])
+  // Tab title: the page name, prefixed with 「(N) 」 while N goals wait for the owner's reply.
+  useEffect(() => {
+    if (!authenticated) { document.title = 'Conveyor 控制台'; return }
+    document.title = `${goalsWaiting > 0 ? `(${goalsWaiting}) ` : ''}${VIEW_LABELS[view]} · Conveyor 控制台`
+  }, [authenticated, view, goalsWaiting])
   useEffect(() => {
     const followLocation = () => {
       const next = viewFromLocation()
@@ -571,6 +580,45 @@ export default function App() {
     inboxTimerRef.current = timer
     return () => { stopped = true; window.clearInterval(timer); inboxTimerRef.current = null }
   }, [authenticated, system?.features?.routines, inboxOpen, token])
+
+  // The 项目 badge: goals waiting for the owner's reply, read every 15 s while the console is
+  // unlocked and the 项目 page exists (features.agent_supervisor). A hidden tab stops the poll;
+  // showing it again reads at once and restarts it. Leaving 项目 also reads at once.
+  const supervisorOn = Boolean(system?.features?.agent_supervisor)
+  const codeOpen = view === 'code'
+  useEffect(() => {
+    if (!authenticated || !supervisorOn || !token) { setGoalsWaiting(0); return }
+    let stopped = false
+    let generation = 0
+    let timer: number | null = null
+    const load = () => {
+      if (stopped || document.visibilityState !== 'visible' || isLockedRef.current) return
+      const gen = ++generation
+      void fetch('/api/supervisor/goals', { headers: { Authorization: `Bearer ${token}` }, signal: pollAbortRef.current.signal })
+        .then(response => response.ok ? response.json() : null)
+        .then(data => {
+          if (stopped || gen !== generation || !data || !Array.isArray(data.goals)) return
+          setGoalsWaiting(data.goals.filter((goal: { state?: string }) => goal?.state === 'waiting_user').length)
+        })
+        .catch(() => {})
+    }
+    const stop = () => {
+      if (timer !== null) window.clearInterval(timer)
+      timer = null
+      goalsTimerRef.current = null
+    }
+    const start = () => {
+      stop()
+      if (document.visibilityState !== 'visible') return
+      load()
+      timer = window.setInterval(load, 15_000)
+      goalsTimerRef.current = timer
+    }
+    const onVisibility = () => { if (document.visibilityState === 'visible') start(); else stop() }
+    start()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => { stopped = true; stop(); document.removeEventListener('visibilitychange', onVisibility) }
+  }, [authenticated, supervisorOn, token, codeOpen])
 
   // Honest connection state: every successful status poll proves the server is reachable;
   // no poll for 12s means the console is reconnecting.
@@ -1157,6 +1205,7 @@ export default function App() {
     if (pollTimerRef.current !== null) { window.clearInterval(pollTimerRef.current); pollTimerRef.current = null }
     if (approvalTimerRef.current !== null) { window.clearInterval(approvalTimerRef.current); approvalTimerRef.current = null }
     if (inboxTimerRef.current !== null) { window.clearInterval(inboxTimerRef.current); inboxTimerRef.current = null }
+    if (goalsTimerRef.current !== null) { window.clearInterval(goalsTimerRef.current); goalsTimerRef.current = null }
     if (staleTimerRef.current !== null) { window.clearTimeout(staleTimerRef.current); staleTimerRef.current = null }
 
     // With PWA disabled, locking retains exactly the legacy console behaviour.
@@ -1335,7 +1384,7 @@ export default function App() {
       onClick={() => { setView(item.view); setNavMenuOpen(false) }}>
       {inMenu && <ShellIcon name={item.view} size={16} />}
       <span>{VIEW_LABELS[item.view]}</span>
-      {item.badge ? <span className="shell-nav-badge">{item.badge > 99 ? '99+' : item.badge}</span> : null}
+      {item.badge ? <span className="shell-nav-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge > 99 ? '99+' : item.badge}</span> : null}
       {inMenu && shortcut && <kbd aria-hidden="true">{shortcut}</kbd>}
     </button>
   }
@@ -1926,7 +1975,7 @@ export default function App() {
                 aria-current={view === item.view ? 'page' : undefined}
                 onClick={() => { setView(item.view); setMoreSheetOpen(false) }}>
                 <span className="mobile-sheet-label"><ShellIcon name={item.view} size={20} />{VIEW_LABELS[item.view]}</span>
-                {item.badge ? <span className="mobile-badge">{item.badge}</span> : null}
+                {item.badge ? <span className="mobile-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge}</span> : null}
               </button>
             ))}
           </div>
@@ -1946,10 +1995,11 @@ export default function App() {
         {bottomNav.map(item => (
           <button key={item.view} type="button" className={`mobile-nav-item ${view === item.view && !moreSheetOpen ? 'active' : ''}`}
             aria-current={view === item.view ? 'page' : undefined}
+            aria-label={item.badgeLabel ? `${VIEW_LABELS[item.view]}，${item.badgeLabel}` : undefined}
             onClick={() => { setView(item.view); setMoreSheetOpen(false) }}>
             <span className="mobile-nav-icon" style={{ position: 'relative' }}>
               <ShellIcon name={item.view} size={22} />
-              {item.badge ? <span className="mobile-badge-pill">{item.badge > 99 ? '99+' : item.badge}</span> : null}
+              {item.badge ? <span className="mobile-badge-pill" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge > 99 ? '99+' : item.badge}</span> : null}
             </span>
             <span>{VIEW_LABELS[item.view]}</span>
           </button>
