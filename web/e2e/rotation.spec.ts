@@ -4,6 +4,8 @@ import { expect, test, type Locator, type Page, type Route } from '@playwright/t
 const NOW = new Date('2026-11-08T12:00:00+08:00')
 const NOW_S = Math.floor(NOW.getTime() / 1000)
 const SHOTS = 'test-results/rotation'
+/** Round 4 evidence shots; set R4_SHOTS_DIR to save them elsewhere. */
+const R4_SHOTS = process.env.R4_SHOTS_DIR || 'test-results/r4-fix'
 const DESKTOP = { width: 1440, height: 900 }
 const PHONE = { width: 390, height: 844 }
 
@@ -301,7 +303,8 @@ test.describe('Usage-based rotation (执行者)', () => {
     const log = page.locator('details.workers-switch-log')
     await expect(log).not.toHaveAttribute('open', '')
     await log.locator('summary').click()
-    await expect(log.getByText('11月8日 02:10 Antigravity 本周用量 95% → 换到 Super Grok')).toBeVisible()
+    // The detail's raw "weekly 95%" becomes the window name and percentage, with no repeated "用量" (QA F10).
+    await expect(log.getByText('11月8日 02:10 Antigravity 本周用量已用 95%，换到 Super Grok')).toBeVisible()
     await expect(log.getByText('11月7日 21:30 Codex 额度用完 → 换到 Antigravity')).toBeVisible()
 
     await shoot(page, 'usage')
@@ -317,6 +320,10 @@ test.describe('Usage-based rotation (执行者)', () => {
     const agy = cardByLabel(page, 'Antigravity')
     await expect(agy.getByText('已达上限 · 约 3 天后恢复')).toBeVisible()
     await expect(agy.getByText('可用', { exact: true })).toHaveCount(0)
+    // Over the line, so the role chip says it is skipped, never 参与轮换 (QA F3).
+    await expect(agy.locator('.worker-role')).toHaveText('暂时跳过')
+    await expect(agy.getByText('参与轮换')).toHaveCount(0)
+    await expect(cardByLabel(page, 'Codex').locator('.worker-role')).toHaveText('参与轮换')
 
     const grok = cardByLabel(page, 'Super Grok')
     await expect(grok.getByText('当前使用', { exact: true })).toBeVisible()
@@ -476,8 +483,9 @@ test.describe('Usage-based rotation (执行者)', () => {
     await select.focus()
     await expect(agy.getByText('共 40 个模型')).toBeVisible()
     // The id is the option text, and duplicated descriptions no longer hide which model is which.
-    await expect(select.locator('option[value="moonshotai/model-0"]')).toHaveText(/^moonshotai\/model-0 · fast low-cost/)
-    await expect(select.locator('option[value="deepseek/model-1"]')).toHaveText(/^deepseek\/model-1 · fast low-cost/)
+    // The human label comes first, the id second (QA F8).
+    await expect(select.locator('option[value="moonshotai/model-0"]')).toHaveText(/^fast low-cost agentic coding & reasoning · moonshotai\/model-0$/)
+    await expect(select.locator('option[value="deepseek/model-1"]')).toHaveText(/^fast low-cost agentic coding & reasoning · deepseek\/model-1$/)
 
     const search = agy.getByRole('searchbox', { name: '搜索 Antigravity 的模型' })
     await search.fill('model-3')
@@ -590,5 +598,55 @@ test.describe('Usage-based rotation (执行者)', () => {
     await expect(card.getByText('未配置服务商')).toBeVisible()
     await card.getByRole('button', { name: '去模型设置' }).click()
     await expect(page.getByRole('dialog', { name: '模型设置' })).toBeVisible()
+  })
+
+  test('保存顺序 is disabled until the order or a switch changes, and sends nothing when quiet (QA F6)', async ({ page }) => {
+    const api = await installApi(page)
+    await open(page)
+    const save = page.getByRole('button', { name: '保存顺序' })
+    await expect(save).toBeDisabled()
+    expect(api.calls.some(c => c.path === '/api/workers/order')).toBe(false)
+
+    await page.getByRole('button', { name: '下移 Antigravity' }).click()
+    await expect(save).toBeEnabled()
+    await save.click()
+    await expect(page.getByText('已保存执行者顺序。')).toBeVisible()
+    await expect(save).toBeDisabled()
+    expect(api.calls.filter(c => c.path === '/api/workers/order')).toHaveLength(1)
+  })
+
+  test('the lifted card is solid while dragging on a phone, so text underneath does not show through (QA F5)', async ({ page }) => {
+    await installApi(page)
+    await open(page, PHONE)
+    const handle = cardByLabel(page, 'Claude Code').locator('.worker-drag-handle')
+    const box = (await handle.boundingBox())!
+    const x = box.x + box.width / 2
+    const y = box.y + box.height / 2
+    await handle.evaluate((el, p) => {
+      el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: p.x, clientY: p.y }))
+    }, { x, y })
+    await page.evaluate(py => window.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: 100, clientY: py })), y - 120)
+
+    const dragged = page.locator('li.worker-card.is-dragged')
+    await expect(dragged).toHaveCount(1)
+    const style = await dragged.evaluate(el => {
+      const s = getComputedStyle(el)
+      return { opacity: s.opacity, background: s.backgroundColor, shadow: s.boxShadow }
+    })
+    expect(style.opacity).toBe('1')
+    expect(style.background).toBe('rgb(255, 255, 255)')
+    expect(style.shadow).not.toBe('none')
+    await page.evaluate(py => window.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: 100, clientY: py })), y - 120)
+  })
+
+  test('r4 screenshots: 执行者 at 1440 and 390 (QA fix evidence)', async ({ page, context }) => {
+    for (const size of [DESKTOP, PHONE]) {
+      const p = size === DESKTOP ? page : await context.newPage()
+      await installApi(p)
+      await open(p, size)
+      await expect(cardByLabel(p, 'Codex')).toBeVisible()
+      await p.evaluate(() => document.fonts.ready)
+      await p.screenshot({ path: `${R4_SHOTS}/r4-fix-workers-${size.width}.png`, fullPage: true, animations: 'disabled' })
+    }
   })
 })

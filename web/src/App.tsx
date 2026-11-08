@@ -1969,6 +1969,20 @@ function describeProviderError(message: string): { field?: ProviderField; text: 
   return rule ? { field: rule[1], text: rule[2] } : describeFailure(message, '保存没有成功，请稍后再试。')
 }
 
+/** Owner-facing (Chinese only) reason a model-list fetch failed. The raw server text is shown only under 技术详情. */
+function describeModelsFailure(raw: string, code?: string): string {
+  if (code === 'api_key_required') return '获取模型列表失败：请先填写 API 密钥。'
+  const upstream = Number(raw.match(/(?:HTTP |returned )(\d{3})/)?.[1] ?? raw.match(/\b(401|403|404)\b/)?.[1]) || 0
+  if (upstream === 401 || upstream === 403) return `获取模型列表失败：API 密钥不对或没有权限（${upstream}）。请检查后再试。`
+  if (upstream === 404) return '获取模型列表失败：接口地址不对（404）。请检查后再试。'
+  if (/超时|网络|连接|timeout|network|refused|ECONN/i.test(raw)) return '获取模型列表失败：连不上服务商。请检查网络和接口地址后再试。'
+  if (/服务地址|base url|接口地址/i.test(raw)) return '获取模型列表失败：接口地址还没填好或格式不对。请检查后再试。'
+  return `获取模型列表失败：服务商没有正常返回${upstream ? `（${upstream}）` : ''}。请检查接口地址和 API 密钥后再试。`
+}
+
+/** Fields that live under the collapsed 高级 section of 模型设置. */
+const PROVIDER_ADVANCED_FIELDS: ProviderField[] = ['provider_id', 'env_key']
+
 const PROVIDER_PRESETS = [
   {
     id: 'deepseek',
@@ -2022,11 +2036,22 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
   const [fetchedModels, setFetchedModels] = useState<string[]>([])
   const [fetchModelsError, setFetchModelsError] = useState('')
   const [fetchModelsNote, setFetchModelsNote] = useState('')
+  const [fetchModelsDetail, setFetchModelsDetail] = useState('')
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [selectedPreset, setSelectedPreset] = useState<string>('')
   const sheetRef = useRef<HTMLElement>(null)
   const discardCancelRef = useRef<HTMLButtonElement>(null)
   const controls = useRef<Partial<Record<ProviderField, HTMLInputElement | HTMLSelectElement | null>>>({})
-  useEffect(() => { if (config) setDraft(providerDraft(config)) }, [config])
+  // The app polls /api/config/provider and hands back a new object each time. Adopt the server values only
+  // while nothing here is edited, so a poll never wipes what the owner is typing or has just picked.
+  const baselineRef = useRef<ProviderDraft | null>(null)
+  useEffect(() => {
+    if (!config) return
+    const next = providerDraft(config)
+    const previous = baselineRef.current
+    baselineRef.current = next
+    setDraft(current => (previous === null || PROVIDER_FIELDS.every(field => current[field] === previous[field]) ? next : current))
+  }, [config])
   const baseline = providerDraft(config)
   const dirty = Boolean(config) && PROVIDER_FIELDS.some(field => draft[field] !== baseline[field])
 
@@ -2043,6 +2068,8 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
   function applyPreset(preset: typeof PROVIDER_PRESETS[number]) {
     setSaved(false)
     setSelectedPreset(preset.id)
+    // A model name (and the list fetched for it) belongs to one provider: switching provider drops both.
+    const providerChanged = draft.provider_id.trim().toLowerCase() !== preset.provider_id
     setDraft(previous => ({
       ...previous,
       provider_id: preset.provider_id,
@@ -2050,6 +2077,7 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
       base_url: preset.base_url,
       wire_api: preset.wire_api,
       env_key: preset.env_key,
+      ...(providerChanged ? { model: '' } : {}),
     }))
     setFieldErrors(previous => ({
       ...previous,
@@ -2058,18 +2086,31 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
       base_url: undefined,
       wire_api: undefined,
       env_key: undefined,
+      ...(providerChanged ? { model: undefined } : {}),
     }))
-    setFetchedModels([]); setFetchModelsNote(''); setFetchModelsError('')
+    if (providerChanged) {
+      setFetchedModels([]); setFetchModelsNote(''); setFetchModelsError(''); setFetchModelsDetail('')
+    }
   }
 
+  /** 自定义 starts from a blank provider: nothing from the previous preset is carried over. */
   function chooseCustom() {
+    if (activePreset === 'custom') return
+    setSaved(false)
     setSelectedPreset('custom')
+    setDraft(previous => ({
+      ...previous,
+      provider_id: '', provider_name: '', base_url: '', env_key: '', model: '', api_key: '',
+    }))
+    setFieldErrors({})
+    setFetchedModels([]); setFetchModelsNote(''); setFetchModelsError(''); setFetchModelsDetail('')
   }
 
   async function fetchProviderModels() {
     setFetchingModels(true)
     setFetchModelsError('')
     setFetchModelsNote('')
+    setFetchModelsDetail('')
     try {
       const token = sessionStorage.getItem('conveyor-token') || storedToken()
       // Send what is on screen (not only what was saved): a first-time setup can fetch before saving.
@@ -2087,9 +2128,9 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
       })
       if (!response.ok) {
         const data = await response.json().catch(() => null) as { error?: string; code?: string } | null
-        const reason = data?.error ? `${data.error.replace(/[。.]+$/, '')}。` : ''
-        const status = response.status === 401 || response.status === 403 ? '服务商拒绝了这个密钥，' : ''
-        setFetchModelsError(`获取模型列表失败：${status}${reason}请检查接口地址和 API 密钥。`)
+        const raw = data?.error || `HTTP ${response.status}`
+        setFetchModelsError(describeModelsFailure(raw, data?.code))
+        setFetchModelsDetail(raw)
         return
       }
       const data = await response.json() as { models?: { id: string }[] }
@@ -2099,10 +2140,10 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
         if (ids.length === 0) setFetchModelsError('服务商返回的模型列表为空。')
         else setFetchModelsNote(`已获取 ${ids.length} 个模型，点一下「模型」输入框就能选择。`)
       } else {
-        setFetchModelsError('获取模型列表失败，返回格式不正确。')
+        setFetchModelsError('获取模型列表失败：服务商返回的内容看不懂。请稍后再试。')
       }
     } catch {
-      setFetchModelsError('无法连接服务器，获取模型列表失败。')
+      setFetchModelsError('获取模型列表失败：连不上服务器。请检查网络后再试。')
     } finally {
       setFetchingModels(false)
     }
@@ -2158,7 +2199,12 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
     const errors = validateProvider(draft, config.api_key_configured)
     setFieldErrors(errors); setError(null); setSaved(false)
     const first = PROVIDER_FIELDS.find(field => errors[field])
-    if (first) { controls.current[first]?.focus(); return }
+    if (first) {
+      // A field inside the collapsed 高级 section must be opened before it can take focus.
+      if (PROVIDER_ADVANCED_FIELDS.includes(first)) setAdvancedOpen(true)
+      window.setTimeout(() => controls.current[first]?.focus(), 0)
+      return
+    }
     setSaving(true)
     try {
       await onSave({
@@ -2169,7 +2215,12 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
       setDraft(previous => ({ ...previous, api_key: '' }))
     } catch (reason) {
       const described = describeProviderError(reason instanceof Error ? reason.message : '')
-      if (described.field) { setFieldErrors({ [described.field]: described.text }); controls.current[described.field]?.focus() }
+      if (described.field) {
+        const field = described.field
+        setFieldErrors({ [field]: described.text })
+        if (PROVIDER_ADVANCED_FIELDS.includes(field)) setAdvancedOpen(true)
+        window.setTimeout(() => controls.current[field]?.focus(), 0)
+      }
       else setError({ text: described.text, detail: described.detail })
     } finally { setSaving(false) }
   }
@@ -2226,7 +2277,6 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
             </div>
           </div>
           <div className="form-grid">
-            {field('provider_id', '服务商代号', <input {...control('provider_id')} {...text} className="mono-input" placeholder="deepseek" onChange={event => update('provider_id', event.target.value)} />)}
             {field('provider_name', '显示名称', <input {...control('provider_name')} autoComplete="off" placeholder="DeepSeek" onChange={event => update('provider_name', event.target.value)} />)}
             {field('base_url', '接口地址', <input {...control('base_url')} {...text} type="url" inputMode="url" className="mono-input" placeholder="https://api.deepseek.com/v1" onChange={event => update('base_url', event.target.value)} />, true)}
             {field('model', '模型', (
@@ -2262,12 +2312,24 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
                 {fetchModelsError && (
                   <p className="field-error provider-fetch-error" role="alert">{fetchModelsError}</p>
                 )}
+                {fetchModelsError && fetchModelsDetail && (
+                  <details className="guard-tech-details provider-fetch-tech">
+                    <summary>技术详情</summary>
+                    <span className="guard-tech">{fetchModelsDetail}</span>
+                  </details>
+                )}
               </div>
             ))}
             {field('wire_api', '接口类型', <select {...control('wire_api')} onChange={event => update('wire_api', event.target.value)}><option value="chat">Chat Completions</option><option value="responses">Responses</option></select>)}
             {field('reasoning_effort', '推理强度', <select {...control('reasoning_effort')} onChange={event => update('reasoning_effort', event.target.value)}>{REASONING_LABELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>)}
-            {field('env_key', '密钥名称', <input {...control('env_key')} {...text} className="mono-input" placeholder="OPENAI_API_KEY" onChange={event => update('env_key', event.target.value.toUpperCase())} />)}
             {field('api_key', 'API 密钥', <input {...control('api_key')} {...text} type="password" placeholder={config.api_key_configured ? `已配置 ${config.api_key_hint}，留空则保持不变` : '粘贴 API 密钥'} onChange={event => update('api_key', event.target.value)} />, true)}
+            <details className="provider-advanced wide" open={advancedOpen} onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
+              <summary>高级</summary>
+              <div className="form-grid provider-advanced-grid">
+                {field('provider_id', '服务商代号', <input {...control('provider_id')} {...text} className="mono-input" placeholder="deepseek" onChange={event => update('provider_id', event.target.value)} />)}
+                {field('env_key', '密钥名称', <input {...control('env_key')} {...text} className="mono-input" placeholder="OPENAI_API_KEY" onChange={event => update('env_key', event.target.value.toUpperCase())} />)}
+              </div>
+            </details>
           </div>
           <div className="config-note">
             <strong>密钥只保存在服务器上</strong>

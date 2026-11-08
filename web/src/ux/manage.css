@@ -347,6 +347,10 @@
   overscroll-behavior: contain;
 }
 .primary-interface .provider-settings .form-grid { gap: 16px; }
+.provider-settings .provider-advanced { margin: 0; }
+.provider-settings .provider-advanced > summary { width: fit-content; color: #475467; font-size: 13px; font-weight: 600; cursor: pointer; user-select: none; }
+.provider-settings .provider-advanced-grid { margin-top: 14px; }
+.provider-settings .provider-fetch-tech { margin-top: 4px; }
 
 .primary-interface .settings-sheet .dialog-field { display: grid; align-content: start; gap: 6px; min-width: 0; }
 .primary-interface .settings-sheet .dialog-field > label,

@@ -290,6 +290,9 @@ test.describe('Workers Panel (Conveyor 执行者)', () => {
     // One state chip + one role chip, never contradictory (QA F7).
     await expect(codex.locator('.guard-badge, .worker-role')).toHaveCount(2)
     await expect(page.getByText('当前使用：Codex')).toBeVisible()
+    // Version and install path are technical detail: collapsed on the card (QA F7).
+    await expect(codex.getByText('v0.1.2 · /usr/local/bin/codex')).toBeHidden()
+    await codex.locator('details.worker-tech > summary').click()
     await expect(codex.getByText('v0.1.2 · /usr/local/bin/codex')).toBeVisible()
     await expect(codex.getByText('#1')).toBeVisible()
 
@@ -299,6 +302,9 @@ test.describe('Workers Panel (Conveyor 执行者)', () => {
     await expect(claude.getByText('需要登录')).toBeVisible()
     // A worker that cannot be used yet carries no rotation chip that could contradict that.
     await expect(claude.locator('.worker-role')).toHaveCount(0)
+    // Version and path are behind 技术详情 on the card (QA F7).
+    await expect(claude.getByText('1.0.14 · /usr/local/bin/claude')).toBeHidden()
+    await claude.locator('details.worker-tech > summary').click()
     await expect(claude.getByText('1.0.14 · /usr/local/bin/claude')).toBeVisible()
 
     // 3. Pi: 未安装 + manual hint
@@ -428,7 +434,8 @@ test.describe('Workers Panel (Conveyor 执行者)', () => {
     // Plain-Chinese reason first, the raw API text only behind 技术详情 (QA F8).
     await expect(agy.getByText('这个账号的额度已经用完。')).toBeVisible()
     await expect(agy.getByText('429: rate limit exceeded, resets in 2h')).toBeHidden()
-    await agy.getByText('技术详情').click()
+    // The card also has a version/path 技术详情: pick the one that holds the raw reason.
+    await agy.locator('details.guard-tech-details', { hasText: '429: rate limit' }).locator('summary').click()
     await expect(agy.getByText('429: rate limit exceeded, resets in 2h')).toBeVisible()
 
     const resetBtn = agy.getByRole('button', { name: '我已处理，立即重试' })
