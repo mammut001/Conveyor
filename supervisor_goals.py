@@ -74,6 +74,9 @@ DEFAULT_MAX_ITERATIONS = 5
 MIN_MAX_ITERATIONS = 1
 MAX_MAX_ITERATIONS = 20
 MAX_EVAL_ITERATIONS = MAX_MAX_ITERATIONS
+MIN_EXTEND_ROUNDS = 1
+MAX_EXTEND_ROUNDS = 10
+MAX_EXTEND_MESSAGE_CHARS = 2000
 
 FIRST_ITERATION_NOTE = "这是目标的第 1 轮。"
 
@@ -659,6 +662,111 @@ def reply_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) -
     return get_goal(settings, goal_id)
 
 
+def extend_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    """「再试几轮」 for an `exhausted` or `failed` goal: raise `max_iterations` by
+    `rounds` (1-10), set state back to `running`, and start the next round."""
+    svc.require_enabled(settings)
+    if not isinstance(body, dict):
+        raise _service_error(HTTPStatus.BAD_REQUEST, "请求体必须是 JSON 对象", code="invalid_body")
+
+    raw_rounds = body.get("rounds")
+    if (
+        isinstance(raw_rounds, bool)
+        or not isinstance(raw_rounds, int)
+        or raw_rounds < MIN_EXTEND_ROUNDS
+        or raw_rounds > MAX_EXTEND_ROUNDS
+    ):
+        raise _service_error(
+            HTTPStatus.BAD_REQUEST,
+            f"再试轮数必须是 {MIN_EXTEND_ROUNDS} 到 {MAX_EXTEND_ROUNDS} 之间的整数",
+            code="invalid_rounds",
+        )
+    rounds = int(raw_rounds)
+
+    raw_message = body.get("message")
+    message = ""
+    if raw_message is not None:
+        if not isinstance(raw_message, str):
+            raise _service_error(
+                HTTPStatus.BAD_REQUEST,
+                f"补充说明必须是不超过 {MAX_EXTEND_MESSAGE_CHARS} 个字的字符串",
+                code="invalid_message",
+            )
+        if "\x00" in raw_message:
+            raise _service_error(
+                HTTPStatus.BAD_REQUEST,
+                "补充说明包含无效字符",
+                code="invalid_message",
+            )
+        cleaned_message = raw_message.strip()
+        if len(cleaned_message) > MAX_EXTEND_MESSAGE_CHARS or (
+            not cleaned_message and len(raw_message) > MAX_EXTEND_MESSAGE_CHARS
+        ):
+            raise _service_error(
+                HTTPStatus.BAD_REQUEST,
+                f"补充说明不能超过 {MAX_EXTEND_MESSAGE_CHARS} 个字",
+                code="invalid_message",
+            )
+        message = redact_text(cleaned_message).strip()
+
+    goal = _get_goal_row(settings, goal_id)
+    if goal["state"] not in (GOAL_EXHAUSTED, GOAL_FAILED):
+        raise _service_error(
+            HTTPStatus.CONFLICT,
+            "只有已用完轮数或失败的目标才能再试几轮",
+            code="goal_not_extendable",
+        )
+
+    _repo_path, wt_path, managed = _scope_paths(settings, goal)
+    if not managed:
+        raise _service_error(
+            HTTPStatus.CONFLICT,
+            "目标只能在托管的 git worktree 里继续执行",
+            code="unmanaged_worktree",
+        )
+    if ags.has_active_task_for_worktree(settings, wt_path):
+        raise _service_error(
+            HTTPStatus.CONFLICT,
+            "当前工作目录还有正在执行的任务，等它结束后再试",
+            code="worktree_busy",
+        )
+
+    iterations = _iterations(settings, goal["id"])
+    next_n = len(iterations) + 1
+    new_max_iterations = int(goal["max_iterations"]) + rounds
+    base_prompt = str(goal.get("last_next_prompt") or "").strip()
+    prompt = _extend_prompt(goal, next_n, base_prompt, message)
+
+    now = _utc_now()
+    conn = _connect(settings)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """INSERT INTO supervisor_goal_iterations
+               (goal_id, n, task_id, prompt, decision, decision_reason,
+                started_at, finished_at, task_final_state, evaluating, evaluating_since)
+               VALUES (?, ?, '', ?, '', '', ?, '', '', 0, '')""",
+            (goal["id"], next_n, prompt, now),
+        )
+        conn.execute(
+            """UPDATE supervisor_goals
+               SET state = ?, max_iterations = ?, question = '', stop_reason = '', updated_at = ?
+               WHERE id = ?""",
+            (GOAL_RUNNING, new_max_iterations, now, goal["id"]),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    updated_goal = _get_goal_row(settings, goal["id"])
+    _start_iteration(server, settings, updated_goal, next_n, prompt)
+    svc.ensure_server_worker(server, settings, wake=True)
+    return get_goal(settings, goal["id"])
+
+
 # ---------------------------------------------------------------------------
 # Iteration persistence helpers
 # ---------------------------------------------------------------------------
@@ -866,6 +974,21 @@ def _reply_prompt(goal: dict[str, Any], n: int, base_next_prompt: str, message: 
         raw = f"{header}本轮要做：{base_next_prompt}\n\n用户补充：{message}"
     else:
         raw = f"{header}本轮要做：请按用户下面的补充继续。\n\n用户补充：{message}"
+    return truncate(raw, svc.MAX_GOAL_CHARS)
+
+
+def _extend_prompt(goal: dict[str, Any], n: int, base_next_prompt: str, message: str) -> str:
+    """Prompt for the iteration started by `extend_goal`: builds on the evaluator's
+    last `next_prompt` (if any) plus `用户补充：<message>` when given."""
+    header = f"这是目标「{goal['title']}」的第 {n} 轮。目标：{goal['outcome']}\n\n"
+    if base_next_prompt and message:
+        raw = f"{header}本轮要做：{base_next_prompt}\n\n用户补充：{message}"
+    elif base_next_prompt:
+        raw = f"{header}本轮要做：{base_next_prompt}"
+    elif message:
+        raw = f"{header}本轮要做：请按用户下面的补充继续。\n\n用户补充：{message}"
+    else:
+        raw = f"{header}本轮要做：请基于前面的进展继续推进，完成目标。"
     return truncate(raw, svc.MAX_GOAL_CHARS)
 
 
@@ -1274,6 +1397,8 @@ async def _evaluate_iteration(
             settings, goal_id, n,
             decision=DECISION_GIVE_UP, reason=reason, task_state=state,
         )
+        if decision["next_prompt"].strip() and len(decision["next_prompt"].strip()) <= MAX_NEXT_PROMPT_CHARS:
+            _update_goal(settings, goal_id, last_next_prompt=decision["next_prompt"].strip())
         _finish_goal(
             settings, goal, GOAL_FAILED,
             summary=summary,
@@ -1316,6 +1441,8 @@ async def _evaluate_iteration(
         decision=DECISION_CONTINUE, reason=decision["reason"], task_state=state,
     )
     if used >= max_iterations:
+        if decision["next_prompt"].strip() and len(decision["next_prompt"].strip()) <= MAX_NEXT_PROMPT_CHARS:
+            _update_goal(settings, goal_id, last_next_prompt=decision["next_prompt"].strip())
         _finish_goal(
             settings, goal, GOAL_EXHAUSTED,
             summary=summary,

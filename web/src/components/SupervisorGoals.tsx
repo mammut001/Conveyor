@@ -609,6 +609,56 @@ export default function SupervisorGoals({
     && worktree.managed
     && !locked
     && !hasActiveGoal
+  // 「再试几轮」：已用完轮数或失败的目标可以增加 1–10 轮（默认 3 轮）继续跑。
+  const canOfferExtend = Boolean(resultCopy)
+    && (shownGoal?.state === 'exhausted' || shownGoal?.state === 'failed')
+    && !readOnly
+  const [extendOpen, setExtendOpen] = useState(false)
+  const [extendRounds, setExtendRounds] = useState('3')
+  const [extendMessage, setExtendMessage] = useState('')
+  const [extending, setExtending] = useState(false)
+  const [extendError, setExtendError] = useState('')
+  useEffect(() => {
+    setExtendOpen(false)
+    setExtendRounds('3')
+    setExtendMessage('')
+    setExtendError('')
+  }, [shownGoalId, contextKey])
+  const handleExtend = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault()
+      if (!shownGoal || extending || readOnly) return
+      const parsedRounds = Number.parseInt(extendRounds, 10)
+      const rounds = Number.isFinite(parsedRounds) ? Math.min(10, Math.max(1, parsedRounds)) : 3
+      const message = extendMessage.trim()
+      setExtending(true)
+      setExtendError('')
+      try {
+        const res = await apiCall<GoalDetail>(
+          `/api/supervisor/goals/${encodeURIComponent(shownGoal.id)}/extend`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              rounds,
+              ...(message ? { message } : {}),
+            }),
+          },
+        )
+        setDetail(res)
+        pinGoal('')
+        setFormRequested(false)
+        setExtendOpen(false)
+        setExtendRounds('3')
+        setExtendMessage('')
+        await refresh()
+      } catch (err) {
+        setExtendError(goalChineseError(err))
+      } finally {
+        setExtending(false)
+      }
+    },
+    [apiCall, extendMessage, extendRounds, extending, pinGoal, readOnly, refresh, shownGoal],
+  )
 
   return (
     <div className="sup-goals-scroll">
@@ -689,10 +739,77 @@ export default function SupervisorGoals({
                       查看改动
                     </button>
                   )}
+                  {canOfferExtend && (
+                    <button
+                      type="button"
+                      className="shell-button sup-goal-extend-button"
+                      aria-expanded={extendOpen}
+                      onClick={() => {
+                        setExtendOpen(prev => !prev)
+                        setExtendError('')
+                      }}
+                    >
+                      再试几轮
+                    </button>
+                  )}
                   <button type="button" className="shell-button primary sup-goal-new-button" onClick={handleStartNew}>
                     开始新目标
                   </button>
                 </div>
+                {extendOpen && canOfferExtend && (
+                  <form
+                    className="sup-goal-extend"
+                    aria-label="再试几轮"
+                    onSubmit={event => {
+                      void handleExtend(event)
+                    }}
+                  >
+                    <div className="sup-goal-form-row">
+                      <div className="sup-form-field sup-goal-rounds-field">
+                        <label htmlFor="sup-goal-extend-rounds">再试几轮</label>
+                        <input
+                          id="sup-goal-extend-rounds"
+                          aria-label="再试几轮"
+                          type="number"
+                          min={1}
+                          max={10}
+                          step={1}
+                          value={extendRounds}
+                          disabled={extending || readOnly}
+                          onChange={e => setExtendRounds(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="sup-form-field">
+                      <label htmlFor="sup-goal-extend-message">补充说明</label>
+                      <textarea
+                        id="sup-goal-extend-message"
+                        aria-label="补充说明"
+                        placeholder="补充说明（可选），例如：换个思路或重点检查哪里"
+                        rows={3}
+                        maxLength={2000}
+                        value={extendMessage}
+                        disabled={extending || readOnly}
+                        onChange={e => setExtendMessage(e.target.value)}
+                      />
+                    </div>
+                    {extendError && (
+                      <div className="sup-banner sup-banner--error" role="alert">
+                        <strong>没有继续成功</strong>
+                        <span>{extendError}</span>
+                      </div>
+                    )}
+                    <div className="sup-goal-extend-actions">
+                      <button
+                        type="submit"
+                        className="shell-button primary"
+                        disabled={extending || readOnly}
+                      >
+                        {extending ? '正在继续…' : '继续'}
+                      </button>
+                    </div>
+                  </form>
+                )}
                 {changesOpen && <SupervisorDiffView diffState={goalDiff} />}
                 {canOfferMerge && (
                   <button
