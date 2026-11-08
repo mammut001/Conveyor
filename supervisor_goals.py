@@ -96,6 +96,19 @@ NO_NEXT_PROMPT_QUESTION = (
 
 _SCHEMA_INIT_LOCK = threading.Lock()
 _INITIALIZED_DBS: set[str] = set()
+_REPLY_LOCKS_GUARD = threading.Lock()
+_REPLY_LOCKS: dict[str, threading.Lock] = {}
+_GOAL_INFLIGHT_STATES = svc._INFLIGHT_STATES | frozenset({"pending_dispatch"})
+_GOAL_ACTIVE_TASK_STATES = svc._ACTIVE_WORKTREE_STATES | frozenset({"pending_dispatch"})
+
+
+def _goal_reply_lock(goal_id: str) -> threading.Lock:
+    with _REPLY_LOCKS_GUARD:
+        lock = _REPLY_LOCKS.get(goal_id)
+        if lock is None:
+            lock = threading.Lock()
+            _REPLY_LOCKS[goal_id] = lock
+        return lock
 
 _GOALS_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS supervisor_goals (
@@ -540,17 +553,7 @@ def stop_goal(server: Any, settings: Any, goal_id: str) -> dict[str, Any]:
     if goal["state"] in (GOAL_STOPPED, GOAL_ACHIEVED, GOAL_FAILED, GOAL_EXHAUSTED):
         return get_goal(settings, goal_id)
 
-    iterations = _iterations(settings, goal_id)
-    current = iterations[-1] if iterations else None
     reason = "用户手动停止了目标"
-    if current and current["task_id"]:
-        task = ags.get_task(settings, current["task_id"])
-        if task is not None and str(task.get("state") or "") in svc._ACTIVE_WORKTREE_STATES:
-            try:
-                svc.cancel_scoped_task(server, settings, current["task_id"], reason=reason)
-            except svc.SupervisorServiceError:
-                log.warning("goal %s: cancelling task %s failed", goal_id, current["task_id"], exc_info=True)
-
     _update_goal(
         settings,
         goal_id,
@@ -559,8 +562,29 @@ def stop_goal(server: Any, settings: Any, goal_id: str) -> dict[str, Any]:
         stop_reason=reason,
         updated_at=_utc_now(),
     )
+
+    iterations = _iterations(settings, goal_id)
+    for item in reversed(iterations):
+        tid = str(item.get("task_id") or "")
+        if not tid:
+            continue
+        task = ags.get_task(settings, tid)
+        if task is not None and str(task.get("state") or "") in _GOAL_ACTIVE_TASK_STATES:
+            try:
+                svc.cancel_scoped_task(server, settings, tid, reason=reason)
+            except svc.SupervisorServiceError:
+                log.warning("goal %s: cancelling task %s failed", goal_id, tid, exc_info=True)
+
     svc.ensure_server_worker(server, settings, wake=True)
     return get_goal(settings, goal_id)
+
+
+def _is_reply_already_processing(goal: dict[str, Any], iterations: list[dict[str, Any]]) -> bool:
+    if goal.get("state") == GOAL_RUNNING and iterations:
+        last = iterations[-1]
+        if str(last.get("decision_reason") or "") == "用户补充说明后继续" and not last.get("decision"):
+            return True
+    return False
 
 
 def reply_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -568,13 +592,10 @@ def reply_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) -
     svc.require_enabled(settings)
     if not isinstance(body, dict):
         raise _service_error(HTTPStatus.BAD_REQUEST, "request body must be an object", code="invalid_body")
-    goal = _get_goal_row(settings, goal_id)
-    if goal["state"] != GOAL_WAITING_USER:
-        raise _service_error(
-            HTTPStatus.CONFLICT,
-            "目标当前没有在等待用户回复",
-            code="goal_not_waiting_user",
-        )
+
+    pre_goal = _get_goal_row(settings, goal_id)
+    gid = pre_goal["id"]
+    saw_waiting = pre_goal["state"] == GOAL_WAITING_USER
 
     raw_achieved = body.get("achieved")
     achieved = bool(raw_achieved) if isinstance(raw_achieved, bool) else False
@@ -586,80 +607,143 @@ def reply_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) -
             raise _service_error(HTTPStatus.BAD_REQUEST, "message must be a string", code="invalid_message")
         message = redact_text(raw_message).strip()
 
-    if achieved:
-        updated = _update_goal(
-            settings,
-            goal_id,
-            state=GOAL_ACHIEVED,
-            stop_reason="用户确认已达成",
-            question="",
-            updated_at=_utc_now(),
-        )
-        notify_goal_change(settings, updated, GOAL_ACHIEVED)
-        svc.ensure_server_worker(server, settings, wake=True)
-        return get_goal(settings, goal_id)
+    lock = _goal_reply_lock(gid)
+    if not lock.acquire(blocking=False):
+        if saw_waiting:
+            raise _service_error(
+                HTTPStatus.CONFLICT,
+                "已经在处理你的回复",
+                code="goal_reply_in_progress",
+            )
+        lock.acquire()
 
-    if not message:
-        raise _service_error(
-            HTTPStatus.BAD_REQUEST,
-            "请用 message 描述这一轮还要改什么（或把 achieved 设为 true 确认达成）",
-            code="invalid_message",
-        )
-
-    iterations = _iterations(settings, goal_id)
-    current = iterations[-1] if iterations else None
-
-    # Release the worktree lock held by a task that is itself waiting for the user.
-    if current and current["task_id"]:
-        task = ags.get_task(settings, current["task_id"])
-        if task is not None and str(task.get("state") or "") == "waiting_user":
-            try:
-                svc.cancel_scoped_task(server, settings, current["task_id"], reason="用户回复目标，取消等待中的任务")
-            except svc.SupervisorServiceError:
-                log.warning(
-                    "goal %s: cancelling waiting task %s failed",
-                    goal_id,
-                    current["task_id"],
-                    exc_info=True,
-                )
-
-    next_n = len(iterations) + 1
-    # Documented exception: when the budget is used up the user's explicit reply
-    # buys exactly ONE extra iteration; anything beyond that is refused.
-    if next_n > int(goal["max_iterations"]) + 1:
-        raise _service_error(
-            HTTPStatus.CONFLICT,
-            "迭代预算已经用完（用户补充也只允许多跑一轮），请调高 max_iterations 后重试",
-            code="goal_iterations_exhausted",
-        )
-
-    base_prompt = str(goal.get("last_next_prompt") or "").strip()
-    prompt = _reply_prompt(goal, next_n, base_prompt, message)
-
-    now = _utc_now()
-    conn = _connect(settings)
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            """INSERT INTO supervisor_goal_iterations
-               (goal_id, n, task_id, prompt, decision, decision_reason,
-                started_at, finished_at, task_final_state, evaluating, evaluating_since)
-               VALUES (?, ?, '', ?, '', '用户补充说明后继续', ?, '', '', 0, '')""",
-            (goal_id, next_n, prompt, now),
-        )
-        conn.execute(
-            "UPDATE supervisor_goals SET state = ?, question = '', updated_at = ? WHERE id = ?",
-            (GOAL_RUNNING, now, goal_id),
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+        goal = _get_goal_row(settings, gid)
+        iterations = _iterations(settings, gid)
+        if goal["state"] != GOAL_WAITING_USER:
+            if saw_waiting or _is_reply_already_processing(goal, iterations):
+                raise _service_error(
+                    HTTPStatus.CONFLICT,
+                    "已经在处理你的回复",
+                    code="goal_reply_in_progress",
+                )
+            raise _service_error(
+                HTTPStatus.CONFLICT,
+                "目标当前没有在等待用户回复",
+                code="goal_not_waiting_user",
+            )
 
-    svc.ensure_server_worker(server, settings, wake=True)
-    return get_goal(settings, goal_id)
+        if achieved:
+            now = _utc_now()
+            conn = _connect(settings)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                cur = conn.execute(
+                    """UPDATE supervisor_goals
+                       SET state = ?, stop_reason = '用户确认已达成', question = '', updated_at = ?
+                       WHERE id = ? AND state = ?""",
+                    (GOAL_ACHIEVED, now, gid, GOAL_WAITING_USER),
+                )
+                if cur.rowcount != 1:
+                    conn.rollback()
+                    raise _service_error(
+                        HTTPStatus.CONFLICT,
+                        "已经在处理你的回复",
+                        code="goal_reply_in_progress",
+                    )
+                conn.commit()
+            except svc.SupervisorServiceError:
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+            updated = _get_goal_row(settings, gid)
+            notify_goal_change(settings, updated, GOAL_ACHIEVED)
+            svc.ensure_server_worker(server, settings, wake=True)
+            return get_goal(settings, gid)
+
+        if not message:
+            raise _service_error(
+                HTTPStatus.BAD_REQUEST,
+                "请用 message 描述这一轮还要改什么（或把 achieved 设为 true 确认达成）",
+                code="invalid_message",
+            )
+
+        current = iterations[-1] if iterations else None
+        next_n = len(iterations) + 1
+        # Documented exception: when the budget is used up the user's explicit reply
+        # buys exactly ONE extra iteration; anything beyond that is refused.
+        # Check budget BEFORE cancelling the waiting task so a 409 never kills it.
+        if next_n > int(goal["max_iterations"]) + 1:
+            raise _service_error(
+                HTTPStatus.CONFLICT,
+                "迭代预算已经用完（用户补充也只允许多跑一轮），请调高 max_iterations 后重试",
+                code="goal_iterations_exhausted",
+            )
+
+        base_prompt = str(goal.get("last_next_prompt") or "").strip()
+        prompt = _reply_prompt(goal, next_n, base_prompt, message)
+
+        now = _utc_now()
+        conn = _connect(settings)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE supervisor_goals SET state = ?, question = '', updated_at = ? WHERE id = ? AND state = ?",
+                (GOAL_RUNNING, now, gid, GOAL_WAITING_USER),
+            )
+            if cur.rowcount != 1:
+                conn.rollback()
+                raise _service_error(
+                    HTTPStatus.CONFLICT,
+                    "已经在处理你的回复",
+                    code="goal_reply_in_progress",
+                )
+            conn.execute(
+                """INSERT INTO supervisor_goal_iterations
+                   (goal_id, n, task_id, prompt, decision, decision_reason,
+                    started_at, finished_at, task_final_state, evaluating, evaluating_since)
+                   VALUES (?, ?, '', ?, '', '用户补充说明后继续', ?, '', '', 0, '')""",
+                (gid, next_n, prompt, now),
+            )
+            conn.commit()
+        except svc.SupervisorServiceError:
+            raise
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()
+            raise _service_error(
+                HTTPStatus.CONFLICT,
+                "已经在处理你的回复",
+                code="goal_reply_in_progress",
+            ) from exc
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        # Release the worktree lock held by a task that is itself waiting for the user.
+        if current and current["task_id"]:
+            task = ags.get_task(settings, current["task_id"])
+            if task is not None and str(task.get("state") or "") == "waiting_user":
+                try:
+                    svc.cancel_scoped_task(
+                        server, settings, current["task_id"], reason="用户回复目标，取消等待中的任务"
+                    )
+                except svc.SupervisorServiceError:
+                    log.warning(
+                        "goal %s: cancelling waiting task %s failed",
+                        gid,
+                        current["task_id"],
+                        exc_info=True,
+                    )
+
+        svc.ensure_server_worker(server, settings, wake=True)
+        return get_goal(settings, gid)
+    finally:
+        lock.release()
 
 
 def extend_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -1000,7 +1084,7 @@ def _adopt_orphan_task(settings: Any, worktree_path: str, prompt: str) -> str:
     except Exception:
         return ""
     for task in tasks:
-        if str(task.get("state") or "") not in svc._ACTIVE_WORKTREE_STATES:
+        if str(task.get("state") or "") not in _GOAL_ACTIVE_TASK_STATES:
             continue
         if str(task.get("goal") or "") != prompt:
             continue
@@ -1011,11 +1095,92 @@ def _adopt_orphan_task(settings: Any, worktree_path: str, prompt: str) -> str:
     return ""
 
 
+def _goal_is_running(settings: Any, goal_id: str) -> bool:
+    try:
+        return str(_get_goal_row(settings, goal_id).get("state") or "") == GOAL_RUNNING
+    except Exception:
+        return False
+
+
+def _cancel_task_for_stopped_goal(server: Any, settings: Any, goal_id: str, task_id: str) -> None:
+    if not task_id:
+        return
+    try:
+        svc.cancel_scoped_task(server, settings, task_id, reason="目标已停止，取消本轮任务")
+    except svc.SupervisorServiceError:
+        log.warning("goal %s: cancel of task %s after stop failed", goal_id, task_id, exc_info=True)
+
+
+def _redispatch_iteration_task(
+    server: Any,
+    settings: Any,
+    goal: dict[str, Any],
+    n: int,
+    task_id: str,
+) -> str:
+    """Dispatch an iteration task that was created (`pending_dispatch`) but never dispatched."""
+    goal_id = str(goal["id"])
+    if not _goal_is_running(settings, goal_id):
+        _cancel_task_for_stopped_goal(server, settings, goal_id, task_id)
+        return ""
+
+    try:
+        _repo_path, wt_path, managed = _scope_paths(settings, goal)
+    except svc.SupervisorServiceError as exc:
+        _fail_goal(settings, goal, str(exc.message))
+        return ""
+    if not managed:
+        _fail_goal(settings, goal, "目标的 worktree 不再是托管状态，无法继续执行")
+        return ""
+
+    if ags.has_active_task_for_worktree(settings, wt_path, exclude_task_id=task_id):
+        return ""
+
+    roles = goal.get("role_overrides") or {}
+    try:
+        svc.dispatch_scoped_task(
+            server,
+            settings,
+            task_id,
+            {"roles": roles} if roles else {},
+        )
+    except svc.SupervisorServiceError as exc:
+        log.warning("goal %s iteration %s: task re-dispatch failed: %s", goal_id, n, exc.message)
+        if exc.status == HTTPStatus.CONFLICT:
+            return ""
+        try:
+            svc.cancel_scoped_task(server, settings, task_id, reason="目标派发失败，取消本轮任务")
+        except svc.SupervisorServiceError:
+            log.warning("goal %s: cleanup of task %s failed", goal_id, task_id, exc_info=True)
+        _clear_iteration_task(settings, goal_id, n)
+        _fail_goal(settings, goal, f"第 {n} 轮任务派发失败：{exc.message}")
+        return ""
+    except Exception as exc:
+        log.exception("goal %s iteration %s: unexpected re-dispatch error", goal_id, n)
+        _fail_goal(settings, goal, f"第 {n} 轮任务派发异常：{type(exc).__name__}")
+        return ""
+
+    if not _goal_is_running(settings, goal_id):
+        _cancel_task_for_stopped_goal(server, settings, goal_id, task_id)
+        return ""
+
+    log.info("goal %s iteration %s re-dispatched pending task %s", goal_id, n, task_id)
+    return task_id
+
+
 def _start_iteration(server: Any, settings: Any, goal: dict[str, Any], n: int, prompt: str) -> str:
     """Ensure iteration `n` has a dispatched task. Returns the task id ('' when deferred)."""
-    iteration = _ensure_iteration(settings, goal["id"], n, prompt)
+    goal_id = str(goal["id"])
+    if not _goal_is_running(settings, goal_id):
+        return ""
+
+    iteration = _ensure_iteration(settings, goal_id, n, prompt)
     if iteration["task_id"]:
-        return iteration["task_id"]
+        existing_tid = str(iteration["task_id"])
+        existing_task = ags.get_task(settings, existing_tid)
+        if existing_task is not None and str(existing_task.get("state") or "") == "pending_dispatch":
+            return _redispatch_iteration_task(server, settings, goal, n, existing_tid)
+        return existing_tid
 
     try:
         _repo_path, wt_path, managed = _scope_paths(settings, goal)
@@ -1031,8 +1196,14 @@ def _start_iteration(server: Any, settings: Any, goal: dict[str, Any], n: int, p
     if ags.has_active_task_for_worktree(settings, wt_path):
         adopted = _adopt_orphan_task(settings, wt_path, prompt)
         if adopted:
-            _set_iteration_task(settings, goal["id"], n, adopted)
+            _set_iteration_task(settings, goal_id, n, adopted)
+            if not _goal_is_running(settings, goal_id):
+                _cancel_task_for_stopped_goal(server, settings, goal_id, adopted)
+                return ""
             return adopted
+        return ""
+
+    if not _goal_is_running(settings, goal_id):
         return ""
 
     roles = goal.get("role_overrides") or {}
@@ -1047,35 +1218,44 @@ def _start_iteration(server: Any, settings: Any, goal: dict[str, Any], n: int, p
             },
         )
         task_id = str(task["id"])
-        _set_iteration_task(settings, goal["id"], n, task_id)
+        _set_iteration_task(settings, goal_id, n, task_id)
+        if not _goal_is_running(settings, goal_id):
+            _cancel_task_for_stopped_goal(server, settings, goal_id, task_id)
+            return ""
         svc.dispatch_scoped_task(
             server,
             settings,
             task_id,
             {"roles": roles} if roles else {},
         )
+        if not _goal_is_running(settings, goal_id):
+            _cancel_task_for_stopped_goal(server, settings, goal_id, task_id)
+            return ""
     except svc.SupervisorServiceError as exc:
-        log.warning("goal %s iteration %s: task dispatch failed: %s", goal["id"], n, exc.message)
+        log.warning("goal %s iteration %s: task dispatch failed: %s", goal_id, n, exc.message)
         if task_id:
             # Task row exists but never ran: drop it so the next tick can retry cleanly.
             try:
                 svc.cancel_scoped_task(server, settings, task_id, reason="目标派发失败，取消本轮任务")
             except svc.SupervisorServiceError:
-                log.warning("goal %s: cleanup of task %s failed", goal["id"], task_id, exc_info=True)
-            _clear_iteration_task(settings, goal["id"], n)
+                log.warning("goal %s: cleanup of task %s failed", goal_id, task_id, exc_info=True)
+            _clear_iteration_task(settings, goal_id, n)
         if exc.status == HTTPStatus.CONFLICT:
             adopted = _adopt_orphan_task(settings, wt_path, prompt)
             if adopted:
-                _set_iteration_task(settings, goal["id"], n, adopted)
+                _set_iteration_task(settings, goal_id, n, adopted)
+                if not _goal_is_running(settings, goal_id):
+                    _cancel_task_for_stopped_goal(server, settings, goal_id, adopted)
+                    return ""
                 return adopted
             return ""
         _fail_goal(settings, goal, f"第 {n} 轮任务派发失败：{exc.message}")
         return ""
     except Exception as exc:  # defensive: never let one goal kill the loop
-        log.exception("goal %s iteration %s: unexpected dispatch error", goal["id"], n)
+        log.exception("goal %s iteration %s: unexpected dispatch error", goal_id, n)
         _fail_goal(settings, goal, f"第 {n} 轮任务派发异常：{type(exc).__name__}")
         return ""
-    log.info("goal %s iteration %s dispatched task %s", goal["id"], n, task_id)
+    log.info("goal %s iteration %s dispatched task %s", goal_id, n, task_id)
     return task_id
 
 
@@ -1245,6 +1425,22 @@ def _normalize_decision(parsed: dict[str, Any] | None) -> dict[str, str]:
     }
 
 
+def _prepare_evaluator_call(
+    settings: Any,
+    goal: dict[str, Any],
+    iterations: list[dict[str, Any]],
+) -> tuple[bool, str, Any, Any, str, int]:
+    roles = ags.load_roles(settings)
+    coordinator = roles["coordinator"]
+    executor = ags.get_executor(settings, "chat")
+    ok, reason = executor.available()
+    if not ok:
+        return False, str(reason or ""), None, None, "", 0
+    prompt = _build_eval_prompt(goal, iterations, settings)
+    timeout = max(30, min(int(ags.task_timeout(settings)), 600))
+    return True, "", executor, coordinator, prompt, timeout
+
+
 async def _ask_evaluator(
     settings: Any,
     goal: dict[str, Any],
@@ -1257,14 +1453,19 @@ async def _ask_evaluator(
     """Ask the coordinator chat model for a decision. Never raises."""
     empty = _normalize_decision(None)
     try:
-        roles = ags.load_roles(settings)
-        coordinator = roles["coordinator"]
-        executor = ags.get_executor(settings, "chat")
-        ok, reason = executor.available()
+        ok, reason, executor, coordinator, prompt, timeout = await asyncio.to_thread(
+            _prepare_evaluator_call,
+            settings,
+            goal,
+            iterations,
+        )
         if not ok:
-            log.warning("goal %s: evaluator chat unavailable: %s", goal["id"], reason)
+            log.warning(
+                "goal %s: evaluator chat unavailable: %s",
+                goal["id"],
+                truncate(redact_text(str(reason or "")), MAX_REASON_CHARS),
+            )
             return empty
-        prompt = _build_eval_prompt(goal, iterations, settings)
         ctx = ags.ExecutionContext(
             task_id=task_id,
             repo_path=repo_path,
@@ -1272,7 +1473,6 @@ async def _ask_evaluator(
             stage="goal_evaluation",
             metadata={"goal_id": goal["id"]},
         )
-        timeout = max(30, min(int(ags.task_timeout(settings)), 600))
         result = await ags._invoke_role_executor(
             executor,
             role=coordinator,
@@ -1286,7 +1486,8 @@ async def _ask_evaluator(
         log.warning("goal %s: evaluator call failed: %s", goal["id"], type(exc).__name__)
         return empty
     if not getattr(result, "success", False):
-        log.warning("goal %s: evaluator returned failure: %s", goal["id"], getattr(result, "error", ""))
+        safe_error = truncate(redact_text(str(getattr(result, "error", "") or "")), MAX_REASON_CHARS)
+        log.warning("goal %s: evaluator returned failure: %s", goal["id"], safe_error)
         return empty
     parsed = _parse_decision(getattr(result, "output", ""))
     if parsed is None:
@@ -1295,37 +1496,144 @@ async def _ask_evaluator(
     return _normalize_decision(parsed)
 
 
-async def _evaluate_iteration(
+def _stage_eval_fields(
+    settings: Any,
+    goal_id: str,
+    *,
+    summary: str = "",
+    question: str | None = None,
+    last_next_prompt: str | None = None,
+) -> None:
+    """Persist evaluation metadata on the goal row before `_record_decision` commits,
+    so `_reapply_decision` has full fidelity if a later write fails."""
+    updates: dict[str, Any] = {
+        "summary": truncate(redact_text(summary), MAX_SUMMARY_CHARS),
+        "updated_at": _utc_now(),
+    }
+    if question is not None:
+        updates["question"] = truncate(redact_text(question), MAX_QUESTION_CHARS)
+    if last_next_prompt is not None:
+        updates["last_next_prompt"] = truncate(redact_text(last_next_prompt), MAX_NEXT_PROMPT_CHARS)
+    _update_goal(settings, goal_id, **updates)
+
+
+def _reapply_decision(
+    server: Any,
+    settings: Any,
+    goal: dict[str, Any],
+    iteration: dict[str, Any],
+    iterations: list[dict[str, Any]],
+) -> None:
+    """Idempotently finish applying a stored iteration decision when a goal is still
+    `running` (recovery after a failure between `_record_decision` and goal transition)."""
+    goal_id = str(goal["id"])
+    goal = _get_goal_row(settings, goal_id)
+    if goal["state"] != GOAL_RUNNING:
+        return
+
+    n = int(iteration["n"])
+    stored_decision = str(iteration.get("decision") or "").strip().lower()
+    reason = str(iteration.get("decision_reason") or "")
+    state = str(iteration.get("task_final_state") or "")
+    if not state and iteration.get("task_id"):
+        task = ags.get_task(settings, str(iteration["task_id"])) or {}
+        state = str(task.get("state") or "")
+    summary = str(goal.get("summary") or "") or f"第 {n} 轮已结束，任务状态：{state}。"
+
+    if state == "cancelled" and not stored_decision:
+        _finish_goal(
+            settings,
+            goal,
+            GOAL_STOPPED,
+            summary=summary,
+            stop_reason="本轮任务被取消，目标已停止",
+        )
+        return
+
+    if stored_decision == DECISION_GIVE_UP:
+        _finish_goal(
+            settings,
+            goal,
+            GOAL_FAILED,
+            summary=summary,
+            stop_reason=reason or "评估器判断目标无法达成",
+        )
+        return
+
+    if stored_decision == DECISION_ACHIEVED:
+        _finish_goal(
+            settings,
+            goal,
+            GOAL_ACHIEVED,
+            summary=summary,
+            stop_reason=reason or "评估器判断目标已达成",
+        )
+        return
+
+    if stored_decision == DECISION_ASK_USER:
+        question = str(goal.get("question") or "") or reason or EVALUATOR_UNAVAILABLE_QUESTION
+        _finish_goal(settings, goal, GOAL_WAITING_USER, summary=summary, question=question)
+        return
+
+    if stored_decision == DECISION_CONTINUE:
+        used = len(iterations)
+        max_iterations = int(goal["max_iterations"])
+        if used >= max_iterations:
+            _finish_goal(
+                settings,
+                goal,
+                GOAL_EXHAUSTED,
+                summary=summary,
+                stop_reason=f"迭代预算已用完（{max_iterations} 轮），目标尚未达成",
+            )
+            return
+
+        next_prompt = str(goal.get("last_next_prompt") or "").strip()
+        if not next_prompt or len(next_prompt) > MAX_NEXT_PROMPT_CHARS:
+            _stage_eval_fields(settings, goal_id, summary=summary, question=NO_NEXT_PROMPT_QUESTION)
+            _record_decision(
+                settings,
+                goal_id,
+                n,
+                decision=DECISION_ASK_USER,
+                reason="continue 缺少可用的 next_prompt",
+                task_state=state,
+            )
+            _finish_goal(
+                settings,
+                goal,
+                GOAL_WAITING_USER,
+                summary=summary,
+                question=NO_NEXT_PROMPT_QUESTION,
+            )
+            return
+
+        next_n = n + 1
+        prompt = _continuation_prompt(goal, next_n, next_prompt)
+        _update_goal(
+            settings,
+            goal_id,
+            last_next_prompt=next_prompt,
+            summary=truncate(redact_text(summary), MAX_SUMMARY_CHARS),
+            updated_at=_utc_now(),
+        )
+        _start_iteration(server, settings, goal, next_n, prompt)
+
+
+def _apply_evaluation_decision(
     server: Any,
     settings: Any,
     goal: dict[str, Any],
     iteration: dict[str, Any],
     iterations: list[dict[str, Any]],
     task: dict[str, Any],
+    decision: dict[str, str],
 ) -> None:
-    goal_id = goal["id"]
+    goal_id = str(goal["id"])
     n = int(iteration["n"])
     task_id = str(iteration["task_id"])
     state = str(task.get("state") or "")
     stage = str(task.get("stage") or "")
-
-    if not _claim_iteration(settings, goal_id, n):
-        return  # another tick owns it, or it was already evaluated
-
-    try:
-        repo_path, wt_path, _managed = _scope_paths(settings, goal)
-    except svc.SupervisorServiceError as exc:
-        _fail_goal(settings, goal, str(exc.message))
-        return
-
-    decision = await _ask_evaluator(
-        settings,
-        goal,
-        iterations,
-        worktree_path=wt_path,
-        repo_path=repo_path,
-        task_id=task_id,
-    )
 
     # The operator may have stopped / resolved the goal while we were evaluating.
     if str(_get_goal_row(settings, goal_id).get("state") or "") != GOAL_RUNNING:
@@ -1346,6 +1654,7 @@ async def _evaluate_iteration(
     # ---- hard rules enforced in code, never trusted from the model -------
     if state == "cancelled":
         # No evaluator decision is recorded: the round never produced a result.
+        _stage_eval_fields(settings, goal_id, summary=summary)
         _record_decision(
             settings, goal_id, n,
             decision="", reason="本轮任务已被取消，未产生评估结论", task_state=state,
@@ -1365,6 +1674,7 @@ async def _evaluate_iteration(
                 f"第 {n} 轮的任务在等待用户处理（阶段：{stage or 'waiting_user'}）。"
                 "请检查结果后告诉我是否达成，或者还要改什么。"
             )
+        _stage_eval_fields(settings, goal_id, summary=summary, question=question)
         _record_decision(
             settings, goal_id, n,
             decision=DECISION_ASK_USER, reason=question, task_state=state,
@@ -1375,6 +1685,7 @@ async def _evaluate_iteration(
     if not decision["decision"]:
         # Parse failure / chat unavailable / unusable decision payload.
         question = EVALUATOR_UNAVAILABLE_QUESTION
+        _stage_eval_fields(settings, goal_id, summary=summary, question=question)
         _record_decision(
             settings, goal_id, n,
             decision=DECISION_ASK_USER, reason="评估器无法给出可用的判断", task_state=state,
@@ -1393,6 +1704,7 @@ async def _evaluate_iteration(
 
     if decision["decision"] == DECISION_GIVE_UP:
         reason = decision["reason"] or "评估器判断目标无法达成"
+        _stage_eval_fields(settings, goal_id, summary=summary)
         _record_decision(
             settings, goal_id, n,
             decision=DECISION_GIVE_UP, reason=reason, task_state=state,
@@ -1408,6 +1720,7 @@ async def _evaluate_iteration(
 
     if decision["decision"] == DECISION_ACHIEVED:
         reason = decision["reason"] or "评估器判断目标已达成"
+        _stage_eval_fields(settings, goal_id, summary=summary)
         _record_decision(
             settings, goal_id, n,
             decision=DECISION_ACHIEVED, reason=reason, task_state=state,
@@ -1423,19 +1736,47 @@ async def _evaluate_iteration(
         question = decision["question"] or (
             "评估器需要你确认这一轮的结果，请检查后告诉我是否达成或还要改什么。"
         )
+        next_suggestion = decision["next_prompt"].strip()
+        _stage_eval_fields(
+            settings,
+            goal_id,
+            summary=summary,
+            question=question,
+            last_next_prompt=next_suggestion if next_suggestion else None,
+        )
         _record_decision(
             settings, goal_id, n,
             decision=DECISION_ASK_USER, reason=decision["reason"] or question, task_state=state,
         )
         # Keep the evaluator's suggestion so an operator reply can build on it.
-        if decision["next_prompt"].strip():
-            _update_goal(settings, goal_id, last_next_prompt=decision["next_prompt"].strip())
+        if next_suggestion:
+            _update_goal(settings, goal_id, last_next_prompt=next_suggestion)
         _finish_goal(settings, goal, GOAL_WAITING_USER, summary=summary, question=question)
         return
 
     # decision == continue
     used = len(iterations)
     max_iterations = int(goal["max_iterations"])
+    next_prompt = decision["next_prompt"].strip()
+    if used < max_iterations and (not next_prompt or len(next_prompt) > MAX_NEXT_PROMPT_CHARS):
+        _stage_eval_fields(settings, goal_id, summary=summary, question=NO_NEXT_PROMPT_QUESTION)
+        _record_decision(
+            settings, goal_id, n,
+            decision=DECISION_ASK_USER, reason="continue 缺少可用的 next_prompt", task_state=state,
+        )
+        _finish_goal(
+            settings, goal, GOAL_WAITING_USER,
+            summary=summary,
+            question=NO_NEXT_PROMPT_QUESTION,
+        )
+        return
+
+    _stage_eval_fields(
+        settings,
+        goal_id,
+        summary=summary,
+        last_next_prompt=next_prompt if used < max_iterations else None,
+    )
     _record_decision(
         settings, goal_id, n,
         decision=DECISION_CONTINUE, reason=decision["reason"], task_state=state,
@@ -1447,19 +1788,6 @@ async def _evaluate_iteration(
             settings, goal, GOAL_EXHAUSTED,
             summary=summary,
             stop_reason=f"迭代预算已用完（{max_iterations} 轮），目标尚未达成",
-        )
-        return
-
-    next_prompt = decision["next_prompt"].strip()
-    if not next_prompt or len(next_prompt) > MAX_NEXT_PROMPT_CHARS:
-        _record_decision(
-            settings, goal_id, n,
-            decision=DECISION_ASK_USER, reason="continue 缺少可用的 next_prompt", task_state=state,
-        )
-        _finish_goal(
-            settings, goal, GOAL_WAITING_USER,
-            summary=summary,
-            question=NO_NEXT_PROMPT_QUESTION,
         )
         return
 
@@ -1475,33 +1803,93 @@ async def _evaluate_iteration(
     _start_iteration(server, settings, goal, next_n, prompt)
 
 
+async def _evaluate_iteration(
+    server: Any,
+    settings: Any,
+    goal: dict[str, Any],
+    iteration: dict[str, Any],
+    iterations: list[dict[str, Any]],
+    task: dict[str, Any],
+) -> None:
+    goal_id = goal["id"]
+    n = int(iteration["n"])
+    task_id = str(iteration["task_id"])
+
+    claimed = await asyncio.to_thread(_claim_iteration, settings, goal_id, n)
+    if not claimed:
+        return  # another tick owns it, or it was already evaluated
+
+    try:
+        repo_path, wt_path, _managed = await asyncio.to_thread(_scope_paths, settings, goal)
+    except svc.SupervisorServiceError as exc:
+        await asyncio.to_thread(_fail_goal, settings, goal, str(exc.message))
+        return
+
+    decision = await _ask_evaluator(
+        settings,
+        goal,
+        iterations,
+        worktree_path=wt_path,
+        repo_path=repo_path,
+        task_id=task_id,
+    )
+
+    await asyncio.to_thread(
+        _apply_evaluation_decision,
+        server,
+        settings,
+        goal,
+        iteration,
+        iterations,
+        task,
+        decision,
+    )
+
+
 async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) -> None:
     goal_id = goal["id"]
-    goal = _get_goal_row(settings, goal_id)
+    goal = await asyncio.to_thread(_get_goal_row, settings, goal_id)
     if goal["state"] != GOAL_RUNNING:
         return
 
-    iterations = _iterations(settings, goal_id)
+    iterations = await asyncio.to_thread(_iterations, settings, goal_id)
     if not iterations:
-        _start_iteration(server, settings, goal, 1, _first_iteration_prompt(goal))
+        await asyncio.to_thread(_start_iteration, server, settings, goal, 1, _first_iteration_prompt(goal))
         return
 
     current = iterations[-1]
-    if not current["task_id"]:
-        # Crash between iteration insert and task creation: retry now.
-        _start_iteration(server, settings, goal, int(current["n"]), current["prompt"])
+    if current.get("decision") or current.get("task_final_state") == "cancelled":
+        await asyncio.to_thread(_reapply_decision, server, settings, goal, current, iterations)
         return
 
-    task = ags.get_task(settings, current["task_id"])
+    if not current["task_id"]:
+        # Crash between iteration insert and task creation: retry now.
+        await asyncio.to_thread(_start_iteration, server, settings, goal, int(current["n"]), current["prompt"])
+        return
+
+    task = await asyncio.to_thread(ags.get_task, settings, current["task_id"])
     if task is None:
-        _fail_goal(
+        await asyncio.to_thread(
+            _fail_goal,
             settings,
             goal,
             f"第 {current['n']} 轮的任务记录缺失（task_id={current['task_id']}），目标无法继续",
         )
         return
 
-    if str(task.get("state") or "") in svc._INFLIGHT_STATES:
+    task_state = str(task.get("state") or "")
+    if task_state == "pending_dispatch":
+        await asyncio.to_thread(
+            _redispatch_iteration_task,
+            server,
+            settings,
+            goal,
+            int(current["n"]),
+            str(current["task_id"]),
+        )
+        return
+
+    if task_state in _GOAL_INFLIGHT_STATES:
         return  # still active: nothing to do this tick
 
     await _evaluate_iteration(server, settings, goal, current, iterations, task)
@@ -1512,7 +1900,7 @@ async def advance_goals(server: Any, settings: Any) -> None:
     if settings is None or not svc.is_enabled(settings):
         return
     try:
-        goals = _running_goals(settings)
+        goals = await asyncio.to_thread(_running_goals, settings)
     except Exception:
         log.exception("failed to list running goals")
         return

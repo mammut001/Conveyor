@@ -3547,16 +3547,19 @@ def _child_env(settings: Any, *, executors: str) -> dict[str, str]:
     return env
 
 
-def _apply_pi_child_env(env: dict[str, str], settings: Any, selection: Any) -> None:
+def _apply_pi_child_env(env: dict[str, str], settings: Any, selection: Any) -> Any:
     """Give a Pi child exactly its one provider key and nothing else.
 
     A saved 模型设置 provider is bridged through a private PI_CODING_AGENT_DIR
     models.json (so ``--provider <id>`` resolves); only that provider's key is
     injected, and every other name in ``PI_PROVIDER_KEY_ENV`` is stripped so
-    one provider's credential can never reach another provider's run.
+    one provider's credential can never reach another provider's run. If
+    models.json cannot be written, falls back to the selected/default provider
+    (``allow_saved=False``) like ``PiBackend``.
     """
-    from runner.pi_agent import PI_PROVIDER_KEY_ENV
+    from runner.pi_agent import PI_PROVIDER_KEY_ENV, resolve_pi_provider
     if selection.models_json is not None:
+        bridged = False
         try:
             from provider_config import _atomic_write
             task_root = getattr(settings, "codex_task_root", None)
@@ -3565,14 +3568,21 @@ def _apply_pi_child_env(env: dict[str, str], settings: Any, selection: Any) -> N
                 pi_dir.mkdir(parents=True, exist_ok=True)
                 _atomic_write(pi_dir / "models.json", selection.models_json, 0o600)
                 env["PI_CODING_AGENT_DIR"] = str(pi_dir)
+                bridged = True
         except OSError:
-            pass
+            bridged = False
+        if not bridged:
+            env.pop("PI_CODING_AGENT_DIR", None)
+            selection = resolve_pi_provider(
+                settings, base_env=env, model_fallback="", chat_model=False, allow_saved=False
+            )
     if selection.api_key:
         env[selection.api_key_env] = selection.api_key
     for other_key in set(PI_PROVIDER_KEY_ENV.values()) - {selection.api_key_env}:
         env.pop(other_key, None)
     env["PI_OFFLINE"] = "1"
     env["PI_TELEMETRY"] = "0"
+    return selection
 
 
 # ---------------------------------------------------------------------------
@@ -3993,6 +4003,15 @@ class PiExecutor:
         tools = "read,bash,edit,write,grep,find,ls" if write else "read,grep,find,ls"
         from runner.pi_agent import resolve_pi_provider
         selection = resolve_pi_provider(self.settings, model_fallback="", chat_model=False)
+        if selection.models_json is not None:
+            probe_env: dict[str, str] = {}
+            resolved = _apply_pi_child_env(probe_env, self.settings, selection)
+            if resolved is not None:
+                selection = resolved
+            elif "PI_CODING_AGENT_DIR" not in probe_env:
+                selection = resolve_pi_provider(
+                    self.settings, model_fallback="", chat_model=False, allow_saved=False
+                )
         cmd = [
             self.binary,
             "-p",
@@ -4003,6 +4022,7 @@ class PiExecutor:
             "--no-skills",
             "--no-prompt-templates",
             "--no-themes",
+            "--no-context-files",
             "--offline",
             "--no-approve",
         ]
