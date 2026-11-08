@@ -181,6 +181,10 @@ def handle_post(
                 replied = goals_mod.reply_goal(handler.server, settings, goal_id, body)
                 handler._json(HTTPStatus.OK, replied)
                 return True
+            if action == "extend":
+                extended = goals_mod.extend_goal(handler.server, settings, goal_id, body)
+                handler._json(HTTPStatus.OK, extended)
+                return True
 
         if len(parts) == 5 and parts[:3] == ["api", "supervisor", "tasks"]:
             task_id = parts[3]
