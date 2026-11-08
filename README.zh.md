@@ -346,6 +346,7 @@ Conveyor 允许 Codex 在隔离的 Git Worktree 内以 `danger-full-access` 权�
 - [x] **实时屏幕与一键接管** — Web 控制台内嵌主机桌面实时画面，点一下即可接管鼠标键盘，Agent 自动暂停（`docs/live_screen.md`）。
 - [x] **主动巡检哨兵 (Always-On Teammate)** — 定时巡检主机负载、磁盘、服务、错误日志与 CI，去重后多端告警。
 - [x] **零中断事务部署与 CI 门禁** — 部署前全自动 Smoke 烟测与单元测试，健康检查失败自动回滚，120+ 测试用例保障稳定性。
+- [x] **目标驱动闭环（目标）** — 在「项目」页按目标多轮迭代、勾选自动检查、查看改动、确认合并到主分支并发送通知提醒，需开启 Supervisor 功能开关（`CONVEYOR_AGENT_SUPERVISOR_ENABLED`，详见 [`docs/goals.md`](docs/goals.md)）。
 
 ### 即将推出计划 (Upcoming Milestones)
 - [ ] **更多主动式守护项 (Proactive Watchers)** — 主机/服务/日志/CI 巡检与 `/teammate pulse` 早晚报已上线；待做：定时 GitHub PR 审查提醒、依赖漏洞自动排查。

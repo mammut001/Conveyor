@@ -342,6 +342,7 @@ See the [roadmap](docs/roadmap.md) for the broader plan and long-term direction.
 - [x] **Live Screen & One-Click Takeover** — The Web Console embeds a live view of the host desktop; one click hands you the mouse and keyboard while the Agent pauses (`docs/live_screen.md`).
 - [x] **Always-On Teammate Sentry** — Scheduled patrols of host load, disk, services, error logs and CI with de-duplicated alerts on every channel.
 - [x] **Transactional Deployment & CI Gates** — Pre-deploy verification, atomic rollback on health failure, and 120+ unit and smoke tests.
+- [x] **Goal-Driven Loop** — Iterative goal loop on the 项目 page with per-repo checks, diff view, owner-confirmed merge, and notifications, available behind the Supervisor feature flag (`CONVEYOR_AGENT_SUPERVISOR_ENABLED`; see [`docs/goals.md`](docs/goals.md)).
 
 ### Upcoming Milestones
 - [ ] **More Proactive Watchers** — Host, service, log and CI patrols and the `/teammate pulse` standup have shipped; still to do: scheduled GitHub PR review reminders and dependency audits.
