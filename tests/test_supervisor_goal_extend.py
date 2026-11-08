@@ -19,6 +19,7 @@ from typing import Any
 from unittest.mock import patch
 
 import agent_supervisor as ags
+import goal_notify
 import supervisor_goals as goals
 import supervisor_service as svc
 from config import Settings
@@ -154,6 +155,18 @@ class SupervisorGoalExtendTests(unittest.TestCase):
         self._executor_patch = patch.object(ags, "get_executor", self._fake_get_executor)
         self._executor_patch.start()
         self.addCleanup(self._executor_patch.stop)
+
+        # A finished goal queues an owner notification whose daemon worker then
+        # writes its dedupe row into the goals DB under this temp state dir
+        # after the test body ended, racing tearDown's rmtree. None of these
+        # tests assert on notifications, so the call is a no-op here. Patch the
+        # name supervisor_goals calls (it imported the function directly, so
+        # patching only goal_notify.notify_goal_change would not stick) plus
+        # the goal_notify attribute for any late-bound caller.
+        for module in (goals, goal_notify):
+            notify_patch = patch.object(module, "notify_goal_change", lambda *_a, **_kw: None)
+            notify_patch.start()
+            self.addCleanup(notify_patch.stop)
 
         repo, _created = svc.register_repository(self.settings, path=str(self.repo_dir))
         wt = svc.create_managed_worktree(self.settings, repo["id"], branch="feat/goal-extend")

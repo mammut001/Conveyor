@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -271,6 +272,26 @@ def notify_goal_change(settings: Any, goal: dict, new_state: str) -> None:
     except queue.Full:
         # The owner would rather miss a notification than have the goal loop stall.
         pass
+
+
+def drain(timeout: float = 2.0) -> bool:
+    """Block until the worker thread has processed everything queued so far.
+
+    Production code never needs this — delivery is fire-and-forget. Tests do:
+    the worker writes its dedupe row into the goals database, so a test that
+    uses a disposable state directory must let the queue drain before removing
+    it, or `shutil.rmtree` races the worker's last write. Never raises;
+    returns False when the queue did not empty within `timeout` seconds.
+    """
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    with _QUEUE.all_tasks_done:
+        while _QUEUE.unfinished_tasks and time.monotonic() < deadline:
+            _QUEUE.all_tasks_done.wait(0.02)
+    return not _QUEUE.unfinished_tasks
+
+
+# Kept as an alias so existing callers keep working; `drain` is the canonical name.
+wait_for_queue = drain
 
 
 def _worker() -> None:

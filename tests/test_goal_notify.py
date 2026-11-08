@@ -12,7 +12,6 @@ import json
 import os
 import socket
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,12 +35,7 @@ PUSH_SUB = {
 
 def _drain(timeout: float = 10.0) -> None:
     """Wait until the goal-notify worker has processed everything queued so far."""
-    queue_obj = goal_notify._QUEUE
-    deadline = time.monotonic() + timeout
-    with queue_obj.all_tasks_done:
-        while queue_obj.unfinished_tasks and time.monotonic() < deadline:
-            queue_obj.all_tasks_done.wait(0.02)
-    if queue_obj.unfinished_tasks:
+    if not goal_notify.drain(timeout):
         raise AssertionError("goal notification worker did not drain in time")
 
 
@@ -80,6 +74,11 @@ class GoalNotifyTextTests(unittest.TestCase):
             pwa_enabled=False,
             goal_notify_enabled=True,
         )
+
+    def tearDown(self) -> None:
+        # The notify worker writes into this temp state dir; let it finish
+        # before the directory is removed in the cleanups.
+        goal_notify.drain()
 
     # ------------------------------------------------------------------
     # one Chinese message per state
@@ -161,6 +160,11 @@ class GoalNotifyDeliveryTests(unittest.TestCase):
         self.pushed: list[tuple[object, str, str]] = []
         self._channel_originals: dict[str, Any] = {}
         self._patch_channels()
+
+    def tearDown(self) -> None:
+        # The notify worker writes into this temp state dir; let it finish
+        # before the directory is removed in the cleanups.
+        goal_notify.drain()
 
     def _patch_channels(self) -> None:
         """(Re)install the fake channels; a module reload undoes the earlier ones."""
@@ -398,6 +402,11 @@ class GoalNotifySupervisorTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.goal_id = self._insert_goal(state=goals.GOAL_WAITING_USER)
+
+    def tearDown(self) -> None:
+        # The notify worker writes into this temp state dir; let it finish
+        # before the directory is removed in the cleanups.
+        goal_notify.drain()
 
     def _insert_goal(self, state: str) -> str:
         goal_id = f"{goals.GOAL_ID_PREFIX}{os.urandom(4).hex()}"

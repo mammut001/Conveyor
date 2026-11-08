@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import agent_supervisor as ags
+import goal_notify
 import supervisor_diff as diff_mod
 import supervisor_goals as goals
 import supervisor_service as svc
@@ -392,6 +393,18 @@ class GoalDiffTests(_DiffFixture):
         self._executor_patch = patch.object(ags, "get_executor", lambda _s, _n: self.fake)
         self._executor_patch.start()
         self.addCleanup(self._executor_patch.stop)
+
+        # A finished goal queues an owner notification whose daemon worker then
+        # writes its dedupe row into the goals DB under this temp state dir
+        # after the test body ended, racing tearDown's rmtree. None of these
+        # tests assert on notifications, so the call is a no-op here. Patch the
+        # name supervisor_goals calls (it imported the function directly, so
+        # patching only goal_notify.notify_goal_change would not stick) plus
+        # the goal_notify attribute for any late-bound caller.
+        for module in (goals, goal_notify):
+            notify_patch = patch.object(module, "notify_goal_change", lambda *_a, **_kw: None)
+            notify_patch.start()
+            self.addCleanup(notify_patch.stop)
 
     def _continue_responder(self, _prompt: str) -> str:
         return json.dumps(
