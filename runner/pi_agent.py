@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -26,6 +27,46 @@ MAX_PI_LOG_BYTES = 2_000_000
 MAX_PI_STDERR_BYTES = 32_000
 
 DESTRUCTIVE_CONFIRM_TAG = "[OPERATOR_CONFIRMED_DESTRUCTIVE]"
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+
+
+def vendored_pi_bin() -> Path:
+    """Path of the Pi binary installed by scripts/install_pi.sh (may not exist)."""
+    return _REPO_ROOT / "vendor" / "pi" / "node_modules" / ".bin" / "pi"
+
+
+def resolve_pi_bin(settings: Any) -> str:
+    """CONVEYOR_PI_BIN > settings.pi_bin > vendored binary > `pi` on PATH."""
+    explicit = str(os.getenv("CONVEYOR_PI_BIN") or getattr(settings, "pi_bin", "") or "").strip()
+    if explicit:
+        return explicit
+    vendored = vendored_pi_bin()
+    if vendored.is_file():
+        return str(vendored)
+    return "pi"
+
+
+def sanitize_pi_provider_id(raw: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9-]+", "-", str(raw or "").strip().lower()).strip("-")
+    return cleaned[:40] or "conveyor"
+
+
+def build_pi_models_json(saved: dict[str, str]) -> dict[str, Any]:
+    """models.json for Pi from the saved 模型设置 provider. Never contains the key."""
+    api = "openai-responses" if saved.get("wire_api") == "responses" else "openai-completions"
+    model = saved["model"]
+    return {
+        "providers": {
+            sanitize_pi_provider_id(saved["provider_id"]): {
+                "baseUrl": saved["base_url"],
+                "api": api,
+                "apiKey": "$" + saved["env_key"],
+                "models": [{"id": model, "name": model}],
+            }
+        }
+    }
 
 
 @dataclass(frozen=True)
@@ -56,11 +97,7 @@ class PiBackend(CodexRunner):
 
     def __init__(self, settings: Any) -> None:
         super().__init__(settings)
-        self.pi_bin = str(
-            os.getenv("CONVEYOR_PI_BIN")
-            or getattr(settings, "pi_bin", "")
-            or "pi"
-        ).strip() or "pi"
+        self.pi_bin = resolve_pi_bin(settings)
         self.pi_provider = str(
             os.getenv("CONVEYOR_PI_PROVIDER")
             or getattr(settings, "pi_provider", "")
@@ -89,11 +126,10 @@ class PiBackend(CodexRunner):
         if os.path.sep in binary:
             path = Path(binary).expanduser()
             if not path.is_file():
-                raise RuntimeError(f"Pi CLI not found: {path}")
+                raise RuntimeError(f"找不到 Pi 可执行文件：{path}。请到「执行者」页面安装内置 Pi，或检查 CONVEYOR_PI_BIN。")
         elif shutil.which(binary) is None:
             raise RuntimeError(
-                "Pi CLI is not installed or not on PATH. "
-                "Install `@mariozechner/pi-coding-agent` or set CONVEYOR_PI_BIN."
+                "尚未安装 Pi。请到「执行者」页面点击安装内置 Pi，或设置 CONVEYOR_PI_BIN。"
             )
 
     async def _create_worktree(self, job: Job) -> Path:
@@ -128,7 +164,28 @@ class PiBackend(CodexRunner):
             "existing user files, stop and ask the user to confirm the deletion first."
         )
 
-    def _pi_command(self, job: Job) -> list[str]:
+    def _explicit_provider_config(self) -> bool:
+        return any(
+            str(value or "").strip()
+            for value in (
+                os.getenv("CONVEYOR_PI_PROVIDER"),
+                os.getenv("CONVEYOR_PI_MODEL"),
+                getattr(self.settings, "pi_provider", ""),
+                getattr(self.settings, "pi_model", ""),
+            )
+        )
+
+    def _saved_provider(self) -> dict[str, str] | None:
+        """Saved 模型设置 provider to bridge into Pi, unless explicit config exists."""
+        if self._explicit_provider_config():
+            return None
+        from provider_config import get_saved_provider
+        saved = get_saved_provider(self.settings)
+        if saved is None or not _ENV_KEY_RE.fullmatch(saved.get("env_key", "")):
+            return None
+        return saved
+
+    def _pi_command(self, job: Job, provider: str | None = None, model: str | None = None) -> list[str]:
         tools = "read,bash,edit,write,grep,find,ls"
         return [
             self.pi_bin,
@@ -140,35 +197,57 @@ class PiBackend(CodexRunner):
             "--no-prompt-templates",
             "--no-themes",
             "--no-context-files",
-            "--provider", self.pi_provider,
-            "--model", self.pi_model,
+            "--provider", provider or self.pi_provider,
+            "--model", model or self.pi_model,
             "--tools", tools,
             "--append-system-prompt", self._pi_system_prompt(job),
         ]
 
     async def _run_codex_attempt(self, job: Job, on_progress: ProgressCallback) -> None:
         """Run one Pi CLI attempt while preserving Conveyor lifecycle APIs."""
-        command = self._pi_command(job)
         from runner.operators.run import job_child_env
         env = job_child_env(self, job)
-
-        # Ensure DeepSeek API key is available to Pi.
-        deepseek_key = (
-            env.get("DEEPSEEK_API_KEY")
-            or os.getenv("DEEPSEEK_API_KEY")
-            or os.getenv("CONVEYOR_CHAT_API_KEY")
-            or getattr(self.settings, "chat_api_key", None)
-            or ""
-        ).strip()
-        if deepseek_key:
-            env["DEEPSEEK_API_KEY"] = deepseek_key
-
+        saved = self._saved_provider()
         pi_dir = Path(self.settings.codex_task_root) / "pi-agent"
+        dir_ready = False
         try:
             pi_dir.mkdir(parents=True, exist_ok=True)
             env["PI_CODING_AGENT_DIR"] = str(pi_dir)
+            dir_ready = True
         except OSError:
             pass
+
+        bridged = False
+        if saved is not None and dir_ready:
+            try:
+                from provider_config import _atomic_write
+                _atomic_write(
+                    pi_dir / "models.json",
+                    json.dumps(build_pi_models_json(saved), ensure_ascii=False, indent=2) + "\n",
+                    0o600,
+                )
+                bridged = True
+            except OSError:
+                bridged = False
+
+        if bridged and saved is not None:
+            command = self._pi_command(
+                job, sanitize_pi_provider_id(saved["provider_id"]), saved["model"]
+            )
+            # Key travels only through the child env under the saved env_key.
+            env[saved["env_key"]] = saved["api_key"]
+        else:
+            command = self._pi_command(job)
+            # Ensure DeepSeek API key is available to Pi.
+            deepseek_key = (
+                env.get("DEEPSEEK_API_KEY")
+                or os.getenv("DEEPSEEK_API_KEY")
+                or os.getenv("CONVEYOR_CHAT_API_KEY")
+                or getattr(self.settings, "chat_api_key", None)
+                or ""
+            ).strip()
+            if deepseek_key:
+                env["DEEPSEEK_API_KEY"] = deepseek_key
         env["PI_OFFLINE"] = "1"
         env["PI_TELEMETRY"] = "0"
 

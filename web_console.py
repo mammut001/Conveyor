@@ -634,10 +634,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
                         return
                     try:
-                        models, cached_at = workers.get_worker_models(worker_id)
+                        models, cached_at = workers.get_worker_models(worker_id, settings=settings)
                         self._json(HTTPStatus.OK, {"models": models, "cached_at": cached_at})
                     except workers.ModelsUnsupportedError:
-                        self._json(HTTPStatus.BAD_REQUEST, {"error": "models unsupported", "code": "models_unsupported"})
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "该执行者不支持选择模型", "code": "models_unsupported"})
                     except workers.ModelsFetchError as exc:
                         self._json(HTTPStatus.BAD_GATEWAY, {"error": str(exc), "code": "models_fetch_failed"})
                     return
@@ -653,7 +653,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         session_info = workers_login.get_login_session(settings, worker_id, session_id)
                         self._json(HTTPStatus.OK, session_info)
                     except workers_login.SessionNotFoundError:
-                        self._json(HTTPStatus.NOT_FOUND, {"error": "session not found", "code": "session_not_found"})
+                        self._json(HTTPStatus.NOT_FOUND, {"error": workers_login.SESSION_NOT_FOUND_MESSAGE, "code": "session_not_found"})
                     return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
@@ -1319,6 +1319,19 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     "ok": ok, "message": message, "job_id": job.id if job else None,
                     "session_id": durable_session_id,
                 })
+            elif parsed.path == "/api/config/provider/models":
+                from provider_config import fetch_provider_models, ProviderModelsError, ApiKeyRequiredError
+                draft = body if isinstance(body, dict) else {}
+                try:
+                    models = fetch_provider_models(self.server.control.settings, draft=draft)
+                    self._json(HTTPStatus.OK, {"models": models})
+                except ApiKeyRequiredError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"code": "api_key_required", "error": str(exc)})
+                except ProviderModelsError as exc:
+                    self._json(HTTPStatus.BAD_GATEWAY, {"code": "models_fetch_failed", "error": str(exc)})
+                except Exception:
+                    logger.exception("Failed to fetch provider models")
+                    self._json(HTTPStatus.BAD_GATEWAY, {"code": "models_fetch_failed", "error": "获取模型列表失败"})
             elif parsed.path == "/api/config/provider":
                 result = self.server.control.update_provider_config(body)
                 self._json(HTTPStatus.OK, {"ok": True, "config": result})
@@ -1640,11 +1653,29 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         payload = workers.set_worker_model(settings, worker_id, model)
                         self._json(HTTPStatus.OK, payload)
                     except workers.ModelsUnsupportedError:
-                        self._json(HTTPStatus.BAD_REQUEST, {"error": "models unsupported", "code": "models_unsupported"})
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "该执行者不支持选择模型", "code": "models_unsupported"})
                     except workers.UnknownModelError:
                         self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown model '{model}'", "code": "unknown_model"})
                     except workers.ModelsFetchError as exc:
                         self._json(HTTPStatus.BAD_GATEWAY, {"error": str(exc), "code": "models_fetch_failed"})
+                    return
+                if len(parts) == 4 and parts[2] == "usage" and parts[3] == "refresh":
+                    payload = workers.refresh_usage_now(settings)
+                    self._json(HTTPStatus.OK, payload)
+                    return
+                if len(parts) == 4 and parts[3] == "threshold":
+                    worker_id = parts[2]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    value = body.get("threshold_percent") if isinstance(body, dict) else None
+                    try:
+                        payload = workers.set_worker_threshold(settings, worker_id, value)
+                    except workers.BadThresholdError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "阈值需要是 1 到 100 之间的整数", "code": "bad_threshold"})
+                        return
+                    self._json(HTTPStatus.OK, payload)
                     return
                 if len(parts) == 5 and parts[3] == "login" and parts[4] == "start":
                     worker_id = parts[2]
@@ -1657,7 +1688,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         session_info = workers_login.start_login_session(settings, worker_id)
                         self._json(HTTPStatus.OK, session_info)
                     except workers_login.LoginUnsupportedError:
-                        self._json(HTTPStatus.BAD_REQUEST, {"error": "login unsupported", "code": "login_unsupported"})
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "该执行者不支持在线登录", "code": "login_unsupported"})
                     return
                 if len(parts) == 6 and parts[3] == "login" and parts[5] == "code":
                     worker_id = parts[2]
@@ -1672,11 +1703,20 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         session_info = workers_login.send_login_code(settings, worker_id, session_id, code)
                         self._json(HTTPStatus.OK, session_info)
                     except workers_login.BadCodeError:
-                        self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid code", "code": "bad_code"})
+                        # The login session stays alive: the owner can fix the code and resubmit.
+                        extra: dict[str, Any] = {}
+                        try:
+                            current = workers_login.get_login_session(settings, worker_id, session_id)
+                            extra = {"session": current["session"], "state": current["state"]}
+                        except Exception:
+                            pass
+                        self._json(HTTPStatus.BAD_REQUEST, {
+                            "error": workers_login.BAD_CODE_MESSAGE, "code": "bad_code", **extra,
+                        })
                     except workers_login.SessionNotFoundError:
-                        self._json(HTTPStatus.NOT_FOUND, {"error": "session not found", "code": "session_not_found"})
+                        self._json(HTTPStatus.NOT_FOUND, {"error": workers_login.SESSION_NOT_FOUND_MESSAGE, "code": "session_not_found"})
                     except workers_login.SessionInactiveError:
-                        self._json(HTTPStatus.BAD_REQUEST, {"error": "session inactive", "code": "session_inactive"})
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": workers_login.SESSION_INACTIVE_MESSAGE, "code": "session_inactive"})
                     return
                 if len(parts) == 6 and parts[3] == "login" and parts[5] == "cancel":
                     worker_id = parts[2]
@@ -1690,7 +1730,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         session_info = workers_login.cancel_login_session(settings, worker_id, session_id)
                         self._json(HTTPStatus.OK, session_info)
                     except workers_login.SessionNotFoundError:
-                        self._json(HTTPStatus.NOT_FOUND, {"error": "session not found", "code": "session_not_found"})
+                        self._json(HTTPStatus.NOT_FOUND, {"error": workers_login.SESSION_NOT_FOUND_MESSAGE, "code": "session_not_found"})
                     return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
@@ -2245,6 +2285,8 @@ def main() -> None:
     delegation_worker = start_delegation(loop, settings)
     import agent_security
     agent_retention_worker = agent_security.start(loop, settings)
+    import worker_usage
+    usage_refresh = worker_usage.start_background_refresh(loop, settings)
     def _resume_goals() -> None:
         try:
             from web_chat import resume_goal_loops
@@ -2260,6 +2302,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if usage_refresh is not None:
+            usage_refresh.cancel()
         if agent_retention_worker is not None:
             agent_retention_worker.cancel()
         if delegation_worker is not None:

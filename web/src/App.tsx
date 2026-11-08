@@ -25,7 +25,8 @@ import { dropApproval, isStale, shouldRefreshForEvent } from './approvalFreshnes
 import { mergeJobEvents, type JobEvent as EventItem } from './jobEvents'
 import { CONNECTION_LABELS, LockConfirmDialog, SHORTCUT_PREFIX, ShellIcon, VIEW_LABELS, VIEW_SUBTITLES, findVisibleComposer, isTypingTarget, shellErrorText, urlForView, useMediaQuery, viewFromLocation, type ConnectionState, type ShellView } from './ux/shellNav'
 import { ChangedFileList, ClampedText, DiffBody, DiffStat, ToolCallCard } from './components/TaskParts'
-import { changesDiffFrom, changesOutcome, durationText, emptyChangesDiff, eventKindLabel, expiryText, groupToolCalls, jobErrorSummary, modeLabel, nodeStatusLabel, nodeTypeLabel, toolDisplayName, type ChangesDiff, type ChangesOutcome, type DiffResponse } from './taskText'
+import { SetupChecklist } from './components/SetupChecklist'
+import { changesDiffFrom, changesOutcome, describeJobError, durationText, emptyChangesDiff, eventKindLabel, expiryText, groupToolCalls, jobErrorSummary, modeLabel, nodeStatusLabel, nodeTypeLabel, toolDisplayName, type ChangesDiff, type ChangesOutcome, type DiffResponse } from './taskText'
 type Job = {
   id: string; state: string; mode: string; channel: string; chat_id: string; operator_id?: string
   created_at: string; updated_at?: string; started_at?: string; finished_at?: string
@@ -233,6 +234,11 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState<{ text: string; detail?: string } | null>(null)
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
+  const [workersData, setWorkersData] = useState<any>(null)
+  const [checklistDismissed, setChecklistDismissed] = useState(() => {
+    try { return localStorage.getItem('conveyor-onboarding-dismissed') === 'true' } catch { return false }
+  })
+  const [onboardingActive, setOnboardingActive] = useState(false)
   // The view lives in the URL hash (#chat, #memory, …; legacy /memory paths still open it).
   const [view, setView] = useState<ShellView>(() => viewFromLocation() || 'tasks')
   const viewRef = useRef(view)
@@ -598,11 +604,13 @@ export default function App() {
     if (!token || isLockedRef.current) return
     const gen = ++refreshGen.current
     try {
-      const [sessionData, jobData, approvalData, nodeData, systemData, computerData, agentData] = await Promise.all([
+      const [sessionData, jobData, approvalData, nodeData, systemData, computerData, agentData, providerData, workersPayload] = await Promise.all([
         api<{ sessions: Session[] }>('/api/sessions'), api<{ jobs: Job[] }>('/api/jobs'),
         api<{ approvals: Approval[] }>('/api/approvals'), api<{ nodes: NodeInfo[] }>('/api/nodes'),
         api<SystemStatus>('/api/system/status'), api<ComputerStatus>('/api/computer/status'),
         api<{ enabled: boolean; agents: Agent[] }>('/api/agents').catch(() => ({ enabled: false, agents: [] as Agent[] })),
+        api<any>('/api/config/provider').catch(() => null),
+        api<any>('/api/workers').catch(() => null),
       ])
       // A newer refresh (or a decision that bumped the generation) started
       // while this one was in flight. Drop it so a late poll cannot restore
@@ -614,6 +622,12 @@ export default function App() {
       setSessions(taskSessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setTokenDraft(''); setError('')
       setAgentState(agentData)
+      if (providerData) {
+        setProviderConfig(providerData.config || providerData)
+      }
+      if (workersPayload) {
+        setWorkersData(workersPayload)
+      }
       const pinned = agentData.enabled
         ? (agentData.agents.find(agent => agent.id === (localStorage.getItem('conveyor-agent') || '')) || agentData.agents[0])?.session_id
         : ''
@@ -908,7 +922,10 @@ export default function App() {
 
   async function openSettings() {
     setSettingsOpen(true); setError('')
-    try { setProviderConfig(await api<ProviderConfig>('/api/config/provider')) }
+    try {
+      const p = await api<any>('/api/config/provider')
+      if (p) setProviderConfig(p.config || p)
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not load settings') }
   }
 
@@ -1020,6 +1037,49 @@ export default function App() {
     setToken(''); setAuthenticated(false); setRememberToken(false)
   }
 
+  const modelConfigured = Boolean(providerConfig && providerConfig.api_key_configured && providerConfig.model)
+  const workersEnabled = Boolean(system?.features?.workers)
+  const hasEligibleWorker = Boolean(
+    workersData?.active ||
+    (Array.isArray(workersData?.workers) && workersData.workers.some((w: any) =>
+      w.enabled && w.installed && w.runnable && w.auth !== 'needs_login' && w.quota?.state !== 'cooling'
+    ))
+  )
+  const hasSentFirstMessage = Boolean(
+    (sessions && sessions.length > 0 && sessions.some(s => (s.message_count || 0) > 0 || (s.job_count || 0) > 0)) ||
+    (jobs && jobs.length > 0) ||
+    (transcript && transcript.length > 0)
+  )
+  const hasNoUsableWay = Boolean(initialLoaded && !modelConfigured && (!workersEnabled || !hasEligibleWorker))
+
+  const ONBOARDING_DISMISSED_KEY = 'conveyor-onboarding-dismissed'
+  const ONBOARDING_HEALTHY_KEY = 'conveyor-onboarding-healthy'
+
+  useEffect(() => {
+    if (!initialLoaded) return
+    if (hasNoUsableWay) {
+      setOnboardingActive(true)
+      try {
+        if (localStorage.getItem(ONBOARDING_HEALTHY_KEY) === 'true') {
+          localStorage.removeItem(ONBOARDING_DISMISSED_KEY)
+          localStorage.removeItem(ONBOARDING_HEALTHY_KEY)
+          setChecklistDismissed(false)
+        }
+      } catch { /* ignore */ }
+    } else {
+      try {
+        localStorage.setItem(ONBOARDING_HEALTHY_KEY, 'true')
+      } catch { /* ignore */ }
+    }
+  }, [hasNoUsableWay, initialLoaded])
+
+  const handleDismissChecklist = useCallback(() => {
+    setChecklistDismissed(true)
+    try {
+      localStorage.setItem(ONBOARDING_DISMISSED_KEY, 'true')
+    } catch { /* ignore */ }
+  }, [])
+
   if (!authenticated) return <UnlockScreen
     tokenDraft={tokenDraft} onTokenDraftChange={value => { setTokenDraft(value); if (error) setError('') }}
     rememberToken={rememberToken} onRememberTokenChange={setRememberToken}
@@ -1031,6 +1091,23 @@ export default function App() {
       if (retry) void refresh()
     }}
   />
+
+  const showChecklist = !checklistDismissed && (hasNoUsableWay || (onboardingActive && !hasSentFirstMessage))
+
+  const checklistNode = showChecklist ? (
+    <SetupChecklist
+      workersEnabled={workersEnabled}
+      hasEligibleWorker={hasEligibleWorker}
+      modelConfigured={modelConfigured}
+      hasSentFirstMessage={hasSentFirstMessage}
+      onNavigateWorkers={() => {
+        historyModeRef.current = 'push'
+        setView('workers')
+      }}
+      onOpenSettings={() => void openSettings()}
+      onDismiss={handleDismissChecklist}
+    />
+  ) : null
 
   const conversationProps: ChatPanelProps = {
     token, active: view === 'chat',
@@ -1045,6 +1122,7 @@ export default function App() {
     onApprovalDecided: () => { void refresh(); void fetchApprovalInboxCount() },
     onSessionChange: refresh, initialInput: chatDraft,
     onInitialInputConsumed: () => setChatDraft(''),
+    setupChecklist: view === 'chat' ? checklistNode : undefined,
   }
 
   // Shell values for this render: right panel, connection, navigation groups and header text.
@@ -1265,6 +1343,7 @@ export default function App() {
         ) : (
           <>
             <div className="event-stream task-stream" ref={streamRef}>
+              {view === 'tasks' && checklistNode}
               {activeRefinement && <div className="job-notice task-notice task-notice--sticky"><strong>改动还没应用</strong><span>已连续修改 {refinementTurn} 轮，{activeChangedFiles} 个文件有改动。继续输入会在同一个隔离副本里接着改；满意后在右侧「改动」里应用或放弃。</span></div>}
               {selectedJob && !terminalJobState(selectedJob.state) && realtimeState === 'reconnecting' && <div className="job-notice task-notice" role="status"><strong>正在重新连接任务进度</strong><span>已收到的记录会保留，连接恢复后继续同步。</span></div>}
               {selectedJob?.state === 'completed' && !transcript.length && <div className="job-notice task-notice" role="status"><strong>任务已完成</strong><span>对话记录暂不可用，可以在右侧「运行日志」里查看结果。</span></div>}
@@ -1281,7 +1360,42 @@ export default function App() {
                 </article>
               )}
 
-              {selectedJob?.state === 'failed' && !staleTerminalRun && <div className="job-notice failed task-notice" role="alert"><strong>任务执行失败</strong><span>{jobErrorSummary(selectedJob.error)}</span>{selectedJob.error && <details className="task-notice-raw"><summary>详情</summary><small className="task-notice-detail">{selectedJob.error}</small></details>}</div>}
+              {selectedJob?.state === 'failed' && !staleTerminalRun && (() => {
+                const info = describeJobError(selectedJob.error)
+                return (
+                  <div className="job-notice failed task-notice" role="alert">
+                    <strong>任务执行失败</strong>
+                    <span>{info.message}</span>
+                    {info.action === 'workers' && (
+                      <button
+                        type="button"
+                        className="task-notice-action"
+                        onClick={() => {
+                          historyModeRef.current = 'push'
+                          setView('workers')
+                        }}
+                      >
+                        {info.actionLabel || '去执行者'}
+                      </button>
+                    )}
+                    {info.action === 'settings' && (
+                      <button
+                        type="button"
+                        className="task-notice-action"
+                        onClick={() => void openSettings()}
+                      >
+                        {info.actionLabel || '去设置'}
+                      </button>
+                    )}
+                    {selectedJob.error && (
+                      <details className="task-notice-raw">
+                        <summary>详情</summary>
+                        <small className="task-notice-detail">{selectedJob.error}</small>
+                      </details>
+                    )}
+                  </div>
+                )
+              })()}
               {selectedJob?.state === 'cancelled' && !staleTerminalRun && <div className="job-notice task-notice" role="status"><strong>任务已取消</strong><span>已有记录已保留，可以在下方输入下一步。</span></div>}
               {selectedJob?.state === 'interrupted' && !staleTerminalRun && <div className="job-notice task-notice" role="status"><strong>任务已中断</strong><span>已有记录已保留，可以在下方补充说明继续处理。</span>{selectedJob.error && <details className="task-notice-raw"><summary>详情</summary><small className="task-notice-detail">{selectedJob.error}</small></details>}</div>}
 
@@ -1742,11 +1856,12 @@ type ProviderDraft = Record<ProviderField, string>
 const PROVIDER_FIELDS: ProviderField[] = ['provider_id', 'provider_name', 'base_url', 'model', 'wire_api', 'reasoning_effort', 'env_key', 'api_key']
 const REASONING_LABELS: [string, string][] = [['none', '不推理'], ['minimal', '最低'], ['low', '低'], ['medium', '中'], ['high', '高'], ['xhigh', '最高']]
 const PROVIDER_HINTS: Partial<Record<ProviderField, string>> = {
-  provider_id: '小写字母开头，可用数字、- 和 _（技术名：ID）',
-  base_url: 'OpenAI 兼容接口的地址，远程服务必须用 https',
-  wire_api: '多数兼容服务选 Chat Completions（技术名：协议）',
+  provider_id: '给这家服务商起个英文小名，选了上面的预设会自动填好',
+  base_url: '服务商给你的接口网址，远程服务必须用 https',
+  wire_api: '不确定就选 Chat Completions，选了预设会自动填好',
+  model: '点「获取模型列表」从服务商读取可用模型',
   reasoning_effort: '越高越仔细，也越慢',
-  env_key: '保存在服务器上的密钥名称（技术名：变量名）',
+  env_key: '密钥在服务器上的存放名称，选了预设会自动填好，一般不用改',
 }
 
 function providerDraft(config: ProviderConfig | null): ProviderDraft {
@@ -1850,6 +1965,7 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
   const [fetchingModels, setFetchingModels] = useState(false)
   const [fetchedModels, setFetchedModels] = useState<string[]>([])
   const [fetchModelsError, setFetchModelsError] = useState('')
+  const [fetchModelsNote, setFetchModelsNote] = useState('')
   const [selectedPreset, setSelectedPreset] = useState<string>('')
   const sheetRef = useRef<HTMLElement>(null)
   const discardCancelRef = useRef<HTMLButtonElement>(null)
@@ -1866,7 +1982,7 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
             draft.provider_id === p.provider_id &&
             draft.base_url === p.base_url &&
             draft.wire_api === p.wire_api
-        )?.id || (selectedPreset || 'custom')
+        )?.id || (selectedPreset || (draft.provider_id.trim() || draft.base_url.trim() ? 'custom' : ''))
 
   function applyPreset(preset: typeof PROVIDER_PRESETS[number]) {
     setSaved(false)
@@ -1887,6 +2003,7 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
       wire_api: undefined,
       env_key: undefined,
     }))
+    setFetchedModels([]); setFetchModelsNote(''); setFetchModelsError('')
   }
 
   function chooseCustom() {
@@ -1896,24 +2013,35 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
   async function fetchProviderModels() {
     setFetchingModels(true)
     setFetchModelsError('')
+    setFetchModelsNote('')
     try {
       const token = sessionStorage.getItem('conveyor-token') || storedToken()
+      // Send what is on screen (not only what was saved): a first-time setup can fetch before saving.
+      // An empty api_key tells the server to fall back to the key it already stores.
       const response = await fetch('/api/config/provider/models', {
-        headers: { Authorization: 'Bearer ' + token },
-        cache: 'no-store',
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider_id: draft.provider_id.trim().toLowerCase(),
+          base_url: draft.base_url.trim(),
+          wire_api: draft.wire_api,
+          env_key: draft.env_key.trim().toUpperCase(),
+          api_key: draft.api_key.trim(),
+        }),
       })
       if (!response.ok) {
         const data = await response.json().catch(() => null) as { error?: string; code?: string } | null
-        setFetchModelsError(data?.error || '获取模型列表失败，请检查服务地址与密钥。')
+        const reason = data?.error ? `${data.error.replace(/[。.]+$/, '')}。` : ''
+        const status = response.status === 401 || response.status === 403 ? '服务商拒绝了这个密钥，' : ''
+        setFetchModelsError(`获取模型列表失败：${status}${reason}请检查接口地址和 API 密钥。`)
         return
       }
       const data = await response.json() as { models?: { id: string }[] }
       if (data && Array.isArray(data.models)) {
         const ids = data.models.map(m => m.id).filter(Boolean)
         setFetchedModels(ids)
-        if (ids.length === 0) {
-          setFetchModelsError('服务商返回的模型列表为空。')
-        }
+        if (ids.length === 0) setFetchModelsError('服务商返回的模型列表为空。')
+        else setFetchModelsNote(`已获取 ${ids.length} 个模型，点一下「模型」输入框就能选择。`)
       } else {
         setFetchModelsError('获取模型列表失败，返回格式不正确。')
       }
@@ -2071,6 +2199,9 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
                       <option key={id} value={id} />
                     ))}
                   </datalist>
+                )}
+                {fetchModelsNote && !fetchModelsError && (
+                  <p className="field-hint provider-fetch-note" role="status">{fetchModelsNote}</p>
                 )}
                 {fetchModelsError && (
                   <p className="field-error provider-fetch-error" role="alert">{fetchModelsError}</p>

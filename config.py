@@ -126,7 +126,7 @@ class Settings:
     # Codex agent; "auto" answers conversation / Q&A / quotes / images with
     # a direct chat-model call and escalates to Codex only when execution
     # is needed. OpenAI-compatible endpoint; falls back to MINIMAX_*.
-    chat_mode: str = "off"  # off|auto
+    chat_mode: str = ""  # off|auto|"" (unset)
     chat_base_url: str | None = None
     chat_api_key: str | None = None  # SENSITIVE
     chat_model: str | None = None
@@ -226,8 +226,10 @@ class Settings:
     routines_enabled: bool = False
     webhooks_enabled: bool = False
     hooks_enabled: bool = False
-    workers_enabled: bool = False
-    workers_install_enabled: bool = False
+    workers_enabled: bool = True
+    workers_install_enabled: bool = True
+    workers_unsandboxed: bool = False
+    workers_usage_interval_seconds: int = 3600
     routines_feishu_chat_id: str | None = None
     routines_approval_ttl_seconds: int = 86_400
     long_term_memory_enabled: bool = False
@@ -526,7 +528,7 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "research_fetch_top_n": _int_env("RESEARCH_FETCH_TOP_N", 5),
         "research_max_chars_per_source": _int_env("RESEARCH_MAX_CHARS_PER_SOURCE", 6000),
         # Chat tier (intent mode)
-        "chat_mode": (os.getenv("CONVEYOR_CHAT_MODE", "off").strip().lower() or "off"),
+        "chat_mode": (os.getenv("CONVEYOR_CHAT_MODE", "").strip().lower()),
         "chat_base_url": (os.getenv("CONVEYOR_CHAT_BASE_URL") or os.getenv("MINIMAX_BASE_URL") or None),
         "chat_api_key": (os.getenv("CONVEYOR_CHAT_API_KEY") or os.getenv("MINIMAX_API_KEY") or None),
         "chat_model": (os.getenv("CONVEYOR_CHAT_MODEL") or os.getenv("MINIMAX_CHAT_MODEL") or None),
@@ -668,11 +670,17 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         ).strip().lower() in ("true", "1", "yes", "on"),
         "hooks_enabled": os.getenv("CONVEYOR_HOOKS_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on"),
         "workers_enabled": os.getenv(
-            "CONVEYOR_WORKERS_ENABLED", "false"
+            "CONVEYOR_WORKERS_ENABLED", "true"
         ).strip().lower() in ("true", "1", "yes", "on"),
         "workers_install_enabled": os.getenv(
-            "CONVEYOR_WORKERS_INSTALL", "false"
+            "CONVEYOR_WORKERS_INSTALL", "true"
         ).strip().lower() in ("true", "1", "yes", "on"),
+        "workers_unsandboxed": os.getenv(
+            "CONVEYOR_WORKERS_UNSANDBOXED", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "workers_usage_interval_seconds": max(
+            300, _int_env("CONVEYOR_WORKERS_USAGE_INTERVAL_SECONDS", 3600)
+        ),
         "routines_feishu_chat_id": os.getenv("CONVEYOR_ROUTINES_FEISHU_CHAT_ID") or None,
         # Routine approvals outlive the 5-minute interactive TTL: clamp 5 min .. 7 days.
         "routines_approval_ttl_seconds": max(

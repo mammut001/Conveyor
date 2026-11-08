@@ -41,7 +41,7 @@ const R3_WORKERS: Worker[] = [
     login_command: 'agy',
     install_command: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
     install_supported: true,
-    runnable: false,
+    runnable: true,
     enabled: true,
     priority: 1,
     quota: { state: 'available', reset_at: null, reason: null },
@@ -94,6 +94,7 @@ type Fixture = {
   loginResponses?: Record<string, unknown>
   loginPollState?: 'open_url' | 'needs_code' | 'done' | 'failed'
   providerModelsFail?: boolean
+  badCodeOnce?: boolean
 }
 
 async function installApi(page: Page, fixture: Fixture = {}) {
@@ -107,6 +108,7 @@ async function installApi(page: Page, fixture: Fixture = {}) {
     fixture.loginPollState || 'open_url'
   let loginCodeSubmitted = ''
   let loginCancelled = false
+  let badCodeSent = false
 
   const providerConfig = {
     provider_id: 'deepseek',
@@ -166,7 +168,7 @@ async function installApi(page: Page, fixture: Fixture = {}) {
       Object.assign(providerConfig, body)
       return json({ config: providerConfig })
     }
-    if (path === '/api/config/provider/models' && method === 'GET') {
+    if (path === '/api/config/provider/models' && method === 'POST') {
       if (fixture.providerModelsFail) {
         return json({ code: 'models_fetch_failed', error: '无法连接服务商接口' }, 502)
       }
@@ -265,6 +267,10 @@ async function installApi(page: Page, fixture: Fixture = {}) {
 
     if (path.startsWith('/api/workers/') && path.includes('/login/') && path.endsWith('/code') && method === 'POST') {
       const { code } = (body as { code: string }) || {}
+      if (fixture.badCodeOnce && !badCodeSent) {
+        badCodeSent = true
+        return json({ code: 'bad_code', error: 'bad code' }, 400)
+      }
       loginCodeSubmitted = code
       loginSessionState = 'done'
       const id = path.split('/')[3]
@@ -364,7 +370,10 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     // Inline confirm showing the exact command
     const confirmBox = agyCard.locator('.guard-inline-confirm')
     await expect(confirmBox).toBeVisible()
-    await expect(confirmBox.getByText('将在服务器上运行：')).toBeVisible()
+    await expect(confirmBox.getByText('将从官方渠道下载并安装 Antigravity')).toBeVisible()
+    // The shell pipeline is a detail, not the decision (QA F12).
+    await expect(confirmBox.getByText('curl -fsSL https://antigravity.google/cli/install.sh | bash')).toBeHidden()
+    await confirmBox.getByText('查看将运行的命令').click()
     await expect(confirmBox.getByText('curl -fsSL https://antigravity.google/cli/install.sh | bash')).toBeVisible()
 
     // Confirm install
@@ -380,7 +389,7 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     const details = agyCard.locator('details.worker-details')
     await expect(details).toBeVisible()
     await expect(details.getByText('Running curl -fsSL https://antigravity.google/cli/install.sh')).toBeVisible()
-    await expect(agyCard.getByText('可用')).toBeVisible()
+    await expect(agyCard.getByText('可用', { exact: true })).toBeVisible()
 
     // After install, models_supported worker now shows the model select
     await expect(agyCard.getByRole('combobox', { name: 'Antigravity 模型选择' })).toBeVisible()
@@ -449,7 +458,7 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     // Status advances to done
     await expect(claudeCard.getByText('登录成功。')).toBeVisible()
     // Worker list refreshed, auth ok
-    await expect(claudeCard.getByText('可用')).toBeVisible()
+    await expect(claudeCard.getByText('可用', { exact: true })).toBeVisible()
 
     // Take screenshots
     await shoot(page, 'login-flow-done-desktop')
@@ -479,6 +488,26 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     expect(startCalls.length).toBe(2)
   })
 
+  test('a badly formatted login code keeps the login going (QA F9)', async ({ page }) => {
+    const api = await installApi(page, { loginPollState: 'open_url', badCodeOnce: true })
+    await openWorkers(page, SIZES[0])
+    const claudeCard = page.locator('li.worker-card', { hasText: 'Claude Code' })
+    await claudeCard.getByRole('button', { name: '登录' }).click()
+    api.setLoginSessionState('needs_code')
+    const codeInput = claudeCard.getByPlaceholder('把登录页面显示的登录码粘贴到这里')
+    await expect(codeInput).toBeVisible({ timeout: 5000 })
+    await codeInput.fill('BAD CODE')
+    await claudeCard.getByRole('button', { name: '提交' }).click()
+    await expect(claudeCard.getByText('登录码格式不正确，请检查后重新提交。')).toBeVisible()
+    // The draft and the form stay: no restart, no new session.
+    await expect(codeInput).toHaveValue('BAD CODE')
+    expect(api.calls.filter(c => c.path.endsWith('/login/start'))).toHaveLength(1)
+    await codeInput.fill('GOOD-CODE')
+    await claudeCard.getByRole('button', { name: '提交' }).click()
+    await expect(claudeCard.getByText('登录成功。')).toBeVisible()
+    expect(api.getSubmittedCode()).toBe('GOOD-CODE')
+  })
+
   test('cancel login flow', async ({ page }) => {
     const api = await installApi(page, { loginPollState: 'open_url' })
     await openWorkers(page, SIZES[0])
@@ -495,9 +524,10 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     expect(cancelCall).toBeTruthy()
     expect(api.isCancelled()).toBe(true)
 
-    // Failed message says "已取消"
-    await expect(claudeCard.getByText('已取消')).toBeVisible()
-    await expect(claudeCard.getByRole('button', { name: '重试' })).toBeVisible()
+    // A user choice is neutral, not a red failure (QA F10).
+    await expect(claudeCard.getByText('已取消。')).toBeVisible()
+    await expect(claudeCard.getByRole('button', { name: '重新开始登录' })).toBeVisible()
+    await expect(claudeCard.getByRole('alert')).toHaveCount(0)
   })
 
   test('model select load/save on workers', async ({ page }) => {
@@ -578,6 +608,10 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     await expect(dialog.getByLabel('接口地址')).toHaveValue('https://api.deepseek.com/v1')
     await expect(dialog.getByLabel('接口类型')).toHaveValue('chat')
     await expect(dialog.getByLabel('密钥名称')).toHaveValue('DEEPSEEK_API_KEY')
+    // Presets never guess a model: the current value stays and a hint points to 获取模型列表.
+    await expect(dialog.getByLabel('模型')).toHaveValue('deepseek-chat')
+    await expect(dialog.getByText('点「获取模型列表」从服务商读取可用模型')).toBeVisible()
+    await expect(presetsGroup.locator('.provider-preset-chip.is-active')).toHaveText('DeepSeek')
 
     // Snapshots
     await shoot(page, 'provider-presets-desktop')
@@ -587,12 +621,24 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
 
   test('model list fetch success + error', async ({ page }) => {
     // 1. Success case
-    await installApi(page)
+    const api = await installApi(page)
     const dialog = await openSettings(page, SIZES[0])
 
     const fetchBtn = dialog.getByRole('button', { name: '获取模型列表' })
     await expect(fetchBtn).toBeVisible()
     await fetchBtn.click()
+
+    // The form values go to POST /api/config/provider/models, not only the saved config (QA F1).
+    await expect(dialog.getByText('已获取 3 个模型')).toBeVisible()
+    const modelsCall = api.calls.find(c => c.path === '/api/config/provider/models')
+    expect(modelsCall?.method).toBe('POST')
+    expect(modelsCall?.body).toMatchObject({
+      provider_id: 'deepseek',
+      base_url: 'https://api.deepseek.com/v1',
+      wire_api: 'chat',
+      env_key: 'DEEPSEEK_API_KEY',
+      api_key: '',
+    })
 
     // Check datalist populated
     const datalist = dialog.locator('#provider-models-datalist')
@@ -615,6 +661,7 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
 
     // Assert short Chinese error line
     await expect(errDialog.getByText('无法连接服务商接口')).toBeVisible()
+    await expect(errDialog.getByText('请检查接口地址和 API 密钥')).toBeVisible()
 
     // Snapshots
     await shoot(errorPage, 'provider-model-fetch-error-desktop')

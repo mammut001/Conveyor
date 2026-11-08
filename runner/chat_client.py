@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
 import httpx
@@ -27,7 +28,7 @@ class ChatError(RuntimeError):
 @dataclass(frozen=True)
 class ChatConfig:
     base_url: str
-    api_key: str
+    api_key: str = field(repr=False)
     model: str
     timeout: float = 60
     max_tokens: int = 1500
@@ -36,18 +37,60 @@ class ChatConfig:
 
 def config_from_settings(settings: Any) -> ChatConfig | None:
     """ChatConfig when the chat tier is enabled and configured, else None."""
-    if str(getattr(settings, "chat_mode", "off") or "off").lower() != "auto":
+    mode = str(getattr(settings, "conveyor_chat_mode", None) or getattr(settings, "chat_mode", "") or "").strip().lower()
+    env_mode = os.getenv("CONVEYOR_CHAT_MODE", "").strip().lower()
+
+    # Rule 1: if CONVEYOR_CHAT_MODE is explicitly "off" -> off (unchanged).
+    if mode in ("off", "false", "0", "disabled") or env_mode in ("off", "false", "0", "disabled"):
         return None
-    api_key = getattr(settings, "chat_api_key", None)
-    model = getattr(settings, "chat_model", None)
-    if not api_key or not model:
+
+    timeout = int(getattr(settings, "chat_timeout_seconds", 60) or 60)
+    max_tokens = int(getattr(settings, "chat_max_tokens", 1500) or 1500)
+
+    # Rule 2: If the CONVEYOR_CHAT_* key+model are set -> use them (unchanged).
+    # Keep DEFAULT_BASE_URL behaviour for explicit chat config.
+    explicit_api_key = (
+        getattr(settings, "conveyor_chat_api_key", None)
+        or getattr(settings, "chat_api_key", None)
+        or os.getenv("CONVEYOR_CHAT_API_KEY")
+        or os.getenv("MINIMAX_API_KEY")
+    )
+    explicit_model = (
+        getattr(settings, "conveyor_chat_model", None)
+        or getattr(settings, "chat_model", None)
+        or os.getenv("CONVEYOR_CHAT_MODEL")
+        or os.getenv("MINIMAX_CHAT_MODEL")
+    )
+    if explicit_api_key and explicit_model:
+        explicit_base_url = (
+            getattr(settings, "conveyor_chat_base_url", None)
+            or getattr(settings, "chat_base_url", None)
+            or os.getenv("CONVEYOR_CHAT_BASE_URL")
+            or os.getenv("MINIMAX_BASE_URL")
+            or DEFAULT_BASE_URL
+        ).rstrip("/")
+        return ChatConfig(
+            base_url=explicit_base_url,
+            api_key=explicit_api_key,
+            model=explicit_model,
+            timeout=timeout,
+            max_tokens=max_tokens,
+        )
+
+    # Rule 3: Otherwise (mode unset or auto, no chat-specific config) ->
+    # use the saved provider (base_url, model, key read via provider_config, never logged).
+    from provider_config import get_saved_provider_credentials
+
+    provider = get_saved_provider_credentials(settings)
+    if not provider:
         return None
+
     return ChatConfig(
-        base_url=(getattr(settings, "chat_base_url", None) or DEFAULT_BASE_URL).rstrip("/"),
-        api_key=api_key,
-        model=model,
-        timeout=int(getattr(settings, "chat_timeout_seconds", 60) or 60),
-        max_tokens=int(getattr(settings, "chat_max_tokens", 1500) or 1500),
+        base_url=provider["base_url"].rstrip("/"),
+        api_key=provider["api_key"],
+        model=provider["model"],
+        timeout=timeout,
+        max_tokens=max_tokens,
     )
 
 
@@ -205,4 +248,4 @@ async def complete_chat(config: ChatConfig, messages: list[dict], tools: list[di
     except httpx.HTTPStatusError as exc:
         raise ChatError(f"HTTP {exc.response.status_code}") from exc
     except Exception as exc:
-        raise ChatError(_clean_chat_error(str(exc), config.api_key)) from exc
+        raise ChatError(_clean_chat_error(str(exc), config.api_key)) from None

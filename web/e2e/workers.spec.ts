@@ -285,9 +285,11 @@ test.describe('Workers Panel (Conveyor 执行者)', () => {
     // 1. Codex: 可用 + 当前选用 + runnable
     const codex = page.locator('li.worker-card', { hasText: 'Codex' })
     await expect(codex).toBeVisible()
-    await expect(codex.getByText('可用')).toBeVisible()
-    await expect(codex.getByText('当前选用')).toBeVisible()
-    await expect(codex.getByText('Conveyor 可直接调用')).toBeVisible()
+    await expect(codex.getByText('可用', { exact: true })).toBeVisible()
+    await expect(codex.getByText('当前使用', { exact: true })).toBeVisible()
+    // One state chip + one role chip, never contradictory (QA F7).
+    await expect(codex.locator('.guard-badge, .worker-role')).toHaveCount(2)
+    await expect(page.getByText('当前使用：Codex')).toBeVisible()
     await expect(codex.getByText('v0.1.2 · /usr/local/bin/codex')).toBeVisible()
     await expect(codex.getByText('#1')).toBeVisible()
 
@@ -295,26 +297,27 @@ test.describe('Workers Panel (Conveyor 执行者)', () => {
     const claude = page.locator('li.worker-card', { hasText: 'Claude Code' })
     await expect(claude).toBeVisible()
     await expect(claude.getByText('需要登录')).toBeVisible()
-    await expect(claude.getByText('Conveyor 可直接调用')).toBeVisible()
+    // A worker that cannot be used yet carries no rotation chip that could contradict that.
+    await expect(claude.locator('.worker-role')).toHaveCount(0)
     await expect(claude.getByText('1.0.14 · /usr/local/bin/claude')).toBeVisible()
 
     // 3. Pi: 未安装 + manual hint
     const pi = page.locator('li.worker-card', { hasText: 'Pi' })
     await expect(pi).toBeVisible()
     await expect(pi.getByText('未安装')).toBeVisible()
-    await expect(pi.getByText('需在服务器上手动安装')).toBeVisible()
+    await expect(pi.getByText('需要手动安装，暂时没有一键安装')).toBeVisible()
+    await expect(pi.locator('.worker-role')).toHaveCount(0)
 
     // 4. Antigravity: cooling chip + not runnable
     const agy = page.locator('li.worker-card', { hasText: 'Antigravity' })
     await expect(agy).toBeVisible()
     await expect(agy.getByText('额度用完·约 2 小时后恢复')).toBeVisible()
-    await expect(agy.getByText('暂只检测，不参与轮换')).toBeVisible()
+    await expect(agy.getByText('暂不支持轮换')).toBeVisible()
 
     // 5. Command Code: 未安装 + not runnable + install button
     const cmd = page.locator('li.worker-card', { hasText: 'Command Code' })
     await expect(cmd).toBeVisible()
     await expect(cmd.getByText('未安装')).toBeVisible()
-    await expect(cmd.getByText('暂只检测，不参与轮换')).toBeVisible()
     await expect(cmd.getByRole('button', { name: '安装' })).toBeVisible()
 
     // Desktop screenshot
@@ -374,7 +377,9 @@ test.describe('Workers Panel (Conveyor 执行者)', () => {
     await installBtn.click()
 
     // Inline confirmation
-    await expect(cmd.getByText('将在服务器上运行：npm install -g command-code')).toBeVisible()
+    await expect(cmd.getByText('将从官方渠道下载并安装 Command Code')).toBeVisible()
+    await cmd.getByText('查看将运行的命令').click()
+    await expect(cmd.locator('code', { hasText: 'npm install -g command-code' })).toBeVisible()
     const confirmBtn = cmd.getByRole('button', { name: '确认安装' })
     await confirmBtn.click()
 
@@ -393,7 +398,7 @@ test.describe('Workers Panel (Conveyor 执行者)', () => {
     await open(page, SIZES[0])
 
     const cmdDisabled = page.locator('li.worker-card', { hasText: 'Command Code' })
-    await expect(cmdDisabled.getByText('在服务器上运行这条命令安装：')).toBeVisible()
+    await expect(cmdDisabled.getByText('在运行 Conveyor 的电脑上打开终端，运行下面这条命令安装：')).toBeVisible()
     await expect(cmdDisabled.locator('code', { hasText: 'npm install -g command-code' })).toBeVisible()
     const copyBtn = cmdDisabled.getByRole('button', { name: '复制' })
     await expect(copyBtn).toBeVisible()
@@ -406,7 +411,7 @@ test.describe('Workers Panel (Conveyor 执行者)', () => {
     await open(page, SIZES[0])
 
     const claude = page.locator('li.worker-card', { hasText: 'Claude Code' })
-    await expect(claude.getByText('在服务器终端里运行，按提示在浏览器完成登录，然后点 重新检测：')).toBeVisible()
+    await expect(claude.getByText('在运行 Conveyor 的电脑上打开终端，运行下面这条命令并按提示在浏览器登录，完成后点「重新检测」：')).toBeVisible()
     await expect(claude.locator('code', { hasText: 'claude auth login' })).toBeVisible()
     const copyBtn = claude.getByRole('button', { name: '复制' })
     await expect(copyBtn).toBeVisible()
@@ -420,9 +425,13 @@ test.describe('Workers Panel (Conveyor 执行者)', () => {
 
     const agy = page.locator('li.worker-card', { hasText: 'Antigravity' })
     await expect(agy.getByText('预计恢复时间：约 2 小时后恢复')).toBeVisible()
+    // Plain-Chinese reason first, the raw API text only behind 技术详情 (QA F8).
+    await expect(agy.getByText('这个账号的额度已经用完。')).toBeVisible()
+    await expect(agy.getByText('429: rate limit exceeded, resets in 2h')).toBeHidden()
+    await agy.getByText('技术详情').click()
     await expect(agy.getByText('429: rate limit exceeded, resets in 2h')).toBeVisible()
 
-    const resetBtn = agy.getByRole('button', { name: '重置额度状态' })
+    const resetBtn = agy.getByRole('button', { name: '我已处理，立即重试' })
     await resetBtn.click()
 
     const resetCall = calls.find(c => c.method === 'POST' && c.path === '/api/workers/agy/reset-quota')

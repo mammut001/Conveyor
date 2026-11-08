@@ -237,6 +237,73 @@ def save_provider_config(settings: Any, payload: dict[str, Any]) -> dict[str, An
     return get_provider_config(settings)
 
 
+def get_saved_provider_credentials(settings: Any) -> dict[str, str] | None:
+    """Return active provider {base_url, model, api_key} from config.toml and .env/os.environ."""
+    try:
+        path = config_path(settings)
+        if not path.exists():
+            return None
+        text = path.read_text(encoding="utf-8", errors="replace")
+        top, providers = _parse_simple_config(text)
+        provider_id = top.get("model_provider", "").strip()
+        model = top.get("model", "").strip()
+        if not provider_id or not model:
+            return None
+        provider = providers.get(provider_id, {})
+        base_url = str(provider.get("base_url") or "").strip().rstrip("/")
+        if not base_url:
+            return None
+        env_key = provider.get("env_key") or "OPENAI_API_KEY"
+        secret = os.getenv(env_key) or _read_env_value(env_path(), env_key)
+        if not secret:
+            return None
+        return {
+            "base_url": base_url,
+            "model": model,
+            "api_key": secret,
+        }
+    except Exception:
+        return None
+
+
+def get_saved_provider(settings: Any) -> dict[str, str] | None:
+    """Return the saved 模型设置 provider incl. wire_api/env_key and its key.
+
+    {provider_id, provider_name, base_url, model, wire_api, env_key, api_key}
+    or None when no usable provider (url, model and key) is saved. The key is
+    returned for handing to a child process; callers must never log it.
+    """
+    try:
+        path = config_path(settings)
+        if not path.exists():
+            return None
+        top, providers = _parse_simple_config(path.read_text(encoding="utf-8", errors="replace"))
+        provider_id = top.get("model_provider", "").strip()
+        model = top.get("model", "").strip()
+        provider = providers.get(provider_id, {})
+        base_url = str(provider.get("base_url") or "").strip().rstrip("/")
+        if not provider_id or not model or not base_url:
+            return None
+        env_key = str(provider.get("env_key") or "OPENAI_API_KEY").strip()
+        if not _ENV_KEY_RE.fullmatch(env_key):
+            return None
+        secret = os.getenv(env_key) or _read_env_value(env_path(), env_key)
+        if not secret:
+            return None
+        wire_api = str(provider.get("wire_api") or "responses").strip().lower()
+        return {
+            "provider_id": provider_id,
+            "provider_name": provider.get("name", provider_id),
+            "base_url": base_url,
+            "model": model,
+            "wire_api": wire_api,
+            "env_key": env_key,
+            "api_key": secret,
+        }
+    except Exception:
+        return None
+
+
 def refresh_provider_env() -> dict[str, str]:
     """Read provider credentials from .env for each new Codex child process."""
     result: dict[str, str] = {}
@@ -258,28 +325,77 @@ class ProviderModelsError(Exception):
     pass
 
 
-def fetch_provider_models(settings: Any) -> list[dict[str, str]]:
-    path = config_path(settings)
-    text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
-    top, providers = _parse_simple_config(text)
-    provider_id = top.get("model_provider", "")
-    if not provider_id:
-        raise ProviderModelsError("未配置模型供应商")
-    provider = providers.get(provider_id, {})
-    base_url = str(provider.get("base_url") or "").strip().rstrip("/")
-    if not base_url:
-        raise ProviderModelsError("未配置 Provider Base URL")
+class ApiKeyRequiredError(ProviderModelsError):
+    pass
+
+
+def _normalize_base_url(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    host = (parsed.hostname or "").lower()
+    if ":" in host:
+        host = f"[{host}]"
+    default = {"https": 443, "http": 80}.get(parsed.scheme.lower())
+    port = parsed.port if parsed.port is not None else default
+    return f"{parsed.scheme.lower()}://{host}:{port}{parsed.path.rstrip('/')}"
+
+
+def fetch_provider_models(settings: Any, draft: dict[str, Any] | None = None) -> list[dict[str, str]]:
+    """List models of a provider.
+
+    Without `draft` the saved provider is used (GET). With `draft` the form
+    values are used: base_url and env_key from the draft, api_key from the
+    draft or, when blank, the key already stored for that env_key.
+    """
+    if draft is not None:
+        base_url = str(draft.get("base_url") or "").strip().rstrip("/")
+        if not base_url:
+            raise ProviderModelsError("请先填写服务地址")
+        env_key = str(draft.get("env_key") or "OPENAI_API_KEY").strip().upper()
+        if not _ENV_KEY_RE.fullmatch(env_key):
+            raise ProviderModelsError("密钥名称格式不正确")
+        typed_key = str(draft.get("api_key") or "").strip()
+        if typed_key and (len(typed_key) > 4096 or "\n" in typed_key or "\r" in typed_key):
+            raise ProviderModelsError("API 密钥格式不正确")
+        if typed_key:
+            secret = typed_key
+        else:
+            # The stored key may only go to the saved provider itself.
+            path = config_path(settings)
+            text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+            top, providers = _parse_simple_config(text)
+            saved = providers.get(top.get("model_provider", ""), {})
+            saved_url = str(saved.get("base_url") or "").strip()
+            saved_env = str(saved.get("env_key") or "OPENAI_API_KEY").strip().upper()
+            try:
+                same_url = bool(saved_url) and _normalize_base_url(saved_url) == _normalize_base_url(base_url)
+            except ValueError:
+                same_url = False
+            if not (same_url and saved_env == env_key):
+                raise ApiKeyRequiredError("换了接口地址后，需要先填写 API 密钥才能读取模型列表")
+            secret = os.getenv(env_key) or _read_env_value(env_path(), env_key)
+    else:
+        path = config_path(settings)
+        text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        top, providers = _parse_simple_config(text)
+        provider_id = top.get("model_provider", "")
+        if not provider_id:
+            raise ProviderModelsError("未配置模型供应商")
+        provider = providers.get(provider_id, {})
+        base_url = str(provider.get("base_url") or "").strip().rstrip("/")
+        if not base_url:
+            raise ProviderModelsError("未配置 Provider Base URL")
+        env_key = provider.get("env_key") or "OPENAI_API_KEY"
+        secret = os.getenv(env_key) or _read_env_value(env_path(), env_key)
 
     parsed = urlparse(base_url)
+    if parsed.username or parsed.password or not parsed.netloc:
+        raise ProviderModelsError("服务地址格式不正确")
     if parsed.scheme == "https":
         pass
     elif parsed.scheme == "http" and parsed.hostname in ("127.0.0.1", "localhost", "::1"):
         pass
     else:
         raise ProviderModelsError("远程供应商 Base URL 必须使用 HTTPS")
-
-    env_key = provider.get("env_key") or "OPENAI_API_KEY"
-    secret = os.getenv(env_key) or _read_env_value(env_path(), env_key)
 
     models_url = f"{base_url}/models"
     headers = {
@@ -292,10 +408,12 @@ def fetch_provider_models(settings: Any) -> list[dict[str, str]]:
     req = urllib.request.Request(models_url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            raw = resp.read()
+            raw = resp.read(2 * 1024 * 1024)
             data = json.loads(raw.decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as exc:
-        raise ProviderModelsError(f"供应商服务返回 HTTP {exc.code}") from exc
+        if exc.code in (401, 403):
+            raise ProviderModelsError(f"服务商拒绝了这个密钥（HTTP {exc.code}），请检查 API 密钥") from exc
+        raise ProviderModelsError(f"供应商服务返回 HTTP {exc.code}，请检查服务地址") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise ProviderModelsError("请求超时或网络连接失败") from exc
     except Exception as exc:

@@ -109,9 +109,21 @@ test('leaving mid-reply puts the message back in the box', async ({ page }) => {
   await shot(page, 'interrupted-1440')
 })
 
+test('a missing executor is not offered a pointless retry', async ({ page }) => {
+  await setup(page, async (route, count) => sseRoute(sse([['session', { session_id: 's1' }], ['message', { text: "[Errno 2] No such file or directory: 'codex'" }], ['done', {}]]))(route, count))
+  await open(page)
+  await composer(page).fill('跑一下检查')
+  await page.keyboard.press('Enter')
+  const alert = page.getByRole('alert')
+  await expect(alert).toContainText('还没有可用的执行者')
+  await expect(alert.getByRole('button', { name: '重试' })).toHaveCount(0)
+  await expect(page.locator('.transcript-content', { hasText: 'Errno' })).toHaveCount(0)
+  await expect(composer(page)).toHaveValue('跑一下检查')
+})
+
 test('raw backend error becomes an error card with retry, not a bubble', async ({ page }) => {
   await setup(page, async (route, count) => {
-    if (count === 1) return sseRoute(sse([['session', { session_id: 's1' }], ['message', { text: "[Errno 2] No such file or directory: 'codex'" }], ['done', {}]]))(route, count)
+    if (count === 1) return sseRoute(sse([['session', { session_id: 's1' }], ['message', { text: 'Traceback (most recent call last):\n  File "x.py", line 1\nValueError: boom' }], ['done', {}]]))(route, count)
     return sseRoute(okReply('这次好了。'))(route, count)
   })
   await open(page)
@@ -120,7 +132,7 @@ test('raw backend error becomes an error card with retry, not a bubble', async (
   const alert = page.getByRole('alert')
   await expect(alert).toBeVisible()
   await expect(alert.getByRole('button', { name: '重试' })).toBeVisible()
-  await expect(page.locator('.transcript-content', { hasText: 'Errno' })).toHaveCount(0)
+  await expect(page.locator('.transcript-content', { hasText: 'Traceback' })).toHaveCount(0)
   // The failed bubble is gone, the words are back in the box.
   await expect(page.locator('.role-user')).toHaveCount(0)
   await expect(composer(page)).toHaveValue('跑一下检查')

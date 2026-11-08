@@ -6,6 +6,7 @@ from typing import Any
 
 from runner.backend import AgentBackend, CodexBackend
 from runner.claude_code import ClaudeCodeBackend
+from runner.cli_backend import CLI_CONFIGS, CliBackend
 from runner.core import CodexRunner
 from runner.pi_agent import PiBackend
 from runner.types import JobMode, ProgressCallback
@@ -21,7 +22,11 @@ def create_worker_backend(worker_id: str, settings: Any) -> Any:
         return ClaudeCodeBackend(settings)
     if norm in ("pi", "pi-agent", "pi_agent"):
         return PiBackend(settings)
-    raise ValueError(f"Worker '{worker_id}' has no runnable backend (expected codex, claude-code, or pi)")
+    if norm in CLI_CONFIGS:
+        return CliBackend(settings, CLI_CONFIGS[norm])
+    raise ValueError(
+        f"Worker '{worker_id}' has no runnable backend "
+        "(expected codex, claude-code, pi, agy, grok, or cmd)")
 
 
 class PooledRunner(CodexRunner):
@@ -85,7 +90,7 @@ class PooledRunner(CodexRunner):
     ) -> Any:
         from workers import async_pick_worker, classify_failure, mark_cooling
 
-        worker = await async_pick_worker(self.settings)
+        worker = await async_pick_worker(self.settings, mode=mode)
         if not worker:
             raise RuntimeError("No eligible worker available in worker pool")
 
@@ -111,7 +116,7 @@ class PooledRunner(CodexRunner):
             mark_cooling(self.settings, worker["id"], reset_seconds=failure[1], reason=str(exc))
 
             # Retry once on next eligible worker (start-time quota retry)
-            next_worker = await async_pick_worker(self.settings)
+            next_worker = await async_pick_worker(self.settings, mode=mode)
             if not next_worker or next_worker["id"] == worker["id"]:
                 raise
 

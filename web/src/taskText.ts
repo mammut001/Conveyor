@@ -254,9 +254,47 @@ export function durationText(seconds: number) {
   return `${rest} 秒`
 }
 
-/** Raw job error (English, technical) → one short Chinese sentence for the failed-task card. */
-export function jobErrorSummary(error?: string | null) {
+export type JobErrorInfo = {
+  message: string
+  action?: 'workers' | 'settings'
+  actionLabel?: string
+}
+
+export function describeJobError(error?: string | null): JobErrorInfo {
   const raw = (error || '').trim()
-  if (!raw || /No such file or directory|Errno|ENOENT|not found|spawn|Permission denied|Traceback|command/i.test(raw)) return '任务没能启动，请稍后重试。'
-  return '任务没能完成，可以补充说明后重新发送。'
+  if (!raw) {
+    return { message: '任务没能启动，请稍后重试。' }
+  }
+
+  const isMissingWorkerPool = /No eligible worker available in worker pool/i.test(raw)
+  const isMissingCli = /(?:No such file or directory|not found|ENOENT)[\s\S]*?\b(codex|claude|pi|agy|cmd)\b|\b(codex|claude|pi|agy|cmd)\b[\s\S]*?(?:No such file or directory|not found|ENOENT)/i.test(raw)
+
+  if (isMissingWorkerPool || isMissingCli) {
+    return {
+      message: '还没有可用的执行者，先去「执行者」页安装并登录一个',
+      action: 'workers',
+      actionLabel: '去执行者',
+    }
+  }
+
+  const isModelProviderError = /chat tier is disabled|no model configured|provider|api[-_]?key|OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY|model_providers/i.test(raw)
+
+  if (isModelProviderError) {
+    return {
+      message: '还没有可用的模型，先在「设置」里配置模型',
+      action: 'settings',
+      actionLabel: '去设置',
+    }
+  }
+
+  if (/No such file or directory|Errno|ENOENT|not found|spawn|Permission denied|Traceback|command/i.test(raw)) {
+    return { message: '任务没能启动，请稍后重试。' }
+  }
+
+  return { message: '任务没能完成，可以补充说明后重新发送。' }
+}
+
+/** Raw job error (English, technical) → one short Chinese sentence for the failed-task card. */
+export function jobErrorSummary(error?: string | null): string {
+  return describeJobError(error).message
 }

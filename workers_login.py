@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import pty
@@ -7,9 +8,12 @@ import re
 import secrets
 import select
 import shlex
+import struct
 import subprocess
+import termios
 import threading
 import time
+import unicodedata
 from typing import Any
 
 import workers
@@ -21,6 +25,10 @@ URL_RE = re.compile(r"https://[^\s\"'<>]+", re.IGNORECASE)
 CODE_PROMPT_PUNCT_RE = re.compile(r"[:?：？]\s*$")
 
 SESSION_TIMEOUT_SECONDS = 600.0  # 10 minutes
+LOGIN_EXPIRED_MESSAGE = "登录已超时，请重新开始登录"
+SESSION_NOT_FOUND_MESSAGE = "登录已超时或已结束，请重新开始登录"
+SESSION_INACTIVE_MESSAGE = "登录已结束，请重新开始登录"
+BAD_CODE_MESSAGE = "验证码格式不正确，请检查后再提交"
 
 
 class LoginUnsupportedError(Exception):
@@ -44,7 +52,35 @@ def strip_ansi(text: str) -> str:
 
 
 def extract_url(text: str) -> str | None:
-    match = URL_RE.search(text)
+    clean = strip_ansi(text)
+    lines = clean.splitlines()
+    for i, line in enumerate(lines):
+        match = URL_RE.search(line)
+        if not match:
+            continue
+        url = match.group(0)
+        curr_end = match.end()
+        curr_len = len(line)
+        curr_i = i
+
+        while curr_end == curr_len and curr_len in (80, 500) and curr_i + 1 < len(lines):
+            next_line = lines[curr_i + 1]
+            if not next_line.strip():
+                break
+            tokens = next_line.split()
+            if not tokens:
+                break
+            continuation = tokens[0]
+            url += continuation
+            curr_i += 1
+            curr_len = len(next_line)
+            curr_end = len(continuation)
+
+        url = url.rstrip(".,;:!?'\")>]")
+        if url:
+            return url
+
+    match = URL_RE.search(clean)
     if not match:
         return None
     url = match.group(0).rstrip(".,;:!?'\")>]")
@@ -70,6 +106,9 @@ def validate_code(code: Any) -> str:
         raise BadCodeError("code must be a string")
     if "\r" in code or "\n" in code:
         raise BadCodeError("code must be a single line")
+    # Invisible format characters (zero-width space, BOM, ...) are common when a
+    # code is copied from a web page: drop them instead of failing the paste.
+    code = "".join(ch for ch in code if unicodedata.category(ch) != "Cf")
     code_stripped = code.strip()
     if len(code_stripped) < 1 or len(code_stripped) > 200:
         raise BadCodeError("code length must be 1..200")
@@ -170,7 +209,19 @@ def _reader_loop(session: WorkerLoginSession) -> None:
             if session.is_expired():
                 with session._lock:
                     session.state = "failed"
-                    session.message = "登录超时"
+                    session.message = LOGIN_EXPIRED_MESSAGE
+                break
+
+            if session.url is None and (time.time() - session.started_at) > 30.0:
+                login_cmd = session.worker_def.get("login_command") or session.worker_id
+                with session._lock:
+                    session.state = "failed"
+                    session.message = f"登录程序没有给出登录地址，可以在服务器终端里运行：{login_cmd}"
+                if proc is not None and proc.poll() is None:
+                    try:
+                        proc.terminate()
+                    except OSError:
+                        pass
                 break
 
             if master_fd is None:
@@ -254,8 +305,9 @@ def _reader_loop(session: WorkerLoginSession) -> None:
                 session.state = "failed"
                 session.message = "已取消"
                 return
-            if session.state == "failed" and session.message == "登录超时":
+            if session.state == "failed":
                 return
+            had_url = session.url is not None
 
         # Re-run auth detection with cleared cache
         try:
@@ -270,6 +322,16 @@ def _reader_loop(session: WorkerLoginSession) -> None:
             if session.cancelled:
                 session.state = "failed"
                 session.message = "已取消"
+            elif not had_url:
+                if rc == 0 and auth_ok:
+                    session.state = "done"
+                    session.message = "已经登录了"
+                else:
+                    session.state = "failed"
+                    if rc != 0:
+                        session.message = "登录进程异常退出"
+                    else:
+                        session.message = "登录未完成或验证失败"
             elif rc == 0 and auth_ok:
                 session.state = "done"
                 session.message = "登录成功"
@@ -305,6 +367,16 @@ def start_login_session(settings: Any, worker_id: str) -> dict[str, Any]:
         )
 
         master_fd, slave_fd = pty.openpty()
+        try:
+            winsize = struct.pack("HHHH", 50, 500, 0, 0)
+            for fd in (slave_fd, master_fd):
+                try:
+                    fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+                except OSError:
+                    pass
+        except Exception:
+            pass
+
         cmd = shlex.split(login_cmd_str)
         clean_env = _build_clean_env()
 
@@ -354,7 +426,13 @@ def get_login_session(settings: Any, worker_id: str, session_id: str) -> dict[st
         session.cancel()
         with session._lock:
             session.state = "failed"
-            session.message = "登录超时"
+            session.message = LOGIN_EXPIRED_MESSAGE
+    elif session.url is None and session.state == "waiting_url" and (time.time() - session.started_at) > 30.0:
+        login_cmd = session.worker_def.get("login_command") or session.worker_id
+        session.cancel()
+        with session._lock:
+            session.state = "failed"
+            session.message = f"登录程序没有给出登录地址，可以在服务器终端里运行：{login_cmd}"
 
     return session.to_dict()
 

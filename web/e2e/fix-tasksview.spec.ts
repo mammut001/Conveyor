@@ -70,7 +70,7 @@ test('failed run shows own request, Chinese summary, raw detail folded, title fr
   await openTasks(page)
   await expect(page.locator('.pending-turn')).toContainText('把登录按钮改成蓝色')
   const notice = page.locator('.task-notice.failed')
-  await expect(notice).toContainText('任务没能启动，请稍后重试')
+  await expect(notice).toContainText('还没有可用的执行者，先去「执行者」页安装并登录一个')
   await expect(notice.locator('.task-notice-detail')).toBeHidden()
   await notice.getByText('详情').click()
   await expect(notice.locator('.task-notice-detail')).toContainText('codex')

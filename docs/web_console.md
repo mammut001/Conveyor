@@ -52,6 +52,8 @@ CONVEYOR_WEB_TOKEN=<generated 64-hex-character value>
 CONVEYOR_EVENT_RETENTION_PER_JOB=2000
 ```
 
+> **Zero-config onboarding**: On fresh installs, the worker pool (`CONVEYOR_WORKERS_ENABLED`) and worker install (`CONVEYOR_WORKERS_INSTALL`) default to enabled. Setting a model provider via the Web Console "设置" dialog automatically powers both the runner and the chat tier without requiring manual edits to `.env` or setting `CONVEYOR_CHAT_*` variables. Explicit `CONVEYOR_CHAT_MODE=off` or `CONVEYOR_WORKERS_ENABLED=false` still disables them.
+
 The standard installer installs both `conveyor-web.service` and
 `conveyor-handoff.service`. For a manual source deployment:
 
@@ -143,7 +145,7 @@ Web 控制台已全面重构为简体中文原生界面，提供清晰的导航�
 ### 顶栏操作与会话安全
 
 - **实时状态指示**：顶栏显示连接状态（`在线`、`连接中`、`重连中`）、当前运行中任务数与队列深度。
-- **设置**：配置模型服务商参数，包括服务商 ID（服务商代号）、显示名称、接口地址、模型、接口协议（接口类型）、推理强度、密钥变量名（密钥名称）与 API 密钥。
+- **设置**：配置模型服务商参数，包括服务商 ID（服务商代号）、显示名称、接口地址、模型、接口协议（接口类型）、推理强度、密钥变量名（密钥名称）与 API 密钥。在 Web 对话框保存后，对话层（Chat tier）在未配置 `CONVEYOR_CHAT_*` 专属密钥与模型时会自动回退使用此服务商，新安装无需编辑 `.env` 即可直接在网页端使用完整功能；显式配置 `CONVEYOR_CHAT_MODE=off` 可关闭对话层。
 - **锁定**：点击顶栏「锁定」按钮会弹出二次确认对话框（`锁定控制台？`），提示将清除这台设备上保存的访问令牌。确认后才清除 Token，按 `Esc` 或点「取消」安全保留会话。
 
 ## API

@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { FormattedText } from './FormattedText';
 import { VoiceRecorder } from './VoiceRecorder';
 import { CopyButton } from './CopyButton';
@@ -69,6 +69,7 @@ export type ChatPanelProps = {
   /** The Agent's colour, used for its avatar beside replies. */
   agentColor?: string;
   onBusyChange?: (busy: boolean) => void;
+  setupChecklist?: ReactNode;
 };
 
 const VOICE_PLACEHOLDER = '🎤 正在识别语音…';
@@ -168,7 +169,7 @@ function approvalLabel(status: string): string {
     : '已处理';
 }
 
-export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange }: ChatPanelProps) {
+export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const draftKey = `conveyor-chat-draft:v1:${agentSessionId || 'free-chat'}`;
@@ -712,6 +713,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
           if (followStreamRef.current) setUnseen(false);
         }}>
         <div ref={contentRef} className="chat-stream-content">
+        {setupChecklist}
         {showWelcome && (
           <div className="welcome-state">
             <div className="chat-welcome-avatar" aria-hidden="true" style={agentColor ? { background: agentColor } : undefined}>

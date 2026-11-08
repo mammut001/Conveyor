@@ -28,10 +28,18 @@ def create_agent_backend(settings: Any, provider: str | None = None):
 
 
 def create_runtime_runner(settings: Any, provider: str | None = None) -> CodexRunner:
-    if getattr(settings, "workers_enabled", False) and not provider:
+    backend_env = os.getenv("CONVEYOR_AGENT_BACKEND", "").strip()
+    workers_env = os.getenv("CONVEYOR_WORKERS_ENABLED", "").strip().lower()
+    workers_explicit_true = workers_env in ("true", "1", "yes", "on")
+
+    use_pool = getattr(settings, "workers_enabled", False) and not provider
+    if backend_env and not workers_explicit_true:
+        use_pool = False
+
+    if use_pool:
         from runner.pooled import PooledRunner
         return PooledRunner(settings)
-    selected = (provider or os.getenv("CONVEYOR_AGENT_BACKEND", "codex")).strip().lower()
+    selected = (provider or backend_env or "codex").strip().lower()
     if selected in {"", "codex"}:
         return CodexRunner(settings)
     if selected in {"claude", "claude-code"}:

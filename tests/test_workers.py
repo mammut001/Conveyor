@@ -27,7 +27,18 @@ from web_console import WebConsoleHandler, WebConsoleServer
 from web_control import WebControl
 
 
-def _make_settings(root: Path, workers_enabled: bool = True, workers_install_enabled: bool = False):
+def setUpModule() -> None:
+    # Never let usage refresh reach a real provider from these tests.
+    global _usage_patcher
+    _usage_patcher = patch("worker_usage.fetch_usage", return_value=None)
+    _usage_patcher.start()
+
+
+def tearDownModule() -> None:
+    _usage_patcher.stop()
+
+
+def _make_settings(root: Path, workers_enabled: bool = True, workers_install_enabled: bool = True):
     task_root = root / "tasks"
     ws_root = root / "ws"
     mem_root = root / "mem"
@@ -173,7 +184,7 @@ class WorkerUnitTests(unittest.TestCase):
     def test_catalog_structure(self) -> None:
         catalog = workers.get_catalog()
         ids = [item["id"] for item in catalog]
-        self.assertEqual(ids, ["codex", "claude-code", "pi", "agy", "cmd"])
+        self.assertEqual(ids, ["codex", "claude-code", "pi", "agy", "cmd", "grok"])
 
         codex = workers.get_catalog_worker("codex")
         self.assertIsNotNone(codex)
@@ -182,7 +193,7 @@ class WorkerUnitTests(unittest.TestCase):
 
         agy = workers.get_catalog_worker("agy")
         self.assertIsNotNone(agy)
-        self.assertFalse(agy["runnable"])
+        self.assertTrue(agy["runnable"])
         self.assertEqual(agy["install_command"], "curl -fsSL https://antigravity.google/cli/install.sh | bash")
         self.assertEqual(agy["models_command"], ["agy", "models"])
         self.assertEqual(agy["auth_type"], "cmd")
@@ -191,12 +202,21 @@ class WorkerUnitTests(unittest.TestCase):
 
         pi = workers.get_catalog_worker("pi")
         self.assertIsNotNone(pi)
-        self.assertIsNone(pi["install_command"])
+        self.assertEqual(pi["label"], "Pi（内置）")
+        self.assertEqual(pi["install_argv"], ["bash", "scripts/install_pi.sh"])
         self.assertIsNone(pi["models_command"])
 
         cmd = workers.get_catalog_worker("cmd")
         self.assertIsNotNone(cmd)
-        self.assertFalse(cmd["runnable"])
+        self.assertTrue(cmd["runnable"])
+
+        grok = workers.get_catalog_worker("grok")
+        self.assertIsNotNone(grok)
+        self.assertEqual(grok["label"], "Super Grok")
+        self.assertEqual(grok["install_command"], "curl -fsSL https://x.ai/cli/install.sh | bash")
+        self.assertEqual(grok["login_command"], "grok login")
+        self.assertEqual(grok["models_command"], ["grok", "models"])
+        self.assertTrue(grok["runnable"])
 
     @patch("shutil.which", return_value=None)
     def test_detection_uninstalled(self, _mock_which) -> None:
@@ -256,6 +276,7 @@ class WorkerUnitTests(unittest.TestCase):
     @patch("shutil.which", return_value="/usr/local/bin/pi")
     @patch("subprocess.run")
     def test_detection_pi_auth_unknown(self, mock_run, _mock_which) -> None:
+        # Detection alone cannot know the saved provider; the payload sets pi auth.
         mock_run.return_value = subprocess.CompletedProcess(["pi", "--version"], 0, stdout="0.5.0", stderr="")
         worker_def = workers.get_catalog_worker("pi")
         result = workers.detect_worker(worker_def)
@@ -417,7 +438,7 @@ class WorkerUnitTests(unittest.TestCase):
 
             # Load default state
             state = workers.load_workers_state(settings)
-            self.assertEqual(state["order"], ["codex", "claude-code", "pi", "agy", "cmd"])
+            self.assertEqual(state["order"], ["codex", "claude-code", "pi", "agy", "cmd", "grok"])
             self.assertEqual(state["cooling"], {})
 
             # Mark cooling
@@ -445,9 +466,12 @@ class WorkerUnitTests(unittest.TestCase):
                 "pi": {"installed": True, "version": "0.5", "path": "/bin/pi", "auth": "unknown"},
                 "agy": {"installed": True, "version": "1.0", "path": "/bin/agy", "auth": "ok"},
                 "cmd": {"installed": True, "version": "1.0", "path": "/bin/cmd", "auth": "ok"},
+                "grok": {"installed": True, "version": "1.0", "path": "/bin/grok", "auth": "ok"},
             }
 
-            with patch("workers.detect_all_workers", return_value=fake_detections):
+            # Pi needs some key source (here the legacy DEEPSEEK_API_KEY) to be eligible.
+            with patch("workers.detect_all_workers", return_value=fake_detections), \
+                 patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-test-deepseek"}):
                 # Default order: codex is picked first
                 picked = workers.pick_worker(settings)
                 self.assertIsNotNone(picked)
@@ -465,10 +489,15 @@ class WorkerUnitTests(unittest.TestCase):
                 self.assertIsNotNone(picked)
                 self.assertEqual(picked["id"], "pi")
 
-                # If pi is cooling, agy and cmd are NOT picked because runnable=False
+                # If pi is cooling, agy is next (now runnable), then cmd, then grok
                 workers.mark_cooling(settings, "pi", reset_seconds=300)
-                picked = workers.pick_worker(settings)
-                self.assertIsNone(picked)
+                self.assertEqual(workers.pick_worker(settings)["id"], "agy")
+                workers.mark_cooling(settings, "agy", reset_seconds=300)
+                self.assertEqual(workers.pick_worker(settings)["id"], "cmd")
+                workers.mark_cooling(settings, "cmd", reset_seconds=300)
+                self.assertEqual(workers.pick_worker(settings)["id"], "grok")
+                workers.mark_cooling(settings, "grok", reset_seconds=300)
+                self.assertIsNone(workers.pick_worker(settings))
 
 
 class WorkerModelsUnitTests(unittest.TestCase):
@@ -511,11 +540,9 @@ class WorkerModelsUnitTests(unittest.TestCase):
         ids = [m["id"] for m in models]
         self.assertEqual(ids, ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"])
 
-    def test_codex_pi_models_unsupported(self) -> None:
+    def test_codex_models_unsupported(self) -> None:
         with self.assertRaises(workers.ModelsUnsupportedError):
             workers.get_worker_models("codex")
-        with self.assertRaises(workers.ModelsUnsupportedError):
-            workers.get_worker_models("pi")
 
     def test_models_caching_10min(self) -> None:
         with patch("shutil.which", return_value="/bin/agy"), \
@@ -601,6 +628,16 @@ class WorkersLoginUnitTests(unittest.TestCase):
 
         codex_text = "Open https://platform.openai.com/device?user_code=ABCD-EFGH and enter the code."
         self.assertEqual(workers_login.extract_url(codex_text), "https://platform.openai.com/device?user_code=ABCD-EFGH")
+
+        # 4. URL wrapped at 80 columns (long URL cut by pty 80-col width)
+        line1 = "https://commandcode.ai/studio/auth/cli?code=" + ("a" * 36)
+        self.assertEqual(len(line1), 80)
+        line2 = "bcdef123456789\n"
+        wrapped_text = f"Opening browser for login:\n{line1}\n{line2}Enter code: "
+        self.assertEqual(
+            workers_login.extract_url(wrapped_text),
+            "https://commandcode.ai/studio/auth/cli?code=" + ("a" * 36) + "bcdef123456789",
+        )
 
     def test_detect_code_prompt(self) -> None:
         # agy SSH flow
@@ -739,6 +776,91 @@ class WorkersLoginUnitTests(unittest.TestCase):
                 mock_proc.terminate.assert_called()
                 os.close(test_pipe)
 
+    def test_login_exit_0_without_url_already_logged_in(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = _make_settings(Path(tmpdir))
+
+            s_master, s_slave = socket.socketpair()
+            master_fd = s_master.detach()
+            slave_fd = s_slave.detach()
+            test_pipe = os.dup(slave_fd)
+
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+            mock_proc.wait.return_value = 0
+
+            with patch("pty.openpty", return_value=(master_fd, slave_fd)), \
+                 patch("subprocess.Popen", return_value=mock_proc), \
+                 patch("workers.detect_worker", return_value={"installed": True, "version": "1.0", "path": "/bin/agy", "auth": "ok"}):
+
+                start_res = workers_login.start_login_session(settings, "agy")
+                session_id = start_res["session"]
+
+                os.write(test_pipe, b"\xe2\x9c\x94 Already logged in as dev@example.com\n")
+                mock_proc.poll.return_value = 0
+                os.close(test_pipe)
+                time.sleep(0.3)
+
+                curr = workers_login.get_login_session(settings, "agy", session_id)
+                self.assertEqual(curr["state"], "done")
+                self.assertEqual(curr["message"], "已经登录了")
+
+    def test_login_exit_0_without_url_auth_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = _make_settings(Path(tmpdir))
+
+            s_master, s_slave = socket.socketpair()
+            master_fd = s_master.detach()
+            slave_fd = s_slave.detach()
+            test_pipe = os.dup(slave_fd)
+
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+            mock_proc.wait.return_value = 0
+
+            with patch("pty.openpty", return_value=(master_fd, slave_fd)), \
+                 patch("subprocess.Popen", return_value=mock_proc), \
+                 patch("workers.detect_worker", return_value={"installed": True, "version": "1.0", "path": "/bin/agy", "auth": "needs_login"}):
+
+                start_res = workers_login.start_login_session(settings, "agy")
+                session_id = start_res["session"]
+
+                os.write(test_pipe, b"Finished without url\n")
+                mock_proc.poll.return_value = 0
+                os.close(test_pipe)
+                time.sleep(0.3)
+
+                curr = workers_login.get_login_session(settings, "agy", session_id)
+                self.assertEqual(curr["state"], "failed")
+                self.assertEqual(curr["message"], "登录未完成或验证失败")
+
+    def test_login_no_url_30s_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = _make_settings(Path(tmpdir))
+
+            s_master, s_slave = socket.socketpair()
+            master_fd = s_master.detach()
+            slave_fd = s_slave.detach()
+            test_pipe = os.dup(slave_fd)
+
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+
+            with patch("pty.openpty", return_value=(master_fd, slave_fd)), \
+                 patch("subprocess.Popen", return_value=mock_proc):
+
+                start_res = workers_login.start_login_session(settings, "agy")
+                session_id = start_res["session"]
+
+                session = workers_login._active_sessions["agy"]
+                session.started_at = time.time() - 31.0
+                time.sleep(0.3)
+
+                curr = workers_login.get_login_session(settings, "agy", session_id)
+                self.assertEqual(curr["state"], "failed")
+                self.assertEqual(curr["message"], "登录程序没有给出登录地址，可以在服务器终端里运行：agy")
+                os.close(test_pipe)
+
     def test_session_new_start_kills_old(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = _make_settings(Path(tmpdir))
@@ -785,7 +907,7 @@ class WorkersLoginUnitTests(unittest.TestCase):
             workers_login._active_sessions["agy"] = session
             curr = workers_login.get_login_session(settings, "agy", "test-exp")
             self.assertEqual(curr["state"], "failed")
-            self.assertEqual(curr["message"], "登录超时")
+            self.assertEqual(curr["message"], "登录已超时，请重新开始登录")
 
 
 class PooledRunnerTests(unittest.TestCase):
@@ -1056,7 +1178,7 @@ class WebConsoleApiTests(unittest.TestCase):
         workers.clear_detection_cache()
 
         cls.tmpdir = tempfile.TemporaryDirectory()
-        cls.settings = _make_settings(Path(cls.tmpdir.name), workers_enabled=True, workers_install_enabled=False)
+        cls.settings = _make_settings(Path(cls.tmpdir.name), workers_enabled=True, workers_install_enabled=True)
 
         cls.loop = asyncio.new_event_loop()
         cls.loop_thread = threading.Thread(target=cls.loop.run_forever, daemon=True)
@@ -1123,9 +1245,9 @@ class WebConsoleApiTests(unittest.TestCase):
         status, body = self.request("GET", "/api/workers")
         self.assertEqual(status, 200)
         self.assertTrue(body["enabled"])
-        self.assertFalse(body["install_enabled"])
+        self.assertTrue(body["install_enabled"])
         self.assertIn("workers", body)
-        self.assertEqual(len(body["workers"]), 5)
+        self.assertEqual(len(body["workers"]), 6)
 
         status, body = self.request("POST", "/api/workers/detect")
         self.assertEqual(status, 200)
@@ -1143,7 +1265,7 @@ class WebConsoleApiTests(unittest.TestCase):
         self.assertEqual(body.get("code"), "unknown_worker")
 
         # Valid order update
-        new_order = ["claude-code", "codex", "pi", "agy", "cmd"]
+        new_order = ["claude-code", "codex", "pi", "agy", "cmd", "grok"]
         status, body = self.request("POST", "/api/workers/order", {"order": new_order, "enabled": ["claude-code", "codex"]})
         self.assertEqual(status, 200)
         worker_ids = [w["id"] for w in body["workers"]]
@@ -1169,8 +1291,9 @@ class WebConsoleApiTests(unittest.TestCase):
             self.assertEqual(status, 400)
             self.assertEqual(body.get("code"), "confirm_required")
 
-            # 3. Install unsupported (pi has install_command=None) -> 400
-            status, body = self.request("POST", "/api/workers/pi/install", {"confirm": True})
+            # 3. Install unsupported (a worker without install_command) -> 400
+            with patch.dict(workers._CATALOG_BY_ID["pi"], {"install_command": None, "install_argv": None}):
+                status, body = self.request("POST", "/api/workers/pi/install", {"confirm": True})
             self.assertEqual(status, 400)
             self.assertEqual(body.get("code"), "install_unsupported")
 
@@ -1193,7 +1316,7 @@ class WebConsoleApiTests(unittest.TestCase):
                 self.assertFalse(kwargs.get("shell", False))
                 self.assertEqual(kwargs.get("timeout"), 300)
         finally:
-            self.settings.workers_install_enabled = False
+            self.settings.workers_install_enabled = True
 
     def test_reset_quota_api(self) -> None:
         workers.mark_cooling(self.settings, "claude-code", reset_seconds=1800)
@@ -1226,7 +1349,7 @@ class WebConsoleApiTests(unittest.TestCase):
                 self.assertFalse(kwargs.get("shell", False))
                 self.assertEqual(kwargs.get("timeout"), 300)
         finally:
-            self.settings.workers_install_enabled = False
+            self.settings.workers_install_enabled = True
 
     def test_models_api_flow(self) -> None:
         # 1. GET models for claude-code (fixed list)
@@ -1268,6 +1391,191 @@ class WebConsoleApiTests(unittest.TestCase):
         status, body = self.request("POST", "/api/workers/codex/model", {"model": "any"})
         self.assertEqual(status, 400)
         self.assertEqual(body.get("code"), "models_unsupported")
+
+    def test_bad_code_keeps_login_session_and_messages_are_chinese(self) -> None:
+        s_master, s_slave = socket.socketpair()
+        master_fd = s_master.detach()
+        slave_fd = s_slave.detach()
+        test_pipe = os.dup(slave_fd)
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.wait.return_value = 0
+        with patch("pty.openpty", return_value=(master_fd, slave_fd)), \
+             patch("subprocess.Popen", return_value=mock_proc):
+            status, body = self.request("POST", "/api/workers/codex/login/start")
+            self.assertEqual(status, 200)
+            session_id = body["session"]
+
+            status, body = self.request("POST", f"/api/workers/codex/login/{session_id}/code", {"code": "bad\ncode"})
+            self.assertEqual(status, 400)
+            self.assertEqual(body["code"], "bad_code")
+            self.assertIn("验证码", body["error"])
+            self.assertNotEqual(body.get("state"), "failed")
+
+            # the same session still answers and still accepts a corrected code
+            status, body = self.request("GET", f"/api/workers/codex/login/{session_id}")
+            self.assertEqual(status, 200)
+            self.assertNotEqual(body["state"], "failed")
+            status, body = self.request("POST", f"/api/workers/codex/login/{session_id}/code", {"code": "GOOD-123"})
+            self.assertEqual(status, 200)
+            self.assertEqual(os.read(test_pipe, 1024), b"GOOD-123\n")
+
+            # unknown session -> Chinese message, stable code, no English leak
+            status, body = self.request("GET", "/api/workers/codex/login/does-not-exist")
+            self.assertEqual(status, 404)
+            self.assertEqual(body["code"], "session_not_found")
+            self.assertIn("重新开始登录", body["error"])
+            self.assertNotIn("not found", body["error"])
+            status, body = self.request("POST", "/api/workers/codex/login/does-not-exist/code", {"code": "ABC12345"})
+            self.assertEqual(status, 404)
+            self.assertIn("重新开始登录", body["error"])
+
+            self.request("POST", f"/api/workers/codex/login/{session_id}/cancel")
+        os.close(test_pipe)
+
+    def test_provider_models_post_uses_form_values(self) -> None:
+        seen: dict[str, Any] = {}
+
+        class FakeResponse:
+            def __init__(self, payload: bytes) -> None:
+                self._payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, *args):
+                return self._payload
+
+        def fake_urlopen(req, timeout=None):
+            seen["url"] = req.full_url
+            seen["auth"] = req.get_header("Authorization")
+            return FakeResponse(b'{"data": [{"id": "deepseek-chat"}, {"id": "deepseek-reasoner"}]}')
+
+        with patch("provider_config.urllib.request.urlopen", side_effect=fake_urlopen):
+            status, body = self.request("POST", "/api/config/provider/models", {
+                "base_url": "https://api.deepseek.com/v1/",
+                "env_key": "DEEPSEEK_API_KEY",
+                "api_key": "sk-draft-key-1234",
+            })
+        self.assertEqual(status, 200)
+        self.assertEqual([m["id"] for m in body["models"]], ["deepseek-chat", "deepseek-reasoner"])
+        self.assertEqual(seen["url"], "https://api.deepseek.com/v1/models")
+        self.assertEqual(seen["auth"], "Bearer sk-draft-key-1234")
+        self.assertNotIn("sk-draft-key-1234", json.dumps(body))
+
+        # plain http to a remote host is refused, no upstream call
+        with patch("provider_config.urllib.request.urlopen", side_effect=AssertionError("must not call")):
+            status, body = self.request("POST", "/api/config/provider/models", {"base_url": "http://example.com/v1", "api_key": "typed-key-9999"})
+        self.assertEqual(status, 502)
+        self.assertEqual(body["code"], "models_fetch_failed")
+        # missing base_url
+        status, body = self.request("POST", "/api/config/provider/models", {})
+        self.assertEqual(status, 502)
+        self.assertIn("服务地址", body["error"])
+
+    def test_provider_models_stored_key_only_goes_to_saved_provider(self) -> None:
+        import provider_config
+        calls: list[Any] = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, *args):
+                return b'{"data": [{"id": "m1"}]}'
+
+        def fake_urlopen(req, timeout=None):
+            calls.append((req.full_url, req.get_header("Authorization")))
+            return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as raw:
+            settings = SimpleNamespace(codex_memory_root=Path(raw))
+            (Path(raw) / "config.toml").write_text(
+                'model = "m"\nmodel_provider = "ds"\n\n[model_providers.ds]\nname = "DS"\n'
+                'base_url = "https://api.example.com/v1"\nenv_key = "DS_API_KEY"\nwire_api = "chat"\n'
+            )
+            env_file = Path(raw) / ".env"
+            env_file.write_text("DS_API_KEY=stored-secret-key\n")
+            with patch.dict(os.environ, {"CONVEYOR_ENV_FILE": str(env_file)}), \
+                 patch("provider_config.urllib.request.urlopen", side_effect=fake_urlopen):
+                # same URL (case/trailing slash/default port differ) + blank key -> stored key
+                for url in ("https://api.example.com/v1", "https://API.Example.com:443/v1/"):
+                    calls.clear()
+                    models = provider_config.fetch_provider_models(
+                        settings, draft={"base_url": url, "env_key": "DS_API_KEY"})
+                    self.assertEqual(models, [{"id": "m1"}])
+                    self.assertEqual(calls, [(url.rstrip("/") + "/models", "Bearer stored-secret-key")])
+
+                # different host / path / env_key + blank key -> refused, no outbound request
+                calls.clear()
+                for draft in (
+                    {"base_url": "https://evil.example.org/v1", "env_key": "DS_API_KEY"},
+                    {"base_url": "https://api.example.com/v2", "env_key": "DS_API_KEY"},
+                    {"base_url": "https://api.example.com/v1", "env_key": "OTHER_API_KEY"},
+                    {"base_url": "http://api.example.com/v1", "env_key": "DS_API_KEY"},
+                ):
+                    with self.assertRaises(provider_config.ApiKeyRequiredError):
+                        provider_config.fetch_provider_models(settings, draft=draft)
+                self.assertEqual(calls, [])
+
+                # typed key is used as-is, even for another host
+                provider_config.fetch_provider_models(settings, draft={
+                    "base_url": "https://evil.example.org/v1", "env_key": "DS_API_KEY", "api_key": "typed-key-9999"})
+                self.assertEqual(calls, [("https://evil.example.org/v1/models", "Bearer typed-key-9999")])
+
+    def test_provider_models_api_key_required_is_400(self) -> None:
+        with patch("provider_config.urllib.request.urlopen", side_effect=AssertionError("no request")):
+            status, body = self.request("POST", "/api/config/provider/models", {
+                "base_url": "https://never-saved.example.net/v1", "env_key": "NEVER_SAVED_KEY"})
+        self.assertEqual(status, 400)
+        self.assertEqual(body["code"], "api_key_required")
+        self.assertEqual(body["error"], "换了接口地址后，需要先填写 API 密钥才能读取模型列表")
+
+    def test_provider_models_upstream_error_body_not_passed_through(self) -> None:
+        import io
+        import urllib.error
+
+        def failing(req, timeout=None):
+            raise urllib.error.HTTPError(
+                req.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"error":"invalid key sk-LEAK-SECRET"}')
+            )
+
+        with patch("provider_config.urllib.request.urlopen", side_effect=failing):
+            status, body = self.request("POST", "/api/config/provider/models", {
+                "base_url": "https://api.example.com/v1", "api_key": "sk-draft-key-1234",
+            })
+        self.assertEqual(status, 502)
+        self.assertEqual(body["code"], "models_fetch_failed")
+        self.assertIn("HTTP 401", body["error"])
+        self.assertNotIn("LEAK", json.dumps(body))
+        self.assertNotIn("invalid key", json.dumps(body))
+
+        def broken(req, timeout=None):
+            raise OSError("ReadTimeout: secret internal detail sk-LEAK")
+
+        with patch("provider_config.urllib.request.urlopen", side_effect=broken):
+            status, body = self.request("POST", "/api/config/provider/models", {"base_url": "https://api.example.com/v1", "api_key": "typed-key-9999"})
+        self.assertEqual(status, 502)
+        self.assertNotIn("LEAK", json.dumps(body))
+        self.assertNotIn("ReadTimeout", json.dumps(body))
+
+    def test_worker_models_fetch_error_hides_stderr(self) -> None:
+        workers.clear_models_cache()
+        proc = MagicMock(returncode=2, stdout="", stderr="Traceback ... token=sk-LEAK-STDERR")
+        with patch("workers.shutil.which", return_value="/usr/local/bin/cmd"), \
+             patch("workers.subprocess.run", return_value=proc):
+            status, body = self.request("GET", "/api/workers/cmd/models")
+        workers.clear_models_cache()
+        self.assertEqual(status, 502)
+        self.assertEqual(body["code"], "models_fetch_failed")
+        self.assertNotIn("LEAK", json.dumps(body, ensure_ascii=False))
+        self.assertNotIn("Traceback", json.dumps(body, ensure_ascii=False))
 
     def test_login_api_flow(self) -> None:
         s_master, s_slave = socket.socketpair()
@@ -1413,6 +1721,122 @@ class WebConsoleApiTests(unittest.TestCase):
                 self.assertEqual(res.get("error"), "not found")
         finally:
             self.settings.workers_enabled = True
+
+
+class RuntimeRunnerPoolDefaultsTests(unittest.TestCase):
+    def test_default_settings_use_pooled_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            settings = _make_settings(Path(raw))
+            self.assertTrue(settings.workers_enabled)
+            self.assertTrue(settings.workers_install_enabled)
+            with patch.dict(os.environ, {}, clear=True):
+                from runner.providers import create_runtime_runner
+                from runner.pooled import PooledRunner
+
+                runner = create_runtime_runner(settings)
+                self.assertIsInstance(runner, PooledRunner)
+
+    def test_explicit_agent_backend_keeps_backend_unless_workers_explicitly_true(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            settings = _make_settings(Path(raw))
+            from runner.providers import create_runtime_runner
+            from runner.claude_code import ClaudeCodeBackend
+            from runner.pooled import PooledRunner
+
+            # Existing deployment: CONVEYOR_AGENT_BACKEND is set, CONVEYOR_WORKERS_ENABLED is unset
+            with patch.dict(os.environ, {"CONVEYOR_AGENT_BACKEND": "claude-code"}, clear=True):
+                runner = create_runtime_runner(settings)
+                self.assertIsInstance(runner, ClaudeCodeBackend)
+
+            # When CONVEYOR_WORKERS_ENABLED is explicitly true, pool is used
+            with patch.dict(os.environ, {"CONVEYOR_AGENT_BACKEND": "claude-code", "CONVEYOR_WORKERS_ENABLED": "true"}, clear=True):
+                runner = create_runtime_runner(settings)
+                self.assertIsInstance(runner, PooledRunner)
+
+            # When CONVEYOR_WORKERS_ENABLED is false, keeps backend
+            settings_disabled = _make_settings(Path(raw), workers_enabled=False)
+            with patch.dict(os.environ, {"CONVEYOR_AGENT_BACKEND": "claude-code", "CONVEYOR_WORKERS_ENABLED": "false"}, clear=True):
+                runner = create_runtime_runner(settings_disabled)
+                self.assertIsInstance(runner, ClaudeCodeBackend)
+
+    def test_explicit_provider_parameter_overrides_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            settings = _make_settings(Path(raw))
+            from runner.providers import create_runtime_runner
+            from runner.pi_agent import PiBackend
+
+            with patch.dict(os.environ, {}, clear=True):
+                runner = create_runtime_runner(settings, provider="pi")
+                self.assertIsInstance(runner, PiBackend)
+
+    def test_config_loading_defaults_and_disabling(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            env_file = Path(raw) / ".env"
+            env_file.write_text(
+                f"TELEGRAM_BOT_TOKEN=tok\nTELEGRAM_ALLOWED_USER_ID=123\n"
+                f"CODEX_WORKSPACE_ROOT={raw}/ws\nCODEX_TASK_ROOT={raw}/tasks\nCODEX_MEMORY_ROOT={raw}/mem\n"
+            )
+            from config import load_settings
+
+            # Unset env vars default to True
+            with patch.dict(os.environ, {}, clear=True):
+                loaded = load_settings(env_file=env_file)
+                self.assertTrue(loaded.workers_enabled)
+                self.assertTrue(loaded.workers_install_enabled)
+
+            # Explicit "false"/"0"/"off" disables
+            for disabled_val in ("false", "0", "off"):
+                with patch.dict(
+                    os.environ,
+                    {"CONVEYOR_WORKERS_ENABLED": disabled_val, "CONVEYOR_WORKERS_INSTALL": disabled_val},
+                    clear=True,
+                ):
+                    loaded = load_settings(env_file=env_file)
+                    self.assertFalse(loaded.workers_enabled)
+                    self.assertFalse(loaded.workers_install_enabled)
+
+
+class WorkerFixUnitTests(unittest.TestCase):
+    CMD_SAMPLE = (
+        "Available models  ·  96 models\n"
+        "\n"
+        "Open Source\n"
+        "\n"
+        "deepseek/deepseek-v4-pro                hybrid-attention long-context reasoning\n"
+        "moonshotai/kimi-k3.1-pro                frontier reasoning & agentic coding with 1M context\n"
+        "\n"
+        "Meta\n"
+        "\n"
+        "meta/muse-spark-1.2                     coding-optimized for agentic workflows\n"
+        "\n"
+        'Pass the full id, or just the short name after the last "/":\n'
+        "cmd --model moonshotai/kimi-k2.5\n"
+        "cmd --model kimi-k2.5\n"
+        "\n"
+        "Docs:  https://commandcode.ai/docs/reference/cli/models\n"
+        "\n"
+        "Decision models (headless only)\n"
+        "typesafe/jev  typed questions in, probabilities out - Run it headlessly: cmd -p '{}'\n"
+    )
+
+    def test_parse_cmd_models_keeps_only_real_vendor_model_rows(self) -> None:
+        models = workers.parse_cmd_models(self.CMD_SAMPLE)
+        self.assertEqual(
+            [m["id"] for m in models],
+            ["deepseek/deepseek-v4-pro", "moonshotai/kimi-k3.1-pro", "meta/muse-spark-1.2"],
+        )
+        for m in models:
+            self.assertRegex(m["id"], r"^[\w.-]+/[\w.:-]+$")
+            self.assertNotIn(" ", m["id"])
+
+    def test_parse_cmd_models_rejects_prose_with_slash(self) -> None:
+        text = 'Pass the full id, or just the short name after the last "/":\nsee a/b for help\n  x/y   ok\n'
+        self.assertEqual([m["id"] for m in workers.parse_cmd_models(text)], [])
+
+    def test_validate_code_drops_invisible_characters(self) -> None:
+        self.assertEqual(workers_login.validate_code("AB\u200bCD\ufeff12"), "ABCD12")
+        with self.assertRaises(workers_login.BadCodeError):
+            workers_login.validate_code("\u200b")
 
 
 if __name__ == "__main__":

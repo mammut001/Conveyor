@@ -130,6 +130,172 @@ body { color: var(--text); background: var(--bg); }
 .job-notice strong { color: #29313d; }
 .job-notice.failed { border-color: #f0d1d4; background: #fff6f6; color: #a43842; }
 .job-notice.failed strong { color: #8d2e37; }
+
+/* First-run setup checklist card */
+.setup-checklist-card {
+  margin-bottom: 20px;
+  padding: 16px 18px;
+  border: 1px solid #dce4ef;
+  border-radius: 14px;
+  background: #f8fafc;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .04);
+}
+.setup-checklist-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.setup-checklist-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.setup-checklist-title strong {
+  color: #1e293b;
+  font-size: 14px;
+  font-weight: 600;
+}
+.setup-checklist-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color .15s ease, color .15s ease;
+}
+.setup-checklist-close:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+.setup-checklist-items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+.setup-checklist-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #edf2f7;
+  transition: border-color .15s ease;
+}
+.setup-checklist-item.is-done {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+.setup-checklist-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 1px;
+}
+.setup-checklist-item.is-done .setup-checklist-badge {
+  background: #22c55e;
+  color: #ffffff;
+}
+.setup-checklist-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.setup-checklist-link {
+  color: #2563eb;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  font-size: 13px;
+  font-weight: 500;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  display: inline;
+}
+.setup-checklist-link:hover {
+  color: #1d4ed8;
+}
+.setup-checklist-action-btn {
+  font-family: inherit;
+}
+.setup-checklist-label {
+  color: #1e293b;
+  font-size: 13px;
+  font-weight: 500;
+}
+.setup-checklist-item.is-done .setup-checklist-label {
+  color: #15803d;
+}
+.setup-checklist-muted {
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.setup-checklist-text-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Task notice action button */
+.task-notice-action {
+  margin-top: 8px;
+  padding: 6px 14px;
+  min-height: 32px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  width: fit-content;
+  transition: opacity .15s ease;
+}
+.task-notice-action:hover {
+  opacity: .85;
+}
+
+@media (max-width: 820px) {
+  .setup-checklist-close {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+  .setup-checklist-item {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+  .task-notice-action {
+    min-height: 40px;
+    padding: 8px 16px;
+  }
+}
 .composer { position: relative; z-index: 2; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; width: min(880px, calc(100% - 44px)); margin: 10px auto 17px; padding: 10px 12px; border: 1px solid #dedfe3; border-top: 1px solid #dedfe3; border-radius: 20px; background: #fff; box-shadow: 0 5px 20px rgba(16, 24, 40, .07); }
 .composer textarea { min-width: 0; min-height: 42px; max-height: 144px; padding: 9px 4px; color: #282a2f; font-size: 14px; line-height: 1.55; }
 .composer textarea::placeholder { color: #92969e; }

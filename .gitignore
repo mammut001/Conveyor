@@ -65,6 +65,7 @@ menubar-agent/build/
 /$HOME
 /.workbuddy
 web/node_modules/
+vendor/pi/node_modules/
 web/test-results/
 web/playwright-report/
 
