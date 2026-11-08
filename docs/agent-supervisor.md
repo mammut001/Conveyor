@@ -149,6 +149,50 @@ export CONVEYOR_AGENT_SUPERVISOR_VALIDATION_COMMANDS_JSON='[
 
 ---
 
+## 自动检查（按仓库选择）
+
+非技术 owner 可以为每个仓库选择**服务器在该仓库中检测到**的检查命令，无需设置环境变量。
+
+浏览器**只选择**服务器检测到的候选检查的 ID；argv 永远由服务器派生，浏览器无法提供任意命令。
+
+### 检测列表（`supervisor_validation.detect_candidates`，仅扫描仓库根目录，不执行任何命令）
+
+| 来源 | 候选 ID | argv |
+| --- | --- | --- |
+| `package.json` 的 `scripts.test`（非 npm 默认的 `no test specified`） | `npm-test` / `pnpm-test` / `yarn-test`（存在 `pnpm-lock.yaml` / `yarn.lock` 时改用对应包管理器） | `[<pm>, "test", "--silent"]` |
+| `package.json` 的 `scripts.lint` | `npm-lint` 等 | `[<pm>, "run", "lint"]` |
+| `package.json` 的 `scripts.build` | `npm-build` 等 | `[<pm>, "run", "build"]` |
+| pytest 配置（`pytest.ini`、`pyproject.toml` 的 `[tool.pytest.ini_options]`、`setup.cfg` 的 `[tool:pytest]`、根目录 `conftest.py`） | `pytest` | `["python3", "-m", "pytest", "-q"]` |
+| `tests/` 目录含 `test_*.py` 且无 pytest 配置 | `unittest` | `["python3", "-m", "unittest", "discover", "-s", "tests"]` |
+| `Makefile` 的 `test:` 目标 | `make-test` | `["make", "test"]` |
+| `go.mod` | `go-test` | `["go", "test", "./..."]` |
+| `Cargo.toml` | `cargo-test` | `["cargo", "test", "--quiet"]` |
+
+每个候选都带 `available`（`shutil.which(argv[0])` 是否可用）与中文 `unavailable_reason`。文件读取上限 512 KB，无法读取/损坏的文件会被静默跳过。多个生态系统的候选可同时存在（例如 `npm-test` 与 `go-test`）。
+
+### 优先级（env 优先）
+
+`agent_supervisor.load_validation_commands(settings, repo_path)` 的解析顺序：
+
+1. 若 `CONVEYOR_AGENT_SUPERVISOR_VALIDATION_COMMANDS_JSON`（或 Settings）有规格，**原样返回**——运维配置始终优先。
+2. 否则，若给出 `repo_path`，返回该仓库（按规范化路径匹配）已存储的、owner 选择的规格。
+3. 否则返回空 → 任务进入 `waiting_user` / `needs_validation`（绝不伪造 `completed`）。
+
+### 安全规则（保持不变）
+
+浏览器只选择服务器检测到的候选 ID（未知 ID → `400 unknown_check`）；argv 永远来自服务器检测结果，并在保存时固化为服务器派生规格。任务元数据仍然拒绝 `validation_commands` 等运维专用键。
+
+### HTTP API（相同的认证、`SupervisorServiceError` JSON 结构、feature-flag 门控）
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /api/supervisor/repositories/<repo_id>/validation` | 返回 `{candidates, selected, source, env_commands, effective}` |
+| `POST /api/supervisor/repositories/<repo_id>/validation` | body `{"selected": [ids]}`，保存并返回与 GET 相同的 payload（`200`）；空列表清除选择 |
+
+仓库 payload（`GET /api/supervisor/repositories`）中每个仓库额外带 `validation_source`（`"env"` / `"repo"` / `"none"`），供 UI 无需额外请求即可提示。
+
+---
+
 ## Seeding the Agent Supervisor Skill
 
 Conveyor stores skills in its internal `personal_tools.skills` SQLite database (`skills.db`), not Codex global skill paths.

@@ -7,6 +7,7 @@ from typing import Any
 
 import supervisor_service as svc
 import supervisor_goals as goals_mod
+import supervisor_validation as validation_mod
 from redaction import redact_text, truncate
 
 logger = logging.getLogger("conveyor.web_supervisor_api")
@@ -58,6 +59,11 @@ def handle_get(
                 state=state,
             )
             handler._json(HTTPStatus.OK, {"tasks": tasks, "count": len(tasks)})
+            return True
+
+        if len(parts) == 5 and parts[:3] == ["api", "supervisor", "repositories"] and parts[4] == "validation":
+            detail = validation_mod.get_repo_validation(settings, parts[3])
+            handler._json(HTTPStatus.OK, detail)
             return True
 
         if len(parts) == 4 and parts[:3] == ["api", "supervisor", "tasks"]:
@@ -126,6 +132,11 @@ def handle_post(
                 base_ref=body.get("base_ref"),
             )
             handler._json(HTTPStatus.CREATED, wt)
+            return True
+
+        if len(parts) == 5 and parts[:3] == ["api", "supervisor", "repositories"] and parts[4] == "validation":
+            detail = validation_mod.set_repo_validation(settings, parts[3], body.get("selected"))
+            handler._json(HTTPStatus.OK, detail)
             return True
 
         if path == "/api/supervisor/tasks":

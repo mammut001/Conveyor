@@ -105,6 +105,14 @@ CREATE TABLE IF NOT EXISTS supervisor_task_requests (
     payload_sha256 TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS supervisor_repo_validation (
+    repo_id TEXT PRIMARY KEY,
+    selected_json TEXT NOT NULL,
+    specs_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(repo_id) REFERENCES supervisor_repositories(id) ON DELETE CASCADE
+);
 """
 
 
@@ -655,10 +663,25 @@ def _format_repository(
         "id": str(repo_row["id"]),
         "name": str(repo_row["name"]),
         "path": canon_repo,
+        "validation_source": _repo_validation_source(settings, str(repo_row["id"])),
         "default_branch": _detect_default_branch(settings, canon_repo),
         "created_at": str(repo_row["created_at"]),
         "worktrees": worktrees,
     }
+
+
+def _repo_validation_source(settings: Any, repo_id: str) -> str:
+    """Per-repository validation source: 'env' | 'repo' | 'none'.
+
+    Lets the UI warn about missing checks without an extra call. Lazy import
+    keeps supervisor_validation (which lazily imports this module) cycle-free.
+    """
+    try:
+        import supervisor_validation
+
+        return supervisor_validation.compute_validation_source(settings, repo_id)
+    except Exception:
+        return "none"
 
 
 def register_repository(

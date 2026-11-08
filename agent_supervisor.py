@@ -5273,10 +5273,18 @@ async def _spawn_cli(
     )
 
 
-def load_validation_commands(settings: Any) -> list[tuple[str, tuple[str, ...]]]:
-    """Load immutable operator-configured validation commands from Settings.
+def load_validation_commands(
+    settings: Any, repo_path: str | None = None
+) -> list[tuple[str, tuple[str, ...]]]:
+    """Load validation command specs.
 
-    Never reads from task metadata or browser-controllable payloads.
+    Precedence:
+      1. Operator env/settings specs win unchanged (operator config always wins).
+      2. Otherwise, when ``repo_path`` is given, return the repository's stored
+         per-repo specs (owner-selected IDs resolved to server-detected argv).
+
+    Never reads argv from task metadata or browser-controllable payloads; the
+    browser only selects IDs of server-detected candidates.
     """
     raw = getattr(settings, "agent_supervisor_validation_commands", ()) or ()
     if not isinstance(raw, (list, tuple)):
@@ -5301,6 +5309,13 @@ def load_validation_commands(settings: Any) -> list[tuple[str, tuple[str, ...]]]
                 f"invalid operator validation command specification at index {idx}"
             )
         specs.append((name, tuple(argv)))
+    if specs:
+        return specs
+    if repo_path:
+        # Lazy import avoids an agent_supervisor <-> supervisor_service cycle.
+        import supervisor_validation
+
+        return supervisor_validation.load_repo_validation_specs(settings, repo_path)
     return specs
 
 
@@ -5329,7 +5344,7 @@ async def run_operator_validations(
 ) -> list[dict[str, Any]]:
     """Execute bounded operator-configured validation commands in isolated
     process groups and verify that the target worktree snapshot stays pinned."""
-    specs = load_validation_commands(settings)
+    specs = load_validation_commands(settings, repo_path=repo_path)
     if not specs:
         return []
     canon_wp = _canonical_path(worktree_path)
@@ -5666,11 +5681,12 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
             if not ok_pol:
                 raise SupervisorStateError(reason_pol)
 
-        # Validate operator-configured validation command definitions up front.
-        val_specs = load_validation_commands(settings)
-
         acceptance_criteria = acceptance_criteria or str(meta.get("acceptance_criteria") or "")
         repo_path = _canonical_path(task.get("repo_path", ""))
+
+        # Resolve validation command definitions up front. Operator env/settings
+        # specs win; otherwise the repository's owner-selected per-repo checks.
+        val_specs = load_validation_commands(settings, repo_path=repo_path)
         raw_wp = task.get("worktree_path") or worktree_path or ""
         wp = _canonical_path(raw_wp) if raw_wp else ""
         if not wp:
