@@ -6,6 +6,8 @@ import type {
   SupervisorTaskDetail,
 } from '../src/components/SupervisorWorkspace'
 import type { Goal, GoalDetail } from '../src/components/SupervisorGoals'
+import { goalRoundTaskTitle } from '../src/taskText'
+import type { SupervisorDiff } from '../src/components/SupervisorDiff'
 import type { SupervisorChecksCandidate } from '../src/components/SupervisorChecks'
 
 // Server-detected 自动检查 candidates for the mocked Conveyor repository.
@@ -347,9 +349,14 @@ const RUNNING_GOAL_MID_EVAL: GoalDetail = {
   ],
 }
 
+// 目标循环写下的任务目标文本（supervisor_goals._first_iteration_prompt /
+// _continuation_prompt 的真实形状）：页面上的标题应该是「目标第 N 轮：…」。
+const GOAL_OUTCOME_1 = '首页加载时间降到 1 秒以内，并且所有测试通过'
+const GOAL_OUTCOME_2 = '把构建时间压到 30 秒以内，并不让任何测试变慢'
+
 const GOAL_TASK_1: SupervisorTaskDetail = {
   id: 'goal-task-1',
-  goal: '第 1 轮：把首页加载时间降到 1 秒以内',
+  goal: `${GOAL_OUTCOME_1}\n\n这是目标的第 1 轮。`,
   repo_path: '/srv/repos/conveyor',
   worktree_path: '/srv/repos/conveyor-wt/fix-console',
   branch: 'fix/console',
@@ -366,18 +373,61 @@ const GOAL_TASK_1: SupervisorTaskDetail = {
   summary: '',
 }
 
-// 「查看改动」要能落到最近一轮的任务上：每一轮各有一个已结束的任务。
+// 每一轮各有一个任务；任务页上的标题由 goal 文本解析成「目标第 N 轮：…」。
 const GOAL_TASK_2: SupervisorTaskDetail = {
   ...GOAL_TASK_1,
   id: 'goal-task-2',
-  goal: '第 2 轮：复验加载时间并补上移动端验收步骤',
+  goal: `这是目标「首页加载时间降到 1 秒以内」的第 2 轮。目标：${GOAL_OUTCOME_1}\n\n本轮要做：复验加载时间并补上移动端验收步骤`,
   state: 'completed',
 }
 const GOAL_TASK_3: SupervisorTaskDetail = {
   ...GOAL_TASK_1,
   id: 'goal-task-3',
-  goal: '第 3 轮：继续压缩构建时间',
+  goal: `这是目标「把构建时间压到 30 秒以内」的第 3 轮。目标：${GOAL_OUTCOME_2}\n\n本轮要做：继续压缩构建时间`,
   state: 'completed',
+}
+
+// 「查看改动」就地展开的目标差异（并行任务提供的 /api/supervisor/goals/<id>/diff 形状）。
+const GOAL_DIFF: SupervisorDiff = {
+  goal_id: 'goal-mock-finished-1',
+  base_sha: '8352f46a9c01',
+  head_sha: 'a1b2c3d4e5f6',
+  files: [
+    { path: 'web/src/App.tsx', status: 'M', additions: 12, deletions: 3 },
+    { path: 'web/src/ux/supervisor.css', status: 'M', additions: 40, deletions: 1 },
+    { path: 'web/src/components/SupervisorDiff.tsx', status: 'A', additions: 90, deletions: 0 },
+    { path: 'docs/supervisor.md', status: 'M', additions: 5, deletions: 2 },
+  ],
+  diff: [
+    'diff --git a/web/src/App.tsx b/web/src/App.tsx',
+    '--- a/web/src/App.tsx',
+    '+++ b/web/src/App.tsx',
+    '@@ -1,2 +1,2 @@',
+    ' context line',
+    '-removed line',
+    '+added line',
+    'diff --git a/web/src/ux/supervisor.css b/web/src/ux/supervisor.css',
+    '--- a/web/src/ux/supervisor.css',
+    '+++ b/web/src/ux/supervisor.css',
+    '@@ -10,2 +10,3 @@',
+    ' .sup-changes {',
+    '+  display: flex;',
+    ' }',
+    'diff --git a/web/src/components/SupervisorDiff.tsx b/web/src/components/SupervisorDiff.tsx',
+    '--- a/web/src/components/SupervisorDiff.tsx',
+    '+++ b/web/src/components/SupervisorDiff.tsx',
+    '@@ -0,0 +1,2 @@',
+    '+export function SupervisorDiffView() {}',
+    '+export default SupervisorDiffView',
+    'diff --git a/docs/supervisor.md b/docs/supervisor.md',
+    '--- a/docs/supervisor.md',
+    '+++ b/docs/supervisor.md',
+    '@@ -3,2 +3,2 @@',
+    '-old doc line',
+    '+new doc line',
+  ].join('\n'),
+  truncated: false,
+  untracked: [],
 }
 
 async function installGoalsMockFixture(
@@ -386,6 +436,9 @@ async function installGoalsMockFixture(
     initialGoalsByWt?: Record<string, GoalDetail[]>
     initialTasksByWt?: Record<string, SupervisorTaskDetail[]>
     failNextGoalCreate?: boolean
+    diffsByGoal?: Record<string, SupervisorDiff>
+    diffsByTask?: Record<string, SupervisorDiff>
+    diffMissingFor?: string[]
   } = {},
 ) {
   // Deep-clone every seeded goal: route handlers mutate state, and tests share the fixtures.
@@ -402,6 +455,8 @@ async function installGoalsMockFixture(
   const goalCreateCalls: Array<Record<string, unknown>> = []
   const goalStopCalls: Array<{ id: string; body: Record<string, unknown> }> = []
   const goalReplyCalls: Array<{ id: string; body: { message: string; achieved: boolean } }> = []
+  // 「改动」懒加载证据：只有点开「查看改动」时才应该出现请求。
+  const diffRequests: string[] = []
 
   let failNextGoalCreate = options.failNextGoalCreate ?? false
   let growGoalIterations = false
@@ -616,6 +671,29 @@ async function installGoalsMockFixture(
       })
     }
 
+    // ---- 「改动」 contract（并行任务提供，这里按同样形状 mock） ----
+    const goalDiffMatch = path.match(/^\/api\/supervisor\/goals\/([^/]+)\/diff$/)
+    if (goalDiffMatch && method === 'GET') {
+      const goalId = goalDiffMatch[1]
+      diffRequests.push(goalId)
+      if ((options.diffMissingFor || []).includes(goalId)) {
+        return json({ error: 'worktree is gone', code: 'worktree_missing' }, 404)
+      }
+      const diff = options.diffsByGoal?.[goalId]
+      return diff ? json(diff) : json({ error: 'goal not found' }, 404)
+    }
+
+    const taskDiffMatch = path.match(/^\/api\/supervisor\/tasks\/([^/]+)\/diff$/)
+    if (taskDiffMatch && method === 'GET') {
+      const taskId = taskDiffMatch[1]
+      diffRequests.push(taskId)
+      if ((options.diffMissingFor || []).includes(taskId)) {
+        return json({ error: 'worktree is gone', code: 'worktree_missing' }, 404)
+      }
+      const diff = options.diffsByTask?.[taskId]
+      return diff ? json(diff) : json({ error: 'task not found' }, 404)
+    }
+
     return json({ error: `unhandled ${method} ${path}` }, 404)
   })
 
@@ -623,6 +701,7 @@ async function installGoalsMockFixture(
     goalCreateCalls,
     goalStopCalls,
     goalReplyCalls,
+    diffRequests,
     setGrowGoalIterations(v: boolean) {
       growGoalIterations = v
     },
@@ -894,17 +973,18 @@ test('mock fixture: 查看这一轮的任务 switches to 任务与结果 with th
 
   await expect(page.getByRole('tab', { name: '任务与结果' })).toHaveAttribute('aria-selected', 'true')
   const taskCard = page.getByRole('region', { name: '当前任务进度与结果' })
-  await expect(taskCard).toContainText('第 1 轮：把首页加载时间降到 1 秒以内')
+  await expect(taskCard).toContainText('目标第 1 轮：首页加载时间降到 1 秒以内，并且所有测试通过')
   await expect(taskCard).toContainText('执行中')
 })
 
-test('mock fixture: an achieved 目标 says where the changes are and 查看改动 opens the last 轮\'s task', async ({
+test('mock fixture: an achieved 目标 says where the changes are and 查看改动 shows the diff inline', async ({
   page,
 }) => {
   await page.setViewportSize(DESKTOP)
-  await installGoalsMockFixture(page, {
+  const fixture = await installGoalsMockFixture(page, {
     initialGoalsByWt: { 'wt-fix-console': [FINISHED_GOAL, EXHAUSTED_GOAL] },
     initialTasksByWt: { 'wt-fix-console': [GOAL_TASK_2, GOAL_TASK_3] },
+    diffsByGoal: { 'goal-mock-finished-1': GOAL_DIFF },
   })
   await page.goto('/#code')
   await page.getByRole('tab', { name: '目标' }).click()
@@ -921,19 +1001,49 @@ test('mock fixture: an achieved 目标 says where the changes are and 查看改�
   // 最上面这一个不再重复出现在「以前的目标」里。
   await expect(page.locator('.sup-goal-history')).toContainText('以前的目标 · 1 个')
 
-  // 「查看改动」= 任务与结果 + 这个目标最近一轮（第 2 轮）的任务。
-  await card.getByRole('button', { name: '查看改动' }).click()
-  await expect(page.getByRole('tab', { name: '任务与结果' })).toHaveAttribute('aria-selected', 'true')
-  const taskCard = page.getByRole('region', { name: '当前任务进度与结果' })
-  await expect(taskCard).toContainText('第 2 轮：复验加载时间并补上移动端验收步骤')
-  await expect(taskCard).not.toContainText('第 3 轮：继续压缩构建时间')
+  // 「查看改动」就地展开这个目标的改动：文件列表 + 逐行差异，不跳页、不请求任务差异。
+  const button = card.getByRole('button', { name: '查看改动' })
+  await expect(button).toHaveAttribute('aria-expanded', 'false')
+  // 还没点开：这个目标的差异一次都没请求过。
+  expect(fixture.diffRequests).not.toContain('goal-mock-finished-1')
+  await button.click()
+  await expect(button).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByRole('tab', { name: '目标' })).toHaveAttribute('aria-selected', 'true')
+
+  const changes = card.locator('.sup-changes')
+  await expect(changes).toBeVisible()
+  await expect(changes.locator('.changed-file')).toHaveCount(GOAL_DIFF.files.length)
+  await expect(changes.locator('.changed-file-name').first()).toHaveText('App.tsx')
+  await expect(changes.locator('.diff-stat').first()).toHaveAttribute('aria-label', '新增 12 行，删除 3 行')
+  // 4 个文件：按文件收起，点开一个才看那一块的逐行差异。
+  const fileBlocks = changes.locator('.sup-changes-file')
+  await expect(fileBlocks).toHaveCount(GOAL_DIFF.files.length)
+  await expect(fileBlocks.first().locator('summary')).toContainText('web/src/App.tsx')
+  await fileBlocks.first().locator('summary').click()
+  await expect(fileBlocks.first()).toHaveAttribute('open', '')
+  await expect(fileBlocks.first().locator('.diff-line--add').first()).toHaveText('+added line')
+  await expect(fileBlocks.first().locator('.diff-line--del').first()).toHaveText('-removed line')
+  expect(fixture.diffRequests).toContain('goal-mock-finished-1')
+
+  // 再点一次收起，不再重复请求。
+  await button.click()
+  await expect(button).toHaveAttribute('aria-expanded', 'false')
+  await expect(card.locator('.sup-changes')).toHaveCount(0)
+  expect(fixture.diffRequests.filter(id => id === 'goal-mock-finished-1')).toHaveLength(1)
 })
 
-// 失败 / 用完轮数 / 停止：结果卡同样要给出「查看改动」（只要有某一轮跑出了任务）。
-const FINISHED_WITH_TASK: Array<{ chip: string; goal: GoalDetail; task: SupervisorTaskDetail }> = [
-  { chip: '失败', goal: FAILED_GOAL, task: GOAL_TASK_1 },
-  { chip: '已用完轮数', goal: EXHAUSTED_GOAL, task: GOAL_TASK_3 },
-  { chip: '已停止', goal: STOPPED_GOAL, task: GOAL_TASK_2 },
+// 失败 / 用完轮数 / 停止：结果卡同样就地给出「查看改动」。
+const FINISHED_WITH_TASK: Array<{
+  chip: string
+  goal: GoalDetail
+  /** 这一轮在任务页上的标题（由任务目标文本解析出来）。 */
+  taskTitle: string
+  /** 这一轮是第几轮，用来点「查看这一轮的任务」。 */
+  round: number
+}> = [
+  { chip: '失败', goal: FAILED_GOAL, taskTitle: `目标第 1 轮：${GOAL_OUTCOME_1}`, round: 1 },
+  { chip: '已用完轮数', goal: EXHAUSTED_GOAL, taskTitle: '目标第 3 轮：继续压缩构建时间', round: 3 },
+  { chip: '已停止', goal: STOPPED_GOAL, taskTitle: '目标第 2 轮：复验加载时间并补上移动端验收步骤', round: 2 },
 ]
 
 test('mock fixture: 失败 / 用完轮数 / 停止 的结果卡 also offers 查看改动', async ({ page }) => {
@@ -941,6 +1051,11 @@ test('mock fixture: 失败 / 用完轮数 / 停止 的结果卡 also offers 查�
   await installGoalsMockFixture(page, {
     initialGoalsByWt: { 'wt-fix-console': [FINISHED_GOAL, ...FINISHED_WITH_TASK.map(item => item.goal)] },
     initialTasksByWt: { 'wt-fix-console': [GOAL_TASK_1, GOAL_TASK_2, GOAL_TASK_3] },
+    diffsByGoal: {
+      'goal-mock-failed-1': { ...GOAL_DIFF, goal_id: 'goal-mock-failed-1' },
+      'goal-mock-exhausted-1': { ...GOAL_DIFF, goal_id: 'goal-mock-exhausted-1' },
+      'goal-mock-stopped-1': { ...GOAL_DIFF, goal_id: 'goal-mock-stopped-1' },
+    },
   })
   await page.goto('/#code')
   await page.getByRole('tab', { name: '目标' }).click()
@@ -952,11 +1067,91 @@ test('mock fixture: 失败 / 用完轮数 / 停止 的结果卡 also offers 查�
     await history.locator('.sup-goal-history-row').filter({ hasText: item.chip }).click()
     const card = page.getByRole('region', { name: '目标进度' })
     await expect(card).toContainText(item.chip)
+
+    // 「查看改动」就地展开这个目标的改动，不跳页。
     await card.getByRole('button', { name: '查看改动' }).click()
+    await expect(card.locator('.sup-changes')).toBeVisible()
+    await expect(page.getByRole('tab', { name: '目标' })).toHaveAttribute('aria-selected', 'true')
+    await card.getByRole('button', { name: '查看改动' }).click()
+
+    // 「查看这一轮的任务」才是跳页那一支：切到任务页并选中这一轮的任务。
+    await card.getByRole('button', { name: '查看每一轮' }).click()
+    const round = card.locator('.sup-goal-iteration').filter({ hasText: `第 ${item.round} 轮` })
+    await round.getByRole('button', { name: '查看这一轮的任务' }).click()
     await expect(page.getByRole('tab', { name: '任务与结果' })).toHaveAttribute('aria-selected', 'true')
-    await expect(page.getByRole('region', { name: '当前任务进度与结果' })).toContainText(item.task.goal)
+    await expect(page.getByRole('region', { name: '当前任务进度与结果' })).toContainText(item.taskTitle)
     await page.getByRole('tab', { name: '目标' }).click()
   }
+})
+
+test('mock fixture: 目标的工作目录已经不在了时说「这个工作目录已经不在了」', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installGoalsMockFixture(page, {
+    initialGoalsByWt: { 'wt-fix-console': [FINISHED_GOAL] },
+    initialTasksByWt: { 'wt-fix-console': [GOAL_TASK_2] },
+    diffMissingFor: ['goal-mock-finished-1'],
+  })
+  await page.goto('/#code')
+  await page.getByRole('tab', { name: '目标' }).click()
+
+  const card = page.getByRole('region', { name: '目标进度' })
+  await card.getByRole('button', { name: '查看改动' }).click()
+  await expect(card.locator('.sup-changes')).toHaveCount(0)
+  await expect(card.getByText('这个工作目录已经不在了，看不到这一轮的改动。')).toBeVisible()
+})
+
+test('mock fixture: 查看这一轮的任务 把这一轮的任务带到眼前，看得见这一轮的标题', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installGoalsMockFixture(page, {
+    initialGoalsByWt: { 'wt-fix-console': [RUNNING_GOAL] },
+    initialTasksByWt: { 'wt-fix-console': [GOAL_TASK_1] },
+  })
+  await page.goto('/#code')
+
+  const card = page.getByRole('region', { name: '目标进度' })
+  await card.getByRole('button', { name: '查看这一轮的任务' }).click()
+
+  await expect(page.getByRole('tab', { name: '任务与结果' })).toHaveAttribute('aria-selected', 'true')
+  const taskCard = page.locator('.sup-active-task-card')
+  await expect(taskCard).toBeVisible()
+  // 第 1 轮没有「本轮要做」，标题用目标结果的第一行（parser 对 fixture 的真实产出）。
+  await expect(taskCard).toContainText(goalRoundTaskTitle(GOAL_TASK_1.goal))
+  await expect(taskCard).toContainText('目标第 1 轮：首页加载时间降到 1 秒以内，并且所有测试通过')
+  await expect(taskCard).toContainText('执行中')
+
+  // 老板点完之后，这一轮的任务卡片就在眼前（不会落在屏幕外）。
+  await expect(taskCard).toBeInViewport()
+})
+
+// 目标循环里「第 1 轮失败、第 2 轮接着跑」是正常过程：这一条失败不算「需处理」。
+const GOAL_LOOP_ROUND_1_GOAL = '首页加载时间降到 1 秒以内，并且所有测试通过\n\n这是目标的第 1 轮。'
+const GOAL_LOOP_ROUND_2_GOAL = '这是目标「首页加载时间降到 1 秒以内」的第 2 轮。目标：首页加载时间降到 1 秒以内，并且所有测试通过\n\n本轮要做：复验加载时间并补上移动端验收步骤'
+
+test('mock fixture: 目标里前面失败的轮次不算进「需处理或失败」', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installGoalsMockFixture(page, {
+    initialGoalsByWt: { 'wt-fix-console': [RUNNING_GOAL_MID_EVAL] },
+    initialTasksByWt: {
+      'wt-fix-console': [
+        { ...GOAL_TASK_2, goal: GOAL_LOOP_ROUND_2_GOAL, state: 'completed' },
+        {
+          ...GOAL_TASK_1,
+          goal: GOAL_LOOP_ROUND_1_GOAL,
+          state: 'failed',
+          error: 'max repair rounds exceeded; remaining issues reported',
+        },
+      ],
+    },
+  })
+  await page.goto('/#code')
+
+  // 目标页默认打开；切到任务页看运行记录的红字条。
+  await page.getByRole('tab', { name: '任务与结果' }).click()
+  const history = page.locator('.sup-run-history')
+  await expect(history).toContainText('运行记录 · 2 条')
+  // 第 1 轮失败后面还有第 2 轮：没有「需处理或失败」。
+  await expect(history.locator('.sup-run-history-alert')).toHaveCount(0)
+  await expect(history).toContainText('失败或等待确认时自动展开')
 })
 
 test('mock fixture: an English backend error becomes one Chinese line, never the raw message', async ({ page }) => {
@@ -1027,6 +1222,39 @@ test('mock fixture: waiting_user on phone has no horizontal overflow and keeps r
   }))
   expect(overflow.scroll).toBeLessThanOrEqual(overflow.client)
   expect(overflow.scroll).toBeLessThanOrEqual(390)
+})
+
+test('mock fixture: phone 390px shows the 目标 改动 without horizontal overflow and keeps 查看改动 tappable', async ({ page }) => {
+  await page.setViewportSize(PHONE)
+  await installGoalsMockFixture(page, {
+    initialGoalsByWt: { 'wt-fix-console': [FINISHED_GOAL] },
+    initialTasksByWt: { 'wt-fix-console': [GOAL_TASK_2] },
+    diffsByGoal: { 'goal-mock-finished-1': GOAL_DIFF },
+  })
+  await page.goto('/#code')
+  await page.getByRole('tab', { name: '目标' }).click()
+
+  const card = page.getByRole('region', { name: '目标进度' })
+  const button = card.getByRole('button', { name: '查看改动' })
+  const box = await button.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.height).toBeGreaterThanOrEqual(40)
+
+  await button.click()
+  const changes = card.locator('.sup-changes')
+  await expect(changes).toBeVisible()
+  await changes.scrollIntoViewIfNeeded()
+  // 点开第一个文件的逐行差异：最长的一行也只在差异框里自己滚。
+  await changes.locator('.sup-changes-file').first().locator('summary').click()
+  await expect(changes.locator('pre.diff-body').first()).toBeVisible()
+
+  const overflow = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }))
+  expect(overflow.scroll).toBeLessThanOrEqual(overflow.client)
+  expect(overflow.scroll).toBeLessThanOrEqual(390)
+  await page.screenshot({ path: test.info().outputPath('sup-h2-goal-changes-390.png') })
 })
 
 test('mock fixture: the 目标 tab shows no English goal/iteration words', async ({ page }) => {
