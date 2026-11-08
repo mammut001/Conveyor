@@ -400,6 +400,12 @@ class WorkerUnitTests(unittest.TestCase):
         workers.detect_all_workers(force=True)
         self.assertGreater(mock_run.call_count, initial_calls)
 
+    def test_real_agy_quota_message(self) -> None:
+        # Captured from a real agy run that ran out of quota (2026-11-08).
+        text = ("error: Individual quota reached. Please upgrade your subscription to "
+                "increase your limits. Resets in 139h56m47s.")
+        self.assertEqual(workers.classify_failure(text), ("quota", 139 * 3600 + 56 * 60 + 47))
+
     def test_quota_failure_classification(self) -> None:
         # "Resets in 14h6m27s" -> 14*3600 + 6*60 + 27 = 50787 seconds
         result = workers.classify_failure("Resets in 14h6m27s")
