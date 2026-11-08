@@ -7,6 +7,7 @@ import type {
   SupervisorRoleKey,
   SupervisorWorktree,
 } from './SupervisorWorkspace'
+import SupervisorChecks, { type SupervisorChecksSummary } from './SupervisorChecks'
 import { SupervisorRoleBar, supStateLabel } from './SupervisorWorkspace'
 
 // ---------------------------------------------------------------------------
@@ -293,6 +294,7 @@ export default function SupervisorGoals({
   onChangeRole,
   onOpenTask,
   onActiveGoalChange,
+  onRefreshRepositories,
 }: {
   apiCall: <T>(path: string, init?: RequestInit) => Promise<T>
   repo: SupervisorRepo
@@ -305,7 +307,21 @@ export default function SupervisorGoals({
   onChangeRole: (role: SupervisorRoleKey, patch: Partial<RoleOverrideEntry>) => void
   onOpenTask: (taskId: string) => void
   onActiveGoalChange: (hasActiveGoal: boolean) => void
+  onRefreshRepositories?: () => void
 }) {
+  // 自动检查状态（来自 SupervisorChecks 的汇报）：用来在「开始」上方提醒还没有检查命令。
+  const [checksSummary, setChecksSummary] = useState<SupervisorChecksSummary | null>(null)
+  useEffect(() => {
+    setChecksSummary(null)
+  }, [repo.id])
+  const handleChecksSummary = useCallback((summary: SupervisorChecksSummary) => {
+    setChecksSummary(summary)
+  }, [])
+  // 服务器已配置（env）时不算「未设置」；否则只要勾选数为 0 就提醒。详情还没读到时，先按仓库列表
+  // 自带的标记判断：标记说「没有」或没有标记时，先按没有检查提醒（绝不挡住「开始」）。
+  const checksMissing = checksSummary
+    ? checksSummary.source !== 'env' && checksSummary.selectedCount === 0
+    : repo.validation_source !== 'env' && repo.validation_source !== 'repo'
   const contextKey = `${repo.id}:${worktree.id}`
   const [goals, setGoals] = useState<Goal[]>([])
   const [detail, setDetail] = useState<GoalDetail | null>(null)
@@ -797,6 +813,19 @@ export default function SupervisorGoals({
                 onChangeRole={onChangeRole}
                 disabled={readOnly || locked || creating}
               />
+
+              <SupervisorChecks
+                apiCall={apiCall}
+                repo={repo}
+                onSummaryChange={handleChecksSummary}
+                onSaved={onRefreshRepositories}
+              />
+
+              {checksMissing && (
+                <p className="sup-checks-warning" role="status">
+                  还没有设置自动检查，每一轮做完都会停下来请你检查。
+                </p>
+              )}
 
               {createError && (
                 <div className="sup-banner sup-banner--error" role="alert">

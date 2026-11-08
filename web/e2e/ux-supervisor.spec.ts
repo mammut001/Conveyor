@@ -6,6 +6,7 @@ import type {
   SupervisorTask,
   SupervisorTaskDetail,
 } from '../src/components/SupervisorWorkspace'
+import type { SupervisorChecksCandidate } from '../src/components/SupervisorChecks'
 
 // NOTE: All tests in this spec use mocked API fixtures to verify frontend contract wiring,
 // state isolation, idempotency, accessibility, and honest status rendering.
@@ -14,6 +15,26 @@ import type {
 const TOKEN = 'ux-supervisor-mock-fixture-token-0001'
 const DESKTOP = { width: 1440, height: 900 }
 const PHONE = { width: 390, height: 844 }
+
+// Server-detected 自动检查 candidates for the mocked Conveyor repository.
+const CHECKS_CANDIDATES: SupervisorChecksCandidate[] = [
+  {
+    id: 'npm-test',
+    label: '运行测试（npm test）',
+    argv: ['npm', 'test', '--silent'],
+    reason: 'package.json 的 scripts.test',
+    available: true,
+    unavailable_reason: '',
+  },
+  {
+    id: 'npm-build',
+    label: '构建项目（npm run build）',
+    argv: ['npm', 'run', 'build'],
+    reason: 'package.json 的 scripts.build',
+    available: true,
+    unavailable_reason: '',
+  },
+]
 
 function createMockCapabilities(overrides: Partial<SupervisorCapabilities> = {}): SupervisorCapabilities {
   return {
@@ -69,6 +90,7 @@ function createInitialRepos(): SupervisorRepo[] {
       name: 'Conveyor',
       path: '/srv/repos/conveyor',
       source_machine: 'dev-workstation',
+      validation_source: 'none',
       worktrees: [
         {
           id: 'wt-main',
@@ -270,6 +292,21 @@ async function installSupervisorMockFixture(
       repo.worktrees.push(createdWt)
       tasksByWt[createdWt.id] = []
       return json(createdWt, 201)
+    }
+
+    // 自动检查 contract: per-repository validation candidates (collapsed card above the dispatch card)
+    const validationMatch = path.match(/^\/api\/supervisor\/repositories\/([^/]+)\/validation$/)
+    if (validationMatch && method === 'GET') {
+      const repoId = validationMatch[1]
+      const known = repos.some(r => r.id === repoId)
+      return json({
+        repo_id: repoId,
+        candidates: known ? CHECKS_CANDIDATES : [],
+        selected: [],
+        source: 'none',
+        env_commands: [],
+        effective: [],
+      })
     }
 
     if (path === '/api/supervisor/tasks' && method === 'GET') {
