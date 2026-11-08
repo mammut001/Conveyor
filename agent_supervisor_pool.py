@@ -2,7 +2,7 @@
 
 The pool only chooses *which* worker runs. The actual run is delegated to the
 existing Supervisor executor for that worker, so read-only and sandbox rules
-stay where they already are. Workers without a Supervisor adapter (pi, grok,
+stay where they already are. Workers without a Supervisor adapter (grok,
 codex) are never used here.
 """
 from __future__ import annotations
@@ -18,8 +18,13 @@ from agent_supervisor import ExecutionResult, RoleConfig
 
 logger = logging.getLogger("conveyor.agent_supervisor_pool")
 
-POOL_TO_SUPERVISOR = {"claude-code": "claude", "agy": "antigravity", "cmd": "command-code"}
-NO_WORKER_REASON = "执行者池里没有可用的 Claude Code / Antigravity / Command Code"
+POOL_TO_SUPERVISOR = {
+    "claude-code": "claude",
+    "agy": "antigravity",
+    "cmd": "command-code",
+    "pi": "pi",
+}
+NO_WORKER_REASON = "执行者池里没有可用的 Claude Code / Antigravity / Command Code / Pi（内置）"
 ALL_QUOTA_PREFIX = "执行者池里的执行者额度都用完了："
 
 
@@ -35,7 +40,14 @@ def _identity(worktree_path: str) -> dict[str, str] | None:
 
 
 def _worker_model(worker: dict[str, Any]) -> str | None:
-    """The worker's own saved model only; Supervisor role models never reach pool workers."""
+    """The worker's own saved model only; Supervisor role models never reach pool workers.
+
+    Pi chooses its provider and model via resolve_pi_provider (CONVEYOR_PI_* >
+    saved 模型设置 > Pi default), whose bridged models.json only registers the
+    saved 模型设置 model, so a pool worker model is never passed to Pi.
+    """
+    if worker.get("id") == "pi":
+        return None
     value = worker.get("model")
     if isinstance(value, str) and value.strip():
         return value.strip()

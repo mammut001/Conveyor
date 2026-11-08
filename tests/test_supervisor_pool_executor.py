@@ -95,15 +95,16 @@ class PoolExecutorTests(unittest.TestCase):
             _worker("agy", enabled=False),
             _worker("cmd", auth="needs_login"),
             _worker("claude-code", state="cooling"),
-            _worker("pi"),
+            _worker("pi", auth="needs_login"),
             _worker("grok"),
             _worker("codex"),
         ]
         self.assertEqual(self._executor().candidates(ANALYST), [])
         self.workers.append(_worker("claude-code"))
         self.workers.append(_worker("cmd"))
+        self.workers.append(_worker("pi"))
         self.assertEqual([w["id"] for w in self._executor().candidates(ANALYST)],
-                         ["claude-code", "cmd"])
+                         ["claude-code", "cmd", "pi"])
 
     def test_not_installed_is_skipped(self) -> None:
         self.workers = [_worker("claude-code", installed=False), _worker("agy")]
@@ -189,12 +190,13 @@ class PoolExecutorTests(unittest.TestCase):
 
     # 7. no candidates: never falls back, factory never called
     def test_no_candidates_fails_without_calling_factory(self) -> None:
-        self.workers = [_worker("pi"), _worker("grok"), _worker("claude-code", enabled=False)]
+        self.workers = [_worker("pi", auth="needs_login"), _worker("grok"), _worker("claude-code", enabled=False)]
         ex = self._executor()
         self.assertEqual(ex.available(), (False, pool.NO_WORKER_REASON))
         result = self._run(executor=ex)
         self.assertFalse(result.success)
         self.assertEqual(result.error, pool.NO_WORKER_REASON)
+        self.assertIn("Pi", pool.NO_WORKER_REASON)
         self.assertEqual(self.factory_names, [])
         self.assertEqual(self.calls, [])
 
@@ -246,6 +248,58 @@ class PoolExecutorTests(unittest.TestCase):
         self._run(role=dataclasses.replace(ANALYST, model="deepseek-chat"))
         sent = [(r.executor, r.model) for r in self.received_roles]
         self.assertEqual(sent, [("claude", "claude-sonnet-5-5"), ("antigravity", None)])
+
+    def test_pi_is_eligible_for_read_and_write_roles_and_maps_to_pi(self) -> None:
+        self.workers = [_worker("pi")]
+        ex = self._executor()
+        self.assertEqual(ex.available(), (True, "ok"))
+        self.assertEqual([w["id"] for w in ex.candidates(ANALYST)], ["pi"])
+        self.assertEqual([w["id"] for w in ex.candidates(IMPLEMENTER)], ["pi"])
+        self.assertEqual([w["id"] for w in ex.candidates(REVIEWER)], ["pi"])
+        self.results = {"pi": _result(True, output="done", execution_id="ex-pi")}
+        result = self._run(role=IMPLEMENTER, executor=ex)
+        self.assertTrue(result.success)
+        self.assertEqual(self.calls, ["pi"])
+        self.assertEqual(self.received_roles[0].executor, "pi")
+        self.assertEqual(result.evidence["pool"]["worker_id"], "pi")
+
+    def test_pi_never_receives_pool_worker_model_or_supervisor_role_model(self) -> None:
+        # Pi resolves its provider/model via resolve_pi_provider; passing a pool worker
+        # model without a matching provider/models.json entry would fail Pi CLI startup.
+        self.workers = [
+            dict(_worker("claude-code"), model="claude-sonnet-5-5"),
+            dict(_worker("pi"), model="pool-model-pi-cannot-use"),
+        ]
+        self.results = {
+            "claude": _result(False, error=QUOTA_ERROR),
+            "pi": _result(True, output="ok"),
+        }
+        self._run(role=dataclasses.replace(ANALYST, model="deepseek-chat"))
+        sent = [(r.executor, r.model) for r in self.received_roles]
+        self.assertEqual(sent, [("claude", "claude-sonnet-5-5"), ("pi", None)])
+
+    def test_pi_participates_in_quota_rotation(self) -> None:
+        self.workers = [_worker("pi"), _worker("agy")]
+        self.results = {
+            "pi": _result(False, error=QUOTA_ERROR, execution_id="ex-pi"),
+            "antigravity": _result(True, output="done", execution_id="ex-agy"),
+        }
+        result = self._run(role=REVIEWER)
+        self.assertTrue(result.success)
+        self.assertEqual(self.calls, ["pi", "antigravity"])
+        state = workers.load_workers_state(self.settings)
+        self.assertIn("pi", state["cooling"])
+        self.assertEqual(state["switch_log"][-1]["from"], "pi")
+        self.assertEqual(state["switch_log"][-1]["to"], "agy")
+
+    def test_pi_write_role_does_not_rotate_after_edits(self) -> None:
+        self.workers = [_worker("pi"), _worker("agy")]
+        self.results = {"pi": _result(False, error=QUOTA_ERROR)}
+        with patch("agent_supervisor.target_identity", side_effect=[{"sha": "a"}, {"sha": "b"}]):
+            write_res = self._run(role=IMPLEMENTER)
+        self.assertFalse(write_res.success)
+        self.assertEqual(self.calls, ["pi"])
+        self.assertNotIn("pi", workers.load_workers_state(self.settings)["cooling"])
 
     def test_cancel_delegates_to_cancel_execution(self) -> None:
         with patch("agent_supervisor.cancel_execution", return_value=True) as cancel:

@@ -6,8 +6,8 @@
 
 - **多入口与现有功能**：仓库包含 Telegram、飞书和 Web 入口，以及聊天、任务、审批和桌面相关代码；各能力的实际部署和启用状态需要单独核实。
 - **Supervisor 工作区代码**：已在本分支提交（尚未合并到 `main`），包括可配置的协调、分析、实现和审阅角色，以及任务状态、工作树锁、交接、验收和部署阶段的记录。Web 的「项目」页可以派发任务，派发后由后台 worker 运行分析、实现、审阅和有限修复循环。参见 [架构总览](architecture-overview.md)。
-- **执行器现状**：Claude Code、Command Code 和 Antigravity（agy）执行器已实现。`pool`（执行者池）按用量和额度在这些执行者之间轮换。Supervisor 内的 Codex 适配器仍未实现，选用时明确报不可用。角色或模型的示例不是线上配置的证据。
-- **执行者池**：「执行者」页可以检测、登录、拖动排序和设置用量阈值；额度类失败后自动换下一个执行者。Pi 与 Super Grok 不参与 Supervisor 执行。
+- **执行器现状**：Claude Code、Command Code、Antigravity（agy）和 Pi（内置）执行器已实现。`pool`（执行者池）按用量和额度在这些执行者之间轮换。Supervisor 内的 Codex 适配器仍未实现，选用时明确报不可用。角色或模型的示例不是线上配置的证据。
+- **执行者池**：「执行者」页可以检测、登录、拖动排序和设置用量阈值；额度类失败后自动换下一个执行者。Pi（内置）已加入执行者池（只读角色限制为 `read,grep,find,ls`）；Super Grok 与 Codex 不参与 Supervisor 执行。
 - **待贯通与未验证**：
   - 额度提示识别：agy 已用真实输出验证（「Individual quota reached … Resets in 139h56m47s」，有回归测试）；claude 和 cmd 的真实额度提示还没有对照过，目前靠通用关键词匹配。
   - Command Code 无界面（`-p`）运行时，2026-11-08 本机实测 `accept-edits` 与 `dont-ask` 都写不了文件，只有 `--yolo` 能写，而无人值守时不应使用 `--yolo`。因此它目前更适合只读的分析和审阅，不适合当实现角色。

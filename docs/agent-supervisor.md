@@ -93,7 +93,7 @@ AGY read roles use a session-scoped permission deny profile; these tool permissi
 - **Claude (`claude`)**: Local CLI adapter with `--permission-mode` and tools allowlist.
 - **Command-Code (`command-code`)**: Local CLI adapter with `--permission-mode` (`plan` for read, `accept-edits` for write).
 - **Pi (`pi`)**: Built-in Pi coding agent. Read-only roles (analyst, reviewer) run with `--tools read,grep,find,ls` (no `bash`/`edit`/`write`); the implementer adds `read,bash,edit,write,grep,find,ls`. It runs headless with `--no-session --no-extensions --no-mcp --no-skills --no-prompt-templates --no-themes --offline --no-approve`, and its provider/model/credential follow the same precedence as the Pi worker (explicit `CONVEYOR_PI_*` > saved 模型设置 > Pi default); only the one chosen provider key reaches the child and `--api-key` is never passed. The reviewer verdict is parsed from Pi's text output (no `--json-schema`), exactly like command-code.
-- **Pool (`pool`)**: Picks one of the Claude Code, Antigravity or Command Code workers per role call and delegates to that worker's adapter. See the pool section below.
+- **Pool (`pool`)**: Picks one of the Claude Code, Antigravity, Command Code or Pi (`Pi（内置）`) workers per role call and delegates to that worker's adapter. See the pool section below.
 - **Codex (`codex`)**: Intentionally unsupported in this build; reports unavailable before dispatch.
 - **Provider Quota Notice**: Executor `available()` checks verify local binary presence on the host. Upstream provider quota exhaustion, rate limits, or network failures are runtime execution errors, not availability guarantees.
 
@@ -119,16 +119,16 @@ AGY read roles use a session-scoped permission deny profile; these tool permissi
 
 ### Rules
 
-- Candidates are pool workers that are enabled, installed, not `needs_login`, not cooling, and whose Supervisor adapter reports available. Mapping: Claude Code to `claude`, Antigravity to `antigravity`, Command Code to `command-code`. Pi, Super Grok and Codex never run through the pool.
-- Read roles (analyst, reviewer) need a worker eligible for RUN. The implementer needs a worker eligible for FIX. Command Code is excluded from FIX unless `CONVEYOR_WORKERS_UNSANDBOXED=true`.
+- Candidates are pool workers that are enabled, installed, not `needs_login`, not cooling, and whose Supervisor adapter reports available. Mapping: Claude Code to `claude`, Antigravity to `antigravity`, Command Code to `command-code`, Pi (`Pi（内置）`) to `pi`. Super Grok and Codex never run through the pool.
+- Read roles (analyst, reviewer) need a worker eligible for RUN. The implementer needs a worker eligible for FIX. Command Code is excluded from FIX unless `CONVEYOR_WORKERS_UNSANDBOXED=true`. Pi enforces read-only roles with `--tools read,grep,find,ls` and write roles with `--tools read,bash,edit,write,grep,find,ls`.
 - Order follows the owner's drag order. Workers over their usage threshold (default 95%, set per worker from 1 to 100) are tried last. The threshold does not stop a run that has already started.
 - Rotation happens only after a quota failure (quota wording, or a "resets in" reset time). The failed worker is cooled until the reported reset, or for 45 minutes when none is parsed. Any other failure ends the call without rotating.
 - An implementer that has already changed its worktree is not re-run on another worker.
 - Each attempt is a separate execution record with its own executor and model. The web console shows a switch note between a failed attempt and the next one.
-- Each worker runs with its own saved model (`/api/workers/<id>/model`). The Supervisor role model is never passed to pool workers.
+- CLI workers (`claude-code`, `agy`, `cmd`) run with their own saved model (`/api/workers/<id>/model`). Pi resolves its provider and model via `resolve_pi_provider` (`CONVEYOR_PI_*` > saved 模型设置 > Pi default), so a pool worker model is never passed to Pi. The Supervisor role model is never passed to pool workers.
 - Cooling is shared with the chat pool (`runner/pooled.py`). If every candidate hits a quota, the error starts with "执行者池里的执行者额度都用完了：".
 - Usage readers live in `worker_usage.py`. Antigravity usage needs a running local Antigravity language server; without one, the pool relies on quota errors alone. See also the [worker pool notes](workers.md).
-- `scripts/supervisor_pool_smoke.py` runs the real flow with fake `claude` and `agy` binaries and stubbed detection.
+- `scripts/supervisor_pool_smoke.py` runs the real flow with fake `claude`, `agy` and `pi` binaries and stubbed detection.
 
 ## Host Validation Commands (`CONVEYOR_AGENT_SUPERVISOR_VALIDATION_COMMANDS_JSON`)
 
