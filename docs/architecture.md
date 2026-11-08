@@ -1,5 +1,7 @@
 # Conveyor — 架构与设计
 
+> **历史架构记录**：下文主要描述旧版 Codex 路径，不代表用户当前使用的执行器或部署。请先阅读 [架构总览](architecture-overview.md) 和 [路线图](roadmap.md)，了解 Supervisor 工作区代码、实际边界与未来方向。
+
 > **状态**: Active
 > **日期**: 2026-06-11
 > **适用版本**: 通道解耦 P0+P1、agent 工具层、实时 Telegram 烟测、Telegram live smoke
