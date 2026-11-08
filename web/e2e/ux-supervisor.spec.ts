@@ -6,6 +6,7 @@ import type {
   SupervisorTask,
   SupervisorTaskDetail,
 } from '../src/components/SupervisorWorkspace'
+import type { SupervisorDiff } from '../src/components/SupervisorDiff'
 import type { SupervisorChecksCandidate } from '../src/components/SupervisorChecks'
 
 // NOTE: All tests in this spec use mocked API fixtures to verify frontend contract wiring,
@@ -150,6 +151,9 @@ async function installSupervisorMockFixture(
     initialTasksByWt?: Record<string, SupervisorTaskDetail[]>
     initialDeployments?: SupervisorDeployment[]
     delayWtTasksMs?: Record<string, number>
+    diffsByTask?: Record<string, SupervisorDiff>
+    diffsByGoal?: Record<string, SupervisorDiff>
+    diffMissingFor?: string[]
   } = {},
 ) {
   const featureEnabled = options.featureEnabled ?? true
@@ -166,6 +170,8 @@ async function installSupervisorMockFixture(
   const dispatchCalls: Array<{ taskId: string; body: Record<string, unknown> }> = []
   const cancelCalls: Array<{ taskId: string; body: Record<string, unknown> }> = []
   const deployStartCalls: Array<Record<string, unknown>> = []
+  // 「改动」懒加载证据：只有选中一个任务 / 点开「查看改动」时才应该出现请求。
+  const diffRequests: string[] = []
   const createdByRequestId = new Map<string, SupervisorTaskDetail>()
 
   let loseNextCreateResponse = false
@@ -368,6 +374,29 @@ async function installSupervisorMockFixture(
       return found ? json(found) : json({ error: 'task not found' }, 404)
     }
 
+    // 「改动」：GET /api/supervisor/tasks/<id>/diff（并行任务提供的契约，这里按同样的形状 mock）
+    const taskDiffMatch = path.match(/^\/api\/supervisor\/tasks\/([^/]+)\/diff$/)
+    if (taskDiffMatch && method === 'GET') {
+      const taskId = taskDiffMatch[1]
+      diffRequests.push(taskId)
+      if ((options.diffMissingFor || []).includes(taskId)) {
+        return json({ error: 'worktree is gone', code: 'worktree_missing' }, 404)
+      }
+      const diff = options.diffsByTask?.[taskId]
+      return diff ? json(diff) : json({ error: 'task not found' }, 404)
+    }
+
+    const goalDiffMatch = path.match(/^\/api\/supervisor\/goals\/([^/]+)\/diff$/)
+    if (goalDiffMatch && method === 'GET') {
+      const goalId = goalDiffMatch[1]
+      diffRequests.push(goalId)
+      if ((options.diffMissingFor || []).includes(goalId)) {
+        return json({ error: 'worktree is gone', code: 'worktree_missing' }, 404)
+      }
+      const diff = options.diffsByGoal?.[goalId]
+      return diff ? json(diff) : json({ error: 'goal not found' }, 404)
+    }
+
     const taskActionMatch = path.match(/^\/api\/supervisor\/tasks\/([^/]+)\/(dispatch|cancel)$/)
     if (taskActionMatch && method === 'POST') {
       const [, taskId, action] = taskActionMatch
@@ -433,6 +462,7 @@ async function installSupervisorMockFixture(
     dispatchCalls,
     cancelCalls,
     deployStartCalls,
+    diffRequests,
     tasksByWt,
     deployments,
     setCapabilities(next: SupervisorCapabilities) {
@@ -1392,7 +1422,7 @@ const RAW_ERROR_CASES: Array<{ raw: string; expected: string }> = [
   { raw: 'antigravity (agy) binary not found: /usr/local/bin/agy', expected: '执行器不可用（未安装或暂时无法使用）' },
   { raw: 'invalid review evidence: malformed JSON in review verdict', expected: '审查结果无效或审查失败，任务没有通过审查' },
   { raw: 'operator validation failed: unit (exit 1): 3 tests failed', expected: '自动验收检查没有通过' },
-  { raw: 'max repair rounds exceeded; remaining issues reported', expected: '自动修复次数已用完，仍有问题未解决' },
+  { raw: 'max repair rounds exceeded; remaining issues reported', expected: '自动修了几轮还是没通过检查' },
   { raw: 'git worktree add failed: fatal: already exists', expected: '代码工作区（git worktree）出现问题' },
   { raw: 'cancelled by user', expected: '任务已被取消' },
   { raw: 'supervisor restarted while task was in implementing', expected: '执行过程被意外中断' },
@@ -1415,3 +1445,372 @@ for (const { raw, expected } of RAW_ERROR_CASES) {
     await expect(banner.locator('pre')).toHaveText(raw)
   })
 }
+
+// ---------------------------------------------------------------------------
+// H2 「改动」+ 任务卡片短总结 + 运行记录中文原因 + 目标轮次标题
+// ---------------------------------------------------------------------------
+
+const GOAL_TITLE = '把首页加载时间降到 1 秒以内'
+const GOAL_OUTCOME = '首页加载时间降到 1 秒以内，并且所有测试通过'
+
+// 目标循环写下的第 1 轮 / 第 2 轮任务目标文本（supervisor_goals._first_iteration_prompt /
+// _continuation_prompt 的真实形状）。
+const GOAL_ROUND_1_GOAL = `${GOAL_OUTCOME}\n\n这是目标的第 1 轮。`
+const GOAL_ROUND_2_GOAL = `这是目标「${GOAL_TITLE}」的第 2 轮。目标：${GOAL_OUTCOME}\n\n本轮要做：复验加载时间并补上移动端验收步骤`
+
+function diffFile(path: string, status: SupervisorDiff['files'][number]['status'], additions: number, deletions: number) {
+  return { path, status, additions, deletions }
+}
+
+function fakeDiff(...paths: string[]): string {
+  return paths.map(path => [
+    `diff --git a/${path} b/${path}`,
+    '--- a/' + path,
+    '+++ b/' + path,
+    '@@ -1,2 +1,2 @@',
+    ' context line',
+    '-removed line',
+    '+added line',
+  ].join('\n')).join('\n')
+}
+
+// 运行记录默认收起；有失败时会自动展开。点开之前先看一眼，别把已经展开的又收起。
+async function openRunHistory(page: Page) {
+  const bar = page.locator('.sup-run-history-bar')
+  if ((await bar.getAttribute('aria-expanded')) !== 'true') await bar.click()
+  await expect(bar).toHaveAttribute('aria-expanded', 'true')
+}
+
+const CHANGES_TASK: SupervisorTaskDetail = {
+  id: 'sup-task-changes',
+  goal: GOAL_ROUND_2_GOAL,
+  repo_path: '/srv/repos/conveyor',
+  worktree_path: '/srv/repos/conveyor-wt/fix-console',
+  branch: 'fix/console',
+  state: 'completed',
+  stage: 'completed',
+  repair_round: 1,
+  max_repair_rounds: 2,
+  base_sha: '8352f46a9c01',
+  current_sha: 'a1b2c3d4e5f6',
+  updated_at: '2026-11-14T10:00:00Z',
+  summary: [
+    '任务: sup-task-changes',
+    '目标: 复验加载时间',
+    '状态: completed / 阶段: completed',
+    '仓库: /srv/repos/conveyor',
+    'Worktree: /srv/repos/conveyor-wt/fix-console',
+    '分支: fix/console',
+    '代码版本: a1b2c3d4e5f6',
+    '内容指纹: 1a2b3c4d5e6f7788…',
+    '修复轮次: 1/2',
+    '验收: 通过 @ a1b2c3d4e5f6',
+  ].join('\n'),
+  metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+  handoffs: [],
+  executions: [],
+  acceptance: { passed: true, summary: '构建与测试都通过了。' },
+}
+
+// 5 个文件：超过 3 个，每个文件的差异要单独收起来。
+const CHANGES_DIFF: SupervisorDiff = {
+  task_id: 'sup-task-changes',
+  base_sha: '8352f46a9c01',
+  head_sha: 'a1b2c3d4e5f6',
+  files: [
+    diffFile('web/src/App.tsx', 'M', 12, 3),
+    diffFile('web/src/taskText.ts', 'M', 40, 1),
+    diffFile('web/src/components/SupervisorDiff.tsx', 'A', 90, 0),
+    diffFile('docs/supervisor.md', 'M', 5, 2),
+    diffFile('old_helper.py', 'D', 0, 20),
+  ],
+  diff: fakeDiff(
+    'web/src/App.tsx',
+    'web/src/taskText.ts',
+    'web/src/components/SupervisorDiff.tsx',
+    'docs/supervisor.md',
+    'old_helper.py',
+  ),
+  truncated: true,
+  untracked: ['web/src/new_notes.md'],
+}
+
+test('H2: 任务卡片显示「改动」：文件列表带 +/-，超过 3 个文件按文件收起，差异懒加载', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  const fixture = await installSupervisorMockFixture(page, {
+    initialTasksByWt: {
+      'wt-fix-console': [
+        CHANGES_TASK,
+        {
+          id: 'sup-task-running',
+          goal: '还在跑的那一轮不该读差异',
+          state: 'running',
+          stage: 'implementation',
+          updated_at: '2026-11-14T11:00:00Z',
+          metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+        },
+      ],
+    },
+    diffsByTask: { 'sup-task-changes': CHANGES_DIFF },
+  })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  // 「改动」是任务卡片里独立的一段，不在「技术细节」里。
+  const changes = page.getByRole('region', { name: '改动' })
+  await expect(changes).toBeVisible()
+  await expect(changes.getByRole('heading', { name: '改动' })).toBeVisible()
+  await expect(page.locator('details.sup-tech-details').first()).not.toHaveAttribute('open', '')
+
+  // 只有选中的这一轮读了差异：正在跑的那一轮没有请求。
+  expect(fixture.diffRequests).toEqual(['sup-task-changes'])
+
+  // 文件列表：5 个改动文件 + 1 个未跟踪新文件，都带 +/- 。
+  const fileList = changes.locator('.changed-files')
+  await expect(fileList.locator('.changed-file')).toHaveCount(6)
+  await expect(fileList.locator('.changed-file-name').first()).toHaveText('App.tsx')
+  await expect(fileList.locator('.diff-stat-add').first()).toHaveText('+12')
+  // +/- 用 aria-label 说清楚，避免依赖减号字符。
+  await expect(fileList.locator('.diff-stat').first()).toHaveAttribute('aria-label', '新增 12 行，删除 3 行')
+  await expect(fileList.locator('.file-chip').first()).toHaveText('修改')
+  await expect(fileList.locator('.file-chip').nth(2)).toHaveText('新增')
+  await expect(fileList.locator('.file-chip').nth(4)).toHaveText('删除')
+  await expect(fileList.locator('.file-chip').last()).toHaveText('新增')
+
+  // 改动太多：一句白话提醒。
+  await expect(changes.getByText('改动太多，只显示前一部分。')).toBeVisible()
+
+  // 超过 3 个文件：每个文件一块，默认收起；点开之前一屏都没有逐行差异。
+  const fileBlocks = changes.locator('.sup-changes-file')
+  await expect(fileBlocks).toHaveCount(5)
+  await expect(changes.locator('pre.diff-body:visible')).toHaveCount(0)
+  await fileBlocks.first().locator('summary').click()
+  const opened = fileBlocks.first()
+  await expect(opened).toHaveAttribute('open', '')
+  await expect(changes.locator('pre.diff-body:visible')).toHaveCount(1)
+  await expect(opened.locator('.diff-line--add').first()).toHaveText('+added line')
+  await expect(opened.locator('.diff-line--del').first()).toHaveText('-removed line')
+  await expect(opened.locator('.diff-line--file').first()).toHaveText('web/src/App.tsx')
+
+  // 切到正在跑的那一轮：没有「改动」段，也不会去读它的差异。
+  await openRunHistory(page)
+  await page.getByRole('group', { name: '当前工作目录运行记录列表' }).getByText('还在跑的那一轮不该读差异').click()
+  await expect(page.getByRole('region', { name: '当前任务进度与结果' })).toContainText('执行中')
+  await expect(page.getByRole('region', { name: '改动' })).toHaveCount(0)
+  expect(fixture.diffRequests).toEqual(['sup-task-changes'])
+})
+
+test('H2: 少于 4 个改动文件时差异直接展开，没有文件时说明「这一轮没有改动文件」', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  const smallDiff: SupervisorDiff = {
+    task_id: 'sup-task-small',
+    base_sha: '8352f46',
+    head_sha: 'a1b2c3d',
+    files: [diffFile('calc.py', 'M', 3, 1), diffFile('tests/test_calc.py', 'M', 8, 0)],
+    diff: fakeDiff('calc.py', 'tests/test_calc.py'),
+    truncated: false,
+    untracked: [],
+  }
+  const emptyDiff: SupervisorDiff = {
+    task_id: 'sup-task-empty',
+    base_sha: '8352f46',
+    head_sha: 'a1b2c3d',
+    files: [],
+    diff: '',
+    truncated: false,
+    untracked: [],
+  }
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: {
+      'wt-fix-console': [
+        { ...CHANGES_TASK, id: 'sup-task-small', goal: '小改动一轮', acceptance: null },
+        { ...CHANGES_TASK, id: 'sup-task-empty', goal: '什么都没改的一轮', acceptance: null },
+      ],
+    },
+    diffsByTask: { 'sup-task-small': smallDiff, 'sup-task-empty': emptyDiff },
+  })
+  await page.goto('/#code')
+
+  const changes = page.getByRole('region', { name: '改动' })
+  await expect(changes).toBeVisible()
+  await expect(changes.locator('.changed-file')).toHaveCount(2)
+  await expect(changes.locator('.sup-changes-file')).toHaveCount(0)
+  await expect(changes.locator('pre.diff-body')).toBeVisible()
+  await expect(changes.locator('.diff-line--add').first()).toHaveText('+added line')
+  await expect(changes.getByText('改动太多，只显示前一部分。')).toHaveCount(0)
+
+  // 一个文件都没有：一句白话，不摆空的差异框。
+  await openRunHistory(page)
+  await page.getByRole('group', { name: '当前工作目录运行记录列表' }).getByText('什么都没改的一轮').click()
+  await expect(changes.getByText('这一轮没有改动文件。')).toBeVisible()
+  await expect(changes.locator('.changed-files')).toHaveCount(0)
+})
+
+test('H2: 工作目录已经不在了时说「这个工作目录已经不在了」，读不到时说稍后再试', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: {
+      'wt-fix-console': [
+        { ...CHANGES_TASK, id: 'sup-task-gone-wt' },
+        { ...CHANGES_TASK, id: 'sup-task-diff-error', goal: '接口暂时读不到的那一轮' },
+      ],
+    },
+    diffMissingFor: ['sup-task-gone-wt'],
+  })
+  await page.goto('/#code')
+
+  const changes = page.getByRole('region', { name: '改动' })
+  await expect(changes.getByText('这个工作目录已经不在了，看不到这一轮的改动。')).toBeVisible()
+  await expect(changes.locator('.changed-files')).toHaveCount(0)
+
+  // 另一个任务：既不是 404 worktree_missing 也没有数据 → 一句「稍后再试」。
+  await openRunHistory(page)
+  await page.getByRole('group', { name: '当前工作目录运行记录列表' }).getByText('接口暂时读不到的那一轮').click()
+  await expect(changes.getByText('暂时读不到这一轮的改动，稍后再试。')).toBeVisible()
+})
+
+test('H2: 任务卡片用一行短总结代替原始摘要，原文收在「技术细节」的「原始摘要」里', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: { 'wt-fix-console': [CHANGES_TASK] },
+    diffsByTask: { 'sup-task-changes': CHANGES_DIFF },
+  })
+  await page.goto('/#code')
+
+  const card = page.getByRole('region', { name: '当前任务进度与结果' })
+  const summary = card.locator('.sup-task-summary')
+  await expect(summary).toBeVisible()
+  await expect(summary.locator('p').first()).toHaveText('已完成 · 自动修了 1 轮 · 验收通过 · 改了 6 个文件')
+  // 验收那段话照常显示，但后端那段多行原始摘要不出现在卡片上。
+  await expect(card.locator('.sup-acceptance-box')).toContainText('构建与测试都通过了。')
+  await expect(card).not.toContainText('内容指纹')
+  await expect(card).not.toContainText('Worktree: /srv/repos')
+  await expect(card).not.toContainText('验收: 通过 @')
+
+  // 「技术细节」里保留原文，标题就叫「原始摘要」。
+  const techDetails = page.locator('details.sup-tech-details').first()
+  await techDetails.locator(':scope > summary').click()
+  const rawBlock = techDetails.locator('.sup-tech-block', { hasText: '原始摘要' })
+  await expect(rawBlock.locator('h4')).toHaveText('原始摘要')
+  await expect(rawBlock.locator('pre')).toContainText('修复轮次: 1/2')
+  await expect(rawBlock.locator('pre')).toContainText('验收: 通过 @ a1b2c3d4e5f6')
+})
+
+test('H2: 执行者自己写的一句结论仍然显示在任务卡片上', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: {
+      'wt-fix-console': [{ ...CHANGES_TASK, summary: '构建产物已输出到 web/dist，可以部署了。' }],
+    },
+    diffsByTask: { 'sup-task-changes': CHANGES_DIFF },
+  })
+  await page.goto('/#code')
+
+  const card = page.getByRole('region', { name: '当前任务进度与结果' })
+  await expect(card.locator('.sup-task-summary-note')).toHaveText('构建产物已输出到 web/dist，可以部署了。')
+})
+
+test('H2: 运行记录里的失败原因先说中文，英文原文收在「技术详情」', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  const fixture = await installSupervisorMockFixture(page, {
+    initialTasksByWt: {
+      'wt-fix-console': [
+        CHANGES_TASK,
+        {
+          id: 'sup-task-rounds',
+          goal: '构建脚本报错',
+          state: 'failed',
+          stage: 'verification',
+          error: 'max repair rounds exceeded; remaining issues reported',
+          updated_at: '2026-11-14T09:00:00Z',
+          metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+        },
+      ],
+    },
+  })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const history = page.locator('.sup-run-history')
+  await expect(history).toContainText('1 条需处理或失败')
+  const row = page.getByRole('group', { name: '当前工作目录运行记录列表' }).locator('.sup-run-row', { hasText: '构建脚本报错' })
+  await expect(row.locator('.sup-run-row-error > span')).toHaveText('自动修了几轮还是没通过检查')
+  await expect(row.locator('.sup-run-row-raw-error pre')).toBeHidden()
+  await row.locator('.sup-run-row-raw-error summary').click()
+  await expect(row.locator('.sup-run-row-raw-error pre')).toBeVisible()
+  await expect(row.locator('.sup-run-row-raw-error pre')).toHaveText('max repair rounds exceeded; remaining issues reported')
+  expect(fixture.diffRequests).toEqual(['sup-task-changes'])
+})
+
+test('H2: 目标轮次的任务标题在运行记录和任务卡片上都显示「目标第 N 轮：…」', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: {
+      'wt-fix-console': [
+        CHANGES_TASK,
+        { ...CHANGES_TASK, id: 'sup-task-round-1', goal: GOAL_ROUND_1_GOAL, state: 'failed', error: 'boom' },
+      ],
+    },
+    diffsByTask: { 'sup-task-changes': CHANGES_DIFF },
+  })
+  await page.goto('/#code')
+
+  // 任务卡片标题：第 2 轮显示这一轮要做的事。
+  const card = page.getByRole('region', { name: '当前任务进度与结果' })
+  await expect(card.locator('.sup-active-task-title h4')).toHaveText('目标第 2 轮：复验加载时间并补上移动端验收步骤')
+
+  // 第 1 轮失败会让运行记录自动展开。
+  await expect(page.locator('.sup-run-history-bar')).toHaveAttribute('aria-expanded', 'true')
+  const rows = page.getByRole('group', { name: '当前工作目录运行记录列表' }).locator('.sup-run-row')
+  await expect(rows).toHaveCount(2)
+  await expect(rows.nth(0).locator('.sup-run-row-main strong')).toHaveText('目标第 2 轮：复验加载时间并补上移动端验收步骤')
+  // 第 1 轮没有「本轮要做」，用目标结果的第一行。
+  await expect(rows.nth(1).locator('.sup-run-row-main strong')).toHaveText(`目标第 1 轮：${GOAL_OUTCOME}`)
+  // 原始的「这是目标…」前缀绝不直接摆在老板面前。
+  await expect(rows.nth(1)).not.toContainText('这是目标', { useInnerText: true })
+})
+
+test('H2: 目标里前面失败的轮次不算进「需处理或失败」', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: {
+      'wt-fix-console': [
+        CHANGES_TASK,
+        { ...CHANGES_TASK, id: 'sup-task-round-1-failed', goal: GOAL_ROUND_1_GOAL, state: 'failed', error: 'max repair rounds exceeded; remaining issues reported' },
+        { ...CHANGES_TASK, id: 'sup-task-plain-failed', goal: '和这个目标无关的失败', state: 'failed', error: 'boom' },
+      ],
+    },
+    diffsByTask: { 'sup-task-changes': CHANGES_DIFF },
+  })
+  await page.goto('/#code')
+
+  const history = page.locator('.sup-run-history')
+  // 3 条记录里 2 条失败，但第 1 轮失败后面还有第 2 轮 → 只剩 1 条要处理。
+  await expect(history).toContainText('运行记录 · 3 条')
+  await expect(history).toContainText('1 条需处理或失败')
+})
+
+test('H2: 改动视图在 390px 手机上不横向溢出', async ({ page }) => {
+  await page.setViewportSize(PHONE)
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: { 'wt-fix-console': [CHANGES_TASK] },
+    diffsByTask: { 'sup-task-changes': CHANGES_DIFF },
+  })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const changes = page.getByRole('region', { name: '改动' })
+  await expect(changes).toBeVisible()
+  await changes.scrollIntoViewIfNeeded()
+  // 点开第一个文件的逐行差异：最长的一行也只在差异框里自己滚。
+  await changes.locator('.sup-changes-file').first().locator('summary').click()
+  await expect(changes.locator('pre.diff-body').first()).toBeVisible()
+
+  const overflow = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }))
+  expect(overflow.scroll).toBeLessThanOrEqual(overflow.client)
+  expect(overflow.scroll).toBeLessThanOrEqual(390)
+  await page.screenshot({ path: test.info().outputPath('sup-h2-changes-390.png') })
+})

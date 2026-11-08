@@ -9,6 +9,7 @@ import type {
 } from './SupervisorWorkspace'
 import SupervisorChecks, { type SupervisorChecksSummary } from './SupervisorChecks'
 import { SupervisorRoleBar, supStateLabel } from './SupervisorWorkspace'
+import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
 
 // ---------------------------------------------------------------------------
 // 目标（goal-driven loop）contract types — mirrors supervisor_goals.py payloads.
@@ -338,6 +339,8 @@ export default function SupervisorGoals({
   const [stopError, setStopError] = useState('')
   const [expandedRound, setExpandedRound] = useState<number | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  // 结果卡上的「查看改动」：就地展开这个目标的改动（文件列表 + 逐行差异），不跳页。
+  const [changesOpen, setChangesOpen] = useState(false)
   const [pinnedGoalId, setPinnedGoalId] = useState('')
   // 老板点了「开始新目标」：表单要一直露出来，别再自动把刚跑完的目标钉回最上面。
   const [formRequested, setFormRequested] = useState(false)
@@ -431,6 +434,7 @@ export default function SupervisorGoals({
   useEffect(() => {
     setTimelineOpen(false)
     setExpandedRound(null)
+    setChangesOpen(false)
   }, [shownGoalId])
 
   // Poll the running goal every 3s while this tab is visible; stop otherwise.
@@ -576,6 +580,8 @@ export default function SupervisorGoals({
   }, [iterations])
   // 跑完之后的结果卡文案（标题 + 白话结论 + 补充说明）。
   const resultCopy = goalFinished && shownGoal ? goalResultCopy(shownGoal, shownDetail) : null
+  // 「查看改动」就地读这个目标的差异：只有点开了才请求。
+  const goalDiff = useSupervisorDiff(apiCall, 'goal', shownGoal?.id || '', changesOpen && goalFinished)
 
   return (
     <div className="sup-goals-scroll">
@@ -647,7 +653,12 @@ export default function SupervisorGoals({
                 )}
                 <div className="sup-goal-result-actions">
                   {lastTaskId && (
-                    <button type="button" className="shell-button" onClick={() => onOpenTask(lastTaskId)}>
+                    <button
+                      type="button"
+                      className="shell-button"
+                      aria-expanded={changesOpen}
+                      onClick={() => setChangesOpen(prev => !prev)}
+                    >
                       查看改动
                     </button>
                   )}
@@ -655,6 +666,7 @@ export default function SupervisorGoals({
                     开始新目标
                   </button>
                 </div>
+                {changesOpen && <SupervisorDiffView diffState={goalDiff} />}
               </div>
             ) : (
               shownDetail?.summary.trim() && <p className="sup-goal-summary">{shownDetail.summary.trim()}</p>

@@ -255,6 +255,109 @@ export function durationText(seconds: number) {
   return `${rest} 秒`
 }
 
+// ---------------------------------------------------------------------------
+// 目标循环创建的任务标题（supervisor_goals._continuation_prompt / _first_iteration_prompt）
+//
+//   第 N 轮：`这是目标「<title>」的第 N 轮。目标：<outcome>\n\n本轮要做：<instruction>`
+//   第 1 轮：`<outcome>\n\n这是目标的第 1 轮。`
+//
+// 老板只看中文短标题，所以解析成「目标第 N 轮：<这一轮要做的事>」，解析不了就返回空串
+// （调用方退回显示原始 goal 文本）。纯函数，方便单测。
+// ---------------------------------------------------------------------------
+
+const GOAL_ROUND_TITLE_MAX_CHARS = 40
+const GOAL_ROUND_MARKER = '本轮要做：'
+
+export type GoalRoundTaskInfo = {
+  round: number
+  /** 目标标题（第 1 轮的任务文本里没有，只有 outcome）。 */
+  goalTitle: string
+  /** 这一轮围绕的目标结果，用来把同一个目标的多轮任务认成一组。 */
+  outcome: string
+  /** 这一轮要做的事（可能多行，取第一行）。 */
+  instruction: string
+}
+
+function firstMeaningfulLine(text: string): string {
+  return text
+    .split('\n')
+    .map(line => line.trim())
+    .find(line => line.length > 0) || ''
+}
+
+/** 解析目标循环写下的任务目标文本；不是目标循环创建的任务返回 null。 */
+export function parseGoalRoundTask(goal?: string | null): GoalRoundTaskInfo | null {
+  const raw = typeof goal === 'string' ? goal.trim() : ''
+  if (!raw) return null
+
+  // 第 2 轮及以后：开头就是「这是目标「…」的第 N 轮。目标：…」
+  const later = raw.match(/^这是目标「([^」]*)」的第 (\d+) 轮。目标：([^\n]*)/)
+  if (later) {
+    const round = Number.parseInt(later[2], 10)
+    if (!Number.isFinite(round) || round < 1) return null
+    const rest = raw.slice(later[0].length)
+    const marker = rest.indexOf(GOAL_ROUND_MARKER)
+    const source = marker >= 0 ? rest.slice(marker + GOAL_ROUND_MARKER.length) : rest
+    return {
+      round,
+      goalTitle: (later[1] || '').trim(),
+      outcome: (later[3] || '').trim(),
+      instruction: firstMeaningfulLine(source),
+    }
+  }
+
+  // 第 1 轮：`<outcome>\n\n这是目标的第 1 轮。`
+  const first = raw.match(/这是目标的第 (\d+) 轮。/)
+  if (first && typeof first.index === 'number') {
+    const round = Number.parseInt(first[1], 10)
+    if (!Number.isFinite(round) || round < 1) return null
+    const outcome = firstMeaningfulLine(raw.slice(0, first.index))
+    return { round, goalTitle: '', outcome, instruction: outcome }
+  }
+  return null
+}
+
+/** 同一个目标的多轮任务靠 outcome（第 1 轮没有标题）认成一组。 */
+export function goalRoundKey(info: GoalRoundTaskInfo): string {
+  return info.outcome || info.goalTitle || `round-${info.round}`
+}
+
+/** 任务标题里这一行短话：`目标第 N 轮：<这一轮要做的事>`，最长 40 个字再加「…」。 */
+export function goalRoundTaskTitle(goal?: string | null): string {
+  const info = parseGoalRoundTask(goal)
+  if (!info) return ''
+  const collapsed = info.instruction.replace(/\s+/g, ' ').trim()
+  const cut = collapsed.length > GOAL_ROUND_TITLE_MAX_CHARS
+    ? `${collapsed.slice(0, GOAL_ROUND_TITLE_MAX_CHARS)}…`
+    : collapsed
+  return cut ? `目标第 ${info.round} 轮：${cut}` : `目标第 ${info.round} 轮`
+}
+
+/** 按 `diff --git` 把一段 unified diff 切成每个文件一块（每块保留自己的文件头，
+ *  这样 diffLines 仍然认识它）。文件头之前的统计前言直接丢掉。 */
+export function splitDiffByFile(diff?: string | null): { path: string; text: string }[] {
+  const raw = typeof diff === 'string' ? diff : ''
+  if (!raw.trim()) return []
+  const chunks: { path: string; text: string }[] = []
+  let current: string[] | null = null
+  for (const line of raw.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      if (current && current.length > 0) chunks.push({ path: diffChunkPath(current), text: current.join('\n') })
+      current = [line]
+      continue
+    }
+    if (current) current.push(line)
+  }
+  if (current && current.length > 0) chunks.push({ path: diffChunkPath(current), text: current.join('\n') })
+  return chunks
+}
+
+function diffChunkPath(lines: string[]): string {
+  const head = lines[0] || ''
+  const match = head.match(/^diff --git a\/(.*) b\/(.*)$/)
+  return match ? match[2] : head.slice('diff --git '.length)
+}
+
 export type JobErrorInfo = {
   message: string
   action?: 'workers' | 'settings'

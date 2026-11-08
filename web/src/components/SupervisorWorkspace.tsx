@@ -3,6 +3,8 @@ import { ChatPanel, type TaskSuggestion } from './ChatPanel'
 import { ChangedFileList } from './TaskParts'
 import SupervisorChecks from './SupervisorChecks'
 import SupervisorGoals, { SupervisorGoalsProbe } from './SupervisorGoals'
+import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
+import { goalRoundTaskTitle, parseGoalRoundTask, goalRoundKey } from '../taskText'
 import { useMediaQuery } from '../ux/shellNav'
 
 export type SupervisorExecutorModel = { id: string; name: string }
@@ -332,7 +334,7 @@ export function supFriendlyTaskError(raw?: string | null): string {
   if (/timed out|timeout/i.test(text)) return '执行超时，任务没有完成'
   if (/unavailable|not found|not installed|not implemented|binary/i.test(text)) return '执行器不可用（未安装或暂时无法使用）'
   if (/verdict|invalid review|review executor|review produced|review envelope|reviewer/i.test(text)) return '审查结果无效或审查失败，任务没有通过审查'
-  if (/max repair rounds/i.test(text)) return '自动修复次数已用完，仍有问题未解决'
+  if (/max repair rounds/i.test(text)) return '自动修了几轮还是没通过检查'
   if (/validation/i.test(text)) return '自动验收检查没有通过'
   if (/worktree|\bgit\b|symlink|target identity|lock/i.test(text)) return '代码工作区（git worktree）出现问题'
   if (/restarted|gone|ended before|interrupted/i.test(text)) return '执行过程被意外中断'
@@ -360,6 +362,34 @@ export function supStageLabel(stage?: string | null, fallbackState?: string | nu
 export function isTerminalTaskState(state?: string | null): boolean {
   const key = (state || '').trim().toLowerCase()
   return ['completed', 'succeeded', 'failed', 'cancelled', 'interrupted'].includes(key)
+}
+
+/** 这些状态才显示「改动」：这一轮已经跑完（成或败）或在等你确认，改动不会再有变化。 */
+const DIFF_VISIBLE_STATES = [
+  'completed', 'succeeded', 'ok', 'passed',
+  'failed', 'error',
+  'waiting_user', 'waiting_for_user', 'waiting_for_human',
+  'needs_attention', 'blocked',
+]
+
+// 后端 summary() 那段多行原始摘要（任务 id / 仓库 path / Worktree path / 分支 / SHA /
+// 内容指纹 / 修复轮次 / 验收 @ sha）对老板没有意义：看得见的那一行用字段现算，原文进「技术细节」。
+const RAW_SUMMARY_PATTERN = /(任务|目标|状态|仓库|Worktree|分支|代码版本|内容指纹|修复轮次|验收)[:：]/
+
+/** 是不是后端那段多行原始摘要（不是的话就是执行者自己写的一句话，可以照常显示）。 */
+export function supIsRawTaskSummary(text?: string | null): boolean {
+  const raw = (text || '').trim()
+  if (!raw) return false
+  if (!raw.includes('\n')) return false
+  return RAW_SUMMARY_PATTERN.test(raw)
+}
+
+/** 执行者自己写的结论（不是原始摘要时）——一句话，原样给老板看。 */
+function taskResultNote(taskDetail: SupervisorTaskDetail | null, task: SupervisorTask): string {
+  const raw = (taskDetail?.summary || task.metadata?.result_summary || '').trim()
+  if (!raw || supIsRawTaskSummary(raw)) return ''
+  const firstLine = raw.split('\n').map(line => line.trim()).find(line => line.length > 0) || ''
+  return firstLine.length > 200 ? `${firstLine.slice(0, 200)}…` : firstLine
 }
 
 export function isAttentionTask(task: SupervisorTask): boolean {
@@ -962,7 +992,25 @@ function SupervisorRunHistory({
   }
 
   const latestTask = tasks[0]
-  const attentionCount = tasks.filter(t => isAttentionTask(t)).length
+  // 目标循环里「前面某一轮失败、后面还有轮次」是正常过程：这些失败不算「需处理」。
+  const latestRoundByGoal = useMemo(() => {
+    const rounds = new Map<string, number>()
+    for (const task of tasks) {
+      const info = parseGoalRoundTask(task.goal)
+      if (!info) continue
+      const key = goalRoundKey(info)
+      const seen = rounds.get(key) || 0
+      if (info.round > seen) rounds.set(key, info.round)
+    }
+    return rounds
+  }, [tasks])
+  const isSupersededRound = useCallback((task: SupervisorTask) => {
+    const info = parseGoalRoundTask(task.goal)
+    if (!info) return false
+    const latest = latestRoundByGoal.get(goalRoundKey(info))
+    return typeof latest === 'number' && latest > info.round
+  }, [latestRoundByGoal])
+  const attentionCount = tasks.filter(t => isAttentionTask(t) && !isSupersededRound(t)).length
 
   return (
     <section className={`sup-run-history ${expanded ? 'is-expanded' : 'is-collapsed'}`} aria-label="运行记录">
@@ -995,30 +1043,42 @@ function SupervisorRunHistory({
               const isSelected = task.id === selectedTaskId
               const attention = isAttentionTask(task)
               return (
-                <button
+                <div
                   key={task.id}
-                  type="button"
                   className={`sup-run-row ${isSelected ? 'selected' : ''} ${attention ? 'is-attention' : ''}`}
-                  aria-pressed={isSelected}
-                  onClick={() => onSelectTask(task.id)}
                 >
-                  <div className="sup-run-row-main">
-                    <strong>{task.goal || task.id}</strong>
-                    <span className={`status-badge ${task.state}`}>
-                      <i />
-                      {supStateLabel(task.state)}
-                    </span>
-                  </div>
-                  <div className="sup-run-row-meta">
-                    <span>阶段：{supStageLabel(task.stage, task.state)}</span>
-                    {typeof task.repair_round === 'number' && typeof task.max_repair_rounds === 'number' && task.max_repair_rounds > 0 && (
-                      <span>修复轮次：{task.repair_round}/{task.max_repair_rounds}</span>
-                    )}
-                    <span>{formatShortTime(task.updated_at || task.created_at)}</span>
-                    <code>{task.id}</code>
-                  </div>
-                  {task.error && <small className="sup-run-row-error">{task.error}</small>}
-                </button>
+                  <button
+                    type="button"
+                    className="sup-run-row-button"
+                    aria-pressed={isSelected}
+                    onClick={() => onSelectTask(task.id)}
+                  >
+                    <div className="sup-run-row-main">
+                      <strong>{goalRoundTaskTitle(task.goal) || task.goal || task.id}</strong>
+                      <span className={`status-badge ${task.state}`}>
+                        <i />
+                        {supStateLabel(task.state)}
+                      </span>
+                    </div>
+                    <div className="sup-run-row-meta">
+                      <span>阶段：{supStageLabel(task.stage, task.state)}</span>
+                      {typeof task.repair_round === 'number' && typeof task.max_repair_rounds === 'number' && task.max_repair_rounds > 0 && (
+                        <span>修复轮次：{task.repair_round}/{task.max_repair_rounds}</span>
+                      )}
+                      <span>{formatShortTime(task.updated_at || task.created_at)}</span>
+                      <code>{task.id}</code>
+                    </div>
+                  </button>
+                  {task.error && (
+                    <div className="sup-run-row-error">
+                      <span>{supFriendlyTaskError(task.error)}</span>
+                      <details className="sup-run-row-raw-error">
+                        <summary>技术详情</summary>
+                        <pre>{task.error}</pre>
+                      </details>
+                    </div>
+                  )}
+                </div>
               )
             })
           )}
@@ -1104,6 +1164,7 @@ function SupervisorTechnicalDetails({
   taskDetail: SupervisorTaskDetail | null
 }) {
   const changedFiles = normalizeChangedFiles(taskDetail?.metadata?.changed_files ?? task?.metadata?.changed_files)
+  const rawSummary = (taskDetail?.summary || task?.metadata?.result_summary || '').trim()
   const handoffs = onlyObjects(taskDetail?.handoffs)
   const executions = onlyObjects(taskDetail?.executions)
   const switchNotes = supExecutionSwitchNotes(executions)
@@ -1116,7 +1177,7 @@ function SupervisorTechnicalDetails({
   return (
     <details className="sup-tech-details">
       <summary className="sup-tech-summary">
-        <span>技术细节（可选查看：改动文件、交接记录与执行输出）</span>
+        <span>技术细节（可选查看：原始摘要、改动文件、交接记录与执行输出）</span>
         <span className="sup-tech-meta">{countLabel}</span>
       </summary>
       <div className="sup-tech-body">
@@ -1127,6 +1188,13 @@ function SupervisorTechnicalDetails({
             {task.current_sha && <span>当前提交：<code>{shortSha(task.current_sha)}</code></span>}
           </div>
         ) : null}
+
+        {rawSummary && (
+          <div className="sup-tech-block">
+            <h4>原始摘要</h4>
+            <pre className="sup-exec-output">{rawSummary}</pre>
+          </div>
+        )}
 
         <div className="sup-tech-block">
           <h4>改动文件</h4>
@@ -1532,6 +1600,10 @@ export function SupervisorWorkspace({
   const contextAbortRef = useRef<AbortController | null>(null)
   const pollInFlightRef = useRef(false)
   const goalInputRef = useRef<HTMLTextAreaElement>(null)
+  // 「查看这一轮的任务」切回任务页后，把这一轮的任务卡片滚进可视区，
+  // 免得老板一落地正对着上面的派发表单。
+  const taskCardRef = useRef<HTMLElement>(null)
+  const pendingTaskScrollRef = useRef(false)
 
   const selectedRepo = useMemo(
     () => repositories.find(r => r.id === selectedRepoId) || null,
@@ -1907,6 +1979,33 @@ export function SupervisorWorkspace({
     return currentSnapshot.taskDetail?.id === selectedTask.id ? currentSnapshot.taskDetail : null
   }, [currentSnapshot.taskDetail, selectedTask])
 
+  // 「改动」：只有这一轮已经结束（完成 / 失败 / 在等你）时才值得看改了什么，
+  // 选中任务时才去读差异（懒加载），读完按任务 id 缓存。
+  const changesReady = Boolean(selectedTask) && DIFF_VISIBLE_STATES.includes((selectedTask?.state || '').trim().toLowerCase())
+  const taskDiff = useSupervisorDiff(apiCall, 'task', selectedTask?.id || '', changesReady)
+  const diffFileCount = taskDiff.status === 'ready'
+    ? (taskDiff.data.files?.length || 0) + (taskDiff.data.untracked?.length || 0)
+    : 0
+
+  // 任务卡片上那一行短总结：状态 + 修了几轮 + 验收 + 改了几个文件（原始摘要进「技术细节」）。
+  const taskSummary = useMemo(() => {
+    if (!selectedTask) return null
+    const acceptance = selectedTaskDetail?.acceptance
+    const verdict = acceptance?.passed === true
+      ? '验收通过'
+      : acceptance?.passed === false
+        ? '验收未通过'
+        : '验收未验证'
+    const parts = [supStateLabel(selectedTask.state)]
+    if (typeof selectedTask.repair_round === 'number') {
+      parts.push(selectedTask.repair_round > 0 ? `自动修了 ${selectedTask.repair_round} 轮` : '没有自动修复')
+    }
+    parts.push(verdict)
+    parts.push(diffFileCount > 0 ? `改了 ${diffFileCount} 个文件` : '没有改动文件')
+    const note = taskResultNote(selectedTaskDetail, selectedTask)
+    return { line: parts.join(' · '), note }
+  }, [diffFileCount, selectedTask, selectedTaskDetail])
+
   const handleSelectTask = useCallback(async (taskId: string) => {
     if (!contextKey || !selectedRepo || !selectedWorktree) return
     const targetKey = contextKey
@@ -2167,7 +2266,21 @@ export function SupervisorWorkspace({
     subTabTouchedRef.current = true
     setSubTab('workspace')
     void handleSelectTask(taskId)
+    // 等这一页连任务卡片一起画出来，再把卡片滚到任务区顶部（见下面的 effect）。
+    pendingTaskScrollRef.current = true
   }, [handleSelectTask])
+
+  // 切页 + 选中都渲染完之后，把这一轮的任务卡片滚到任务区顶部：老板一落地看到的就是这一轮，
+  // 而不是上面的派发表单。放在 effect 里是因为点按钮的那一刻任务卡片可能还没画出来。
+  useEffect(() => {
+    if (!pendingTaskScrollRef.current) return
+    if (subTab !== 'workspace' || !selectedTask) return
+    pendingTaskScrollRef.current = false
+    const frame = window.requestAnimationFrame(() => {
+      taskCardRef.current?.scrollIntoView({ block: 'start' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [subTab, selectedTask])
 
   // Task suggestion from ChatPanel fills reviewable goal without auto-dispatching
   const handlePrepareTask = useCallback((suggestion: TaskSuggestion) => {
@@ -2503,14 +2616,14 @@ export function SupervisorWorkspace({
               </section>
 
               {selectedTask && (
-                <section className="sup-card sup-active-task-card" aria-label="当前任务进度与结果">
+                <section ref={taskCardRef} className="sup-card sup-active-task-card" aria-label="当前任务进度与结果">
                   <div className="sup-active-task-header">
                     <div className="sup-active-task-title">
                       <span className={`status-badge ${selectedTask.state}`}>
                         <i />
                         {supStateLabel(selectedTask.state)}
                       </span>
-                      <h4>{selectedTask.goal}</h4>
+                      <h4>{goalRoundTaskTitle(selectedTask.goal) || selectedTask.goal}</h4>
                     </div>
                     {!isTerminalTaskState(selectedTask.state) && (
                       <button
@@ -2554,10 +2667,11 @@ export function SupervisorWorkspace({
                     </div>
                   )}
 
-                  {(selectedTaskDetail?.summary || selectedTask.metadata?.result_summary) && (
-                    <div className="sup-result-summary">
-                      <h5>执行结果摘要</h5>
-                      <p>{selectedTaskDetail?.summary || selectedTask.metadata?.result_summary}</p>
+                  {changesReady && taskSummary && (
+                    <div className="sup-task-summary">
+                      <h5>这一轮的结果</h5>
+                      <p>{taskSummary.line}</p>
+                      {taskSummary.note && <p className="sup-task-summary-note">{taskSummary.note}</p>}
                     </div>
                   )}
 
@@ -2575,6 +2689,16 @@ export function SupervisorWorkspace({
                       </h5>
                       {selectedTaskDetail.acceptance.summary && <p>{selectedTaskDetail.acceptance.summary}</p>}
                     </div>
+                  )}
+
+                  {changesReady && (
+                    <section className="sup-task-changes" aria-label="改动">
+                      <div className="sup-card-head">
+                        <h4>改动</h4>
+                        <span className="sup-card-hint">改了哪些文件、每一行变成了什么</span>
+                      </div>
+                      <SupervisorDiffView diffState={taskDiff} />
+                    </section>
                   )}
 
                   <p className="sup-separation-note">
