@@ -597,7 +597,7 @@ export default function SupervisorGoals({
           <div className="sup-banner sup-banner--readonly" role="status">
             <div className="sup-banner-text">
               <strong>当前为只读工作目录（{worktree.is_main ? '主分支' : '未托管目录'}）</strong>
-              <span>主工作目录与未托管目录仅支持只读查看。请新建托管 Worktree 以在隔离目录中执行目标。</span>
+              <span>主工作目录与未托管目录仅支持只读查看。请新建工作目录，在独立副本里执行目标。</span>
             </div>
           </div>
         )}
@@ -867,7 +867,7 @@ export default function SupervisorGoals({
 
               <div className="sup-dispatch-footer">
                 <span className="sup-dispatch-context-tag">
-                  作用范围：<code>{repo.name}</code> / <code>{worktree.branch}</code>
+                  在这里改：<code>{repo.name}</code> / <code>{worktree.branch}</code>
                 </span>
                 <button
                   type="submit"

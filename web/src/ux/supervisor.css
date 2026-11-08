@@ -773,6 +773,13 @@
   font-weight: 600;
 }
 
+/* One plain line under each role name (N20: 分析 / 动手改 / 检查 explain themselves). */
+.sup-role-hint {
+  color: #6b7280;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .sup-role-badge {
   padding: 1px 6px;
   border-radius: 999px;
@@ -1782,6 +1789,53 @@
   padding: 28px 20px;
   text-align: center;
   color: #4b5563;
+}
+
+/* N20: the one-paragraph 项目 intro, only while no repository is registered yet. */
+.sup-intro {
+  position: relative;
+  flex: none;
+  margin: 12px 20px 0;
+  padding: 12px 40px 12px 14px;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #f5f9ff;
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.sup-intro p { margin: 0; }
+.sup-intro p + p { margin-top: 6px; }
+.sup-intro strong { color: #1f2328; }
+
+.sup-intro-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #667085;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sup-intro-close:hover { background: #e8eff9; color: #1f2328; }
+
+.sup-intro-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #bd5c40;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .sr-only {

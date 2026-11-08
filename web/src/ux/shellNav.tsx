@@ -16,7 +16,7 @@ export const VIEW_LABELS: Record<ShellView, string> = {
 
 /** One muted line under the page title. */
 export const VIEW_SUBTITLES: Record<ShellView, string> = {
-  chat: '与 Conveyor 直接对话', tasks: '任务', code: '仓库、工作目录与任务监工', inbox: '定时任务的结果和通知', approvals: '等待你确认的操作',
+  chat: '与 Conveyor 直接对话', tasks: '任务', code: '仓库、工作目录与派发任务', inbox: '定时任务的结果和通知', approvals: '等待你确认的操作',
   memory: '助手长期记住的信息', teammate: '全天候值守，发现问题及时提醒', skills: '可在对话中使用的技能',
   workflows: '分步骤推进的长任务', connectors: '连接外部工具和服务', browser: '允许助手访问的网站',
   secrets: '只供助手使用的私密凭据', workers: '谁来替你干活：检测、登录、按额度自动轮换',
