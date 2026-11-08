@@ -272,8 +272,21 @@ Rules:
   oversize and non-regular files are listed in `untracked` only.
 - `diff` is capped at 200 000 characters (`truncated: true` when cut).
 - git runs with a timeout, `GIT_OPTIONAL_LOCKS=0`, no pager, no external diff driver and no textconv
-  filter, and only inside a worktree that canonicalizes under the managed supervisor worktree root —
+  filter, forced `core.fsmonitor=false`, `core.hooksPath=/dev/null` and `core.attributesFile=/dev/null`,
+  and only inside a worktree that canonicalizes under the managed supervisor worktree root —
   anything else is `403 worktree_outside_managed_root`, a vanished worktree is `404 worktree_missing`.
+- Agents in the worktree are untrusted and can write the shared `.git` directory. Before any git call
+  that reads worktree content, `supervisor_diff.repo_exec_risks` scans the effective repository config
+  (`git config --list --includes --show-origin --show-scope`, only `local`/`worktree` scope — the owner's
+  system/global config is trusted) for `include.*`, `includeIf.*`, `core.attributesFile`,
+  `core.fsmonitor` (unless false), `core.hooksPath` (unless empty), `core.sshCommand`, `core.pager`,
+  `diff.external`, `filter.*`, `merge.*.driver`, `diff.*.textconv|command`, `credential.*helper`,
+  `gpg.program`, `gpg.*.program`, `core.editor`, `sequence.editor`; and every attributes source —
+  each tracked, untracked or ignored `.gitattributes` in the worktree (file and index copy), the main
+  checkout's tracked `.gitattributes`, and `<git common dir>/info/attributes` — for a `filter=` /
+  `merge=` / `diff=` driver (git's built-in `merge=text|binary|union` and `diff=<language>` are
+  allowed; unreadable, symlinked or non-regular files count as unsafe). Anything found →
+  `409 unsafe_repo_config` with a Chinese message naming the setting, and no `diff`/`status` runs.
 - The diff body is **not** passed through `redaction.redact_text`: its value patterns are tuned for
   logs and rewrite ordinary code (e.g. `_cli_load_runner` → `[REDACTED]`, `self.token = token`), which
   would corrupt exactly what the owner is asked to review.
@@ -435,14 +448,22 @@ Rules (all enforced in code, each failure is a blocker with a Chinese message):
    `target_not_checked_out` 「主工作目录当前不在 <branch> 分支上，请先切回去再合并」.
 4. The main checkout must be clean (`git status --porcelain --untracked-files=no`), else `target_dirty`
    「主工作目录里有还没提交的改动，为了不弄乱它，先不合并」.
-5. Repository config (`git config --local --list`, plus `--worktree --list` when available) must not contain
-   keys that can run commands — `core.fsmonitor`, `core.hooksPath` (unless empty), `core.sshCommand`,
-   `core.pager`, `diff.external`, `filter.*.clean|smudge|process`, `merge.*.driver`, `diff.*.textconv|command`,
-   `credential.helper`, `gpg.program`, `gpg.*.program`, `core.editor`, `sequence.editor` — and neither
-   checkout may carry a `.gitattributes` naming a `filter=` / `merge=` / `diff=` driver
-   (`unsafe_repo_config` / `unsafe_gitattributes`).
+5. Repository config and attributes must not be able to run commands — the same
+   `supervisor_diff.repo_exec_findings` scan the diff endpoints use (config with `include.*` followed,
+   read from the worktree and the main checkout; every attributes file; `.git/info/attributes`), giving
+   `unsafe_repo_config` / `unsafe_gitattributes`. It runs right after rules 1–2 and **before** any git call
+   that reads worktree content: while it reports anything, the preview returns the blockers with
+   `files: []` and `has_uncommitted: false` without running `diff` / `status`, and POST refuses before
+   step (a).
+5c. The worktree must still be on the branch recorded in `supervisor_worktrees.branch` when
+   `create_managed_worktree` made it (rows from older builds accept only Conveyor's own auto-generated
+   names `sup/<token>` / the directory name), and that branch must differ from the target — else
+   `branch_changed` 「工作目录的分支被改动过，为安全起见不合并」. Checked before anything is committed and
+   re-checked right before the commit and the merge; the merge names `refs/heads/<source_branch>` so a
+   same-named tag cannot be merged instead.
 6. Every git call: `git --no-pager -C <path> -c core.hooksPath=/dev/null -c core.fsmonitor=false
-   -c commit.gpgsign=false -c tag.gpgsign=false -c core.editor=true …` in a scrubbed child env
+   -c commit.gpgsign=false -c tag.gpgsign=false -c core.editor=true -c core.attributesFile=/dev/null …`
+   in a scrubbed child env
    (`supervisor_diff._git_env`: `GIT_DIR`/`GIT_WORK_TREE`/… stripped, `GIT_OPTIONAL_LOCKS=0`,
    `GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`), 60 s timeout, never `shell=True`.
 7. Merge steps: (a) uncommitted work in the worktree is committed as `Conveyor <conveyor@localhost>`

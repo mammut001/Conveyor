@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import shlex
 import sqlite3
 import stat
 import subprocess
@@ -840,6 +841,280 @@ class MergeHttpTests(_MergeFixture):
         )
         self.assertEqual(code, 409)
         self.assertEqual(body.get("code"), "agent_supervisor_disabled")
+
+
+class MergeRepoExecRiskTests(_MergeFixture):
+    """Agent-planted config/attributes never run during preview or merge."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.marker = self.root / "filter-ran"
+        self.filter_cmd = f"touch {shlex.quote(str(self.marker))}; cat"
+
+    def _common_dir(self) -> Path:
+        raw = _git(self.wt_path, "rev-parse", "--git-common-dir").strip()
+        path = Path(raw)
+        return path if path.is_absolute() else (self.wt_path / path).resolve()
+
+    def _plant_subdir_filter(self) -> None:
+        """Tracked sub/data.txt with sub/.gitattributes → `pwn`, plus the filter in .git/config."""
+        (self.wt_path / "sub").mkdir()
+        (self.wt_path / "sub" / "data.txt").write_text("one\n", encoding="utf-8")
+        (self.wt_path / "sub" / ".gitattributes").write_text("*.txt filter=pwn\n", encoding="utf-8")
+        _git(self.wt_path, "add", "-A")
+        _git(self.wt_path, "commit", "-qm", "sub dir with attributes")
+        (self.wt_path / "sub" / "data.txt").write_text("one\ntwo\n", encoding="utf-8")
+        self._set_config("filter.pwn.clean", self.filter_cmd)
+
+    def _forbid_content_reads(self):
+        """Patches that fail the test if anything that reads worktree content runs."""
+
+        def _boom(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("must not read worktree content while the repo is unsafe")
+
+        return (
+            patch.object(merge_mod, "_is_clean", _boom),
+            patch.object(merge_mod, "_has_uncommitted", _boom),
+            patch.object(merge_mod.diff_mod, "build_worktree_diff", _boom),
+            patch.object(merge_mod, "_commit_worktree_changes", _boom),
+        )
+
+    def _run_with_content_reads_forbidden(self, fn: Any) -> Any:
+        patches = self._forbid_content_reads()
+        for p in patches:
+            p.start()
+        try:
+            return fn()
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+    def test_preview_with_filter_and_subdir_attributes_runs_nothing(self) -> None:
+        self._plant_subdir_filter()
+        payload = self._run_with_content_reads_forbidden(self._preview)
+
+        self.assertFalse(payload["can_merge"])
+        codes = [b["code"] for b in payload["blockers"]]
+        self.assertIn("unsafe_repo_config", codes)
+        self.assertIn("unsafe_gitattributes", codes)
+        messages = " ".join(b["message"] for b in payload["blockers"])
+        self.assertIn("filter.pwn.clean", messages)
+        self.assertIn("sub/.gitattributes", messages)
+        self.assertEqual(payload["files"], [])
+        self.assertFalse(payload["has_uncommitted"])
+        self.assertFalse(self.marker.exists(), "the planted filter must never run")
+
+        # Same through the real (unpatched) preview: still nothing runs.
+        self._preview()
+        self.assertFalse(self.marker.exists())
+
+    def test_merge_with_filter_is_refused_before_any_commit(self) -> None:
+        self._plant_subdir_filter()
+        wt_head = _head(self.wt_path)
+        main_head = _head(self.repo_dir)
+
+        def _attempt() -> None:
+            with self.assertRaises(svc.SupervisorServiceError) as ctx:
+                self._merge({"confirm": True})
+            self.assertEqual(ctx.exception.status, 409)
+            self.assertEqual(ctx.exception.to_payload().get("code"), "unsafe_repo_config")
+
+        self._run_with_content_reads_forbidden(_attempt)
+        _attempt()  # and once more without the patches
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(_head(self.wt_path), wt_head)
+        self.assertEqual(_head(self.repo_dir), main_head)
+        self.assertEqual(merge_mod.list_merge_audit(self.settings), [])
+
+    def test_filter_defined_through_include_path_is_blocked(self) -> None:
+        self._worktree_change_committed()
+        included = self.root / "included.cfg"
+        included.write_text(f'[filter "pwn"]\n\tclean = {self.filter_cmd}\n', encoding="utf-8")
+        self._set_config("include.path", str(included))
+        (self.wt_path / ".gitattributes").write_text("*.py filter=pwn\n", encoding="utf-8")
+
+        payload = self._run_with_content_reads_forbidden(self._preview)
+        self.assertFalse(payload["can_merge"])
+        messages = " ".join(b["message"] for b in payload["blockers"]).lower()
+        self.assertIn("include.path", messages)
+        self.assertIn("filter.pwn.clean", messages)
+        with self.assertRaises(svc.SupervisorServiceError) as ctx:
+            self._merge({"confirm": True})
+        self.assertEqual(ctx.exception.to_payload().get("code"), "unsafe_repo_config")
+        self.assertFalse(self.marker.exists())
+
+    def test_driver_in_info_attributes_is_blocked(self) -> None:
+        self._worktree_change_committed()
+        info = self._common_dir() / "info"
+        info.mkdir(parents=True, exist_ok=True)
+        (info / "attributes").write_text("*.txt merge=evil\n", encoding="utf-8")
+
+        payload = self._run_with_content_reads_forbidden(self._preview)
+        self.assertEqual(
+            [b["code"] for b in payload["blockers"]], ["unsafe_gitattributes"]
+        )
+        self.assertIn("info/attributes", payload["blockers"][0]["message"])
+        main_head = _head(self.repo_dir)
+        with self.assertRaises(svc.SupervisorServiceError) as ctx:
+            self._merge({"confirm": True})
+        self.assertEqual(ctx.exception.to_payload().get("code"), "unsafe_gitattributes")
+        self.assertEqual(_head(self.repo_dir), main_head)
+
+    def test_subdir_gitattributes_in_main_checkout_is_blocked(self) -> None:
+        self._worktree_change_committed()
+        (self.repo_dir / "docs").mkdir()
+        (self.repo_dir / "docs" / ".gitattributes").write_text("*.md filter=x\n", encoding="utf-8")
+        _git(self.repo_dir, "add", "-A")
+        _git(self.repo_dir, "commit", "-qm", "attributes in a subdir of main")
+        codes = self._blocker_codes()
+        self.assertIn("unsafe_gitattributes", codes)
+
+    def test_busy_worktree_preview_still_never_reads_content_when_unsafe(self) -> None:
+        task = ags.create_task(
+            self.settings,
+            goal="还在跑的任务",
+            repo_path=str(self.repo_dir),
+            worktree_path=str(self.wt_path),
+        )
+        ags.transition(self.settings, str(task["id"]), "implementing")
+        self._plant_subdir_filter()
+        payload = self._run_with_content_reads_forbidden(self._preview)
+        self.assertFalse(payload["can_merge"])
+        self.assertEqual(payload["files"], [])
+        self.assertFalse(self.marker.exists())
+
+
+class MergeBranchChangedTests(_MergeFixture):
+    """The worktree must still be on the branch recorded when it was created."""
+
+    def _recorded_branch(self) -> str | None:
+        conn = svc._connect(self.settings)
+        try:
+            row = conn.execute(
+                "SELECT branch FROM supervisor_worktrees WHERE id = ?", (self.worktree_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        return row["branch"]
+
+    def test_branch_is_recorded_at_creation(self) -> None:
+        self.assertEqual(self._recorded_branch(), "goal-calc")
+
+    def test_worktree_head_switched_to_main_is_refused(self) -> None:
+        self._worktree_change_uncommitted()
+        main_ref_before = _git(self.repo_dir, "rev-parse", "refs/heads/main").strip()
+        # The agent rewrites .git/worktrees/<n>/HEAD to point at main.
+        _git(self.wt_path, "symbolic-ref", "HEAD", "refs/heads/main")
+
+        preview = self._preview()
+        self.assertFalse(preview["can_merge"])
+        self.assertEqual([b["code"] for b in preview["blockers"]], ["branch_changed"])
+        self.assertEqual(
+            preview["blockers"][0]["message"], "工作目录的分支被改动过，为安全起见不合并"
+        )
+
+        with self.assertRaises(svc.SupervisorServiceError) as ctx:
+            self._merge({"confirm": True, "message": "不该提交到 main"})
+        self.assertEqual(ctx.exception.status, 409)
+        self.assertEqual(ctx.exception.to_payload().get("code"), "branch_changed")
+
+        self.assertEqual(
+            _git(self.repo_dir, "rev-parse", "refs/heads/main").strip(), main_ref_before
+        )
+        self.assertNotIn("不该提交到 main", _git(self.repo_dir, "log", "--all", "--pretty=%s"))
+        self.assertEqual(merge_mod.list_merge_audit(self.settings), [])
+
+    def test_worktree_head_switched_to_another_branch_is_refused(self) -> None:
+        self._worktree_change_committed()
+        _git(self.wt_path, "checkout", "-q", "-b", "sneaky")
+        self.assertEqual(self._blocker_codes(), ["branch_changed"])
+        with self.assertRaises(svc.SupervisorServiceError) as ctx:
+            self._merge({"confirm": True})
+        self.assertEqual(ctx.exception.to_payload().get("code"), "branch_changed")
+
+    def test_branch_ref_made_symbolic_to_main_is_refused(self) -> None:
+        self._worktree_change_uncommitted()
+        main_ref_before = _git(self.repo_dir, "rev-parse", "refs/heads/main").strip()
+        _git(self.repo_dir, "symbolic-ref", "refs/heads/goal-calc", "refs/heads/main")
+        with self.assertRaises(svc.SupervisorServiceError) as ctx:
+            self._merge({"confirm": True})
+        self.assertEqual(ctx.exception.to_payload().get("code"), "branch_changed")
+        self.assertEqual(
+            _git(self.repo_dir, "rev-parse", "refs/heads/main").strip(), main_ref_before
+        )
+
+    def test_switching_back_restores_the_merge(self) -> None:
+        self._worktree_change_committed()
+        _git(self.wt_path, "checkout", "-q", "-b", "sneaky")
+        self.assertEqual(self._blocker_codes(), ["branch_changed"])
+        _git(self.wt_path, "checkout", "-q", "goal-calc")
+        result = self._merge({"confirm": True})
+        self.assertTrue(result["merged"])
+
+    def test_legacy_row_without_recorded_branch(self) -> None:
+        """Rows from older builds: only Conveyor's own auto-generated names are accepted."""
+        repo = svc.list_repositories(self.settings)[0]
+        auto = svc.create_managed_worktree(self.settings, repo["id"])
+        auto_path = Path(str(auto["path"]))
+        conn = svc._connect(self.settings)
+        try:
+            conn.execute(
+                "UPDATE supervisor_worktrees SET branch = NULL WHERE id IN (?, ?)",
+                (str(auto["id"]), self.worktree_id),
+            )
+        finally:
+            conn.close()
+
+        (auto_path / "auto.txt").write_text("auto\n", encoding="utf-8")
+        _git(auto_path, "add", "-A")
+        _git(auto_path, "commit", "-qm", "auto work")
+        self.assertTrue(self._preview(str(auto["id"]))["can_merge"])
+
+        # A custom branch name cannot be verified without a record.
+        self._worktree_change_committed()
+        self.assertEqual(self._blocker_codes(), ["branch_changed"])
+
+    def test_tag_named_like_the_branch_is_not_merged(self) -> None:
+        self._worktree_change_committed()
+        reviewed = _head(self.wt_path)
+        # A tag with the branch's name pointing at different content.
+        _git(self.repo_dir, "tag", "goal-calc", "HEAD")
+        result = self._merge({"confirm": True})
+        parents = _git(self.repo_dir, "rev-list", "--parents", "-n", "1", "HEAD").split()
+        self.assertEqual(parents[0], result["merge_commit"])
+        self.assertIn(reviewed, parents[1:])
+
+    def test_schema_migration_adds_branch_column(self) -> None:
+        db_file = svc._db_path(self.settings)
+        raw = sqlite3.connect(str(db_file))
+        try:
+            cols = [r[1] for r in raw.execute("PRAGMA table_info(supervisor_worktrees)")]
+        finally:
+            raw.close()
+        self.assertIn("branch", cols)
+
+        # An old database without the column gets it on first connect.
+        legacy_root = self.root / "legacy"
+        legacy_settings = _make_settings(legacy_root)
+        legacy_db = svc._db_path(legacy_settings)
+        old = sqlite3.connect(str(legacy_db))
+        try:
+            old.executescript(
+                """CREATE TABLE supervisor_worktrees (
+                    id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,
+                    canonical_path TEXT NOT NULL UNIQUE, managed INTEGER NOT NULL DEFAULT 0,
+                    chat_session_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL)"""
+            )
+        finally:
+            old.close()
+        svc._INITIALIZED_DBS.discard(str(legacy_db))
+        conn = svc._connect(legacy_settings)
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(supervisor_worktrees)")]
+        finally:
+            conn.close()
+        self.assertIn("branch", cols)
 
 
 if __name__ == "__main__":
