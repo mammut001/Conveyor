@@ -232,8 +232,14 @@ def _row(row: sqlite3.Row) -> dict[str, Any]:
     return result
 
 
+def looks_secret(value: str) -> bool:
+    """Shared secret/credential screen (also used by agent_memory notes)."""
+    from personal_tools.long_term_memory import _looks_like_credential
+    return redact_text(value) != value or _looks_like_credential(value)
+
+
 def _validate(text: str, tier: str, source: str) -> str:
-    from personal_tools.long_term_memory import _looks_like_credential, normalize_fact
+    from personal_tools.long_term_memory import normalize_fact
     if tier not in TIERS:
         raise ValueError("tier must be profile, facts or log")
     if source == "untrusted" and tier == "profile":
@@ -244,7 +250,7 @@ def _validate(text: str, tier: str, source: str) -> str:
         value = (text or "").strip()
         if not value or len(value) > LOG_LIMIT:
             raise ValueError("log entry must contain 1-4000 characters")
-    if redact_text(value) != value or _looks_like_credential(value):
+    if looks_secret(value):
         raise ValueError("secrets and credentials cannot be saved to memory")
     return value
 

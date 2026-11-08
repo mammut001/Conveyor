@@ -425,12 +425,14 @@ def reset(
 def system_prompt(
     settings: "Settings", *, has_evidence: bool, can_search: bool = False, worktree_info: str = "", tools_enabled: bool = False,
     operator_id: str = "", memory_query: str = "", memory_allowed: bool = True, active_skill: str = "",
-    agent_name: str = "", agent_instructions: str = "",
+    agent_name: str = "", agent_instructions: str = "", agent_notes: str = "",
 ) -> str:
     from config import load_operator_profile
 
     # Group chats (or memory flag off): no durable memory in the prompt at all.
     memory_on = bool(getattr(settings, "long_term_memory_enabled", False) or getattr(settings, "memory_v2_enabled", False)) and memory_allowed
+    import agent_memory
+    notes_on = agent_memory.enabled(settings) and memory_allowed
 
     try:
         live = load_operator_profile(settings.codex_memory_root)
@@ -473,6 +475,12 @@ def system_prompt(
                 "Do not remember the whole chat, and never store secrets, tokens, or keys. "
                 "This is not the daily journal (/memo).\n"
             )
+        if notes_on:
+            tool_section += (
+                "You may keep brief notes of your own about the environment and the operator's "
+                "projects with memory.note (add, replace or remove; no confirmation needed). "
+                "Never store secrets, passwords, tokens or keys in notes.\n"
+            )
         rule_1 = (
             f"1. If a good answer needs complex execution or capabilities beyond your tools, "
             f"reply with exactly {ESCALATE_TOKEN} and a one-line reason, nothing else. An agent will take over."
@@ -502,6 +510,9 @@ def system_prompt(
         block = prompt_block(settings, operator_id, memory_query)
         if block:
             memory_section = block + "\n"
+    if notes_on and agent_notes:
+        # Frozen per-session snapshot (agent_memory.session_snapshot).
+        memory_section += agent_notes + "\n"
     skills_section = ""
     if getattr(settings, "skills_enabled", False):
         from personal_tools.skills import prompt_block as skills_prompt_block
@@ -828,6 +839,14 @@ async def ask_chat(
     from personal_tools.long_term_memory import owner_for_chat as _owner_for_chat
     _memory_owner = _owner_for_chat(settings, msg.operator_id, msg.channel, msg.chat_id)
 
+    # Hermes-style agent notes: one snapshot per session, computed at its first
+    # turn (no short-term history yet) and frozen for the turns after it.
+    agent_notes_block = ""
+    if memory_allowed:
+        import agent_memory
+        if agent_memory.enabled(settings):
+            agent_notes_block = agent_memory.session_snapshot(settings, key, new_session=not past)
+
     def _messages(content, *, has_evidence: bool, may_search: bool) -> list[dict]:
         return (
             [{"role": "system", "content": system_prompt(
@@ -842,6 +861,7 @@ async def ask_chat(
                 active_skill=active_skill_block,
                 agent_name=agent_name,
                 agent_instructions=agent_instructions,
+                agent_notes=agent_notes_block,
             )}]
             + past
             + [{"role": "user", "content": content}]

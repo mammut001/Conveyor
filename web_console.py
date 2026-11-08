@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import socket
+import sqlite3
 import sys
 import threading
 import time
@@ -489,6 +490,56 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return None
         return settings
 
+    def _agent_notes_route(self, method: str, parts: list[str], query: dict[str, list[str]],
+                           body: dict[str, Any] | None = None) -> bool:
+        """/api/memory/notes[/<id>]: the owner's view of the agent's own notes.
+
+        Returns False when the path is not a notes route. Every error the owner
+        can see is Chinese and carries a machine-readable ``code``.
+        """
+        if parts[:3] != ["api", "memory", "notes"] or len(parts) > 4:
+            return False
+        import agent_memory
+        settings = getattr(self.server.control, "settings", None)
+        if settings is None:
+            from config import load_runtime_settings
+            settings = load_runtime_settings()
+        if not agent_memory.enabled(settings):
+            self._json(HTTPStatus.CONFLICT, {"error": agent_memory.MESSAGES["disabled"],
+                                             "code": "agent_notes_disabled"})
+            return True
+        body = body or {}
+        status_for = {"not_found": HTTPStatus.NOT_FOUND, "notes_full": HTTPStatus.CONFLICT,
+                      "duplicate": HTTPStatus.CONFLICT}
+        try:
+            if len(parts) == 3 and method == "GET":
+                scope = (query.get("scope") or [agent_memory.GLOBAL_SCOPE])[0]
+                self._json(HTTPStatus.OK, agent_memory.api_list(settings, scope))
+            elif len(parts) == 3 and method == "POST":
+                scope = body.get("scope", agent_memory.GLOBAL_SCOPE)
+                note = agent_memory.add_note(settings, scope, body.get("text"), "owner")
+                self._json(HTTPStatus.CREATED, {"ok": True, "note": note})
+            elif len(parts) == 4 and method in ("PUT", "DELETE"):
+                if not parts[3].isdigit():
+                    raise agent_memory.AgentMemoryError("invalid_id")
+                if method == "PUT":
+                    note = agent_memory.replace_note(settings, int(parts[3]), body.get("text"), "owner")
+                    self._json(HTTPStatus.OK, {"ok": True, "note": note})
+                elif agent_memory.remove_note(settings, int(parts[3])):
+                    self._json(HTTPStatus.OK, {"ok": True, "deleted": int(parts[3])})
+                else:
+                    raise agent_memory.AgentMemoryError("not_found")
+            else:
+                self._json(HTTPStatus.METHOD_NOT_ALLOWED, {"error": "不支持这个操作", "code": "method_not_allowed"})
+        except agent_memory.AgentMemoryError as exc:
+            self._json(status_for.get(exc.code, HTTPStatus.BAD_REQUEST),
+                       {"error": exc.message_zh, "code": exc.code})
+        except (OSError, sqlite3.Error):
+            logger.warning("agent notes API failed", exc_info=True)
+            self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "笔记暂时读写不了，请稍后再试",
+                                                        "code": "storage_unavailable"})
+        return True
+
     def _skills_settings(self) -> Any:
         """Settings when skills library is on; otherwise answer 409 and return None."""
         settings = getattr(self.server.control, "settings", None)
@@ -641,6 +692,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     counts["telegram"] = sum(1 for it in items if it.get("origin_channel") == "telegram" or it.get("source") == "telegram")
                     counts["feishu"] = sum(1 for it in items if it.get("origin_channel") == "feishu" or it.get("source") == "feishu")
                 self._json(HTTPStatus.OK, {"items": items, "counts": counts})
+            elif self._agent_notes_route("GET", parts, query):
+                pass
             elif path == "/api/memory":
                 settings = self._memory_settings()
                 if settings is None:
@@ -1167,6 +1220,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
                 except ValueError as exc:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+
+            if self._agent_notes_route("POST", self._segments(parsed.path), parse_qs(parsed.query), body):
                 return
 
             if parsed.path == "/api/memory":
@@ -1932,6 +1988,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         parts = self._segments(parsed.path)
         try:
+            if self._agent_notes_route("PUT", parts, parse_qs(parsed.query), body):
+                return
             if len(parts) == 3 and parts[:2] == ["api", "memory"]:
                 settings = self._memory_settings()
                 if settings is None:
@@ -2062,6 +2120,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.OK, {"ok": True, "slug": slug})
                 except skills.SkillNotFoundError:
                     self._json(HTTPStatus.NOT_FOUND, {"error": f"skill '{slug}' not found"})
+                return
+
+            if self._agent_notes_route("DELETE", parts, parse_qs(parsed.query)):
                 return
 
             if len(parts) == 3 and parts[:2] == ["api", "memory"]:
