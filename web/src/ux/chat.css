@@ -13,7 +13,15 @@
 
 /* ---------- Conversation bar: picker + 新会话 + secondary views ---------- */
 
-.primary-interface .agent-screen { min-width: 0; }
+.primary-interface .agent-screen {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
 
 .primary-interface .chat-conversation-bar {
   position: relative;
@@ -1161,5 +1169,46 @@
   .primary-interface .chat-body-with-rail .chat-composer-hint {
     font-size: 11px;
     white-space: nowrap;
+  }
+}
+
+@media (max-width: 340px) {
+  .primary-interface .chat-topic-rail {
+    display: none !important;
+  }
+  .primary-interface .chat-body-with-rail .chat-panel-container .composer.chat-composer,
+  .primary-interface .chat-panel-container .composer.chat-composer {
+    padding: 4px 4px 6px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  .primary-interface .chat-composer-box {
+    display: flex !important;
+    flex-direction: column !important;
+    padding: 6px 8px 4px !important;
+    gap: 4px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  .primary-interface .chat-panel-container .composer.chat-composer textarea {
+    width: 100% !important;
+    min-height: 36px !important;
+    box-sizing: border-box !important;
+    font-size: 13px !important;
+    line-height: 20px !important;
+  }
+  .primary-interface .chat-composer-hint {
+    display: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .primary-interface :is(.chat-send-button, .chat-voice-button, .chat-composer .chat-new-button, .chat-copy-button, .chat-jump-latest, .chat-rail-toggle, .chat-rail-item) {
+    border: 1px solid ButtonText !important;
+  }
+  .primary-interface .chat-rail-dot {
+    forced-color-adjust: none;
+    border: 1px solid ButtonText !important;
+    background: currentColor !important;
   }
 }

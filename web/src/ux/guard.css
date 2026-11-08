@@ -606,3 +606,22 @@ div.guard-empty { display: flex; flex-direction: column; align-items: center; ga
   .guard-inline-confirm-actions { width: 100%; }
   .guard-inline-confirm-actions .guard-btn { flex: 1 1 0; }
 }
+
+/* ---- Root error page and skip link (main.tsx) ---- */
+.root-error { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg, #f6f7f9); color: var(--text, #1d2330); }
+.root-error-card { max-width: 440px; width: 100%; padding: 28px 24px; border-radius: 16px; background: var(--panel, #fff); border: 1px solid var(--line, #e1e4ea); box-shadow: 0 8px 30px rgba(0,0,0,.08); }
+.root-error-card h1 { margin: 0 0 8px; font-size: 20px; }
+.root-error-card p { margin: 0 0 18px; color: var(--muted, #667085); line-height: 1.6; }
+.root-error-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.root-error-btn { min-height: 44px; padding: 0 20px; border-radius: 10px; border: 1px solid var(--line, #cfd4dc); background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.root-error-btn.primary { background: var(--accent, #2563eb); border-color: transparent; color: #fff; }
+.root-error-card details { margin-top: 16px; color: var(--muted, #667085); font-size: 13px; }
+.root-error-card summary { cursor: pointer; }
+.root-error-card code { display: block; margin-top: 6px; word-break: break-word; font-size: 12px; }
+.skip-link { position: absolute; left: 8px; top: -60px; z-index: 10000; padding: 10px 16px; border-radius: 8px; background: var(--accent, #2563eb); color: #fff; text-decoration: none; font-size: 14px; }
+.skip-link:focus { top: 8px; outline: 2px solid #fff; outline-offset: 2px; }
+
+@media (pointer: coarse), (max-width: 820px) {
+  .guard-btn, .guard-btn-small { min-height: 40px; }
+  .guard-chip { min-height: 40px; }
+}

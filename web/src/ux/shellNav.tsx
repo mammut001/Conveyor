@@ -3,15 +3,15 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent }
 /* App frame helpers (shell area): views and URL routing, media queries, keyboard
  * helpers, error wording, icons and the lock confirmation. */
 
-export type ShellView = 'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'browser' | 'skills' | 'workflows' | 'connectors' | 'secrets' | 'teammate'
+export type ShellView = 'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'browser' | 'skills' | 'workflows' | 'connectors' | 'secrets' | 'teammate' | 'workers'
 
 export const SHELL_VIEWS: readonly ShellView[] = [
-  'chat', 'tasks', 'inbox', 'approvals', 'memory', 'teammate', 'skills', 'workflows', 'connectors', 'browser', 'secrets',
+  'chat', 'tasks', 'inbox', 'approvals', 'memory', 'teammate', 'skills', 'workflows', 'connectors', 'browser', 'secrets', 'workers',
 ]
 
 export const VIEW_LABELS: Record<ShellView, string> = {
   chat: '对话', tasks: '任务', inbox: '收件箱', approvals: '审批', memory: '记忆', teammate: '值守',
-  skills: '技能', workflows: '工作流', connectors: '连接器', browser: '网站授权', secrets: '密钥',
+  skills: '技能', workflows: '工作流', connectors: '连接器', browser: '网站授权', secrets: '密钥', workers: '执行者',
 }
 
 /** One muted line under the page title. */
@@ -19,7 +19,7 @@ export const VIEW_SUBTITLES: Record<ShellView, string> = {
   chat: '与 Conveyor 直接对话', tasks: '任务', inbox: '定时任务的结果和通知', approvals: '等待你确认的操作',
   memory: '助手长期记住的信息', teammate: '全天候值守，发现问题及时提醒', skills: '可在对话中使用的技能',
   workflows: '分步骤推进的长任务', connectors: '连接外部工具和服务', browser: '允许助手访问的网站',
-  secrets: '只供助手使用的私密凭据',
+  secrets: '只供助手使用的私密凭据', workers: '谁来替你干活：检测、登录、按额度自动轮换',
 }
 
 export function isShellView(value: string): value is ShellView {
@@ -77,11 +77,14 @@ export function findVisibleComposer(): HTMLTextAreaElement | null {
   return boxes.find(box => !box.disabled && !box.readOnly && box.getClientRects().length > 0) || null
 }
 
-export type ConnectionState = 'connecting' | 'live' | 'reconnecting'
-export const CONNECTION_LABELS: Record<ConnectionState, string> = { connecting: '连接中', live: '在线', reconnecting: '重连中' }
+export type ConnectionState = 'connecting' | 'live' | 'reconnecting' | 'offline'
+export const CONNECTION_LABELS: Record<ConnectionState, string> = { connecting: '连接中', live: '在线', reconnecting: '重连中', offline: '离线' }
 
 const CJK = /[㐀-鿿]/
 const KNOWN_ERRORS: [RegExp, string][] = [
+  [/^unauthori[sz]ed$|^forbidden$/i, '登录已失效，请重新解锁控制台'],
+  [/unexpected (end of json|token)|is not valid json|in json at position|cannot read propert|is not a function|is not iterable|bad shape/i, '数据格式不对，请稍后重试'],
+  [/internal server error|traceback/i, '服务器暂时出错，请稍后重试'],
   [/^token rejected$/i, '访问令牌已失效，请重新解锁'],
   [/^(failed to fetch|load failed|networkerror.*|network error|could not connect|the network connection was lost\.?)$/i, '无法连接到服务器，正在自动重试…'],
   [/^realtime unavailable$/i, '实时进度暂时不可用，正在重新连接'],
@@ -99,7 +102,9 @@ export function shellErrorText(message: string): { text: string; detail?: string
   const status = raw.match(/^Request failed \((\d{3})\)$/i)
   if (status) return { text: Number(status[1]) >= 500 ? '服务器暂时出错，请稍后重试' : '请求没有完成，请检查后重试', detail: `HTTP ${status[1]}` }
   if (CJK.test(raw)) return { text: raw }
-  return { text: '操作没有完成，请稍后重试', detail: raw || undefined }
+  const line = raw.split(/\r?\n/)[0].trim()
+  const technical = !line || /traceback|\.py\b|node_modules/i.test(raw)
+  return { text: '操作没有完成，请稍后重试', detail: technical ? undefined : line.length > 80 ? `${line.slice(0, 79)}…` : line }
 }
 
 export type ShellIconName = ShellView | 'more' | 'settings' | 'lock' | 'panel' | 'agents' | 'chevron'
@@ -116,6 +121,7 @@ const ICON_PATHS: Record<ShellIconName, string> = {
   connectors: 'M9 3.5v4M15 3.5v4M7 7.5h10v3.5a5 5 0 0 1-10 0V7.5zM12 16v4.5',
   browser: 'M12 20.5a8.5 8.5 0 1 0 0-17 8.5 8.5 0 0 0 0 17zM3.5 12h17M12 3.5c2.3 2.4 3.5 5.2 3.5 8.5s-1.2 6.1-3.5 8.5c-2.3-2.4-3.5-5.2-3.5-8.5S9.7 5.9 12 3.5z',
   secrets: 'M8.5 20a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zM11.7 12.3L20 4M16.5 7.5l2.5 2.5M14.5 9.5l1.8 1.8',
+  workers: 'M12 2a2 2 0 0 1 2 2v1h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2V4a2 2 0 0 1 2-2zm-3 8v2m6-2v2m-5 4h4',
   more: 'M5.5 12h.01M12 12h.01M18.5 12h.01',
   settings: 'M4 7h8.5M16.5 7H20M4 12h2.5M10.5 12H20M4 17h10.5M18.5 17H20M14.5 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8.5 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM16.5 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
   lock: 'M6.5 11h11v9h-11zM8.8 11V8.3a3.2 3.2 0 0 1 6.4 0V11',

@@ -253,3 +253,10 @@ export function durationText(seconds: number) {
   if (minutes > 0) return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`
   return `${rest} 秒`
 }
+
+/** Raw job error (English, technical) → one short Chinese sentence for the failed-task card. */
+export function jobErrorSummary(error?: string | null) {
+  const raw = (error || '').trim()
+  if (!raw || /No such file or directory|Errno|ENOENT|not found|spawn|Permission denied|Traceback|command/i.test(raw)) return '任务没能启动，请稍后重试。'
+  return '任务没能完成，可以补充说明后重新发送。'
+}

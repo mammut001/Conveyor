@@ -404,6 +404,7 @@
   font-variant-numeric: tabular-nums;
 }
 .kn-counter.is-near { color: var(--kn-warning); }
+.kn-counter.is-over { color: var(--kn-danger); font-weight: 500; }
 .kn-inline-select { display: inline-flex; align-items: center; gap: 6px; color: var(--kn-muted); font-size: 13px; }
 .primary-interface .kn-inline-select select { width: auto; min-height: 32px; padding: 4px 8px; }
 
@@ -536,6 +537,7 @@ fieldset.kn-field { display: block; }
 .kn-field > legend { padding: 0; color: var(--kn-text); font-size: 13px; font-weight: 600; }
 fieldset.kn-field > legend { margin-bottom: 8px; }
 .kn-hint { align-self: flex-end; color: var(--kn-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.kn-field-error { margin: 0; color: var(--kn-danger); font-size: 12px; font-weight: 500; line-height: 1.5; }
 
 .kn-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .primary-interface .kn-chip-btn {
@@ -788,3 +790,11 @@ fieldset.kn-field > legend { margin-bottom: 8px; }
 .kn-library-error { display: flex; flex-direction: column; gap: 2px; margin: 0; color: var(--kn-danger); font-size: 13px; }
 .kn-library-error small { color: var(--kn-muted); font-size: 12px; overflow-wrap: anywhere; }
 .primary-interface .kn-library p.kn-library-stale { color: var(--kn-muted); font-size: 12px; }
+
+/* Phone / touch: tap targets of at least 40px (desktop unchanged). */
+@media (pointer: coarse), (max-width: 820px) {
+  .primary-interface .kn-btn, .primary-interface .kn-btn-small, .primary-interface .kn-error-actions .kn-btn,
+  .primary-interface .kn-section-head > .kn-btn, .primary-interface .kn-chip-btn { min-height: 40px; }
+  .primary-interface .kn-inline-select select { min-height: 40px; }
+  .kn-checks label { min-height: 40px; }
+}

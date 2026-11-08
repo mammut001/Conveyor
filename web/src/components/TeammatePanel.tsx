@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { BAD_SHAPE_MESSAGE, techDetail, useLoadingTimeout } from '../ux/knowledgeKit';
 
 export type SentryAlert = {
   source: string;
@@ -194,6 +195,8 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
   const [actionBusy, setActionBusy] = useState(false);
   const [newMuteSource, setNewMuteSource] = useState('');
 
+  useLoadingTimeout(loading && !status, () => { setLoading(false); setProblem({ message: '加载太久了，请重试。' }); });
+
   const loadStatus = useCallback(async () => {
     if (!token) return;
     try {
@@ -205,7 +208,11 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
         setProblem(await failure(res, '无法读取值守状态，请稍后重试。'));
         return;
       }
-      const data = (await res.json()) as TeammateStatus;
+      const data = await res.json().catch(() => null) as TeammateStatus | null;
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        setProblem({ message: BAD_SHAPE_MESSAGE });
+        return;
+      }
       setStatus(data);
       setProblem(null);
     } catch {
@@ -387,7 +394,7 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
             {problem && (
               <p role="alert" className="guard-feedback guard-feedback-error">
                 {problem.message}
-                {problem.detail && <span className="guard-tech">{problem.detail}</span>}
+                {techDetail(problem.detail) && <span className="guard-tech">{techDetail(problem.detail)}</span>}
               </p>
             )}
           </div>

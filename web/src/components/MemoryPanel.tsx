@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { channelLabel, ErrorNote, formatDateTime, formatWhen, friendlyError, responseError, type FriendlyError } from '../ux/knowledgeKit';
+import { channelLabel, ErrorNote, formatDateTime, formatWhen, friendlyError, responseError, readJson, BadShapeError, useLoadingTimeout, type FriendlyError } from '../ux/knowledgeKit';
 
 export type MemoryItem = {
   id: number;
@@ -64,6 +64,8 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
     box.style.height = `${Math.min(box.scrollHeight + box.offsetHeight - box.clientHeight, 168)}px`;
   }, [newText]);
 
+  useLoadingTimeout(!data && !error, () => setError(friendlyError('timeout', '加载太久了，请重试')));
+
   const load = useCallback(async () => {
     if (disabledRef.current || !token) return;
     const gen = ++fetchGen.current;
@@ -81,7 +83,19 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
         return;
       }
       if (!res.ok) throw await responseError(res);
-      const next = (await res.json()) as MemoryList;
+      const body = await readJson(res) as Partial<MemoryList> | null;
+      if (!body || typeof body !== 'object' || Array.isArray(body) || !Array.isArray(body.items)) throw new BadShapeError('memory');
+      const rawCounts = body.counts && typeof body.counts === 'object' ? body.counts : null;
+      const next: MemoryList = {
+        items: body.items.filter((item): item is MemoryItem => !!item && typeof item === 'object' && typeof item.text === 'string'),
+        counts: {
+          profile: Number(rawCounts?.profile) || 0,
+          log: Number(rawCounts?.log) || 0,
+          ...(rawCounts && rawCounts.facts !== undefined ? { facts: Number(rawCounts.facts) || 0 } : {}),
+        },
+        shared: !!body.shared,
+        profile_cap: Number(body.profile_cap) || 0,
+      };
       if (gen !== fetchGen.current) return;
       setData(next);
       setError(null);
@@ -116,7 +130,7 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
   const handleAdd = async (e?: FormEvent) => {
     e?.preventDefault();
     const text = newText.trim();
-    if (!text || formBusy) return;
+    if (!text || formBusy || text.length > limit) return;
     setFormBusy(true);
     setFormError(null);
     try {
@@ -204,7 +218,8 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
     ...(hasFacts ? [{ id: 'facts' as const, label: TIER_LABEL.facts, count: counts?.facts }] : []),
     { id: 'log', label: TIER_LABEL.log, count: counts?.log },
   ];
-  const near = newText.length >= limit - 20;
+  const isOver = newText.length > limit;
+  const near = !isOver && newText.length >= limit - 20;
 
   return (
     <div className="stream-body kn-page kn-memory">
@@ -227,7 +242,6 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
             className="kn-input kn-memory-textarea"
             value={newText}
             rows={1}
-            maxLength={limit}
             placeholder="例如：我习惯用中文回复"
             onChange={(e) => {
               setNewText(e.target.value);
@@ -237,12 +251,17 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
               if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                void handleAdd();
+                if (!isOver) void handleAdd();
               }
             }}
             aria-describedby={`kn-memory-count-${agentId || 'me'}`}
           />
-          <button type="submit" className="kn-btn kn-btn-primary" disabled={formBusy || !newText.trim()}>
+          <button
+            type="submit"
+            className="kn-btn kn-btn-primary"
+            disabled={formBusy || !newText.trim() || isOver}
+            title={isOver ? `字数超出限制（最多 ${limit} 字）` : undefined}
+          >
             {formBusy ? '保存中…' : '记住'}
           </button>
         </div>
@@ -257,8 +276,13 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
               </select>
             </label>
           )}
-          <span id={`kn-memory-count-${agentId || 'me'}`} className={`kn-counter${near ? ' is-near' : ''}`}>
+          <span
+            id={`kn-memory-count-${agentId || 'me'}`}
+            className={`kn-counter${isOver ? ' is-over' : near ? ' is-near' : ''}`}
+            role={isOver ? 'alert' : undefined}
+          >
             {limit === FACT_MAX ? '一次一句话 · ' : ''}{newText.length} / {limit}
+            {isOver && `（超出 ${newText.length - limit} 字）`}
           </span>
         </div>
         {formError && <ErrorNote error={formError} className="kn-error-inline" />}

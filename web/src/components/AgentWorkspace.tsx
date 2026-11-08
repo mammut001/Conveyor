@@ -63,12 +63,13 @@ export function AgentWorkspace({ agent, agents, onSelectAgent, token, ...chatPro
   // Phones: the conversation title gets the row; the two record views fold into a "⋯" menu.
   const compactBar = useMediaQuery('(max-width: 480px)')
   const narrowRail = useMediaQuery('(max-width: 820px)')
+  const veryNarrow = useMediaQuery('(max-width: 340px)')
   const toggleView = (view: SecondaryView) => setPane(current => current === view ? 'chat' : view)
 
   const chat = conversationReady && <ChatPanel key={`${agent.id}:${conversation}`} {...chatProps} token={token}
     agentSessionId={conversation} agentName={agent.name} agentColor={agent.color} onBusyChange={setChatBusy}
     active={chatProps.active !== false && pane === 'chat'} />
-  const showTopicRail = narrowRail || conversations.length > 1
+  const showTopicRail = !veryNarrow && (narrowRail || conversations.length > 1)
 
   return (
     <section className="agent-screen" aria-label={`和 ${agent.name} 的对话`}>

@@ -7,6 +7,8 @@ import os
 import re
 import stat
 import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -250,3 +252,76 @@ def refresh_provider_env() -> dict[str, str]:
         if key.startswith(allowed) and _ENV_KEY_RE.fullmatch(key):
             result[key] = value.strip().strip("'\"")
     return result
+
+
+class ProviderModelsError(Exception):
+    pass
+
+
+def fetch_provider_models(settings: Any) -> list[dict[str, str]]:
+    path = config_path(settings)
+    text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    top, providers = _parse_simple_config(text)
+    provider_id = top.get("model_provider", "")
+    if not provider_id:
+        raise ProviderModelsError("未配置模型供应商")
+    provider = providers.get(provider_id, {})
+    base_url = str(provider.get("base_url") or "").strip().rstrip("/")
+    if not base_url:
+        raise ProviderModelsError("未配置 Provider Base URL")
+
+    parsed = urlparse(base_url)
+    if parsed.scheme == "https":
+        pass
+    elif parsed.scheme == "http" and parsed.hostname in ("127.0.0.1", "localhost", "::1"):
+        pass
+    else:
+        raise ProviderModelsError("远程供应商 Base URL 必须使用 HTTPS")
+
+    env_key = provider.get("env_key") or "OPENAI_API_KEY"
+    secret = os.getenv(env_key) or _read_env_value(env_path(), env_key)
+
+    models_url = f"{base_url}/models"
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Conveyor/1.0",
+    }
+    if secret:
+        headers["Authorization"] = f"Bearer {secret}"
+
+    req = urllib.request.Request(models_url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read()
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        raise ProviderModelsError(f"供应商服务返回 HTTP {exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ProviderModelsError("请求超时或网络连接失败") from exc
+    except Exception as exc:
+        raise ProviderModelsError("解析模型列表失败") from exc
+
+    models_list: list[dict[str, str]] = []
+    seen = set()
+    raw_list = []
+    if isinstance(data, dict):
+        raw_list = data.get("data")
+        if not isinstance(raw_list, list):
+            raw_list = data.get("models") or []
+    elif isinstance(data, list):
+        raw_list = data
+
+    if isinstance(raw_list, list):
+        for item in raw_list:
+            mid = None
+            if isinstance(item, dict) and "id" in item:
+                mid = str(item["id"]).strip()
+            elif isinstance(item, str):
+                mid = item.strip()
+            if mid and mid not in seen:
+                seen.add(mid)
+                models_list.append({"id": mid})
+
+    return models_list
+
+

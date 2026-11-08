@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { BAD_SHAPE_MESSAGE, techDetail, useLoadingTimeout } from '../ux/knowledgeKit'
 
 type Grant = { id: string; kind: 'path'|'actions'|'query'; host: string; port: number; path: string; query_field: string|null; expires_at: number; approver: string; action_types: string[] }
 type Event = { timestamp: number; host: string; method: string; outcome: string; reason: string }
@@ -140,6 +141,8 @@ export function BrowserApprovalsPanel({ token }: { token: string }) {
   const revokeButtons = useRef(new Map<string, HTMLButtonElement>())
   const headers = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }
 
+  useLoadingTimeout(!loaded, () => { setProblem({ message: '加载太久了，请重试。' }); setLoaded(true) })
+
   const reload = useCallback(async () => {
     const [a, b] = await Promise.all([
       fetch('/api/browser/approvals', { headers, cache:'no-store' }).catch(() => null),
@@ -149,18 +152,24 @@ export function BrowserApprovalsPanel({ token }: { token: string }) {
       if (!a) setProblem({ message: '无法连接服务器，网站授权暂时读取不到。' })
       else if (!a.ok) setProblem({ message: '无法读取网站授权，请稍后重试。', detail: await errorCode(a) })
       else {
-        const approvals = await a.json()
-        setGrants(Array.isArray(approvals.approvals) ? approvals.approvals : [])
-        setKilled(Boolean(approvals.kill_switch))
-        setKnown(true)
-        setProblem(null)
+        const approvals = await a.json().catch(() => null)
+        if (!approvals || typeof approvals !== 'object' || !Array.isArray(approvals.approvals)) setProblem({ message: BAD_SHAPE_MESSAGE })
+        else {
+          setGrants(approvals.approvals.filter((g: unknown) => g && typeof g === 'object'))
+          setKilled(Boolean(approvals.kill_switch))
+          setKnown(true)
+          setProblem(null)
+        }
       }
       if (!b) setJournalProblem({ message: '无法连接服务器，访问记录暂时读取不到。' })
       else if (!b.ok) setJournalProblem({ message: '无法读取访问记录，请稍后重试。', detail: await errorCode(b) })
       else {
-        const log = await b.json()
-        setEvents(Array.isArray(log.requests) ? log.requests : [])
-        setJournalProblem(null)
+        const log = await b.json().catch(() => null)
+        if (!log || typeof log !== 'object' || !Array.isArray(log.requests)) setJournalProblem({ message: BAD_SHAPE_MESSAGE })
+        else {
+          setEvents(log.requests.filter((e: unknown) => e && typeof e === 'object'))
+          setJournalProblem(null)
+        }
       }
     } catch {
       setProblem({ message: '服务器返回的数据无法识别，请稍后重试。' })
@@ -258,7 +267,7 @@ export function BrowserApprovalsPanel({ token }: { token: string }) {
         {notice && <p role="status" className="guard-feedback guard-feedback-ok">{notice}</p>}
         {[actionProblem, problem].map((item, index) => item && <p key={index} role="alert" className="guard-feedback guard-feedback-error">
           {item.message}
-          {item.detail && <span className="guard-tech">{item.detail}</span>}
+          {techDetail(item.detail) && <span className="guard-tech">{techDetail(item.detail)}</span>}
         </p>)}
       </div>}
 
@@ -325,7 +334,7 @@ export function BrowserApprovalsPanel({ token }: { token: string }) {
         </div>
         {journalProblem && <p role="alert" className="guard-feedback guard-feedback-error">
           {journalProblem.message}
-          {journalProblem.detail && <span className="guard-tech">{journalProblem.detail}</span>}
+          {techDetail(journalProblem.detail) && <span className="guard-tech">{techDetail(journalProblem.detail)}</span>}
         </p>}
         {!loaded ? <p className="guard-empty">加载中…</p>
           : !events.length ? (!journalProblem && <p className="guard-empty">还没有访问记录。</p>)

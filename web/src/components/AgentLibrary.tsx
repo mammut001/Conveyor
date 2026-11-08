@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { formatDateTime, formatUpcoming, formatWhen, friendlyError, jobStateLabel, scheduleLabel, type FriendlyError } from '../ux/knowledgeKit'
+import { formatDateTime, formatUpcoming, formatWhen, friendlyError, BadShapeError, useLoadingTimeout, jobStateLabel, scheduleLabel, type FriendlyError } from '../ux/knowledgeKit'
 
 type LibraryData = {
   jobs: { id: string; state?: string; prompt_preview?: string; updated_at?: string; changed_files?: { status?: string; path: string }[] }[]
@@ -47,6 +47,9 @@ function Shot({ agentId, id, token, createdAt }: { agentId: string; id: string; 
 export function AgentLibrary({ agentId, token }: { agentId: string; token: string }) {
   const [data, setData] = useState<LibraryData | null>(null)
   const [error, setError] = useState<FriendlyError | null>(null)
+  const [attempt, setAttempt] = useState(0)
+
+  useLoadingTimeout(!data && !error, () => setError(friendlyError('timeout', '加载太久了，请稍后重试')))
 
   useEffect(() => {
     let active = true
@@ -57,7 +60,15 @@ export function AgentLibrary({ agentId, token }: { agentId: string; token: strin
             const body = await response.json().catch(() => ({} as { error?: string }))
             throw new Error(typeof body?.error === 'string' && body.error ? body.error : `HTTP ${response.status}`)
           }
-          return response.json() as Promise<LibraryData>
+          const body = await response.json().catch(() => null) as Partial<LibraryData> | null
+          if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadShapeError('library')
+          return {
+            ...body,
+            jobs: Array.isArray(body.jobs) ? body.jobs : [],
+            routines: Array.isArray(body.routines) ? body.routines : [],
+            screenshots: Array.isArray(body.screenshots) ? body.screenshots : [],
+            memory: body.memory && typeof body.memory === 'object' ? body.memory : null,
+          } as LibraryData
         })
         .then(value => { if (active) { setData(value); setError(null) } })
         .catch(reason => { if (active) setError(friendlyError(reason, '资料暂时读取不到，稍后会自动重试')) })
@@ -65,17 +76,18 @@ export function AgentLibrary({ agentId, token }: { agentId: string; token: strin
     load()
     const timer = window.setInterval(load, 15000)
     return () => { active = false; window.clearInterval(timer) }
-  }, [agentId, token])
+  }, [agentId, token, attempt])
 
   if (error && !data) {
     return (
       <p className="kn-library-error" role="alert" title={error.raw || undefined}>
         {error.message}{error.detail && <small>{error.detail}</small>}
+        <button type="button" className="kn-btn" onClick={() => { setError(null); setAttempt(n => n + 1) }}>重试</button>
       </p>
     )
   }
   if (!data) return <p className="agent-library-empty">加载中…</p>
-  const memoryCount = data.memory ? data.memory.profile + data.memory.log : 0
+  const memoryCount = data.memory ? (Number(data.memory.profile) || 0) + (Number(data.memory.log) || 0) : 0
   const empty = !data.jobs.length && !data.routines.length && !data.screenshots.length && !memoryCount
   if (empty) {
     return (

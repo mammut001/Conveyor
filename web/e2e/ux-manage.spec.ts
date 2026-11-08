@@ -315,7 +315,7 @@ for (const size of WIDTHS) {
       await openSettings(page)
       const dialog = page.getByRole('dialog', { name: '模型设置' })
       await expect(dialog).toBeVisible()
-      for (const label of ['服务商 ID', '显示名称', '接口地址', '模型', '接口协议', '推理强度', '密钥变量名', 'API 密钥']) {
+      for (const label of ['服务商代号', '显示名称', '接口地址', '模型', '接口类型', '推理强度', '密钥名称', 'API 密钥']) {
         await expect(dialog.getByLabel(label, { exact: true })).toBeVisible()
       }
       await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveAttribute('placeholder', '已配置 ••••8a34，留空则保持不变')
