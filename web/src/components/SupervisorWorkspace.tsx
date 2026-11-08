@@ -317,6 +317,29 @@ export function supExecutionSwitchNotes(executions: SupervisorExecution[]): Map<
   return notes
 }
 
+// Maps raw backend failure strings (agent_supervisor.py / supervisor_service.py) to short Chinese
+// causes. Order matters: the first matching rule wins. Unknown text falls back to a generic line.
+export function supFriendlyTaskError(raw?: string | null): string {
+  const text = String(raw || '').trim()
+  if (!text) return '执行没有完成'
+  if (supIsQuotaFailure(text)) return '执行者的额度或用量已用完，任务没有完成'
+  if (/cancel/i.test(text)) return '任务已被取消'
+  if (/timed out|timeout/i.test(text)) return '执行超时，任务没有完成'
+  if (/unavailable|not found|not installed|not implemented|binary/i.test(text)) return '执行器不可用（未安装或暂时无法使用）'
+  if (/verdict|invalid review|review executor|review produced|review envelope|reviewer/i.test(text)) return '审查结果无效或审查失败，任务没有通过审查'
+  if (/max repair rounds/i.test(text)) return '自动修复次数已用完，仍有问题未解决'
+  if (/validation/i.test(text)) return '自动验收检查没有通过'
+  if (/worktree|\bgit\b|symlink|target identity|lock/i.test(text)) return '代码工作区（git worktree）出现问题'
+  if (/restarted|gone|ended before|interrupted/i.test(text)) return '执行过程被意外中断'
+  return '执行没有完成'
+}
+
+const SUP_ROLE_SHORT_LABELS: Record<SupervisorRoleKey, string> = {
+  analyst: '分析',
+  implementer: '实现',
+  reviewer: '审阅',
+}
+
 export function supStageLabel(stage?: string | null, fallbackState?: string | null): string {
   if (stage && stage.trim()) {
     const key = stage.trim().toLowerCase()
@@ -814,11 +837,14 @@ function SupervisorRoleBar({
                 {extraOption && (
                   <option value={extraOption}>{extraOption}{!status.available ? '（不可用）' : ''}</option>
                 )}
-                {executors.map(exec => (
-                  <option key={exec.name} value={exec.name}>
-                    {exec.label || exec.name}{exec.name === 'pool' && exec.available ? '（推荐）' : ''}{!exec.available ? '（不可用）' : ''}
-                  </option>
-                ))}
+                {/* Unavailable executors are hidden unless this role currently uses them (then kept with the reason). */}
+                {executors
+                  .filter(exec => exec.available || exec.name === current.executor)
+                  .map(exec => (
+                    <option key={exec.name} value={exec.name}>
+                      {exec.label || exec.name}{exec.name === 'pool' && exec.available ? '（推荐）' : ''}{!exec.available ? '（不可用）' : ''}
+                    </option>
+                  ))}
                 {!extraOption && executors.length === 0 && (
                   <option value="">未配置执行器</option>
                 )}
@@ -983,6 +1009,37 @@ function SupervisorRunHistory({
         </div>
       )}
     </section>
+  )
+}
+
+// Always-visible summary under the task progress: which worker ran each role (latest attempt wins)
+// plus any executor switch notes. The full execution list stays in 技术细节.
+function SupervisorTaskExecutors({ executions }: { executions: SupervisorExecution[] }) {
+  if (executions.length === 0) return null
+  const latestByRole = new Map<SupervisorRoleKey, SupervisorExecution>()
+  for (const ex of executions) {
+    const key = ROLE_META.find(m => m.key === ex.role)?.key
+    if (key) latestByRole.set(key, ex)
+  }
+  const roleParts = ROLE_META.filter(m => latestByRole.has(m.key))
+  const switchNotes = [...supExecutionSwitchNotes(executions).values()]
+  if (roleParts.length === 0 && switchNotes.length === 0) return null
+  return (
+    <div className="sup-task-executors" aria-label="各角色执行者">
+      {roleParts.length > 0 && (
+        <p className="sup-task-executors-line">
+          {roleParts.map((m, idx) => (
+            <Fragment key={m.key}>
+              {idx > 0 && <span aria-hidden="true"> · </span>}
+              <span>{SUP_ROLE_SHORT_LABELS[m.key]}：{supExecutorLabel(latestByRole.get(m.key)?.executor)}</span>
+            </Fragment>
+          ))}
+        </p>
+      )}
+      {switchNotes.map((note, idx) => (
+        <p key={idx} className="sup-task-switch-note" role="note">{note}</p>
+      ))}
+    </div>
   )
 }
 
@@ -2353,10 +2410,16 @@ export function SupervisorWorkspace({
                     </div>
                   </div>
 
+                  <SupervisorTaskExecutors executions={selectedTaskDetail?.executions || []} />
+
                   {selectedTask.error && (
                     <div className="sup-banner sup-banner--error" role="alert">
-                      <strong>受阻原因 / 错误详情</strong>
-                      <span>{selectedTask.error}</span>
+                      <strong>受阻原因</strong>
+                      <span>{supFriendlyTaskError(selectedTask.error)}</span>
+                      <details className="sup-task-raw-error">
+                        <summary>技术详情</summary>
+                        <pre>{selectedTask.error}</pre>
+                      </details>
                     </div>
                   )}
 

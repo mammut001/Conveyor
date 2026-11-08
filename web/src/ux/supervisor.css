@@ -470,6 +470,12 @@
   background: #f5f6f7;
 }
 
+/* Pane children keep their content height and scroll instead of being squeezed (a squeezed
+ * overflow:hidden 技术细节 box clipped its own summary and became unclickable). */
+.sup-task-pane > * {
+  flex-shrink: 0;
+}
+
 .sup-task-pane .changed-files {
   max-height: none;
   overflow-y: visible;
@@ -1170,7 +1176,8 @@
   cursor: pointer;
 }
 
-.sup-exec-switch-note {
+.sup-exec-switch-note,
+.sup-task-switch-note {
   margin: 2px 0 0;
   padding: 6px 10px;
   border-left: 3px solid #d97706;
@@ -1193,6 +1200,50 @@
 }
 
 .sup-exec-raw-error pre {
+  margin: 6px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: #f3f4f6;
+  color: #1f2328;
+  font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sup-task-executors {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  color: #344054;
+  font-size: 13px;
+}
+
+.sup-task-executors-line {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+
+.sup-task-switch-note {
+  margin: 0;
+}
+
+.sup-task-raw-error {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-size: 11.5px;
+}
+
+.sup-task-raw-error summary {
+  cursor: pointer;
+}
+
+.sup-task-raw-error pre {
   margin: 6px 0 0;
   padding: 8px;
   border-radius: 6px;
