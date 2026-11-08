@@ -16,6 +16,22 @@
 
 </div>
 
+> **架构说明（2026-11）**：下方 README 包含旧版 Codex 路径与界面描述，不能代表当前使用的执行器或部署。请以 [架构总览](docs/architecture-overview.md) 和 [路线图](docs/roadmap.md) 中区分的代码现状与目标为准。截图为本地旧界面，并非新版 Supervisor 的运行证明。
+
+
+![Conveyor vision: a person guides agents through an iterative software development loop](docs/assets/conveyor-vision.png)
+
+**我们的愿景：你负责灵感和方向，Agent 负责规划、编码、验证与持续迭代。** 这张图描绘的是最终目标，具体实现进展见[路线图](docs/roadmap.md)。
+
+
+### 架构方向
+
+![Conveyor 架构概念图](docs/assets/conveyor-architecture-concept.png)
+
+从上到下：用户提出目标，经对话入口交给 Supervisor；协调、分析、实现和审阅角色协作，使用可配置的执行器与工作区。审阅结果可以反馈给实现角色继续迭代。右侧是任务状态等持久化记录。
+
+这是**目标架构示意**：入口与完整执行循环尚待接通，图中的连线不代表线上已实现。具体代码现状及限制见[架构总览](docs/architecture-overview.md)。
+
 ---
 
 ## ⚡ 什么是 Conveyor？
@@ -41,6 +57,16 @@
 ```
 
 **这不是又一个面向公众的多租户聊天机器人。** 这里没有第三方共享工作区，也没有用完即丢、无法沉淀本地依赖的临时容器。**一位受信 Operator，带着严密的 `/diff`、`/apply`、`/discard` 与 `/cancel`，牢牢掌控属于自己的开发机器。**
+
+---
+
+## 📸 Web 控制台实拍
+
+截图来自本地旧版 Web 界面和隔离数据；手机界面启用了 `CONVEYOR_WEB_MOBILE_UI`。截图不代表当前线上部署或 Supervisor 界面。
+
+![Web Console desktop](docs/assets/web-console/desktop.png)
+
+[Mobile](docs/assets/web-console/mobile.png) · [Chat](docs/assets/web-console/chat.png) · [架构总览 / Architecture diagrams](docs/architecture-overview.md) · [Roadmap](docs/roadmap.md)
 
 ---
 
@@ -305,6 +331,8 @@ Conveyor 允许 Codex 在隔离的 Git Worktree 内以 `danger-full-access` 权�
 ---
 
 ## 🗺️ 路线图 (Roadmap)
+
+完整规划及长期目标见 [路线图](docs/roadmap.md)。
 
 ### 当前已实现特性 (v0.2.0)
 - [x] **Git Worktree 物理沙箱隔离** — 每个代码任务独立在 Detached Worktree 执行，具备严苛的 Apply 安全策略（路径白名单、二进制/软链接拦截、体积配额）。
