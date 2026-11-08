@@ -387,6 +387,28 @@
 .primary-interface .copy-button.is-failed { color: #b42318; }
 .primary-interface .chat-panel-container .chat-copy-button { margin-left: -4px; }
 
+/* 「项目」讨论：回复下面的「设为目标」，和「复制」同样大小的小按钮。 */
+.chat-goal-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid #e4e7ec;
+  border-radius: 6px;
+  background: transparent;
+  color: #9a4a33;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.chat-goal-button:hover:not(:disabled) { background: #fbf1ec; border-color: #e8c3b4; }
+.chat-goal-button:focus-visible { outline: 2px solid #bd5c40; outline-offset: 1px; }
+.chat-goal-button:disabled { color: #98a2b3; cursor: not-allowed; }
+@media (max-width: 600px), (pointer: coarse) {
+  .chat-goal-button { min-height: 40px; }
+}
+
 /* Thinking / streaming / approval */
 .primary-interface .chat-thinking {
   display: flex;

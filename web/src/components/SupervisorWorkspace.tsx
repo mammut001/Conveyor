@@ -1584,6 +1584,10 @@ export function SupervisorWorkspace({
   const subTabTouchedRef = useRef(false)
   // 选中的工作目录上有没有正在跑的目标：合并入口在目标跑着的时候要藏起来。
   const [hasActiveGoalInWorktree, setHasActiveGoalInWorktree] = useState(false)
+  // 讨论里点「设为目标」带去「目标」页的草稿（目标页填进输入框后就清掉）。
+  const [goalDraft, setGoalDraft] = useState<string | null>(null)
+  // 目标在跑、老板又不在「目标」页时，隔一会儿重新问一次，好让「设为目标」在目标结束后重新能点。
+  const [goalProbeTick, setGoalProbeTick] = useState(0)
   // 任务卡片上「合并到主分支…」：点开才读合并预览（默认收起）。
   const [mergeOpen, setMergeOpen] = useState(false)
   const [mobileRepoDrawerOpen, setMobileRepoDrawerOpen] = useState(false)
@@ -1846,6 +1850,7 @@ export function SupervisorWorkspace({
     setDeployError('')
     setMergeOpen(false)
     setHasActiveGoalInWorktree(false)
+    setGoalDraft(null)
     subTabTouchedRef.current = false
     setSubTab('workspace')
     setSelectedRepoId(repoId)
@@ -2296,6 +2301,35 @@ export function SupervisorWorkspace({
     setSubTab('goals')
   }, [])
 
+  // 目标还在跑、但「目标」页没打开（它自己会轮询）：每 15 秒重新问一次有没有进行中的目标。
+  useEffect(() => {
+    if (!active || !hasActiveGoalInWorktree || subTab === 'goals') return
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      setGoalProbeTick(tick => tick + 1)
+    }, 15_000)
+    return () => window.clearInterval(timer)
+  }, [active, hasActiveGoalInWorktree, subTab])
+
+  // 讨论里的「设为目标」：切到「目标」页并把草稿填进「描述你想要的结果」，绝不自动开始。
+  const handleMakeGoal = useCallback((draft: string) => {
+    if (hasActiveGoalInWorktree || !draft.trim()) return
+    setGoalDraft(draft)
+    subTabTouchedRef.current = true
+    setSubTab('goals')
+    window.setTimeout(() => {
+      const field = document.getElementById('sup-goal-outcome')
+      if (field instanceof HTMLTextAreaElement && !field.disabled) {
+        field.focus()
+        field.setSelectionRange(field.value.length, field.value.length)
+      }
+    }, 50)
+  }, [hasActiveGoalInWorktree])
+
+  const handleGoalDraftUsed = useCallback(() => {
+    setGoalDraft(null)
+  }, [])
+
   // 「查看这一轮的任务」: jump to 任务与结果 with that task selected.
   const handleOpenGoalTask = useCallback((taskId: string) => {
     subTabTouchedRef.current = true
@@ -2491,7 +2525,7 @@ export function SupervisorWorkspace({
 
         {selectedRepo && selectedWorktree && (
           <SupervisorGoalsProbe
-            key={`probe:${contextKey}`}
+            key={`probe:${contextKey}:${goalProbeTick}`}
             apiCall={apiCall}
             repo={selectedRepo}
             worktree={selectedWorktree}
@@ -2535,6 +2569,8 @@ export function SupervisorWorkspace({
             onOpenTask={handleOpenGoalTask}
             onActiveGoalChange={handleActiveGoalChange}
             onRefreshRepositories={() => void refreshRepositories()}
+            draftOutcome={goalDraft}
+            onDraftOutcomeUsed={handleGoalDraftUsed}
           />
         ) : (
           <div className="sup-workbench-split">
@@ -2804,6 +2840,8 @@ export function SupervisorWorkspace({
                     agentSessionId={selectedWorktree.chat_session_id}
                     agentName={coordinatorLabel}
                     onPrepareTask={handlePrepareTask}
+                    onMakeGoal={handleMakeGoal}
+                    makeGoalDisabledReason={hasActiveGoalInWorktree ? '这个工作目录已经有进行中的目标' : ''}
                     discussionOnly
                   />
                 </div>
