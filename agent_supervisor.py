@@ -3829,6 +3829,10 @@ def get_executor(settings: Any, name: str) -> Executor:
         return ChatExecutor(settings)
     if name == "antigravity":
         return AntigravityExecutor(settings)
+    if name == "pool":
+        from agent_supervisor_pool import PoolExecutor
+
+        return PoolExecutor(settings)
 
     class _Unknown:
         def available(self):

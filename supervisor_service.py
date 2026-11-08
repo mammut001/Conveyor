@@ -58,6 +58,7 @@ _UI_EXPOSED_EXECUTORS: tuple[tuple[str, str], ...] = (
     ("command-code", "Command Code CLI"),
     ("codex", "Codex CLI"),
     ("antigravity", "Antigravity"),
+    ("pool", "执行者池（自动轮换）"),
 )
 _OVERRIDABLE_ROLES = frozenset({"analyst", "implementer", "reviewer"})
 _INFLIGHT_STATES = frozenset({
