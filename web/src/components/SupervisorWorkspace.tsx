@@ -1,6 +1,7 @@
 import { Fragment, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatPanel, type TaskSuggestion } from './ChatPanel'
 import { ChangedFileList } from './TaskParts'
+import SupervisorChecks from './SupervisorChecks'
 import SupervisorGoals, { SupervisorGoalsProbe } from './SupervisorGoals'
 import { useMediaQuery } from '../ux/shellNav'
 
@@ -56,6 +57,8 @@ export type SupervisorRepo = {
   path: string
   worktrees: SupervisorWorktree[]
   source_machine?: string
+  /** "env" = server admin configured, "repo" = owner picked, "none" = nothing selected. */
+  validation_source?: 'env' | 'repo' | 'none'
 }
 
 export type SupervisorTask = {
@@ -1606,6 +1609,18 @@ export function SupervisorWorkspace({
     setInitialLoading(false)
   }, [apiCall, reconcileSelection, selectedWorktreeId, token])
 
+  // Re-read the repository list so validation_source badges stay honest after a save.
+  const refreshRepositories = useCallback(async () => {
+    try {
+      const repoRes = await apiCall<{ repositories: SupervisorRepo[] }>('/api/supervisor/repositories')
+      const repos = Array.isArray(repoRes.repositories) ? repoRes.repositories : []
+      setRepositories(repos)
+      setReposError('')
+    } catch (err) {
+      setReposError(err instanceof Error ? err.message : '无法读取仓库列表')
+    }
+  }, [apiCall])
+
   // Load tasks, task detail, and deployments for the active (repoId, worktreeId) context with race protection
   const loadContextData = useCallback(async (repo: SupervisorRepo, worktree: SupervisorWorktree, isPoll = false) => {
     if (!token) return
@@ -2358,6 +2373,7 @@ export function SupervisorWorkspace({
             onChangeRole={handleRoleChange}
             onOpenTask={handleOpenGoalTask}
             onActiveGoalChange={handleActiveGoalChange}
+            onRefreshRepositories={() => void refreshRepositories()}
           />
         ) : (
           <div className="sup-workbench-split">
@@ -2391,6 +2407,8 @@ export function SupervisorWorkspace({
                   <span>同一托管 Worktree 同一时间只允许一个写入任务运行，当前任务结束或取消后可派发新任务。</span>
                 </div>
               )}
+
+              <SupervisorChecks apiCall={apiCall} repo={selectedRepo} onSaved={() => void refreshRepositories()} />
 
               <section className="sup-card sup-dispatch-card" aria-label="任务目标与派发">
                 <div className="sup-card-head">

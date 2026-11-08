@@ -2117,4 +2117,223 @@
   .sup-goal-rounds {
     white-space: normal;
   }
+
+  /* The collapsed 自动检查 bar keeps only its state word on phones. */
+  .sup-checks-summary-hint {
+    display: none;
+  }
+
+  .sup-checks-reason,
+  .sup-checks-unavailable {
+    margin-left: 24px;
+  }
+}
+
+/* ---- 自动检查 card (collapsed by default) ---- */
+.sup-checks {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.sup-checks-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 14px;
+  color: #1f2328;
+  font-size: 13px;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.sup-checks-summary::-webkit-details-marker {
+  display: none;
+}
+
+.sup-checks-summary:hover {
+  background: #f9fafb;
+}
+
+.sup-checks-summary-hint {
+  margin-left: auto;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.sup-checks-chevron {
+  flex: none;
+  display: inline-block;
+  width: 12px;
+  color: #6b7280;
+  font-size: 12px;
+  transition: transform 120ms ease;
+}
+
+.sup-checks[open] .sup-checks-chevron {
+  transform: rotate(90deg);
+}
+
+.sup-checks-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-top: 1px solid #eceef0;
+  background: #fafbfc;
+}
+
+.sup-checks-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.sup-checks-head strong {
+  color: #1f2328;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sup-checks-hint {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.sup-checks-env-line {
+  margin: 0;
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.sup-checks-empty {
+  margin: 0;
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.sup-checks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sup-checks-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.sup-checks-item.is-unavailable {
+  border-color: #f0d4ce;
+  background: #fdf7f5;
+}
+
+.sup-checks-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: #1f2328;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sup-checks-item.is-unavailable .sup-checks-label {
+  color: #6b7280;
+  cursor: not-allowed;
+}
+
+.sup-checks-label input[type="checkbox"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #bd5c40;
+  cursor: pointer;
+}
+
+.sup-checks-label input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+.sup-checks-label-text {
+  overflow-wrap: anywhere;
+}
+
+.sup-checks-reason {
+  margin-left: 24px;
+  color: #6b7280;
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.sup-checks-unavailable {
+  margin-left: 24px;
+  color: #b42318;
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.sup-checks-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.sup-checks-actions .shell-button {
+  min-height: 40px;
+}
+
+.sup-checks-saved {
+  color: #067647;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.sup-checks-save-error {
+  color: #b42318;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.sup-checks-note {
+  margin: 0;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.sup-checks-warning {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid #d97706;
+  border-radius: 6px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }

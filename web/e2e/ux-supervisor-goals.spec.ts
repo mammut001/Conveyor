@@ -6,6 +6,27 @@ import type {
   SupervisorTaskDetail,
 } from '../src/components/SupervisorWorkspace'
 import type { Goal, GoalDetail } from '../src/components/SupervisorGoals'
+import type { SupervisorChecksCandidate } from '../src/components/SupervisorChecks'
+
+// Server-detected 自动检查 candidates for the mocked Conveyor repository.
+const CHECKS_CANDIDATES: SupervisorChecksCandidate[] = [
+  {
+    id: 'npm-test',
+    label: '运行测试（npm test）',
+    argv: ['npm', 'test', '--silent'],
+    reason: 'package.json 的 scripts.test',
+    available: true,
+    unavailable_reason: '',
+  },
+  {
+    id: 'npm-build',
+    label: '构建项目（npm run build）',
+    argv: ['npm', 'run', 'build'],
+    reason: 'package.json 的 scripts.build',
+    available: true,
+    unavailable_reason: '',
+  },
+]
 
 // NOTE: 目标（goal-driven loop）tab. All tests mock the /api/supervisor/* contract and verify
 // frontend wiring only: default sub-tab rule, create/poll/reply/stop calls, read-only guard,
@@ -42,6 +63,7 @@ function createInitialRepos(): SupervisorRepo[] {
       name: 'Conveyor',
       path: '/srv/repos/conveyor',
       source_machine: 'dev-workstation',
+      validation_source: 'none',
       worktrees: [
         {
           id: 'wt-main',
@@ -578,6 +600,20 @@ async function installGoalsMockFixture(
       }
       found.updated_at = now()
       return json({ ...found, iterations_used: found.iterations.length }, 200)
+    }
+
+    // ---- 自动检查 contract ----
+    const validationMatch = path.match(/^\/api\/supervisor\/repositories\/([^/]+)\/validation$/)
+    if (validationMatch && method === 'GET') {
+      const repoId = validationMatch[1]
+      return json({
+        repo_id: repoId,
+        candidates: CHECKS_CANDIDATES,
+        selected: [],
+        source: 'none',
+        env_commands: [],
+        effective: [],
+      })
     }
 
     return json({ error: `unhandled ${method} ${path}` }, 404)
