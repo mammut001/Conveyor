@@ -19,7 +19,7 @@ The supervisor is controlled by the following environment variables. The feature
 | Environment Variable | Type | Default | Description |
 | --- | --- | --- | --- |
 | `CONVEYOR_AGENT_SUPERVISOR_ENABLED` | bool | `false` | Master feature flag. Alias: `CONVEYOR_ANTIGRAVITY_SUPERVISOR_ENABLED`. |
-| `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR` | string | `claude` | Default executor for analyst, implementer and reviewer (`pool`, `antigravity`, `claude`, `command-code`). `codex` is not implemented. |
+| `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR` | string | `claude` | Default executor for analyst, implementer and reviewer (`pool`, `pi`, `antigravity`, `claude`, `command-code`). `codex` is not implemented. |
 | `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_EXECUTOR` | string | `None` | Role-specific override for implementer executor. |
 | `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_MODEL` | string | `None` | Model identifier for implementer (e.g., `gemini-3.8-flash-medium`). |
 | `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_LOCATION` | string | `worktree` | Execution working directory binding (`worktree` or `control_plane`). |
@@ -56,7 +56,7 @@ The supervisor decouples model selection from role execution:
    - Read-only execution is strictly enforced; analyst cannot take over code editing.
 
 3. **Implementer** (write access):
-   - Pluggable coding engine (`antigravity`, `claude`, `command-code`).
+   - Pluggable coding engine (`pi`, `antigravity`, `claude`, `command-code`).
    - Receives analysis plan and acceptance criteria.
    - Applies modifications and runs internal checks within the assigned isolated git worktree.
    - Returns a plain-text change summary (not a structured verdict), executed commands, and the commit SHA.
@@ -92,6 +92,7 @@ AGY read roles use a session-scoped permission deny profile; these tool permissi
 
 - **Claude (`claude`)**: Local CLI adapter with `--permission-mode` and tools allowlist.
 - **Command-Code (`command-code`)**: Local CLI adapter with `--permission-mode` (`plan` for read, `accept-edits` for write).
+- **Pi (`pi`)**: Built-in Pi coding agent. Read-only roles (analyst, reviewer) run with `--tools read,grep,find,ls` (no `bash`/`edit`/`write`); the implementer adds `read,bash,edit,write,grep,find,ls`. It runs headless with `--no-session --no-extensions --no-mcp --no-skills --no-prompt-templates --no-themes --offline --no-approve`, and its provider/model/credential follow the same precedence as the Pi worker (explicit `CONVEYOR_PI_*` > saved 模型设置 > Pi default); only the one chosen provider key reaches the child and `--api-key` is never passed. The reviewer verdict is parsed from Pi's text output (no `--json-schema`), exactly like command-code.
 - **Pool (`pool`)**: Picks one of the Claude Code, Antigravity or Command Code workers per role call and delegates to that worker's adapter. See the pool section below.
 - **Codex (`codex`)**: Intentionally unsupported in this build; reports unavailable before dispatch.
 - **Provider Quota Notice**: Executor `available()` checks verify local binary presence on the host. Upstream provider quota exhaustion, rate limits, or network failures are runtime execution errors, not availability guarantees.

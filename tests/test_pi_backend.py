@@ -447,11 +447,12 @@ class PiBackendTests(unittest.TestCase):
             self.assertIn("stepfun", command)
             if backend.pi_model:
                 self.assertIn("--model", command)
-            # An empty model must not be passed to the CLI at all.
+            # An empty model must not be passed to the CLI at all; pi 1.5.0
+            # requires --model whenever --provider is given, so both are omitted.
             backend.pi_model = ""
             command = backend._pi_command(job)
             self.assertNotIn("--model", command)
-            self.assertIn("--provider", command)
+            self.assertNotIn("--provider", command)
 
     def test_run_codex_attempt_stepfun_key_only(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
