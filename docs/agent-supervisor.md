@@ -19,7 +19,7 @@ The supervisor is controlled by the following environment variables. The feature
 | Environment Variable | Type | Default | Description |
 | --- | --- | --- | --- |
 | `CONVEYOR_AGENT_SUPERVISOR_ENABLED` | bool | `false` | Master feature flag. Alias: `CONVEYOR_ANTIGRAVITY_SUPERVISOR_ENABLED`. |
-| `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR` | string | `claude` | Default executor for analyst, implementer and reviewer (`pool`, `pi`, `antigravity`, `claude`, `command-code`). `codex` is not implemented. |
+| `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR` | string | auto | Default executor for analyst, implementer and reviewer (`pool`, `pi`, `antigravity`, `claude`, `command-code`). `codex` is not implemented. Unset: the server picks the first usable executor (`pool` → `pi` → `claude` → `antigravity` → `command-code`); `claude` is the last resort so the owner still sees why it cannot run. |
 | `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_EXECUTOR` | string | `None` | Role-specific override for implementer executor. |
 | `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_MODEL` | string | `None` | Model identifier for implementer (e.g., `gemini-3.8-flash-medium`). |
 | `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_LOCATION` | string | `worktree` | Execution working directory binding (`worktree` or `control_plane`). |
@@ -115,6 +115,7 @@ AGY read roles use a session-scoped permission deny profile; these tool permissi
   ```
 
 - Precedence in `load_roles`: the role's `CONVEYOR_AGENT_SUPERVISOR_<ROLE>_EXECUTOR` variable, then `supervisor_roles.json`, then the implementation executor default. A dispatch-time override beats all of them.
+- With nothing configured for a role, the implementation executor default is chosen automatically from the executors that are actually available (see the table above). `GET /api/supervisor/capabilities` reports `roles.<role>.auto_selected: true` for those roles.
 
 ### Rules
 

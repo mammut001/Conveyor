@@ -190,7 +190,7 @@ def handle_post(
             if action == "transition":
                 raise svc.SupervisorServiceError(
                     HTTPStatus.CONFLICT,
-                    "direct browser task transitions are disabled; use /dispatch or /cancel",
+                    "这个操作不能在页面上直接做，请用「开始执行」或「取消」",
                     code="transition_disabled",
                 )
 
@@ -202,7 +202,7 @@ def handle_post(
         if len(parts) == 5 and parts[:3] == ["api", "supervisor", "deployments"] and parts[4] == "stage":
             raise svc.SupervisorServiceError(
                 HTTPStatus.CONFLICT,
-                "browser deployment stage mutation is disabled",
+                "远程执行节点的阶段不能在页面上改",
                 code="stage_mutation_disabled",
             )
 

@@ -517,7 +517,7 @@ class SupervisorApiHttpTests(unittest.TestCase):
         self.assertTrue(exec_by_name["claude"]["available"])
         self.assertFalse(exec_by_name["command-code"]["available"])
         self.assertFalse(exec_by_name["codex"]["available"])
-        self.assertIn("not implemented", exec_by_name["codex"]["reason"])
+        self.assertIn("Codex", exec_by_name["codex"]["reason"])
         self.assertNotIn("models", exec_by_name["claude"])
         self.assertFalse(caps["deployment"]["configured"])
         self.assertFalse(caps["deployment"]["can_start"])

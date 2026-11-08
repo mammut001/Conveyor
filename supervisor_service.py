@@ -126,7 +126,7 @@ class SupervisorServiceError(Exception):
         *,
         code: str | None = None,
     ) -> None:
-        clean = redact_text(str(message or "supervisor error")).strip() or "supervisor error"
+        clean = redact_text(str(message or "服务端出错")).strip() or "服务端出错"
         super().__init__(clean)
         self.status = int(status)
         self.message = truncate(clean, 600)
@@ -155,7 +155,7 @@ def require_enabled(settings: Any) -> None:
     if not is_enabled(settings):
         raise SupervisorServiceError(
             HTTPStatus.CONFLICT,
-            "agent supervisor is disabled (set CONVEYOR_AGENT_SUPERVISOR_ENABLED=true)",
+            "项目功能还没有打开（需要在服务端设置 CONVEYOR_AGENT_SUPERVISOR_ENABLED=true）",
             code="agent_supervisor_disabled",
         )
 
@@ -169,7 +169,7 @@ def _db_path(settings: Any) -> Path:
     if not mem_root:
         raise SupervisorServiceError(
             HTTPStatus.INTERNAL_SERVER_ERROR,
-            "supervisor storage root is not configured",
+            "还没有配置存储目录",
         )
     state_dir = Path(os.path.realpath(os.path.expanduser(str(mem_root)))) / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -199,55 +199,66 @@ def _connect(settings: Any) -> sqlite3.Connection:
 # Input & Git validation helpers
 # ---------------------------------------------------------------------------
 
+# Owner-facing validation text: plain Chinese, no git jargon. The ``code`` field is
+# what clients and tests match on, so it never changes with the wording.
+
+_PATH_FIELD_LABELS = {"path": "路径", "repo_path": "仓库路径", "worktree_path": "工作目录路径"}
+
+
+def _path_label(field_name: str) -> str:
+    return _PATH_FIELD_LABELS.get(field_name, "路径")
+
+
 def _validate_id_token(value: Any, field_name: str) -> str:
     if not isinstance(value, str):
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            f"{field_name} must be a string",
+            f"{field_name} 需要是文字",
             code="invalid_input",
         )
     cleaned = value.strip()
     if not cleaned or not _ID_TOKEN_RE.match(cleaned):
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            f"invalid {field_name}",
+            f"{field_name} 不正确",
             code="invalid_input",
         )
     return cleaned
 
 
 def _canonicalize_user_path(raw: Any, field_name: str = "path") -> str:
+    label = _path_label(field_name)
     if not isinstance(raw, str):
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            f"{field_name} is required",
+            f"请填写{label}",
             code="invalid_path",
         )
     trimmed = raw.strip()
     if not trimmed or len(trimmed) > MAX_PATH_CHARS:
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            f"{field_name} must be 1-{MAX_PATH_CHARS} characters",
+            f"{label}长度需要在 1-{MAX_PATH_CHARS} 个字符之间",
             code="invalid_path",
         )
     if any(ch in trimmed for ch in ("\x00", "\r", "\n")):
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            f"{field_name} contains invalid control characters",
+            f"{label}里有不允许的特殊字符",
             code="invalid_path",
         )
     expanded = os.path.expanduser(trimmed)
     if not os.path.isabs(expanded):
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            f"{field_name} must be an absolute path",
+            f"请填写完整{label}（以 / 开头）",
             code="invalid_path",
         )
     raw_parts = Path(expanded).parts
     if ".." in raw_parts:
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            f"{field_name} must not contain parent traversal segments",
+            f"路径里不能有 ../ 这样的上级跳转",
             code="invalid_path",
         )
     return os.path.realpath(expanded)
@@ -264,7 +275,7 @@ def _managed_worktree_root(settings: Any) -> Path:
     if not task_root:
         raise SupervisorServiceError(
             HTTPStatus.INTERNAL_SERVER_ERROR,
-            "supervisor task root is not configured",
+            "还没有配置任务目录",
         )
     return Path(_canonical_internal_path(str(task_root))) / "worktrees" / "supervisor"
 
@@ -290,39 +301,39 @@ def _run_git(
     except subprocess.TimeoutExpired as exc:
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "git operation timed out",
+            "Git 命令超时了，可以再试一次",
             code="git_timeout",
         ) from exc
     except OSError as exc:
         raise SupervisorServiceError(
             HTTPStatus.INTERNAL_SERVER_ERROR,
-            f"git execution failed: {exc}",
+            f"Git 运行失败：{exc}",
             code="git_unavailable",
         ) from exc
 
 
 def validate_git_repository_root(settings: Any, raw_path: Any) -> str:
     """Validate that `raw_path` resolves to the canonical root of a real main git repository."""
-    canon = _canonicalize_user_path(raw_path, "path")
+    canon = _canonicalize_user_path(raw_path, "路径")
     target = Path(canon)
     if not target.exists() or not target.is_dir():
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "repository path does not exist or is not a directory",
+            "这个路径不存在，或者不是文件夹",
             code="invalid_repository",
         )
     top = _run_git(settings, canon, ["rev-parse", "--show-toplevel"])
     if top.returncode != 0 or not top.stdout.strip():
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "path is not a valid git working repository",
+            "这个文件夹不是 Git 仓库",
             code="invalid_repository",
         )
     top_canon = os.path.realpath(top.stdout.strip())
     if top_canon != canon:
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "path must be the root directory of a git repository, not a subdirectory",
+            "请选 Git 仓库最外层的主文件夹，不要选里面的子文件夹",
             code="invalid_repository_root",
         )
     # Reject secondary linked worktrees being registered as top-level repositories.
@@ -330,7 +341,7 @@ def validate_git_repository_root(settings: Any, raw_path: Any) -> str:
     if dirs.returncode != 0:
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "unable to inspect git repository metadata",
+            "读不到这个仓库的信息",
             code="invalid_repository",
         )
     dir_lines = [ln.strip() for ln in dirs.stdout.splitlines() if ln.strip()]
@@ -340,13 +351,13 @@ def validate_git_repository_root(settings: Any, raw_path: Any) -> str:
         if git_dir != common_dir:
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                "linked git worktrees cannot be registered as standalone repositories; register the main repository root instead",
+                "这是 Git 的工作目录，请注册它所属的主仓库文件夹",
                 code="worktree_not_repo_root",
             )
     if not ags.repo_is_git_dir(canon):
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "repository failed git validation",
+            "这个仓库没有通过检查",
             code="invalid_repository",
         )
     return canon
@@ -367,7 +378,7 @@ def _validate_branch_name(settings: Any, canon_repo: str, raw_branch: Any) -> st
     if not isinstance(raw_branch, str):
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "branch must be a string",
+            "分支名称需要是文字",
             code="invalid_branch",
         )
     branch = raw_branch.strip()
@@ -376,13 +387,13 @@ def _validate_branch_name(settings: Any, canon_repo: str, raw_branch: Any) -> st
     if len(branch) > MAX_BRANCH_CHARS:
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            f"branch name must be <= {MAX_BRANCH_CHARS} characters",
+            f"分支名称长度不能超过 {MAX_BRANCH_CHARS} 个字符",
             code="invalid_branch",
         )
     if branch.startswith("-") or branch.startswith("/") or branch.endswith("/") or branch.endswith(".lock"):
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "invalid git branch name",
+            "分支名称不符合 Git 规则，请换一个（不要以 - 或 / 开头）",
             code="invalid_branch",
         )
     if any(tok in branch for tok in _FORBIDDEN_REF_SUBSTRINGS) or any(
@@ -390,14 +401,14 @@ def _validate_branch_name(settings: Any, canon_repo: str, raw_branch: Any) -> st
     ):
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "invalid git branch name",
+            "分支名称里有不允许的字符，请换一个",
             code="invalid_branch",
         )
     chk = _run_git(settings, canon_repo, ["check-ref-format", "--branch", branch], timeout=5.0)
     if chk.returncode != 0:
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "branch name rejected by git check-ref-format",
+            "Git 不接受这个分支名称，请换一个",
             code="invalid_branch",
         )
     return chk.stdout.strip() or branch
@@ -410,7 +421,7 @@ def _validate_base_ref(settings: Any, canon_repo: str, raw_ref: Any) -> tuple[st
         if not isinstance(raw_ref, str):
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                "base_ref must be a string",
+                "起始位置需要是文字",
                 code="invalid_base_ref",
             )
         cleaned = raw_ref.strip()
@@ -418,22 +429,22 @@ def _validate_base_ref(settings: Any, canon_repo: str, raw_ref: Any) -> tuple[st
             if len(cleaned) > MAX_REF_CHARS or cleaned.startswith("-"):
                 raise SupervisorServiceError(
                     HTTPStatus.BAD_REQUEST,
-                    "invalid base_ref",
+                    "起始位置不符合 Git 规则",
                     code="invalid_base_ref",
                 )
             if any(tok in cleaned for tok in ("\x00", "\r", "\n", "\t", " ")):
                 raise SupervisorServiceError(
                     HTTPStatus.BAD_REQUEST,
-                    "invalid base_ref",
+                    "起始位置里有不允许的字符",
                     code="invalid_base_ref",
                 )
             ref = cleaned
     rev = _run_git(settings, canon_repo, ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], timeout=8.0)
     if rev.returncode != 0 or not rev.stdout.strip():
         msg = (
-            "repository has no commits yet; create an initial commit before adding a worktree"
+            "这个仓库还没有任何提交，请先提交一次再新建工作目录"
             if ref == "HEAD"
-            else f"base_ref '{ref}' does not resolve to a valid commit"
+            else f"找不到 {ref} 对应的提交，请检查起始位置"
         )
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
@@ -699,14 +710,14 @@ def register_repository(
         if not isinstance(name, str):
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                "name must be a string",
+                "名称需要是文字",
                 code="invalid_name",
             )
         clean_name = name.strip()
         if len(clean_name) > MAX_NAME_CHARS or any(ch in clean_name for ch in ("\x00", "\r", "\n")):
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                f"name must be <= {MAX_NAME_CHARS} printable characters",
+                f"名称长度不能超过 {MAX_NAME_CHARS} 个字符",
                 code="invalid_name",
             )
     repo_name = clean_name or Path(canon_repo).name or "repository"
@@ -785,7 +796,7 @@ def _get_repo_row(settings: Any, repo_id: str) -> dict[str, Any]:
     if row is None:
         raise SupervisorServiceError(
             HTTPStatus.NOT_FOUND,
-            f"repository not found: {rid}",
+            f"找不到这个仓库（{rid}）",
             code="repository_not_found",
         )
     return dict(row)
@@ -805,7 +816,7 @@ def create_managed_worktree(
     if not Path(canon_repo).is_dir() or not ags.repo_is_git_dir(canon_repo):
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "registered repository is no longer a valid git repository on disk",
+            "这个仓库在磁盘上已经不见了，或者不再是 Git 仓库",
             code="invalid_repository",
         )
 
@@ -819,7 +830,7 @@ def create_managed_worktree(
     if len(existing_dirs) >= max_wt:
         raise SupervisorServiceError(
             HTTPStatus.CONFLICT,
-            f"managed worktree limit ({max_wt}) reached; prune unused worktrees first",
+            f"工作目录数量到上限了（{max_wt} 个），请先删掉不用的",
             code="worktree_limit_reached",
         )
     raw_budget = os.getenv("CONVEYOR_MAX_WORKTREES_BYTES", "")
@@ -839,7 +850,7 @@ def create_managed_worktree(
             if total_bytes > budget_bytes:
                 raise SupervisorServiceError(
                     HTTPStatus.CONFLICT,
-                    f"managed worktree storage budget exceeded ({total_bytes} > {budget_bytes} bytes)",
+                    "工作目录占用的空间超出上限了，请先删掉不用的",
                     code="worktree_budget_exceeded",
                 )
 
@@ -868,7 +879,7 @@ def create_managed_worktree(
             if branch_rev.returncode == 0 and branch_rev.stdout.strip() != resolved_base_sha:
                 raise SupervisorServiceError(
                     HTTPStatus.CONFLICT,
-                    f"branch '{eff_branch}' already exists at a different commit",
+                    f"分支 {eff_branch} 已经存在，而且指向的不是同一个提交",
                     code="branch_conflict",
                 )
         add_cmd = ["worktree", "add", str(wt_dir), eff_branch]
@@ -885,7 +896,7 @@ def create_managed_worktree(
         )
         raise SupervisorServiceError(
             status,
-            f"failed to create managed worktree: {truncate(err_detail, 280)}",
+            f"新建工作目录失败：{truncate(err_detail, 280)}",
             code="worktree_create_failed",
         )
 
@@ -895,7 +906,7 @@ def create_managed_worktree(
         _run_git(settings, canon_repo, ["worktree", "remove", "--force", wt_canon], timeout=10.0)
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            f"created worktree failed supervisor policy validation: {valid_reason}",
+            f"新建的工作目录没有通过安全检查：{valid_reason}",
             code="worktree_policy_violation",
         )
 
@@ -928,7 +939,7 @@ def create_managed_worktree(
             return item
     raise SupervisorServiceError(
         HTTPStatus.INTERNAL_SERVER_ERROR,
-        "managed worktree was created on disk but could not be enumerated",
+        "工作目录已经建好，但读取不到它的信息",
     )
 
 
@@ -1070,6 +1081,7 @@ def get_capabilities(settings: Any) -> dict[str, Any]:
     from runner.chat_client import config_from_settings
 
     roles_cfg = ags.load_roles(settings)
+    role_sources = ags.role_executor_sources(settings)
     chat_cfg = config_from_settings(settings)
     coord_role = roles_cfg["coordinator"]
     coord_ok, coord_reason = ags.get_executor(settings, coord_role.executor).available()
@@ -1088,6 +1100,9 @@ def get_capabilities(settings: Any) -> dict[str, Any]:
             "model": rc.model or None,
             "location": rc.location,
             "available": bool(ok),
+            # True when no operator configuration named this executor and the
+            # server picked the first usable one for the owner.
+            "auto_selected": role_sources.get(role_name) == "auto",
         }
         if not ok and reason:
             entry["reason"] = redact_text(reason)
@@ -1123,7 +1138,7 @@ def get_capabilities(settings: Any) -> dict[str, Any]:
         "deployment": {
             "configured": False,
             "can_start": False,
-            "reason": "Tailscale deployment runner is not configured on this server.",
+            "reason": "这台机器上还没有配置远程执行节点。",
             "source_machine": host,
         },
         "source_machine": host,
@@ -1146,7 +1161,7 @@ def _resolve_repo_and_worktree(
         if not repo_id or not worktree_id:
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                "both repo_id and worktree_id are required",
+                "请同时选择仓库和工作目录",
                 code="missing_scope",
             )
         repo_row = _get_repo_row(settings, str(repo_id))
@@ -1166,7 +1181,7 @@ def _resolve_repo_and_worktree(
             if other is not None:
                 raise SupervisorServiceError(
                     HTTPStatus.BAD_REQUEST,
-                    "worktree_id does not belong to the specified repo_id",
+                    "这个工作目录不属于选择的仓库",
                     code="scope_mismatch",
                 )
             raise SupervisorServiceError(
@@ -1190,7 +1205,7 @@ def _resolve_repo_and_worktree(
         if row is None:
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                "repository must be registered before creating supervisor tasks",
+                "请先注册这个仓库，再新建任务",
                 code="unregistered_repository",
             )
         repo_fmt = _format_repository(settings, dict(row))
@@ -1198,14 +1213,14 @@ def _resolve_repo_and_worktree(
         if wt is None:
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                "worktree does not belong to registered repository",
+                "这个工作目录不属于已注册的仓库",
                 code="invalid_worktree",
             )
         return repo_fmt, wt
 
     raise SupervisorServiceError(
         HTTPStatus.BAD_REQUEST,
-        "repo_id and worktree_id are required",
+        "请选择仓库和工作目录",
         code="missing_scope",
     )
 
@@ -1305,7 +1320,7 @@ def capture_discussion_snapshot(
         log.error("Failed to read discussion transcript for session %s: %s", session_id, exc)
         raise SupervisorServiceError(
             HTTPStatus.INTERNAL_SERVER_ERROR,
-            f"failed to read discussion transcript: {exc}",
+            f"读不到这个会话的记录：{exc}",
             code="transcript_read_error",
         ) from exc
 
@@ -1365,14 +1380,14 @@ def create_scoped_task(settings: Any, body: dict[str, Any]) -> tuple[dict[str, A
     if not isinstance(raw_goal, str):
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "goal is required",
+            "请填写要做什么",
             code="invalid_goal",
         )
     goal = raw_goal.strip()
     if not goal or len(goal) > MAX_GOAL_CHARS:
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            f"goal must be 1-{MAX_GOAL_CHARS} characters",
+            f"目标长度需要在 1-{MAX_GOAL_CHARS} 个字符之间",
             code="invalid_goal",
         )
 
@@ -1382,14 +1397,14 @@ def create_scoped_task(settings: Any, body: dict[str, Any]) -> tuple[dict[str, A
         if not isinstance(raw_criteria, str):
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                "acceptance_criteria must be a string",
+                "完成标准需要是文字",
                 code="invalid_acceptance_criteria",
             )
         acceptance_criteria = raw_criteria.strip()
         if len(acceptance_criteria) > MAX_CRITERIA_CHARS:
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                f"acceptance_criteria must be <= {MAX_CRITERIA_CHARS} characters",
+                f"完成标准长度不能超过 {MAX_CRITERIA_CHARS} 个字符",
                 code="invalid_acceptance_criteria",
             )
 
@@ -1400,7 +1415,7 @@ def create_scoped_task(settings: Any, body: dict[str, Any]) -> tuple[dict[str, A
         if len(request_id) > MAX_REQUEST_ID_CHARS:
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                f"request_id must be <= {MAX_REQUEST_ID_CHARS} characters",
+                f"请求编号长度不能超过 {MAX_REQUEST_ID_CHARS} 个字符",
                 code="invalid_request_id",
             )
 
@@ -1415,7 +1430,7 @@ def create_scoped_task(settings: Any, body: dict[str, Any]) -> tuple[dict[str, A
     if wt["is_main"] or not wt["managed"]:
         raise SupervisorServiceError(
             HTTPStatus.CONFLICT,
-            "tasks can only run in a managed git worktree; main and external worktrees are read-only",
+            "任务只能在新建的工作目录里跑；主仓库和外部工作目录是只读的",
             code="unmanaged_worktree",
         )
 
@@ -1423,7 +1438,7 @@ def create_scoped_task(settings: Any, body: dict[str, Any]) -> tuple[dict[str, A
     if not ok_wt:
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            f"worktree validation failed: {reason_wt}",
+            f"这个工作目录没有通过检查：{reason_wt}",
             code="invalid_worktree",
         )
 
@@ -1432,7 +1447,7 @@ def create_scoped_task(settings: Any, body: dict[str, Any]) -> tuple[dict[str, A
         if not isinstance(raw_session_id, str):
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                "session_id must be a string",
+                "会话编号需要是文字",
                 code="invalid_session",
             )
         supplied_sid = raw_session_id.strip()
@@ -1441,7 +1456,7 @@ def create_scoped_task(settings: Any, body: dict[str, Any]) -> tuple[dict[str, A
         if supplied_sid != wt["chat_session_id"]:
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                "session_id does not match the selected repository/worktree",
+                "会话编号和选择的仓库/工作目录不一致",
                 code="session_mismatch",
             )
 
@@ -1466,7 +1481,7 @@ def create_scoped_task(settings: Any, body: dict[str, Any]) -> tuple[dict[str, A
             if str(existing_req["payload_sha256"]) != payload_digest:
                 raise SupervisorServiceError(
                     HTTPStatus.CONFLICT,
-                    "request_id was already used with different task parameters",
+                    "这个请求编号已经用过，而且参数不一样",
                     code="request_id_conflict",
                 )
             existing_task = ags.get_task(settings, str(existing_req["task_id"]))
@@ -1476,7 +1491,7 @@ def create_scoped_task(settings: Any, body: dict[str, Any]) -> tuple[dict[str, A
     if wt["locked"] or ags.has_active_task_for_worktree(settings, wt["path"]):
         raise SupervisorServiceError(
             HTTPStatus.CONFLICT,
-            "selected worktree already has an active supervisor task or lock",
+            "这个工作目录已经有任务在跑，或者还锁着",
             code="worktree_locked",
         )
 
@@ -1526,7 +1541,7 @@ def create_scoped_task(settings: Any, body: dict[str, Any]) -> tuple[dict[str, A
                 if str(race_row["payload_sha256"]) != payload_digest:
                     raise SupervisorServiceError(
                         HTTPStatus.CONFLICT,
-                        "request_id was already used with different task parameters",
+                        "这个请求编号已经用过，而且参数不一样",
                         code="request_id_conflict",
                     )
                 winner = ags.get_task(settings, str(race_row["task_id"]))
@@ -1561,7 +1576,7 @@ def _sanitize_role_overrides(raw_roles: Any) -> dict[str, dict[str, Any]] | None
     if not isinstance(raw_roles, dict):
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "roles must be an object",
+            "角色设置的格式不对",
             code="invalid_role_override",
         )
     allowed_executors = {name for name, _ in _UI_EXPOSED_EXECUTORS}
@@ -1570,7 +1585,7 @@ def _sanitize_role_overrides(raw_roles: Any) -> dict[str, dict[str, Any]] | None
         if role_name not in _OVERRIDABLE_ROLES:
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                f"role '{role_name}' cannot be overridden via browser API",
+                f"角色 {role_name} 不能在页面上改",
                 code="invalid_role_override",
             )
         if isinstance(spec, str):
@@ -1581,7 +1596,7 @@ def _sanitize_role_overrides(raw_roles: Any) -> dict[str, dict[str, Any]] | None
             if forbidden_keys:
                 raise SupervisorServiceError(
                     HTTPStatus.BAD_REQUEST,
-                    f"role '{role_name}' override contains server-enforced or unknown fields: "
+                    f"角色 {role_name} 里有不能改的项："
                     f"{', '.join(sorted(str(k) for k in forbidden_keys))}",
                     code="invalid_role_override",
                 )
@@ -1589,7 +1604,7 @@ def _sanitize_role_overrides(raw_roles: Any) -> dict[str, dict[str, Any]] | None
             if not isinstance(raw_exec, str) or not raw_exec.strip():
                 raise SupervisorServiceError(
                     HTTPStatus.BAD_REQUEST,
-                    f"executor is required for role '{role_name}'",
+                    f"请为角色 {role_name} 选择执行者",
                     code="invalid_role_override",
                 )
             exec_name = raw_exec.strip()
@@ -1604,27 +1619,27 @@ def _sanitize_role_overrides(raw_roles: Any) -> dict[str, dict[str, Any]] | None
                     if len(m_clean) > MAX_MODEL_CHARS or m_clean.startswith("-") or not _MODEL_NAME_RE.match(m_clean):
                         raise SupervisorServiceError(
                             HTTPStatus.BAD_REQUEST,
-                            f"invalid model identifier for role '{role_name}'",
+                            f"角色 {role_name} 的模型名称不正确",
                             code="invalid_model",
                         )
                     model_val = m_clean
             else:
                 raise SupervisorServiceError(
                     HTTPStatus.BAD_REQUEST,
-                    f"model for role '{role_name}' must be a string or null",
+                    f"角色 {role_name} 的模型名称需要是文字，或者留空",
                     code="invalid_model",
                 )
         else:
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                f"invalid override specification for role '{role_name}'",
+                f"角色 {role_name} 的设置格式不对",
                 code="invalid_role_override",
             )
 
         if exec_name not in allowed_executors:
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                f"unsupported executor '{exec_name}' for role '{role_name}'",
+                f"执行者 {exec_name} 不能用于角色 {role_name}",
                 code="invalid_executor",
             )
         role_out: dict[str, Any] = {"executor": exec_name}
@@ -1647,7 +1662,7 @@ def dispatch_scoped_task(
     if task is None:
         raise SupervisorServiceError(
             HTTPStatus.NOT_FOUND,
-            f"task not found: {tid}",
+            f"找不到这个任务（{tid}）",
             code="task_not_found",
         )
 
@@ -1658,7 +1673,7 @@ def dispatch_scoped_task(
             if supplied != _canonical_internal_path(str(task.get(immutable_field) or "")):
                 raise SupervisorServiceError(
                     HTTPStatus.BAD_REQUEST,
-                    f"{immutable_field} cannot be reassigned during dispatch",
+                    "开始执行时不能改仓库或工作目录",
                     code="immutable_scope",
                 )
 
@@ -1667,20 +1682,20 @@ def dispatch_scoped_task(
     if not repo_path or not wt_path:
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            "task is missing bound repository or managed worktree",
+            "这个任务没有绑定仓库或工作目录",
             code="invalid_worktree",
         )
     if wt_path == repo_path:
         raise SupervisorServiceError(
             HTTPStatus.CONFLICT,
-            "cannot dispatch supervisor task on main repository worktree",
+            "不能直接在主仓库上跑任务，请先新建一个工作目录",
             code="unmanaged_worktree",
         )
     ok_wt, reason_wt = ags.validate_worktree(settings, repo_path, wt_path)
     if not ok_wt:
         raise SupervisorServiceError(
             HTTPStatus.BAD_REQUEST,
-            f"worktree validation failed: {reason_wt}",
+            f"这个工作目录没有通过检查：{reason_wt}",
             code="invalid_worktree",
         )
 
@@ -1696,7 +1711,7 @@ def dispatch_scoped_task(
     if wt_row is not None and not bool(wt_row["managed"]):
         raise SupervisorServiceError(
             HTTPStatus.CONFLICT,
-            "tasks cannot be dispatched on unmanaged worktrees",
+            "不能在别人的工作目录上派发任务，请选自己新建的工作目录",
             code="unmanaged_worktree",
         )
 
@@ -1706,7 +1721,7 @@ def dispatch_scoped_task(
         if not isinstance(raw_criteria, str) or len(raw_criteria.strip()) > MAX_CRITERIA_CHARS:
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                f"acceptance_criteria must be a string <= {MAX_CRITERIA_CHARS} characters",
+                f"完成标准需要是文字，且不超过 {MAX_CRITERIA_CHARS} 个字符",
                 code="invalid_acceptance_criteria",
             )
         acceptance_criteria = raw_criteria.strip()
@@ -1722,7 +1737,7 @@ def dispatch_scoped_task(
     if state in ags.TERMINAL_STATES:
         raise SupervisorServiceError(
             HTTPStatus.CONFLICT,
-            f"task is already in terminal state '{state}'",
+            f"这个任务已经结束了（{state}）",
             code="task_terminal",
         )
 
@@ -1766,7 +1781,7 @@ def list_scoped_tasks(
         if clean_state not in ags.STATES:
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                f"unknown task state filter: {clean_state}",
+                f"不知道的筛选状态：{clean_state}",
                 code="invalid_state",
             )
 
@@ -1787,14 +1802,14 @@ def list_scoped_tasks(
         if row is None:
             raise SupervisorServiceError(
                 HTTPStatus.NOT_FOUND,
-                f"worktree not found: {wid}",
+                f"找不到这个工作目录（{wid}）",
                 code="worktree_not_found",
             )
         wt_filter = dict(row)
         if repo_filter is not None and str(wt_filter["repo_id"]) != str(repo_filter["id"]):
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                "worktree_id does not belong to repo_id",
+                "这个工作目录不属于选择的仓库",
                 code="scope_mismatch",
             )
 
@@ -1969,12 +1984,12 @@ def cancel_scoped_task(
             f"task not found: {tid}",
             code="task_not_found",
         )
-    clean_reason = "cancelled by user"
+    clean_reason = "手动取消"
     if reason is not None:
         if not isinstance(reason, str):
             raise SupervisorServiceError(
                 HTTPStatus.BAD_REQUEST,
-                "reason must be a string",
+                "原因需要是文字",
                 code="invalid_reason",
             )
         stripped = reason.strip()[:MAX_REASON_CHARS]
@@ -2026,7 +2041,7 @@ def start_scoped_deployment(settings: Any, body: dict[str, Any]) -> dict[str, An
     _ = body
     raise SupervisorServiceError(
         HTTPStatus.CONFLICT,
-        "Tailscale deployment runner is not configured on this server; cannot start deployment.",
+        "这台机器上还没有配置远程执行节点，暂时不能启动。",
         code="deployment_unconfigured",
     )
 

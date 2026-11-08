@@ -65,6 +65,8 @@ DEPLOYMENT_STAGES = (
 )
 
 ROLES = ("coordinator", "analyst", "implementer", "reviewer")
+# Roles whose default executor is the implementation executor (not the chat tier).
+WORKTREE_ROLES = ("analyst", "implementer", "reviewer")
 ALLOWED_ROLE_TOOLS = frozenset({"read", "write"})
 ALLOWED_ROLE_LOCATIONS = frozenset({"control_plane", "worktree"})
 
@@ -864,8 +866,67 @@ def analysis_model(settings: Any) -> str | None:
     return _field(settings, "agent_supervisor_analysis_model", "supervisor_analysis_model", None)
 
 
+# Automatic default order for a role with no explicit executor: the pool rotates
+# over the owner's own workers, the built-in Pi needs no install at all, then the
+# external CLIs. ``claude`` stays last so a machine with nothing installed still
+# gets the concrete reason why it cannot run instead of a silent substitution.
+AUTO_EXECUTOR_ORDER: tuple[str, ...] = ("pool", "pi", "claude", "antigravity", "command-code")
+
+
+def _executor_is_available(settings: Any, name: str, cache: dict[str, bool]) -> bool:
+    """Cheap, network-free availability probe with a per-call cache."""
+    if name not in cache:
+        try:
+            cache[name] = bool(get_executor(settings, name).available()[0])
+        except Exception:
+            cache[name] = False
+    return cache[name]
+
+
+def auto_executor_name(settings: Any, cache: dict[str, bool] | None = None) -> str:
+    """First usable executor for roles that have no explicit configuration.
+
+    Availability checks only look at local binaries / the built-in Pi / the local
+    workers table (no network). ``cache`` lets one ``load_roles()`` call probe
+    each candidate at most once.
+    """
+    seen = {} if cache is None else cache
+    for name in AUTO_EXECUTOR_ORDER:
+        if _executor_is_available(settings, name, seen):
+            return name
+    return "claude"
+
+
+def _configured_implementation_executor(settings: Any) -> str:
+    """Explicitly configured implementation executor, or "" when none is set.
+
+    ``None``/empty means "not configured" and is what makes the automatic
+    default possible: ``config.Settings`` leaves the field ``None`` unless the
+    operator sets ``CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR``. Any
+    non-empty value is an explicit choice and always wins, available or not.
+    """
+    env = (
+        os.getenv("CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR")
+        or os.getenv("CONVEYOR_SUPERVISOR_IMPLEMENTATION_EXECUTOR")
+        or ""
+    ).strip()
+    if env:
+        return env
+    configured = _field(
+        settings, "agent_supervisor_implementation_executor", "supervisor_implementation_executor", None
+    )
+    return str(configured).strip() if configured else ""
+
+
 def implementation_executor_name(settings: Any) -> str:
-    return _field(settings, "agent_supervisor_implementation_executor", "supervisor_implementation_executor", "claude") or "claude"
+    """Implementation executor for the worktree roles.
+
+    Explicit configuration always wins, even when that executor is unavailable
+    (the owner is then told why). With nothing configured the first usable
+    executor is picked automatically, so a machine without Claude Code but with
+    the built-in Pi still has working role defaults.
+    """
+    return _configured_implementation_executor(settings) or auto_executor_name(settings)
 
 
 def _role_env(settings: Any, role: str, key: str) -> str | None:
@@ -879,7 +940,20 @@ def _role_env(settings: Any, role: str, key: str) -> str | None:
 
 def load_roles(settings: Any) -> dict[str, RoleConfig]:
     """Load role configuration from JSON file or env defaults."""
+    roles, _sources = load_roles_with_sources(settings)
+    return roles
+
+
+def load_roles_with_sources(settings: Any) -> tuple[dict[str, RoleConfig], dict[str, str]]:
+    """Roles plus, per role, where its executor came from.
+
+    ``"explicit"`` when the operator named the executor (the role's own
+    ``CONVEYOR_AGENT_SUPERVISOR_<ROLE>_EXECUTOR`` / ``supervisor_roles.json`` /
+    settings entry, or the shared implementation executor), ``"auto"`` when the
+    server picked the first usable executor for the owner.
+    """
     roles: dict[str, RoleConfig] = {}
+    sources: dict[str, str] = {}
     path = _root(settings) / "supervisor_roles.json"
     file_cfg: dict[str, Any] = {}
     if path.exists():
@@ -887,21 +961,34 @@ def load_roles(settings: Any) -> dict[str, RoleConfig]:
             file_cfg = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             file_cfg = {}
+    # One availability probe per load_roles() call; shared by every role that
+    # falls back to the automatic default.
+    availability: dict[str, bool] = {}
+    base_configured = _configured_implementation_executor(settings)
+    base_executor = base_configured or auto_executor_name(settings, availability)
     defaults = {
         "coordinator": RoleConfig("coordinator", executor="chat", tools=["read"], location="control_plane"),
-        "analyst": RoleConfig("analyst", executor=implementation_executor_name(settings), tools=["read"], location="worktree"),
-        "implementer": RoleConfig("implementer", executor=implementation_executor_name(settings), tools=["read", "write"], location="worktree"),
-        "reviewer": RoleConfig("reviewer", executor=implementation_executor_name(settings), tools=["read"], location="worktree"),
+        "analyst": RoleConfig("analyst", executor=base_executor, tools=["read"], location="worktree"),
+        "implementer": RoleConfig("implementer", executor=base_executor, tools=["read", "write"], location="worktree"),
+        "reviewer": RoleConfig("reviewer", executor=base_executor, tools=["read"], location="worktree"),
     }
     for name in ROLES:
         cfg = file_cfg.get(name, {}) if isinstance(file_cfg, dict) else {}
         base = defaults[name]
         env_executor = _role_env(settings, name, "EXECUTOR")
-        executor = str(
+        explicit_executor = (
             env_executor
             or cfg.get("executor")
             or getattr(settings, f"agent_supervisor_{name}_executor", None)
-            or base.executor
+        )
+        executor = str(explicit_executor or base.executor)
+        # Explicit = the role named its own executor, or it inherited an
+        # explicitly configured implementation executor. Everything else is the
+        # automatic default, which the owner did not choose.
+        sources[name] = (
+            "explicit"
+            if explicit_executor or (base_configured and name in WORKTREE_ROLES)
+            else "auto"
         )
         env_model = _role_env(settings, name, "MODEL")
         model = env_model or cfg.get("model") or getattr(settings, f"agent_supervisor_{name}_model", None) or base.model
@@ -929,7 +1016,13 @@ def load_roles(settings: Any) -> dict[str, RoleConfig]:
     for role_cfg in roles.values():
         if role_cfg.model is None and role_cfg.executor.strip().lower() == "codex":
             role_cfg.model = getattr(settings, "codex_model", None)
-    return roles
+    return roles, sources
+
+
+def role_executor_sources(settings: Any) -> dict[str, str]:
+    """Per role: ``"explicit"`` when its executor was configured, else ``"auto"``."""
+    _, sources = load_roles_with_sources(settings)
+    return sources
 
 
 def _validate_role_policy(role: RoleConfig) -> tuple[bool, str]:
@@ -1039,13 +1132,13 @@ def validate_worktree(settings: Any, repo_path: str, worktree_path: str) -> tupl
     canon_repo = _canonical_path(repo_path)
     repo = Path(canon_repo) if canon_repo else Path("")
     if not canon_repo or not repo.is_dir() or not repo_is_git_dir(canon_repo):
-        return False, f"repo_path is not a real git repository: {repo_path}"
+        return False, "这个仓库不是有效的 Git 仓库"
     canon_wt = _canonical_path(worktree_path)
     if not canon_wt:
-        return False, "worktree_path is required for execution"
+        return False, "执行前必须先选定一个工作目录"
     wt = Path(canon_wt)
     if wt == repo or not wt.is_dir() or not is_git_worktree(canon_wt):
-        return False, f"worktree_path is not a real git worktree: {worktree_path}"
+        return False, "这个路径不是 Git 的工作目录"
     allowed: list[Path] = []
     for root in managed_roots(settings, canon_repo):
         allowed.append(root)
@@ -1056,11 +1149,9 @@ def validate_worktree(settings: Any, repo_path: str, worktree_path: str) -> tupl
             inside = True
             break
     if not inside:
-        return False, (f"worktree_path {wt} is outside managed roots; "
-                       "use a worktree created under the task root or repository")
+        return False, "这个工作目录不在 Conveyor 管理的位置里，请用在项目页新建的工作目录"
     if not registered_worktree_of(canon_repo, canon_wt):
-        return False, (f"worktree {wt} is not registered as a worktree of repo "
-                       f"{repo}; per-task repo binding violated")
+        return False, "这个工作目录不属于所选仓库，换一个再试"
     return True, "ok"
 
 
@@ -3564,6 +3655,11 @@ def _executable_exists(binary: str) -> bool:
     return shutil.which(b) is not None
 
 
+# Owner-facing reasons: plain Chinese, no binary names or paths. The technical
+# detail (which binary, which path) stays in the log line for the operator.
+NOT_INSTALLED_REASON = "没有安装 {name}。可以在「执行者」里安装，或改用 Pi（内置）。"
+
+
 class ClaudeExecutor:
     """Local ``claude`` CLI. Read-only roles are enforced by the CLI itself
     (tool allowlist + plan permission mode), not by prompt text. Auth relies
@@ -3577,7 +3673,8 @@ class ClaudeExecutor:
 
     def available(self) -> tuple[bool, str]:
         if not _executable_exists(self.binary):
-            return False, f"claude binary not found: {self.binary}"
+            log.debug("claude executor unavailable: binary %r not found", self.binary)
+            return False, NOT_INSTALLED_REASON.format(name="Claude Code")
         return True, "ok"
 
     def _argv(self, role: RoleConfig, _cwd: str | None = None) -> list[str]:
@@ -3619,7 +3716,8 @@ class CommandCodeExecutor:
 
     def available(self) -> tuple[bool, str]:
         if not _executable_exists(self.binary):
-            return False, f"command-code binary not found: {self.binary}"
+            log.debug("command-code executor unavailable: binary %r not found", self.binary)
+            return False, NOT_INSTALLED_REASON.format(name="Command Code")
         return True, "ok"
 
     def _argv(self, role: RoleConfig, _cwd: str | None = None) -> list[str]:
@@ -3656,7 +3754,8 @@ class CodexExecutor:
         self.binary = os.getenv("CODEX_BIN", getattr(settings, "codex_bin", "codex"))
 
     def available(self) -> tuple[bool, str]:
-        return False, "codex executor adapter is not implemented in this build; pick antigravity, claude, or command-code"
+        log.debug("codex executor adapter is not wired in this build")
+        return False, "这个版本还没有接 Codex，可以选 Pi（内置）、Claude Code、Antigravity 或 Command Code。"
 
     async def run(self, *, role: RoleConfig, prompt: str, worktree_path: str,
                   timeout_seconds: int, task_id: str = "",
@@ -3682,9 +3781,10 @@ class ChatExecutor:
             from runner.chat_client import config_from_settings
             config = config_from_settings(self.settings)
         except Exception as exc:
-            return False, f"chat client configuration error: {type(exc).__name__}"
+            log.debug("chat executor configuration error: %s", exc)
+            return False, "对话模型还没有配好，请去「设置 → 模型设置」检查接口地址、密钥和模型名称。"
         if config is None:
-            return False, "chat model not configured (chat base url/key/model missing)"
+            return False, "还没有设置对话模型，请去「设置 → 模型设置」填好接口地址、密钥和模型名称。"
         return True, "ok"
 
     async def run(self, *, role: RoleConfig, prompt: str, worktree_path: str,
@@ -3755,7 +3855,8 @@ class AntigravityExecutor:
 
     def available(self) -> tuple[bool, str]:
         if not _executable_exists(self.binary):
-            return False, f"antigravity (agy) binary not found: {self.binary}"
+            log.debug("antigravity executor unavailable: binary %r not found", self.binary)
+            return False, NOT_INSTALLED_REASON.format(name="Antigravity")
         return True, "ok"
 
     def _argv(
@@ -3880,7 +3981,8 @@ class PiExecutor:
 
     def available(self) -> tuple[bool, str]:
         if not _executable_exists(self.binary):
-            return False, f"pi binary not found: {self.binary}"
+            log.debug("pi executor unavailable: binary %r not found", self.binary)
+            return False, NOT_INSTALLED_REASON.format(name="Pi（内置）")
         return True, "ok"
 
     def _argv(self, role: RoleConfig, _cwd: str | None = None) -> list[str]:
@@ -3946,7 +4048,7 @@ def get_executor(settings: Any, name: str) -> Executor:
 
     class _Unknown:
         def available(self):
-            return False, f"unknown executor: {name}"
+            return False, f"不知道的执行者：{name}"
 
         async def run(self, *, role, prompt, worktree_path, timeout_seconds, task_id="", context=None):
             return ExecutionResult(success=False, error=f"unknown executor: {name}",

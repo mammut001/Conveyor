@@ -460,7 +460,7 @@ def set_repo_validation(
     if not isinstance(selected_ids, list):
         raise svc.SupervisorServiceError(
             svc.HTTPStatus.BAD_REQUEST,
-            "selected must be a list of check ids",
+            "请选要运行的检查项目（列表）",
             code="invalid_input",
         )
 
@@ -473,14 +473,14 @@ def set_repo_validation(
         if not isinstance(raw, str):
             raise svc.SupervisorServiceError(
                 svc.HTTPStatus.BAD_REQUEST,
-                "check id must be a string",
+                "检查项目的编号需要是文字",
                 code="unknown_check",
             )
         cid = raw.strip()
         if cid not in by_id:
             raise svc.SupervisorServiceError(
                 svc.HTTPStatus.BAD_REQUEST,
-                f"unknown check id: {cid}",
+                f"没有这个检查项目：{cid}",
                 code="unknown_check",
             )
         if cid in seen:

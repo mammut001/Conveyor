@@ -260,8 +260,8 @@ class PiExecutorAvailableTests(unittest.TestCase):
             ex = PiExecutor(settings)
         ok, reason = ex.available()
         self.assertFalse(ok)
-        self.assertIn("pi binary not found", reason)
-        self.assertRegex(reason, r"^pi binary not found: ")  # Chinese-free, like the others
+        self.assertIn("没有安装", reason)
+        self.assertNotIn(tmp.name, reason)  # no paths for a non-technical owner
 
     def test_available_true_with_present_binary(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="pi-present-"))
