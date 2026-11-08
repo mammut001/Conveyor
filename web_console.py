@@ -641,6 +641,40 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     counts["telegram"] = sum(1 for it in items if it.get("origin_channel") == "telegram" or it.get("source") == "telegram")
                     counts["feishu"] = sum(1 for it in items if it.get("origin_channel") == "feishu" or it.get("source") == "feishu")
                 self._json(HTTPStatus.OK, {"items": items, "counts": counts})
+            elif path == "/api/memory/sessions/search":
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                raw_q = (query.get("q") or [""])[0].strip()
+                if not raw_q:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "请输入搜索关键词（1 到 200 个字）。"})
+                    return
+                if len(raw_q) > 200:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "搜索关键词不能超过 200 个字。"})
+                    return
+                raw_limit = (query.get("limit") or [""])[0].strip()
+                if not raw_limit:
+                    limit = 20
+                else:
+                    try:
+                        limit = int(raw_limit)
+                    except ValueError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "返回数量必须在 1 到 50 之间。"})
+                        return
+                    if limit < 1 or limit > 50:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "返回数量必须在 1 到 50 之间。"})
+                        return
+                channel = (query.get("channel") or [""])[0].strip() or None
+                include_archived = (query.get("include_archived") or [""])[0].strip().lower() in ("1", "true", "yes")
+                from transcript_store import get_transcript_store
+                results = get_transcript_store(settings).search(
+                    raw_q,
+                    limit=limit,
+                    channel=channel,
+                    include_archived=include_archived,
+                )
+                self._json(HTTPStatus.OK, {"results": results, "query": raw_q})
             elif path == "/api/memory":
                 settings = self._memory_settings()
                 if settings is None:

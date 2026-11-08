@@ -31,7 +31,7 @@ def private_read(tool: str) -> bool:
     """Conservatively mark attempts to read personal data, even on tool failure."""
     name = tool.lower()
     return (name.startswith(("memory.", "gmail.", "inbox.", "secrets.", "secret."))
-            or name in ("email.inbox", "email.read", "email.search",
+            or name in ("session.search", "email.inbox", "email.read", "email.search",
                         "email.recent", "file.search_private",
                         "calendar.search", "contacts.search", "notes.search",
                         "files.search",

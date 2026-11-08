@@ -141,7 +141,7 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
         if not getattr(settings, "mcp_enabled", False):
             return False
         return spec.danger in (DangerLevel.READ, DangerLevel.WRITE, DangerLevel.DESTRUCTIVE)
-    if name.startswith("memory.") and not memory_allowed:
+    if (name.startswith("memory.") or name == "session.search") and not memory_allowed:
         return False
     if name.startswith("routine.") and not getattr(settings, "routines_enabled", False):
         return False
@@ -256,6 +256,15 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
                     "text": {"type": "string"},
                     "tier": {"type": "string", "enum": ["profile", "facts", "log"]},
                 }, "required": ["text", "tier"],
+            }
+        if name == "session.search":
+            schema["function"]["parameters"] = {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query for past conversations"},
+                    "limit": {"type": "integer", "description": "Maximum number of results (1-50)"},
+                },
+                "required": ["query"],
             }
         schemas.append(schema)
 
@@ -443,6 +452,16 @@ async def run_tool_loop(
                     arg = json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else ""
                 except (TypeError, ValueError):
                     arg = ""
+            elif real_tool_name == "session.search":
+                raw = fn_info.get("arguments")
+                try:
+                    value = json.loads(raw) if isinstance(raw, str) else raw
+                    if isinstance(value, dict):
+                        arg = json.dumps(value, ensure_ascii=False)
+                    else:
+                        arg = str(raw or "").strip()
+                except (TypeError, ValueError):
+                    arg = str(raw or "").strip()
             else:
                 arg = _parse_tool_arg(fn_info.get("arguments"))
 

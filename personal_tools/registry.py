@@ -737,6 +737,13 @@ def register_personal_tools() -> None:
         memory_tools.memory_search,
         keywords=("搜索记忆",),
     )
+    _register(
+        "session.search",
+        "搜索过去的对话记录",
+        DangerLevel.READ,
+        memory_tools.session_search,
+        keywords=("搜索对话", "历史对话", "过去对话"),
+    )
 
     # Reusable skills library (flagged off in is_exposed / chat_tools).
     _register(
