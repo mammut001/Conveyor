@@ -2,6 +2,8 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 
 const NOW = new Date('2026-11-08T12:00:00+08:00')
 const SHOTS = 'test-results/r3-login'
+/** Round 4 evidence shots; set R4_SHOTS_DIR to save them elsewhere. */
+const R4_SHOTS = process.env.R4_SHOTS_DIR || 'test-results/r4-fix'
 const SIZES = [{ width: 1440, height: 900 }, { width: 390, height: 844 }] as const
 type Size = typeof SIZES[number]
 
@@ -94,6 +96,8 @@ type Fixture = {
   loginResponses?: Record<string, unknown>
   loginPollState?: 'open_url' | 'needs_code' | 'done' | 'failed'
   providerModelsFail?: boolean
+  /** A failed 获取模型列表 with a given HTTP status and server text (raw text is English on purpose). */
+  providerModelsError?: { status: number; error: string }
   badCodeOnce?: boolean
 }
 
@@ -169,6 +173,9 @@ async function installApi(page: Page, fixture: Fixture = {}) {
       return json({ config: providerConfig })
     }
     if (path === '/api/config/provider/models' && method === 'POST') {
+      if (fixture.providerModelsError) {
+        return json({ code: 'models_fetch_failed', error: fixture.providerModelsError.error }, fixture.providerModelsError.status)
+      }
       if (fixture.providerModelsFail) {
         return json({ code: 'models_fetch_failed', error: '无法连接服务商接口' }, 502)
       }
@@ -608,8 +615,9 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     await expect(dialog.getByLabel('接口地址')).toHaveValue('https://api.deepseek.com/v1')
     await expect(dialog.getByLabel('接口类型')).toHaveValue('chat')
     await expect(dialog.getByLabel('密钥名称')).toHaveValue('DEEPSEEK_API_KEY')
-    // Presets never guess a model: the current value stays and a hint points to 获取模型列表.
-    await expect(dialog.getByLabel('模型')).toHaveValue('deepseek-chat')
+    // Switching provider drops the previous provider's model (Moonshot's model must not stay on DeepSeek), QA F1.
+    // A hint points to 获取模型列表 to pick the right one.
+    await expect(dialog.getByLabel('模型', { exact: true })).toHaveValue('')
     await expect(dialog.getByText('点「获取模型列表」从服务商读取可用模型')).toBeVisible()
     await expect(presetsGroup.locator('.provider-preset-chip.is-active')).toHaveText('DeepSeek')
 
@@ -659,13 +667,103 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     const errFetchBtn = errDialog.getByRole('button', { name: '获取模型列表' })
     await errFetchBtn.click()
 
-    // Assert short Chinese error line
+    // Chinese-only reason; the raw server text is behind 技术详情 (QA F2).
+    await expect(errDialog.getByText('获取模型列表失败：连不上服务商。请检查网络和接口地址后再试。')).toBeVisible()
+    await expect(errDialog.getByText('无法连接服务商接口')).toBeHidden()
+    await errDialog.locator('.provider-fetch-tech > summary').click()
     await expect(errDialog.getByText('无法连接服务商接口')).toBeVisible()
-    await expect(errDialog.getByText('请检查接口地址和 API 密钥')).toBeVisible()
 
     // Snapshots
     await shoot(errorPage, 'provider-model-fetch-error-desktop')
     await errorPage.setViewportSize(SIZES[1])
     await shoot(errorPage, 'provider-model-fetch-error-phone')
+  })
+
+  test('a 401 from the provider reads in Chinese, the English stays under 技术详情 (QA F2)', async ({ page }) => {
+    await installApi(page, { providerModelsError: { status: 502, error: 'upstream returned 401 Unauthorized' } })
+    const dialog = await openSettings(page, SIZES[0])
+    await dialog.getByRole('button', { name: '获取模型列表' }).click()
+    await expect(dialog.getByRole('alert').filter({ hasText: '获取模型列表失败' }))
+      .toHaveText('获取模型列表失败：API 密钥不对或没有权限（401）。请检查后再试。')
+    await expect(dialog.getByText('upstream returned 401 Unauthorized')).toBeHidden()
+    await dialog.locator('.provider-fetch-tech > summary').click()
+    await expect(dialog.getByText('upstream returned 401 Unauthorized')).toBeVisible()
+  })
+
+  test('a 404 says the 接口地址 is wrong, and unknown server text never shows as the main message (QA F2)', async ({ page }) => {
+    await installApi(page, { providerModelsError: { status: 502, error: 'upstream returned 404 Not Found' } })
+    const dialog = await openSettings(page, SIZES[0])
+    await dialog.getByRole('button', { name: '获取模型列表' }).click()
+    await expect(dialog.getByRole('alert').filter({ hasText: '获取模型列表失败' }))
+      .toHaveText('获取模型列表失败：接口地址不对（404）。请检查后再试。')
+  })
+
+  test('a provider error with no known code still gives a Chinese sentence (QA F2)', async ({ page }) => {
+    await installApi(page, { providerModelsError: { status: 502, error: 'Something odd happened' } })
+    const dialog = await openSettings(page, SIZES[0])
+    await dialog.getByRole('button', { name: '获取模型列表' }).click()
+    await expect(dialog.getByRole('alert').filter({ hasText: '获取模型列表失败' }))
+      .toHaveText('获取模型列表失败：服务商没有正常返回。请检查接口地址和 API 密钥后再试。')
+    await dialog.locator('.provider-fetch-tech > summary').click()
+    await expect(dialog.getByText('Something odd happened')).toBeVisible()
+  })
+
+  test('switching provider clears the model and the fetched list (QA F1)', async ({ page }) => {
+    await installApi(page)
+    const dialog = await openSettings(page, SIZES[0])
+    await dialog.getByRole('button', { name: '获取模型列表' }).click()
+    await expect(dialog.getByText('已获取 3 个模型')).toBeVisible()
+    await expect(dialog.locator('#provider-models-datalist option')).toHaveCount(3)
+
+    await dialog.getByRole('group', { name: '服务商预设' }).getByRole('button', { name: 'StepFun', exact: true }).click()
+    await expect(dialog.getByLabel('接口地址')).toHaveValue('https://api.stepfun.com/v1')
+    await expect(dialog.getByLabel('模型', { exact: true })).toHaveValue('')
+    await expect(dialog.locator('#provider-models-datalist')).toHaveCount(0)
+    await expect(dialog.getByText('已获取 3 个模型')).toHaveCount(0)
+  })
+
+  test('自定义 starts blank; 高级 holds 服务商代号 and 密钥名称 and stays editable (QA F4, F9)', async ({ page }) => {
+    await installApi(page)
+    const dialog = await openSettings(page, SIZES[0])
+    const presets = dialog.getByRole('group', { name: '服务商预设' })
+    const advanced = dialog.locator('details.provider-advanced')
+    await expect(advanced.locator('summary')).toHaveText('高级')
+    await expect(advanced).not.toHaveAttribute('open', '')
+    await expect(dialog.getByLabel('服务商代号', { exact: true })).toBeHidden()
+
+    await presets.getByRole('button', { name: 'StepFun', exact: true }).click()
+    await expect(dialog.getByLabel('接口地址')).toHaveValue('https://api.stepfun.com/v1')
+
+    await presets.getByRole('button', { name: '自定义', exact: true }).click()
+    await expect(dialog.getByLabel('接口地址')).toHaveValue('')
+    await expect(dialog.getByLabel('模型', { exact: true })).toHaveValue('')
+    await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('')
+    await advanced.locator('summary').click()
+    await expect(dialog.getByLabel('服务商代号', { exact: true })).toHaveValue('')
+    await expect(dialog.getByLabel('密钥名称', { exact: true })).toHaveValue('')
+    await dialog.getByLabel('服务商代号', { exact: true }).fill('mycorp')
+    await expect(dialog.getByLabel('服务商代号', { exact: true })).toHaveValue('mycorp')
+  })
+
+  test('saving with a blank 服务商代号 opens 高级 and shows the error there (QA F9)', async ({ page }) => {
+    await installApi(page)
+    const dialog = await openSettings(page, SIZES[0])
+    await dialog.getByRole('group', { name: '服务商预设' }).getByRole('button', { name: '自定义', exact: true }).click()
+    await dialog.getByRole('button', { name: '保存', exact: true }).click()
+    const advanced = dialog.locator('details.provider-advanced')
+    await expect(advanced).toHaveAttribute('open', '')
+    await expect(dialog.getByText('请填写服务商代号')).toBeVisible()
+  })
+
+  test('r4 screenshots: 模型设置 at 1440 and 390 (QA fix evidence)', async ({ page, context }) => {
+    for (const size of SIZES) {
+      const p = size === SIZES[0] ? page : await context.newPage()
+      await installApi(p)
+      const dialog = await openSettings(p, size)
+      await dialog.getByRole('button', { name: '获取模型列表' }).click()
+      await expect(dialog.getByText('已获取 3 个模型')).toBeVisible()
+      await p.evaluate(() => document.fonts.ready)
+      await p.screenshot({ path: `${R4_SHOTS}/r4-fix-models-${size.width}.png`, fullPage: true, animations: 'disabled' })
+    }
   })
 })

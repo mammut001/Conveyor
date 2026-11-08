@@ -127,21 +127,23 @@ function windowName(name: string): string {
   return name
 }
 
-function localizeUsageDetail(detail: string | undefined): string {
-  const text = (detail || '').trim()
-  if (!text) return '用量已达上限'
-  return text
-    .replace(/\b5h\b/gi, '5 小时用量')
-    .replace(/\bweekly\b/gi, '本周用量')
-    .replace(/\bdaily\b/gi, '今日用量')
-    .replace(/\bmonthly\b/gi, '本月用量')
+/**
+ * The switch-log detail is raw backend text (e.g. "Codex 用量 96% 已达阈值 95%" or "weekly 95%").
+ * The sentence already starts with the worker's name, so keep only the window and the percentage.
+ */
+function describeUsageDetail(detail: string | undefined): string {
+  const text = detail || ''
+  const percent = text.match(/(\d{1,3})\s*%/)?.[1]
+  const windowKey = text.match(/\b(5h|weekly|daily|monthly)\b/i)?.[1]
+  const scope = windowKey ? `${windowName(windowKey)}用量` : '用量'
+  return percent ? `${scope}已用 ${percent}%` : `${scope}已达上限`
 }
 
 function describeSwitch(entry: SwitchLogEntry, labelOf: (id: string | null) => string): string {
   const to = labelOf(entry.to)
   const from = entry.from ? labelOf(entry.from) : ''
   if (!from) return `开始使用 ${to}`
-  if (entry.reason === 'threshold') return `${from} ${localizeUsageDetail(entry.detail)} → 换到 ${to}`
+  if (entry.reason === 'threshold') return `${from} ${describeUsageDetail(entry.detail)}，换到 ${to}`
   if (entry.reason === 'quota_error') return `${from} 额度用完 → 换到 ${to}`
   if (entry.reason === 'unavailable') return `${from} 暂时不可用 → 换到 ${to}`
   return `${from} → 换到 ${to}`
@@ -648,6 +650,8 @@ export function WorkersPanel({ token }: { token: string }) {
   }
 
   async function saveOrder() {
+    // Nothing unsaved: no request (the button is disabled too).
+    if (!dirtyRef.current) return
     setSavingOrder(true)
     setActionProblem(null)
     setNotice('')
@@ -936,6 +940,8 @@ export function WorkersPanel({ token }: { token: string }) {
     if (activeWorkerId === worker.id) return <span className="worker-role is-active">当前使用</span>
     if (!worker.runnable) return <span className="worker-role is-off">暂不支持轮换</span>
     if (!worker.enabled) return <span className="worker-role is-off">已停用</span>
+    // Over the threshold or out of quota right now: rotation skips it until it recovers.
+    if (worker.over_threshold || worker.quota?.state === 'cooling') return <span className="worker-role is-off">暂时跳过</span>
     return <span className="worker-role">参与轮换</span>
   }
 
@@ -1039,7 +1045,7 @@ export function WorkersPanel({ token }: { token: string }) {
             <option value="">使用默认</option>
             {shown.map(m => (
               <option key={m.id} value={m.id}>
-                {m.label && m.label !== m.id ? `${m.id} · ${trimLabel(m.label, 70)}` : m.id}
+                {m.label && m.label !== m.id ? `${trimLabel(m.label, 70)} · ${m.id}` : m.id}
               </option>
             ))}
             {worker.model && !shown.some(m => m.id === worker.model) && (
@@ -1147,7 +1153,7 @@ export function WorkersPanel({ token }: { token: string }) {
           <button
             type="button"
             className={`guard-btn ${orderDirty ? 'guard-btn-primary is-highlight' : ''}`}
-            disabled={busy}
+            disabled={busy || !orderDirty}
             aria-busy={savingOrder || undefined}
             onClick={() => { void saveOrder() }}
           >
@@ -1245,7 +1251,6 @@ export function WorkersPanel({ token }: { token: string }) {
                       </span>
                       <span className="worker-priority" title={`优先级第 ${index + 1}`}>#{index + 1}</span>
                       <strong className="worker-label">{worker.label}</strong>
-                      {pv && <span className="worker-path-version">{pv}</span>}
                       {renderStatusChip(worker)}
                       {renderRoleChip(worker)}
                     </div>
@@ -1282,6 +1287,13 @@ export function WorkersPanel({ token }: { token: string }) {
                       </div>
                     </div>
                   </div>
+
+                  {pv && (
+                    <details className="guard-tech-details worker-tech">
+                      <summary>技术详情</summary>
+                      <span className="guard-tech worker-path-version">{pv}</span>
+                    </details>
+                  )}
 
                   {hasBody && (
                     <div className="worker-body">

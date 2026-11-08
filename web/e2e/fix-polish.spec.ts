@@ -219,7 +219,10 @@ test('settings and secrets use plain wording and no file names', async ({ page }
   await goto(page, 'chat')
   await page.locator('header.topbar').getByRole('button', { name: '设置' }).click()
   const dialog = page.getByRole('dialog', { name: '模型设置' })
-  for (const label of ['服务商代号', '接口类型', '密钥名称']) await expect(dialog.getByLabel(label, { exact: true })).toBeVisible()
+  await expect(dialog.getByLabel('接口类型', { exact: true })).toBeVisible()
+  // 服务商代号 and 密钥名称 live under the collapsed 高级 section (QA F9).
+  await dialog.locator('.provider-advanced > summary').click()
+  for (const label of ['服务商代号', '密钥名称']) await expect(dialog.getByLabel(label, { exact: true })).toBeVisible()
   const text = await dialog.innerText()
   for (const old of ['服务商 ID', '接口协议', '密钥变量名', 'config.toml', '.env']) expect(text).not.toContain(old)
   await expect(dialog.getByText('保存在服务器上').first()).toBeVisible()
