@@ -73,40 +73,19 @@ Implementer and role choices in this build:
 
 ## 执行者池 / pool executor
 
-`pool` picks a worker from the 执行者 pool (`workers.py`) for each role call. It
-does not run an agent itself; the matching Supervisor adapter runs the call, so
-that adapter's read-only and sandbox rules still apply.
+`pool` picks a worker from the 执行者 pool for each role call and delegates to that
+worker's Supervisor adapter (Claude Code → `claude`, Antigravity → `antigravity`,
+Command Code → `command-code`), so the adapter's read-only rules still apply. Pi,
+Super Grok and Codex never run through the pool.
 
-Selecting it:
-- In the Code (项目) page, each analyst, implementer and reviewer role has an
-  executor dropdown. 执行者池（自动轮换） is the first entry. The choice applies to
-  that task only.
-- Config: `CONVEYOR_AGENT_SUPERVISOR_<ROLE>_EXECUTOR=pool`, or
-  `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR=pool` for all three roles.
-- Or `supervisor_roles.json` in the Conveyor memory root (`codex_memory_root`,
-  default `~/.codex`): `{"implementer": {"executor": "pool"}}`.
-- Precedence: role env var, then `supervisor_roles.json`, then the default. A
-  dispatch-time override beats all of them. The coordinator stays on `chat`.
+- Select it in the 项目 page role dropdown (listed first), via
+  `CONVEYOR_AGENT_SUPERVISOR_<ROLE>_EXECUTOR=pool`, or `supervisor_roles.json`.
+- Owner's drag order first; workers over their usage threshold are tried last.
+- Rotates only on quota failures (the worker cools until its reset). An
+  implementer that already changed the worktree is not re-run elsewhere.
+- Workers use their own saved model, never the Supervisor role model.
 
-Rules:
-- Candidates are workers that are enabled, installed, not `needs_login`, not
-  cooling, and whose adapter reports available. Mapping: Claude Code to `claude`,
-  Antigravity to `antigravity`, Command Code to `command-code`. Pi, Super Grok and Codex never run
-  through the pool.
-- Analyst and reviewer need RUN eligibility. The implementer needs FIX
-  eligibility; Command Code is excluded from FIX unless
-  `CONVEYOR_WORKERS_UNSANDBOXED=true`.
-- Owner's drag order first. Workers over their usage threshold (default 95%) are
-  tried last. The threshold does not stop a run already in progress.
-- Rotate only after a quota failure (quota wording or a "resets in" time). The
-  failed worker cools down until the reported reset, or 45 minutes if none is
-  parsed. Any other failure ends the call without rotating.
-- An implementer that already changed its worktree is not re-run elsewhere.
-- Each attempt is its own execution record with its own executor and model. The
-  web console shows a switch note between a failed attempt and the next one.
-- Pool workers use their own saved model, never the Supervisor role model.
-- Cooling is shared with the chat pool. If all candidates hit a quota, the error
-  starts with "执行者池里的执行者额度都用完了：".
+Full rules: docs/agent-supervisor.md.
 
 ## Verification & host validation commands
 
