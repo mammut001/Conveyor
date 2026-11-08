@@ -11,6 +11,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -471,6 +472,221 @@ class GoalDiffTests(_DiffFixture):
             goals.get_goal_diff(self.settings, "goal-nope")
         self.assertEqual(ctx.exception.status, 404)
         self.assertEqual(ctx.exception.to_payload().get("code"), "goal_not_found")
+
+
+class RepoExecRiskTests(_DiffFixture):
+    """Repo-controlled config/attributes must never make the diff run a program.
+
+    An agent in the worktree can write the shared `.git/config`, files it
+    includes, `.git/info/attributes` and any `.gitattributes`. `git diff` /
+    `git status` would hand worktree files to a `filter.<x>.clean` command, so
+    the diff endpoints refuse with `409 unsafe_repo_config` before touching
+    worktree content, and the filter's marker file is never created.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.marker = self.root / "filter-ran"
+        self.filter_cmd = f"touch {shlex.quote(str(self.marker))}; cat"
+
+    def _common_dir(self) -> Path:
+        raw = _git(self.wt_path, "rev-parse", "--git-common-dir").strip()
+        path = Path(raw)
+        return path if path.is_absolute() else (self.wt_path / path).resolve()
+
+    def _commit_subdir_attributes(self) -> str:
+        """Tracked sub/data.txt + sub/.gitattributes naming the `pwn` filter."""
+        base = _head(self.wt_path)
+        (self.wt_path / "sub").mkdir()
+        (self.wt_path / "sub" / "data.txt").write_text("one\n", encoding="utf-8")
+        (self.wt_path / "sub" / ".gitattributes").write_text("*.txt filter=pwn\n", encoding="utf-8")
+        _git(self.wt_path, "add", "-A")
+        _git(self.wt_path, "commit", "-qm", "sub dir with attributes")
+        # Uncommitted change: `git diff <base>` must read (and filter) it.
+        (self.wt_path / "sub" / "data.txt").write_text("one\ntwo\n", encoding="utf-8")
+        return base
+
+    def _assert_refused(self, task_id: str, expected_label: str) -> None:
+        with self.assertRaises(svc.SupervisorServiceError) as ctx:
+            svc.get_task_diff(self.settings, task_id)
+        self.assertEqual(ctx.exception.status, 409)
+        payload = ctx.exception.to_payload()
+        self.assertEqual(payload.get("code"), "unsafe_repo_config")
+        self.assertIn(expected_label, payload.get("error", "").lower())
+        self.assertIn("为了安全", payload.get("error", ""))
+        self.assertFalse(self.marker.exists(), "the planted filter must never run")
+
+    def test_filter_in_repo_config_with_subdir_attributes_is_refused(self) -> None:
+        base = self._commit_subdir_attributes()
+        task_id = self._create_task(base_sha=base)
+        _git(self.repo_dir, "config", "filter.pwn.clean", self.filter_cmd)
+
+        self._assert_refused(task_id, "filter.pwn.clean")
+
+        # Same through the HTTP route.
+        from web_supervisor_api import handle_get
+
+        handler = _FakeHandler(self.settings)
+        path = f"/api/supervisor/tasks/{task_id}/diff"
+        handle_get(handler, path, path.strip("/").split("/"), {})
+        assert handler.response is not None
+        code, body = handler.response
+        self.assertEqual(code, 409, body)
+        self.assertEqual(body.get("code"), "unsafe_repo_config")
+        self.assertFalse(self.marker.exists())
+
+        # Sanity: the setup really is armed — a plain `git diff` fires the filter.
+        subprocess.run(
+            ["git", "-C", str(self.wt_path), "diff", base],
+            capture_output=True, check=False,
+        )
+        self.assertTrue(self.marker.exists(), "fixture must be a live filter")
+
+    def test_goal_diff_is_refused_too(self) -> None:
+        base = self._commit_subdir_attributes()
+        goal = goals.create_goal(
+            None,
+            self.settings,
+            {"outcome": "读取目标 diff", "repo_id": self.repo_id, "worktree_id": self.worktree_id},
+        )
+        task_id = self._create_task(base_sha=base)
+        goals._ensure_iteration(self.settings, goal["id"], 1, "第一轮")
+        goals._set_iteration_task(self.settings, goal["id"], 1, task_id)
+        _git(self.repo_dir, "config", "filter.pwn.clean", self.filter_cmd)
+        with self.assertRaises(svc.SupervisorServiceError) as ctx:
+            goals.get_goal_diff(self.settings, goal["id"])
+        self.assertEqual(ctx.exception.status, 409)
+        self.assertEqual(ctx.exception.to_payload().get("code"), "unsafe_repo_config")
+        self.assertFalse(self.marker.exists())
+
+    def test_no_diff_or_status_runs_while_risky(self) -> None:
+        base = self._commit_subdir_attributes()
+        task_id = self._create_task(base_sha=base)
+        _git(self.repo_dir, "config", "filter.pwn.clean", self.filter_cmd)
+        seen: list[list[str]] = []
+        real_git = diff_mod._git
+
+        def _recording_git(settings: Any, worktree: str, args: list[str], **kwargs: Any):
+            seen.append(list(args))
+            return real_git(settings, worktree, args, **kwargs)
+
+        with patch.object(diff_mod, "_git", _recording_git):
+            with self.assertRaises(svc.SupervisorServiceError):
+                svc.get_task_diff(self.settings, task_id)
+        self.assertTrue(seen)
+        for args in seen:
+            self.assertNotIn(args[0], ("diff", "status", "add"), seen)
+        self.assertFalse(self.marker.exists())
+
+    def test_filter_defined_through_include_path_is_refused(self) -> None:
+        base = _head(self.wt_path)
+        task_id = self._create_task(base_sha=base)
+        included = self.root / "included.cfg"
+        included.write_text(f'[filter "pwn"]\n\tclean = {self.filter_cmd}\n', encoding="utf-8")
+        _git(self.repo_dir, "config", "include.path", str(included))
+        (self.wt_path / ".gitattributes").write_text("*.txt filter=pwn\n", encoding="utf-8")
+        (self.wt_path / "tracked.txt").write_text("tracked baseline\nedited\n", encoding="utf-8")
+
+        risks = diff_mod.repo_exec_risks(self.settings, str(self.wt_path))
+        lowered = [r.lower() for r in risks]
+        # `git config --local --list` would not see this one: the include is followed.
+        self.assertIn("filter.pwn.clean", lowered)
+        self.assertIn("include.path", lowered)
+        self._assert_refused(task_id, "include.path")
+
+    def test_driver_in_info_attributes_is_refused(self) -> None:
+        base = _head(self.wt_path)
+        task_id = self._create_task(base_sha=base)
+        info = self._common_dir() / "info"
+        info.mkdir(parents=True, exist_ok=True)
+        (info / "attributes").write_text("*.txt filter=pwn\n", encoding="utf-8")
+        (self.wt_path / "tracked.txt").write_text("tracked baseline\nedited\n", encoding="utf-8")
+        self._assert_refused(task_id, "info/attributes")
+
+    def test_untracked_and_ignored_attributes_files_are_found(self) -> None:
+        (self.wt_path / "deep" / "er").mkdir(parents=True)
+        (self.wt_path / "deep" / "er" / ".gitattributes").write_text(
+            "*.c merge=evil\n", encoding="utf-8"
+        )
+        (self.wt_path / "hidden").mkdir()
+        (self.wt_path / "hidden" / ".gitattributes").write_text(
+            "*.txt filter=pwn\n", encoding="utf-8"
+        )
+        exclude = self._common_dir() / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        exclude.write_text("hidden/\n", encoding="utf-8")
+        risks = diff_mod.repo_exec_risks(self.settings, str(self.wt_path))
+        self.assertIn("deep/er/.gitattributes", risks)
+        self.assertIn("hidden/.gitattributes", risks)
+
+    def test_tracked_attributes_deleted_from_disk_still_counts(self) -> None:
+        """git falls back to the index copy when the worktree file is missing."""
+        self._commit_subdir_attributes()
+        (self.wt_path / "sub" / ".gitattributes").unlink()
+        risks = diff_mod.repo_exec_risks(self.settings, str(self.wt_path))
+        self.assertIn("sub/.gitattributes", risks)
+
+    def test_symlinked_attributes_file_is_refused(self) -> None:
+        outside = self.root / "outside-attrs"
+        outside.write_text("# harmless looking\n", encoding="utf-8")
+        os.symlink(str(outside), str(self.wt_path / ".gitattributes"))
+        self.assertIn(".gitattributes", diff_mod.repo_exec_risks(self.settings, str(self.wt_path)))
+
+    def test_benign_repository_still_diffs(self) -> None:
+        base = _head(self.wt_path)
+        (self.wt_path / ".gitattributes").write_text(
+            "# comment\n*.txt text eol=lf\n*.png -diff binary\n*.py diff=python\n"
+            "*.lock merge=binary\n",
+            encoding="utf-8",
+        )
+        _git(self.repo_dir, "config", "core.fsmonitor", "false")
+        _git(self.repo_dir, "config", "core.hooksPath", "")
+        _git(self.repo_dir, "config", "diff.noprefix", "true")
+        self.assertEqual(diff_mod.repo_exec_risks(self.settings, str(self.wt_path)), [])
+        (self.wt_path / "tracked.txt").write_text("tracked baseline\nedited\n", encoding="utf-8")
+        payload = svc.get_task_diff(self.settings, self._create_task(base_sha=base))
+        self.assertIn("+edited", payload["diff"])
+
+    def test_risky_config_entry_classification(self) -> None:
+        for key, value in (
+            ("include.path", "/x"),
+            ("includeIf.gitdir:/a.b/.path", "/x"),
+            ("core.attributesFile", "/x"),
+            ("core.fsmonitor", "/bin/echo"),
+            ("core.hooksPath", "/x"),
+            ("core.sshCommand", "ssh -x"),
+            ("core.pager", "less"),
+            ("diff.external", "x"),
+            ("filter.x.clean", "x"),
+            ("filter.x.required", "true"),
+            ("merge.x.driver", "x"),
+            ("merge.with.dots.driver", "x"),
+            ("diff.x.textconv", "x"),
+            ("diff.x.command", "x"),
+            ("credential.helper", "store"),
+            ("credential.https://example.com.helper", "store"),
+            ("gpg.program", "x"),
+            ("gpg.ssh.program", "x"),
+            ("core.editor", "vim"),
+            ("sequence.editor", "vim"),
+        ):
+            self.assertTrue(diff_mod.risky_config_entry(key, value), key)
+        for key, value in (
+            ("core.fsmonitor", "false"),
+            ("core.hooksPath", ""),
+            ("user.name", "x"),
+            ("diff.noprefix", "true"),
+            ("merge.log", "true"),
+            ("remote.origin.url", "https://example.com/x.git"),
+            ("core.autocrlf", "input"),
+        ):
+            self.assertFalse(diff_mod.risky_config_entry(key, value), key)
+
+    def test_git_argv_forces_hooks_and_attributes_file_off(self) -> None:
+        argv = diff_mod._git_argv(str(self.wt_path), ["ls-files"])
+        self.assertIn("core.hooksPath=/dev/null", argv)
+        self.assertIn("core.attributesFile=/dev/null", argv)
+        self.assertLess(argv.index("core.attributesFile=/dev/null"), argv.index("ls-files"))
 
 
 class DiffHttpTests(_DiffFixture):

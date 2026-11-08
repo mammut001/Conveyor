@@ -15,8 +15,14 @@ Design contract (see docs/agent-supervisor.md 「合并到主分支」):
   merge target is always the *main checkout* of the registered repository.
 - Every git call runs with a timeout (60 s), `--no-pager`, forced
   `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `commit.gpgsign=false`,
-  `core.editor=true`, a scrubbed child env (copied from `supervisor_diff._git_env`)
-  and never `shell=True`. Nothing is ever pushed.
+  `core.editor=true`, `core.attributesFile=/dev/null`, a scrubbed child env
+  (copied from `supervisor_diff._git_env`) and never `shell=True`. Nothing is
+  ever pushed.
+- Agents in the worktree are untrusted and can write the shared `.git`
+  directory: `supervisor_diff.repo_exec_findings` (config incl. `include.*`,
+  every attributes file) runs before any git call that reads worktree content,
+  and the source branch must be the one recorded when the managed worktree was
+  created (never the target branch), checked before anything is committed.
 - Every rule is a *blocker* with a Chinese message: preview reports them all,
   POST re-checks them and answers `409` with the first one.
 - Merges are serialized per repository (module-level lock registry) and hold the
@@ -26,7 +32,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import sqlite3
 import subprocess
 import threading
@@ -72,8 +77,9 @@ CODE_TARGET_BRANCH_UNKNOWN = "target_branch_unknown"
 CODE_DETACHED_SOURCE = "detached_source"
 CODE_TARGET_NOT_CHECKED_OUT = "target_not_checked_out"
 CODE_TARGET_DIRTY = "target_dirty"
-CODE_UNSAFE_REPO_CONFIG = "unsafe_repo_config"
+CODE_UNSAFE_REPO_CONFIG = diff_mod.CODE_UNSAFE_REPO_CONFIG
 CODE_UNSAFE_GITATTRIBUTES = "unsafe_gitattributes"
+CODE_BRANCH_CHANGED = "branch_changed"
 CODE_NOTHING_TO_MERGE = "nothing_to_merge"
 CODE_MERGE_CONFLICT = "merge_conflict"
 CODE_COMMIT_FAILED = "commit_failed"
@@ -178,6 +184,9 @@ def _git_argv(path: str, args: list[str], *, config: tuple[str, ...] = ()) -> li
         "tag.gpgsign=false",
         "core.editor=true",
         "core.quotePath=false",
+        # Never read the owner's global attributes file either; repository
+        # attributes files are vetted by `_repo_risk_blockers`.
+        "core.attributesFile=/dev/null",
     )
     argv = ["git", "--no-pager", "-C", path]
     for item in (*forced, *config):
@@ -239,8 +248,15 @@ def _head_sha(settings: Any, path: str) -> str:
 
 
 def _current_branch(settings: Any, path: str) -> str:
-    rc, out, _ = _git(settings, path, ["symbolic-ref", "--short", "-q", "HEAD"])
-    return out.strip() if rc == 0 else ""
+    """Branch HEAD finally resolves to, without `--short` disambiguation.
+
+    `symbolic-ref --short` turns `goal-calc` into `heads/goal-calc` as soon as
+    a tag of the same name exists; the full ref name is unambiguous.
+    """
+    rc, out, _ = _git(settings, path, ["symbolic-ref", "-q", "HEAD"])
+    ref = out.strip() if rc == 0 else ""
+    prefix = "refs/heads/"
+    return ref[len(prefix):] if ref.startswith(prefix) else ""
 
 
 def _branch_exists(settings: Any, path: str, branch: str) -> bool:
@@ -305,6 +321,9 @@ def _resolve_scope(settings: Any, worktree_id: Any) -> dict[str, Any]:
         "repo_id": str(repo_row["id"]),
         "worktree_path": str(wt["path"]),
         "main_path": str(repo_row["canonical_path"]),
+        # Branch recorded when the managed worktree was created (may be empty
+        # for rows written by older builds); never the live HEAD.
+        "recorded_branch": str(row["branch"] or "") if "branch" in row.keys() else "",
     }
 
 
@@ -342,111 +361,43 @@ def _target_branch(settings: Any, scope: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# rule 5: repository configuration that can run commands
+# rule 5: repository configuration / attributes that can run commands
 # ---------------------------------------------------------------------------
-# `git config` keys whose value is handed to a shell / external program.
-_UNSAFE_CONFIG_EXACT = frozenset({
-    "core.fsmonitor",
-    "core.hookspath",
-    "core.sshcommand",
-    "core.pager",
-    "core.editor",
-    "sequence.editor",
-    "diff.external",
-    "credential.helper",
-    "gpg.program",
-})
-# Values that disable a feature instead of naming a program to run.
-_DISABLING_VALUES = frozenset({"", "false", "0", "no", "off", "none"})
-_ATTRIBUTE_DRIVER_RE = re.compile(r"(?:^|\s)(filter|merge|diff)\s*=\s*([^\s#]+)")
-_MAX_CONFIG_SCAN_BYTES = 256 * 1024
+# The scan itself lives in `supervisor_diff.repo_exec_findings` (shared with the
+# task/goal diff endpoints): effective repository config with `include.*`
+# followed, every `.gitattributes` in the worktree (tracked, untracked,
+# ignored, index blobs), the main checkout's attributes files and
+# `<git common dir>/info/attributes`. These names stay importable here.
+_DISABLING_VALUES = diff_mod._DISABLING_VALUES
+_value_runs_commands = diff_mod.value_runs_commands
+_config_key_runs_commands = diff_mod.config_key_runs_commands
 
 
-def _value_runs_commands(value: str) -> bool:
-    return value.strip().lower() not in _DISABLING_VALUES
+def _repo_risk_blockers(settings: Any, scope: dict[str, Any]) -> list[dict[str, str]]:
+    """Blockers for every setting that could make git run a program.
 
-
-def _config_key_runs_commands(key: str) -> bool:
-    """True for `core.fsmonitor`, `core.hooksPath`, `filter.<x>.clean|smudge|process`,
-    `merge.<x>.driver`, `diff.<x>.textconv|command`, `gpg.<x>.program`, …"""
-    cleaned = str(key or "").strip().lower()
-    if not cleaned:
-        return False
-    if cleaned in _UNSAFE_CONFIG_EXACT:
-        return True
-    parts = cleaned.split(".")
-    if len(parts) != 3:
-        return False
-    section, _name, leaf = parts
-    if section == "filter" and leaf in ("clean", "smudge", "process"):
-        return True
-    if section == "merge" and leaf == "driver":
-        return True
-    if section == "diff" and leaf in ("textconv", "command"):
-        return True
-    if section == "gpg" and leaf == "program":
-        return True
-    return False
-
-
-def _parse_config_list(raw: str) -> list[tuple[str, str]]:
-    entries: list[tuple[str, str]] = []
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith(("#", ";")):
-            continue
-        if "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        key = key.strip()
-        if key:
-            entries.append((key, value))
-    return entries
-
-
-def _unsafe_config_keys(settings: Any, paths: list[str]) -> list[str]:
-    """Keys in `--local` (+ `--worktree` when available) that can execute commands.
-
-    `paths` is scanned in order and deduplicated: a linked worktree shares the
-    repository's common config, so the same key must not be reported twice.
+    Must run before any git call that reads worktree content (`status`, `diff`,
+    `add`, `merge`): those are exactly the calls a planted filter fires on.
     """
-    keys: list[str] = []
-    seen: set[str] = set()
-    for path in paths:
-        for args in (["config", "--local", "--list"], ["config", "--worktree", "--list"]):
-            rc, out, _err = _git(settings, path, args)
-            if rc != 0:
-                # `--worktree` needs extensions.worktreeConfig; older git rejects it.
-                continue
-            for key, value in _parse_config_list(out):
-                if not _config_key_runs_commands(key) or not _value_runs_commands(value):
-                    continue
-                if key in seen:
-                    continue
-                seen.add(key)
-                keys.append(key)
-    return keys
-
-
-def _gitattributes_has_driver(path: str) -> bool:
-    """`.gitattributes` at the root of `path` naming a filter/merge/diff driver."""
-    full = os.path.join(path, ".gitattributes")
-    try:
-        with open(full, "rb") as handle:
-            raw = handle.read(_MAX_CONFIG_SCAN_BYTES)
-    except OSError:
-        return False
-    text = raw.decode("utf-8", "replace")
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        for match in _ATTRIBUTE_DRIVER_RE.finditer(stripped):
-            value = match.group(2).strip()
-            # `-diff` / `!merge` unset the attribute; they name no driver.
-            if value and not value.startswith(("-", "!")):
-                return True
-    return False
+    findings = diff_mod.repo_exec_findings(
+        settings,
+        str(scope["worktree_path"]),
+        main_checkout=str(scope["main_path"]),
+    )
+    blockers: list[dict[str, str]] = []
+    for kind, label in findings:
+        if kind == diff_mod.RISK_KIND_CONFIG:
+            blockers.append(_blocker(
+                CODE_UNSAFE_REPO_CONFIG,
+                f"仓库配置里有会执行命令的设置（{label}），为安全起见不自动合并",
+            ))
+        else:
+            blockers.append(_blocker(
+                CODE_UNSAFE_GITATTRIBUTES,
+                f"仓库里的 .gitattributes 配置了会执行命令的 filter/merge/diff 驱动（{label}），"
+                "为安全起见不自动合并",
+            ))
+    return blockers
 
 
 # ---------------------------------------------------------------------------
@@ -527,18 +478,43 @@ def _is_safe_branch_name(branch: str) -> bool:
     return not any(tok in cleaned for tok in ("..", "\n", "\x00", " ", "~", "^", ":", "?", "*", "["))
 
 
+def _expected_source_branches(scope: dict[str, Any]) -> set[str]:
+    """The branch this managed worktree was created on, from the supervisor DB.
+
+    Rows written before the branch was recorded fall back to the only names
+    Conveyor itself ever gives a new managed worktree: `sup/<token[:8]>`
+    (`create_managed_worktree` without a branch) or the directory name
+    (`git worktree add <path>` in `agent_supervisor.create_worktree`). The live
+    HEAD is never trusted: an agent can point it at any branch, `main` included.
+    """
+    recorded = str(scope.get("recorded_branch") or "").strip()
+    if recorded:
+        return {recorded}
+    name = os.path.basename(str(scope.get("worktree_path") or "").rstrip(os.sep))
+    candidates: set[str] = set()
+    if name.startswith("sup-") and len(name) > len("sup-"):
+        candidates.add(name)
+        candidates.add(f"sup/{name[len('sup-'):][:8]}")
+    return candidates
+
+
 def _collect_blockers(
     settings: Any,
     scope: dict[str, Any],
     *,
     target_branch: str,
     source_branch: str,
+    risk_blockers: list[dict[str, str]] | None = None,
 ) -> list[dict[str, str]]:
-    """Evaluate rules 1-5. Preview reports all of them; POST answers the first."""
+    """Evaluate rules 1-5. Preview reports all of them; POST answers the first.
+
+    `risk_blockers` lets the preview pass the scan it already ran; otherwise it
+    is computed here, always before the first git call that reads worktree
+    content (`_is_clean` / `status`).
+    """
     blockers: list[dict[str, str]] = []
     wt = scope["worktree"]
     main_path = str(scope["main_path"])
-    worktree_path = str(scope["worktree_path"])
 
     # 1. Only managed Supervisor worktrees, never the main checkout itself.
     if bool(wt.get("is_main")) or not bool(wt.get("managed")):
@@ -554,6 +530,14 @@ def _collect_blockers(
         blockers.append(_blocker(CODE_WORKTREE_BUSY, busy))
         return blockers
 
+    # 5. No repository config / attributes that can run commands. Checked
+    # first among the git rules: everything after this may read worktree content.
+    if risk_blockers is None:
+        risk_blockers = _repo_risk_blockers(settings, scope)
+    if risk_blockers:
+        blockers.extend(risk_blockers)
+        return blockers
+
     if not _is_safe_branch_name(target_branch):
         blockers.append(_blocker(
             CODE_TARGET_BRANCH_UNKNOWN,
@@ -565,6 +549,16 @@ def _collect_blockers(
         blockers.append(_blocker(
             CODE_DETACHED_SOURCE,
             "工作目录现在不在任何分支上（detached HEAD），先切回分支再合并",
+        ))
+        return blockers
+
+    # 5c. The worktree must still be on the branch it was created on, and that
+    # branch can never be the merge target: otherwise step (a) would commit
+    # straight onto e.g. `main`.
+    if source_branch == target_branch or source_branch not in _expected_source_branches(scope):
+        blockers.append(_blocker(
+            CODE_BRANCH_CHANGED,
+            "工作目录的分支被改动过，为安全起见不合并",
         ))
         return blockers
 
@@ -583,22 +577,6 @@ def _collect_blockers(
             "主工作目录里有还没提交的改动，为了不弄乱它，先不合并",
         ))
 
-    # 5. No repository config that can run commands.
-    for key in _unsafe_config_keys(settings, [main_path, worktree_path]):
-        blockers.append(_blocker(
-            CODE_UNSAFE_REPO_CONFIG,
-            f"仓库配置里有会执行命令的设置（{key}），为安全起见不自动合并",
-        ))
-
-    # 5b. No .gitattributes driver in either checkout.
-    for path in (main_path, worktree_path):
-        if _gitattributes_has_driver(path):
-            blockers.append(_blocker(
-                CODE_UNSAFE_GITATTRIBUTES,
-                f"仓库里的 .gitattributes 配置了会执行命令的 filter/merge/diff 驱动（{path}），"
-                "为安全起见不自动合并",
-            ))
-
     return blockers
 
 
@@ -611,7 +589,7 @@ def _merge_base(settings: Any, scope: dict[str, Any], target_branch: str) -> str
     rc, out, _ = _git(
         settings,
         str(scope["worktree_path"]),
-        ["merge-base", target_branch, "HEAD"],
+        ["merge-base", f"refs/heads/{target_branch}", "HEAD"],
     )
     return out.strip() if rc == 0 else ""
 
@@ -620,7 +598,7 @@ def _commits_ahead(settings: Any, scope: dict[str, Any], target_branch: str) -> 
     rc, out, _ = _git(
         settings,
         str(scope["worktree_path"]),
-        ["rev-list", "--count", f"{target_branch}..HEAD"],
+        ["rev-list", "--count", f"refs/heads/{target_branch}..HEAD"],
     )
     if rc != 0:
         return 0
@@ -695,13 +673,21 @@ def _default_commit_message(settings: Any, scope: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 def build_merge_preview(settings: Any, worktree_id: Any) -> dict[str, Any]:
-    """Read-only 「可以合并吗」 report for one managed worktree."""
+    """Read-only 「可以合并吗」 report for one managed worktree.
+
+    The repository is scanned for program-running settings first; while any is
+    present nothing that reads worktree content runs (no diff, no status), so
+    opening the preview can never fire a filter an agent planted.
+    """
     scope = _resolve_scope(settings, worktree_id)
     target_branch = _target_branch(settings, scope)
     source_branch = _current_branch(settings, str(scope["worktree_path"]))
+    risk_blockers = _repo_risk_blockers(settings, scope)
     blockers = _collect_blockers(
         settings, scope, target_branch=target_branch, source_branch=source_branch,
+        risk_blockers=risk_blockers,
     )
+    inspect = not risk_blockers
     return {
         "worktree_id": str(scope["worktree_id"]),
         "repo_id": str(scope["repo_id"]),
@@ -709,9 +695,11 @@ def build_merge_preview(settings: Any, worktree_id: Any) -> dict[str, Any]:
         "target_branch": target_branch,
         "can_merge": not blockers,
         "blockers": blockers,
-        "files": _changed_files(settings, scope, target_branch),
+        "files": _changed_files(settings, scope, target_branch) if inspect else [],
         "commits_ahead": _commits_ahead(settings, scope, target_branch),
-        "has_uncommitted": _has_uncommitted(settings, str(scope["worktree_path"])),
+        "has_uncommitted": (
+            _has_uncommitted(settings, str(scope["worktree_path"])) if inspect else False
+        ),
     }
 
 
@@ -956,8 +944,20 @@ def _run_merge(settings: Any, scope: dict[str, Any], message: str) -> dict[str, 
         first = blockers[0]
         raise _error(HTTPStatus.CONFLICT, first["message"], code=first["code"])
 
+    worktree_path = str(scope["worktree_path"])
+
+    def _require_same_source_branch() -> None:
+        # Re-read right before each write: the HEAD may not move mid-merge.
+        if _current_branch(settings, worktree_path) != source_branch:
+            raise _error(
+                HTTPStatus.CONFLICT,
+                "工作目录的分支被改动过，为安全起见不合并",
+                code=CODE_BRANCH_CHANGED,
+            )
+
     # 7a. Uncommitted work becomes a Conveyor-authored commit on the worktree.
-    if _has_uncommitted(settings, str(scope["worktree_path"])):
+    if _has_uncommitted(settings, worktree_path):
+        _require_same_source_branch()
         _commit_worktree_changes(settings, scope, message)
 
     # 7b. Nothing to merge?
@@ -968,7 +968,9 @@ def _run_merge(settings: Any, scope: dict[str, Any], message: str) -> dict[str, 
             code=CODE_NOTHING_TO_MERGE,
         )
 
-    # 7c. Merge into the main checkout, never pushing anywhere.
+    # 7c. Merge into the main checkout, never pushing anywhere. The fully
+    # qualified ref keeps a same-named tag (or other ref) from being merged.
+    _require_same_source_branch()
     main_head_before = _head_sha(settings, main_path)
     merge_message = MERGE_MESSAGE_TEMPLATE.format(branch=source_branch)
     rc, _out, err = _git(
@@ -981,7 +983,7 @@ def _run_merge(settings: Any, scope: dict[str, Any], message: str) -> dict[str, 
             "--no-edit",
             "-m",
             merge_message,
-            source_branch,
+            f"refs/heads/{source_branch}",
         ],
     )
     if rc != 0:

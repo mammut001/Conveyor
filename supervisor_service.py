@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS supervisor_worktrees (
     chat_session_id TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    branch TEXT,
     FOREIGN KEY(repo_id) REFERENCES supervisor_repositories(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_sup_worktrees_repo ON supervisor_worktrees(repo_id);
@@ -191,8 +192,22 @@ def _connect(settings: Any) -> sqlite3.Connection:
         with _SCHEMA_INIT_LOCK:
             if key not in _INITIALIZED_DBS or not path.exists():
                 conn.executescript(_WEB_SCHEMA_SQL)
+                _migrate_web_schema(conn)
                 _INITIALIZED_DBS.add(key)
     return conn
+
+
+def _migrate_web_schema(conn: sqlite3.Connection) -> None:
+    """Additive columns for databases created by older builds."""
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(supervisor_worktrees)").fetchall()}
+    if "branch" not in cols:
+        # The branch a managed worktree was created on; the merge refuses to
+        # commit/merge when the worktree HEAD has been moved to another branch.
+        try:
+            conn.execute("ALTER TABLE supervisor_worktrees ADD COLUMN branch TEXT")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
 
 # ---------------------------------------------------------------------------
@@ -919,12 +934,13 @@ def create_managed_worktree(
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """INSERT INTO supervisor_worktrees
-               (id, repo_id, canonical_path, managed, chat_session_id, created_at, updated_at)
-               VALUES (?, ?, ?, 1, ?, ?, ?)
+               (id, repo_id, canonical_path, managed, chat_session_id, created_at, updated_at, branch)
+               VALUES (?, ?, ?, 1, ?, ?, ?, ?)
                ON CONFLICT(canonical_path) DO UPDATE SET
                  managed = 1,
+                 branch = excluded.branch,
                  updated_at = excluded.updated_at""",
-            (wt_id, str(repo_row["id"]), wt_canon, chat_sid, now, now),
+            (wt_id, str(repo_row["id"]), wt_canon, chat_sid, now, now, eff_branch),
         )
         conn.commit()
     except Exception:
