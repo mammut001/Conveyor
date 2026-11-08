@@ -83,12 +83,76 @@ export function goalStateLabel(state?: string | null): string {
 
 export function goalDecisionLabel(decision?: string | null): string {
   const key = (decision || '').trim().toLowerCase()
-  if (!key) return '进行中'
-  return GOAL_DECISION_LABELS[key] || '进行中'
+  if (!key) return ''
+  return GOAL_DECISION_LABELS[key] || ''
 }
 
 export function isActiveGoalState(state?: string | null): boolean {
   return GOAL_ACTIVE_STATES.includes((state || '').trim().toLowerCase() as GoalState)
+}
+
+// 目标标题：第一行、空白叠成一个空格、最长 40 个字再加「…」。后端老数据可能存着
+// `[truncated]` 英文标记（或者干脆是空的），这时按同样规则从 outcome 现算一个——
+// 老板只看中文，永远不该看到那种标记。
+const TITLE_MAX_CHARS = 40
+const TITLE_ELLIPSIS = '…'
+
+export function goalDisplayTitle(goal?: { title?: string; outcome?: string } | null): string {
+  const stored = (goal?.title || '').trim()
+  const source = stored && !stored.includes('[truncated]') ? stored : goal?.outcome || ''
+  const firstLine = source
+    .split('\n')
+    .map(line => line.trim())
+    .find(line => line.length > 0) || ''
+  const collapsed = firstLine.replace(/\s+/g, ' ').trim()
+  if (!collapsed) return '新目标'
+  return collapsed.length > TITLE_MAX_CHARS ? `${collapsed.slice(0, TITLE_MAX_CHARS)}${TITLE_ELLIPSIS}` : collapsed
+}
+
+// 任务状态里这些算「已经结束」：任务停了但评估结论还没写出来时，才提示「正在判断下一步…」。
+const TASK_TERMINAL_STATES = ['completed', 'failed', 'cancelled', 'interrupted', 'missing']
+
+function isTerminalTaskState(state?: string | null): boolean {
+  return TASK_TERMINAL_STATES.includes((state || '').trim().toLowerCase())
+}
+
+// 结果卡片怎么说这一步是怎么结束的：全部白话中文。
+function goalResultCopy(
+  goal: Goal,
+  detail?: GoalDetail | null,
+): { headline: string; main: string; extra: string } {
+  const state = (goal.state || '').trim().toLowerCase()
+  const summary = (detail?.summary || goal.summary || '').trim()
+  const reason = (detail?.stop_reason || goal.stop_reason || '').trim()
+  const kept = '已做的改动都留在这个工作目录里。'
+  switch (state) {
+    case 'achieved':
+      return {
+        headline: '已达成',
+        main: summary || reason || `目标已经达成，${kept}`,
+        extra: summary && reason && summary !== reason ? reason : '',
+      }
+    case 'exhausted':
+      return {
+        headline: '轮数用完了，还没有达成',
+        main: reason || `已经跑完 ${goal.max_iterations} 轮，目标还没有达成，${kept}`,
+        extra: summary,
+      }
+    case 'failed':
+      return {
+        headline: '这个目标没有跑成功',
+        main: reason || `这一轮没有跑成功，目标已经停止，${kept}`,
+        extra: summary,
+      }
+    case 'stopped':
+      return {
+        headline: '已经停止',
+        main: reason || `已经按你的要求停止，${kept}`,
+        extra: summary,
+      }
+    default:
+      return { headline: '目标已结束', main: summary || reason || '目标已结束。', extra: '' }
+  }
 }
 
 // Backend errors arrive as {error, code}; some messages are English. The owner only
@@ -130,22 +194,32 @@ function GoalChip({ state }: { state?: string | null }) {
 function GoalIterationRow({
   iteration,
   expanded,
+  goalRunning,
   onToggleExpand,
   onOpenTask,
 }: {
   iteration: Iteration
   expanded: boolean
+  goalRunning: boolean
   onToggleExpand: () => void
   onOpenTask: (taskId: string) => void
 }) {
   const taskState = iteration.task_state || iteration.task_final_state
   const prompt = iteration.prompt.trim()
+  // 只显示任务状态；「继续下一轮 / 已达成 / 需要你决定 / 放弃」只在真的有结论时出现。
+  // 任务已经结束但结论还没写出来时，才提示「正在判断下一步…」。
+  const decision = (iteration.decision || '').trim()
+  const deciding = !decision && goalRunning && isTerminalTaskState(taskState)
   return (
     <li className="sup-goal-iteration">
       <div className="sup-goal-iteration-head">
         <strong className="sup-goal-iteration-n">第 {iteration.n} 轮</strong>
         <span className="sup-goal-iteration-task-state">{taskState ? supStateLabel(taskState) : '未开始'}</span>
-        <span className="sup-goal-iteration-decision">{goalDecisionLabel(iteration.decision)}</span>
+        {decision ? (
+          <span className="sup-goal-iteration-decision">{goalDecisionLabel(decision)}</span>
+        ) : deciding ? (
+          <span className="sup-goal-iteration-decision sup-goal-iteration-decision--pending">正在判断下一步…</span>
+        ) : null}
       </div>
       <div className={`sup-goal-iteration-prompt ${expanded ? 'is-expanded' : ''}`}>
         <p>{prompt || '这一轮没有留下指令记录。'}</p>
@@ -249,8 +323,13 @@ export default function SupervisorGoals({
   const [expandedRound, setExpandedRound] = useState<number | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [pinnedGoalId, setPinnedGoalId] = useState('')
+  // 老板点了「开始新目标」：表单要一直露出来，别再自动把刚跑完的目标钉回最上面。
+  const [formRequested, setFormRequested] = useState(false)
+  const [timelineOpen, setTimelineOpen] = useState(false)
   const pinnedGoalIdRef = useRef('')
+  const formRequestedRef = useRef(false)
   pinnedGoalIdRef.current = pinnedGoalId
+  formRequestedRef.current = formRequested
 
   // Keep the ref in sync immediately (actions read it right after pinning, before re-render).
   const pinGoal = useCallback((goalId: string) => {
@@ -263,6 +342,10 @@ export default function SupervisorGoals({
   const shownGoal: Goal | null = activeGoal || (pinnedGoalId ? goals.find(g => g.id === pinnedGoalId) || null : null)
   const shownDetail: GoalDetail | null = detail && shownGoal && detail.id === shownGoal.id ? detail : null
   const finishedGoals = useMemo(() => goals.filter(g => !isActiveGoalState(g.state)), [goals])
+  // 目标跑完之后（达成 / 用完轮数 / 失败 / 停止）结果卡继续挂在最上面，表单藏起来。
+  const goalFinished = shownGoal ? !isActiveGoalState(shownGoal.state) : false
+  const showForm = !hasActiveGoal && !shownGoal
+  const showTimeline = !goalFinished || timelineOpen
 
   const loadDetail = useCallback(
     async (goalId: string) => {
@@ -293,11 +376,24 @@ export default function SupervisorGoals({
     const currentActive = scoped.find(g => isActiveGoalState(g.state)) || null
     if (currentActive) {
       pinGoal('')
+      setFormRequested(false)
       await loadDetail(currentActive.id)
       return
     }
     if (pinnedGoalIdRef.current && scoped.some(g => g.id === pinnedGoalIdRef.current)) {
       await loadDetail(pinnedGoalIdRef.current)
+      return
+    }
+    if (formRequestedRef.current) {
+      // 老板已经点了「开始新目标」：别把刚跑完的目标又钉回最上面。
+      setDetail(null)
+      return
+    }
+    // 没有在跑的目标：把这个 worktree 最近一个目标的结果卡留在最上面。
+    const latest = scoped[0] || null
+    if (latest) {
+      pinGoal(latest.id)
+      await loadDetail(latest.id)
       return
     }
     setDetail(null)
@@ -307,10 +403,18 @@ export default function SupervisorGoals({
   useEffect(() => {
     setDetail(null)
     pinGoal('')
+    setFormRequested(false)
     setReplyMessage('')
     setConfirmStop(false)
     void refresh()
   }, [contextKey, pinGoal, refresh])
+
+  // 换一个目标看的时候，每一轮默认收起（跑着的时候才默认展开），单轮展开也重置。
+  const shownGoalId = shownGoal?.id || ''
+  useEffect(() => {
+    setTimelineOpen(false)
+    setExpandedRound(null)
+  }, [shownGoalId])
 
   // Poll the running goal every 3s while this tab is visible; stop otherwise.
   useEffect(() => {
@@ -354,6 +458,7 @@ export default function SupervisorGoals({
           }),
         })
         setOutcome('')
+        setFormRequested(false)
         await refresh()
       } catch (err) {
         setCreateError(goalChineseError(err))
@@ -375,6 +480,7 @@ export default function SupervisorGoals({
       )
       setDetail(res)
       pinGoal(res.id)
+      setFormRequested(false)
       setConfirmStop(false)
       await refresh()
     } catch (err) {
@@ -405,9 +511,11 @@ export default function SupervisorGoals({
         setDetail(res)
         if (isActiveGoalState(res.state)) {
           pinGoal('')
+          setFormRequested(false)
           setReplyMessage('')
         } else {
           pinGoal(res.id)
+          setFormRequested(false)
         }
         await refresh()
       } catch (err) {
@@ -419,8 +527,20 @@ export default function SupervisorGoals({
     [activeGoal, apiCall, refresh, replyMessage, replying],
   )
 
+  // 结果卡上的「开始新目标」：收起结果卡，把表单露出来。
+  const handleStartNew = useCallback(() => {
+    pinGoal('')
+    setFormRequested(true)
+    setConfirmStop(false)
+    setReplyMessage('')
+    setStopError('')
+  }, [pinGoal])
+
   const handleSelectFinished = useCallback(
     (goalId: string) => {
+      setFormRequested(false)
+      // 已经在看这个目标了就保持原样（尤其是「查看每一轮」别被收起）。
+      if (pinnedGoalIdRef.current === goalId) return
       pinGoal(goalId)
       void loadDetail(goalId)
     },
@@ -431,6 +551,8 @@ export default function SupervisorGoals({
   const roundsTotal = shownGoal?.max_iterations || DEFAULT_MAX_ROUNDS
   const canStop = Boolean(activeGoal) && !stopping
   const iterations = shownDetail?.iterations || []
+  // 跑完之后的结果卡文案（标题 + 白话结论 + 补充说明）。
+  const resultCopy = goalFinished && shownGoal ? goalResultCopy(shownGoal, shownDetail) : null
 
   return (
     <div className="sup-goals-scroll">
@@ -465,7 +587,7 @@ export default function SupervisorGoals({
             <header className="sup-goal-header">
               <div className="sup-goal-header-main">
                 <GoalChip state={shownGoal.state} />
-                <h3>{shownGoal.title || shownGoal.outcome}</h3>
+                <h3>{goalDisplayTitle(shownGoal)}</h3>
               </div>
               <div className="sup-goal-header-side">
                 <span className="sup-goal-rounds">
@@ -487,8 +609,21 @@ export default function SupervisorGoals({
               <p className="sup-goal-outcome-text">想要的结果：{shownGoal.outcome.trim()}</p>
             )}
 
-            {shownDetail?.summary.trim() && <p className="sup-goal-summary">{shownDetail.summary.trim()}</p>}
             {!shownDetail && <p className="sup-muted-note">正在读取这一目标…</p>}
+
+            {resultCopy ? (
+              // 跑完了：结果卡说清楚这一步是怎么结束的，并给一个「开始新目标」的出口。
+              <div className="sup-goal-result">
+                <strong>{resultCopy.headline}</strong>
+                <p>{resultCopy.main}</p>
+                {resultCopy.extra && <p className="sup-goal-result-note">{resultCopy.extra}</p>}
+                <button type="button" className="shell-button primary sup-goal-new-button" onClick={handleStartNew}>
+                  开始新目标
+                </button>
+              </div>
+            ) : (
+              shownDetail?.summary.trim() && <p className="sup-goal-summary">{shownDetail.summary.trim()}</p>
+            )}
 
             {stopError && (
               <div className="sup-banner sup-banner--error" role="alert">
@@ -578,11 +713,26 @@ export default function SupervisorGoals({
 
             <div className="sup-goal-timeline-head">
               <h4>每一轮在做什么</h4>
-              <span className="sup-card-hint">最新的一轮在最上面</span>
+              {goalFinished ? (
+                <button
+                  type="button"
+                  className="sup-goal-expand-button"
+                  aria-expanded={showTimeline}
+                  onClick={() => setTimelineOpen(prev => !prev)}
+                >
+                  {showTimeline ? '收起每一轮' : '查看每一轮'}
+                </button>
+              ) : (
+                <span className="sup-card-hint">最新的一轮在最上面</span>
+              )}
             </div>
-            {iterations.length === 0 ? (
+            {!goalFinished && iterations.length === 0 && (
               <p className="sup-muted-note">正在准备第 1 轮，稍等几秒就会出现在这里。</p>
-            ) : (
+            )}
+            {goalFinished && !showTimeline && iterations.length > 0 && (
+              <p className="sup-muted-note">一共跑了 {iterations.length} 轮，点「查看每一轮」可以回看每一轮做了什么。</p>
+            )}
+            {showTimeline && iterations.length > 0 && (
               <ol className="sup-goal-timeline">
                 {iterations
                   .slice()
@@ -592,6 +742,7 @@ export default function SupervisorGoals({
                       key={iteration.n}
                       iteration={iteration}
                       expanded={expandedRound === iteration.n}
+                      goalRunning={shownGoal?.state === 'running'}
                       onToggleExpand={() => setExpandedRound(prev => (prev === iteration.n ? null : iteration.n))}
                       onOpenTask={onOpenTask}
                     />
@@ -601,7 +752,7 @@ export default function SupervisorGoals({
           </section>
         )}
 
-        {!hasActiveGoal && (
+        {showForm && (
           <section className="sup-card sup-goal-form-card" aria-label="描述你想要的结果">
             <div className="sup-card-head">
               <h4>描述你想要的结果</h4>
@@ -694,7 +845,7 @@ export default function SupervisorGoals({
                   >
                     <div className="sup-goal-history-row-main">
                       <GoalChip state={goal.state} />
-                      <strong>{goal.title || goal.outcome}</strong>
+                      <strong>{goalDisplayTitle(goal)}</strong>
                     </div>
                     <span className="sup-goal-history-row-meta">
                       第 {goal.iterations_used ?? '—'} / {goal.max_iterations} 轮 · {formatGoalTime(goal.updated_at || goal.created_at)}
