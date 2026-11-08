@@ -80,7 +80,7 @@ export type SupervisorTask = {
     roles?: Record<string, { executor?: string; model?: string | null } | string>
     session_id?: string
     result_summary?: string
-    changed_files?: { status: string; path: string }[]
+    changed_files?: Array<string | { path?: string; file?: string; name?: string; status?: string }>
     pr_status?: string
     [key: string]: unknown
   } | null
@@ -307,6 +307,7 @@ export function supExecutionSwitchNotes(executions: SupervisorExecution[]): Map<
   for (let i = 1; i < executions.length; i += 1) {
     const prev = executions[i - 1]
     const cur = executions[i]
+    if (!prev || !cur || typeof prev !== 'object' || typeof cur !== 'object') continue
     if (!supIsFailedExecution(prev)) continue
     if ((prev.role || '') !== (cur.role || '')) continue
     if (!prev.executor || !cur.executor || prev.executor === cur.executor) continue
@@ -1024,17 +1025,23 @@ function SupervisorRunHistory({
   )
 }
 
+/** Drop anything that is not a plain object so downstream field access never throws. */
+function onlyObjects<T>(items: T[] | undefined | null): T[] {
+  return (Array.isArray(items) ? items : []).filter((item): item is T => Boolean(item) && typeof item === 'object')
+}
+
 // Always-visible summary under the task progress: which worker ran each role (latest attempt wins)
 // plus any executor switch notes. The full execution list stays in 技术细节.
 function SupervisorTaskExecutors({ executions }: { executions: SupervisorExecution[] }) {
-  if (executions.length === 0) return null
+  const rows = onlyObjects(executions)
+  if (rows.length === 0) return null
   const latestByRole = new Map<SupervisorRoleKey, SupervisorExecution>()
-  for (const ex of executions) {
+  for (const ex of rows) {
     const key = ROLE_META.find(m => m.key === ex.role)?.key
     if (key) latestByRole.set(key, ex)
   }
   const roleParts = ROLE_META.filter(m => latestByRole.has(m.key))
-  const switchNotes = [...supExecutionSwitchNotes(executions).values()]
+  const switchNotes = [...supExecutionSwitchNotes(rows).values()]
   if (roleParts.length === 0 && switchNotes.length === 0) return null
   return (
     <div className="sup-task-executors" aria-label="各角色执行者">
@@ -1055,6 +1062,37 @@ function SupervisorTaskExecutors({ executions }: { executions: SupervisorExecuti
   )
 }
 
+export type NormalizedChangedFile = { path: string; status: string }
+
+/**
+ * metadata.changed_files arrives in two shapes from the supervisor backend: the live git
+ * path (supervisor_service._enrich_task_dict) returns a list of plain strings such as
+ * "calc.py", while other payloads carry {path|file|name, status} objects. Normalize both to
+ * {path, status} so ChangedFileList never receives a bare string, and drop any entry that
+ * has no usable path. Pure + exported so it can be unit-tested.
+ */
+export function normalizeChangedFiles(raw: unknown): NormalizedChangedFile[] {
+  if (!Array.isArray(raw)) return []
+  const out: NormalizedChangedFile[] = []
+  for (const entry of raw) {
+    if (typeof entry === 'string') {
+      const path = entry.trim()
+      if (path) out.push({ path, status: 'M' })
+      continue
+    }
+    if (entry && typeof entry === 'object') {
+      const obj = entry as { path?: unknown; file?: unknown; name?: unknown; status?: unknown }
+      const rawPath = obj.path ?? obj.file ?? obj.name
+      const path = typeof rawPath === 'string' ? rawPath.trim() : ''
+      if (path) {
+        const status = typeof obj.status === 'string' && obj.status.trim() ? obj.status : 'M'
+        out.push({ path, status })
+      }
+    }
+  }
+  return out
+}
+
 function SupervisorTechnicalDetails({
   task,
   taskDetail,
@@ -1062,9 +1100,9 @@ function SupervisorTechnicalDetails({
   task: SupervisorTask | null
   taskDetail: SupervisorTaskDetail | null
 }) {
-  const changedFiles = taskDetail?.metadata?.changed_files || task?.metadata?.changed_files || []
-  const handoffs = taskDetail?.handoffs || []
-  const executions = taskDetail?.executions || []
+  const changedFiles = normalizeChangedFiles(taskDetail?.metadata?.changed_files ?? task?.metadata?.changed_files)
+  const handoffs = onlyObjects(taskDetail?.handoffs)
+  const executions = onlyObjects(taskDetail?.executions)
   const switchNotes = supExecutionSwitchNotes(executions)
   const countLabel = [
     changedFiles.length ? `${changedFiles.length} 个改动文件` : '',

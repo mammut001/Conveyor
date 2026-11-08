@@ -756,6 +756,51 @@ test('mock fixture: technical details & run history collapse by default, auto-ex
   await expect(activeCard.getByRole('button', { name: '取消任务' })).toHaveCount(0)
 })
 
+// Regression: the live backend returns metadata.changed_files as a list of plain git path
+// strings (supervisor_service._enrich_task_dict), NOT {path,status} objects. The 项目 page must
+// normalize them and never fall through to the RootErrorBoundary crash screen.
+const STRING_CHANGED_FILES_TASK: SupervisorTaskDetail = {
+  id: 'sup-task-string-changed-files',
+  goal: '改动文件按纯字符串返回时页面不应崩溃',
+  repo_path: '/srv/repos/conveyor',
+  worktree_path: '/srv/repos/conveyor-wt/fix-console',
+  branch: 'fix/console',
+  state: 'completed',
+  stage: 'completed',
+  summary: '已完成。',
+  metadata: {
+    repo_id: 'repo-conveyor',
+    worktree_id: 'wt-fix-console',
+    changed_files: ['calc.py', 'tests/test_calc.py'],
+  },
+  handoffs: [],
+  executions: [],
+}
+
+test('mock fixture: metadata.changed_files as plain strings renders the 项目 page without the error screen and lists both files in 技术细节', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, { initialTasksByWt: { 'wt-fix-console': [STRING_CHANGED_FILES_TASK] } })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  // The auto-selected completed task renders: no RootErrorBoundary crash screen anywhere.
+  await expect(page.locator('.root-error')).toHaveCount(0)
+  await expect(page.getByText('页面出了点问题')).toHaveCount(0)
+
+  // The collapsed summary already counts both normalized files.
+  const techDetails = page.locator('details.sup-tech-details').first()
+  await expect(techDetails.locator('.sup-tech-meta')).toContainText('2 个改动文件')
+
+  // Opening 技术细节 lists both files (strings normalized to {path, status:'M'} → 修改 chip).
+  await techDetails.locator(':scope > summary').click()
+  await expect(techDetails).toHaveAttribute('open', '')
+  const fileList = techDetails.locator('.changed-files')
+  await expect(fileList.locator('.changed-file')).toHaveCount(2)
+  expect(await fileList.locator('.changed-file-name').allTextContents()).toEqual(['calc.py', 'test_calc.py'])
+  expect(await fileList.locator('.changed-file-dir').allTextContents()).toEqual(['tests'])
+  await expect(fileList.locator('.file-chip').first()).toHaveText('修改')
+})
+
 test('mock fixture: honest unconfigured deployment vs staged deployment progress, plus mobile layout without horizontal overflow', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   const fixture = await installSupervisorMockFixture(page, {

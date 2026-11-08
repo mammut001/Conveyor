@@ -6,7 +6,7 @@ export type FileTone = 'added' | 'modified' | 'deleted' | 'renamed'
 
 /** `git status --short` code (already trimmed, e.g. "M", "??", "AM", "R") → chip. */
 export function fileStatusInfo(status?: string): { label: string; tone: FileTone } {
-  const code = (status || '').toUpperCase()
+  const code = (typeof status === 'string' ? status : '').toUpperCase()
   if (code.includes('R')) return { label: '重命名', tone: 'renamed' }
   if (code.includes('D')) return { label: '删除', tone: 'deleted' }
   if (code === '??' || code.includes('A') || code.includes('C')) return { label: '新增', tone: 'added' }
@@ -15,7 +15,8 @@ export function fileStatusInfo(status?: string): { label: string; tone: FileTone
 
 /** Splits "web/src/App.tsx" into name + folder; renames ("a -> b") keep the new path. */
 export function splitPath(raw: string): { name: string; dir: string; from?: string } {
-  const [from, to] = raw.includes(' -> ') ? raw.split(' -> ', 2) : [undefined, raw]
+  const source = typeof raw === 'string' ? raw : ''
+  const [from, to] = source.includes(' -> ') ? source.split(' -> ', 2) : [undefined, source]
   const path = (to || '').replace(/^"|"$/g, '')
   const clean = path.replace(/\/+$/, '')
   const cut = clean.lastIndexOf('/')
