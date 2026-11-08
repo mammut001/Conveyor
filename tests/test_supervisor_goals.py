@@ -868,6 +868,383 @@ class SupervisorGoalTests(unittest.TestCase):
         assert handler_post.response is not None
         self.assertEqual(handler_post.response[0], HTTPStatus.CONFLICT)
 
+    # ------------------------------------------------------------------
+    # 14. S2 robustness & hardening tests
+    # ------------------------------------------------------------------
+
+    def test_advance_one_goal_offloads_sync_steps_to_thread_and_keeps_evaluator_async(self) -> None:
+        from unittest.mock import patch
+
+        goal = self._create_goal()
+        to_thread_funcs: list[str] = []
+        orig_to_thread = asyncio.to_thread
+        eval_thread_id: list[int] = []
+        loop_thread_id: list[int] = []
+
+        async def _spy_to_thread(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+            to_thread_funcs.append(getattr(func, "__name__", str(func)))
+            return await orig_to_thread(func, *args, **kwargs)
+
+        orig_run = self.fake.run
+
+        async def _spy_eval_run(**kwargs: Any) -> ags.ExecutionResult:
+            eval_thread_id.append(threading.get_ident())
+            return await orig_run(**kwargs)
+
+        self.fake.run = _spy_eval_run
+        self._respond_with(
+            {"decision": "achieved", "reason": "全部完成", "summary": "已完成"}
+        )
+
+        async def _drive() -> None:
+            loop_thread_id.append(threading.get_ident())
+            with patch("supervisor_goals.asyncio.to_thread", side_effect=_spy_to_thread):
+                await goals.advance_goals(None, self.settings)
+                task_id = self._current_task_id(goal["id"])
+                self._set_task_state(task_id, "completed")
+                await goals.advance_goals(None, self.settings)
+
+        asyncio.run(_drive())
+
+        self.assertIn("_running_goals", to_thread_funcs)
+        self.assertIn("_get_goal_row", to_thread_funcs)
+        self.assertIn("_iterations", to_thread_funcs)
+        self.assertIn("_start_iteration", to_thread_funcs)
+        self.assertIn("get_task", to_thread_funcs)
+        self.assertIn("_claim_iteration", to_thread_funcs)
+        self.assertIn("_scope_paths", to_thread_funcs)
+        self.assertIn("_prepare_evaluator_call", to_thread_funcs)
+        self.assertIn("_apply_evaluation_decision", to_thread_funcs)
+        # Evaluator call itself is natively async on the event loop thread.
+        self.assertNotIn("_invoke_role_executor", to_thread_funcs)
+        self.assertEqual(eval_thread_id, loop_thread_id)
+        self.assertEqual(self._goal(goal["id"])["state"], "achieved")
+
+    def test_failure_after_record_decision_recovers_on_next_tick_achieved(self) -> None:
+        from unittest.mock import patch
+
+        goal = self._create_goal()
+        self._advance()
+        task_id = self._current_task_id(goal["id"])
+        self._set_task_state(task_id, "completed")
+
+        self._respond_with(
+            {"decision": "achieved", "reason": "验收全部通过", "summary": "第 1 轮完成目标"}
+        )
+
+        orig_record = goals._record_decision
+
+        def _record_then_crash(*args: Any, **kwargs: Any) -> None:
+            orig_record(*args, **kwargs)
+            raise RuntimeError("injected crash right after _record_decision")
+
+        with patch("supervisor_goals._record_decision", side_effect=_record_then_crash):
+            self._advance()
+
+        # After the crash: iteration has decision='achieved' committed, goal is still running.
+        mid = self._goal(goal["id"])
+        self.assertEqual(mid["state"], "running")
+        self.assertEqual(mid["iterations"][0]["decision"], "achieved")
+        self.assertEqual(self.fake.calls, 1)
+
+        # Next tick must re-apply the stored decision idempotently without re-running evaluator.
+        self._advance()
+        final = self._goal(goal["id"])
+        self.assertEqual(final["state"], "achieved")
+        self.assertEqual(final["stop_reason"], "验收全部通过")
+        self.assertIn("第 1 轮完成目标", final["summary"])
+        self.assertEqual(self.fake.calls, 1)
+
+    def test_failure_after_record_decision_recovers_on_next_tick_continue(self) -> None:
+        from unittest.mock import patch
+
+        goal = self._create_goal(max_iterations=3)
+        self._advance()
+        task_id = self._current_task_id(goal["id"])
+        self._set_task_state(task_id, "completed")
+
+        self._respond_with(
+            {
+                "decision": "continue",
+                "reason": "还需补齐边界测试",
+                "next_prompt": "请补充边界条件测试",
+                "summary": "第 1 轮已完成主流程",
+            }
+        )
+
+        orig_record = goals._record_decision
+
+        def _record_then_crash(*args: Any, **kwargs: Any) -> None:
+            orig_record(*args, **kwargs)
+            raise RuntimeError("injected crash right after _record_decision")
+
+        with patch("supervisor_goals._record_decision", side_effect=_record_then_crash):
+            self._advance()
+
+        mid = self._goal(goal["id"])
+        self.assertEqual(mid["state"], "running")
+        self.assertEqual(len(mid["iterations"]), 1)
+        self.assertEqual(mid["iterations"][0]["decision"], "continue")
+        self.assertEqual(self.fake.calls, 1)
+
+        # Next tick re-applies the stored continue decision and starts iteration 2.
+        self._advance()
+        after = self._goal(goal["id"])
+        self.assertEqual(after["state"], "running")
+        self.assertEqual(len(after["iterations"]), 2)
+        self.assertTrue(after["iterations"][1]["task_id"])
+        self.assertIn("请补充边界条件测试", after["iterations"][1]["prompt"])
+        self.assertEqual(self.fake.calls, 1)
+
+    def test_stop_goal_interleaving_between_iteration_insert_and_dispatch_cancels_task(self) -> None:
+        from unittest.mock import patch
+
+        goal = self._create_goal()
+        orig_create_scoped = svc.create_scoped_task
+        created_task_ids: list[str] = []
+
+        def _create_while_stop_interleaves(settings: Any, body: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+            # Simulate HTTP stop_goal running between _ensure_iteration (task_id='') and task creation/dispatch.
+            goals.stop_goal(None, settings, goal["id"])
+            task, created = orig_create_scoped(settings, body)
+            created_task_ids.append(str(task["id"]))
+            return task, created
+
+        with patch("supervisor_goals.svc.create_scoped_task", side_effect=_create_while_stop_interleaves):
+            # Force _start_iteration past the initial _goal_is_running check so stop_goal happens
+            # right between _ensure_iteration and create_scoped_task / dispatch_scoped_task.
+            goals._ensure_iteration(self.settings, goal["id"], 1, goals._first_iteration_prompt(goal))
+            orig_is_running = goals._goal_is_running
+            check_count = 0
+
+            def _is_running_first_true(settings: Any, gid: str) -> bool:
+                nonlocal check_count
+                check_count += 1
+                if check_count <= 2:
+                    return True
+                return orig_is_running(settings, gid)
+
+            with patch("supervisor_goals._goal_is_running", side_effect=_is_running_first_true):
+                ret = goals._start_iteration(
+                    None, self.settings, goal, 1, goals._first_iteration_prompt(goal)
+                )
+
+        self.assertEqual(ret, "")
+        self.assertEqual(len(created_task_ids), 1)
+        task = ags.get_task(self.settings, created_task_ids[0])
+        self.assertIsNotNone(task)
+        assert task is not None
+        self.assertEqual(task["state"], "cancelled")
+        self.assertEqual(self._goal(goal["id"])["state"], "stopped")
+
+    def test_stop_goal_interleaving_during_dispatch_cancels_dispatched_task(self) -> None:
+        from unittest.mock import patch
+
+        goal = self._create_goal()
+        orig_dispatch = svc.dispatch_scoped_task
+        dispatched_task_ids: list[str] = []
+
+        def _dispatch_then_stop(
+            server: Any, settings: Any, task_id: str, body: dict[str, Any]
+        ) -> dict[str, Any]:
+            res = orig_dispatch(server, settings, task_id, body)
+            dispatched_task_ids.append(task_id)
+            # Simulate stop_goal racing right as dispatch_scoped_task finishes,
+            # or having marked the goal stopped before task_id was visible.
+            goals._update_goal(
+                settings,
+                goal["id"],
+                state=goals.GOAL_STOPPED,
+                stop_reason="用户手动停止了目标",
+                updated_at=goals._utc_now(),
+            )
+            return res
+
+        with patch("supervisor_goals.svc.dispatch_scoped_task", side_effect=_dispatch_then_stop):
+            self._advance()
+
+        self.assertEqual(len(dispatched_task_ids), 1)
+        task = ags.get_task(self.settings, dispatched_task_ids[0])
+        self.assertIsNotNone(task)
+        assert task is not None
+        self.assertEqual(task["state"], "cancelled")
+        self.assertEqual(self._goal(goal["id"])["state"], "stopped")
+
+    def test_reply_goal_budget_exhausted_does_not_cancel_waiting_task(self) -> None:
+        from http import HTTPStatus
+
+        goal = self._create_goal(max_iterations=1)
+        self._advance()
+        t1 = self._current_task_id(goal["id"])
+        self._set_task_state(t1, "waiting_user", stage="needs_validation")
+        self._advance()
+        self.assertEqual(self._goal(goal["id"])["state"], "waiting_user")
+
+        # Iteration 2 is allowed (max_iterations + 1 == 2).
+        replied = goals.reply_goal(None, self.settings, goal["id"], {"message": "第一次补充"})
+        self.assertEqual(replied["state"], "running")
+        self._advance()
+        t2 = self._current_task_id(goal["id"])
+        self.assertTrue(t2)
+        self._set_task_state(t2, "waiting_user", stage="needs_validation")
+        self._advance()
+        self.assertEqual(self._goal(goal["id"])["state"], "waiting_user")
+
+        # Now next_n == 3 > max_iterations + 1 (2): reply must fail with 409 BEFORE cancelling t2.
+        with self.assertRaises(svc.SupervisorServiceError) as ctx:
+            goals.reply_goal(None, self.settings, goal["id"], {"message": "超出预算的回复"})
+        self.assertEqual(ctx.exception.status, HTTPStatus.CONFLICT)
+        self.assertEqual(ctx.exception.code, "goal_iterations_exhausted")
+
+        t2_after = ags.get_task(self.settings, t2)
+        self.assertIsNotNone(t2_after)
+        assert t2_after is not None
+        self.assertEqual(
+            t2_after["state"],
+            "waiting_user",
+            "waiting task must not be cancelled when reply is rejected for exhausted budget",
+        )
+
+    def test_reply_goal_concurrent_replies_do_not_500_and_return_409(self) -> None:
+        from http import HTTPStatus
+        from unittest.mock import patch
+
+        goal = self._create_goal(max_iterations=3)
+        self._advance()
+        t1 = self._current_task_id(goal["id"])
+        self._set_task_state(t1, "waiting_user", stage="needs_validation")
+        self._advance()
+        self.assertEqual(self._goal(goal["id"])["state"], "waiting_user")
+
+        # Verify both lock contention and conditional state transition return 409
+        # 「已经在处理你的回复」 instead of raising sqlite3.IntegrityError (500).
+        results: list[tuple[str, Any]] = []
+        barrier = threading.Barrier(2)
+
+        def _worker(msg: str) -> None:
+            barrier.wait(timeout=5.0)
+            try:
+                res = goals.reply_goal(None, self.settings, goal["id"], {"message": msg})
+                results.append(("ok", res))
+            except svc.SupervisorServiceError as exc:
+                results.append(("err", exc))
+            except Exception as exc:  # pragma: no cover
+                results.append(("unexpected", exc))
+
+        th1 = threading.Thread(target=_worker, args=("回复 A",))
+        th2 = threading.Thread(target=_worker, args=("回复 B",))
+        th1.start()
+        th2.start()
+        th1.join(timeout=10.0)
+        th2.join(timeout=10.0)
+
+        self.assertEqual(len(results), 2)
+        oks = [r for kind, r in results if kind == "ok"]
+        errs = [r for kind, r in results if kind == "err"]
+        self.assertEqual(len(oks), 1, f"expected 1 success, got {results}")
+        self.assertEqual(len(errs), 1, f"expected 1 conflict error, got {results}")
+        self.assertEqual(errs[0].status, HTTPStatus.CONFLICT)
+        self.assertEqual(errs[0].message, "已经在处理你的回复")
+        self.assertEqual(errs[0].code, "goal_reply_in_progress")
+
+        # Stop the first goal to free the worktree before testing the conditional UPDATE race.
+        goals.stop_goal(None, self.settings, goal["id"])
+
+        goal2 = self._create_goal(max_iterations=3)
+        self._advance()
+        t2 = self._current_task_id(goal2["id"])
+        self._set_task_state(t2, "waiting_user", stage="needs_validation")
+        self._advance()
+
+        orig_get_row = goals._get_goal_row
+
+        def _stale_waiting_row(settings: Any, gid: str) -> dict[str, Any]:
+            row = orig_get_row(settings, gid)
+            # Simulate second request reading stale waiting_user before acquiring DB write,
+            # while the DB row has already been updated to running by the first reply.
+            conn = goals._connect(settings)
+            try:
+                conn.execute(
+                    "UPDATE supervisor_goals SET state = ? WHERE id = ?",
+                    (goals.GOAL_RUNNING, gid),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return row
+
+        with patch("supervisor_goals._get_goal_row", side_effect=_stale_waiting_row):
+            with self.assertRaises(svc.SupervisorServiceError) as ctx:
+                goals.reply_goal(None, self.settings, goal2["id"], {"message": "并发第二次回复"})
+        self.assertEqual(ctx.exception.status, HTTPStatus.CONFLICT)
+        self.assertEqual(ctx.exception.message, "已经在处理你的回复")
+        self.assertEqual(ctx.exception.code, "goal_reply_in_progress")
+
+    def test_pending_dispatch_treated_as_inflight_and_redispatched_on_next_tick(self) -> None:
+        goal = self._create_goal()
+        prompt = goals._first_iteration_prompt(goal)
+        goals._ensure_iteration(self.settings, goal["id"], 1, prompt)
+        task, _created = svc.create_scoped_task(
+            self.settings,
+            {
+                "goal": prompt,
+                "repo_id": self.repo_id,
+                "worktree_id": self.worktree_id,
+            },
+        )
+        task_id = str(task["id"])
+        goals._set_iteration_task(self.settings, goal["id"], 1, task_id)
+
+        # Sanity check: task is in pending_dispatch (created before crash, never dispatched).
+        raw_task = ags.get_task(self.settings, task_id)
+        self.assertIsNotNone(raw_task)
+        assert raw_task is not None
+        self.assertEqual(raw_task["state"], "pending_dispatch")
+
+        # Next tick must NOT evaluate the pending_dispatch task as finished;
+        # it must re-dispatch it instead.
+        self._advance()
+        self.assertEqual(self.fake.calls, 0, "pending_dispatch task must not be evaluated as finished")
+        after_task = ags.get_task(self.settings, task_id)
+        self.assertIsNotNone(after_task)
+        assert after_task is not None
+        self.assertNotEqual(after_task["state"], "pending_dispatch")
+        self.assertIn(after_task["state"], goals._GOAL_INFLIGHT_STATES)
+        self.assertEqual(self._goal(goal["id"])["state"], "running")
+
+    def test_evaluator_failure_log_redacts_and_truncates_error(self) -> None:
+        goal = self._create_goal()
+        self._advance()
+        task_id = self._current_task_id(goal["id"])
+        self._set_task_state(task_id, "completed")
+
+        secret = "sk-proj-supersecretkey1234567890abcdef"
+        long_tail = "X" * (goals.MAX_REASON_CHARS + 500)
+
+        async def _failing_run(**_kwargs: Any) -> ags.ExecutionResult:
+            self.fake.calls += 1
+            return ags.ExecutionResult(
+                success=False,
+                output="",
+                error=f"Authorization: Bearer {secret} {long_tail}",
+                started_at=ags._utc_now(),
+                finished_at=ags._utc_now(),
+            )
+
+        self.fake.run = _failing_run
+
+        with self.assertLogs(goals.log, level="WARNING") as cm:
+            self._advance()
+
+        joined = "\n".join(cm.output)
+        self.assertNotIn(secret, joined)
+        self.assertIn("[REDACTED]", joined)
+        self.assertIn("evaluator returned failure:", joined)
+        for line in cm.output:
+            if "evaluator returned failure:" in line:
+                suffix = line.split("evaluator returned failure:", 1)[1].strip()
+                self.assertLessEqual(len(suffix), goals.MAX_REASON_CHARS)
+
 
 if __name__ == "__main__":
     unittest.main()

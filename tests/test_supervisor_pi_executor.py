@@ -37,7 +37,8 @@ IMPLEMENTER = RoleConfig(name="implementer", executor="pi", tools=["read", "writ
 
 _ISOLATION_FLAGS = (
     "-p", "--mode", "json", "--no-session", "--no-extensions", "--no-mcp",
-    "--no-skills", "--no-prompt-templates", "--no-themes", "--offline", "--no-approve",
+    "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
+    "--offline", "--no-approve",
 )
 
 _FAKE_PI = r'''#!__PY__
@@ -140,6 +141,29 @@ class PiExecutorArgvTests(unittest.TestCase):
         for flag in _ISOLATION_FLAGS:
             self.assertIn(flag, argv)
         self.assertEqual(argv[argv.index("--mode") + 1], "json")
+
+    def test_no_context_files_passed_for_all_roles(self) -> None:
+        for role in (ANALYST, REVIEWER, IMPLEMENTER):
+            argv = _argv_for(self.settings, role)
+            self.assertIn("--no-context-files", argv, role.name)
+
+    def test_argv_falls_back_when_models_json_write_fails(self) -> None:
+        import provider_config
+        env_file = self.tmp / "provider.env"
+        payload = {
+            "provider_id": "step-fun", "provider_name": "StepFun", "model": "step-3",
+            "base_url": "https://api.stepfun.example/v1", "wire_api": "chat",
+            "env_key": "STEPFUN_API_KEY", "api_key": "saved-value",
+        }
+        with patch.dict(os.environ, _clean_env(CONVEYOR_ENV_FILE=str(env_file)), clear=True):
+            provider_config.save_provider_config(self.settings, payload)
+            with patch("provider_config._atomic_write", side_effect=OSError("disk full")):
+                argv = PiExecutor(self.settings)._argv(REVIEWER, "/tmp")
+        # Saved provider requires models.json; when writing fails, argv must not
+        # reference the unavailable saved provider.
+        self.assertNotIn("step-fun", argv)
+        self.assertNotIn("--provider", argv)
+        self.assertNotIn("--model", argv)
 
     def test_never_passes_api_key(self) -> None:
         argv = _argv_for(self.settings, IMPLEMENTER, CONVEYOR_PI_PROVIDER="stepfun",
@@ -318,6 +342,30 @@ class PiChildEnvTests(unittest.TestCase):
         # models.json references the key by name, never the raw value.
         self.assertNotIn("saved-value", models.read_text(encoding="utf-8"))
         self.assertIn("$STEPFUN_API_KEY", models.read_text(encoding="utf-8"))
+
+    def test_saved_provider_models_json_oserror_falls_back_cleanly(self) -> None:
+        import provider_config
+        env_file = self.tmp / "provider.env"
+        payload = {
+            "provider_id": "step-fun", "provider_name": "StepFun", "model": "step-3",
+            "base_url": "https://api.stepfun.example/v1", "wire_api": "chat",
+            "env_key": "STEPFUN_API_KEY", "api_key": "saved-value",
+        }
+        with patch.dict(
+            os.environ,
+            _clean_env(CONVEYOR_ENV_FILE=str(env_file), DEEPSEEK_API_KEY="ds-fallback"),
+            clear=True,
+        ):
+            provider_config.save_provider_config(self.settings, payload)
+            with patch("provider_config._atomic_write", side_effect=OSError("read-only fs")):
+                child = ags._child_env(self.settings, executors="pi")
+                argv = PiExecutor(self.settings)._argv(ANALYST, "/tmp")
+        self.assertNotIn("PI_CODING_AGENT_DIR", child)
+        self.assertNotIn("STEPFUN_API_KEY", child)
+        self.assertEqual(child.get("DEEPSEEK_API_KEY"), "ds-fallback")
+        self.assertNotIn("step-fun", argv)
+        self.assertNotIn("--provider", argv)
+        self.assertNotIn("--model", argv)
 
 
 class PiExecutorEndToEndTests(unittest.TestCase):
