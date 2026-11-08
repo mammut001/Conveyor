@@ -289,7 +289,9 @@ class Settings:
     agent_supervisor_enabled: bool = False
     agent_supervisor_chat_model: str | None = None
     agent_supervisor_analysis_model: str | None = None
-    agent_supervisor_implementation_executor: str = "claude"
+    # None (no CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR) means "pick the first
+    # usable executor automatically"; see agent_supervisor.auto_executor_name.
+    agent_supervisor_implementation_executor: str | None = None
     agent_supervisor_max_repair_rounds: int = 3
     agent_supervisor_task_timeout_seconds: int = 3600
     # Per-role executor/model/location overrides.
@@ -854,8 +856,8 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "agent_supervisor_implementation_executor": (
             os.getenv("CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR")
             or os.getenv("CONVEYOR_SUPERVISOR_IMPLEMENTATION_EXECUTOR")
-            or "claude"
-        ).strip() or "claude",
+            or ""
+        ).strip() or None,
         "agent_supervisor_max_repair_rounds": max(1, min(10, _int_env("CONVEYOR_AGENT_SUPERVISOR_MAX_REPAIR_ROUNDS", 3))),
         "agent_supervisor_task_timeout_seconds": max(60, min(86400, _int_env("CONVEYOR_AGENT_SUPERVISOR_TASK_TIMEOUT_SECONDS", 3600))),
         "agent_supervisor_antigravity_bin": (

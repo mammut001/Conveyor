@@ -81,17 +81,71 @@ class WebOutbound:
         self.last_job: Any = None
         self.turn_id = uuid.uuid4().hex
         self._delivered_final = False
+        self._user_persisted = False
         self.handles_transcript_directly = True
 
     def on_job_submitted(self, job: Any) -> None:
         self.last_job = job
+
+    def persist_request(self, msg: InboundMessage, text: str | None = None) -> None:
+        """Store the session row and the owner's message before any model call.
+
+        A failed model call must not lose the owner's question: once the request
+        is accepted the session exists, so the transcript keeps the question and
+        the failure reason after a reload instead of 404-ing.
+        """
+        if self._user_persisted or not self.settings or not self.durable_session_id:
+            return
+        user_text = (text if text is not None else (self.prompt or msg.text)) or ""
+        if not user_text.strip():
+            return
+        try:
+            from transcript_store import get_transcript_store
+            get_transcript_store(self.settings).append(
+                self.durable_session_id, "user", user_text, kind="chat",
+                channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id,
+            )
+            self._user_persisted = True
+        except Exception:
+            logger.exception("Failed to persist web task request to TranscriptStore")
+
+    def note_provider_failure(self, msg: InboundMessage, text: str) -> None:
+        """Keep the question plus a plain-Chinese reason when the model call failed.
+
+        The 提问 request is accepted (202) before the model answers, so the
+        session detail must show what failed; otherwise the owner reloads into a
+        session that does not exist and the question is gone.
+        """
+        if not self.settings or not self.durable_session_id:
+            return
+        self.persist_request(msg)
+        if self._delivered_final or not text:
+            return
+        self._delivered_final = True
+        try:
+            from transcript_store import get_transcript_store
+            get_transcript_store(self.settings).append(
+                self.durable_session_id, "assistant", text, kind="error",
+                channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id,
+            )
+        except Exception:
+            logger.exception("Failed to persist web task failure to TranscriptStore")
 
     def record_task_turn(self, msg: InboundMessage, job_id: str, user_text: str, assistant_text: str) -> None:
         """Keep a finished task run's request and final answer in the session transcript."""
         if not self.settings or not self.durable_session_id:
             return
         from transcript_store import get_transcript_store
-        get_transcript_store(self.settings).append_turn(
+        store = get_transcript_store(self.settings)
+        if self._user_persisted:
+            # The request was stored when it was accepted; only the answer is new.
+            store.append(
+                self.durable_session_id, "assistant", assistant_text or "",
+                job_id=job_id, kind="codex", channel=msg.channel,
+                operator_id=msg.operator_id, source_chat_id=msg.chat_id,
+            )
+            return
+        store.append_turn(
             self.durable_session_id, user_text or "", assistant_text or "",
             job_id=job_id, kind="codex", channel=msg.channel,
             operator_id=msg.operator_id, source_chat_id=msg.chat_id,
@@ -147,15 +201,22 @@ class WebOutbound:
         user_text = self.prompt or msg.text
         try:
             from transcript_store import get_transcript_store
-            get_transcript_store(self.settings).append_turn(
-                self.durable_session_id,
-                user_text,
-                text,
-                channel=msg.channel,
-                operator_id=msg.operator_id,
-                source_chat_id=msg.chat_id,
-                kind=kind,
-            )
+            store = get_transcript_store(self.settings)
+            if self._user_persisted:
+                store.append(
+                    self.durable_session_id, "assistant", text, kind=kind,
+                    channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id,
+                )
+            else:
+                store.append_turn(
+                    self.durable_session_id,
+                    user_text,
+                    text,
+                    channel=msg.channel,
+                    operator_id=msg.operator_id,
+                    source_chat_id=msg.chat_id,
+                    kind=kind,
+                )
         except Exception:
             logger.exception("Failed to persist web turn to TranscriptStore")
         try:
@@ -731,14 +792,14 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                             settings = None
                     if not sup_svc.is_enabled(settings):
                         self._json(HTTPStatus.CONFLICT, {
-                            "error": "agent supervisor is disabled (set CONVEYOR_AGENT_SUPERVISOR_ENABLED=true)",
+                            "error": "项目功能还没有打开（需要在服务端设置 CONVEYOR_AGENT_SUPERVISOR_ENABLED=true）",
                             "code": "agent_supervisor_disabled",
                         })
                         return
                     binding = sup_svc.resolve_supervisor_chat_session(settings, session_id)
                     if binding is None:
                         self._json(HTTPStatus.NOT_FOUND, {
-                            "error": "supervisor worktree session not found",
+                            "error": "找不到这个项目会话",
                             "code": "session_not_found",
                         })
                         return
@@ -1315,7 +1376,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                             sup_settings = None
                     if not sup_svc.is_enabled(sup_settings):
                         self._json(HTTPStatus.CONFLICT, {
-                            "error": "agent supervisor is disabled (set CONVEYOR_AGENT_SUPERVISOR_ENABLED=true)",
+                            "error": "项目功能还没有打开（需要在服务端设置 CONVEYOR_AGENT_SUPERVISOR_ENABLED=true）",
                             "code": "agent_supervisor_disabled",
                         })
                         return
@@ -1374,12 +1435,12 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                             sup_settings = None
                     if not sup_svc.is_enabled(sup_settings):
                         self._json(HTTPStatus.CONFLICT, {
-                            "error": "agent supervisor is disabled (set CONVEYOR_AGENT_SUPERVISOR_ENABLED=true)",
+                            "error": "项目功能还没有打开（需要在服务端设置 CONVEYOR_AGENT_SUPERVISOR_ENABLED=true）",
                             "code": "agent_supervisor_disabled",
                         })
                         return
                     self._json(HTTPStatus.CONFLICT, {
-                        "error": "supervisor worktree sessions are read-only in chat; dispatch tasks via /api/supervisor/tasks",
+                        "error": "这是项目的工作目录，请在「项目」里派发任务",
                         "code": "supervisor_session_read_only",
                     })
                     return
@@ -1402,6 +1463,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     settings, durable_session_id,
                     is_codex=(mode == JobMode.FIX), prompt=prompt,
                 )
+                # Store the session and the owner's question before the model
+                # call: a provider failure then leaves the question and the
+                # Chinese reason in the transcript instead of a lost session.
+                outbound.persist_request(msg)
                 if body.get("execution_only") is True:
                     # Explicit chat-to-task handoff: do not send the same request
                     # through the chat model a second time.

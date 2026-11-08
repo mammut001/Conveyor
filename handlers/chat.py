@@ -725,6 +725,13 @@ def _extract_skill_invocation(text: str) -> tuple[str, str, str, str] | None:
     return None
 
 
+def _provider_error_text(exc: Exception) -> str:
+    """Text for a non-ChatError provider failure, redacted like a ChatError."""
+    from redaction import redact_text
+
+    return redact_text(str(exc).strip())[:200] or type(exc).__name__
+
+
 async def _chat_tier_failed(
     msg: InboundMessage, port: OutboundPort, placeholder: str | None, exc: Exception,
 ) -> tuple[ChatOutcome, "Checked"]:
@@ -734,8 +741,13 @@ async def _chat_tier_failed(
     raw = str(exc)
     text = owner_chat_error_text(raw)
     logger.warning("chat tier failed (no agent fallback): %s", raw)
-    # Bot ports show the sentence in the placeholder; the web port renders it from the returned Checked.
-    if placeholder and not getattr(port, "handles_transcript_directly", False):
+    # Ports that own their own transcript (web) keep the owner's question plus
+    # this reason, so a failed model call is visible after a reload instead of
+    # silently dropping the turn. Bot ports show the sentence in the placeholder.
+    note_failure = getattr(port, "note_provider_failure", None)
+    if note_failure is not None:
+        note_failure(msg, text)
+    elif placeholder and not getattr(port, "handles_transcript_directly", False):
         await port.edit_progress(msg, placeholder, text)
     return "error", Checked(body=text, confidence="low", removed_links=0, escalate=False, reason=raw)
 
@@ -845,6 +857,8 @@ async def ask_chat(
             loop_res = await run_tool_loop(msg, port, settings, tool_messages, config, placeholder=placeholder)
         except ChatError as exc:
             return await _chat_tier_failed(msg, port, placeholder, exc)
+        except Exception as exc:  # a provider/library error is still a provider failure
+            return await _chat_tier_failed(msg, port, placeholder, ChatError(_provider_error_text(exc)))
 
         if loop_res.confirmation_requested:
             note = loop_res.text.strip() or "已请求确认"
@@ -907,6 +921,8 @@ async def ask_chat(
             buf = await _stream(_messages(user_content, has_evidence=bool(evidence), may_search=can_search))
         except ChatError as exc:
             return await _chat_tier_failed(msg, port, placeholder, exc)
+        except Exception as exc:  # a provider/library error is still a provider failure
+            return await _chat_tier_failed(msg, port, placeholder, ChatError(_provider_error_text(exc)))
 
         # One model-requested web search, then a second round with the results.
         searched = ""
@@ -933,6 +949,8 @@ async def ask_chat(
                 buf = await _stream(_messages(user_content, has_evidence=bool(evidence), may_search=False))
             except ChatError as exc:
                 return await _chat_tier_failed(msg, port, placeholder, exc)
+            except Exception as exc:  # a provider/library error is still a provider failure
+                return await _chat_tier_failed(msg, port, placeholder, ChatError(_provider_error_text(exc)))
 
     allowed = evidence_urls(evidence) | extract_urls(question)
     if reply is not None:

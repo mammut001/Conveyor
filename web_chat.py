@@ -92,6 +92,44 @@ class WebChatPort(OutboundPort):
         # outlive the HTTP stream, and its answer is still saved to history.
         self.job_id = ""
 
+    def persist_request(self, msg: InboundMessage) -> None:
+        """Store the session row and the owner's question before the model call.
+
+        A failed model call (or a dropped stream) must not lose the question:
+        the session exists from the moment the request is accepted.
+        """
+        if self._user_persisted or not self.settings or not self.durable_session_id:
+            return
+        user_text = self.prompt or msg.text
+        if not user_text or not user_text.strip():
+            return
+        try:
+            get_transcript_store(self.settings).append(
+                self.durable_session_id, "user", user_text, kind="chat",
+                channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id,
+            )
+            self._user_persisted = True
+        except Exception:
+            logger.exception("Failed to persist web chat request to TranscriptStore")
+
+    def note_provider_failure(self, msg: InboundMessage, text: str) -> None:
+        """Keep the question and the plain reason a model call failed.
+
+        The SSE stream still emits the bubble (with the raw detail under 详情);
+        storing it here means the session shows the failure after a reload.
+        """
+        self.persist_request(msg)
+        if self._delivered_final or not self.settings or not self.durable_session_id or not text:
+            return
+        self._delivered_final = True
+        try:
+            get_transcript_store(self.settings).append(
+                self.durable_session_id, "assistant", text, kind="error",
+                channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id,
+            )
+        except Exception:
+            logger.exception("Failed to persist web chat failure to TranscriptStore")
+
     def on_job_submitted(self, queued_job: Any) -> None:
         self.job_id = str(getattr(queued_job, "id", "") or "")
         # Record the request as soon as a job exists: if the phone loses the
@@ -234,12 +272,17 @@ class WebChatPort(OutboundPort):
         ident = dict(channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id)
         try:
             store = get_transcript_store(self.settings)
-            if not self._user_persisted:
+            if self._user_persisted:
+                # The request was stored when it was accepted; only the reply is new.
+                store.append(
+                    self.durable_session_id, "assistant", text, kind=kind, metadata=metadata, **ident,
+                )
+            else:
                 store.append(self.durable_session_id, "user", user_text, kind="chat", **ident)
                 self._user_persisted = True
-            store.append(
-                self.durable_session_id, "assistant", text, kind=kind, metadata=metadata, **ident,
-            )
+                store.append(
+                    self.durable_session_id, "assistant", text, kind=kind, metadata=metadata, **ident,
+                )
         except Exception:
             logger.exception("Failed to persist web chat turn to TranscriptStore")
 
@@ -288,6 +331,9 @@ async def _run_supervisor_chat(
         port.emit("done", {"outcome": "unavailable"})
         return
 
+    # The question is stored before the model call, so a provider failure keeps
+    # it in the transcript instead of losing the whole turn.
+    port.persist_request(msg)
     ws_context = build_supervisor_chat_context(settings, binding)
     lang = getattr(settings, "operator_language", "zh-CN") or "zh-CN"
     system_prompt = (
@@ -328,7 +374,10 @@ async def _run_supervisor_chat(
     except ChatError as exc:
         safe_err = redact_text(str(exc))
         logger.warning("Supervisor chat provider unavailable: %s", safe_err)
-        port.emit("error", {"error": f"对话模型暂时不可用：{safe_err}"})
+        from runner.chat_client import owner_chat_error_text
+        reason = owner_chat_error_text(str(exc))
+        port.note_provider_failure(msg, reason)
+        port.emit("error", {"error": reason})
         port.emit("done", {"outcome": "unavailable"})
         return
 
@@ -386,6 +435,9 @@ async def run_web_chat(
     from handlers.jobs import handle_codex_job
     from handlers.tools.runner import _request_confirmation, handle_route, try_resolve_confirmation
     from runner.types import JobMode
+    # The question is stored before the model call: a failed call, a dropped
+    # stream or a reload must not lose what the owner sent.
+    port.persist_request(msg)
     try:
         if await try_resolve_confirmation(msg, port, settings):
             port.emit("done", {"outcome": "answered"})

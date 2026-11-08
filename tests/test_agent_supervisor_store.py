@@ -145,7 +145,7 @@ class SupervisorStoreTests(unittest.TestCase):
         subprocess.run(["git", "commit", "-qm", "x"], cwd=other, check=True, capture_output=True)
         ok, reason = validate_worktree(self.settings, str(self.repo), str(other))
         self.assertFalse(ok)
-        self.assertIn("per-task repo binding", reason)
+        self.assertIn("不属于所选仓库", reason)
         # a plain dir in the managed root (not git) must be rejected
         plain = self.tmp / "plain"
         plain.mkdir()

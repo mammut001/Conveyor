@@ -34,6 +34,14 @@ _EXPANDED_MAX_TOKENS = 16384
 
 _REASONING_FIELDS = ("reasoning", "reasoning_content")
 
+# A provider the machine cannot reach at all (DNS failure, refused connection,
+# no route): the owner needs to check the 接口地址, not wait.
+_CONNECTION_ERROR_RE = re.compile(
+    r"(cannot connect|connection (error|refused|reset|failed)|connect(ion)? (timeout|error)|"
+    r"name or service not known|nodename nor servname|temporary failure in name resolution|"
+    r"getaddrinfo|unreachable|ssl (error|verify|certificate)|max retries)"
+)
+
 
 class ChatError(RuntimeError):
     """Chat call failed; callers fall back to the Codex agent."""
@@ -186,6 +194,8 @@ def owner_chat_error_text(raw: str) -> str:
         return "模型服务请求太频繁或额度已用完（429），可以稍后再试，或在「设置」里换一个服务商。"
     if code.startswith("5"):
         return f"模型服务暂时出错（{code}），可以稍后再试。"
+    if _CONNECTION_ERROR_RE.search(lowered):
+        return "连不上模型服务，请检查「设置 → 模型设置」里的接口地址，或稍后再试。"
     if "invalid" in lowered or "stream" in lowered or "finish" in lowered:
         return "模型服务返回的内容不完整，可以在「设置」里把接口类型换成 Chat Completions 再试。"
     return "模型服务暂时不可用，可以稍后再试。"
