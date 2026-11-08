@@ -1,6 +1,7 @@
 import { Fragment, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatPanel, type TaskSuggestion } from './ChatPanel'
 import { ChangedFileList } from './TaskParts'
+import SupervisorGoals, { SupervisorGoalsProbe } from './SupervisorGoals'
 import { useMediaQuery } from '../ux/shellNav'
 
 export type SupervisorExecutorModel = { id: string; name: string }
@@ -762,7 +763,7 @@ function SupervisorRepoSidebar({
   )
 }
 
-function SupervisorRoleBar({
+export function SupervisorRoleBar({
   capabilities,
   effectiveRoles,
   onChangeRole,
@@ -1461,7 +1462,10 @@ export function SupervisorWorkspace({
   const [selectedWorktreeId, setSelectedWorktreeId] = useState(savedContext.worktreeId)
   const [expandedRepos, setExpandedRepos] = useState<Record<string, boolean>>({})
   const [searchQuery, setSearchQuery] = useState('')
-  const [subTab, setSubTab] = useState<'workspace' | 'chat' | 'deploy'>('workspace')
+  const [subTab, setSubTab] = useState<'goals' | 'workspace' | 'chat' | 'deploy'>('workspace')
+  // The 目标 tab becomes the default once the selected worktree has a running / waiting goal;
+  // any explicit tab click wins from then on (reset when the worktree context changes).
+  const subTabTouchedRef = useRef(false)
   const [mobileRepoDrawerOpen, setMobileRepoDrawerOpen] = useState(false)
 
   // Repository registration & worktree creation states
@@ -1693,6 +1697,8 @@ export function SupervisorWorkspace({
     contextAbortRef.current?.abort()
     setDispatchError('')
     setDeployError('')
+    subTabTouchedRef.current = false
+    setSubTab('workspace')
     setSelectedRepoId(repoId)
     setSelectedWorktreeId(worktreeId)
     setExpandedRepos(prev => ({ ...prev, [repoId]: true }))
@@ -2092,6 +2098,24 @@ export function SupervisorWorkspace({
     }
   }, [apiCall, capabilities?.deployment?.can_start, capabilities?.deployment?.configured, contextKey, deployBusy, selectedTask])
 
+  const handleSubTabChange = useCallback((tab: 'goals' | 'workspace' | 'chat' | 'deploy') => {
+    subTabTouchedRef.current = true
+    setSubTab(tab)
+  }, [])
+
+  // 目标 tab: an active (running / waiting) goal becomes the default sub-tab for this worktree.
+  const handleActiveGoalChange = useCallback((hasActiveGoal: boolean) => {
+    if (!hasActiveGoal || subTabTouchedRef.current) return
+    setSubTab('goals')
+  }, [])
+
+  // 「查看这一轮的任务」: jump to 任务与结果 with that task selected.
+  const handleOpenGoalTask = useCallback((taskId: string) => {
+    subTabTouchedRef.current = true
+    setSubTab('workspace')
+    void handleSelectTask(taskId)
+  }, [handleSelectTask])
+
   // Task suggestion from ChatPanel fills reviewable goal without auto-dispatching
   const handlePrepareTask = useCallback((suggestion: TaskSuggestion) => {
     updateCurrentDraft({
@@ -2099,7 +2123,10 @@ export function SupervisorWorkspace({
       preparedSessionId: suggestion.session_id,
       fromSuggestion: true,
     })
-    if (narrowViewport) setSubTab('workspace')
+    if (narrowViewport) {
+      subTabTouchedRef.current = true
+      setSubTab('workspace')
+    }
     window.setTimeout(() => {
       goalInputRef.current?.focus()
     }, 50)
@@ -2203,9 +2230,18 @@ export function SupervisorWorkspace({
             <button
               type="button"
               role="tab"
+              aria-selected={subTab === 'goals'}
+              className={`sup-subnav-tab ${subTab === 'goals' ? 'active' : ''}`}
+              onClick={() => handleSubTabChange('goals')}
+            >
+              目标
+            </button>
+            <button
+              type="button"
+              role="tab"
               aria-selected={subTab === 'workspace'}
               className={`sup-subnav-tab ${subTab === 'workspace' ? 'active' : ''}`}
-              onClick={() => setSubTab('workspace')}
+              onClick={() => handleSubTabChange('workspace')}
             >
               任务与结果
             </button>
@@ -2215,7 +2251,7 @@ export function SupervisorWorkspace({
                 role="tab"
                 aria-selected={subTab === 'chat'}
                 className={`sup-subnav-tab ${subTab === 'chat' ? 'active' : ''}`}
-                onClick={() => setSubTab('chat')}
+                onClick={() => handleSubTabChange('chat')}
               >
                 工作目录对话
               </button>
@@ -2225,7 +2261,7 @@ export function SupervisorWorkspace({
               role="tab"
               aria-selected={subTab === 'deploy'}
               className={`sup-subnav-tab ${subTab === 'deploy' ? 'active' : ''}`}
-              onClick={() => setSubTab('deploy')}
+              onClick={() => handleSubTabChange('deploy')}
             >
               部署
             </button>
@@ -2237,6 +2273,16 @@ export function SupervisorWorkspace({
             <strong>部分监工接口暂未就绪</strong>
             <span>{[capabilitiesError, reposError].filter(Boolean).join(' · ')}</span>
           </div>
+        )}
+
+        {selectedRepo && selectedWorktree && (
+          <SupervisorGoalsProbe
+            key={`probe:${contextKey}`}
+            apiCall={apiCall}
+            repo={selectedRepo}
+            worktree={selectedWorktree}
+            onActiveGoalChange={handleActiveGoalChange}
+          />
         )}
 
         {!selectedRepo || !selectedWorktree ? (
@@ -2260,6 +2306,21 @@ export function SupervisorWorkspace({
               onStartDeploy={() => void handleStartDeploy()}
             />
           </div>
+        ) : subTab === 'goals' ? (
+          <SupervisorGoals
+            key={contextKey}
+            apiCall={apiCall}
+            repo={selectedRepo}
+            worktree={selectedWorktree}
+            visible={active && subTab === 'goals'}
+            readOnly={isReadOnlyWorktree}
+            locked={isLockedWorktree}
+            capabilities={capabilities}
+            effectiveRoles={effectiveRoles}
+            onChangeRole={handleRoleChange}
+            onOpenTask={handleOpenGoalTask}
+            onActiveGoalChange={handleActiveGoalChange}
+          />
         ) : (
           <div className="sup-workbench-split">
             <div
