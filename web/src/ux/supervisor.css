@@ -1170,6 +1170,40 @@
   cursor: pointer;
 }
 
+.sup-exec-switch-note {
+  margin: 2px 0 0;
+  padding: 6px 10px;
+  border-left: 3px solid #d97706;
+  border-radius: 6px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.sup-exec-switch-note time {
+  margin-right: 8px;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+.sup-exec-raw-error {
+  margin-top: 6px;
+  font-size: 11.5px;
+}
+
+.sup-exec-raw-error pre {
+  margin: 6px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: #f3f4f6;
+  color: #1f2328;
+  font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .sup-exec-output {
   margin: 6px 0 0;
   padding: 8px;

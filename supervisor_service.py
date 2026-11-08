@@ -54,11 +54,12 @@ _ID_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,119}$")
 _FORBIDDEN_REF_SUBSTRINGS = ("..", "@{", "\\", "\x00", "\r", "\n", "\t", " ")
 _UI_EXPOSED_EXECUTORS: tuple[tuple[str, str], ...] = (
-    ("claude", "Claude CLI"),
-    ("command-code", "Command Code CLI"),
+    # Pool first: it is the recommended choice whenever a pool worker is usable.
+    ("pool", "执行者池（自动轮换）"),
+    ("claude", "Claude Code"),
+    ("command-code", "Command Code"),
     ("codex", "Codex CLI"),
     ("antigravity", "Antigravity"),
-    ("pool", "执行者池（自动轮换）"),
 )
 _OVERRIDABLE_ROLES = frozenset({"analyst", "implementer", "reviewer"})
 _INFLIGHT_STATES = frozenset({
