@@ -29,7 +29,7 @@ collapsed unless a failure or user action is required.
    - Read-only by default; enforced strictly by runtime/CLI permission policy.
    - Never takes over file edits.
 
-3. Implementer (pluggable executor: Antigravity, Claude Code, Command-Code)
+3. Implementer (pluggable executor: Antigravity, Claude Code, Command-Code, or the pool `pool`)
    - Receives the analysis plan and acceptance criteria.
    - Modifies code and runs checks inside the assigned isolated worktree (`accept-edits` mode).
    - Returns plain-text change summary, commands actually run, results and the commit SHA.
@@ -66,8 +66,49 @@ Implementer and role choices in this build:
 - **Provider Quota Notice**: For CLI adapters, `available()` verifies local binary
   presence. Account/provider rate limits, quota exhaustion, or network failures
   are runtime execution errors, not availability guarantees.
+- **Pool (`pool`)**: chooses one worker from the 执行者 pool per role call and
+  delegates to that worker's adapter. See the pool section below.
 - **Codex (`codex`)**: adapter is unsupported / NOT wired in this build; reports
   unavailable with an explicit diagnostic message if selected.
+
+## 执行者池 / pool executor
+
+`pool` picks a worker from the 执行者 pool (`workers.py`) for each role call. It
+does not run an agent itself; the matching Supervisor adapter runs the call, so
+that adapter's read-only and sandbox rules still apply.
+
+Selecting it:
+- In the Code (项目) page, each analyst, implementer and reviewer role has an
+  executor dropdown. 执行者池（自动轮换） is the first entry. The choice applies to
+  that task only.
+- Config: `CONVEYOR_AGENT_SUPERVISOR_<ROLE>_EXECUTOR=pool`, or
+  `CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR=pool` for all three roles.
+- Or `supervisor_roles.json` in the Conveyor memory root (`codex_memory_root`,
+  default `~/.codex`): `{"implementer": {"executor": "pool"}}`.
+- Precedence: role env var, then `supervisor_roles.json`, then the default. A
+  dispatch-time override beats all of them. The coordinator stays on `chat`.
+
+Rules:
+- Candidates are workers that are enabled, installed, not `needs_login`, not
+  cooling, and whose adapter reports available. Mapping: Claude Code to `claude`,
+  Antigravity to `antigravity`, Command Code to `command-code`. Pi, Super Grok and Codex never run
+  through the pool.
+- Analyst and reviewer need RUN eligibility. The implementer needs FIX
+  eligibility; Command Code is excluded from FIX unless
+  `CONVEYOR_WORKERS_UNSANDBOXED=true`.
+- Owner's drag order first. Workers over their usage threshold (default 95%) are
+  tried last. The threshold does not stop a run already in progress.
+- Rotate only after a quota failure (quota wording or a "resets in" time). The
+  failed worker cools down until the reported reset, or 45 minutes if none is
+  parsed. Any other failure ends the call without rotating.
+- An implementer that already changed its worktree is not re-run elsewhere.
+- Each attempt is its own execution record with its own executor and model. The
+  web console shows a switch note between a failed attempt and the next one.
+- Pool workers use their own saved model, never the Supervisor role model.
+- Cooling is shared with the chat pool. If all candidates hit a quota, the error
+  starts with "执行者池里的执行者额度都用完了：".
+
+## Verification & host validation commands
 
 Runtime status and recovery track process handles and PIDs across daemon
 restarts. Note that stdio streams cannot reconnect across daemon restarts.
