@@ -2,6 +2,7 @@ import { Fragment, FormEvent, useCallback, useEffect, useMemo, useRef, useState 
 import { ChatPanel, type TaskSuggestion } from './ChatPanel'
 import { ChangedFileList } from './TaskParts'
 import SupervisorChecks from './SupervisorChecks'
+import ProjectNotesCard from './ProjectNotes'
 import SupervisorGoals, { SupervisorGoalsProbe } from './SupervisorGoals'
 import SupervisorMerge from './SupervisorMerge'
 import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
@@ -2606,6 +2607,8 @@ export function SupervisorWorkspace({
               )}
 
               <SupervisorChecks apiCall={apiCall} repo={selectedRepo} onSaved={() => void refreshRepositories()} />
+
+              <ProjectNotesCard key={selectedRepo.id} token={token} repoId={selectedRepo.id} repoName={selectedRepo.name} />
 
               <section className="sup-card sup-dispatch-card" aria-label="任务目标与派发">
                 <div className="sup-card-head">
