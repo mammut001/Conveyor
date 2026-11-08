@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import agent_supervisor as ags
+import supervisor_diff as diff_mod
 import supervisor_service as svc
 from redaction import redact_text, truncate
 
@@ -468,6 +469,49 @@ def get_goal(settings: Any, goal_id: str) -> dict[str, Any]:
     goal["iterations"] = iterations
     goal["iterations_used"] = len(iterations)
     return goal
+
+
+def get_goal_diff(settings: Any, goal_id: str) -> dict[str, Any]:
+    """Whole-goal diff: base of the FIRST iteration task -> current worktree content.
+
+    Because every iteration runs on the same managed worktree, diffing from the
+    first task's `base_sha` shows everything the goal changed, not just the last
+    iteration. 404 when the goal has not produced a task yet.
+    """
+    svc.require_enabled(settings)
+    goal = _get_goal_row(settings, goal_id)
+    iterations = _iterations(settings, goal["id"])
+    first_task_id = next((str(it.get("task_id") or "") for it in iterations if it.get("task_id")), "")
+    if not first_task_id:
+        raise _service_error(
+            HTTPStatus.NOT_FOUND,
+            "目标还没有产生任何任务，暂无 diff 可读",
+            code="goal_no_task",
+        )
+    task = ags.get_task(settings, first_task_id)
+    if task is None:
+        raise _service_error(
+            HTTPStatus.NOT_FOUND,
+            f"目标的首个任务不存在: {first_task_id}",
+            code="goal_task_missing",
+        )
+    _repo_path, worktree_path, managed = _scope_paths(settings, goal)
+    if not managed:
+        raise _service_error(
+            HTTPStatus.FORBIDDEN,
+            "目标只能在托管的 git worktree 里读取 diff",
+            code="unmanaged_worktree",
+        )
+    meta = task.get("metadata")
+    if not isinstance(meta, dict):
+        meta = {}
+    payload = diff_mod.build_worktree_diff(
+        settings,
+        worktree_path=worktree_path,
+        base_sha=str(task.get("base_sha") or ""),
+        fallback_base_sha=str(meta.get("queued_target_sha") or ""),
+    )
+    return {"goal_id": goal["id"], **payload}
 
 
 def stop_goal(server: Any, settings: Any, goal_id: str) -> dict[str, Any]:

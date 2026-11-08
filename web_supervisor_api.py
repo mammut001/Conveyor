@@ -71,6 +71,11 @@ def handle_get(
             handler._json(HTTPStatus.OK, detail)
             return True
 
+        if len(parts) == 5 and parts[:3] == ["api", "supervisor", "tasks"] and parts[4] == "diff":
+            detail = svc.get_task_diff(settings, parts[3])
+            handler._json(HTTPStatus.OK, detail)
+            return True
+
         if path == "/api/supervisor/goals":
             goals = goals_mod.list_goals(settings)
             handler._json(HTTPStatus.OK, {"goals": goals, "count": len(goals)})
@@ -78,6 +83,11 @@ def handle_get(
 
         if len(parts) == 4 and parts[:3] == ["api", "supervisor", "goals"]:
             detail = goals_mod.get_goal(settings, parts[3])
+            handler._json(HTTPStatus.OK, detail)
+            return True
+
+        if len(parts) == 5 and parts[:3] == ["api", "supervisor", "goals"] and parts[4] == "diff":
+            detail = goals_mod.get_goal_diff(settings, parts[3])
             handler._json(HTTPStatus.OK, detail)
             return True
 

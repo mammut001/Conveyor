@@ -1923,6 +1923,36 @@ def get_scoped_task(settings: Any, task_id: str) -> dict[str, Any]:
     return enriched
 
 
+def get_task_diff(settings: Any, task_id: str) -> dict[str, Any]:
+    """Read-only diff of one task: `base_sha` -> current managed-worktree content.
+
+    Covers committed + staged + unstaged changes plus untracked text files.
+    Imported lazily because `supervisor_diff` builds on this module's canonical
+    path / error helpers.
+    """
+    require_enabled(settings)
+    import supervisor_diff as diff_mod
+
+    tid = _validate_id_token(task_id, "task_id")
+    task = ags.get_task(settings, tid)
+    if task is None:
+        raise SupervisorServiceError(
+            HTTPStatus.NOT_FOUND,
+            f"task not found: {tid}",
+            code="task_not_found",
+        )
+    meta = task.get("metadata")
+    if not isinstance(meta, dict):
+        meta = {}
+    payload = diff_mod.build_worktree_diff(
+        settings,
+        worktree_path=task.get("worktree_path") or "",
+        base_sha=str(task.get("base_sha") or ""),
+        fallback_base_sha=str(meta.get("queued_target_sha") or ""),
+    )
+    return {"task_id": tid, **payload}
+
+
 def cancel_scoped_task(
     server: Any,
     settings: Any,

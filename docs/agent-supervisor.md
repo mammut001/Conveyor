@@ -242,6 +242,41 @@ Supervisor actions are accessible over authenticated HTTP endpoints. Dispatch wa
 - `POST /api/supervisor/tasks/<id>/cancel`: Terminates in-memory process handles and process groups, releasing the worktree lock. Returns `200 OK`.
 - `POST /api/supervisor/tasks/<id>/transition`: Direct browser task transitions are disabled (returns `409 Conflict`), ensuring state advances solely from real execution results.
 
+### Read-only diff endpoints
+
+Owners need to see WHAT changed, so both tasks and goals expose the candidate diff
+(`base_sha` → current worktree content: committed + staged + unstaged, plus untracked text files) as
+JSON. Implemented in `supervisor_diff.py`, dispatched from `web_supervisor_api.py` with the same auth,
+feature flag and `SupervisorServiceError` shape as every other supervisor route.
+
+- `GET /api/supervisor/tasks/<id>/diff`:
+  ```json
+  {
+    "task_id": "sup-...",
+    "base_sha": "<resolved base commit>",
+    "head_sha": "<worktree HEAD>",
+    "files": [{"path": "a.py", "status": "A|M|D|R|?", "additions": 3, "deletions": 1}],
+    "diff": "<unified diff text>",
+    "truncated": false,
+    "untracked": ["notes.txt"]
+  }
+  ```
+- `GET /api/supervisor/goals/<id>/diff`: the same payload plus `goal_id`, anchored on the **first**
+  iteration task's `base_sha` so the whole goal's change is visible (`404 goal_no_task` before the
+  first task exists).
+
+Rules:
+- Base resolution: the task's `base_sha`, else its `queued_target_sha` metadata, else `HEAD`.
+- Untracked files ≤ 64 KB and decodable as UTF-8 are inlined as synthetic `new file` diffs; binary,
+  oversize and non-regular files are listed in `untracked` only.
+- `diff` is capped at 200 000 characters (`truncated: true` when cut).
+- git runs with a timeout, `GIT_OPTIONAL_LOCKS=0`, no pager, no external diff driver and no textconv
+  filter, and only inside a worktree that canonicalizes under the managed supervisor worktree root —
+  anything else is `403 worktree_outside_managed_root`, a vanished worktree is `404 worktree_missing`.
+- The diff body is **not** passed through `redaction.redact_text`: its value patterns are tuned for
+  logs and rewrite ordinary code (e.g. `_cli_load_runner` → `[REDACTED]`, `self.token = token`), which
+  would corrupt exactly what the owner is asked to review.
+
 ---
 
 ## 目标闭环（goals）
@@ -318,6 +353,7 @@ operator stops it, or a decision is needed from the operator.
 | --- | --- |
 | `GET /api/supervisor/goals` | list goals (`{goals: [...], count: n}`) |
 | `GET /api/supervisor/goals/<id>` | goal detail incl. iterations and each task's current state |
+| `GET /api/supervisor/goals/<id>/diff` | whole-goal diff anchored on the first iteration task's `base_sha` (`404 goal_no_task` before any task) |
 | `POST /api/supervisor/goals` | create a goal (`201`) |
 | `POST /api/supervisor/goals/<id>/stop` | stop the goal and cancel its active task (`200`) |
 | `POST /api/supervisor/goals/<id>/reply` | answer a `waiting_user` goal (`200`) |
