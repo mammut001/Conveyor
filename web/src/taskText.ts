@@ -277,6 +277,30 @@ export function describeJobError(error?: string | null): JobErrorInfo {
     }
   }
 
+  // The model answered, but not in a form the agent could finish: usually the wrong 接口类型 for this provider.
+  if (/stream ended|finish_reason|terminal response event|Responses (API|stream)|invalid (JSON|response)/i.test(raw)) {
+    return {
+      message: '模型服务返回不完整，可以在模型设置里把接口类型换成 Chat Completions 再试',
+      action: 'settings',
+      actionLabel: '去设置',
+    }
+  }
+
+  // Provider HTTP failures. Configuration problems (401/403/404) say what to change instead of "retype and resend".
+  const providerStatus = /HTTP|status|provider|completions|responses/i.test(raw) ? raw.match(/\b(4\d\d|5\d\d)\b/)?.[1] : undefined
+  if (providerStatus === '401' || providerStatus === '403') {
+    return { message: `模型服务拒绝了这次请求（${providerStatus}），请在模型设置里检查 API 密钥`, action: 'settings', actionLabel: '去设置' }
+  }
+  if (providerStatus === '404') {
+    return { message: '模型服务的接口地址不对（404），请在模型设置里检查接口地址', action: 'settings', actionLabel: '去设置' }
+  }
+  if (providerStatus === '429') {
+    return { message: '模型服务请求太频繁或额度已用完（429），可以稍后再试，或在模型设置里换一个服务商', action: 'settings', actionLabel: '去设置' }
+  }
+  if (providerStatus && providerStatus.startsWith('5')) {
+    return { message: `模型服务暂时出错（${providerStatus}），可以稍后再试` }
+  }
+
   const isModelProviderError = /chat tier is disabled|no model configured|provider|api[-_]?key|OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY|model_providers/i.test(raw)
 
   if (isModelProviderError) {

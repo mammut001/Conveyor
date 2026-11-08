@@ -28,6 +28,8 @@ export type ChatMessage = {
   interrupted?: boolean;
   /** A stored reply that was really a backend error: shown as a short notice, raw text under 详情. */
   failedReply?: string;
+  /** The chat provider failed this turn: `text` is the Chinese sentence, `detail` the raw error (under 详情). */
+  failure?: { text: string; detail?: string };
   taskSuggestion?: TaskSuggestion;
   originChannel?: 'web' | 'telegram' | 'feishu';
   pendingApproval?: {
@@ -635,6 +637,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                   taskSuggestion: payload.task_suggestion,
                   created_at: new Date().toISOString(),
                   subagents: finishedSubagents,
+                  failure: payload.failure ? { text: String(payload.text || ''), detail: String(payload.failure.detail || '') || undefined } : undefined,
                 },
               ]);
               setSubagents([]);
@@ -732,7 +735,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                 <h2>{agentName ? `和 ${agentName} 聊点什么？` : '想聊点什么？'}</h2>
                 <p>可以帮你查资料、跑命令、改代码，删除等危险操作会先问你。</p>
                 <details className="welcome-nightly-commands">
-                  <summary>夜间任务怎么用？</summary>
+                  <summary>高级：夜间任务（不用也能正常使用）</summary>
                   <p>夜间任务只在预览环境运行，不碰生产；默认运行 1 小时，最多处理 12 个任务，达到时间限制或任务配额会自动停止，发现的 Issue 会保留，方便之后继续处理。</p>
                   <p>示例：<code>{'/nightly_start 检查预览环境并修复失败的测试'}</code></p>
                   <ul>
@@ -833,6 +836,25 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                       {r.tool_name ? <> · {describeApproval(r.tool_name).action}</> : ' · 操作确认'}
                       {r.arg ? <> · <code>{r.arg}</code></> : null}
                     </p>
+                  </div>
+                </div>
+              </article>
+            );
+          }
+
+          if (message.failure) {
+            return (
+              <article key={message.id} className="transcript-message role-assistant chat-turn">
+                {avatar}
+                <div className="transcript-body">
+                  <div className="transcript-content chat-failed-reply" role="alert">
+                    <p className="formatted-paragraph">{message.failure.text}</p>
+                    {message.failure.detail && (
+                      <details>
+                        <summary>详情</summary>
+                        <code>{message.failure.detail}</code>
+                      </details>
+                    )}
                   </div>
                 </div>
               </article>

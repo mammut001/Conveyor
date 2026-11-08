@@ -133,7 +133,8 @@ def _validate(payload: dict[str, Any]) -> dict[str, str]:
     provider_name = str(payload.get("provider_name") or provider_id).strip()
     model = str(payload.get("model") or "").strip()
     base_url = str(payload.get("base_url") or "").strip().rstrip("/")
-    wire_api = str(payload.get("wire_api") or "responses").strip().lower()
+    # A save that omits wire_api gets Chat Completions; saved values are never rewritten here.
+    wire_api = str(payload.get("wire_api") or "chat").strip().lower()
     reasoning = str(payload.get("reasoning_effort") or "minimal").strip().lower()
     env_key = str(payload.get("env_key") or "OPENAI_API_KEY").strip().upper()
     api_key = str(payload.get("api_key") or "").strip()

@@ -11,6 +11,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import re
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
@@ -163,6 +164,31 @@ def _provider_error(obj: Any) -> None:
     base = obj.get("base_resp") if isinstance(obj, dict) else None
     if isinstance(base, dict) and base.get("status_code"):
         raise ChatError(f"provider error: {base}")
+
+
+def owner_chat_error_text(raw: str) -> str:
+    """One short Chinese sentence for a failed chat-model call (owner-facing).
+
+    The raw ChatError text stays with the caller for 技术详情; this only picks
+    the sentence, and says what to change when the cause is configuration.
+    """
+    text = raw or ""
+    lowered = text.lower()
+    code_match = re.search(r"\b(4\d\d|5\d\d)\b", text)
+    code = code_match.group(1) if code_match else ""
+    if "timed out" in lowered or "timeout" in lowered:
+        return "模型服务响应超时了，可以稍后再试。"
+    if code in ("401", "403"):
+        return f"模型服务拒绝了这次请求（{code}），请在「设置」里检查 API 密钥。"
+    if code == "404":
+        return "模型服务的接口地址不对（404），请在「设置」里检查接口地址。"
+    if code == "429":
+        return "模型服务请求太频繁或额度已用完（429），可以稍后再试，或在「设置」里换一个服务商。"
+    if code.startswith("5"):
+        return f"模型服务暂时出错（{code}），可以稍后再试。"
+    if "invalid" in lowered or "stream" in lowered or "finish" in lowered:
+        return "模型服务返回的内容不完整，可以在「设置」里把接口类型换成 Chat Completions 再试。"
+    return "模型服务暂时不可用，可以稍后再试。"
 
 
 def _choice0(obj: Any) -> dict | None:

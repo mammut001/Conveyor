@@ -152,8 +152,9 @@ async function setupMocks(page: Page, opts: MockOptions = {}) {
           model: body.model || 'gpt-4o',
           reasoning_effort: 'minimal',
           base_url: body.base_url || 'https://api.openai.com/v1',
-          wire_api: 'responses',
-          env_key: 'OPENAI_API_KEY',
+          // Echo what was saved, as the server does, so the form is not left dirty after a save.
+          wire_api: body.wire_api || 'chat',
+          env_key: body.env_key || 'OPENAI_API_KEY',
           api_key_configured: true,
           api_key_hint: '••••1234',
           config_path: '/tmp/config.toml',

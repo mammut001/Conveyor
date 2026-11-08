@@ -240,7 +240,6 @@ export default function App() {
   const [checklistDismissed, setChecklistDismissed] = useState(() => {
     try { return localStorage.getItem('conveyor-onboarding-dismissed') === 'true' } catch { return false }
   })
-  const [onboardingActive, setOnboardingActive] = useState(false)
   // The view lives in the URL hash (#chat, #memory, …; legacy /memory paths still open it).
   const [view, setView] = useState<ShellView>(() => viewFromLocation() || 'tasks')
   const viewRef = useRef(view)
@@ -1090,7 +1089,6 @@ export default function App() {
   useEffect(() => {
     if (!initialLoaded) return
     if (hasNoUsableWay) {
-      setOnboardingActive(true)
       try {
         if (localStorage.getItem(ONBOARDING_HEALTHY_KEY) === 'true') {
           localStorage.removeItem(ONBOARDING_DISMISSED_KEY)
@@ -1124,7 +1122,8 @@ export default function App() {
     }}
   />
 
-  const showChecklist = !checklistDismissed && (hasNoUsableWay || (onboardingActive && !hasSentFirstMessage))
+  // Derived from server state on every load (no in-memory flag): the checklist stays until the first message is sent or it is dismissed.
+  const showChecklist = initialLoaded && !checklistDismissed && (hasNoUsableWay || !hasSentFirstMessage)
 
   const checklistNode = showChecklist ? (
     <SetupChecklist
@@ -1414,6 +1413,7 @@ export default function App() {
                   <div className="job-notice failed task-notice" role="alert">
                     <strong>任务执行失败</strong>
                     <span>{info.message}</span>
+                    <small className="task-notice-hint">这段内容已留在下方输入框，修改后可以重新发送。</small>
                     {info.action === 'workers' && (
                       <button
                         type="button"
@@ -1691,7 +1691,7 @@ export default function App() {
               <span>自动操作电脑</span>
               <strong className={computer?.armed ? 'on' : ''}>{computer?.armed ? (computer.arm_remaining_seconds > 0 ? `已开启 · 还剩 ${durationText(computer.arm_remaining_seconds)}` : '已开启') : '未开启'}</strong>
             </div>
-            <button type="button" className="emergency" title="立即停止助手对电脑的所有自动操作" onClick={() => action('/api/computer/stop')}>紧急停止</button>
+            <button type="button" className={`emergency ${computer?.armed ? '' : 'is-idle'}`.trim()} title="立即停止助手对电脑的所有自动操作（仅在助手正在操作电脑时需要）" onClick={() => action('/api/computer/stop')}>紧急停止</button>
           </div>
           {computer?.active_task && <KeyValue label="正在执行" value={computer.active_task.status ? stateLabel(String(computer.active_task.status)) : String(computer.active_task.task_id || '进行中')} />}
           <LiveScreenPanel key={selectedAgent?.id || 'host'} token={token} agentId={selectedAgent?.id} agentName={selectedAgent?.name} />
@@ -1923,7 +1923,8 @@ const PROVIDER_HINTS: Partial<Record<ProviderField, string>> = {
 function providerDraft(config: ProviderConfig | null): ProviderDraft {
   return {
     provider_id: config?.provider_id || '', provider_name: config?.provider_name || '', base_url: config?.base_url || '',
-    model: config?.model || '', wire_api: config?.wire_api || 'responses', reasoning_effort: config?.reasoning_effort || 'minimal',
+    // Chat Completions is what most OpenAI-compatible providers speak; Responses is only chosen explicitly (see OpenAI preset).
+    model: config?.model || '', wire_api: config?.wire_api || 'chat', reasoning_effort: config?.reasoning_effort || 'minimal',
     env_key: config?.env_key || 'OPENAI_API_KEY', api_key: '',
   }
 }
@@ -1973,6 +1974,7 @@ function describeProviderError(message: string): { field?: ProviderField; text: 
 function describeModelsFailure(raw: string, code?: string): string {
   if (code === 'api_key_required') return '获取模型列表失败：请先填写 API 密钥。'
   const upstream = Number(raw.match(/(?:HTTP |returned )(\d{3})/)?.[1] ?? raw.match(/\b(401|403|404)\b/)?.[1]) || 0
+  if (upstream === 501 || upstream === 405) return '这个服务商不支持自动获取模型列表，请直接在「模型」里填写模型名称。'
   if (upstream === 401 || upstream === 403) return `获取模型列表失败：API 密钥不对或没有权限（${upstream}）。请检查后再试。`
   if (upstream === 404) return '获取模型列表失败：接口地址不对（404）。请检查后再试。'
   if (/超时|网络|连接|timeout|network|refused|ECONN/i.test(raw)) return '获取模型列表失败：连不上服务商。请检查网络和接口地址后再试。'
@@ -1981,7 +1983,7 @@ function describeModelsFailure(raw: string, code?: string): string {
 }
 
 /** Fields that live under the collapsed 高级 section of 模型设置. */
-const PROVIDER_ADVANCED_FIELDS: ProviderField[] = ['provider_id', 'env_key']
+const PROVIDER_ADVANCED_FIELDS: ProviderField[] = ['provider_id', 'env_key', 'reasoning_effort']
 
 const PROVIDER_PRESETS = [
   {
@@ -2104,7 +2106,8 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
     setSelectedPreset('custom')
     setDraft(previous => ({
       ...previous,
-      provider_id: '', provider_name: '', base_url: '', env_key: '', model: '', api_key: '',
+      // A custom provider starts blank, on Chat Completions (the usual OpenAI-compatible interface).
+      provider_id: '', provider_name: '', base_url: '', env_key: '', model: '', api_key: '', wire_api: 'chat', reasoning_effort: 'minimal',
     }))
     setFieldErrors({})
     setFetchedModels([]); setFetchModelsNote(''); setFetchModelsError(''); setFetchModelsDetail('')
@@ -2328,13 +2331,13 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
               </div>
             ))}
             {field('wire_api', '接口类型', <select {...control('wire_api')} onChange={event => update('wire_api', event.target.value)}><option value="chat">Chat Completions</option><option value="responses">Responses</option></select>)}
-            {field('reasoning_effort', '推理强度', <select {...control('reasoning_effort')} onChange={event => update('reasoning_effort', event.target.value)}>{REASONING_LABELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>)}
             {field('api_key', 'API 密钥', <input {...control('api_key')} {...text} type="password" placeholder={config.api_key_configured ? `已配置 ${config.api_key_hint}，留空则保持不变` : '粘贴 API 密钥'} onChange={event => update('api_key', event.target.value)} />, true)}
             <details className="provider-advanced wide" open={advancedOpen} onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
               <summary>高级</summary>
               <div className="form-grid provider-advanced-grid">
                 {field('provider_id', '服务商代号', <input {...control('provider_id')} {...text} className="mono-input" placeholder="deepseek" onChange={event => update('provider_id', event.target.value)} />)}
                 {field('env_key', '密钥名称', <input {...control('env_key')} {...text} className="mono-input" placeholder="OPENAI_API_KEY" onChange={event => update('env_key', event.target.value.toUpperCase())} />)}
+                {field('reasoning_effort', '推理强度', <select {...control('reasoning_effort')} onChange={event => update('reasoning_effort', event.target.value)}>{REASONING_LABELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>)}
               </div>
             </details>
           </div>

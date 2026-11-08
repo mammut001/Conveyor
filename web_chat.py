@@ -456,6 +456,14 @@ async def run_web_chat(
         outcome, checked = await ask_chat(
             msg, port, settings, question=prompt, runner=runner,
         )
+        if outcome == "error":
+            # The chat provider failed: a Chinese error bubble, raw text under 详情, and no agent run.
+            text = checked.body if checked is not None else "模型服务暂时不可用，可以稍后再试。"
+            raw = checked.reason if checked is not None else ""
+            port.emit("message", {"text": text, "failure": {"detail": raw}})
+            port._persist_turn(msg, text, kind="chat")
+            port.emit("done", {"outcome": "error"})
+            return
         if outcome in {"escalate", "unavailable"}:
             if runner is not None:
                 if is_destructive_request(prompt):

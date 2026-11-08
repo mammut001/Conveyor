@@ -246,12 +246,14 @@ async function shoot(page: Page, name: string) {
 }
 
 async function expectNoSidewaysOverflow(page: Page) {
-  const overflow = await page.locator('.guard-page').evaluate(el => ({
-    inner: el.scrollWidth - el.clientWidth,
-    right: el.getBoundingClientRect().right - window.innerWidth,
-  }))
-  expect(overflow.inner).toBeLessThanOrEqual(1)
-  expect(overflow.right).toBeLessThanOrEqual(1)
+  // The shell nav settles a moment after a viewport change; poll the measurement instead of sampling it once.
+  await expect.poll(async () => {
+    const overflow = await page.locator('.guard-page').evaluate(el => ({
+      inner: el.scrollWidth - el.clientWidth,
+      right: el.getBoundingClientRect().right - window.innerWidth,
+    }))
+    return Math.max(overflow.inner, overflow.right)
+  }).toBeLessThanOrEqual(1)
 }
 
 const cardByLabel = (page: Page, label: string): Locator => page.locator(`li.worker-card[aria-label="${label}"]`)

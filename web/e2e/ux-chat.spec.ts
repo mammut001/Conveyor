@@ -339,7 +339,7 @@ for (const width of [1440, 390]) {
     test('welcome state of a fresh conversation', async ({ page }) => {
       await openChat(page, width, { emptyHistory: true })
       await expect(page.getByRole('heading', { name: '和 Conveyor 聊点什么？' })).toBeVisible()
-      await expect(page.getByText('夜间任务怎么用？')).toBeVisible()
+      await expect(page.getByText('高级：夜间任务（不用也能正常使用）')).toBeVisible()
       await noHorizontalScroll(page)
       await shot(page, 'welcome', width)
     })
