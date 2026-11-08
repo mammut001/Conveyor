@@ -531,11 +531,14 @@ test('mock fixture: repo/worktree tree selection, register repo, create managed 
   await expect(page.getByText(/当前为只读工作目录/)).toBeVisible()
   await expect(page.getByRole('button', { name: '开始执行' })).toBeDisabled()
 
-  // Create a new managed worktree from the read-only CTA
-  await page.getByRole('button', { name: '+ 新建托管 Worktree' }).click()
-  const createWtForm = page.getByRole('form', { name: '为 Conveyor 新建 Worktree' })
+  // Create a new managed worktree from the read-only CTA (scoped to this repo's group:
+  // every expanded repository renders its own 「+ 新建工作目录」 button).
+  await page.getByRole('group', { name: 'Conveyor 的工作目录' })
+    .getByRole('button', { name: '+ 新建工作目录' })
+    .click()
+  const createWtForm = page.getByRole('form', { name: '为 Conveyor 新建工作目录' })
   await createWtForm.getByLabel('分支名称（可选）').fill('feat/supervisor-e2e')
-  await createWtForm.getByRole('button', { name: '创建 Worktree' }).click()
+  await createWtForm.getByRole('button', { name: '创建工作目录' }).click()
   await expect(page.getByRole('heading', { name: 'Conveyor / feat/supervisor-e2e' })).toBeVisible()
   await expect(page.getByText(/当前为只读工作目录/)).toHaveCount(0)
 
@@ -653,7 +656,7 @@ test('mock fixture: role overrides, unavailable executor blocker, explicit creat
   await page.setViewportSize(DESKTOP)
 
   // Unavailable executors that the role does not use are not offered (see the dropdown tests below)
-  const implSelect = page.getByLabel('实现角色执行器')
+  const implSelect = page.getByLabel('动手改执行器')
   await expect(implSelect.locator('option', { hasText: 'Cursor Agent' })).toHaveCount(0)
   await expect(page.getByText(/本地未安装 cursor-agent 可执行文件/)).toHaveCount(0)
 
@@ -661,8 +664,8 @@ test('mock fixture: role overrides, unavailable executor blocker, explicit creat
   await implSelect.selectOption('antigravity')
   await page.locator('.sup-role-advanced > summary').click()
   // Analyst (claude) has fetched models -> <select>; Implementer (antigravity) has no models -> <input>
-  await page.getByLabel('分析角色模型').selectOption('claude-3-5-haiku')
-  await page.getByLabel('实现角色模型').fill('gemini-3.8-flash-high')
+  await page.getByLabel('分析模型').selectOption('claude-3-5-haiku')
+  await page.getByLabel('动手改模型').fill('gemini-3.8-flash-high')
 
   // 1) Simulate lost create response: server records task, browser sees network drop, retry reuses request_id & task.id
   fixture.setLoseNextCreateResponse(true)
@@ -977,7 +980,7 @@ test('mock fixture: honest unconfigured deployment vs staged deployment progress
   // Verify no horizontal overflow on desktop and mobile (390px)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.setViewportSize(PHONE)
-  await expect(page.getByRole('button', { name: '选择仓库与 Worktree' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '选择仓库与工作目录' })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })
 
@@ -1128,7 +1131,7 @@ test('mock fixture: 执行者池 is first in the executor list, marked 推荐 wh
   await page.goto('/#code')
   await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
 
-  const analystSelect = page.getByLabel('分析角色执行器')
+  const analystSelect = page.getByLabel('分析执行器')
   const optionTexts = await analystSelect.locator('option').allTextContents()
   expect(optionTexts[0]).toBe('执行者池（自动轮换）（推荐）')
   expect(optionTexts).toContain('Claude Code')
@@ -1145,7 +1148,7 @@ test('mock fixture: unavailable 执行者池 explains the reason in Chinese on t
   await page.goto('/#code')
   await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
 
-  const analystSelect = page.getByLabel('分析角色执行器')
+  const analystSelect = page.getByLabel('分析执行器')
   await expect(analystSelect.locator('option').first()).toHaveText('执行者池（自动轮换）（不可用）')
   await expect(page.locator('.sup-role-reason').first()).toHaveText(POOL_REASON_UNAVAILABLE)
 })
@@ -1260,7 +1263,7 @@ test('mock fixture: role executor dropdowns hide unavailable executors the role 
   await page.goto('/#code')
   await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
 
-  for (const label of ['分析角色执行器', '实现角色执行器', '审查角色执行器']) {
+  for (const label of ['分析执行器', '动手改执行器', '检查执行器']) {
     const optionTexts = await page.getByLabel(label).locator('option').allTextContents()
     expect(optionTexts.join('|')).not.toContain('Cursor Agent')
     expect(optionTexts.join('|')).not.toContain('（不可用）')
@@ -1281,7 +1284,7 @@ test('mock fixture: a role still using an unavailable executor keeps it visible 
   await page.goto('/#code')
   await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
 
-  const implSelect = page.getByLabel('实现角色执行器')
+  const implSelect = page.getByLabel('动手改执行器')
   await expect(implSelect).toHaveValue('cursor_unavailable')
   await expect(implSelect.locator('option', { hasText: 'Cursor Agent' })).toHaveText('Cursor Agent（不可用）')
   await expect(page.locator('.sup-role-reason')).toHaveText(CURSOR_REASON)

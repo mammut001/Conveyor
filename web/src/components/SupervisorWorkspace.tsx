@@ -190,11 +190,13 @@ type WorktreeDataSnapshot = {
 
 const CONTEXT_STORAGE_KEY = 'conveyor-supervisor-context-v1'
 const PENDING_DISPATCH_PREFIX = 'conveyor-supervisor-pending-dispatch:v1:'
+/** N20: the one-paragraph 项目 intro stays closed once the owner has read it. */
+const PROJECT_INTRO_DISMISSED_KEY = 'conveyor-supervisor-intro-dismissed'
 
 const ROLE_META: { key: SupervisorRoleKey; label: string; hint: string }[] = [
-  { key: 'analyst', label: '分析角色', hint: '拆解目标与边界' },
-  { key: 'implementer', label: '实现角色', hint: '在隔离目录编写与自测' },
-  { key: 'reviewer', label: '审查角色', hint: '独立审查与验收判定' },
+  { key: 'analyst', label: '分析', hint: '先想清楚要改成什么样' },
+  { key: 'implementer', label: '动手改', hint: '在工作目录里改代码并自测' },
+  { key: 'reviewer', label: '检查', hint: '照验收标准逐条检查' },
 ]
 
 export const DEPLOY_STAGE_ORDER: { key: DeploymentStageKey; label: string }[] = [
@@ -519,10 +521,10 @@ export function MachineIcon({ kind }: { kind: 'laptop' | 'network' | 'server' })
 }
 
 function worktreeBadgeInfo(wt: SupervisorWorktree): { label: string; tone: 'readonly' | 'locked' | 'ready' } {
-  if (wt.is_main) return { label: '默认分支 · 只读', tone: 'readonly' }
-  if (!wt.managed) return { label: '未托管 · 只读', tone: 'readonly' }
+  if (wt.is_main) return { label: '主分支（只看）', tone: 'readonly' }
+  if (!wt.managed) return { label: '未托管（只看）', tone: 'readonly' }
   if (wt.locked || wt.active_task_id) return { label: '执行中 · 已锁定', tone: 'locked' }
-  return { label: '托管 · 可派发', tone: 'ready' }
+  return { label: '可以开始', tone: 'ready' }
 }
 
 function SupervisorRepoSidebar({
@@ -720,7 +722,7 @@ function SupervisorRepoSidebar({
                   {isCreatingHere ? (
                     <form
                       className="sup-inline-form sup-worktree-create-form"
-                      aria-label={`为 ${repo.name} 新建 Worktree`}
+                      aria-label={`为 ${repo.name} 新建工作目录`}
                       onSubmit={e => void submitCreateWorktree(e, repo.id)}
                     >
                       <div className="sup-form-field">
@@ -762,7 +764,7 @@ function SupervisorRepoSidebar({
                           className="shell-button primary"
                           disabled={Boolean(createWorktreeBusyRepoId)}
                         >
-                          {createWorktreeBusyRepoId === repo.id ? '创建中…' : '创建 Worktree'}
+                          {createWorktreeBusyRepoId === repo.id ? '创建中…' : '创建工作目录'}
                         </button>
                       </div>
                     </form>
@@ -776,7 +778,7 @@ function SupervisorRepoSidebar({
                         onOpenCreateWorktree(repo.id)
                       }}
                     >
-                      + 新建 Worktree
+                      + 新建工作目录
                     </button>
                   )}
                 </div>
@@ -788,7 +790,7 @@ function SupervisorRepoSidebar({
         {!filteredRepos.length && (
           <div className="sup-empty-tree">
             {repositories.length === 0
-              ? '还没有已注册的仓库，点击上方「+ 注册仓库」添加本地 Git 仓库路径。'
+              ? '还没有登记仓库，点上面的「+ 注册仓库」把本地 Git 仓库的路径加进来。'
               : '没有匹配的仓库或分支。'}
           </div>
         )}
@@ -835,7 +837,7 @@ export function SupervisorRoleBar({
   }
 
   return (
-    <div className="sup-roles-panel" aria-label="角色与执行器配置">
+    <div className="sup-roles-panel" aria-label="谁来干活">
       {noRoleExecutorReady && (
         <p className="sup-role-guidance" role="status">
           项目需要 Claude Code、Antigravity 或 Command Code 至少一个已安装并登录。
@@ -846,8 +848,8 @@ export function SupervisorRoleBar({
       <div className="sup-roles-grid">
         <div className="sup-role-card sup-role-card--coordinator">
           <div className="sup-role-head">
-            <span className="sup-role-title">协调对话</span>
-            <span className="sup-role-badge is-ok">主会话</span>
+            <span className="sup-role-title">讨论</span>
+            <span className="sup-role-badge is-ok">先聊方案</span>
           </div>
           <div className="sup-role-Static">
             <strong>{coordinatorExec}</strong>
@@ -863,11 +865,12 @@ export function SupervisorRoleBar({
           return (
             <div key={key} className={`sup-role-card ${!status.available ? 'is-unavailable' : ''}`}>
               <div className="sup-role-head">
-                <label htmlFor={`sup-role-exec-${key}`} className="sup-role-title" title={hint}>{label}</label>
+                <label htmlFor={`sup-role-exec-${key}`} className="sup-role-title">{label}</label>
                 <span className={`sup-role-badge ${status.available ? 'is-ok' : 'is-err'}`}>
                   {status.available ? '已就绪' : '不可用'}
                 </span>
               </div>
+              <small className="sup-role-hint">{hint}</small>
               <select
                 id={`sup-role-exec-${key}`}
                 aria-label={`${label}执行器`}
@@ -904,7 +907,7 @@ export function SupervisorRoleBar({
       </div>
 
       <details className="sup-role-advanced">
-        <summary>模型与角色高级配置（可选）</summary>
+        <summary>高级设置</summary>
         <div className="sup-role-advanced-body">
           <p className="sup-quota-disclaimer">
             说明：执行器显示「已就绪」仅代表本地适配器或命令已配置，不承诺远程模型配额一定可用；执行失败时不会静默回退到其他服务商。
@@ -1037,7 +1040,7 @@ function SupervisorRunHistory({
       {expanded && (
         <div className="sup-run-history-list" role="group" aria-label="当前工作目录运行记录列表">
           {tasks.length === 0 ? (
-            <p className="sup-muted-note">这个 Worktree 还没有任务运行记录。</p>
+            <p className="sup-muted-note">这个工作目录还没有任务运行记录。</p>
           ) : (
             tasks.map(task => {
               const isSelected = task.id === selectedTaskId
@@ -1346,7 +1349,7 @@ function SupervisorDeployView({
   } else if (!deployCaps.can_start) {
     disableReason = deployCaps.reason?.trim() || '部署运行器当前处于不可用状态，暂不能发起部署。'
   } else if (!selectedTask) {
-    disableReason = '请先在当前 Worktree 中选择或完成一项任务后再发起部署。'
+    disableReason = '请先在当前工作目录中选择或完成一项任务后再发起部署。'
   }
 
   const sourceMachine =
@@ -1494,7 +1497,7 @@ function SupervisorDeployView({
           <h4>本次部署上下文</h4>
           <div className="sup-kv-list">
             <div><span>仓库</span><strong>{repo?.name || '未选'}</strong></div>
-            <div><span>Worktree</span><strong>{worktree?.branch || '未选'}</strong></div>
+            <div><span>工作目录</span><strong>{worktree?.branch || '未选'}</strong></div>
             <div><span>关联任务</span><strong>{selectedTask?.id || activeDeployment?.task_id || '无'}</strong></div>
             <div><span>当前阶段</span><strong>{activeStageText}</strong></div>
             <div><span>总体状态</span><strong>{activeDeployment ? supStateLabel(activeDeployment.status) : '未开始'}</strong></div>
@@ -1605,6 +1608,17 @@ export function SupervisorWorkspace({
   const taskCardRef = useRef<HTMLElement>(null)
   const pendingTaskScrollRef = useRef(false)
 
+  // N20: a one-paragraph intro at the top of 项目, only while there is no repository yet.
+  // Once the owner closes it (or a repository exists) it stays out of the way.
+  const [projectIntroDismissed, setProjectIntroDismissed] = useState(() => {
+    try { return localStorage.getItem(PROJECT_INTRO_DISMISSED_KEY) === 'true' } catch { return false }
+  })
+  const dismissProjectIntro = useCallback(() => {
+    setProjectIntroDismissed(true)
+    try { localStorage.setItem(PROJECT_INTRO_DISMISSED_KEY, 'true') } catch { /* storage unavailable */ }
+  }, [])
+  const projectIntroOpen = !initialLoading && !projectIntroDismissed && repositories.length === 0
+
   const selectedRepo = useMemo(
     () => repositories.find(r => r.id === selectedRepoId) || null,
     [repositories, selectedRepoId],
@@ -1660,7 +1674,7 @@ export function SupervisorWorkspace({
       setCapabilities(capRes.value)
       setCapabilitiesError('')
     } else {
-      setCapabilitiesError(capRes.reason instanceof Error ? capRes.reason.message : '无法读取监工能力配置')
+      setCapabilitiesError(capRes.reason instanceof Error ? capRes.reason.message : '无法读取项目能力配置')
     }
 
     if (repoRes.status === 'fulfilled') {
@@ -1896,7 +1910,7 @@ export function SupervisorWorkspace({
       selectWorktreeContext(repoId, createdWt.id)
       return true
     } catch (err) {
-      setCreateWorktreeError(err instanceof Error ? err.message : '创建 Worktree 失败')
+      setCreateWorktreeError(err instanceof Error ? err.message : '新建工作目录失败')
       return false
     } finally {
       setCreateWorktreeBusyRepoId('')
@@ -2358,13 +2372,26 @@ export function SupervisorWorkspace({
       )}
 
       <div className="sup-main-column">
+        {projectIntroOpen && (
+          <section className="sup-intro" role="region" aria-label="项目是做什么的">
+            <button type="button" className="sup-intro-close" aria-label="关闭说明" onClick={dismissProjectIntro}>×</button>
+            <p>
+              「项目」把你电脑上的 Git <strong>仓库</strong>（就是项目文件夹）登记进来，再为它建出一个或多个<strong>工作目录</strong>。
+              每个工作目录是项目的一份独立副本，改动不会碰到主分支，确认后再合并。
+            </p>
+            <p>
+              要真的动手改代码，还需要一个<strong>可用的执行者</strong>（已经装好并登录）。
+              {onOpenWorkers && <> <button type="button" className="sup-intro-link" onClick={onOpenWorkers}>去执行者页</button></>}
+            </p>
+          </section>
+        )}
         <header className="sup-context-bar">
           <div className="sup-context-title-group">
             {narrowViewport && (
               <button
                 type="button"
                 className="shell-header-button sup-mobile-repo-btn"
-                aria-label="选择仓库与 Worktree"
+                aria-label="选择仓库与工作目录"
                 onClick={() => setMobileRepoDrawerOpen(true)}
               >
                 <span>仓库</span>
@@ -2419,7 +2446,7 @@ export function SupervisorWorkspace({
                 className={`sup-subnav-tab ${subTab === 'chat' ? 'active' : ''}`}
                 onClick={() => handleSubTabChange('chat')}
               >
-                工作目录对话
+                讨论
               </button>
             )}
             <button
@@ -2436,7 +2463,7 @@ export function SupervisorWorkspace({
 
         {(capabilitiesError || reposError) && (
           <div className="sup-banner sup-banner--warning" role="status">
-            <strong>部分监工接口暂未就绪</strong>
+            <strong>部分项目接口暂未就绪</strong>
             <span>{[capabilitiesError, reposError].filter(Boolean).join(' · ')}</span>
           </div>
         )}
@@ -2454,9 +2481,9 @@ export function SupervisorWorkspace({
         {!selectedRepo || !selectedWorktree ? (
           <div className="sup-empty-workspace">
             <div className="brand-mark">C</div>
-            <h3>{initialLoading ? '正在加载仓库与工作目录…' : '选择或创建一个托管 Worktree'}</h3>
+            <h3>{initialLoading ? '正在加载仓库与工作目录…' : '选择或创建一个工作目录'}</h3>
             <p>
-              在左侧选择仓库并进入独立 Worktree，即可与主对话模型讨论方案、明确派发给分析/实现/审查角色执行，并查看结果与部署状态。
+              在左侧选择仓库并进入一个工作目录，就可以在这里讨论方案、派发任务，并查看结果与部署状态。
             </p>
           </div>
         ) : subTab === 'deploy' ? (
@@ -2498,7 +2525,7 @@ export function SupervisorWorkspace({
                 <div className="sup-banner sup-banner--readonly" role="status">
                   <div className="sup-banner-text">
                     <strong>当前为只读工作目录（{selectedWorktree.is_main ? '主分支' : '未托管目录'}）</strong>
-                    <span>主工作目录与未托管目录仅支持只读查看。请新建托管 Worktree 以在隔离目录中派发任务。</span>
+                    <span>主工作目录与未托管目录仅支持只读查看。请新建工作目录，在独立副本里派发任务。</span>
                   </div>
                   <button
                     type="button"
@@ -2509,15 +2536,15 @@ export function SupervisorWorkspace({
                       if (narrowViewport) setMobileRepoDrawerOpen(true)
                     }}
                   >
-                    + 新建托管 Worktree
+                    新建工作目录
                   </button>
                 </div>
               )}
 
               {!isReadOnlyWorktree && isLockedWorktree && (
                 <div className="sup-banner sup-banner--locked" role="status">
-                  <strong>当前 Worktree 已锁定（任务执行中）</strong>
-                  <span>同一托管 Worktree 同一时间只允许一个写入任务运行，当前任务结束或取消后可派发新任务。</span>
+                  <strong>当前工作目录已锁定（任务执行中）</strong>
+                  <span>同一个工作目录同一时间只允许一个任务运行，当前任务结束或取消后可以再派发新任务。</span>
                 </div>
               )}
 
@@ -2543,8 +2570,8 @@ export function SupervisorWorkspace({
                     aria-label="任务目标"
                     placeholder={
                       isReadOnlyWorktree
-                        ? '只读工作目录不可直接派发，请先新建托管 Worktree…'
-                        : '输入要在这个 Worktree 完成的目标（例如：为 Code 页面补充仓库搜索与错误提示）…'
+                        ? '只读工作目录不能派发任务，请先新建工作目录…'
+                        : '输入要在这个工作目录完成的目标（例如：为项目页补充仓库搜索与错误提示）…'
                     }
                     rows={3}
                     value={currentDraft.goal}
@@ -2592,7 +2619,7 @@ export function SupervisorWorkspace({
 
                   <div className="sup-dispatch-footer">
                     <span className="sup-dispatch-context-tag">
-                      作用范围：<code>{selectedRepo.name}</code> / <code>{selectedWorktree.branch}</code>
+                      在这里改：<code>{selectedRepo.name}</code> / <code>{selectedWorktree.branch}</code>
                     </span>
                     <button
                       type="submit"
@@ -2720,12 +2747,12 @@ export function SupervisorWorkspace({
             <div
               className="sup-chat-pane"
               style={narrowViewport && subTab !== 'chat' ? { display: 'none' } : undefined}
-              aria-label="当前工作目录对话"
+              aria-label="讨论"
             >
               <div className="sup-chat-pane-header">
                 <div>
-                  <strong>当前 Worktree 对话</strong>
-                  <small>协调模型：{coordinatorLabel}</small>
+                  <strong>讨论</strong>
+                  <small>用来聊方案的模型：{coordinatorLabel}</small>
                 </div>
                 <span className="sup-chat-pane-badge">讨论不自动执行</span>
               </div>
@@ -2746,7 +2773,7 @@ export function SupervisorWorkspace({
                 <div className="sup-chat-unbound" role="status">
                   <strong>当前工作目录尚未绑定对话会话</strong>
                   <p>
-                    后端尚未为该 Worktree 分配 <code>chat_session_id</code>。为避免伪造虚构会话，此处不显示模拟聊天；你仍可在左侧直接填写「当前任务目标」并点击「开始执行」。
+                    后端还没有为这个工作目录分配对话会话。为避免伪造虚构会话，此处不显示模拟聊天；你仍可在左侧直接填写「当前任务目标」并点击「开始执行」。
                   </p>
                 </div>
               )}

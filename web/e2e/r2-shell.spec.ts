@@ -225,7 +225,7 @@ test('F4: settings dialog with unsaved edits shows inline confirm on Esc, Esc re
   await expect(sheet).toBeVisible()
 
   // Change model field to dirty
-  const modelInput = sheet.locator('input[placeholder="deepseek-chat"]')
+  const modelInput = sheet.locator('#provider-model')
   await modelInput.fill('deepseek-reasoner')
 
   // Press Escape

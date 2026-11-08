@@ -863,6 +863,14 @@
 .primary-interface .composer.task-composer:focus-within { border-color: #bd5c40; box-shadow: 0 0 0 3px rgba(189, 92, 64, .12); }
 .primary-interface .composer.task-composer::after { content: none; display: none; }
 .primary-interface .task-composer .composer-handoff-note { padding: 0 0 2px; color: #6b7280; font-size: 12px; }
+/* A composer slot that only explains something (a failed send, a read-only 工作目录对话):
+   no textarea, so the note takes the full width and the buttons sit on their own row. */
+.primary-interface .composer.task-composer--notice { gap: 8px; }
+.primary-interface .task-composer--notice .task-composer-error-text { color: #b42318; font-size: 13px; line-height: 1.6; }
+.primary-interface .task-composer--notice .task-composer-error-text small { display: block; margin-top: 2px; color: #6b7280; font-size: 12px; }
+.primary-interface .task-composer--notice .task-composer-readonly-text { color: #1f2328; font-size: 13px; line-height: 1.6; }
+.primary-interface .task-composer--notice .task-composer-bar { flex-wrap: wrap; row-gap: 8px; }
+.primary-interface .task-composer--notice .shell-button { min-height: 40px; padding: 8px 18px; border-radius: 8px; font-family: inherit; font-size: 14px; font-weight: 600; }
 .primary-interface .task-composer textarea {
   width: 100%;
   min-height: 48px;

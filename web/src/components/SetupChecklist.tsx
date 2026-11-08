@@ -3,6 +3,8 @@ export interface SetupChecklistProps {
   hasEligibleWorker: boolean
   modelConfigured: boolean
   hasSentFirstMessage: boolean
+  /** Every step just finished in this page: the card says so once before it goes away. */
+  allDone?: boolean
   onNavigateWorkers: () => void
   onOpenSettings: () => void
   onDismiss: () => void
@@ -13,6 +15,7 @@ export function SetupChecklist({
   hasEligibleWorker,
   modelConfigured,
   hasSentFirstMessage,
+  allDone = false,
   onNavigateWorkers,
   onOpenSettings,
   onDismiss,
@@ -22,6 +25,7 @@ export function SetupChecklist({
   const step1Done = !workersEnabled || Boolean(hasEligibleWorker)
   const step2Done = Boolean(modelConfigured)
   const step3Done = Boolean(hasSentFirstMessage)
+  const finished = allDone || (step1Done && step2Done && step3Done)
 
   return (
     <div className="setup-checklist-card" role="region" aria-label="还差几步就能用">
@@ -94,6 +98,7 @@ export function SetupChecklist({
           </div>
         </li>
       </ol>
+      {finished && <p className="setup-checklist-done" role="status">都准备好了，可以开始用。</p>}
     </div>
   )
 }

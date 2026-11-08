@@ -54,12 +54,19 @@ type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[]; r
 // Chat-only sessions stay in Chat; promoted conversations with jobs also appear in Tasks.
 const isChatSessionId = (id: string) => id.includes(':webchat-') || id.startsWith('webchat-')
 const isChatSession = (session: Session) => isChatSessionId(session.id) || (session.source_chat_id || '').startsWith('webchat-')
-const taskSessionsOnly = (items: Session[]) => items.filter(item => !isChatSession(item) || item.job_count > 0 || Boolean(item.latest_job))
+// 项目 (Supervisor) worktree conversations: read-only in chat and belong to the 项目 page.
+// They never join the 任务 / 对话 lists, so the owner is never dropped into one that
+// answers 409 (N17 / N21).
+const isSupervisorWorktreeSessionId = (id: string) => id.includes('supwt-')
+const isSupervisorWorktreeSession = (session: Session) => isSupervisorWorktreeSessionId(session.id)
+const taskSessionsOnly = (items: Session[]) => items.filter(item =>
+  !isSupervisorWorktreeSession(item) && (!isChatSession(item) || item.job_count > 0 || Boolean(item.latest_job)))
 // 对话 lists every web conversation that already has messages, including the chat-only
 // sessions the 任务 list leaves out. A session with no messages is not worth reopening,
 // so the empty state only shows when nothing was ever said.
 const chatSessionsOnly = (items: Session[]) => items.filter(item =>
-  (item.channel || 'web') === 'web' && ((item.message_count || 0) > 0 || (item.job_count || 0) > 0))
+  !isSupervisorWorktreeSession(item)
+  && (item.channel || 'web') === 'web' && ((item.message_count || 0) > 0 || (item.job_count || 0) > 0))
 type Approval = {
   id: string
   kind?: 'job' | 'tool'
@@ -248,6 +255,8 @@ export default function App() {
   const [executionOnly, setExecutionOnly] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // POST /api/tasks failed: the reason sits next to the composer, never only as a border.
+  const [submitError, setSubmitError] = useState<{ text: string; detail?: string } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState<{ text: string; detail?: string } | null>(null)
@@ -1055,7 +1064,7 @@ export default function App() {
 
   async function submit(event: FormEvent) {
     event.preventDefault(); if (!prompt.trim() || busy) return
-    setBusy(true); setError('')
+    setBusy(true); setError(''); setSubmitError(null)
     try {
       const result = await api<{ job_id: string; session_id?: string }>('/api/tasks', {
         method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSessionId || undefined, execution_only: executionOnly }),
@@ -1068,7 +1077,13 @@ export default function App() {
       if (result.session_id) setSelectedSessionId(result.session_id)
       setSelectedJobId(result.job_id || '')
       await Promise.all([refresh(), refreshTranscript()])
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Submit failed') }
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Submit failed'
+      // The server's own reason (Chinese when it has one) belongs next to the composer,
+      // not only in the banner at the top of the page (N17).
+      setSubmitError(shellErrorText(message))
+      setError(message)
+    }
     finally { setBusy(false) }
   }
   async function action(path: string, body: object = {}) {
@@ -1205,6 +1220,20 @@ export default function App() {
     } catch { /* ignore */ }
   }, [])
 
+  // N2: when the last step finishes on this page the card is shown once more, all three ticked
+  // with 「都准备好了」, so the owner actually sees ③ tick. A reload (or 关闭) hides it for good.
+  // Declared above every early return: hooks must run on every render of this component.
+  const stepsOpenAtLoadRef = useRef<boolean | null>(null)
+  const [checklistFinished, setChecklistFinished] = useState(false)
+  useEffect(() => {
+    if (!initialLoaded || checklistDismissed) return
+    // Whether the steps were still open when this page opened: only then is there a
+    // completed state worth showing once. A page that opens already finished shows nothing.
+    if (stepsOpenAtLoadRef.current === null) stepsOpenAtLoadRef.current = onboardingStepsOpen
+    if (!stepsOpenAtLoadRef.current) return
+    if (!onboardingStepsOpen) setChecklistFinished(true)
+  }, [checklistDismissed, initialLoaded, onboardingStepsOpen])
+
   // 带着记住的令牌刷新时，先显示「正在打开…」；只有真的没有令牌、或者令牌被拒了，
   // 才亮出解锁表单（连同它的错误提示）。
   if (!authenticated) {
@@ -1223,7 +1252,8 @@ export default function App() {
   }
 
   // Derived from server state on every load (no in-memory flag): the checklist stays until every step is done or it is dismissed.
-  const showChecklist = initialLoaded && !checklistDismissed && onboardingStepsOpen
+  const showChecklist = initialLoaded && !checklistDismissed
+    && (onboardingStepsOpen || (checklistFinished && stepsOpenAtLoadRef.current === true))
 
   const checklistNode = showChecklist ? (
     <SetupChecklist
@@ -1231,6 +1261,7 @@ export default function App() {
       hasEligibleWorker={hasEligibleWorker}
       modelConfigured={modelConfigured}
       hasSentFirstMessage={hasSentFirstMessage}
+      allDone={checklistFinished}
       onNavigateWorkers={() => {
         historyModeRef.current = 'push'
         setView('workers')
@@ -1626,9 +1657,38 @@ export default function App() {
                 </div>
               )}
             </div>
+            {submitError && (
+              <div className="composer task-composer task-composer--notice" role="alert">
+                <div className="composer-handoff-note task-composer-error-text">
+                  <span>{submitError.text}</span>
+                  {submitError.detail && <small>{submitError.detail}</small>}
+                </div>
+                <div className="task-composer-bar">
+                  <button type="button" className="shell-button" onClick={() => setSubmitError(null)}>知道了</button>
+                </div>
+              </div>
+            )}
+            {isSupervisorWorktreeSessionId(selectedSessionId) ? (
+              // 项目 里的工作目录对话：在这里发送只会被服务器拒绝（409）。说清楚，并给出两条出路。
+              <div className="composer task-composer task-composer--notice" role="status">
+                <div className="composer-handoff-note task-composer-readonly-text">
+                  <span>这是「项目」里的工作目录对话，请到「项目」页讨论或派发。</span>
+                </div>
+                <div className="task-composer-bar">
+                  <button type="button" className="shell-button primary" onClick={() => { historyModeRef.current = 'push'; setView('code') }}>去项目</button>
+                  <button
+                    type="button"
+                    className="shell-button"
+                    onClick={() => { selectSession('', ''); setCreatingSession(true); setPrompt(''); setSubmitError(null) }}
+                  >
+                    新建会话
+                  </button>
+                </div>
+              </div>
+            ) : (
             <form className="composer task-composer" onSubmit={submit}>
               {executionOnly && <div className="composer-handoff-note" role="status">原请求已带入任务页。你可以编辑内容，再点击发送执行。</div>}
-              <textarea aria-label="任务内容" value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={activeRefinement ? '继续说明要怎么改…' : '描述要做的事…'} rows={2} maxLength={8000} onKeyDown={event => { if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return; if (coarsePointer) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
+              <textarea aria-label="任务内容" value={prompt} onChange={event => { setPrompt(event.target.value); if (submitError) setSubmitError(null) }} placeholder={activeRefinement ? '继续说明要怎么改…' : '描述要做的事…'} rows={2} maxLength={8000} onKeyDown={event => { if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return; if (coarsePointer) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
               <div className="task-composer-bar">
                 <div className="mode-switch task-mode-switch" role="group" aria-label="运行方式">
                   <button type="button" className={mode === 'run' ? 'active' : ''} aria-pressed={mode === 'run'} title="提问：只回答问题、查资料，不修改项目文件" onClick={() => setMode('run')}>提问</button>
@@ -1638,6 +1698,7 @@ export default function App() {
                 <button className="send-button" onPointerDown={event => event.preventDefault()} onMouseDown={event => event.preventDefault()} disabled={!prompt.trim() || busy}>{busy ? '发送中…' : '发送'}</button>
               </div>
             </form>
+            )}
           </>
         )}
       </section>
@@ -2444,7 +2505,7 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
           </div>
           <div className="form-grid">
             {field('provider_name', '显示名称', <input {...control('provider_name')} autoComplete="off" placeholder="我的模型" onChange={event => update('provider_name', event.target.value)} />)}
-            {field('base_url', '接口地址', <input {...control('base_url')} {...text} type="url" inputMode="url" className="mono-input" placeholder="https://api.deepseek.com/v1" onChange={event => update('base_url', event.target.value)} />, true)}
+            {field('base_url', '接口地址', <input {...control('base_url')} {...text} type="url" inputMode="url" className="mono-input" placeholder="https://你的服务地址/v1" onChange={event => update('base_url', event.target.value)} />, true)}
             {field('model', '模型', (
               <div className="provider-model-wrapper">
                 <div className="provider-model-row">
@@ -2452,7 +2513,7 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
                     {...control('model')}
                     {...text}
                     className="mono-input"
-                    placeholder="deepseek-chat"
+                    placeholder="模型名称，例如 gpt-4o-mini"
                     list={fetchedModels.length > 0 ? 'provider-models-datalist' : undefined}
                     onChange={event => update('model', event.target.value)}
                   />
