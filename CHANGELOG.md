@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Reminders understand Chinese time phrases**: 10分钟后 / 2小时后 / 明天早上8点 / 下午3点半 / 今晚九点十五分 / 后天 10:30 (a time already past today means tomorrow).
 - **Pi backend documentation** (`docs/pi_backend.md`) and Pi variables in `.env.example`.
+- **合并到主分支 (Supervisor)**: a finished goal's changes sat uncommitted in a managed worktree with no way for the owner to take them. `GET /api/supervisor/worktrees/<id>/merge-preview` reports `can_merge` plus every blocker in Chinese, and `POST /api/supervisor/worktrees/<id>/merge` (owner-confirmed) commits the worktree's work as `Conveyor`, merges it into the repository's default branch in the main checkout with `--no-ff`, aborts and reports conflicts instead of leaving a half-merge, and records an audit row in `supervisor_merges`. Refuses a busy worktree, a main checkout on another branch or dirty, and repository config / `.gitattributes` that can execute commands; every git call runs hook-free, fsmonitor-free, unsigned and timeout-bound, and nothing is ever pushed.
 
 ### Security
 - A typed 确认 with several pending approvals in the chat no longer executes the newest one by guesswork; the owner is asked to use the card's button.

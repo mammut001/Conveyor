@@ -371,6 +371,70 @@ operator stops it, or a decision is needed from the operator.
 
 ---
 
+## 合并到主分支
+
+A finished goal leaves its changes in a *managed Supervisor worktree* (branch e.g. `goal-calc`); the owner's
+working tree stays untouched until they say so. `supervisor_merge.py` is that explicit, owner-triggered merge
+back into the repository's default branch in the **main checkout**, with the same auth, feature flag and
+`SupervisorServiceError` JSON shape as every other supervisor route.
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /api/supervisor/worktrees/<worktree_id>/merge-preview` | read-only 「可以合并吗」 report |
+| `POST /api/supervisor/worktrees/<worktree_id>/merge` | perform the merge (`200`), or `409` with a blocker code |
+
+`GET .../merge-preview` →
+
+```json
+{
+  "worktree_id": "wt-...",
+  "repo_id": "repo-...",
+  "source_branch": "goal-calc",
+  "target_branch": "main",
+  "can_merge": true,
+  "blockers": [],
+  "files": [{"path": "calc.py", "status": "M", "additions": 3, "deletions": 1}],
+  "commits_ahead": 0,
+  "has_uncommitted": true
+}
+```
+
+`POST .../merge` body: `{"confirm": true, "message": "optional, <=200 chars"}` →
+`{"merged": true, "target_branch": "main", "merge_commit": "<sha>", "files_changed": 2}`.
+`confirm` is mandatory (`400 confirm_required`); the merge itself never pushes anywhere.
+
+Rules (all enforced in code, each failure is a blocker with a Chinese message):
+
+1. Only **managed Supervisor worktrees** (under `<task root>/worktrees/supervisor`) can be merged — never the
+   main checkout itself (`unmanaged_worktree`).
+2. No active task (`has_active_task_for_worktree`) and no `running` goal on that worktree (`worktree_busy`).
+3. Target = the repository's default branch, and the main checkout must have it checked out, else
+   `target_not_checked_out` 「主工作目录当前不在 <branch> 分支上，请先切回去再合并」.
+4. The main checkout must be clean (`git status --porcelain --untracked-files=no`), else `target_dirty`
+   「主工作目录里有还没提交的改动，为了不弄乱它，先不合并」.
+5. Repository config (`git config --local --list`, plus `--worktree --list` when available) must not contain
+   keys that can run commands — `core.fsmonitor`, `core.hooksPath` (unless empty), `core.sshCommand`,
+   `core.pager`, `diff.external`, `filter.*.clean|smudge|process`, `merge.*.driver`, `diff.*.textconv|command`,
+   `credential.helper`, `gpg.program`, `gpg.*.program`, `core.editor`, `sequence.editor` — and neither
+   checkout may carry a `.gitattributes` naming a `filter=` / `merge=` / `diff=` driver
+   (`unsafe_repo_config` / `unsafe_gitattributes`).
+6. Every git call: `git --no-pager -C <path> -c core.hooksPath=/dev/null -c core.fsmonitor=false
+   -c commit.gpgsign=false -c tag.gpgsign=false -c core.editor=true …` in a scrubbed child env
+   (`supervisor_diff._git_env`: `GIT_DIR`/`GIT_WORK_TREE`/… stripped, `GIT_OPTIONAL_LOCKS=0`,
+   `GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`), 60 s timeout, never `shell=True`.
+7. Merge steps: (a) uncommitted work in the worktree is committed as `Conveyor <conveyor@localhost>`
+   (`git add -A` + `git commit --no-verify -m "<message or Conveyor：<goal title or 任务改动>>"`, the owner's
+   git config is never touched); (b) nothing ahead → `409 nothing_to_merge`; (c) in the main checkout
+   `git merge --no-ff --no-verify --no-edit -m "合并 <source_branch>（Conveyor）" <source_branch>` — on a
+   non-zero exit the merge is aborted, the main checkout is verified back at its previous HEAD and clean, and
+   `409 merge_conflict` is returned together with the conflicting paths; (d) an audit row is written to
+   `supervisor_merges` (`id`, `worktree_id`, `repo_id`, `source_branch`, `target_branch`, `merge_commit`,
+   `created_at`) in `supervisor_web.sqlite3`.
+8. Merges are serialized per repository (module-level lock registry) and hold the worktree's runtime lock for
+   the whole operation, so no task can be dispatched mid-merge.
+
+---
+
 ## Deployment Truth: Store Tracking Only
 
 The supervisor tracks deployment progress across 5 stages:

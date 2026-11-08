@@ -7,6 +7,7 @@ from typing import Any
 
 import supervisor_service as svc
 import supervisor_goals as goals_mod
+import supervisor_merge as merge_mod
 import supervisor_validation as validation_mod
 from redaction import redact_text, truncate
 
@@ -63,6 +64,11 @@ def handle_get(
 
         if len(parts) == 5 and parts[:3] == ["api", "supervisor", "repositories"] and parts[4] == "validation":
             detail = validation_mod.get_repo_validation(settings, parts[3])
+            handler._json(HTTPStatus.OK, detail)
+            return True
+
+        if len(parts) == 5 and parts[:3] == ["api", "supervisor", "worktrees"] and parts[4] == "merge-preview":
+            detail = merge_mod.build_merge_preview(settings, parts[3])
             handler._json(HTTPStatus.OK, detail)
             return True
 
@@ -147,6 +153,11 @@ def handle_post(
         if len(parts) == 5 and parts[:3] == ["api", "supervisor", "repositories"] and parts[4] == "validation":
             detail = validation_mod.set_repo_validation(settings, parts[3], body.get("selected"))
             handler._json(HTTPStatus.OK, detail)
+            return True
+
+        if len(parts) == 5 and parts[:3] == ["api", "supervisor", "worktrees"] and parts[4] == "merge":
+            result = merge_mod.merge_worktree(settings, parts[3], body)
+            handler._json(HTTPStatus.OK, result)
             return True
 
         if path == "/api/supervisor/tasks":
