@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import agent_memory
 import agent_supervisor as ags
 import supervisor_goals as goals
 import supervisor_service as svc
@@ -1244,6 +1245,213 @@ class SupervisorGoalTests(unittest.TestCase):
             if "evaluator returned failure:" in line:
                 suffix = line.split("evaluator returned failure:", 1)[1].strip()
                 self.assertLessEqual(len(suffix), goals.MAX_REASON_CHARS)
+
+    # ------------------------------------------------------------------
+    # Goal lessons -> agent_memory (scope repo:<repo_id>, source untrusted)
+    # ------------------------------------------------------------------
+
+    def test_lessons_stored_only_when_goal_achieved_with_untrusted_source(self) -> None:
+        scope = f"repo:{self.repo_id}"
+        goal = self._create_goal(max_iterations=4)
+
+        # Round 1: decision=continue with lessons -> must NOT store notes.
+        self._advance()
+        t1 = self._current_task_id(goal["id"])
+        self._set_task_state(t1, "completed")
+        self._respond_with(
+            {
+                "decision": "continue",
+                "reason": "还要补测试",
+                "next_prompt": "补齐单元测试",
+                "question": "",
+                "summary": "第 1 轮完成代码，还需补测试。",
+                "lessons": ["继续轮次里的经验不该提前落库"],
+            }
+        )
+        self._advance()
+        self.assertEqual(self._goal(goal["id"])["state"], "running")
+        self.assertEqual(agent_memory.list_notes(self.settings, scope), [])
+
+        # Round 2: task failed, evaluator claims achieved -> downgraded to continue, must NOT store notes.
+        t2 = self._current_task_id(goal["id"])
+        self._set_task_state(t2, "failed")
+        self._respond_with(
+            {
+                "decision": "achieved",
+                "reason": "误判达成",
+                "next_prompt": "修复失败的任务",
+                "question": "",
+                "summary": "第 2 轮失败。",
+                "lessons": ["降级轮次里的经验也不该落库"],
+            }
+        )
+        self._advance()
+        self.assertEqual(self._goal(goal["id"])["state"], "running")
+        self.assertEqual(agent_memory.list_notes(self.settings, scope), [])
+
+        # Round 3: task completed, decision=achieved -> lessons ARE stored as untrusted.
+        t3 = self._current_task_id(goal["id"])
+        self._set_task_state(t3, "completed")
+        self._respond_with(
+            {
+                "decision": "achieved",
+                "reason": "全部完成",
+                "next_prompt": "",
+                "question": "",
+                "summary": "第 3 轮已达成。",
+                "lessons": [
+                    "后端单测使用 python3 -m unittest discover -s tests 运行",
+                    "所有面向用户的提示文案必须使用简体中文",
+                    "不要直接修改主工作区，改动都在托管 worktree 里完成",
+                ],
+            }
+        )
+        self._advance()
+        self.assertEqual(self._goal(goal["id"])["state"], "achieved")
+        notes = agent_memory.list_notes(self.settings, scope)
+        self.assertEqual(
+            [n["text"] for n in notes],
+            [
+                "后端单测使用 python3 -m unittest discover -s tests 运行",
+                "所有面向用户的提示文案必须使用简体中文",
+                "不要直接修改主工作区，改动都在托管 worktree 里完成",
+            ],
+        )
+        for note in notes:
+            self.assertEqual(note["scope"], scope)
+            self.assertEqual(note["source"], "untrusted")
+
+    def test_lessons_not_stored_on_give_up_or_ask_user(self) -> None:
+        scope = f"repo:{self.repo_id}"
+        goal = self._create_goal(max_iterations=3)
+        self._advance()
+        t1 = self._current_task_id(goal["id"])
+        self._set_task_state(t1, "completed")
+        self._respond_with(
+            {
+                "decision": "ask_user",
+                "reason": "需要确认",
+                "next_prompt": "",
+                "question": "是否保留旧接口？",
+                "summary": "等待确认。",
+                "lessons": ["ask_user 时不落库"],
+            }
+        )
+        self._advance()
+        self.assertEqual(self._goal(goal["id"])["state"], "waiting_user")
+        self.assertEqual(agent_memory.list_notes(self.settings, scope), [])
+
+        goals.reply_goal(None, self.settings, goal["id"], {"message": "不用保留旧接口"})
+        self._advance()
+        t2 = self._current_task_id(goal["id"])
+        self._set_task_state(t2, "completed")
+        self._respond_with(
+            {
+                "decision": "give_up",
+                "reason": "外部依赖缺失",
+                "next_prompt": "",
+                "question": "",
+                "summary": "放弃目标。",
+                "lessons": ["give_up 时也不落库"],
+            }
+        )
+        self._advance()
+        self.assertEqual(self._goal(goal["id"])["state"], "failed")
+        self.assertEqual(agent_memory.list_notes(self.settings, scope), [])
+
+    def test_lessons_caps_duplicates_and_secrets_ignored_safely(self) -> None:
+        scope = f"repo:{self.repo_id}"
+        agent_memory.add_note(self.settings, scope, "已有的仓库约定", source="owner")
+
+        goal = self._create_goal()
+        self._advance()
+        t1 = self._current_task_id(goal["id"])
+        self._set_task_state(t1, "completed")
+
+        secret_lesson = "测试 token 是 sk-abcdefghijklmnopqrstuvwxyz012345"
+        overlong_lesson = "长" * 201
+        valid_lesson = "每次改动后跑 pytest -q"
+        extra_4th_lesson = "第四条超出每轮 3 条上限不该写入"
+
+        self._respond_with(
+            {
+                "decision": "achieved",
+                "reason": "已完成",
+                "next_prompt": "",
+                "question": "",
+                "summary": "达成。",
+                "lessons": [
+                    secret_lesson,
+                    overlong_lesson,
+                    valid_lesson,
+                    extra_4th_lesson,
+                ],
+            }
+        )
+        with self.assertLogs(goals.log, level="WARNING") as cm:
+            self._advance()
+
+        self.assertEqual(self._goal(goal["id"])["state"], "achieved")
+        joined_logs = "\n".join(cm.output)
+        self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz012345", joined_logs)
+
+        notes = agent_memory.list_notes(self.settings, scope)
+        self.assertEqual([n["text"] for n in notes], ["已有的仓库约定", valid_lesson])
+        self.assertEqual(notes[0]["source"], "owner")
+        self.assertEqual(notes[1]["source"], "untrusted")
+
+        # Now fill the repo scope to 2200 chars and verify notes_full is ignored safely
+        # and duplicate lessons do not fail the goal.
+        for n in list(agent_memory.list_notes(self.settings, scope)):
+            agent_memory.remove_note(self.settings, n["id"])
+        for idx in range(4):
+            agent_memory.add_note(self.settings, scope, str(idx) * 500, source="owner")
+        agent_memory.add_note(self.settings, scope, "z" * 200, source="owner")
+        self.assertEqual(agent_memory.used_chars(self.settings, scope), 2200)
+
+        goal2 = self._create_goal()
+        self._advance()
+        t2 = self._current_task_id(goal2["id"])
+        self._set_task_state(t2, "completed")
+        self._respond_with(
+            {
+                "decision": "achieved",
+                "reason": "容量满时仍达成",
+                "next_prompt": "",
+                "question": "",
+                "summary": "达成。",
+                "lessons": ["容量已满时新增的经验", "z" * 200],
+            }
+        )
+        with self.assertLogs(goals.log, level="WARNING") as cm2:
+            self._advance()
+        self.assertEqual(self._goal(goal2["id"])["state"], "achieved")
+        self.assertTrue(any("notes_full" in line for line in cm2.output))
+        self.assertEqual(agent_memory.used_chars(self.settings, scope), 2200)
+
+    def test_evaluator_without_lessons_or_with_non_list_lessons_still_works(self) -> None:
+        scope = f"repo:{self.repo_id}"
+        for idx, lessons_val in enumerate((None, "not-a-list", [None, 123, "   ", "单条有效经验", "单条有效经验"])):
+            goal = self._create_goal()
+            self._advance()
+            tid = self._current_task_id(goal["id"])
+            self._set_task_state(tid, "completed")
+            payload: dict[str, Any] = {
+                "decision": "achieved",
+                "reason": f"完成 {idx}",
+                "next_prompt": "",
+                "question": "",
+                "summary": f"达成 {idx}",
+            }
+            if lessons_val is not None:
+                payload["lessons"] = lessons_val
+            self._respond_with(payload)
+            self._advance()
+            self.assertEqual(self._goal(goal["id"])["state"], "achieved")
+
+        notes = agent_memory.list_notes(self.settings, scope)
+        self.assertEqual([n["text"] for n in notes], ["单条有效经验"])
+        self.assertEqual(notes[0]["source"], "untrusted")
 
 
 if __name__ == "__main__":

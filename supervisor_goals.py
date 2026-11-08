@@ -77,6 +77,8 @@ MAX_EVAL_ITERATIONS = MAX_MAX_ITERATIONS
 MIN_EXTEND_ROUNDS = 1
 MAX_EXTEND_ROUNDS = 10
 MAX_EXTEND_MESSAGE_CHARS = 2000
+MAX_LESSON_ITEMS = 3
+MAX_LESSON_CHARS = 200
 
 FIRST_ITERATION_NOTE = "这是目标的第 1 轮。"
 
@@ -1332,12 +1334,14 @@ def _build_eval_prompt(
         "请根据「目标」和「历史轮次」判断用户期望的结果是否已经达成。",
         "只输出一个 JSON 对象：不要输出任何解释文字，不要使用 Markdown 代码块。",
         'JSON 字段：{"decision": "continue"|"achieved"|"ask_user"|"give_up", '
-        '"reason": "...", "next_prompt": "...", "question": "...", "summary": "..."}',
+        '"reason": "...", "next_prompt": "...", "question": "...", "summary": "...", '
+        '"lessons": ["..."]}',
         "- decision=achieved 仅当最新一轮任务状态为 completed 且确实实现了目标；",
         "- decision=continue 必须在 next_prompt 里给出下一轮的具体中文指令；",
         "- decision=ask_user 必须在 question 里给出需要用户决策的中文问题；",
         "- decision=give_up 表示目标无法达成，reason 说明原因；",
-        "- summary 是一段中文进展摘要（当前进展、还差什么）。",
+        "- summary 是一段中文进展摘要（当前进展、还差什么）；",
+        "- lessons（可选）：最多 3 条简短字符串（每条 <= 200 字），记录本轮学到的关于这个仓库的长期事实（测试怎么跑、代码约定、常见坑），不要写任务进度。",
         "",
         f"目标标题：{goal['title']}",
         f"最大轮次：{goal['max_iterations']}（已用 {len(iterations)} 轮）",
@@ -1395,7 +1399,7 @@ def _parse_decision(raw_output: Any) -> dict[str, Any] | None:
     return None
 
 
-def _normalize_decision(parsed: dict[str, Any] | None) -> dict[str, str]:
+def _normalize_decision(parsed: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         return {
             "decision": "",
@@ -1403,6 +1407,7 @@ def _normalize_decision(parsed: dict[str, Any] | None) -> dict[str, str]:
             "next_prompt": "",
             "question": "",
             "summary": "",
+            "lessons": [],
         }
     raw_decision = str(parsed.get("decision") or "").strip().lower()
     if raw_decision not in DECISIONS:
@@ -1416,13 +1421,84 @@ def _normalize_decision(parsed: dict[str, Any] | None) -> dict[str, str]:
             value = json.dumps(value, ensure_ascii=False)
         return redact_text(value).strip()
 
+    raw_lessons = parsed.get("lessons")
+    lessons: list[Any] = list(raw_lessons) if isinstance(raw_lessons, list) else []
+
     return {
         "decision": raw_decision,
         "reason": _text("reason"),
         "next_prompt": _text("next_prompt"),
         "question": _text("question"),
         "summary": _text("summary"),
+        "lessons": lessons,
     }
+
+
+def _store_goal_lessons(settings: Any, goal: dict[str, Any], raw_lessons: Any) -> None:
+    """Persist up to 3 short repository lessons when a goal ends as achieved.
+
+    Model output derived from repository content is marked ``source="untrusted"``.
+    Duplicates, cap overflows, secret rejections, and storage errors are skipped
+    silently (logging a redacted warning) and never fail the goal.
+    """
+    if not isinstance(raw_lessons, list) or not raw_lessons:
+        return
+    repo_id = str(goal.get("repo_id") or "").strip()
+    if not repo_id:
+        return
+    try:
+        import agent_memory
+    except Exception:
+        return
+    if getattr(settings, "agent_notes_enabled", None) is False:
+        return
+    scope = f"{agent_memory.REPO_PREFIX}{repo_id}"
+    if len(raw_lessons) > MAX_LESSON_ITEMS:
+        log.warning(
+            "goal %s: evaluator returned %d lessons; capping to %d",
+            goal.get("id"),
+            len(raw_lessons),
+            MAX_LESSON_ITEMS,
+        )
+    seen: set[str] = set()
+    count = 0
+    for item in raw_lessons:
+        if count >= MAX_LESSON_ITEMS:
+            break
+        if not isinstance(item, str):
+            continue
+        count += 1
+        text = item.strip()
+        if not text:
+            continue
+        if len(text) > MAX_LESSON_CHARS:
+            log.warning(
+                "goal %s: skipping lesson over %d chars (%d chars): %s",
+                goal.get("id"),
+                MAX_LESSON_CHARS,
+                len(text),
+                truncate(redact_text(text), 120),
+            )
+            continue
+        norm = " ".join(text.split())
+        if norm in seen:
+            continue
+        seen.add(norm)
+        try:
+            agent_memory.add_note(settings, scope, text, source="untrusted")
+        except agent_memory.AgentMemoryError as exc:
+            log.warning(
+                "goal %s: skipping lesson (%s): %s",
+                goal.get("id"),
+                exc.code,
+                truncate(redact_text(text), 120),
+            )
+        except Exception as exc:
+            log.warning(
+                "goal %s: failed to store lesson (%s)",
+                goal.get("id"),
+                type(exc).__name__,
+            )
 
 
 def _prepare_evaluator_call(
@@ -1725,6 +1801,7 @@ def _apply_evaluation_decision(
             settings, goal_id, n,
             decision=DECISION_ACHIEVED, reason=reason, task_state=state,
         )
+        _store_goal_lessons(settings, goal, decision.get("lessons"))
         _finish_goal(
             settings, goal, GOAL_ACHIEVED,
             summary=summary,
