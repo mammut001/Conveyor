@@ -633,7 +633,24 @@ test('mock fixture: the 目标 tab shows no English merge/confirm words', async 
 
   const pane = page.locator('.sup-goals-scroll')
   await expect(pane).toBeVisible()
-  const visibleText = await pane.innerText()
+  // 文件路径是数据不是界面用词（mock 里有 SupervisorMerge.tsx 这种名字）：先把改动文件
+  // 列表的行和逐行差异整块摘掉，再收剩下的可见文字，保证查的是界面文案本身。
+  const visibleText = await pane.evaluate(paneEl => {
+    const clone = paneEl.cloneNode(true) as HTMLElement
+    clone
+      .querySelectorAll(
+        [
+          // ChangedFileList（TaskParts.tsx）：改动文件列表的行与路径
+          '.changed-files', '.changed-file', '.changed-file-path', '.changed-file-name', '.changed-file-dir',
+          // DiffBlocks（SupervisorDiff.tsx）：折叠的逐文件差异行与路径
+          '.sup-changes-files', '.sup-changes-file', '.sup-changes-file-path',
+          // DiffBody / DiffStat（TaskParts.tsx）：逐行差异与 +/- 统计
+          '.diff-body', '.diff-lines', '.diff-line', '.diff-truncated', '.diff-stat',
+        ].join(', '),
+      )
+      .forEach(node => node.remove())
+    return clone.innerText
+  })
   expect(visibleText).not.toMatch(/merge/i)
   expect(visibleText).not.toMatch(/confirm/i)
   expect(visibleText).not.toMatch(/worktree/i)
