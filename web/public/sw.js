@@ -47,18 +47,25 @@ self.addEventListener('push', (event) => {
   let data
   try { data = event.data.json() } catch { return }
   if (!data || typeof data.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(data.id)) return
-  event.waitUntil(self.registration.showNotification('Conveyor needs your review', {
-    tag: 'conveyor-review-' + data.id,
-    data: { id: data.id },
+  // Goal pushes carry a generic Chinese title (the goal text never leaves the machine).
+  const kind = data.kind === 'goal' ? 'goal' : 'review'
+  const title = kind === 'goal'
+    ? (typeof data.title === 'string' && data.title ? data.title : 'Conveyor：目标需要你看一下')
+    : 'Conveyor needs your review'
+  event.waitUntil(self.registration.showNotification(title, {
+    tag: 'conveyor-' + kind + '-' + data.id,
+    data: { id: data.id, kind: kind },
     icon: '/icon-192.png',
   }))
 })
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const id = event.notification.data?.id
+  const data = event.notification.data || {}
+  const id = data.id
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return
   // Deep link only; approval decisions ALWAYS require bearer-authenticated UI.
-  const url = '/?approval=' + encodeURIComponent(id) + '#approvals'
+  // A goal needs the owner on the 项目 page, not the approvals list.
+  const url = data.kind === 'goal' ? '/#code' : '/?approval=' + encodeURIComponent(id) + '#approvals'
   event.waitUntil((async () => {
     const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
     for (const client of clients) {

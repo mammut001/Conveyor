@@ -14,6 +14,10 @@ Design contract (see docs/agent-supervisor.md 「目标闭环（goals）」):
   scope, role-override and worktree-lock validation is reused, never bypassed.
 - The evaluator (coordinator chat model) only *proposes* a decision; the hard
   rules in this module are enforced in code and never trusted from the model.
+- When a goal reaches `waiting_user` / `achieved` / `exhausted` / `failed` the owner is
+  told on the channels Conveyor already has (`goal_notify.notify_goal_change`,
+  non-blocking and deduplicated per transition). `stopped` is silent: the owner
+  stopped the goal themselves.
 - All user-facing strings (question, summary, errors) are Simplified Chinese.
 """
 from __future__ import annotations
@@ -32,6 +36,8 @@ from typing import Any
 import agent_supervisor as ags
 import supervisor_diff as diff_mod
 import supervisor_service as svc
+from goal_notify import NOTIFY_STATES as GOAL_NOTIFY_STATES
+from goal_notify import notify_goal_change
 from redaction import redact_text, truncate
 
 log = logging.getLogger("conveyor.supervisor_goals")
@@ -123,6 +129,16 @@ CREATE TABLE IF NOT EXISTS supervisor_goal_iterations (
 );
 CREATE INDEX IF NOT EXISTS idx_sup_goals_state ON supervisor_goals(state);
 CREATE INDEX IF NOT EXISTS idx_sup_goal_iters_goal ON supervisor_goal_iterations(goal_id, n);
+
+-- goal_notify.py: which (goal, state, updated_at) transitions the owner was already
+-- told about. Survives restarts, so a second tick never repeats a notification.
+CREATE TABLE IF NOT EXISTS supervisor_goal_notifications (
+    goal_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    sent_at TEXT NOT NULL,
+    PRIMARY KEY (goal_id, state, updated_at)
+);
 """
 
 
@@ -568,7 +584,7 @@ def reply_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) -
         message = redact_text(raw_message).strip()
 
     if achieved:
-        _update_goal(
+        updated = _update_goal(
             settings,
             goal_id,
             state=GOAL_ACHIEVED,
@@ -576,6 +592,7 @@ def reply_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) -
             question="",
             updated_at=_utc_now(),
         )
+        notify_goal_change(settings, updated, GOAL_ACHIEVED)
         svc.ensure_server_worker(server, settings, wake=True)
         return get_goal(settings, goal_id)
 
@@ -799,6 +816,10 @@ def _finish_goal(
         updated_at=_utc_now(),
     )
     log.info("goal %s -> %s (%s)", goal["id"], state, updated.get("stop_reason") or updated.get("question") or "")
+    # Tell the owner on Telegram / Feishu / Web Push. Non-blocking and idempotent;
+    # `stopped` is skipped because the owner stopped the goal themselves.
+    if state in GOAL_NOTIFY_STATES:
+        notify_goal_change(settings, updated, state)
     return updated
 
 
