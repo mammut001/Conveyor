@@ -55,6 +55,8 @@ export type InboxPanelProps = {
   onUnreadChange?: (count: number) => void;
   onApprovalDecided?: () => void;
   webhooksEnabled?: boolean;
+  /** The 定时任务 feature flag: when it is off the page says so instead of calling the API. */
+  routinesEnabled?: boolean;
   /** New routines are created for this agent and report into its conversation. */
   agentId?: string;
   agentName?: string;
@@ -147,7 +149,7 @@ const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 const MINUTES = Array.from({ length: 12 }, (_, step) => step * 5);
 const pad2 = (value: number) => String(value).padStart(2, '0');
 
-export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksEnabled, agentId, agentName }: InboxPanelProps) {
+export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksEnabled, routinesEnabled = true, agentId, agentName }: InboxPanelProps) {
   const [disabled, setDisabled] = useState(false);
   const disabledRef = useRef(false);
   const [items, setItems] = useState<InboxItem[]>([]);
@@ -243,12 +245,19 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
   }, [token]);
 
   useEffect(() => {
+    // The feature is off: the page says so without asking the server (no 409 in the console).
+    if (!routinesEnabled) {
+      disabledRef.current = true;
+      setDisabled(true);
+      setLoaded({ inbox: true, routines: true });
+      return;
+    }
     void fetchInbox();
     void fetchRoutines();
-  }, [fetchInbox, fetchRoutines]);
+  }, [fetchInbox, fetchRoutines, routinesEnabled]);
 
   useEffect(() => {
-    if (disabled || disabledRef.current) return;
+    if (disabled || disabledRef.current || !routinesEnabled) return;
     const timer = window.setInterval(() => {
       if (disabledRef.current) return;
       void fetchInbox();

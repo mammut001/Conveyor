@@ -23,7 +23,7 @@ import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
 import { dropApproval, isStale, shouldRefreshForEvent } from './approvalFreshness'
 
-import { mergeJobEvents, type JobEvent as EventItem } from './jobEvents'
+import { mergeJobEvents, streamedText, type JobEvent as EventItem } from './jobEvents'
 import { CONNECTION_LABELS, LockConfirmDialog, SHORTCUT_PREFIX, ShellIcon, VIEW_LABELS, VIEW_SUBTITLES, findVisibleComposer, isTypingTarget, shellErrorText, urlForView, useMediaQuery, viewFromLocation, type ConnectionState, type ShellView } from './ux/shellNav'
 import { ChangedFileList, ClampedText, DiffBody, DiffStat, ToolCallCard } from './components/TaskParts'
 import { SetupChecklist } from './components/SetupChecklist'
@@ -55,6 +55,11 @@ type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[]; r
 const isChatSessionId = (id: string) => id.includes(':webchat-') || id.startsWith('webchat-')
 const isChatSession = (session: Session) => isChatSessionId(session.id) || (session.source_chat_id || '').startsWith('webchat-')
 const taskSessionsOnly = (items: Session[]) => items.filter(item => !isChatSession(item) || item.job_count > 0 || Boolean(item.latest_job))
+// 对话 lists every web conversation that already has messages, including the chat-only
+// sessions the 任务 list leaves out. A session with no messages is not worth reopening,
+// so the empty state only shows when nothing was ever said.
+const chatSessionsOnly = (items: Session[]) => items.filter(item =>
+  (item.channel || 'web') === 'web' && ((item.message_count || 0) > 0 || (item.job_count || 0) > 0))
 type Approval = {
   id: string
   kind?: 'job' | 'tool'
@@ -212,6 +217,8 @@ export default function App() {
   const [tokenDraft, setTokenDraft] = useState('')
   const [authenticated, setAuthenticated] = useState(false)
   const [sessions, setSessions] = useState<Session[]>([])
+  // 对话 sidebar rows: web conversations that already have messages (chat-only ones included).
+  const [chatSessions, setChatSessions] = useState<Session[]>([])
   const [anySessionHasMessages, setAnySessionHasMessages] = useState(false)
   const [jobs, setJobs] = useState<Job[]>([])
   const [selectedSessionId, setSelectedSessionId] = useState(() => sessionStorage.getItem('conveyor-selected-session') || '')
@@ -251,6 +258,11 @@ export default function App() {
   const [inboxUnread, setInboxUnread] = useState(0)
   const [approvalInboxCount, setApprovalInboxCount] = useState(0)
   const [chatDraft, setChatDraft] = useState('')
+  // 对话: which conversation the panel shows, and the one a sidebar row asked it to open.
+  const [chatSessionId, setChatSessionId] = useState('')
+  const [chatOpenRequest, setChatOpenRequest] = useState<{ id: string; nonce: number } | null>(null)
+  // A message sent from 对话 right now: checklist step ③ ticks before the next poll.
+  const [chatMessageSent, setChatMessageSent] = useState(false)
   const [realtimeState, setRealtimeState] = useState<'connecting' | 'live' | 'reconnecting'>('connecting')
   const sessionDetailFetchGen = useRef(0)
   const transcriptRequestRef = useRef<{ sessionId: string; generation: number } | null>(null)
@@ -568,6 +580,20 @@ export default function App() {
     setTranscript([])
   }, [])
 
+  // The 会话 sidebar serves both surfaces: 任务 keeps its task runs (chat-only
+  // conversations live in 对话), 对话 lists every web conversation with messages.
+  const sidebarSessions = view === 'chat' ? chatSessions : sessions
+  const sidebarActiveId = view === 'chat' ? chatSessionId : selectedSessionId
+  const openConversation = useCallback((session: Session) => {
+    if (view === 'chat' && !agentState.enabled) {
+      // 对话 reopens the conversation in the chat panel itself, with its messages.
+      // A nonce makes a repeated click on the same row a fresh request.
+      setChatOpenRequest(previous => ({ id: session.id, nonce: (previous?.nonce ?? 0) + 1 }))
+      return
+    }
+    selectSession(session.id, session.latest_job?.id)
+  }, [agentState.enabled, selectSession, view])
+
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     if (!token || isLockedRef.current) throw new DOMException('Aborted', 'AbortError')
     const signal = init?.signal || pollAbortRef.current.signal
@@ -593,6 +619,7 @@ export default function App() {
       }
       void api<{ sessions: Session[] }>('/api/sessions').then(data => {
         const taskSessions = taskSessionsOnly(data.sessions)
+        setChatSessions(chatSessionsOnly(data.sessions))
         setSessions(taskSessions)
         if (selectedSessionId === sessionId && taskSessions[0]) {
           selectSession(taskSessions[0].id, taskSessions[0].latest_job?.id)
@@ -624,6 +651,7 @@ export default function App() {
       const taskSessions = taskSessionsOnly(sessionData.sessions)
       // 对话 (webchat) sessions are filtered out of the 任务 list, but a message there still counts as the first message.
       setAnySessionHasMessages(sessionData.sessions.some(s => (s.message_count || 0) > 0 || (s.job_count || 0) > 0))
+      setChatSessions(chatSessionsOnly(sessionData.sessions))
       setSessions(taskSessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setTokenDraft(''); setError('')
       setAgentState(agentData)
@@ -673,6 +701,13 @@ export default function App() {
       setError(reason instanceof Error ? reason.message : 'Could not connect')
     }
   }, [api, creatingSession, selectedJobId, selectedSessionId, token])
+
+  // The chat panel reports the conversation it is showing (restored, opened or new),
+  // so the 对话 sidebar can highlight it and the session list stays current.
+  const handleChatSessionChange = useCallback((sessionId: string) => {
+    setChatSessionId(sessionId)
+    void refresh()
+  }, [refresh])
 
   const refreshTranscript = useCallback(async () => {
     if (selectedSessionId !== transcriptSessionRef.current) return
@@ -934,10 +969,11 @@ export default function App() {
   const changesOutcomeNow = changesResult?.jobId === changesJobId ? changesResult.outcome : changesEventOutcome
   const liveAssistantText = useMemo(() => {
     if (!selectedJob || terminalJobState(selectedJob.state)) return ''
-    return events
+    // Ordered concatenation of the deltas: a cumulative snapshot replaces what came
+    // before it instead of being appended (Pi re-sends the whole answer so far).
+    return streamedText(events
       .filter(item => item.kind === 'assistant.delta')
-      .map(item => String(item.payload.text || ''))
-      .join('')
+      .map(item => String(item.payload.text || '')))
   }, [events, selectedJob])
   // A failed/cancelled run that a newer run has replaced is history: it lives in the run list,
   // not in the badge or notice above the newer conversation.
@@ -1001,6 +1037,9 @@ export default function App() {
     setMode(sent.mode)
   }, [selectedJob])
   const coarsePointer = useMediaQuery('(pointer: coarse)')
+  // A phone keyboard has no Enter key: the composer hint drops that part on narrow screens too.
+  const narrowComposer = useMediaQuery('(max-width: 640px)')
+  const touchComposer = coarsePointer || narrowComposer
 
   async function submit(event: FormEvent) {
     event.preventDefault(); if (!prompt.trim() || busy) return
@@ -1107,13 +1146,19 @@ export default function App() {
       w.enabled && w.installed && w.runnable && w.auth !== 'needs_login' && w.quota?.state !== 'cooling'
     ))
   )
+  // Step ③ ticks from data that survives a reload (any session with messages, or a
+  // job) plus the message being sent right now, so it never depends on one poll.
   const hasSentFirstMessage = Boolean(
+    chatMessageSent ||
     anySessionHasMessages ||
     (sessions && sessions.length > 0 && sessions.some(s => (s.message_count || 0) > 0 || (s.job_count || 0) > 0)) ||
     (jobs && jobs.length > 0) ||
     (transcript && transcript.length > 0)
   )
   const hasNoUsableWay = Boolean(initialLoaded && !modelConfigured && (!workersEnabled || !hasEligibleWorker))
+  // ① only asks for work when the 执行者 feature is on; otherwise the owner cannot act on it.
+  const executorStepDone = !workersEnabled || hasEligibleWorker
+  const onboardingStepsOpen = Boolean(hasNoUsableWay || !executorStepDone || !modelConfigured || !hasSentFirstMessage)
 
   const ONBOARDING_DISMISSED_KEY = 'conveyor-onboarding-dismissed'
   const ONBOARDING_HEALTHY_KEY = 'conveyor-onboarding-healthy'
@@ -1154,8 +1199,8 @@ export default function App() {
     }}
   />
 
-  // Derived from server state on every load (no in-memory flag): the checklist stays until the first message is sent or it is dismissed.
-  const showChecklist = initialLoaded && !checklistDismissed && (hasNoUsableWay || !hasSentFirstMessage)
+  // Derived from server state on every load (no in-memory flag): the checklist stays until every step is done or it is dismissed.
+  const showChecklist = initialLoaded && !checklistDismissed && onboardingStepsOpen
 
   const checklistNode = showChecklist ? (
     <SetupChecklist
@@ -1183,8 +1228,12 @@ export default function App() {
       setView('tasks')
     },
     onApprovalDecided: () => { void refresh(); void fetchApprovalInboxCount() },
-    onSessionChange: refresh, initialInput: chatDraft,
+    onSessionChange: handleChatSessionChange, initialInput: chatDraft,
     onInitialInputConsumed: () => setChatDraft(''),
+    // A 会话 sidebar row in 对话 asks the panel to open that conversation.
+    openSessionRequest: chatOpenRequest,
+    // Sending from 对话 counts as the first message immediately (step ③ of the checklist).
+    onMessageSent: () => setChatMessageSent(true),
     setupChecklist: view === 'chat' ? checklistNode : undefined,
   }
 
@@ -1295,13 +1344,13 @@ export default function App() {
           : <>
         <div className="panel-heading session-list-heading"><h2>会话</h2><button type="button" className="agent-new-btn" onClick={() => { selectSession('', ''); setCreatingSession(true); setPrompt(''); setSessionsDrawerOpen(false); }} aria-label="新建会话" title="新建会话"><span aria-hidden="true">+</span> 新建</button>{listDrawerClose}</div>
         <div className="session-list">
-          {sessions.map(session => (
+          {sidebarSessions.map(session => (
             <div key={session.id} className="session-item-row">
               <button
-                className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`}
+                className={`session-item ${session.id === sidebarActiveId ? 'active' : ''}`}
                 title={sessionLabel(session)}
-                aria-pressed={session.id === selectedSessionId}
-                onClick={() => { selectSession(session.id, session.latest_job?.id); setSessionsDrawerOpen(false); }}
+                aria-pressed={session.id === sidebarActiveId}
+                onClick={() => { openConversation(session); setSessionsDrawerOpen(false); }}
               >
                 <span className={`status-rail ${session.latest_job?.state || ''}`} />
                 <span>
@@ -1320,7 +1369,7 @@ export default function App() {
               </button>
             </div>
           ))}
-          {!sessions.length && <Empty text="还没有会话，点“新建”开始。" />}
+          {!sidebarSessions.length && <Empty text="还没有会话，点“新建”开始。" />}
         </div>
           </>}
         <QueueSummary states={system?.queue.states} />
@@ -1389,6 +1438,7 @@ export default function App() {
             agentName={selectedAgent?.name}
             token={token}
             webhooksEnabled={Boolean(system?.features?.webhooks)}
+            routinesEnabled={Boolean(system?.features?.routines)}
             onUnreadChange={setInboxUnread}
             onApprovalDecided={() => {
               void refresh()
@@ -1561,7 +1611,7 @@ export default function App() {
                   <button type="button" className={mode === 'run' ? 'active' : ''} aria-pressed={mode === 'run'} title="提问：只回答问题、查资料，不修改项目文件" onClick={() => setMode('run')}>提问</button>
                   <button type="button" className={mode === 'fix' ? 'active' : ''} aria-pressed={mode === 'fix'} title="改代码：在一份隔离的项目副本里修改。完成后你先查看差异，再决定是否应用改动。" onClick={() => setMode('fix')}>改代码</button>
                 </div>
-                <span className="task-composer-hint">{mode === 'fix' ? '在隔离副本里改，看过差异再应用' : coarsePointer ? '回车换行，点「发送」提交' : <>Enter 发送<span className="chat-hint-newline"> · Shift + Enter 换行</span></>}</span>
+                <span className="task-composer-hint">{mode === 'fix' ? '在隔离副本里改，看过差异再应用' : touchComposer ? '点「发送」提交' : <>Enter 发送<span className="chat-hint-newline"> · Shift + Enter 换行</span></>}</span>
                 <button className="send-button" onPointerDown={event => event.preventDefault()} onMouseDown={event => event.preventDefault()} disabled={!prompt.trim() || busy}>{busy ? '发送中…' : '发送'}</button>
               </div>
             </form>
@@ -2360,7 +2410,7 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
             </div>
           </div>
           <div className="form-grid">
-            {field('provider_name', '显示名称', <input {...control('provider_name')} autoComplete="off" placeholder="DeepSeek" onChange={event => update('provider_name', event.target.value)} />)}
+            {field('provider_name', '显示名称', <input {...control('provider_name')} autoComplete="off" placeholder="我的模型" onChange={event => update('provider_name', event.target.value)} />)}
             {field('base_url', '接口地址', <input {...control('base_url')} {...text} type="url" inputMode="url" className="mono-input" placeholder="https://api.deepseek.com/v1" onChange={event => update('base_url', event.target.value)} />, true)}
             {field('model', '模型', (
               <div className="provider-model-wrapper">

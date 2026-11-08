@@ -131,9 +131,9 @@ export function looksLikeRawError(text: string): boolean {
   return /Traceback \(most recent call last\)/.test(value) && !value.includes('```')
 }
 
-const DEEP_HINT = /\s*发\s*\/deep\s*让\s*Codex\s*深入查证。?\s*$/
+const DEEP_HINT = /\s*(?:发\s*\/deep\s*让\s*Codex\s*深入查证|想更深入地查证，可以让执行者再查一遍)。?\s*$/
 
-/** The backend closes some replies with "发 /deep 让 Codex 深入查证。"; the owner never needs to type that. */
+/** The backend closes some replies with a "dig deeper" line the web owner cannot act on; it is dropped here. */
 export function stripDeepHint(text: string): string {
   return (text || '').replace(DEEP_HINT, '').replace(/\n\s*[ℹ️⚠️️]+\s*$/u, '').trimEnd()
 }

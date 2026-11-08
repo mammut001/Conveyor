@@ -72,6 +72,10 @@ export type ChatPanelProps = {
   agentColor?: string;
   onBusyChange?: (busy: boolean) => void;
   setupChecklist?: ReactNode;
+  /** A conversation another surface (the 会话 sidebar in 对话) asks this panel to open. */
+  openSessionRequest?: { id: string; nonce: number } | null;
+  /** Called when the owner sends a message from this panel (used by the first-run checklist). */
+  onMessageSent?: () => void;
   /** When true, this conversation is a worktree-scoped planning/discussion surface
    *  that prepares task goals rather than directly running commands or nightly jobs. */
   discussionOnly?: boolean;
@@ -174,9 +178,11 @@ function approvalLabel(status: string): string {
     : '已处理';
 }
 
-export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, discussionOnly = false }: ChatPanelProps) {
+export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, discussionOnly = false }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Reading a restored conversation must not flash the welcome state first.
+  const [historyLoading, setHistoryLoading] = useState(false);
   const draftKey = `conveyor-chat-draft:v1:${agentSessionId || 'free-chat'}`;
   const [input, setInput] = useState(() => {
     try { return sessionStorage.getItem(draftKey) || ''; }
@@ -259,6 +265,9 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     }
   }, [initialInput, onInitialInputConsumed]);
 
+  const onSessionChangeRef = useRef(onSessionChange);
+  onSessionChangeRef.current = onSessionChange;
+
   const loadHistory = useCallback(async (sid: string): Promise<HistoryMessage[] | null> => {
     if (!sid) {
       setMessages([]);
@@ -266,6 +275,9 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     }
     const version = ++historyVersionRef.current;
     setError(null);
+    setHistoryLoading(true);
+    // The panel says which conversation it is showing, so the 会话 sidebar can highlight it.
+    onSessionChangeRef.current?.(sid);
     try {
       const res = await fetch(`/api/chat/history?session_id=${encodeURIComponent(sid)}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -313,6 +325,8 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
           ? { message: human.message, detail: human.detail }
           : { message: '暂时无法读取聊天记录', detail: human.detail, action: 'history' });
       }
+    } finally {
+      if (version === historyVersionRef.current) setHistoryLoading(false);
     }
     return null;
   }, [token]);
@@ -332,6 +346,36 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
       restoreInterrupted(pending, null);
     }
   }, [loadHistory, takeInflight, restoreInterrupted]);
+
+  // Open a conversation another surface asked for (a 会话 sidebar row in 对话):
+  // the panel becomes that session and reads its messages.
+  const openConversation = useCallback((sid: string) => {
+    historyVersionRef.current++;
+    followStreamRef.current = true;
+    failedSendRef.current = null;
+    setShowLatest(false);
+    setUnseen(false);
+    setNotice('');
+    setError(null);
+    setInput('');
+    setStreamingDelta('');
+    setStatusText('');
+    setSubagents([]);
+    subagentsRef.current = [];
+    setSessionId(sid);
+    if (!agentSessionId) localStorage.setItem('conveyor-chat-session', sid);
+    onSessionChangeRef.current?.(sid);
+    void loadHistory(sid);
+    textareaRef.current?.focus();
+  }, [agentSessionId, loadHistory]);
+  const openedNonceRef = useRef(0);
+  useEffect(() => {
+    // An agent's conversation is fixed, and a reply in flight is never interrupted.
+    const request = openSessionRequest;
+    if (!request || agentSessionId || request.nonce === openedNonceRef.current || busy) return;
+    openedNonceRef.current = request.nonce;
+    openConversation(request.id);
+  }, [openSessionRequest, agentSessionId, busy, openConversation]);
 
   const scrollToLatest = useCallback(() => {
     const node = streamRef.current;
@@ -403,6 +447,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     setInput('');
     localStorage.removeItem('conveyor-chat-session');
     setMessages([]);
+    setHistoryLoading(false);
     setStreamingDelta('');
     setStatusText('');
     setSubagents([]);
@@ -507,6 +552,8 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
       created_at: new Date().toISOString(),
     };
     setMessages(prev => [...prev, userMsg]);
+    // The owner has now sent a message: checklist step ③ ticks without waiting for a poll.
+    onMessageSent?.();
 
     try {
       const res = await fetch(
@@ -703,7 +750,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
   };
 
   const placeholder = `给 ${displayName} 发消息…`;
-  const showWelcome = messages.length === 0 && !streamingDelta && !busy && error?.action !== 'history';
+  const showWelcome = messages.length === 0 && !historyLoading && !streamingDelta && !busy && error?.action !== 'history';
 
   return (
     <div className="chat-panel-container" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -949,6 +996,13 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
             {avatar}
             <span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span>
             <span>{statusText || '正在思考…'}</span>
+          </div>
+        )}
+
+        {historyLoading && !messages.length && !busy && (
+          <div className="chat-thinking" role="status">
+            {avatar}
+            <span>正在读取记录…</span>
           </div>
         )}
 

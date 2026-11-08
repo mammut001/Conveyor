@@ -236,11 +236,20 @@ test.describe('r4 onboarding QA fixes (e2e/r4-onboard-fix.spec.ts)', () => {
     await expect(checklist.locator('li[data-step="3"] .setup-checklist-label')).toHaveText('发第一条消息')
   })
 
-  test('F5: checklist hides once the first message has been sent', async ({ page }) => {
+  test('F5: checklist hides once every step is done (executor, model, first message)', async ({ page }) => {
     const job = failedJob('')
     job.state = 'ok'
     await setupMocks(page, { modelConfigured: true, jobs: [job], sessions: [{ id: 'sess-1', channel: 'web', title: '会话 1', created_at: new Date().toISOString(), last_activity: new Date().toISOString(), job_count: 1, message_count: 2, latest_job: job }] })
+    // The first message alone is not enough while ① is still open: the owner still needs an executor.
     await page.goto('/#tasks')
+    await expect(page.locator('.setup-checklist-card')).toBeVisible()
+    await expect(page.locator('.setup-checklist-card li[data-step="1"]')).not.toHaveClass(/is-done/)
+    // With an installed, logged-in executor every step is done, so the checklist goes away.
+    await page.route('**/api/workers', async route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ enabled: true, install_enabled: true, active: 'pi', workers: [{ ...piWorker, installed: true, auth: 'ok' }] }),
+    }))
+    await page.reload()
     await expect(page.locator('.setup-checklist-card')).toHaveCount(0)
   })
 
