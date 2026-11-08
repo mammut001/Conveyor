@@ -9,6 +9,7 @@ import type {
 } from './SupervisorWorkspace'
 import SupervisorChecks, { type SupervisorChecksSummary } from './SupervisorChecks'
 import { SupervisorRoleBar, supStateLabel } from './SupervisorWorkspace'
+import SupervisorMerge from './SupervisorMerge'
 import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
 
 // ---------------------------------------------------------------------------
@@ -341,6 +342,8 @@ export default function SupervisorGoals({
   const [historyOpen, setHistoryOpen] = useState(false)
   // 结果卡上的「查看改动」：就地展开这个目标的改动（文件列表 + 逐行差异），不跳页。
   const [changesOpen, setChangesOpen] = useState(false)
+  // 结果卡上的「合并到主分支…」：点开才读合并预览，确认后才真的合并。
+  const [mergeOpen, setMergeOpen] = useState(false)
   const [pinnedGoalId, setPinnedGoalId] = useState('')
   // 老板点了「开始新目标」：表单要一直露出来，别再自动把刚跑完的目标钉回最上面。
   const [formRequested, setFormRequested] = useState(false)
@@ -435,6 +438,7 @@ export default function SupervisorGoals({
     setTimelineOpen(false)
     setExpandedRound(null)
     setChangesOpen(false)
+    setMergeOpen(false)
   }, [shownGoalId])
 
   // Poll the running goal every 3s while this tab is visible; stop otherwise.
@@ -582,6 +586,14 @@ export default function SupervisorGoals({
   const resultCopy = goalFinished && shownGoal ? goalResultCopy(shownGoal, shownDetail) : null
   // 「查看改动」就地读这个目标的差异：只有点开了才请求。
   const goalDiff = useSupervisorDiff(apiCall, 'goal', shownGoal?.id || '', changesOpen && goalFinished)
+  // 只有达成目标才给「合并到主分支」：主工作目录 / 未托管目录没有合并入口，还有任务或
+  // 目标在跑的时候也不给（合并不能和正在写的改动撞上）。
+  const canOfferMerge = Boolean(resultCopy)
+    && shownGoal?.state === 'achieved'
+    && !worktree.is_main
+    && worktree.managed
+    && !locked
+    && !hasActiveGoal
 
   return (
     <div className="sup-goals-scroll">
@@ -667,6 +679,17 @@ export default function SupervisorGoals({
                   </button>
                 </div>
                 {changesOpen && <SupervisorDiffView diffState={goalDiff} />}
+                {canOfferMerge && (
+                  <button
+                    type="button"
+                    className="shell-button sup-goal-merge-button"
+                    aria-expanded={mergeOpen}
+                    onClick={() => setMergeOpen(prev => !prev)}
+                  >
+                    合并到主分支…
+                  </button>
+                )}
+                {mergeOpen && canOfferMerge && <SupervisorMerge apiCall={apiCall} worktree={worktree} />}
               </div>
             ) : (
               shownDetail?.summary.trim() && <p className="sup-goal-summary">{shownDetail.summary.trim()}</p>

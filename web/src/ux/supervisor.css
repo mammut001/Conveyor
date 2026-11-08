@@ -1167,6 +1167,12 @@
   margin-top: 2px;
 }
 
+/* 结果卡里的合并卡片占满一行，别挤成一小块。 */
+.sup-goal-result .sup-merge-card {
+  width: 100%;
+  margin-top: 4px;
+}
+
 .sup-separation-note {
   margin: 0;
   color: #6b7280;
@@ -2648,4 +2654,102 @@
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+/* ---- 「合并到主分支」：入口按钮 + 预览 / 确认 / 结果 ---- */
+.sup-merge-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.sup-merge-entry-hint {
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* 手机上手指点：合并相关的按钮至少 40px 高。 */
+.sup-merge-toggle,
+.sup-goal-merge-button,
+.sup-merge-card .shell-button {
+  min-height: 40px;
+}
+
+.sup-merge-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+}
+
+/* 文件列表和「改动」长得一样：占满一行，长路径自己省略。 */
+.sup-merge-block .sup-changes {
+  width: 100%;
+}
+
+.sup-merge-summary {
+  margin: 0;
+  color: #1f2328;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.sup-merge-note {
+  margin: 0;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.sup-merge-blockers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #f0d4ce;
+  border-radius: 8px;
+  background: #fdf7f5;
+  color: #b42318;
+  font-size: 12.5px;
+  line-height: 1.6;
+  list-style: none;
+}
+
+.sup-merge-blockers li {
+  overflow-wrap: anywhere;
+}
+
+.sup-merge-success {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #aef0c8;
+  border-left: 3px solid #067647;
+  border-radius: 6px;
+  background: #f0fdf4;
+  color: #067647;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.sup-merge-confirm-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sup-merge-conflict-note {
+  display: block;
+  margin-top: 2px;
+  color: #b42318;
+  font-weight: 500;
 }

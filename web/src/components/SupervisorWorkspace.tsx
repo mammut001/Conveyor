@@ -3,6 +3,7 @@ import { ChatPanel, type TaskSuggestion } from './ChatPanel'
 import { ChangedFileList } from './TaskParts'
 import SupervisorChecks from './SupervisorChecks'
 import SupervisorGoals, { SupervisorGoalsProbe } from './SupervisorGoals'
+import SupervisorMerge from './SupervisorMerge'
 import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
 import { goalRoundTaskTitle, parseGoalRoundTask, goalRoundKey } from '../taskText'
 import { useMediaQuery } from '../ux/shellNav'
@@ -373,6 +374,9 @@ const DIFF_VISIBLE_STATES = [
   'waiting_user', 'waiting_for_user', 'waiting_for_human',
   'needs_attention', 'blocked',
 ]
+
+/** 这些状态才算「这一轮做完了」：任务与结果页的「合并到主分支」入口只看这一个状态。 */
+const MERGE_DONE_STATES = ['completed', 'succeeded', 'ok', 'passed']
 
 // 后端 summary() 那段多行原始摘要（任务 id / 仓库 path / Worktree path / 分支 / SHA /
 // 内容指纹 / 修复轮次 / 验收 @ sha）对老板没有意义：看得见的那一行用字段现算，原文进「技术细节」。
@@ -1578,6 +1582,10 @@ export function SupervisorWorkspace({
   // The 目标 tab becomes the default once the selected worktree has a running / waiting goal;
   // any explicit tab click wins from then on (reset when the worktree context changes).
   const subTabTouchedRef = useRef(false)
+  // 选中的工作目录上有没有正在跑的目标：合并入口在目标跑着的时候要藏起来。
+  const [hasActiveGoalInWorktree, setHasActiveGoalInWorktree] = useState(false)
+  // 任务卡片上「合并到主分支…」：点开才读合并预览（默认收起）。
+  const [mergeOpen, setMergeOpen] = useState(false)
   const [mobileRepoDrawerOpen, setMobileRepoDrawerOpen] = useState(false)
 
   // Repository registration & worktree creation states
@@ -1836,6 +1844,8 @@ export function SupervisorWorkspace({
     contextAbortRef.current?.abort()
     setDispatchError('')
     setDeployError('')
+    setMergeOpen(false)
+    setHasActiveGoalInWorktree(false)
     subTabTouchedRef.current = false
     setSubTab('workspace')
     setSelectedRepoId(repoId)
@@ -2081,6 +2091,16 @@ export function SupervisorWorkspace({
     [currentSnapshot.tasks],
   )
   const isLockedWorktree = Boolean(selectedWorktree && (selectedWorktree.locked || hasRunningTaskInWorktree))
+  // 「合并到主分支」入口：只给受托管的工作目录（主分支 / 未托管目录不能作为合并来源），
+  // 这一轮已经跑完、而且没有任务或目标在跑的时候才出现。
+  const latestTask = currentSnapshot.tasks[0] || null
+  const latestTaskDone = Boolean(latestTask)
+    && MERGE_DONE_STATES.includes((latestTask?.state || '').trim().toLowerCase())
+  const mergeAvailable = Boolean(selectedWorktree)
+    && !isReadOnlyWorktree
+    && !isLockedWorktree
+    && !hasActiveGoalInWorktree
+    && latestTaskDone
 
   const currentPending = contextKey ? (pendingByContext[contextKey] || null) : null
 
@@ -2271,6 +2291,7 @@ export function SupervisorWorkspace({
 
   // 目标 tab: an active (running / waiting) goal becomes the default sub-tab for this worktree.
   const handleActiveGoalChange = useCallback((hasActiveGoal: boolean) => {
+    setHasActiveGoalInWorktree(hasActiveGoal)
     if (!hasActiveGoal || subTabTouchedRef.current) return
     setSubTab('goals')
   }, [])
@@ -2732,6 +2753,23 @@ export function SupervisorWorkspace({
                     状态边界：任务完成 ≠ PR 已合并 ≠ 已部署上线。需要部署时请切换至「部署」标签页操作。
                   </p>
                 </section>
+              )}
+
+              {mergeAvailable && selectedWorktree && (
+                <div className="sup-merge-entry">
+                  <button
+                    type="button"
+                    className="shell-button sup-merge-toggle"
+                    aria-expanded={mergeOpen}
+                    onClick={() => setMergeOpen(prev => !prev)}
+                  >
+                    合并到主分支…
+                  </button>
+                  <span className="sup-merge-entry-hint">这一轮的改动还在这个工作目录里，确认后才合回主分支。</span>
+                </div>
+              )}
+              {mergeOpen && mergeAvailable && selectedWorktree && (
+                <SupervisorMerge apiCall={apiCall} worktree={selectedWorktree} />
               )}
 
               <SupervisorRunHistory
