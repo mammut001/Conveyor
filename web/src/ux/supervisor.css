@@ -1925,6 +1925,54 @@
   white-space: nowrap;
 }
 
+/* 当前这一轮的实时进度：一行「在做哪一步 · 谁在做 · 已经多久」，窄屏自动换行 */
+.sup-goal-live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0;
+  min-width: 0;
+  color: #4b5563;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sup-goal-live-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #d97757;
+  animation: sup-goal-live-pulse 1.6s ease-in-out infinite;
+}
+
+.sup-goal-live-step {
+  color: #1f2328;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sup-goal-live-executor {
+  overflow-wrap: anywhere;
+}
+
+.sup-goal-live-elapsed {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@keyframes sup-goal-live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sup-goal-live-dot {
+    animation: none;
+  }
+}
+
 .sup-goal-chip {
   flex: none;
   display: inline-flex;

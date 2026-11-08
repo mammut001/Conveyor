@@ -5,10 +5,11 @@ import type {
   SupervisorCapabilities,
   SupervisorRepo,
   SupervisorRoleKey,
+  SupervisorTaskDetail,
   SupervisorWorktree,
 } from './SupervisorWorkspace'
 import SupervisorChecks, { type SupervisorChecksSummary } from './SupervisorChecks'
-import { SupervisorRoleBar, supStateLabel } from './SupervisorWorkspace'
+import { SupervisorRoleBar, supExecutorLabel, supStageLabel, supStateLabel } from './SupervisorWorkspace'
 import SupervisorMerge from './SupervisorMerge'
 import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
 
@@ -78,6 +79,8 @@ const DEFAULT_MAX_ROUNDS = 5
 const MIN_MAX_ROUNDS = 1
 const MAX_MAX_ROUNDS = 20
 const POLL_INTERVAL_MS = 3000
+/** 当前这一轮的任务详情最多每 5 秒读一次（只在页面看得见时）。 */
+const ROUND_TASK_POLL_MS = 5000
 
 export function goalStateLabel(state?: string | null): string {
   const key = (state || '').trim().toLowerCase() as GoalState
@@ -246,6 +249,195 @@ function GoalIterationRow({
         )}
       </div>
     </li>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 当前这一轮的实时进度：一行白话「在做哪一步 · 谁在做 · 已经多久」。
+// 步骤来自任务的 state / stage（GET /api/supervisor/tasks/<id>），读不到详情时
+// 只用目标轮询里带的 task_state；已经过去的时间每秒在本地走，不额外发请求。
+// ---------------------------------------------------------------------------
+
+/** 任务详情里这一行用得到的字段（后端还会带上 started_at）。 */
+export type GoalRoundTask = SupervisorTaskDetail & { started_at?: string | null }
+
+// 这一轮的任务已经停下来（结束或在等人）：接下来是评估器判断下一步。
+const ROUND_TASK_SETTLED_STATES = [
+  ...TASK_TERMINAL_STATES,
+  'succeeded',
+  'waiting_user',
+  'waiting_for_user',
+  'waiting_for_human',
+]
+
+const HAS_CHINESE = /[\u4e00-\u9fff]/
+
+function isRoundTaskSettled(state?: string | null): boolean {
+  return ROUND_TASK_SETTLED_STATES.includes((state || '').trim().toLowerCase())
+}
+
+/** 这一轮现在在做哪一步：只返回白话中文。 */
+export function goalRoundStepLabel(
+  state?: string | null,
+  stage?: string | null,
+  repairRound?: number | null,
+): string {
+  const s = (state || '').trim().toLowerCase()
+  // 后端阶段可能带「:轮次」后缀（例如 implementation:1），只看前半截。
+  const st = (stage || '').trim().toLowerCase().split(':')[0]
+  const repair = Math.max(0, Math.floor(Number(repairRound) || 0))
+  if (!s) return '准备中'
+  if (isRoundTaskSettled(s)) return '正在判断下一步…'
+  if (s === 'repair_pending' || st === 'repair') return `自动修复第 ${Math.max(1, repair)} 轮`
+  if (s === 'analyzing' || st === 'analysis' || st === 'analyzing') return '分析中'
+  if (s === 'implementing' || st === 'implementation' || st === 'implementing') {
+    return repair > 0 ? `自动修复第 ${repair} 轮` : '动手改'
+  }
+  if (st === 'validation') return '运行自动检查'
+  if (s === 'reviewing' || st === 'review' || st === 'reviewing') return '检查中'
+  if (s === 'dispatching' || s === 'pending_dispatch' || s === 'created') return '准备中'
+  const stageLabel = st ? supStageLabel(st, s) : ''
+  if (HAS_CHINESE.test(stageLabel)) return stageLabel
+  const stateLabel = supStateLabel(s)
+  if (HAS_CHINESE.test(stateLabel)) return stateLabel
+  return '正在进行'
+}
+
+// 每一步对应哪个角色：执行记录里找不到正在跑的那条时，用任务里登记的角色执行者。
+function stepRole(state: string, stage: string): SupervisorRoleKey | '' {
+  const s = state.trim().toLowerCase()
+  const st = stage.trim().toLowerCase().split(':')[0]
+  if (st === 'validation') return ''
+  if (s === 'analyzing' || st === 'analysis') return 'analyst'
+  if (s === 'implementing' || s === 'repair_pending' || st === 'implementation' || st === 'repair') return 'implementer'
+  if (s === 'reviewing' || st === 'review') return 'reviewer'
+  return ''
+}
+
+/** 谁在做：正在跑的执行记录优先；自动检查由服务器自己跑，不写执行者。 */
+export function goalRoundExecutor(task: GoalRoundTask | null, state: string, stage: string): string {
+  if (!task) return ''
+  const role = stepRole(state, stage)
+  if (!role) return ''
+  const executions = Array.isArray(task.executions) ? task.executions : []
+  for (let i = executions.length - 1; i >= 0; i -= 1) {
+    const ex = executions[i]
+    if (!ex || typeof ex !== 'object') continue
+    const status = (ex.status || '').trim().toLowerCase()
+    if (status !== 'running' || (ex.finished_at || '').trim()) continue
+    const name = (ex.executor || '').trim()
+    if (!name || name === 'operator-validation') return ''
+    return supExecutorLabel(name)
+  }
+  const roles = task.metadata?.roles
+  const entry = roles ? roles[role] : undefined
+  const name = typeof entry === 'string' ? entry : entry?.executor || ''
+  return name.trim() ? supExecutorLabel(name) : ''
+}
+
+/** 「已经 3 分 12 秒」：不到一分钟只说秒，一小时以上只说小时和分。 */
+export function goalElapsedLabel(totalSeconds: number): string {
+  const sec = Math.max(0, Math.floor(totalSeconds))
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  const s = sec % 60
+  if (h > 0) return `已经 ${h} 小时 ${m} 分`
+  if (m > 0) return `已经 ${m} 分 ${s} 秒`
+  return `已经 ${s} 秒`
+}
+
+function parseTimeMs(value?: string | null): number | null {
+  const raw = (value || '').trim()
+  if (!raw) return null
+  const ms = new Date(raw).getTime()
+  return Number.isNaN(ms) ? null : ms
+}
+
+function usePageVisible(): boolean {
+  const [pageVisible, setPageVisible] = useState(() =>
+    typeof document === 'undefined' ? true : document.visibilityState !== 'hidden',
+  )
+  useEffect(() => {
+    const onChange = () => setPageVisible(document.visibilityState !== 'hidden')
+    document.addEventListener('visibilitychange', onChange)
+    return () => document.removeEventListener('visibilitychange', onChange)
+  }, [])
+  return pageVisible
+}
+
+function GoalRoundProgress({
+  apiCall,
+  iteration,
+  visible,
+}: {
+  apiCall: <T>(path: string, init?: RequestInit) => Promise<T>
+  iteration: Iteration
+  visible: boolean
+}) {
+  const pageVisible = usePageVisible()
+  const active = visible && pageVisible
+  const taskId = (iteration.task_id || '').trim()
+  const iterationState = (iteration.task_state || '').trim()
+  const settled = isRoundTaskSettled(iterationState)
+  const [task, setTask] = useState<GoalRoundTask | null>(null)
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  // 上一次开始读任务详情的时间：页面切走再切回来也保证两次请求至少隔 5 秒。
+  const lastFetchRef = useRef(0)
+
+  useEffect(() => {
+    setTask(null)
+    lastFetchRef.current = 0
+  }, [taskId])
+
+  // 任务详情：只在页面看得见、这一轮的任务还在跑时读，最多每 5 秒一次。
+  useEffect(() => {
+    if (!active || !taskId || settled) return
+    let cancelled = false
+    let timer: number | undefined
+    const run = async () => {
+      lastFetchRef.current = Date.now()
+      try {
+        const res = await apiCall<GoalRoundTask>(`/api/supervisor/tasks/${encodeURIComponent(taskId)}`)
+        if (!cancelled && res && (!res.id || res.id === taskId)) setTask(res)
+      } catch {
+        // 读不到详情就先用目标轮询里的状态，不打扰老板。
+      }
+      if (!cancelled) timer = window.setTimeout(() => void run(), ROUND_TASK_POLL_MS)
+    }
+    const wait = Math.max(0, ROUND_TASK_POLL_MS - (Date.now() - lastFetchRef.current))
+    timer = window.setTimeout(() => void run(), wait)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [active, apiCall, taskId, settled])
+
+  // 已经过去的时间每秒在本地走一下，不发请求。
+  useEffect(() => {
+    if (!active) return
+    setNowMs(Date.now())
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [active])
+
+  const matchedTask = task && (!task.id || task.id === taskId) ? task : null
+  const state = iterationState || matchedTask?.state || ''
+  // 详情比目标轮询旧的时候，阶段可能已经过时：状态对得上才用它的阶段。
+  const stage = matchedTask && (matchedTask.state || '').trim().toLowerCase() === state.toLowerCase()
+    ? matchedTask.stage || ''
+    : ''
+  const step = goalRoundStepLabel(state, stage, matchedTask?.repair_round)
+  const executor = settled ? '' : goalRoundExecutor(matchedTask, state, stage)
+  const startedMs = parseTimeMs(iteration.started_at) ?? parseTimeMs(matchedTask?.started_at)
+  const elapsed = startedMs === null ? '' : goalElapsedLabel((nowMs - startedMs) / 1000)
+
+  return (
+    <p className="sup-goal-live">
+      <span className="sup-goal-live-dot" aria-hidden="true" />
+      <span className="sup-goal-live-step">{step}</span>
+      {executor && <span className="sup-goal-live-executor">{executor} 在做</span>}
+      {elapsed && <span className="sup-goal-live-elapsed">{elapsed}</span>}
+    </p>
   )
 }
 
@@ -597,6 +789,15 @@ export default function SupervisorGoals({
     if (withTask.length === 0) return ''
     return withTask.reduce((latest, round) => (round.n > latest.n ? round : latest)).task_id
   }, [iterations])
+  // 正在跑的目标的当前这一轮（编号最大的那一轮），还没有结论时才显示实时进度。
+  const currentRound = useMemo(
+    () => (iterations.length > 0 ? iterations.reduce((latest, round) => (round.n > latest.n ? round : latest)) : null),
+    [iterations],
+  )
+  const showRoundProgress = shownGoal?.state === 'running'
+    && shownDetail?.state === 'running'
+    && Boolean(currentRound)
+    && !(currentRound?.decision || '').trim()
   // 跑完之后的结果卡文案（标题 + 白话结论 + 补充说明）。
   const resultCopy = goalFinished && shownGoal ? goalResultCopy(shownGoal, shownDetail) : null
   // 「查看改动」就地读这个目标的差异：只有点开了才请求。
@@ -710,6 +911,15 @@ export default function SupervisorGoals({
                 )}
               </div>
             </header>
+
+            {showRoundProgress && currentRound && (
+              <GoalRoundProgress
+                key={`${shownGoal.id}:${currentRound.n}`}
+                apiCall={apiCall}
+                iteration={currentRound}
+                visible={visible}
+              />
+            )}
 
             {shownGoal.outcome.trim() && shownGoal.outcome.trim() !== shownGoal.title && (
               <p className="sup-goal-outcome-text">想要的结果：{shownGoal.outcome.trim()}</p>
