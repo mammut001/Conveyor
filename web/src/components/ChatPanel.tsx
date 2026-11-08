@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState, t
 import { FormattedText } from './FormattedText';
 import { VoiceRecorder } from './VoiceRecorder';
 import { CopyButton } from './CopyButton';
+import { buildGoalDraft } from './chatGoalDraft';
 import { useMediaQuery } from '../ux/shellNav';
 import {
   CHANNEL_LABELS, ChatRequestError, STREAM_INTERRUPTED, describeApproval, describeChatError, formatChatTime, formatFullTime,
@@ -79,6 +80,11 @@ export type ChatPanelProps = {
   /** When true, this conversation is a worktree-scoped planning/discussion surface
    *  that prepares task goals rather than directly running commands or nightly jobs. */
   discussionOnly?: boolean;
+  /** 「项目」讨论专用：每条回复下面出现「设为目标」，把草稿（老板最后的要求 + 这条回复）交出去。
+   *  主「对话」页不传，就不会出现这个按钮。 */
+  onMakeGoal?: (draft: string) => void;
+  /** 有值时「设为目标」不能点，这句话作为悬停提示。 */
+  makeGoalDisabledReason?: string;
 };
 
 const VOICE_PLACEHOLDER = '🎤 正在识别语音…';
@@ -178,7 +184,7 @@ function approvalLabel(status: string): string {
     : '已处理';
 }
 
-export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, discussionOnly = false }: ChatPanelProps) {
+export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, discussionOnly = false, onMakeGoal, makeGoalDisabledReason = '' }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Reading a restored conversation must not flash the welcome state first.
@@ -797,7 +803,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
           </div>
         )}
 
-        {messages.map(message => {
+        {messages.map((message, messageIndex) => {
           const source = sourceLabel(message);
           if (message.role === 'user') {
             return (
@@ -961,6 +967,29 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                   {message.interrupted && <span>回答中断 · 已保留收到的内容</span>}
                   <MessageTime value={message.created_at} />
                   <CopyButton text={shownText} className="chat-copy-button" title="复制这条回复" />
+                  {onMakeGoal && (
+                    <button
+                      type="button"
+                      className="chat-goal-button"
+                      disabled={Boolean(makeGoalDisabledReason)}
+                      title={makeGoalDisabledReason || '把这段讨论填进「目标」，你检查修改后再点「开始」'}
+                      onClick={() => {
+                        if (makeGoalDisabledReason) return;
+                        // 老板在这条回复之前最后一次说的话。
+                        let request = '';
+                        for (let i = messageIndex - 1; i >= 0; i -= 1) {
+                          const prev = messages[i];
+                          if (prev.role === 'user' && prev.text.trim() && prev.text !== VOICE_PLACEHOLDER) {
+                            request = prev.text;
+                            break;
+                          }
+                        }
+                        onMakeGoal(buildGoalDraft(request, shownText));
+                      }}
+                    >
+                      设为目标
+                    </button>
+                  )}
                 </footer>
               </div>
             </article>

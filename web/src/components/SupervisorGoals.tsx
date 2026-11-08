@@ -297,6 +297,8 @@ export default function SupervisorGoals({
   onOpenTask,
   onActiveGoalChange,
   onRefreshRepositories,
+  draftOutcome,
+  onDraftOutcomeUsed,
 }: {
   apiCall: <T>(path: string, init?: RequestInit) => Promise<T>
   repo: SupervisorRepo
@@ -310,6 +312,9 @@ export default function SupervisorGoals({
   onOpenTask: (taskId: string) => void
   onActiveGoalChange: (hasActiveGoal: boolean) => void
   onRefreshRepositories?: () => void
+  /** 从「讨论」里点「设为目标」带来的草稿：只填进输入框，绝不自动开始。 */
+  draftOutcome?: string | null
+  onDraftOutcomeUsed?: () => void
 }) {
   // 自动检查状态（来自 SupervisorChecks 的汇报）：用来在「开始」上方提醒还没有检查命令。
   const [checksSummary, setChecksSummary] = useState<SupervisorChecksSummary | null>(null)
@@ -431,6 +436,16 @@ export default function SupervisorGoals({
     setConfirmStop(false)
     void refresh()
   }, [contextKey, pinGoal, refresh])
+
+  // 「设为目标」带来的草稿：露出表单（像点了「开始新目标」）并填进去；必须排在上面的初次加载之后。
+  useEffect(() => {
+    if (!draftOutcome) return
+    pinGoal('')
+    formRequestedRef.current = true
+    setFormRequested(true)
+    setOutcome(draftOutcome)
+    onDraftOutcomeUsed?.()
+  }, [draftOutcome, onDraftOutcomeUsed, pinGoal])
 
   // 换一个目标看的时候，每一轮默认收起（跑着的时候才默认展开），单轮展开也重置。
   const shownGoalId = shownGoal?.id || ''
