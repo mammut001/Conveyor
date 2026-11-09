@@ -372,8 +372,8 @@ test('记忆: list, add with a counter, search as you type, delete with confirma
   await expect(items.last()).toContainText('10月20日 09:12')
   await expect(panel.getByRole('button', { name: /^全部/ })).toContainText('6')
   await expect(panel.getByRole('button', { name: /^全部/ })).toHaveAttribute('aria-pressed', 'true')
-  await expect(panel.getByRole('button', { name: /^常用档案/ })).toContainText('3')
-  await expect(panel.getByText(/最先记住的 8 条是常用档案/)).toBeVisible()
+  await expect(panel.getByRole('button', { name: /^常用信息/ })).toContainText('3')
+  await expect(panel.getByText(/最先记住的 8 条每次对话都会参考/)).toBeVisible()
   expect(await englishLeftovers(panel)).toEqual([])
   await shoot(page, 'memory-list', 1440, panel)
   await shoot(page, 'memory-list', 390, panel)
@@ -401,7 +401,7 @@ test('记忆: list, add with a counter, search as you type, delete with confirma
   await expect(items).toHaveCount(7)
 
   // Filters are Chinese and real buttons.
-  await panel.getByRole('button', { name: /^记忆日志/ }).click()
+  await panel.getByRole('button', { name: /^历史记录/ }).click()
   await expect(items).toHaveCount(3)
   await panel.getByRole('button', { name: /^全部/ }).click()
 
@@ -566,7 +566,7 @@ test('资料 tab: Chinese sections that fit the right panel', async ({ page }) =
   await expect(library.getByRole('heading', { name: /^定时任务/ })).toBeVisible()
   await expect(library.getByRole('heading', { name: '改过的文件' })).toBeVisible()
   await expect(library.getByRole('heading', { name: '电脑截图' })).toBeVisible()
-  await expect(library).toContainText('2 条常用档案')
+  await expect(library).toContainText('2 条常用信息')
   await expect(library).toContainText('每周账单汇总')
   await expect(library).toContainText('每周一 09:00 · 下次 11月9日 09:00')
   await expect(library).toContainText('月初对账提醒已暂停')

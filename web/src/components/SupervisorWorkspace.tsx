@@ -8,6 +8,7 @@ import SupervisorMerge from './SupervisorMerge'
 import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
 import { goalRoundTaskTitle, parseGoalRoundTask, goalRoundKey } from '../taskText'
 import { useMediaQuery } from '../ux/shellNav'
+import { readDispatchDraft, writeDispatchDraft } from './supDrafts'
 
 export type SupervisorExecutorModel = { id: string; name: string }
 
@@ -290,12 +291,26 @@ const SUP_EXECUTOR_LABELS: Record<string, string> = {
   'command-code': 'Command Code',
   codex: 'Codex CLI',
   pool: '执行者池',
+  // The coordinator is the chat model itself: 讨论 never spawns a CLI (QA N29).
+  chat: '内置对话模型',
 }
 
 export function supExecutorLabel(name?: string | null): string {
   const raw = (name || '').trim()
   if (!raw) return '未指定执行者'
   return SUP_EXECUTOR_LABELS[raw.toLowerCase()] || raw
+}
+
+/**
+ * The coordinator (讨论) is the chat model itself. The owner reads one plain Chinese line;
+ * an executor we have no Chinese name for still reads 内置对话模型, and the raw code plus
+ * the model id stay behind 技术详情 (QA N29).
+ */
+export function supCoordinatorLabel(executor?: string | null): string {
+  const raw = (executor || '').trim()
+  if (!raw) return '内置对话模型'
+  const label = supExecutorLabel(raw)
+  return /[\u4e00-\u9fff]/.test(label) ? label : '内置对话模型'
 }
 
 const SUP_QUOTA_PATTERN = /quota|usage limit|rate limit|resource_exhausted|429|credit balance|额度|配额/i
@@ -822,6 +837,10 @@ export function SupervisorRoleBar({
   const noRoleExecutorReady = capabilities !== null && !executors.some(exec => exec.available)
   const coordinatorExec = capabilities?.coordinator?.executor || '当前主对话'
   const coordinatorModel = capabilities?.coordinator?.model || '默认模型'
+  // The coordinator card shows the plain Chinese label; the raw executor code and model id are
+  // technical detail (QA N29).
+  const coordinatorLabel = supCoordinatorLabel(coordinatorExec)
+  const coordinatorTech = [coordinatorExec, coordinatorModel].filter(Boolean).join(' · ')
 
   const getExecutorInfo = (execName: string): SupervisorExecutorInfo | undefined =>
     executors.find(item => item.name === execName)
@@ -857,8 +876,12 @@ export function SupervisorRoleBar({
             <span className="sup-role-badge is-ok">先聊方案</span>
           </div>
           <div className="sup-role-Static">
-            <strong>{coordinatorExec}</strong>
-            <small>{coordinatorModel}</small>
+            <strong>{coordinatorLabel}</strong>
+            <small>用「模型设置」里的对话模型聊方案</small>
+            <details className="sup-role-tech">
+              <summary>技术详情</summary>
+              <span>{coordinatorTech}</span>
+            </details>
           </div>
         </div>
 
@@ -1938,6 +1961,24 @@ export function SupervisorWorkspace({
     return draftsByContext[contextKey] || { goal: '', acceptanceCriteria: '' }
   }, [contextKey, draftsByContext])
 
+  // N25: restore the dispatch draft (goal + 验收标准) for this worktree once, when the owner
+  // lands on it, so a reload does not lose what was typed. In-memory entries always win.
+  useEffect(() => {
+    if (!contextKey || draftsByContext[contextKey]) return
+    const stored = readDispatchDraft(contextKey)
+    if (!stored.goal && !stored.criteria) return
+    setDraftsByContext(prev => (prev[contextKey]
+      ? prev
+      : { ...prev, [contextKey]: { goal: stored.goal, acceptanceCriteria: stored.criteria } }))
+  }, [contextKey, draftsByContext])
+
+  // N25: every change is saved as a draft (an empty one is dropped), so a successful
+  // 开始执行 — which clears the draft — clears the stored copy too.
+  useEffect(() => {
+    if (!contextKey || !draftsByContext[contextKey]) return
+    writeDispatchDraft(contextKey, { goal: currentDraft.goal, criteria: currentDraft.acceptanceCriteria })
+  }, [contextKey, currentDraft, draftsByContext])
+
   const updateCurrentDraft = useCallback((patch: Partial<WorktreeDraft>) => {
     if (!contextKey) return
     setDraftsByContext(prev => ({
@@ -2368,13 +2409,13 @@ export function SupervisorWorkspace({
     }, 50)
   }, [narrowViewport, updateCurrentDraft])
 
-  const coordinatorLabel = useMemo(() => {
-    if (capabilities?.coordinator?.executor) {
-      return capabilities.coordinator.model
-        ? `${capabilities.coordinator.executor} · ${capabilities.coordinator.model}`
-        : capabilities.coordinator.executor
-    }
-    return coordinatorFallbackName || '当前主对话'
+  // 讨论 uses the coordinator chat model. The owner sees one plain Chinese line; the raw
+  // executor code and model id stay in the 技术详情 disclosure (QA N29).
+  const coordinatorPlain = useMemo(() => supCoordinatorLabel(capabilities?.coordinator?.executor), [capabilities?.coordinator])
+  const coordinatorTech = useMemo(() => {
+    const executor = capabilities?.coordinator?.executor || ''
+    const model = capabilities?.coordinator?.model || ''
+    return [executor, model].filter(Boolean).join(' · ') || coordinatorFallbackName || ''
   }, [capabilities?.coordinator, coordinatorFallbackName])
 
   const activeWorktreeBadge = selectedWorktree ? worktreeBadgeInfo(selectedWorktree) : null
@@ -2622,6 +2663,11 @@ export function SupervisorWorkspace({
                   </div>
                 )}
 
+                {/* N25: while a draft exists the owner can see it is kept on this device. */}
+                {(currentDraft.goal.trim() || currentDraft.acceptanceCriteria.trim()) && (
+                  <p className="sup-draft-hint" role="status">草稿已自动保存，刷新页面也不会丢；点「开始执行」后清除。</p>
+                )}
+
                 <form className="composer sup-goal-composer" onSubmit={e => void handleCreateAndDispatch(e)}>
                   <label htmlFor="sup-goal-textarea" className="sr-only">任务目标</label>
                   <textarea
@@ -2829,7 +2875,13 @@ export function SupervisorWorkspace({
               <div className="sup-chat-pane-header">
                 <div>
                   <strong>讨论</strong>
-                  <small>用来聊方案的模型：{coordinatorLabel}</small>
+                  <small>用来聊方案的模型：{coordinatorPlain}</small>
+                  {coordinatorTech && (
+                    <details className="sup-chat-tech">
+                      <summary>技术详情</summary>
+                      <span>{coordinatorTech}</span>
+                    </details>
+                  )}
                 </div>
                 <span className="sup-chat-pane-badge">讨论不自动执行</span>
               </div>
@@ -2841,7 +2893,6 @@ export function SupervisorWorkspace({
                     token={token}
                     active={active && (!narrowViewport || subTab === 'chat')}
                     agentSessionId={selectedWorktree.chat_session_id}
-                    agentName={coordinatorLabel}
                     onPrepareTask={handlePrepareTask}
                     onMakeGoal={handleMakeGoal}
                     makeGoalDisabledReason={hasActiveGoalInWorktree ? '这个工作目录已经有进行中的目标' : ''}

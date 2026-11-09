@@ -386,7 +386,7 @@ export function describeJobError(error?: string | null): JobErrorInfo {
   // The model answered, but not in a form the agent could finish: usually the wrong 接口类型 for this provider.
   if (/stream ended|finish_reason|terminal response event|Responses (API|stream)|invalid (JSON|response)/i.test(raw)) {
     return {
-      message: '模型服务返回不完整，可以在模型设置里把接口类型换成 Chat Completions 再试',
+      message: '模型服务返回不完整，可以在模型设置里把接口类型换成「通用聊天接口」再试',
       action: 'settings',
       actionLabel: '去设置',
     }

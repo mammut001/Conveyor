@@ -166,7 +166,7 @@ test.describe('r4 onboarding QA fixes (e2e/r4-onboard-fix.spec.ts)', () => {
     const notice = page.locator('.job-notice.failed.task-notice')
     await expect(notice).toBeVisible()
     await shot(page, 'F3-failed-task')
-    await expect(notice).toContainText('模型服务返回不完整，可以在模型设置里把接口类型换成 Chat Completions 再试')
+    await expect(notice).toContainText('模型服务返回不完整，可以在模型设置里把接口类型换成「通用聊天接口」再试')
     await expect(notice).not.toContainText('补充说明后重新发送')
     await expect(notice.locator('button.task-notice-action')).toHaveText('去设置')
     await expect(notice.locator('.task-notice-detail')).toBeHidden()

@@ -226,7 +226,7 @@ def normalize_fact(text: str) -> str:
     if not fact:
         return _fail("用法: memory.remember <一句话事实>")
     if redact_text(fact) != fact or _looks_like_credential(fact):
-        return _fail("不能记住密钥、token 或密码。")
+        return _fail("不能记住密钥、密码或访问令牌。")
     body = fact.rstrip("。！？!?…. ")
     if _SENTENCE_BREAK.search(body):
         return _fail("一次只记住一句话。请把事实收成一个句子再试。")
@@ -251,7 +251,7 @@ def screen_write_arg(tool_name: str, arg: str) -> Screened:
         if not text:
             return Screened("", "用法: memory.forget <#id 或要忘掉的那句话>")
         if redact_text(text) != text:
-            return Screened("", "不能把密钥、token 或密码放进记忆操作。")
+            return Screened("", "不能把密钥、密码或访问令牌放进记忆操作。")
         if len(text) > FACT_MAX_CHARS:
             return Screened("", f"太长了（最多 {FACT_MAX_CHARS} 字）。用 #id 删除。")
         return Screened(text)
@@ -405,7 +405,7 @@ def forget_fact(settings: Any, operator_id: str, arg: str) -> tuple[list[dict[st
             return [deleted], "deleted"
 
         if redact_text(text) != text:
-            raise ValueError("不能把密钥、token 或密码放进记忆操作。")
+            raise ValueError("不能把密钥、密码或访问令牌放进记忆操作。")
         rows = conn.execute(
             """
             SELECT * FROM memories
@@ -622,7 +622,7 @@ async def memory_remember(
         row = remember_fact(settings, operator_id, arg, source_channel=channel)
     except ValueError as exc:
         return ToolResult(False, str(exc))
-    where = "常用档案" if row["kind"] == "profile" else "记忆日志"
+    where = "常用信息" if row["kind"] == "profile" else "历史记录"
     return ToolResult(True, f"已记住 #{row['id']}（{where}）: {row['text']}")
 
 
@@ -674,11 +674,11 @@ async def memory_list(
     logs = list_facts(settings, operator_id, kind="log")
     if not profiles and not logs:
         return ToolResult(True, "还没有长期记忆。让我记住一句话即可。")
-    lines = [f"常用档案 ({len(profiles)}/{PROFILE_CAP}):"]
+    lines = [f"常用信息 ({len(profiles)}/{PROFILE_CAP}):"]
     lines.extend(_fmt(settings, r) for r in profiles)
     newest_logs = sorted(logs, key=lambda r: (r["created_at"], r["id"]), reverse=True)
     shown = newest_logs[:30]
-    lines.append(f"记忆日志 ({len(logs)} 条，显示最近 {len(shown)} 条):")
+    lines.append(f"历史记录 ({len(logs)} 条，显示最近 {len(shown)} 条):")
     lines.extend(_fmt(settings, r) for r in shown)
     if len(logs) > len(shown):
         lines.append(f"…还有 {len(logs) - len(shown)} 条，用 memory.search 查找。")
@@ -703,7 +703,7 @@ async def memory_search(
     if not query:
         return ToolResult(False, "用法: memory.search <关键词>")
     if redact_text(query) != query:
-        return ToolResult(False, "不能用密钥或 token 搜索记忆。")
+        return ToolResult(False, "不能用密钥或访问令牌搜索记忆。")
     rows = search_facts(settings, operator_id, query)
     if not rows:
         return ToolResult(True, f"长期记忆里没有匹配「{query}」的事实。")

@@ -861,6 +861,9 @@
   box-shadow: 0 1px 2px rgba(16, 24, 40, .05);
 }
 .primary-interface .composer.task-composer:focus-within { border-color: #bd5c40; box-shadow: 0 0 0 3px rgba(189, 92, 64, .12); }
+/* QA N24: when the conversation already shows the failure (with 重试) beside it, the composer
+   itself is not in an error state — it keeps the neutral border, red focus ring and all. */
+.primary-interface .composer.task-composer--settled:focus-within { border-color: #d0d5dd; box-shadow: 0 1px 2px rgba(16, 24, 40, .05); }
 .primary-interface .composer.task-composer::after { content: none; display: none; }
 .primary-interface .task-composer .composer-handoff-note { padding: 0 0 2px; color: #6b7280; font-size: 12px; }
 /* A composer slot that only explains something (a failed send, a read-only 工作目录对话):

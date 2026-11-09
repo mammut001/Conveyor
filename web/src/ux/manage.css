@@ -350,6 +350,11 @@
 .provider-settings .provider-advanced { margin: 0; }
 .provider-settings .provider-advanced > summary { width: fit-content; color: #475467; font-size: 13px; font-weight: 600; cursor: pointer; user-select: none; }
 .provider-settings .provider-advanced-grid { margin-top: 14px; }
+/* 技术设置: the two machine names (服务商代号 / 密钥名称) live one level deeper (QA N26). */
+.provider-settings .provider-tech { margin: 0 0 14px; }
+.provider-settings .provider-tech > summary { width: fit-content; color: #475467; font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
+.provider-settings .provider-tech-note { margin: 8px 0 0; color: #6b7280; font-size: 12px; line-height: 1.5; }
+.provider-settings .provider-tech-grid { margin-top: 10px; }
 .provider-settings .provider-fetch-tech { margin-top: 4px; }
 
 .primary-interface .settings-sheet .dialog-field { display: grid; align-content: start; gap: 6px; min-width: 0; }

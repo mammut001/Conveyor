@@ -720,12 +720,12 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     await expect(dialog.getByText('已获取 3 个模型')).toHaveCount(0)
   })
 
-  test('自定义 starts blank; 高级 holds 服务商代号 and 密钥名称 and stays editable (QA F4, F9)', async ({ page }) => {
+  test('自定义 starts blank; 高级 holds 技术设置 with 服务商代号 and 密钥名称 and stays editable (QA F4, F9, N26)', async ({ page }) => {
     await installApi(page)
     const dialog = await openSettings(page, SIZES[0])
     const presets = dialog.getByRole('group', { name: '服务商预设' })
     const advanced = dialog.locator('details.provider-advanced')
-    await expect(advanced.locator('summary')).toHaveText('高级')
+    await expect(advanced.locator(':scope > summary')).toHaveText('高级')
     await expect(advanced).not.toHaveAttribute('open', '')
     await expect(dialog.getByLabel('服务商代号', { exact: true })).toBeHidden()
 
@@ -736,7 +736,12 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     await expect(dialog.getByLabel('接口地址')).toHaveValue('')
     await expect(dialog.getByLabel('模型', { exact: true })).toHaveValue('')
     await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('')
-    await advanced.locator('summary').click()
+    // 服务商代号 / 密钥名称 sit one level deeper, under 技术设置 (QA N26).
+    await advanced.locator(':scope > summary').click()
+    const tech = dialog.locator('details.provider-tech')
+    await expect(tech.locator('summary')).toHaveText('技术设置')
+    await expect(dialog.getByLabel('服务商代号', { exact: true })).toBeHidden()
+    await tech.locator('summary').click()
     await expect(dialog.getByLabel('服务商代号', { exact: true })).toHaveValue('')
     await expect(dialog.getByLabel('密钥名称', { exact: true })).toHaveValue('')
     await dialog.getByLabel('服务商代号', { exact: true }).fill('mycorp')

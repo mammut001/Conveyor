@@ -211,6 +211,13 @@ export default function SupervisorChecks({
                     <span className="sup-checks-label-text">{candidate.label}</span>
                   </label>
                   {candidate.reason && <small className="sup-checks-reason">{candidate.reason}</small>}
+                  {/* The raw command is technical: it stays behind 技术详情 (QA N29). */}
+                  {candidate.argv.length > 0 && (
+                    <details className="sup-checks-tech">
+                      <summary>技术详情</summary>
+                      <code>{candidate.argv.join(' ')}</code>
+                    </details>
+                  )}
                   {!candidate.available && candidate.unavailable_reason && (
                     <small className="sup-checks-unavailable">{candidate.unavailable_reason}</small>
                   )}

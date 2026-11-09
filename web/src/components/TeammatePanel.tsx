@@ -51,8 +51,9 @@ const SOURCE_LABELS: Record<string, string> = {
   'host.cpu': 'CPU 负载',
   'host.service': '系统服务',
   'host.logs': '错误日志',
-  'repo.git': 'Git 工作区',
-  'repo.ci': 'GitHub CI',
+  // Plain Chinese: the owner never needs the backend source codes (QA N29).
+  'repo.git': '代码改动',
+  'repo.ci': '自动构建',
 };
 
 const SERVICE_LABELS: Record<string, string> = {
@@ -306,7 +307,12 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
 
   const thresholds = status?.thresholds;
   const services = status?.monitored_services ?? [];
-  const modules = [
+  const modules: Array<{
+    key: string; title: string; sources: string[]; command: string; action: string
+    description: string
+    /** Technical names belong in the 详情 disclosure, never in the visible line (QA N29). */
+    detail?: string
+  }> = [
     {
       key: 'disk', title: '磁盘空间', sources: ['host.disk'], command: '/clean', action: '查看磁盘',
       description: `使用率超过 ${thresholds?.disk_pct ?? 90}% 或剩余空间少于 ${thresholds?.disk_gb ?? 3} GB 时提醒。`,
@@ -324,8 +330,9 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
       description: `10 分钟内出现 ${thresholds?.error_burst ?? 5} 条以上错误日志时提醒。`,
     },
     {
-      key: 'repo', title: 'Git 与 GitHub CI', sources: ['repo.git', 'repo.ci'], command: '/github_ci', action: '查看代码与构建',
-      description: '未提交的改动积压过多，或 main 分支的 GitHub CI 构建失败时提醒。',
+      key: 'repo', title: '代码仓库与自动构建', sources: ['repo.git', 'repo.ci'], command: '/github_ci', action: '查看代码与构建',
+      description: '未提交的改动积压过多，或默认分支的自动构建失败时提醒。',
+      detail: '检查代码仓库里未提交的改动，以及默认分支（main）上的自动构建是否通过。',
     },
   ];
 
@@ -494,6 +501,7 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
                   <details className="guard-module-detail">
                     <summary>详情</summary>
                     <small>点按钮会在对话中发送 <code className="guard-cmd">{module.command}</code></small>
+                    {module.detail && <small>{module.detail}</small>}
                   </details>
                 </article>
               );

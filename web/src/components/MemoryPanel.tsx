@@ -24,7 +24,8 @@ type MemoryList = {
 
 type Tier = 'profile' | 'facts' | 'log';
 
-const TIER_LABEL: Record<Tier, string> = { profile: '常用档案', facts: '事实', log: '记忆日志' };
+// Plain Chinese tier names: the owner never sees the backend kind codes (QA N29).
+const TIER_LABEL: Record<Tier, string> = { profile: '常用信息', facts: '记住的事', log: '历史记录' };
 const FACT_MAX = 280;
 const LOG_MAX = 4000;
 
@@ -301,7 +302,7 @@ export function MemoryPanel({ token, agentId = '', agentName = '', onOpenSession
               <select className="kn-input" value={newTier} onChange={(e) => setNewTier(e.target.value as Tier)} aria-label="记忆类型">
                 <option value="facts">{TIER_LABEL.facts}</option>
                 <option value="profile">{TIER_LABEL.profile}</option>
-                <option value="log">日志</option>
+                <option value="log">历史记录</option>
               </select>
             </label>
           )}
@@ -438,7 +439,7 @@ export function MemoryPanel({ token, agentId = '', agentName = '', onOpenSession
                     {item.source_channel && <span>{fromChannel(item.source_channel)}</span>}
                     {item.source === 'untrusted' && <span>来自外部内容</span>}
                     {item.expires_at && <span>{formatDateTime(item.expires_at)} 到期</span>}
-                    <span className="kn-memory-id" title="在对话里可以用这个编号，例如“忘掉 #12”">#{item.id}</span>
+                    <span className="kn-memory-id" title="在对话里可以用这个编号，例如「忘掉 12」">编号 {item.id}</span>
                   </div>
                   {!editing && (
                     <div className="kn-row-actions">
@@ -484,7 +485,7 @@ export function MemoryPanel({ token, agentId = '', agentName = '', onOpenSession
       )}
 
       {data && !hasFacts && total > 0 && (
-        <p className="kn-footnote">最先记住的 {data.profile_cap} 条是常用档案，每次对话都会参考；之后的存进记忆日志，需要时再查。</p>
+        <p className="kn-footnote">最先记住的 {data.profile_cap} 条每次对话都会参考；之后的存进历史记录，需要时再查。</p>
       )}
 
       {extraSections}

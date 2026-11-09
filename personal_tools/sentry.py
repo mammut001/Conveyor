@@ -35,8 +35,8 @@ SOURCE_LABELS = {
     "host.cpu": "CPU 负载",
     "host.service": "系统服务",
     "host.logs": "错误日志",
-    "repo.git": "Git 工作区",
-    "repo.ci": "GitHub CI",
+    "repo.git": "代码改动",
+    "repo.ci": "自动构建",
 }
 SEVERITY_LABELS = {"critical": "严重", "warning": "警告", "info": "提示"}
 
@@ -468,12 +468,12 @@ def check_github_ci(settings: Settings) -> list[SentryAlert]:
                 SentryAlert(
                     source="repo.ci",
                     severity="critical",
-                    title="GitHub CI 构建失败",
-                    summary=f"仓库 `{repo}` main 分支最新 CI 构建失败。\n{truncate(ci_res.text, 200)}",
+                    title="自动构建没有通过",
+                    summary=f"仓库「{repo}」默认分支（main）最新一次自动构建失败。\n{truncate(ci_res.text, 200)}",
                     fingerprint=f"repo.ci.{repo}.failure",
                     suggested_actions=[
-                        {"label": "查看详细 CI 状态", "command": "/github_ci"},
-                        {"label": "启动自动排查与修复", "command": "/fix 排查并修复 main 分支的 CI 失败"},
+                        {"label": "查看构建状态", "command": "/github_ci"},
+                        {"label": "启动自动排查与修复", "command": "/fix 排查并修复默认分支的构建失败"},
                     ],
                 )
             )
@@ -712,7 +712,7 @@ def teammate_status_text(settings: Settings) -> str:
         f"• ⚡ CPU 与异常进程守护 (系统负载比例 > {getattr(settings, 'sentry_load_threshold_ratio', 2.0)}x)",
         f"• 🛠️ 系统服务巡检 ({services_str or '无'})",
         f"• 📜 错误日志激增检测 (10分钟错误数 >= {getattr(settings, 'sentry_error_burst_threshold', 5)})",
-        "• 📦 Git 工作区与 GitHub CI 守护",
+        "• 📦 代码改动与自动构建守护",
     ]
 
     if state.muted_sources:
@@ -796,7 +796,7 @@ def teammate_daily_pulse(
                 capture_output=True, text=True, timeout=3,
             )
             dirty_count = len([l for l in diff_res.stdout.splitlines() if l.strip()]) if diff_res.returncode == 0 else 0
-            lines.append(f"• Git 分支: `{branch}` · 未提交改动: {dirty_count} 项")
+            lines.append(f"• 当前分支: `{branch}` · 未提交改动: {dirty_count} 项")
         except Exception:
             pass
 

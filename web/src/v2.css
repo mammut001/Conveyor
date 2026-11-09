@@ -677,8 +677,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   color: #58151c;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+/* 重试 resends the question that failed, in the same session. */
+.transcript-error-card .transcript-error-retry {
+  margin-top: 8px;
+  min-height: 40px;
+  padding: 8px 18px;
+  border: 1px solid #f1b6b6;
+  border-radius: 8px;
+  background: #fff;
+  color: #a43842;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.transcript-error-card .transcript-error-retry:hover { background: #fdeeee; border-color: #e79a9a; }
 
 /* Formatted Text Flow */
 .formatted-text-flow {

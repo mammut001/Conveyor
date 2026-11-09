@@ -197,7 +197,7 @@ class TestSentryEngine(unittest.TestCase):
         self.assertEqual(len(alerts), 1)
         self.assertEqual(
             alerts[0].suggested_actions[1],
-            {"label": "启动自动排查与修复", "command": "/fix 排查并修复 main 分支的 CI 失败"},
+            {"label": "启动自动排查与修复", "command": "/fix 排查并修复默认分支的构建失败"},
         )
 
     def test_check_log_error_spikes(self):

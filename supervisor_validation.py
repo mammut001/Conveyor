@@ -110,23 +110,23 @@ def _detect_node(root: Path) -> list[dict[str, Any]]:
     if _real(test_script) and _NPM_DEFAULT_TEST_MARKER not in test_script:
         out.append(_candidate(
             cid=f"{pm}-test",
-            label=f"运行测试（{pm} test）",
+            label="运行测试",
             argv=[pm, "test", "--silent"],
-            reason="package.json 的 scripts.test",
+            reason="项目里配好了测试命令",
         ))
     if _real(scripts.get("lint")):
         out.append(_candidate(
             cid=f"{pm}-lint",
-            label=f"运行代码检查（{pm} run lint）",
+            label="运行代码检查",
             argv=[pm, "run", "lint"],
-            reason="package.json 的 scripts.lint",
+            reason="项目里配好了检查命令",
         ))
     if _real(scripts.get("build")):
         out.append(_candidate(
             cid=f"{pm}-build",
-            label=f"构建项目（{pm} run build）",
+            label="构建项目",
             argv=[pm, "run", "build"],
-            reason="package.json 的 scripts.build",
+            reason="项目里配好了构建命令",
         ))
     return out
 
@@ -150,7 +150,7 @@ def _detect_python(root: Path) -> list[dict[str, Any]]:
     if reason:
         return [_candidate(
             cid="pytest",
-            label="运行测试（pytest）",
+            label="运行测试",
             argv=["python3", "-m", "pytest", "-q"],
             reason=reason,
         )]
@@ -163,9 +163,9 @@ def _detect_python(root: Path) -> list[dict[str, Any]]:
         if has_tests:
             return [_candidate(
                 cid="unittest",
-                label="运行测试（unittest）",
+                label="运行测试",
                 argv=["python3", "-m", "unittest", "discover", "-s", "tests"],
-                reason="tests/ 目录包含 test_*.py",
+                reason="这个仓库里有测试文件",
             )]
     return []
 
@@ -177,9 +177,9 @@ def _detect_makefile(root: Path) -> list[dict[str, Any]]:
     if _MAKE_TEST_RE.search(text):
         return [_candidate(
             cid="make-test",
-            label="运行测试（make test）",
+            label="运行测试",
             argv=["make", "test"],
-            reason="Makefile 的 test: 目标",
+            reason="项目里配好了测试命令",
         )]
     return []
 
@@ -188,9 +188,9 @@ def _detect_go(root: Path) -> list[dict[str, Any]]:
     if (root / "go.mod").is_file():
         return [_candidate(
             cid="go-test",
-            label="运行测试（go test）",
+            label="运行测试",
             argv=["go", "test", "./..."],
-            reason="go.mod",
+            reason="这是一个 Go 项目",
         )]
     return []
 
@@ -199,9 +199,9 @@ def _detect_rust(root: Path) -> list[dict[str, Any]]:
     if (root / "Cargo.toml").is_file():
         return [_candidate(
             cid="cargo-test",
-            label="运行测试（cargo test）",
+            label="运行测试",
             argv=["cargo", "test", "--quiet"],
-            reason="Cargo.toml",
+            reason="这是一个 Rust 项目",
         )]
     return []
 

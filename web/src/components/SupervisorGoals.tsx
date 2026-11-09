@@ -12,6 +12,7 @@ import SupervisorChecks, { type SupervisorChecksSummary } from './SupervisorChec
 import { SupervisorRoleBar, supExecutorLabel, supStageLabel, supStateLabel } from './SupervisorWorkspace'
 import SupervisorMerge from './SupervisorMerge'
 import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
+import { readGoalDraft, writeGoalDraft } from './supDrafts'
 
 // ---------------------------------------------------------------------------
 // 目标（goal-driven loop）contract types — mirrors supervisor_goals.py payloads.
@@ -525,7 +526,12 @@ export default function SupervisorGoals({
   const [goals, setGoals] = useState<Goal[]>([])
   const [detail, setDetail] = useState<GoalDetail | null>(null)
   const [loadError, setLoadError] = useState('')
-  const [outcome, setOutcome] = useState('')
+  const [outcome, setOutcome] = useState(() => readGoalDraft(contextKey))
+  // N25: the typed goal is a draft on this device until 开始; an empty draft is dropped, so a
+  // successful 开始 clears the stored copy together with the box.
+  useEffect(() => {
+    writeGoalDraft(contextKey, outcome)
+  }, [contextKey, outcome])
   const [maxRounds, setMaxRounds] = useState(String(DEFAULT_MAX_ROUNDS))
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
@@ -1186,6 +1192,10 @@ export default function SupervisorGoals({
                 disabled={readOnly || locked || creating}
                 onChange={e => setOutcome(e.target.value)}
               />
+              {/* N25: while a draft exists the owner can see it is kept on this device. */}
+              {outcome.trim() && (
+                <p className="sup-draft-hint" role="status">草稿已自动保存，刷新页面也不会丢；点「开始」后清除。</p>
+              )}
               <div className="sup-goal-form-row">
                 <div className="sup-form-field sup-goal-rounds-field">
                   <label htmlFor="sup-goal-max-rounds">最多尝试几轮</label>

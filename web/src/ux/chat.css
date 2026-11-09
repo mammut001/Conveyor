@@ -345,6 +345,10 @@
   user-select: none;
 }
 .primary-interface .chat-panel-container .chat-avatar { width: 28px; height: 28px; margin-top: 1px; font-size: 13px; }
+/* The avatar is an emoji, not a Latin letter (QA N29): keep it proportional to the circle. */
+.primary-interface .chat-avatar > span,
+.primary-interface .chat-welcome-avatar > span,
+.primary-interface .chat-panel-container .chat-bubble-avatar > span { font-size: 1.2em; line-height: 1; }
 
 .primary-interface .chat-panel-container .chat-meta {
   display: flex;
@@ -1162,7 +1166,6 @@
   background: #f2f4f7;
   color: #4b5563;
 }
-.primary-interface .chat-panel-container .chat-source-hash,
 .primary-interface .chat-panel-container .chat-source-arrow {
   font-style: normal;
   opacity: .85;
