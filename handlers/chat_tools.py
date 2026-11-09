@@ -450,6 +450,23 @@ async def run_tool_loop(
     max_steps = 3 if max_steps_val is None else int(max_steps_val)
     max_steps = max(0, max_steps)
     tools_called: list[str] = []
+    # Hermes-style memory nudge: on every N-th owner turn of the session, remind
+    # the model it may persist one durable fact with memory.note. Skipped when
+    # notes are off, the model has no tools, this is a group chat, or the turn
+    # already carries untrusted content. The per-session counter is durable, so
+    # a restart keeps the cadence instead of resetting it.
+    if schemas:
+        import agent_memory
+        if agent_memory.enabled(settings):
+            every = agent_memory.nudge_every(settings)
+            if every > 0 and str(getattr(msg, "chat_type", "")) != "group":
+                from handlers.chat import chat_key
+                line = agent_memory.note_nudge(
+                    settings, chat_key(msg, settings), every,
+                    may_nudge=not turn_has_untrusted(messages),
+                )
+                if line:
+                    messages.append({"role": "system", "content": line})
     # Share the provider wait budget across rounds. Tool execution has its own
     # lifecycle and must not be cancelled just because model time ran out.
     model_remaining = float(config.timeout)
