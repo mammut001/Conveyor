@@ -18,6 +18,11 @@ Design contract (see docs/agent-supervisor.md 「目标闭环（goals）」):
   told on the channels Conveyor already has (`goal_notify.notify_goal_change`,
   non-blocking and deduplicated per transition). `stopped` is silent: the owner
   stopped the goal themselves.
+- The owner answers from the phone: `/goals`, `/goal_reply`, `/goal_done` and
+  `/goal_stop` (`handlers/goal_commands.py`) resolve a short goal id
+  (`short_goal_id` / `resolve_goal_id`) and call `reply_goal` / `stop_goal` with
+  **no** server handle, so those two wake the goal loop through the module-level
+  wake hook `SupervisorWorkerManager` registers when it starts.
 - All user-facing strings (question, summary, errors) are Simplified Chinese.
 """
 from __future__ import annotations
@@ -31,7 +36,7 @@ import threading
 from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import agent_supervisor as ags
 import supervisor_diff as diff_mod
@@ -77,6 +82,8 @@ MAX_EVAL_ITERATIONS = MAX_MAX_ITERATIONS
 MIN_EXTEND_ROUNDS = 1
 MAX_EXTEND_ROUNDS = 10
 MAX_EXTEND_MESSAGE_CHARS = 2000
+# 手机上打不出 16 位 hex：`/goals` 和通知里只显示 `goal-` 后面的前 6 位。
+SHORT_ID_CHARS = 6
 MAX_LESSON_ITEMS = 3
 MAX_LESSON_CHARS = 200
 
@@ -102,6 +109,13 @@ _REPLY_LOCKS_GUARD = threading.Lock()
 _REPLY_LOCKS: dict[str, threading.Lock] = {}
 _GOAL_INFLIGHT_STATES = svc._INFLIGHT_STATES | frozenset({"pending_dispatch"})
 _GOAL_ACTIVE_TASK_STATES = svc._ACTIVE_WORKTREE_STATES | frozenset({"pending_dispatch"})
+
+# 唤醒钩子：跑 `advance_goals` 的 worker 挂在 Web 服务器的
+# `SupervisorWorkerManager` 事件循环上，而手机上的一条 `/goal_reply` 是在 bot 进程里
+# 发生的，手里根本没有 server 句柄。Manager 启动时把自己注册进来，这样回复之后
+# 目标闭环立刻被叫醒，不用等下一个 tick、也不依赖 web 服务是否起着。
+_WAKE_HOOKS_GUARD = threading.Lock()
+_WAKE_HOOKS: list[Callable[[Any], None]] = []
 
 
 def _goal_reply_lock(goal_id: str) -> threading.Lock:
@@ -338,6 +352,113 @@ def _iterations(settings: Any, goal_id: str) -> list[dict[str, Any]]:
     finally:
         conn.close()
     return [_iteration_row_to_dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Short goal ids (what the owner types on a phone)
+# ---------------------------------------------------------------------------
+
+def short_goal_id(goal_id: Any) -> str:
+    """The phone-friendly id: the first `SHORT_ID_CHARS` characters after ``goal-``.
+
+    A full id keeps working everywhere a short one is accepted, so a paste from
+    the web console is never rejected.
+    """
+    raw = str(goal_id or "").strip()
+    if raw.startswith(GOAL_ID_PREFIX):
+        raw = raw[len(GOAL_ID_PREFIX):]
+    return raw[:SHORT_ID_CHARS]
+
+
+def resolve_goal_id(settings: Any, token: Any) -> str:
+    """Resolve what the owner typed (short id or full id) to exactly one goal id.
+
+    Raises a Simplified-Chinese `SupervisorServiceError` when nothing matches or
+    when the short id is ambiguous — acting on the wrong goal would be worse than
+    asking the owner to be more precise.
+    """
+    raw = str(token or "").strip()
+    if not raw:
+        raise _service_error(
+            HTTPStatus.BAD_REQUEST,
+            "请给出目标短编号（/goals 里可以看到）",
+            code="invalid_goal_ref",
+        )
+    svc.require_enabled(settings)
+    conn = _connect(settings)
+    try:
+        rows = conn.execute(
+            """SELECT id FROM supervisor_goals
+               WHERE id = ? OR lower(substr(id, ?, ?)) = lower(?)
+               ORDER BY created_at DESC, id DESC""",
+            (raw, len(GOAL_ID_PREFIX) + 1, SHORT_ID_CHARS, raw),
+        ).fetchall()
+    finally:
+        conn.close()
+    matches = [str(row["id"]) for row in rows]
+    if not matches:
+        raise _service_error(
+            HTTPStatus.NOT_FOUND,
+            f"找不到目标：{raw}。用 /goals 查看短编号。",
+            code="goal_not_found",
+        )
+    if len(matches) > 1:
+        raise _service_error(
+            HTTPStatus.CONFLICT,
+            f"短编号 {raw} 对应 {len(matches)} 个目标，请用完整目标 ID（用 /goals 查看）。",
+            code="goal_ref_ambiguous",
+        )
+    return matches[0]
+
+
+# ---------------------------------------------------------------------------
+# Waking the goal loop without a web server handle
+# ---------------------------------------------------------------------------
+
+def set_goal_wake_hook(hook: Callable[[Any], None]) -> Callable[[], None] | None:
+    """Register `hook(settings)`, called whenever a goal is answered without a server.
+
+    Returns a callable that unregisters the hook again (used on worker shutdown).
+    """
+    if not callable(hook):
+        return None
+    with _WAKE_HOOKS_GUARD:
+        if hook not in _WAKE_HOOKS:
+            _WAKE_HOOKS.append(hook)
+
+    def _unregister() -> None:
+        with _WAKE_HOOKS_GUARD:
+            if hook in _WAKE_HOOKS:
+                _WAKE_HOOKS.remove(hook)
+
+    return _unregister
+
+
+def wake_hooks() -> tuple[Callable[[Any], None], ...]:
+    with _WAKE_HOOKS_GUARD:
+        return tuple(_WAKE_HOOKS)
+
+
+def wake_goal_loop(settings: Any) -> None:
+    """Wake whatever runs `advance_goals` (best effort, never raises)."""
+    for hook in wake_hooks():
+        try:
+            hook(settings)
+        except Exception:
+            log.debug("goal wake hook failed", exc_info=True)
+
+
+def _wake_goal_worker(server: Any, settings: Any) -> None:
+    """Wake the goal loop after the owner acted on a goal.
+
+    With a server handle the web server's own `SupervisorWorkerManager` is woken
+    (and started when it is not running yet). Without one — a Telegram
+    `/goal_reply` runs in the bot process, which owns no server — the registered
+    wake hook is used instead, so the next iteration starts immediately.
+    """
+    if server is not None:
+        svc.ensure_server_worker(server, settings, wake=True)
+    wake_goal_loop(settings)
 
 
 def _scope_paths(settings: Any, goal: dict[str, Any]) -> tuple[str, str, bool]:
@@ -577,7 +698,7 @@ def stop_goal(server: Any, settings: Any, goal_id: str) -> dict[str, Any]:
             except svc.SupervisorServiceError:
                 log.warning("goal %s: cancelling task %s failed", goal_id, tid, exc_info=True)
 
-    svc.ensure_server_worker(server, settings, wake=True)
+    _wake_goal_worker(server, settings)
     return get_goal(settings, goal_id)
 
 
@@ -663,7 +784,7 @@ def reply_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) -
                 conn.close()
             updated = _get_goal_row(settings, gid)
             notify_goal_change(settings, updated, GOAL_ACHIEVED)
-            svc.ensure_server_worker(server, settings, wake=True)
+            _wake_goal_worker(server, settings)
             return get_goal(settings, gid)
 
         if not message:
@@ -742,7 +863,7 @@ def reply_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) -
                         exc_info=True,
                     )
 
-        svc.ensure_server_worker(server, settings, wake=True)
+        _wake_goal_worker(server, settings)
         return get_goal(settings, gid)
     finally:
         lock.release()

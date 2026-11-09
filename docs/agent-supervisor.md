@@ -400,10 +400,46 @@ owner stopped the goal themselves.
   "id": <goal id>, "kind": "goal"}` (push payloads are stored and rendered by the browser vendor, so
   the goal text never leaves the machine) and `sw.js` deep-links the click to `/#code`; **Telegram**
   and **Feishu** get the full text through the shared `personal_tools.sentry.send_owner_*` helpers the
-  sentry alerts use.
+  sentry alerts use. A `waiting_user` message additionally ends with the one-line reply hint for that
+  channel (`REPLY_HINTS`, e.g. 「在 Telegram 里回复：/goal_reply <短编号> 你的回答」), because the owner
+  can answer from the phone — see below.
 - Idempotent: the goals DB keeps `(goal_id, state, updated_at)` in `supervisor_goal_notifications`
   (atomic claim), so a restart or a second loop tick never repeats a notification.
 - Off switch: `CONVEYOR_GOAL_NOTIFY=false` (`Settings.goal_notify_enabled`, default on).
+
+### Answering from the phone (handlers/goal_commands.py)
+
+A `waiting_user` notification used to be a dead end on a phone: the only way to
+answer was the web console. Four commands in the shared `COMMAND_TABLE`
+(`handlers/commands.py`, so **Telegram and Feishu both serve them**) close the loop:
+
+| Command | Purpose |
+| --- | --- |
+| `/goals` | list the goals that need the owner — `waiting_user` first, then `running`; each line is 「title」+ Chinese state + `第 N / M 轮` + 短编号, at most 10 |
+| `/goal_reply <短编号> <你的回答>` | answer a `waiting_user` goal (same body as `POST /reply` with `achieved: false`) and start the next iteration |
+| `/goal_done <短编号>` | confirm the goal is achieved (`achieved: true`) |
+| `/goal_stop <短编号>` | `stop_goal` |
+
+- 短编号 is the first 6 characters after `goal-` (`supervisor_goals.short_goal_id`).
+  `resolve_goal_id` accepts the short id or the full id and resolves it to **exactly
+  one** goal; an unknown id answers 「找不到目标：…」 and an ambiguous one
+  「短编号 … 对应 N 个目标，请用完整目标 ID」 — never the wrong goal.
+- Every command except `/goals` mutates goal state, so the gate is the one the runtime
+  kill switch uses (`agent_security_controls.owner_command`): the configured owner id
+  for the channel **and** `channel.auth.is_allowed` **and** `chat_type == "p2p"`. A group
+  (including an owner's Telegram Forum Topic, which keeps its real `chat_type`) is
+  refused in Chinese.
+- Replies are Chinese and report the new state; `SupervisorServiceError` messages are
+  relayed verbatim, and a failing action never raises into the dispatcher.
+- The `waiting_user` notification ends with a one-line hint naming the command for the
+  channel the owner is reading (`goal_notify.REPLY_HINTS`, e.g.
+  「在 Telegram 里回复：/goal_reply 0a1b2c 你的回答」). Web Push carries no text.
+- **Waking the loop**: `reply_goal` / `stop_goal` used to wake the worker only through
+  `svc.ensure_server_worker(server, …)`, which needs a `WebConsoleServer`. A phone reply
+  runs in the bot process and has no server, so `SupervisorWorkerManager` now registers a
+  module-level wake hook (`supervisor_goals.set_goal_wake_hook`) on `ensure_started`
+  (removed on `stop`), and the reply path calls `_wake_goal_worker(server, settings)`,
+  which uses the server when there is one and the hook otherwise.
 
 ---
 

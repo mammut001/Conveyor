@@ -40,6 +40,7 @@ from scripts.smoke import run_smoke
 from scripts.edit_harness import run_edit_harness
 from scripts.health_snapshot import health_snapshot
 from handlers import ops as ops_handlers
+from handlers import goal_commands as goal_cmds
 from handlers.tools.registry import TOOL_REGISTRY, DangerLevel
 from handlers.tools.restart_aliases import RESTART_USAGE, resolve_restart_alias
 
@@ -1846,7 +1847,10 @@ async def _help(msg, port, _runner, _settings, _arg):
         "• 看上次结果：/last\n"
         "• 停止当前任务：/cancel\n"
         "• 清空当前对话：说“清空对话”，或 /chat_clear\n"
-        "• 交给 Codex 深入处理上一问：/deep\n\n"
+        "• 交给 Codex 深入处理上一问：/deep\n"
+        "• 需要你处理的目标：/goals\n"
+        "• 回复等待中的目标：/goal_reply <短编号> <你的回答>\n"
+        "• 确认目标达成：/goal_done <短编号> · 停止目标：/goal_stop <短编号>\n\n"
         "更多示例：/nl_help · 完整命令：/commands"
     )
     import agent_channel_routing
@@ -2002,6 +2006,12 @@ async def _commands(msg, port, _runner, _settings, _arg):
     text += "P5.6 直接 Computer Use: Telegram/Feishu → Codex → 本地 cua-driver 实际控制鼠标键盘。\n"
     text += "默认全部关闭；需先 /computer_arm 或 CONVEYOR_COMPUTER_ALWAYS_DIRECT=true，且存在本地 cua-driver。\n"
     text += "敏感上下文 (密码/银行/支付/密钥串/系统设置/删除账户) 会被拦截并停止。\n"
+    text += "\n"
+    text += "目标闭环 (Supervisor goals，只在私聊里对老板本人有效):\n"
+    text += "/goals — 需要你处理的目标（等待回复 / 进行中，最多 10 个）\n"
+    text += "/goal_reply <短编号> <你的回答> — 回复等待中的目标，继续跑\n"
+    text += "/goal_done <短编号> — 确认目标已达成\n"
+    text += "/goal_stop <短编号> — 停止目标\n"
     text += "\n"
     text += "任务队列 (P3.8):\n"
     text += "/queue — 查看队列状态\n"
@@ -2387,6 +2397,13 @@ COMMAND_TABLE: dict[str, CommandSpec] = {
         CommandSpec("help", "常用操作", _help),
         CommandSpec("commands", "完整命令列表", _commands),
         CommandSpec("nl_help", "自然语言示例", _nl_help),
+        # Supervisor goals: answer a `waiting_user` goal from the phone. The
+        # owner-only + private-chat gate lives in the handlers (they mutate goal
+        # state, and `/goals` is gated too so goal titles stay private).
+        CommandSpec("goals", "需要你处理的目标", goal_cmds._goals),
+        CommandSpec("goal_reply", "回复等待中的目标", goal_cmds._goal_reply, takes_optional_arg=True),
+        CommandSpec("goal_done", "确认目标已达成", goal_cmds._goal_done, takes_optional_arg=True),
+        CommandSpec("goal_stop", "停止目标", goal_cmds._goal_stop, takes_optional_arg=True),
     ]
 }
 

@@ -25,7 +25,7 @@ import threading
 from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import agent_supervisor as ags
 from redaction import redact_text, truncate
@@ -2079,6 +2079,8 @@ class SupervisorWorkerManager:
       evaluator chat call never blocks task claiming.
     - Supports immediate wakeup on `POST /api/supervisor/tasks/:id/dispatch` and
       clean cancellation/shutdown when `WebConsoleServer.server_close()` runs.
+    - Registers a goal-loop wake hook on start, so a goal answered from a phone
+      (`/goal_reply` in the bot process, which owns no server) wakes this loop too.
     """
 
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -2092,10 +2094,40 @@ class SupervisorWorkerManager:
         self._goals_task: asyncio.Task[None] | None = None
         self._recovered_once = False
         self._closed = False
+        self._wake_unregister: Callable[[], None] | None = None
+
+    def wake(self, settings: Any = None) -> None:
+        """Wake the worker loop from ANY thread (e.g. a Telegram goal reply)."""
+        self.ensure_started(self._settings if settings is None else settings, wake=True)
+
+    def _register_goal_wake_hook(self) -> None:
+        """Let `supervisor_goals.reply_goal` / `stop_goal` wake this loop without a
+        server handle: a `/goal_reply` answered on a phone runs in the bot process,
+        which never sees the `WebConsoleServer` that owns this manager."""
+        with self._lock:
+            if self._closed or self._wake_unregister is not None:
+                return
+        from supervisor_goals import set_goal_wake_hook
+
+        unregister = set_goal_wake_hook(self.wake)
+        with self._lock:
+            if self._closed:
+                if unregister is not None:
+                    unregister()
+                return
+            self._wake_unregister = unregister
+
+    def _unregister_goal_wake_hook(self) -> None:
+        with self._lock:
+            unregister = self._wake_unregister
+            self._wake_unregister = None
+        if unregister is not None:
+            unregister()
 
     def ensure_started(self, settings: Any, *, wake: bool = False, server: Any = None) -> None:
         if not is_enabled(settings):
             return
+        self._register_goal_wake_hook()
         with self._lock:
             if self._closed:
                 return
@@ -2355,6 +2387,7 @@ class SupervisorWorkerManager:
             self._closed = True
             worker = self._worker_task
             flows = list(self._active_flows.values())
+        self._unregister_goal_wake_hook()
 
         async def _shutdown() -> None:
             if worker is not None and not worker.done():
