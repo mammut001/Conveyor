@@ -16,6 +16,22 @@ Turn your phone into a remote dev workstation. Write code, fix CI, inspect diffs
 
 </div>
 
+> **Architecture note (2026-11):** The README below describes an older Codex-based path and UI; it does not establish the executor or deployment currently in use. See the [architecture overview](docs/architecture-overview.md) and [roadmap](docs/roadmap.md) for the distinction between code and intended direction. The screenshots show the local legacy UI, not a running Supervisor interface.
+
+
+![Conveyor vision: a person guides agents through an iterative software development loop](docs/assets/conveyor-vision.png)
+
+**Our vision: you provide the ideas and direction; agents plan, build, verify, and iterate.** This illustration depicts the goal; see the [roadmap](docs/roadmap.md) for implementation status.
+
+
+### Architecture direction
+
+![Conveyor architecture concept](docs/assets/conveyor-architecture-concept.png)
+
+From top to bottom: an operator communicates a goal through a conversation surface; a supervisor coordinates planning, analysis, implementation, and review roles with configurable executors and a workspace. Review can feed back into implementation, while task state is persisted.
+
+This is a **target architecture illustration**: the entry point and complete execution loop are not yet connected. See the [architecture overview](docs/architecture-overview.md) for the code's current boundaries.
+
 ---
 
 ## ⚡ What is Conveyor?
@@ -41,6 +57,16 @@ When you step away from your desk, your code, servers, logs, and development env
 ```
 
 No public multi-tenant SaaS. No ephemeral throwaway containers that lose your dependencies. **One trusted operator controlling their own machine with strict `/diff`, `/apply`, and `/cancel` safety controls.**
+
+---
+
+## 📸 Web Console screenshots
+
+Captured from the local legacy Web UI with isolated data and the mobile UI flag enabled. These do not establish the current deployment or a Supervisor interface.
+
+![Web Console desktop](docs/assets/web-console/desktop.png)
+
+[Mobile](docs/assets/web-console/mobile.png) · [Chat](docs/assets/web-console/chat.png) · [架构总览 / Architecture diagrams](docs/architecture-overview.md) · [Roadmap](docs/roadmap.md)
 
 ---
 
@@ -302,6 +328,8 @@ Conveyor runs with `danger-full-access` within isolated git worktrees so Codex c
 
 ## 🗺️ Roadmap & Milestones
 
+See the [roadmap](docs/roadmap.md) for the broader plan and long-term direction.
+
 ### Current Capabilities (v0.2.0)
 - [x] **Git Worktree Physical Sandbox** — Detached per-job worktrees with strict Apply Safety Policies (path allowlists, binary/symlink protection, size caps).
 - [x] **Persistent Job Queue** — SQLite-backed FIFO queue with pause/resume, priority handling, and crash recovery.
@@ -314,6 +342,7 @@ Conveyor runs with `danger-full-access` within isolated git worktrees so Codex c
 - [x] **Live Screen & One-Click Takeover** — The Web Console embeds a live view of the host desktop; one click hands you the mouse and keyboard while the Agent pauses (`docs/live_screen.md`).
 - [x] **Always-On Teammate Sentry** — Scheduled patrols of host load, disk, services, error logs and CI with de-duplicated alerts on every channel.
 - [x] **Transactional Deployment & CI Gates** — Pre-deploy verification, atomic rollback on health failure, and 120+ unit and smoke tests.
+- [x] **Goal-Driven Loop** — Iterative goal loop on the 项目 page with per-repo checks, diff view, owner-confirmed merge, and notifications, available behind the Supervisor feature flag (`CONVEYOR_AGENT_SUPERVISOR_ENABLED`; see [`docs/goals.md`](docs/goals.md)).
 
 ### Upcoming Milestones
 - [ ] **More Proactive Watchers** — Host, service, log and CI patrols and the `/teammate pulse` standup have shipped; still to do: scheduled GitHub PR review reminders and dependency audits.

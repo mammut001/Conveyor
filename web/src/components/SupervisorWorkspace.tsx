@@ -1,7 +1,14 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatPanel, type TaskSuggestion } from './ChatPanel'
 import { ChangedFileList } from './TaskParts'
+import SupervisorChecks from './SupervisorChecks'
+import ProjectNotesCard from './ProjectNotes'
+import SupervisorGoals, { SupervisorGoalsProbe } from './SupervisorGoals'
+import SupervisorMerge from './SupervisorMerge'
+import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
+import { goalRoundTaskTitle, parseGoalRoundTask, goalRoundKey } from '../taskText'
 import { useMediaQuery } from '../ux/shellNav'
+import { readDispatchDraft, writeDispatchDraft } from './supDrafts'
 
 export type SupervisorExecutorModel = { id: string; name: string }
 
@@ -55,6 +62,8 @@ export type SupervisorRepo = {
   path: string
   worktrees: SupervisorWorktree[]
   source_machine?: string
+  /** "env" = server admin configured, "repo" = owner picked, "none" = nothing selected. */
+  validation_source?: 'env' | 'repo' | 'none'
 }
 
 export type SupervisorTask = {
@@ -79,7 +88,7 @@ export type SupervisorTask = {
     roles?: Record<string, { executor?: string; model?: string | null } | string>
     session_id?: string
     result_summary?: string
-    changed_files?: { status: string; path: string }[]
+    changed_files?: Array<string | { path?: string; file?: string; name?: string; status?: string }>
     pr_status?: string
     [key: string]: unknown
   } | null
@@ -184,11 +193,13 @@ type WorktreeDataSnapshot = {
 
 const CONTEXT_STORAGE_KEY = 'conveyor-supervisor-context-v1'
 const PENDING_DISPATCH_PREFIX = 'conveyor-supervisor-pending-dispatch:v1:'
+/** N20: the one-paragraph 项目 intro stays closed once the owner has read it. */
+const PROJECT_INTRO_DISMISSED_KEY = 'conveyor-supervisor-intro-dismissed'
 
 const ROLE_META: { key: SupervisorRoleKey; label: string; hint: string }[] = [
-  { key: 'analyst', label: '分析角色', hint: '拆解目标与边界' },
-  { key: 'implementer', label: '实现角色', hint: '在隔离目录编写与自测' },
-  { key: 'reviewer', label: '审查角色', hint: '独立审查与验收判定' },
+  { key: 'analyst', label: '分析', hint: '先想清楚要改成什么样' },
+  { key: 'implementer', label: '动手改', hint: '在工作目录里改代码并自测' },
+  { key: 'reviewer', label: '检查', hint: '照验收标准逐条检查' },
 ]
 
 export const DEPLOY_STAGE_ORDER: { key: DeploymentStageKey; label: string }[] = [
@@ -274,6 +285,87 @@ export function supStateLabel(state?: string | null): string {
   return SUP_STATE_LABELS[key] || state || '未知'
 }
 
+const SUP_EXECUTOR_LABELS: Record<string, string> = {
+  claude: 'Claude Code',
+  antigravity: 'Antigravity',
+  'command-code': 'Command Code',
+  codex: 'Codex CLI',
+  pool: '执行者池',
+  // The coordinator is the chat model itself: 讨论 never spawns a CLI (QA N29).
+  chat: '内置对话模型',
+}
+
+export function supExecutorLabel(name?: string | null): string {
+  const raw = (name || '').trim()
+  if (!raw) return '未指定执行者'
+  return SUP_EXECUTOR_LABELS[raw.toLowerCase()] || raw
+}
+
+/**
+ * The coordinator (讨论) is the chat model itself. The owner reads one plain Chinese line;
+ * an executor we have no Chinese name for still reads 内置对话模型, and the raw code plus
+ * the model id stay behind 技术详情 (QA N29).
+ */
+export function supCoordinatorLabel(executor?: string | null): string {
+  const raw = (executor || '').trim()
+  if (!raw) return '内置对话模型'
+  const label = supExecutorLabel(raw)
+  return /[\u4e00-\u9fff]/.test(label) ? label : '内置对话模型'
+}
+
+const SUP_QUOTA_PATTERN = /quota|usage limit|rate limit|resource_exhausted|429|credit balance|额度|配额/i
+
+export function supIsQuotaFailure(text?: string | null): boolean {
+  return SUP_QUOTA_PATTERN.test(String(text || ''))
+}
+
+function supIsFailedExecution(ex: SupervisorExecution): boolean {
+  const key = (ex.status || '').trim().toLowerCase()
+  return key === 'failed' || key === 'timeout'
+}
+
+// Derived from consecutive execution rows only (no extra persistence): when the row before
+// row i failed for the same role on a different executor, row i gets a Chinese switch note.
+export function supExecutionSwitchNotes(executions: SupervisorExecution[]): Map<number, string> {
+  const notes = new Map<number, string>()
+  for (let i = 1; i < executions.length; i += 1) {
+    const prev = executions[i - 1]
+    const cur = executions[i]
+    if (!prev || !cur || typeof prev !== 'object' || typeof cur !== 'object') continue
+    if (!supIsFailedExecution(prev)) continue
+    if ((prev.role || '') !== (cur.role || '')) continue
+    if (!prev.executor || !cur.executor || prev.executor === cur.executor) continue
+    const from = supExecutorLabel(prev.executor)
+    const to = supExecutorLabel(cur.executor)
+    const cause = supIsQuotaFailure(prev.error) ? `${from} 额度用完` : `${from} 执行失败`
+    notes.set(i, `${cause}，已换成 ${to}`)
+  }
+  return notes
+}
+
+// Maps raw backend failure strings (agent_supervisor.py / supervisor_service.py) to short Chinese
+// causes. Order matters: the first matching rule wins. Unknown text falls back to a generic line.
+export function supFriendlyTaskError(raw?: string | null): string {
+  const text = String(raw || '').trim()
+  if (!text) return '执行没有完成'
+  if (supIsQuotaFailure(text)) return '执行者的额度或用量已用完，任务没有完成'
+  if (/cancel/i.test(text)) return '任务已被取消'
+  if (/timed out|timeout/i.test(text)) return '执行超时，任务没有完成'
+  if (/unavailable|not found|not installed|not implemented|binary/i.test(text)) return '执行器不可用（未安装或暂时无法使用）'
+  if (/verdict|invalid review|review executor|review produced|review envelope|reviewer/i.test(text)) return '审查结果无效或审查失败，任务没有通过审查'
+  if (/max repair rounds/i.test(text)) return '自动修了几轮还是没通过检查'
+  if (/validation/i.test(text)) return '自动验收检查没有通过'
+  if (/worktree|\bgit\b|symlink|target identity|lock/i.test(text)) return '代码工作区（git worktree）出现问题'
+  if (/restarted|gone|ended before|interrupted/i.test(text)) return '执行过程被意外中断'
+  return '执行没有完成'
+}
+
+const SUP_ROLE_SHORT_LABELS: Record<SupervisorRoleKey, string> = {
+  analyst: '分析',
+  implementer: '实现',
+  reviewer: '审阅',
+}
+
 export function supStageLabel(stage?: string | null, fallbackState?: string | null): string {
   if (stage && stage.trim()) {
     const key = stage.trim().toLowerCase()
@@ -289,6 +381,37 @@ export function supStageLabel(stage?: string | null, fallbackState?: string | nu
 export function isTerminalTaskState(state?: string | null): boolean {
   const key = (state || '').trim().toLowerCase()
   return ['completed', 'succeeded', 'failed', 'cancelled', 'interrupted'].includes(key)
+}
+
+/** 这些状态才显示「改动」：这一轮已经跑完（成或败）或在等你确认，改动不会再有变化。 */
+const DIFF_VISIBLE_STATES = [
+  'completed', 'succeeded', 'ok', 'passed',
+  'failed', 'error',
+  'waiting_user', 'waiting_for_user', 'waiting_for_human',
+  'needs_attention', 'blocked',
+]
+
+/** 这些状态才算「这一轮做完了」：任务与结果页的「合并到主分支」入口只看这一个状态。 */
+const MERGE_DONE_STATES = ['completed', 'succeeded', 'ok', 'passed']
+
+// 后端 summary() 那段多行原始摘要（任务 id / 仓库 path / Worktree path / 分支 / SHA /
+// 内容指纹 / 修复轮次 / 验收 @ sha）对老板没有意义：看得见的那一行用字段现算，原文进「技术细节」。
+const RAW_SUMMARY_PATTERN = /(任务|目标|状态|仓库|Worktree|分支|代码版本|内容指纹|修复轮次|验收)[:：]/
+
+/** 是不是后端那段多行原始摘要（不是的话就是执行者自己写的一句话，可以照常显示）。 */
+export function supIsRawTaskSummary(text?: string | null): boolean {
+  const raw = (text || '').trim()
+  if (!raw) return false
+  if (!raw.includes('\n')) return false
+  return RAW_SUMMARY_PATTERN.test(raw)
+}
+
+/** 执行者自己写的结论（不是原始摘要时）——一句话，原样给老板看。 */
+function taskResultNote(taskDetail: SupervisorTaskDetail | null, task: SupervisorTask): string {
+  const raw = (taskDetail?.summary || task.metadata?.result_summary || '').trim()
+  if (!raw || supIsRawTaskSummary(raw)) return ''
+  const firstLine = raw.split('\n').map(line => line.trim()).find(line => line.length > 0) || ''
+  return firstLine.length > 200 ? `${firstLine.slice(0, 200)}…` : firstLine
 }
 
 export function isAttentionTask(task: SupervisorTask): boolean {
@@ -418,10 +541,10 @@ export function MachineIcon({ kind }: { kind: 'laptop' | 'network' | 'server' })
 }
 
 function worktreeBadgeInfo(wt: SupervisorWorktree): { label: string; tone: 'readonly' | 'locked' | 'ready' } {
-  if (wt.is_main) return { label: '默认分支 · 只读', tone: 'readonly' }
-  if (!wt.managed) return { label: '未托管 · 只读', tone: 'readonly' }
+  if (wt.is_main) return { label: '主分支（只看）', tone: 'readonly' }
+  if (!wt.managed) return { label: '未托管（只看）', tone: 'readonly' }
   if (wt.locked || wt.active_task_id) return { label: '执行中 · 已锁定', tone: 'locked' }
-  return { label: '托管 · 可派发', tone: 'ready' }
+  return { label: '可以开始', tone: 'ready' }
 }
 
 function SupervisorRepoSidebar({
@@ -619,7 +742,7 @@ function SupervisorRepoSidebar({
                   {isCreatingHere ? (
                     <form
                       className="sup-inline-form sup-worktree-create-form"
-                      aria-label={`为 ${repo.name} 新建 Worktree`}
+                      aria-label={`为 ${repo.name} 新建工作目录`}
                       onSubmit={e => void submitCreateWorktree(e, repo.id)}
                     >
                       <div className="sup-form-field">
@@ -661,7 +784,7 @@ function SupervisorRepoSidebar({
                           className="shell-button primary"
                           disabled={Boolean(createWorktreeBusyRepoId)}
                         >
-                          {createWorktreeBusyRepoId === repo.id ? '创建中…' : '创建 Worktree'}
+                          {createWorktreeBusyRepoId === repo.id ? '创建中…' : '创建工作目录'}
                         </button>
                       </div>
                     </form>
@@ -675,7 +798,7 @@ function SupervisorRepoSidebar({
                         onOpenCreateWorktree(repo.id)
                       }}
                     >
-                      + 新建 Worktree
+                      + 新建工作目录
                     </button>
                   )}
                 </div>
@@ -687,7 +810,7 @@ function SupervisorRepoSidebar({
         {!filteredRepos.length && (
           <div className="sup-empty-tree">
             {repositories.length === 0
-              ? '还没有已注册的仓库，点击上方「+ 注册仓库」添加本地 Git 仓库路径。'
+              ? '还没有登记仓库，点上面的「+ 注册仓库」把本地 Git 仓库的路径加进来。'
               : '没有匹配的仓库或分支。'}
           </div>
         )}
@@ -696,20 +819,28 @@ function SupervisorRepoSidebar({
   )
 }
 
-function SupervisorRoleBar({
+export function SupervisorRoleBar({
   capabilities,
   effectiveRoles,
   onChangeRole,
+  onOpenWorkers,
   disabled,
 }: {
   capabilities: SupervisorCapabilities | null
   effectiveRoles: RoleOverrides
   onChangeRole: (role: SupervisorRoleKey, patch: Partial<RoleOverrideEntry>) => void
+  onOpenWorkers?: () => void
   disabled?: boolean
 }) {
   const executors = capabilities?.executors || []
+  // Pi (built-in) only serves 对话 and 任务, so it never appears here; say what the Supervisor needs instead.
+  const noRoleExecutorReady = capabilities !== null && !executors.some(exec => exec.available)
   const coordinatorExec = capabilities?.coordinator?.executor || '当前主对话'
   const coordinatorModel = capabilities?.coordinator?.model || '默认模型'
+  // The coordinator card shows the plain Chinese label; the raw executor code and model id are
+  // technical detail (QA N29).
+  const coordinatorLabel = supCoordinatorLabel(coordinatorExec)
+  const coordinatorTech = [coordinatorExec, coordinatorModel].filter(Boolean).join(' · ')
 
   const getExecutorInfo = (execName: string): SupervisorExecutorInfo | undefined =>
     executors.find(item => item.name === execName)
@@ -730,16 +861,27 @@ function SupervisorRoleBar({
   }
 
   return (
-    <div className="sup-roles-panel" aria-label="角色与执行器配置">
+    <div className="sup-roles-panel" aria-label="谁来干活">
+      {noRoleExecutorReady && (
+        <p className="sup-role-guidance" role="status">
+          项目需要 Claude Code、Antigravity 或 Command Code 至少一个已安装并登录。
+          {onOpenWorkers && <> <button type="button" className="sup-role-guidance-link" onClick={onOpenWorkers}>去执行者页</button></>}
+          Pi 只用于对话和任务。
+        </p>
+      )}
       <div className="sup-roles-grid">
         <div className="sup-role-card sup-role-card--coordinator">
           <div className="sup-role-head">
-            <span className="sup-role-title">协调对话</span>
-            <span className="sup-role-badge is-ok">主会话</span>
+            <span className="sup-role-title">讨论</span>
+            <span className="sup-role-badge is-ok">先聊方案</span>
           </div>
           <div className="sup-role-Static">
-            <strong>{coordinatorExec}</strong>
-            <small>{coordinatorModel}</small>
+            <strong>{coordinatorLabel}</strong>
+            <small>用「模型设置」里的对话模型聊方案</small>
+            <details className="sup-role-tech">
+              <summary>技术详情</summary>
+              <span>{coordinatorTech}</span>
+            </details>
           </div>
         </div>
 
@@ -751,11 +893,12 @@ function SupervisorRoleBar({
           return (
             <div key={key} className={`sup-role-card ${!status.available ? 'is-unavailable' : ''}`}>
               <div className="sup-role-head">
-                <label htmlFor={`sup-role-exec-${key}`} className="sup-role-title" title={hint}>{label}</label>
+                <label htmlFor={`sup-role-exec-${key}`} className="sup-role-title">{label}</label>
                 <span className={`sup-role-badge ${status.available ? 'is-ok' : 'is-err'}`}>
                   {status.available ? '已就绪' : '不可用'}
                 </span>
               </div>
+              <small className="sup-role-hint">{hint}</small>
               <select
                 id={`sup-role-exec-${key}`}
                 aria-label={`${label}执行器`}
@@ -771,11 +914,14 @@ function SupervisorRoleBar({
                 {extraOption && (
                   <option value={extraOption}>{extraOption}{!status.available ? '（不可用）' : ''}</option>
                 )}
-                {executors.map(exec => (
-                  <option key={exec.name} value={exec.name}>
-                    {exec.label || exec.name}{!exec.available ? '（不可用）' : ''}
-                  </option>
-                ))}
+                {/* Unavailable executors are hidden unless this role currently uses them (then kept with the reason). */}
+                {executors
+                  .filter(exec => exec.available || exec.name === current.executor)
+                  .map(exec => (
+                    <option key={exec.name} value={exec.name}>
+                      {exec.label || exec.name}{exec.name === 'pool' && exec.available ? '（推荐）' : ''}{!exec.available ? '（不可用）' : ''}
+                    </option>
+                  ))}
                 {!extraOption && executors.length === 0 && (
                   <option value="">未配置执行器</option>
                 )}
@@ -789,7 +935,7 @@ function SupervisorRoleBar({
       </div>
 
       <details className="sup-role-advanced">
-        <summary>模型与角色高级配置（可选）</summary>
+        <summary>高级设置</summary>
         <div className="sup-role-advanced-body">
           <p className="sup-quota-disclaimer">
             说明：执行器显示「已就绪」仅代表本地适配器或命令已配置，不承诺远程模型配额一定可用；执行失败时不会静默回退到其他服务商。
@@ -877,7 +1023,25 @@ function SupervisorRunHistory({
   }
 
   const latestTask = tasks[0]
-  const attentionCount = tasks.filter(t => isAttentionTask(t)).length
+  // 目标循环里「前面某一轮失败、后面还有轮次」是正常过程：这些失败不算「需处理」。
+  const latestRoundByGoal = useMemo(() => {
+    const rounds = new Map<string, number>()
+    for (const task of tasks) {
+      const info = parseGoalRoundTask(task.goal)
+      if (!info) continue
+      const key = goalRoundKey(info)
+      const seen = rounds.get(key) || 0
+      if (info.round > seen) rounds.set(key, info.round)
+    }
+    return rounds
+  }, [tasks])
+  const isSupersededRound = useCallback((task: SupervisorTask) => {
+    const info = parseGoalRoundTask(task.goal)
+    if (!info) return false
+    const latest = latestRoundByGoal.get(goalRoundKey(info))
+    return typeof latest === 'number' && latest > info.round
+  }, [latestRoundByGoal])
+  const attentionCount = tasks.filter(t => isAttentionTask(t) && !isSupersededRound(t)).length
 
   return (
     <section className={`sup-run-history ${expanded ? 'is-expanded' : 'is-collapsed'}`} aria-label="运行记录">
@@ -904,36 +1068,48 @@ function SupervisorRunHistory({
       {expanded && (
         <div className="sup-run-history-list" role="group" aria-label="当前工作目录运行记录列表">
           {tasks.length === 0 ? (
-            <p className="sup-muted-note">这个 Worktree 还没有任务运行记录。</p>
+            <p className="sup-muted-note">这个工作目录还没有任务运行记录。</p>
           ) : (
             tasks.map(task => {
               const isSelected = task.id === selectedTaskId
               const attention = isAttentionTask(task)
               return (
-                <button
+                <div
                   key={task.id}
-                  type="button"
                   className={`sup-run-row ${isSelected ? 'selected' : ''} ${attention ? 'is-attention' : ''}`}
-                  aria-pressed={isSelected}
-                  onClick={() => onSelectTask(task.id)}
                 >
-                  <div className="sup-run-row-main">
-                    <strong>{task.goal || task.id}</strong>
-                    <span className={`status-badge ${task.state}`}>
-                      <i />
-                      {supStateLabel(task.state)}
-                    </span>
-                  </div>
-                  <div className="sup-run-row-meta">
-                    <span>阶段：{supStageLabel(task.stage, task.state)}</span>
-                    {typeof task.repair_round === 'number' && typeof task.max_repair_rounds === 'number' && task.max_repair_rounds > 0 && (
-                      <span>修复轮次：{task.repair_round}/{task.max_repair_rounds}</span>
-                    )}
-                    <span>{formatShortTime(task.updated_at || task.created_at)}</span>
-                    <code>{task.id}</code>
-                  </div>
-                  {task.error && <small className="sup-run-row-error">{task.error}</small>}
-                </button>
+                  <button
+                    type="button"
+                    className="sup-run-row-button"
+                    aria-pressed={isSelected}
+                    onClick={() => onSelectTask(task.id)}
+                  >
+                    <div className="sup-run-row-main">
+                      <strong>{goalRoundTaskTitle(task.goal) || task.goal || task.id}</strong>
+                      <span className={`status-badge ${task.state}`}>
+                        <i />
+                        {supStateLabel(task.state)}
+                      </span>
+                    </div>
+                    <div className="sup-run-row-meta">
+                      <span>阶段：{supStageLabel(task.stage, task.state)}</span>
+                      {typeof task.repair_round === 'number' && typeof task.max_repair_rounds === 'number' && task.max_repair_rounds > 0 && (
+                        <span>修复轮次：{task.repair_round}/{task.max_repair_rounds}</span>
+                      )}
+                      <span>{formatShortTime(task.updated_at || task.created_at)}</span>
+                      <code>{task.id}</code>
+                    </div>
+                  </button>
+                  {task.error && (
+                    <div className="sup-run-row-error">
+                      <span>{supFriendlyTaskError(task.error)}</span>
+                      <details className="sup-run-row-raw-error">
+                        <summary>技术详情</summary>
+                        <pre>{task.error}</pre>
+                      </details>
+                    </div>
+                  )}
+                </div>
               )
             })
           )}
@@ -943,6 +1119,74 @@ function SupervisorRunHistory({
   )
 }
 
+/** Drop anything that is not a plain object so downstream field access never throws. */
+function onlyObjects<T>(items: T[] | undefined | null): T[] {
+  return (Array.isArray(items) ? items : []).filter((item): item is T => Boolean(item) && typeof item === 'object')
+}
+
+// Always-visible summary under the task progress: which worker ran each role (latest attempt wins)
+// plus any executor switch notes. The full execution list stays in 技术细节.
+function SupervisorTaskExecutors({ executions }: { executions: SupervisorExecution[] }) {
+  const rows = onlyObjects(executions)
+  if (rows.length === 0) return null
+  const latestByRole = new Map<SupervisorRoleKey, SupervisorExecution>()
+  for (const ex of rows) {
+    const key = ROLE_META.find(m => m.key === ex.role)?.key
+    if (key) latestByRole.set(key, ex)
+  }
+  const roleParts = ROLE_META.filter(m => latestByRole.has(m.key))
+  const switchNotes = [...supExecutionSwitchNotes(rows).values()]
+  if (roleParts.length === 0 && switchNotes.length === 0) return null
+  return (
+    <div className="sup-task-executors" aria-label="各角色执行者">
+      {roleParts.length > 0 && (
+        <p className="sup-task-executors-line">
+          {roleParts.map((m, idx) => (
+            <Fragment key={m.key}>
+              {idx > 0 && <span aria-hidden="true"> · </span>}
+              <span>{SUP_ROLE_SHORT_LABELS[m.key]}：{supExecutorLabel(latestByRole.get(m.key)?.executor)}</span>
+            </Fragment>
+          ))}
+        </p>
+      )}
+      {switchNotes.map((note, idx) => (
+        <p key={idx} className="sup-task-switch-note" role="note">{note}</p>
+      ))}
+    </div>
+  )
+}
+
+export type NormalizedChangedFile = { path: string; status: string }
+
+/**
+ * metadata.changed_files arrives in two shapes from the supervisor backend: the live git
+ * path (supervisor_service._enrich_task_dict) returns a list of plain strings such as
+ * "calc.py", while other payloads carry {path|file|name, status} objects. Normalize both to
+ * {path, status} so ChangedFileList never receives a bare string, and drop any entry that
+ * has no usable path. Pure + exported so it can be unit-tested.
+ */
+export function normalizeChangedFiles(raw: unknown): NormalizedChangedFile[] {
+  if (!Array.isArray(raw)) return []
+  const out: NormalizedChangedFile[] = []
+  for (const entry of raw) {
+    if (typeof entry === 'string') {
+      const path = entry.trim()
+      if (path) out.push({ path, status: 'M' })
+      continue
+    }
+    if (entry && typeof entry === 'object') {
+      const obj = entry as { path?: unknown; file?: unknown; name?: unknown; status?: unknown }
+      const rawPath = obj.path ?? obj.file ?? obj.name
+      const path = typeof rawPath === 'string' ? rawPath.trim() : ''
+      if (path) {
+        const status = typeof obj.status === 'string' && obj.status.trim() ? obj.status : 'M'
+        out.push({ path, status })
+      }
+    }
+  }
+  return out
+}
+
 function SupervisorTechnicalDetails({
   task,
   taskDetail,
@@ -950,9 +1194,11 @@ function SupervisorTechnicalDetails({
   task: SupervisorTask | null
   taskDetail: SupervisorTaskDetail | null
 }) {
-  const changedFiles = taskDetail?.metadata?.changed_files || task?.metadata?.changed_files || []
-  const handoffs = taskDetail?.handoffs || []
-  const executions = taskDetail?.executions || []
+  const changedFiles = normalizeChangedFiles(taskDetail?.metadata?.changed_files ?? task?.metadata?.changed_files)
+  const rawSummary = (taskDetail?.summary || task?.metadata?.result_summary || '').trim()
+  const handoffs = onlyObjects(taskDetail?.handoffs)
+  const executions = onlyObjects(taskDetail?.executions)
+  const switchNotes = supExecutionSwitchNotes(executions)
   const countLabel = [
     changedFiles.length ? `${changedFiles.length} 个改动文件` : '',
     handoffs.length ? `${handoffs.length} 次角色交接` : '',
@@ -962,7 +1208,7 @@ function SupervisorTechnicalDetails({
   return (
     <details className="sup-tech-details">
       <summary className="sup-tech-summary">
-        <span>技术细节（可选查看：改动文件、交接记录与执行输出）</span>
+        <span>技术细节（可选查看：原始摘要、改动文件、交接记录与执行输出）</span>
         <span className="sup-tech-meta">{countLabel}</span>
       </summary>
       <div className="sup-tech-body">
@@ -973,6 +1219,13 @@ function SupervisorTechnicalDetails({
             {task.current_sha && <span>当前提交：<code>{shortSha(task.current_sha)}</code></span>}
           </div>
         ) : null}
+
+        {rawSummary && (
+          <div className="sup-tech-block">
+            <h4>原始摘要</h4>
+            <pre className="sup-exec-output">{rawSummary}</pre>
+          </div>
+        )}
 
         <div className="sup-tech-block">
           <h4>改动文件</h4>
@@ -1002,17 +1255,39 @@ function SupervisorTechnicalDetails({
           <div className="sup-tech-block">
             <h4>执行与终端输出</h4>
             <div className="sup-execution-list">
-              {executions.map((ex, idx) => (
-                <details key={ex.id ?? idx} className="sup-execution-item">
-                  <summary>
-                    <strong>{ex.role || ex.stage || '执行'}</strong>
-                    {ex.executor && <span> · {ex.executor}{ex.model ? ` (${ex.model})` : ''}</span>}
-                    {ex.status && <span className="sup-exec-status"> · {supStateLabel(ex.status)}</span>}
-                  </summary>
-                  {ex.error && <p className="sup-inline-error">{ex.error}</p>}
-                  {ex.output ? <pre className="sup-exec-output">{ex.output}</pre> : <p className="sup-muted-note">无标准输出内容。</p>}
-                </details>
-              ))}
+              {executions.map((ex, idx) => {
+                const switchNote = switchNotes.get(idx)
+                const roleLabel = ROLE_META.find(m => m.key === ex.role)?.label || ex.role || ex.stage || '执行'
+                return (
+                  <Fragment key={ex.id ?? idx}>
+                    {switchNote && (
+                      <p className="sup-exec-switch-note" role="note">
+                        <time>{formatShortTime(ex.started_at)}</time>
+                        {switchNote}
+                      </p>
+                    )}
+                    <details className="sup-execution-item">
+                      <summary>
+                        <strong>{roleLabel}</strong>
+                        {ex.executor && <span> · {supExecutorLabel(ex.executor)}{ex.model ? ` (${ex.model})` : ''}</span>}
+                        {ex.status && <span className="sup-exec-status"> · {supStateLabel(ex.status)}</span>}
+                      </summary>
+                      {ex.error && (
+                        <>
+                          <p className="sup-inline-error">
+                            {supIsQuotaFailure(ex.error) ? '额度用完，本次执行未完成' : '本次执行失败'}
+                          </p>
+                          <details className="sup-exec-raw-error">
+                            <summary>技术详情</summary>
+                            <pre>{ex.error}</pre>
+                          </details>
+                        </>
+                      )}
+                      {ex.output ? <pre className="sup-exec-output">{ex.output}</pre> : <p className="sup-muted-note">无标准输出内容。</p>}
+                    </details>
+                  </Fragment>
+                )
+              })}
             </div>
           </div>
         )}
@@ -1102,7 +1377,7 @@ function SupervisorDeployView({
   } else if (!deployCaps.can_start) {
     disableReason = deployCaps.reason?.trim() || '部署运行器当前处于不可用状态，暂不能发起部署。'
   } else if (!selectedTask) {
-    disableReason = '请先在当前 Worktree 中选择或完成一项任务后再发起部署。'
+    disableReason = '请先在当前工作目录中选择或完成一项任务后再发起部署。'
   }
 
   const sourceMachine =
@@ -1250,7 +1525,7 @@ function SupervisorDeployView({
           <h4>本次部署上下文</h4>
           <div className="sup-kv-list">
             <div><span>仓库</span><strong>{repo?.name || '未选'}</strong></div>
-            <div><span>Worktree</span><strong>{worktree?.branch || '未选'}</strong></div>
+            <div><span>工作目录</span><strong>{worktree?.branch || '未选'}</strong></div>
             <div><span>关联任务</span><strong>{selectedTask?.id || activeDeployment?.task_id || '无'}</strong></div>
             <div><span>当前阶段</span><strong>{activeStageText}</strong></div>
             <div><span>总体状态</span><strong>{activeDeployment ? supStateLabel(activeDeployment.status) : '未开始'}</strong></div>
@@ -1308,10 +1583,12 @@ export function SupervisorWorkspace({
   token,
   active,
   coordinatorFallbackName,
+  onOpenWorkers,
 }: {
   token: string
   active: boolean
   coordinatorFallbackName?: string
+  onOpenWorkers?: () => void
 }) {
   const narrowViewport = useMediaQuery('(max-width: 900px)')
   const [capabilities, setCapabilities] = useState<SupervisorCapabilities | null>(null)
@@ -1325,7 +1602,18 @@ export function SupervisorWorkspace({
   const [selectedWorktreeId, setSelectedWorktreeId] = useState(savedContext.worktreeId)
   const [expandedRepos, setExpandedRepos] = useState<Record<string, boolean>>({})
   const [searchQuery, setSearchQuery] = useState('')
-  const [subTab, setSubTab] = useState<'workspace' | 'chat' | 'deploy'>('workspace')
+  const [subTab, setSubTab] = useState<'goals' | 'workspace' | 'chat' | 'deploy'>('workspace')
+  // The 目标 tab becomes the default once the selected worktree has a running / waiting goal;
+  // any explicit tab click wins from then on (reset when the worktree context changes).
+  const subTabTouchedRef = useRef(false)
+  // 选中的工作目录上有没有正在跑的目标：合并入口在目标跑着的时候要藏起来。
+  const [hasActiveGoalInWorktree, setHasActiveGoalInWorktree] = useState(false)
+  // 讨论里点「设为目标」带去「目标」页的草稿（目标页填进输入框后就清掉）。
+  const [goalDraft, setGoalDraft] = useState<string | null>(null)
+  // 目标在跑、老板又不在「目标」页时，隔一会儿重新问一次，好让「设为目标」在目标结束后重新能点。
+  const [goalProbeTick, setGoalProbeTick] = useState(0)
+  // 任务卡片上「合并到主分支…」：点开才读合并预览（默认收起）。
+  const [mergeOpen, setMergeOpen] = useState(false)
   const [mobileRepoDrawerOpen, setMobileRepoDrawerOpen] = useState(false)
 
   // Repository registration & worktree creation states
@@ -1351,6 +1639,21 @@ export function SupervisorWorkspace({
   const contextAbortRef = useRef<AbortController | null>(null)
   const pollInFlightRef = useRef(false)
   const goalInputRef = useRef<HTMLTextAreaElement>(null)
+  // 「查看这一轮的任务」切回任务页后，把这一轮的任务卡片滚进可视区，
+  // 免得老板一落地正对着上面的派发表单。
+  const taskCardRef = useRef<HTMLElement>(null)
+  const pendingTaskScrollRef = useRef(false)
+
+  // N20: a one-paragraph intro at the top of 项目, only while there is no repository yet.
+  // Once the owner closes it (or a repository exists) it stays out of the way.
+  const [projectIntroDismissed, setProjectIntroDismissed] = useState(() => {
+    try { return localStorage.getItem(PROJECT_INTRO_DISMISSED_KEY) === 'true' } catch { return false }
+  })
+  const dismissProjectIntro = useCallback(() => {
+    setProjectIntroDismissed(true)
+    try { localStorage.setItem(PROJECT_INTRO_DISMISSED_KEY, 'true') } catch { /* storage unavailable */ }
+  }, [])
+  const projectIntroOpen = !initialLoading && !projectIntroDismissed && repositories.length === 0
 
   const selectedRepo = useMemo(
     () => repositories.find(r => r.id === selectedRepoId) || null,
@@ -1407,7 +1710,7 @@ export function SupervisorWorkspace({
       setCapabilities(capRes.value)
       setCapabilitiesError('')
     } else {
-      setCapabilitiesError(capRes.reason instanceof Error ? capRes.reason.message : '无法读取监工能力配置')
+      setCapabilitiesError(capRes.reason instanceof Error ? capRes.reason.message : '无法读取项目能力配置')
     }
 
     if (repoRes.status === 'fulfilled') {
@@ -1427,6 +1730,18 @@ export function SupervisorWorkspace({
     }
     setInitialLoading(false)
   }, [apiCall, reconcileSelection, selectedWorktreeId, token])
+
+  // Re-read the repository list so validation_source badges stay honest after a save.
+  const refreshRepositories = useCallback(async () => {
+    try {
+      const repoRes = await apiCall<{ repositories: SupervisorRepo[] }>('/api/supervisor/repositories')
+      const repos = Array.isArray(repoRes.repositories) ? repoRes.repositories : []
+      setRepositories(repos)
+      setReposError('')
+    } catch (err) {
+      setReposError(err instanceof Error ? err.message : '无法读取仓库列表')
+    }
+  }, [apiCall])
 
   // Load tasks, task detail, and deployments for the active (repoId, worktreeId) context with race protection
   const loadContextData = useCallback(async (repo: SupervisorRepo, worktree: SupervisorWorktree, isPoll = false) => {
@@ -1557,6 +1872,11 @@ export function SupervisorWorkspace({
     contextAbortRef.current?.abort()
     setDispatchError('')
     setDeployError('')
+    setMergeOpen(false)
+    setHasActiveGoalInWorktree(false)
+    setGoalDraft(null)
+    subTabTouchedRef.current = false
+    setSubTab('workspace')
     setSelectedRepoId(repoId)
     setSelectedWorktreeId(worktreeId)
     setExpandedRepos(prev => ({ ...prev, [repoId]: true }))
@@ -1629,7 +1949,7 @@ export function SupervisorWorkspace({
       selectWorktreeContext(repoId, createdWt.id)
       return true
     } catch (err) {
-      setCreateWorktreeError(err instanceof Error ? err.message : '创建 Worktree 失败')
+      setCreateWorktreeError(err instanceof Error ? err.message : '新建工作目录失败')
       return false
     } finally {
       setCreateWorktreeBusyRepoId('')
@@ -1640,6 +1960,24 @@ export function SupervisorWorkspace({
     if (!contextKey) return { goal: '', acceptanceCriteria: '' }
     return draftsByContext[contextKey] || { goal: '', acceptanceCriteria: '' }
   }, [contextKey, draftsByContext])
+
+  // N25: restore the dispatch draft (goal + 验收标准) for this worktree once, when the owner
+  // lands on it, so a reload does not lose what was typed. In-memory entries always win.
+  useEffect(() => {
+    if (!contextKey || draftsByContext[contextKey]) return
+    const stored = readDispatchDraft(contextKey)
+    if (!stored.goal && !stored.criteria) return
+    setDraftsByContext(prev => (prev[contextKey]
+      ? prev
+      : { ...prev, [contextKey]: { goal: stored.goal, acceptanceCriteria: stored.criteria } }))
+  }, [contextKey, draftsByContext])
+
+  // N25: every change is saved as a draft (an empty one is dropped), so a successful
+  // 开始执行 — which clears the draft — clears the stored copy too.
+  useEffect(() => {
+    if (!contextKey || !draftsByContext[contextKey]) return
+    writeDispatchDraft(contextKey, { goal: currentDraft.goal, criteria: currentDraft.acceptanceCriteria })
+  }, [contextKey, currentDraft, draftsByContext])
 
   const updateCurrentDraft = useCallback((patch: Partial<WorktreeDraft>) => {
     if (!contextKey) return
@@ -1712,6 +2050,33 @@ export function SupervisorWorkspace({
     return currentSnapshot.taskDetail?.id === selectedTask.id ? currentSnapshot.taskDetail : null
   }, [currentSnapshot.taskDetail, selectedTask])
 
+  // 「改动」：只有这一轮已经结束（完成 / 失败 / 在等你）时才值得看改了什么，
+  // 选中任务时才去读差异（懒加载），读完按任务 id 缓存。
+  const changesReady = Boolean(selectedTask) && DIFF_VISIBLE_STATES.includes((selectedTask?.state || '').trim().toLowerCase())
+  const taskDiff = useSupervisorDiff(apiCall, 'task', selectedTask?.id || '', changesReady)
+  const diffFileCount = taskDiff.status === 'ready'
+    ? (taskDiff.data.files?.length || 0) + (taskDiff.data.untracked?.length || 0)
+    : 0
+
+  // 任务卡片上那一行短总结：状态 + 修了几轮 + 验收 + 改了几个文件（原始摘要进「技术细节」）。
+  const taskSummary = useMemo(() => {
+    if (!selectedTask) return null
+    const acceptance = selectedTaskDetail?.acceptance
+    const verdict = acceptance?.passed === true
+      ? '验收通过'
+      : acceptance?.passed === false
+        ? '验收未通过'
+        : '验收未验证'
+    const parts = [supStateLabel(selectedTask.state)]
+    if (typeof selectedTask.repair_round === 'number') {
+      parts.push(selectedTask.repair_round > 0 ? `自动修了 ${selectedTask.repair_round} 轮` : '没有自动修复')
+    }
+    parts.push(verdict)
+    parts.push(diffFileCount > 0 ? `改了 ${diffFileCount} 个文件` : '没有改动文件')
+    const note = taskResultNote(selectedTaskDetail, selectedTask)
+    return { line: parts.join(' · '), note }
+  }, [diffFileCount, selectedTask, selectedTaskDetail])
+
   const handleSelectTask = useCallback(async (taskId: string) => {
     if (!contextKey || !selectedRepo || !selectedWorktree) return
     const targetKey = contextKey
@@ -1773,6 +2138,16 @@ export function SupervisorWorkspace({
     [currentSnapshot.tasks],
   )
   const isLockedWorktree = Boolean(selectedWorktree && (selectedWorktree.locked || hasRunningTaskInWorktree))
+  // 「合并到主分支」入口：只给受托管的工作目录（主分支 / 未托管目录不能作为合并来源），
+  // 这一轮已经跑完、而且没有任务或目标在跑的时候才出现。
+  const latestTask = currentSnapshot.tasks[0] || null
+  const latestTaskDone = Boolean(latestTask)
+    && MERGE_DONE_STATES.includes((latestTask?.state || '').trim().toLowerCase())
+  const mergeAvailable = Boolean(selectedWorktree)
+    && !isReadOnlyWorktree
+    && !isLockedWorktree
+    && !hasActiveGoalInWorktree
+    && latestTaskDone
 
   const currentPending = contextKey ? (pendingByContext[contextKey] || null) : null
 
@@ -1956,6 +2331,68 @@ export function SupervisorWorkspace({
     }
   }, [apiCall, capabilities?.deployment?.can_start, capabilities?.deployment?.configured, contextKey, deployBusy, selectedTask])
 
+  const handleSubTabChange = useCallback((tab: 'goals' | 'workspace' | 'chat' | 'deploy') => {
+    subTabTouchedRef.current = true
+    setSubTab(tab)
+  }, [])
+
+  // 目标 tab: an active (running / waiting) goal becomes the default sub-tab for this worktree.
+  const handleActiveGoalChange = useCallback((hasActiveGoal: boolean) => {
+    setHasActiveGoalInWorktree(hasActiveGoal)
+    if (!hasActiveGoal || subTabTouchedRef.current) return
+    setSubTab('goals')
+  }, [])
+
+  // 目标还在跑、但「目标」页没打开（它自己会轮询）：每 15 秒重新问一次有没有进行中的目标。
+  useEffect(() => {
+    if (!active || !hasActiveGoalInWorktree || subTab === 'goals') return
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      setGoalProbeTick(tick => tick + 1)
+    }, 15_000)
+    return () => window.clearInterval(timer)
+  }, [active, hasActiveGoalInWorktree, subTab])
+
+  // 讨论里的「设为目标」：切到「目标」页并把草稿填进「描述你想要的结果」，绝不自动开始。
+  const handleMakeGoal = useCallback((draft: string) => {
+    if (hasActiveGoalInWorktree || !draft.trim()) return
+    setGoalDraft(draft)
+    subTabTouchedRef.current = true
+    setSubTab('goals')
+    window.setTimeout(() => {
+      const field = document.getElementById('sup-goal-outcome')
+      if (field instanceof HTMLTextAreaElement && !field.disabled) {
+        field.focus()
+        field.setSelectionRange(field.value.length, field.value.length)
+      }
+    }, 50)
+  }, [hasActiveGoalInWorktree])
+
+  const handleGoalDraftUsed = useCallback(() => {
+    setGoalDraft(null)
+  }, [])
+
+  // 「查看这一轮的任务」: jump to 任务与结果 with that task selected.
+  const handleOpenGoalTask = useCallback((taskId: string) => {
+    subTabTouchedRef.current = true
+    setSubTab('workspace')
+    void handleSelectTask(taskId)
+    // 等这一页连任务卡片一起画出来，再把卡片滚到任务区顶部（见下面的 effect）。
+    pendingTaskScrollRef.current = true
+  }, [handleSelectTask])
+
+  // 切页 + 选中都渲染完之后，把这一轮的任务卡片滚到任务区顶部：老板一落地看到的就是这一轮，
+  // 而不是上面的派发表单。放在 effect 里是因为点按钮的那一刻任务卡片可能还没画出来。
+  useEffect(() => {
+    if (!pendingTaskScrollRef.current) return
+    if (subTab !== 'workspace' || !selectedTask) return
+    pendingTaskScrollRef.current = false
+    const frame = window.requestAnimationFrame(() => {
+      taskCardRef.current?.scrollIntoView({ block: 'start' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [subTab, selectedTask])
+
   // Task suggestion from ChatPanel fills reviewable goal without auto-dispatching
   const handlePrepareTask = useCallback((suggestion: TaskSuggestion) => {
     updateCurrentDraft({
@@ -1963,19 +2400,22 @@ export function SupervisorWorkspace({
       preparedSessionId: suggestion.session_id,
       fromSuggestion: true,
     })
-    if (narrowViewport) setSubTab('workspace')
+    if (narrowViewport) {
+      subTabTouchedRef.current = true
+      setSubTab('workspace')
+    }
     window.setTimeout(() => {
       goalInputRef.current?.focus()
     }, 50)
   }, [narrowViewport, updateCurrentDraft])
 
-  const coordinatorLabel = useMemo(() => {
-    if (capabilities?.coordinator?.executor) {
-      return capabilities.coordinator.model
-        ? `${capabilities.coordinator.executor} · ${capabilities.coordinator.model}`
-        : capabilities.coordinator.executor
-    }
-    return coordinatorFallbackName || '当前主对话'
+  // 讨论 uses the coordinator chat model. The owner sees one plain Chinese line; the raw
+  // executor code and model id stay in the 技术详情 disclosure (QA N29).
+  const coordinatorPlain = useMemo(() => supCoordinatorLabel(capabilities?.coordinator?.executor), [capabilities?.coordinator])
+  const coordinatorTech = useMemo(() => {
+    const executor = capabilities?.coordinator?.executor || ''
+    const model = capabilities?.coordinator?.model || ''
+    return [executor, model].filter(Boolean).join(' · ') || coordinatorFallbackName || ''
   }, [capabilities?.coordinator, coordinatorFallbackName])
 
   const activeWorktreeBadge = selectedWorktree ? worktreeBadgeInfo(selectedWorktree) : null
@@ -2029,13 +2469,26 @@ export function SupervisorWorkspace({
       )}
 
       <div className="sup-main-column">
+        {projectIntroOpen && (
+          <section className="sup-intro" role="region" aria-label="项目是做什么的">
+            <button type="button" className="sup-intro-close" aria-label="关闭说明" onClick={dismissProjectIntro}>×</button>
+            <p>
+              「项目」把你电脑上的 Git <strong>仓库</strong>（就是项目文件夹）登记进来，再为它建出一个或多个<strong>工作目录</strong>。
+              每个工作目录是项目的一份独立副本，改动不会碰到主分支，确认后再合并。
+            </p>
+            <p>
+              要真的动手改代码，还需要一个<strong>可用的执行者</strong>（已经装好并登录）。
+              {onOpenWorkers && <> <button type="button" className="sup-intro-link" onClick={onOpenWorkers}>去执行者页</button></>}
+            </p>
+          </section>
+        )}
         <header className="sup-context-bar">
           <div className="sup-context-title-group">
             {narrowViewport && (
               <button
                 type="button"
                 className="shell-header-button sup-mobile-repo-btn"
-                aria-label="选择仓库与 Worktree"
+                aria-label="选择仓库与工作目录"
                 onClick={() => setMobileRepoDrawerOpen(true)}
               >
                 <span>仓库</span>
@@ -2063,13 +2516,22 @@ export function SupervisorWorkspace({
             </div>
           </div>
 
-          <div className="sup-subnav" role="tablist" aria-label="Code 工作区视图">
+          <div className="sup-subnav" role="tablist" aria-label="项目视图">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={subTab === 'goals'}
+              className={`sup-subnav-tab ${subTab === 'goals' ? 'active' : ''}`}
+              onClick={() => handleSubTabChange('goals')}
+            >
+              目标
+            </button>
             <button
               type="button"
               role="tab"
               aria-selected={subTab === 'workspace'}
               className={`sup-subnav-tab ${subTab === 'workspace' ? 'active' : ''}`}
-              onClick={() => setSubTab('workspace')}
+              onClick={() => handleSubTabChange('workspace')}
             >
               任务与结果
             </button>
@@ -2079,9 +2541,9 @@ export function SupervisorWorkspace({
                 role="tab"
                 aria-selected={subTab === 'chat'}
                 className={`sup-subnav-tab ${subTab === 'chat' ? 'active' : ''}`}
-                onClick={() => setSubTab('chat')}
+                onClick={() => handleSubTabChange('chat')}
               >
-                工作目录对话
+                讨论
               </button>
             )}
             <button
@@ -2089,7 +2551,7 @@ export function SupervisorWorkspace({
               role="tab"
               aria-selected={subTab === 'deploy'}
               className={`sup-subnav-tab ${subTab === 'deploy' ? 'active' : ''}`}
-              onClick={() => setSubTab('deploy')}
+              onClick={() => handleSubTabChange('deploy')}
             >
               部署
             </button>
@@ -2098,17 +2560,27 @@ export function SupervisorWorkspace({
 
         {(capabilitiesError || reposError) && (
           <div className="sup-banner sup-banner--warning" role="status">
-            <strong>部分监工接口暂未就绪</strong>
+            <strong>部分项目接口暂未就绪</strong>
             <span>{[capabilitiesError, reposError].filter(Boolean).join(' · ')}</span>
           </div>
+        )}
+
+        {selectedRepo && selectedWorktree && (
+          <SupervisorGoalsProbe
+            key={`probe:${contextKey}:${goalProbeTick}`}
+            apiCall={apiCall}
+            repo={selectedRepo}
+            worktree={selectedWorktree}
+            onActiveGoalChange={handleActiveGoalChange}
+          />
         )}
 
         {!selectedRepo || !selectedWorktree ? (
           <div className="sup-empty-workspace">
             <div className="brand-mark">C</div>
-            <h3>{initialLoading ? '正在加载仓库与工作目录…' : '选择或创建一个托管 Worktree'}</h3>
+            <h3>{initialLoading ? '正在加载仓库与工作目录…' : '选择或创建一个工作目录'}</h3>
             <p>
-              在左侧选择仓库并进入独立 Worktree，即可与主对话模型讨论方案、明确派发给分析/实现/审查角色执行，并查看结果与部署状态。
+              在左侧选择仓库并进入一个工作目录，就可以在这里讨论方案、派发任务，并查看结果与部署状态。
             </p>
           </div>
         ) : subTab === 'deploy' ? (
@@ -2124,6 +2596,24 @@ export function SupervisorWorkspace({
               onStartDeploy={() => void handleStartDeploy()}
             />
           </div>
+        ) : subTab === 'goals' ? (
+          <SupervisorGoals
+            key={contextKey}
+            apiCall={apiCall}
+            repo={selectedRepo}
+            worktree={selectedWorktree}
+            visible={active && subTab === 'goals'}
+            readOnly={isReadOnlyWorktree}
+            locked={isLockedWorktree}
+            capabilities={capabilities}
+            effectiveRoles={effectiveRoles}
+            onChangeRole={handleRoleChange}
+            onOpenTask={handleOpenGoalTask}
+            onActiveGoalChange={handleActiveGoalChange}
+            onRefreshRepositories={() => void refreshRepositories()}
+            draftOutcome={goalDraft}
+            onDraftOutcomeUsed={handleGoalDraftUsed}
+          />
         ) : (
           <div className="sup-workbench-split">
             <div
@@ -2134,7 +2624,7 @@ export function SupervisorWorkspace({
                 <div className="sup-banner sup-banner--readonly" role="status">
                   <div className="sup-banner-text">
                     <strong>当前为只读工作目录（{selectedWorktree.is_main ? '主分支' : '未托管目录'}）</strong>
-                    <span>主工作目录与未托管目录仅支持只读查看。请新建托管 Worktree 以在隔离目录中派发任务。</span>
+                    <span>主工作目录与未托管目录仅支持只读查看。请新建工作目录，在独立副本里派发任务。</span>
                   </div>
                   <button
                     type="button"
@@ -2145,17 +2635,21 @@ export function SupervisorWorkspace({
                       if (narrowViewport) setMobileRepoDrawerOpen(true)
                     }}
                   >
-                    + 新建托管 Worktree
+                    新建工作目录
                   </button>
                 </div>
               )}
 
               {!isReadOnlyWorktree && isLockedWorktree && (
                 <div className="sup-banner sup-banner--locked" role="status">
-                  <strong>当前 Worktree 已锁定（任务执行中）</strong>
-                  <span>同一托管 Worktree 同一时间只允许一个写入任务运行，当前任务结束或取消后可派发新任务。</span>
+                  <strong>当前工作目录已锁定（任务执行中）</strong>
+                  <span>同一个工作目录同一时间只允许一个任务运行，当前任务结束或取消后可以再派发新任务。</span>
                 </div>
               )}
+
+              <SupervisorChecks apiCall={apiCall} repo={selectedRepo} onSaved={() => void refreshRepositories()} />
+
+              <ProjectNotesCard key={selectedRepo.id} token={token} repoId={selectedRepo.id} repoName={selectedRepo.name} />
 
               <section className="sup-card sup-dispatch-card" aria-label="任务目标与派发">
                 <div className="sup-card-head">
@@ -2169,6 +2663,11 @@ export function SupervisorWorkspace({
                   </div>
                 )}
 
+                {/* N25: while a draft exists the owner can see it is kept on this device. */}
+                {(currentDraft.goal.trim() || currentDraft.acceptanceCriteria.trim()) && (
+                  <p className="sup-draft-hint" role="status">草稿已自动保存，刷新页面也不会丢；点「开始执行」后清除。</p>
+                )}
+
                 <form className="composer sup-goal-composer" onSubmit={e => void handleCreateAndDispatch(e)}>
                   <label htmlFor="sup-goal-textarea" className="sr-only">任务目标</label>
                   <textarea
@@ -2177,8 +2676,8 @@ export function SupervisorWorkspace({
                     aria-label="任务目标"
                     placeholder={
                       isReadOnlyWorktree
-                        ? '只读工作目录不可直接派发，请先新建托管 Worktree…'
-                        : '输入要在这个 Worktree 完成的目标（例如：为 Code 页面补充仓库搜索与错误提示）…'
+                        ? '只读工作目录不能派发任务，请先新建工作目录…'
+                        : '输入要在这个工作目录完成的目标（例如：为项目页补充仓库搜索与错误提示）…'
                     }
                     rows={3}
                     value={currentDraft.goal}
@@ -2203,6 +2702,7 @@ export function SupervisorWorkspace({
                     capabilities={capabilities}
                     effectiveRoles={effectiveRoles}
                     onChangeRole={handleRoleChange}
+                    onOpenWorkers={onOpenWorkers}
                     disabled={isReadOnlyWorktree || dispatchBusy}
                   />
 
@@ -2225,7 +2725,7 @@ export function SupervisorWorkspace({
 
                   <div className="sup-dispatch-footer">
                     <span className="sup-dispatch-context-tag">
-                      作用范围：<code>{selectedRepo.name}</code> / <code>{selectedWorktree.branch}</code>
+                      在这里改：<code>{selectedRepo.name}</code> / <code>{selectedWorktree.branch}</code>
                     </span>
                     <button
                       type="submit"
@@ -2249,14 +2749,14 @@ export function SupervisorWorkspace({
               </section>
 
               {selectedTask && (
-                <section className="sup-card sup-active-task-card" aria-label="当前任务进度与结果">
+                <section ref={taskCardRef} className="sup-card sup-active-task-card" aria-label="当前任务进度与结果">
                   <div className="sup-active-task-header">
                     <div className="sup-active-task-title">
                       <span className={`status-badge ${selectedTask.state}`}>
                         <i />
                         {supStateLabel(selectedTask.state)}
                       </span>
-                      <h4>{selectedTask.goal}</h4>
+                      <h4>{goalRoundTaskTitle(selectedTask.goal) || selectedTask.goal}</h4>
                     </div>
                     {!isTerminalTaskState(selectedTask.state) && (
                       <button
@@ -2287,17 +2787,24 @@ export function SupervisorWorkspace({
                     </div>
                   </div>
 
+                  <SupervisorTaskExecutors executions={selectedTaskDetail?.executions || []} />
+
                   {selectedTask.error && (
                     <div className="sup-banner sup-banner--error" role="alert">
-                      <strong>受阻原因 / 错误详情</strong>
-                      <span>{selectedTask.error}</span>
+                      <strong>受阻原因</strong>
+                      <span>{supFriendlyTaskError(selectedTask.error)}</span>
+                      <details className="sup-task-raw-error">
+                        <summary>技术详情</summary>
+                        <pre>{selectedTask.error}</pre>
+                      </details>
                     </div>
                   )}
 
-                  {(selectedTaskDetail?.summary || selectedTask.metadata?.result_summary) && (
-                    <div className="sup-result-summary">
-                      <h5>执行结果摘要</h5>
-                      <p>{selectedTaskDetail?.summary || selectedTask.metadata?.result_summary}</p>
+                  {changesReady && taskSummary && (
+                    <div className="sup-task-summary">
+                      <h5>这一轮的结果</h5>
+                      <p>{taskSummary.line}</p>
+                      {taskSummary.note && <p className="sup-task-summary-note">{taskSummary.note}</p>}
                     </div>
                   )}
 
@@ -2317,10 +2824,37 @@ export function SupervisorWorkspace({
                     </div>
                   )}
 
+                  {changesReady && (
+                    <section className="sup-task-changes" aria-label="改动">
+                      <div className="sup-card-head">
+                        <h4>改动</h4>
+                        <span className="sup-card-hint">改了哪些文件、每一行变成了什么</span>
+                      </div>
+                      <SupervisorDiffView diffState={taskDiff} />
+                    </section>
+                  )}
+
                   <p className="sup-separation-note">
                     状态边界：任务完成 ≠ PR 已合并 ≠ 已部署上线。需要部署时请切换至「部署」标签页操作。
                   </p>
                 </section>
+              )}
+
+              {mergeAvailable && selectedWorktree && (
+                <div className="sup-merge-entry">
+                  <button
+                    type="button"
+                    className="shell-button sup-merge-toggle"
+                    aria-expanded={mergeOpen}
+                    onClick={() => setMergeOpen(prev => !prev)}
+                  >
+                    合并到主分支…
+                  </button>
+                  <span className="sup-merge-entry-hint">这一轮的改动还在这个工作目录里，确认后才合回主分支。</span>
+                </div>
+              )}
+              {mergeOpen && mergeAvailable && selectedWorktree && (
+                <SupervisorMerge apiCall={apiCall} worktree={selectedWorktree} />
               )}
 
               <SupervisorRunHistory
@@ -2336,12 +2870,18 @@ export function SupervisorWorkspace({
             <div
               className="sup-chat-pane"
               style={narrowViewport && subTab !== 'chat' ? { display: 'none' } : undefined}
-              aria-label="当前工作目录对话"
+              aria-label="讨论"
             >
               <div className="sup-chat-pane-header">
                 <div>
-                  <strong>当前 Worktree 对话</strong>
-                  <small>协调模型：{coordinatorLabel}</small>
+                  <strong>讨论</strong>
+                  <small>用来聊方案的模型：{coordinatorPlain}</small>
+                  {coordinatorTech && (
+                    <details className="sup-chat-tech">
+                      <summary>技术详情</summary>
+                      <span>{coordinatorTech}</span>
+                    </details>
+                  )}
                 </div>
                 <span className="sup-chat-pane-badge">讨论不自动执行</span>
               </div>
@@ -2353,8 +2893,9 @@ export function SupervisorWorkspace({
                     token={token}
                     active={active && (!narrowViewport || subTab === 'chat')}
                     agentSessionId={selectedWorktree.chat_session_id}
-                    agentName={coordinatorLabel}
                     onPrepareTask={handlePrepareTask}
+                    onMakeGoal={handleMakeGoal}
+                    makeGoalDisabledReason={hasActiveGoalInWorktree ? '这个工作目录已经有进行中的目标' : ''}
                     discussionOnly
                   />
                 </div>
@@ -2362,7 +2903,7 @@ export function SupervisorWorkspace({
                 <div className="sup-chat-unbound" role="status">
                   <strong>当前工作目录尚未绑定对话会话</strong>
                   <p>
-                    后端尚未为该 Worktree 分配 <code>chat_session_id</code>。为避免伪造虚构会话，此处不显示模拟聊天；你仍可在左侧直接填写「当前任务目标」并点击「开始执行」。
+                    后端还没有为这个工作目录分配对话会话。为避免伪造虚构会话，此处不显示模拟聊天；你仍可在左侧直接填写「当前任务目标」并点击「开始执行」。
                   </p>
                 </div>
               )}

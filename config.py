@@ -126,7 +126,7 @@ class Settings:
     # Codex agent; "auto" answers conversation / Q&A / quotes / images with
     # a direct chat-model call and escalates to Codex only when execution
     # is needed. OpenAI-compatible endpoint; falls back to MINIMAX_*.
-    chat_mode: str = "off"  # off|auto
+    chat_mode: str = ""  # off|auto|"" (unset)
     chat_base_url: str | None = None
     chat_api_key: str | None = None  # SENSITIVE
     chat_model: str | None = None
@@ -231,12 +231,22 @@ class Settings:
     routines_enabled: bool = False
     webhooks_enabled: bool = False
     hooks_enabled: bool = False
+    workers_enabled: bool = True
+    workers_install_enabled: bool = True
+    workers_unsandboxed: bool = False
+    workers_usage_interval_seconds: int = 3600
     routines_feishu_chat_id: str | None = None
     routines_approval_ttl_seconds: int = 86_400
     long_term_memory_enabled: bool = False
     memory_v2_enabled: bool = False
     memory_v2_recall_k: int = 5
     memory_v2_token_cap: int = 1000
+    # Hermes-style agent notes (agent_memory.py). None = automatic: on exactly
+    # when long-term memory or memory v2 is on. CONVEYOR_AGENT_NOTES overrides.
+    agent_notes_enabled: bool | None = None
+    # Hermes-style memory nudge: on every N-th owner turn of a session the chat
+    # tool loop reminds the model it may persist a durable fact. 0 disables.
+    agent_notes_nudge_every: int = 8
     long_term_memory_shared: bool = True
     long_term_memory_groups: bool = False
     approval_inbox_enabled: bool = False
@@ -285,7 +295,9 @@ class Settings:
     agent_supervisor_enabled: bool = False
     agent_supervisor_chat_model: str | None = None
     agent_supervisor_analysis_model: str | None = None
-    agent_supervisor_implementation_executor: str = "claude"
+    # None (no CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR) means "pick the first
+    # usable executor automatically"; see agent_supervisor.auto_executor_name.
+    agent_supervisor_implementation_executor: str | None = None
     agent_supervisor_max_repair_rounds: int = 3
     agent_supervisor_task_timeout_seconds: int = 3600
     # Per-role executor/model/location overrides.
@@ -320,6 +332,9 @@ class Settings:
         "conveyor-vps-computer",
         "conveyor-scheduler",
     )
+    # Tell the owner when a goal needs them or finishes (goal_notify.py).
+    # Off switch: CONVEYOR_GOAL_NOTIFY=false.
+    goal_notify_enabled: bool = True
 
     def __getattr__(self, name: str) -> Any:
         _aliases = {
@@ -599,7 +614,7 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "research_fetch_top_n": _int_env("RESEARCH_FETCH_TOP_N", 5),
         "research_max_chars_per_source": _int_env("RESEARCH_MAX_CHARS_PER_SOURCE", 6000),
         # Chat tier (intent mode)
-        "chat_mode": (os.getenv("CONVEYOR_CHAT_MODE", "off").strip().lower() or "off"),
+        "chat_mode": (os.getenv("CONVEYOR_CHAT_MODE", "").strip().lower()),
         "chat_base_url": (os.getenv("CONVEYOR_CHAT_BASE_URL") or os.getenv("MINIMAX_BASE_URL") or None),
         "chat_api_key": (os.getenv("CONVEYOR_CHAT_API_KEY") or os.getenv("MINIMAX_API_KEY") or None),
         "chat_model": (os.getenv("CONVEYOR_CHAT_MODEL") or os.getenv("MINIMAX_CHAT_MODEL") or None),
@@ -741,6 +756,18 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
             "CONVEYOR_WEBHOOKS_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes", "on"),
         "hooks_enabled": os.getenv("CONVEYOR_HOOKS_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on"),
+        "workers_enabled": os.getenv(
+            "CONVEYOR_WORKERS_ENABLED", "true"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "workers_install_enabled": os.getenv(
+            "CONVEYOR_WORKERS_INSTALL", "true"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "workers_unsandboxed": os.getenv(
+            "CONVEYOR_WORKERS_UNSANDBOXED", "false"
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "workers_usage_interval_seconds": max(
+            300, _int_env("CONVEYOR_WORKERS_USAGE_INTERVAL_SECONDS", 3600)
+        ),
         "routines_feishu_chat_id": os.getenv("CONVEYOR_ROUTINES_FEISHU_CHAT_ID") or None,
         # Routine approvals outlive the 5-minute interactive TTL: clamp 5 min .. 7 days.
         "routines_approval_ttl_seconds": max(
@@ -750,6 +777,13 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "memory_v2_enabled": os.getenv("CONVEYOR_MEMORY_V2", "false").lower() in ("1", "true", "yes", "on"),
         "memory_v2_recall_k": max(0, min(20, _int_env("CONVEYOR_MEMORY_V2_RECALL_K", 5))),
         "memory_v2_token_cap": max(128, min(4000, _int_env("CONVEYOR_MEMORY_V2_TOKEN_CAP", 1000))),
+        # Agent notes: unset/empty = follow the memory flags (see agent_memory.enabled).
+        "agent_notes_enabled": (
+            None if not os.getenv("CONVEYOR_AGENT_NOTES", "").strip()
+            else os.getenv("CONVEYOR_AGENT_NOTES", "").strip().lower() in ("1", "true", "yes", "on")
+        ),
+        # Memory nudge cadence: every N-th owner turn; 0 turns the nudge off.
+        "agent_notes_nudge_every": max(0, _int_env("CONVEYOR_AGENT_NOTES_NUDGE_EVERY", 8)),
         # Durable cross-chat memory. Off: tools hidden, prompts unchanged.
         "long_term_memory_enabled": os.getenv(
             "CONVEYOR_LONG_TERM_MEMORY", "false"
@@ -838,8 +872,8 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "agent_supervisor_implementation_executor": (
             os.getenv("CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR")
             or os.getenv("CONVEYOR_SUPERVISOR_IMPLEMENTATION_EXECUTOR")
-            or "claude"
-        ).strip() or "claude",
+            or ""
+        ).strip() or None,
         "agent_supervisor_max_repair_rounds": max(1, min(10, _int_env("CONVEYOR_AGENT_SUPERVISOR_MAX_REPAIR_ROUNDS", 3))),
         "agent_supervisor_task_timeout_seconds": max(60, min(86400, _int_env("CONVEYOR_AGENT_SUPERVISOR_TASK_TIMEOUT_SECONDS", 3600))),
         "agent_supervisor_antigravity_bin": (
@@ -876,6 +910,10 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
                 "conveyor-telegram-bot,conveyor-feishu-bot,conveyor-vps-computer,conveyor-scheduler"
             ).split(",") if s.strip()
         ),
+        # Owner notifications for goals that need them or finished (goal_notify.py).
+        "goal_notify_enabled": os.getenv(
+            "CONVEYOR_GOAL_NOTIFY", "true"
+        ).strip().lower() in ("true", "1", "yes", "on"),
     }
 
 

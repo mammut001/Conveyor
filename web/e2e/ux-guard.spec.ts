@@ -71,8 +71,8 @@ const SERVICE_ALERT = {
   fingerprint: 'host.service.conveyor-feishu-bot', created_at: ago(60 * 3 + 5),
 }
 const CI_ALERT = {
-  source: 'repo.ci', severity: 'critical', title: 'GitHub CI 构建失败',
-  summary: '仓库 `mammut001/Conveyor` main 分支最新 CI 构建失败。\n✗ web-console / e2e (pull_request) failed in 4m12s\n✗ python / unittest failed in 2m03s',
+  source: 'repo.ci', severity: 'critical', title: '自动构建没有通过',
+  summary: '仓库「mammut001/Conveyor」默认分支（main）最新一次自动构建失败。\n✗ web-console / e2e (pull_request) failed in 4m12s\n✗ python / 运行测试 failed in 2m03s',
   fingerprint: 'repo.ci.main', created_at: ago(60 * 30),
 }
 const GIT_ALERT = {
@@ -442,13 +442,13 @@ for (const size of SIZES) {
     await expect(panel.locator('.guard-alert.is-critical')).toHaveCount(2)
     await expect(panel.locator('.guard-alert', { hasText: '日志错误突增预警' }).getByText('14 分钟前')).toHaveCount(0)
     await expect(panel.locator('.guard-alert', { hasText: '日志错误突增预警' }).getByText('18 分钟前')).toBeVisible()
-    await expect(panel.locator('.guard-alert', { hasText: 'GitHub CI 构建失败' }).getByText('11月2日 08:30')).toBeVisible()
-    for (const title of ['磁盘空间', 'CPU 负载', '系统服务', '错误日志', 'Git 与 GitHub CI']) {
+    await expect(panel.locator('.guard-alert', { hasText: '自动构建没有通过' }).getByText('11月2日 08:30')).toBeVisible()
+    for (const title of ['磁盘空间', 'CPU 负载', '系统服务', '错误日志', '代码仓库与自动构建']) {
       await expect(panel.getByRole('heading', { name: title, exact: true })).toBeVisible()
     }
     await expect(panel.getByText('飞书机器人')).toBeVisible()
     await expect(panel.getByText('还没有静音任何来源。')).toHaveCount(0)
-    await expect(panel.getByRole('button', { name: '取消静音 Git 工作区' })).toBeVisible()
+    await expect(panel.getByRole('button', { name: '取消静音 代码改动' })).toBeVisible()
     await expect(panel.getByPlaceholder('输入告警来源，例如 host.disk')).toBeVisible()
     await expectNoSidewaysOverflow(page)
     await expectChineseChrome(page)
@@ -482,12 +482,14 @@ for (const size of SIZES) {
     await panel.getByRole('button', { name: '静音', exact: true }).click()
     expect(calls).toContainEqual({ method: 'POST', path: '/api/teammate/action', body: { action: 'mute', value: 'host.disk' } })
     await expect(panel.getByRole('button', { name: '取消静音 磁盘空间' })).toBeVisible()
-    await panel.getByRole('button', { name: '取消静音 Git 工作区' }).click()
+    await panel.getByRole('button', { name: '取消静音 代码改动' }).click()
     expect(calls).toContainEqual({ method: 'POST', path: '/api/teammate/action', body: { action: 'unmute', value: 'repo.git' } })
-    await expect(panel.getByRole('button', { name: '取消静音 Git 工作区' })).toHaveCount(0)
+    await expect(panel.getByRole('button', { name: '取消静音 代码改动' })).toHaveCount(0)
 
     // Module quick commands keep the send-to-chat behaviour: the command lands in the chat composer.
-    await panel.getByRole('button', { name: '在对话中执行 /ps' }).click()
+    // The button names the check in plain words; the slash command is only under 详情.
+    await expect(panel.getByRole('button', { name: '在对话中执行 /ps' })).toHaveCount(0)
+    await panel.getByRole('button', { name: '查看 CPU 占用' }).click()
     await expect(panel).toHaveCount(0)
     await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('textarea')].some(t => t.value === '/ps'))).toBe(true)
   })

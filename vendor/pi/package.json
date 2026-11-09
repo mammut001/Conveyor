@@ -1,0 +1,10 @@
+{
+  "name": "conveyor-vendored-pi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pi coding agent bundled with Conveyor (installed by scripts/install_pi.sh)",
+  "engines": { "node": ">=22.19.0" },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0"
+  }
+}

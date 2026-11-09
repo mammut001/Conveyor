@@ -78,6 +78,8 @@ const NETWORK = /failed to fetch|networkerror|load failed|network error|network 
 
 const KNOWN: Array<[RegExp, string, boolean]> = [
   [/token rejected|unauthori[sz]ed/i, '访问令牌已失效，请重新解锁', false],
+  [/No eligible worker available in worker pool|(?:No such file or directory|not found|ENOENT)[\s\S]*?\b(codex|claude|pi|agy|cmd)\b|\b(codex|claude|pi|agy|cmd)\b[\s\S]*?(?:No such file or directory|not found|ENOENT)/i, '还没有可用的执行者，先去「执行者」页安装并登录一个', false],
+  [/no model configured|model_providers/i, '还没有可用的模型，先在「设置」里配置模型', false],
   [/chat tier is disabled/i, '对话模型还没有配置好，暂时无法回复。请在「设置」里检查模型配置。', true],
   [/voice messages are disabled/i, '语音输入还没有开启，请改用文字。', false],
   [/kill switch/i, '浏览器紧急停止开关已打开，需要先关闭它才能批准这个操作。', false],
@@ -129,9 +131,9 @@ export function looksLikeRawError(text: string): boolean {
   return /Traceback \(most recent call last\)/.test(value) && !value.includes('```')
 }
 
-const DEEP_HINT = /\s*发\s*\/deep\s*让\s*Codex\s*深入查证。?\s*$/
+const DEEP_HINT = /\s*(?:发\s*\/deep\s*让\s*Codex\s*深入查证|想更深入地查证，可以让执行者再查一遍)。?\s*$/
 
-/** The backend closes some replies with "发 /deep 让 Codex 深入查证。"; the owner never needs to type that. */
+/** The backend closes some replies with a "dig deeper" line the web owner cannot act on; it is dropped here. */
 export function stripDeepHint(text: string): string {
   return (text || '').replace(DEEP_HINT, '').replace(/\n\s*[ℹ️⚠️️]+\s*$/u, '').trimEnd()
 }

@@ -54,6 +54,26 @@ class TranscriptStoreTests(unittest.TestCase):
         self.assertEqual(sessions[0]["message_count"], 1)
         self.assertEqual(sessions[0]["job_count"], 1)
 
+    def test_list_sessions_reports_the_last_message_kind(self) -> None:
+        # A provider failure is stored with kind="error"; the 任务 / 对话 sidebar marks the
+        # session 「（没有完成）」 from this field (QA r8 N30).
+        self.store.append(
+            "web:web-console:s1", "user", "question", channel="web",
+            operator_id="web-console", source_chat_id="s1",
+        )
+        self.assertEqual(self.store.list_sessions()[0]["last_message_kind"], None)
+        self.store.append(
+            "web:web-console:s1", "assistant", "连不上模型服务", kind="error", channel="web",
+            operator_id="web-console", source_chat_id="s1",
+        )
+        self.assertEqual(self.store.list_sessions()[0]["last_message_kind"], "error")
+        # A later answer in the same session clears the mark.
+        self.store.append(
+            "web:web-console:s1", "assistant", "正常", kind="chat", channel="web",
+            operator_id="web-console", source_chat_id="s1",
+        )
+        self.assertEqual(self.store.list_sessions()[0]["last_message_kind"], "chat")
+
     def test_session_identity_is_channel_and_operator_namespaced(self) -> None:
         telegram = session_identity("telegram", "same", "operator")
         feishu = session_identity("feishu", "same", "operator")

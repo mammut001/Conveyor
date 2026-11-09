@@ -10,13 +10,15 @@ export function ChangedFileList({ files, stats }: {
 }) {
   return (
     <ul className="changed-files" aria-label="改动的文件">
-      {files.map(file => {
+      {files.map((file, index) => {
+        const path = typeof file?.path === 'string' ? file.path.trim() : ''
+        if (!path) return null
         const info = fileStatusInfo(file.status)
-        const parts = splitPath(file.path)
+        const parts = splitPath(path)
         const target = parts.dir ? `${parts.dir}/${parts.name}` : parts.name
-        const stat = stats?.[target] || stats?.[file.path]
+        const stat = stats?.[target] || stats?.[path]
         return (
-          <li key={file.path} className="changed-file" title={parts.from ? `${parts.from} → ${target}` : target}>
+          <li key={`${index}-${path}`} className="changed-file" title={parts.from ? `${parts.from} → ${target}` : target}>
             <span className={`file-chip file-chip--${info.tone}`}>{info.label}</span>
             <span className="changed-file-path">
               <span className="changed-file-name">{parts.name}</span>

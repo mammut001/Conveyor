@@ -9,6 +9,7 @@ import { SkillsPanel } from './components/SkillsPanel'
 import { WorkflowPanel } from './components/WorkflowPanel'
 import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { SecretsPanel } from './components/SecretsPanel'
+import { WorkersPanel } from './components/WorkersPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
 import { PwaNotifications } from './components/PwaNotifications'
 import { leavePwa } from './pwa'
@@ -22,10 +23,11 @@ import { TranscriptPanel } from './components/TranscriptPanel'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
 import { dropApproval, isStale, shouldRefreshForEvent } from './approvalFreshness'
 
-import { mergeJobEvents, type JobEvent as EventItem } from './jobEvents'
+import { mergeJobEvents, streamedText, type JobEvent as EventItem } from './jobEvents'
 import { CONNECTION_LABELS, LockConfirmDialog, SHORTCUT_PREFIX, ShellIcon, VIEW_LABELS, VIEW_SUBTITLES, findVisibleComposer, isTypingTarget, shellErrorText, urlForView, useMediaQuery, viewFromLocation, type ConnectionState, type ShellView } from './ux/shellNav'
 import { ChangedFileList, ClampedText, DiffBody, DiffStat, ToolCallCard } from './components/TaskParts'
-import { changesDiffFrom, changesOutcome, durationText, emptyChangesDiff, eventKindLabel, expiryText, groupToolCalls, modeLabel, nodeStatusLabel, nodeTypeLabel, toolDisplayName, type ChangesDiff, type ChangesOutcome, type DiffResponse } from './taskText'
+import { SetupChecklist } from './components/SetupChecklist'
+import { changesDiffFrom, changesOutcome, describeJobError, durationText, emptyChangesDiff, eventKindLabel, expiryText, groupToolCalls, jobErrorSummary, modeLabel, nodeStatusLabel, nodeTypeLabel, toolDisplayName, type ChangesDiff, type ChangesOutcome, type DiffResponse } from './taskText'
 type Job = {
   id: string; state: string; mode: string; channel: string; chat_id: string; operator_id?: string
   created_at: string; updated_at?: string; started_at?: string; finished_at?: string
@@ -47,12 +49,26 @@ type Session = {
   id: string; channel?: string; title?: string; created_at: string; updated_at?: string; last_activity: string
   operator_id?: string; source_chat_id?: string; job_count: number; message_count?: number; latest_job?: Job
   active_refinement?: ActiveRefinement | null
+  /** kind of the newest stored message: 'error' means the last turn failed (QA N30). */
+  last_message_kind?: string | null
 }
 type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[]; runs?: RunSummary[] }
 // Chat-only sessions stay in Chat; promoted conversations with jobs also appear in Tasks.
 const isChatSessionId = (id: string) => id.includes(':webchat-') || id.startsWith('webchat-')
 const isChatSession = (session: Session) => isChatSessionId(session.id) || (session.source_chat_id || '').startsWith('webchat-')
-const taskSessionsOnly = (items: Session[]) => items.filter(item => !isChatSession(item) || item.job_count > 0 || Boolean(item.latest_job))
+// 项目 (Supervisor) worktree conversations: read-only in chat and belong to the 项目 page.
+// They never join the 任务 / 对话 lists, so the owner is never dropped into one that
+// answers 409 (N17 / N21).
+const isSupervisorWorktreeSessionId = (id: string) => id.includes('supwt-')
+const isSupervisorWorktreeSession = (session: Session) => isSupervisorWorktreeSessionId(session.id)
+const taskSessionsOnly = (items: Session[]) => items.filter(item =>
+  !isSupervisorWorktreeSession(item) && (!isChatSession(item) || item.job_count > 0 || Boolean(item.latest_job)))
+// 对话 lists every web conversation that already has messages, including the chat-only
+// sessions the 任务 list leaves out. A session with no messages is not worth reopening,
+// so the empty state only shows when nothing was ever said.
+const chatSessionsOnly = (items: Session[]) => items.filter(item =>
+  !isSupervisorWorktreeSession(item)
+  && (item.channel || 'web') === 'web' && ((item.message_count || 0) > 0 || (item.job_count || 0) > 0))
 type Approval = {
   id: string
   kind?: 'job' | 'tool'
@@ -89,7 +105,10 @@ type SystemStatus = {
     mcp?: boolean
     teammate?: boolean
     agents?: boolean
+    workers?: boolean
     agent_supervisor?: boolean
+    /** The server already has a usable chat model (saved in 模型设置 or from .env). */
+    chat_model_configured?: boolean
   }
 }
 type ComputerStatus = {
@@ -104,6 +123,8 @@ type ProviderConfig = {
   provider_id: string; provider_name: string; model: string; reasoning_effort: string
   base_url: string; wire_api: 'responses' | 'chat'; env_key: string
   api_key_configured: boolean; api_key_hint: string; config_path: string
+  /** Any usable chat model on the server, including one configured by env vars. */
+  chat_model_configured?: boolean
 }
 
 const statusOrder = ['running', 'queued', 'interrupted', 'failed', 'cancelled', 'completed']
@@ -142,6 +163,11 @@ function stateLabel(state?: string) {
 }
 function sessionLabel(session: Session | undefined) {
   return session?.title || session?.latest_job?.prompt_preview || '新会话'
+}
+// A session whose last turn failed is marked in the list, so it never reads like a finished one (N30).
+function sessionListTitle(session: Session) {
+  const base = session.title || '未命名会话'
+  return session.last_message_kind === 'error' ? `${base}（没有完成）` : base
 }
 function storedToken() {
   try { return localStorage.getItem('conveyor-token') || '' } catch { return '' }
@@ -208,7 +234,14 @@ export default function App() {
   }, [agentState.enabled])
   const [tokenDraft, setTokenDraft] = useState('')
   const [authenticated, setAuthenticated] = useState(false)
+  // 刷新时带着记住的令牌（或这个标签页里已经存过的令牌）先别亮出解锁表单：先显示一个
+  // 没有输入框的「正在打开…」，等服务器确认令牌有效再进应用。否则表单会先闪一秒，
+  // 老板这期间打的字全都落到光标底下突然出现的输入框里。
+  const [checkingStoredToken, setCheckingStoredToken] = useState(() => Boolean(sessionStorage.getItem('conveyor-token') || storedToken()))
   const [sessions, setSessions] = useState<Session[]>([])
+  // 对话 sidebar rows: web conversations that already have messages (chat-only ones included).
+  const [chatSessions, setChatSessions] = useState<Session[]>([])
+  const [anySessionHasMessages, setAnySessionHasMessages] = useState(false)
   const [jobs, setJobs] = useState<Job[]>([])
   const [selectedSessionId, setSelectedSessionId] = useState(() => sessionStorage.getItem('conveyor-selected-session') || '')
   const [selectedJobId, setSelectedJobId] = useState('')
@@ -229,10 +262,16 @@ export default function App() {
   const [executionOnly, setExecutionOnly] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // POST /api/tasks failed: the reason sits next to the composer, never only as a border.
+  const [submitError, setSubmitError] = useState<{ text: string; detail?: string } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState<{ text: string; detail?: string } | null>(null)
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
+  const [workersData, setWorkersData] = useState<any>(null)
+  const [checklistDismissed, setChecklistDismissed] = useState(() => {
+    try { return localStorage.getItem('conveyor-onboarding-dismissed') === 'true' } catch { return false }
+  })
   // The view lives in the URL hash (#chat, #memory, …; legacy /memory paths still open it).
   const [view, setView] = useState<ShellView>(() => viewFromLocation() || 'tasks')
   const viewRef = useRef(view)
@@ -242,7 +281,14 @@ export default function App() {
   const historyModeRef = useRef<'push' | 'replace'>('replace')
   const [inboxUnread, setInboxUnread] = useState(0)
   const [approvalInboxCount, setApprovalInboxCount] = useState(0)
+  // 项目 badge and title prefix: goals (目标) waiting for the owner's reply.
+  const [goalsWaiting, setGoalsWaiting] = useState(0)
   const [chatDraft, setChatDraft] = useState('')
+  // 对话: which conversation the panel shows, and the one a sidebar row asked it to open.
+  const [chatSessionId, setChatSessionId] = useState('')
+  const [chatOpenRequest, setChatOpenRequest] = useState<{ id: string; nonce: number } | null>(null)
+  // A message sent from 对话 right now: checklist step ③ ticks before the next poll.
+  const [chatMessageSent, setChatMessageSent] = useState(false)
   const [realtimeState, setRealtimeState] = useState<'connecting' | 'live' | 'reconnecting'>('connecting')
   const sessionDetailFetchGen = useRef(0)
   const transcriptRequestRef = useRef<{ sessionId: string; generation: number } | null>(null)
@@ -266,6 +312,17 @@ export default function App() {
   const [navMenuOpen, setNavMenuOpen] = useState(false)
   const [lockConfirmOpen, setLockConfirmOpen] = useState(false)
   const [syncStale, setSyncStale] = useState(false)
+  const [isOnline, setIsOnline] = useState(() => typeof navigator !== 'undefined' ? navigator.onLine : true)
+  const [initialLoaded, setInitialLoaded] = useState(false)
+  const [pollFailed, setPollFailed] = useState(false)
+  const [notice, setNotice] = useState('')
+  const pollAbortRef = useRef<AbortController>(new AbortController())
+  const isLockedRef = useRef(false)
+  const pollTimerRef = useRef<number | null>(null)
+  const approvalTimerRef = useRef<number | null>(null)
+  const inboxTimerRef = useRef<number | null>(null)
+  const goalsTimerRef = useRef<number | null>(null)
+  const staleTimerRef = useRef<number | null>(null)
   const navMoreRef = useRef<HTMLDivElement>(null)
   const moreSheetRef = useRef<HTMLDivElement>(null)
   const drawerOpenerRef = useRef<HTMLElement | null>(null)
@@ -301,21 +358,24 @@ export default function App() {
   // ("更多" when space is short). Alt+1…9 follow this order.
   const features = system?.features
   const navItems = useMemo(() => {
-    const items: { view: ShellView; group: 'main' | 'more'; badge?: number }[] = [
+    const items: { view: ShellView; group: 'main' | 'more'; badge?: number; badgeLabel?: string }[] = [
       { view: 'chat', group: 'main' },
       { view: 'tasks', group: 'main' },
     ]
-    if (features?.agent_supervisor) items.push({ view: 'code', group: 'main' })
+    if (features?.agent_supervisor) {
+      items.push({ view: 'code', group: 'main', badge: goalsWaiting, badgeLabel: goalsWaiting > 0 ? `有 ${goalsWaiting} 个目标在等你回复` : undefined })
+    }
     items.push({ view: 'inbox', group: 'main', badge: inboxUnread })
     if (features?.approval_inbox) items.push({ view: 'approvals', group: 'main', badge: approvalInboxCount })
     if (features?.long_term_memory || view === 'memory') items.push({ view: 'memory', group: 'main' })
     if ((features?.teammate ?? true) || view === 'teammate') items.push({ view: 'teammate', group: 'main' })
     items.push({ view: 'browser', group: 'more' }, { view: 'secrets', group: 'more' })
+    if (features?.workers) items.push({ view: 'workers', group: 'more' })
     if (features?.skills || view === 'skills') items.push({ view: 'skills', group: 'more' })
     if (features?.workflows || view === 'workflows') items.push({ view: 'workflows', group: 'more' })
     if (features?.mcp || view === 'connectors') items.push({ view: 'connectors', group: 'more' })
     return items
-  }, [features?.agent_supervisor, features?.approval_inbox, features?.long_term_memory, features?.teammate, features?.skills, features?.workflows, features?.mcp, view, inboxUnread, approvalInboxCount])
+  }, [features?.agent_supervisor, features?.approval_inbox, features?.long_term_memory, features?.teammate, features?.skills, features?.workflows, features?.mcp, features?.workers, view, inboxUnread, approvalInboxCount, goalsWaiting])
   const shortcutViewsRef = useRef<ShellView[]>([])
   shortcutViewsRef.current = navItems.slice(0, 9).map(item => item.view)
 
@@ -421,15 +481,19 @@ export default function App() {
   // URL ⇄ view: a view change writes #view (a new history entry; redirects replace it),
   // back/forward and edited hashes switch the view. The query string (?agent=, ?approval=) is kept.
   useEffect(() => {
-    if (!authenticated) { document.title = 'Conveyor 控制台'; return }
+    if (!authenticated) return
     const target = urlForView(view)
     if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== target) {
       if (historyModeRef.current === 'push') window.history.pushState(window.history.state, '', target)
       else window.history.replaceState(window.history.state, '', target)
     }
     historyModeRef.current = 'push'
-    document.title = `${VIEW_LABELS[view]} · Conveyor 控制台`
   }, [authenticated, view])
+  // Tab title: the page name, prefixed with 「(N) 」 while N goals wait for the owner's reply.
+  useEffect(() => {
+    if (!authenticated) { document.title = 'Conveyor 控制台'; return }
+    document.title = `${goalsWaiting > 0 ? `(${goalsWaiting}) ` : ''}${VIEW_LABELS[view]} · Conveyor 控制台`
+  }, [authenticated, view, goalsWaiting])
   useEffect(() => {
     const followLocation = () => {
       const next = viewFromLocation()
@@ -512,16 +576,56 @@ export default function App() {
     if (!authenticated || !system?.features?.routines || inboxOpen) return
     let stopped = false
     const load = () => {
-      if (document.visibilityState !== 'visible') return
-      void fetch('/api/inbox?limit=1', { headers: { Authorization: `Bearer ${token}` } })
+      if (document.visibilityState !== 'visible' || !token || isLockedRef.current) return
+      void fetch('/api/inbox?limit=1', { headers: { Authorization: `Bearer ${token}` }, signal: pollAbortRef.current.signal })
         .then(response => response.ok ? response.json() : null)
         .then(data => { if (!stopped && data && Number.isFinite(Number(data.unread))) setInboxUnread(Number(data.unread)) })
         .catch(() => {})
     }
     load()
     const timer = window.setInterval(load, 30_000)
-    return () => { stopped = true; window.clearInterval(timer) }
+    inboxTimerRef.current = timer
+    return () => { stopped = true; window.clearInterval(timer); inboxTimerRef.current = null }
   }, [authenticated, system?.features?.routines, inboxOpen, token])
+
+  // The 项目 badge: goals waiting for the owner's reply, read every 15 s while the console is
+  // unlocked and the 项目 page exists (features.agent_supervisor). A hidden tab stops the poll;
+  // showing it again reads at once and restarts it. Leaving 项目 also reads at once.
+  const supervisorOn = Boolean(system?.features?.agent_supervisor)
+  const codeOpen = view === 'code'
+  useEffect(() => {
+    if (!authenticated || !supervisorOn || !token) { setGoalsWaiting(0); return }
+    let stopped = false
+    let generation = 0
+    let timer: number | null = null
+    const load = () => {
+      if (stopped || document.visibilityState !== 'visible' || isLockedRef.current) return
+      const gen = ++generation
+      void fetch('/api/supervisor/goals', { headers: { Authorization: `Bearer ${token}` }, signal: pollAbortRef.current.signal })
+        .then(response => response.ok ? response.json() : null)
+        .then(data => {
+          if (stopped || gen !== generation || !data || !Array.isArray(data.goals)) return
+          setGoalsWaiting(data.goals.filter((goal: { state?: string }) => goal?.state === 'waiting_user').length)
+        })
+        .catch(() => {})
+    }
+    const stop = () => {
+      if (timer !== null) window.clearInterval(timer)
+      timer = null
+      goalsTimerRef.current = null
+    }
+    const start = () => {
+      stop()
+      if (document.visibilityState !== 'visible') return
+      load()
+      timer = window.setInterval(load, 15_000)
+      goalsTimerRef.current = timer
+    }
+    const onVisibility = () => { if (document.visibilityState === 'visible') start(); else stop() }
+    start()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => { stopped = true; stop(); document.removeEventListener('visibilitychange', onVisibility) }
+  }, [authenticated, supervisorOn, token, codeOpen])
 
   // Honest connection state: every successful status poll proves the server is reachable;
   // no poll for 12s means the console is reconnecting.
@@ -529,7 +633,8 @@ export default function App() {
     if (!system) return
     setSyncStale(false)
     const timer = window.setTimeout(() => setSyncStale(true), 12_000)
-    return () => window.clearTimeout(timer)
+    staleTimerRef.current = timer
+    return () => { window.clearTimeout(timer); staleTimerRef.current = null }
   }, [system])
 
   const selectSession = useCallback((sessionId: string, jobId?: string) => {
@@ -547,9 +652,26 @@ export default function App() {
     setTranscript([])
   }, [])
 
+  // The 会话 sidebar serves both surfaces: 任务 keeps its task runs (chat-only
+  // conversations live in 对话), 对话 lists every web conversation with messages.
+  const sidebarSessions = view === 'chat' ? chatSessions : sessions
+  const sidebarActiveId = view === 'chat' ? chatSessionId : selectedSessionId
+  const openConversation = useCallback((session: Session) => {
+    if (view === 'chat' && !agentState.enabled) {
+      // 对话 reopens the conversation in the chat panel itself, with its messages.
+      // A nonce makes a repeated click on the same row a fresh request.
+      setChatOpenRequest(previous => ({ id: session.id, nonce: (previous?.nonce ?? 0) + 1 }))
+      return
+    }
+    selectSession(session.id, session.latest_job?.id)
+  }, [agentState.enabled, selectSession, view])
+
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
+    if (!token || isLockedRef.current) throw new DOMException('Aborted', 'AbortError')
+    const signal = init?.signal || pollAbortRef.current.signal
     const response = await fetch(path, {
       ...init,
+      signal,
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(init?.headers || {}) },
     })
     if (response.status === 401) { forgetToken(); if (system?.features?.pwa) void leavePwa(token).catch(() => undefined); setAuthenticated(false); throw new Error('Token rejected') }
@@ -569,6 +691,7 @@ export default function App() {
       }
       void api<{ sessions: Session[] }>('/api/sessions').then(data => {
         const taskSessions = taskSessionsOnly(data.sessions)
+        setChatSessions(chatSessionsOnly(data.sessions))
         setSessions(taskSessions)
         if (selectedSessionId === sessionId && taskSessions[0]) {
           selectSession(taskSessions[0].id, taskSessions[0].latest_job?.id)
@@ -580,23 +703,38 @@ export default function App() {
   }, [api, selectSession, selectedSessionId])
 
   const refresh = useCallback(async () => {
-    if (!token) return
+    if (!token || isLockedRef.current) return
     const gen = ++refreshGen.current
     try {
-      const [sessionData, jobData, approvalData, nodeData, systemData, computerData, agentData] = await Promise.all([
+      const [sessionData, jobData, approvalData, nodeData, systemData, computerData, agentData, providerData, workersPayload] = await Promise.all([
         api<{ sessions: Session[] }>('/api/sessions'), api<{ jobs: Job[] }>('/api/jobs'),
         api<{ approvals: Approval[] }>('/api/approvals'), api<{ nodes: NodeInfo[] }>('/api/nodes'),
         api<SystemStatus>('/api/system/status'), api<ComputerStatus>('/api/computer/status'),
         api<{ enabled: boolean; agents: Agent[] }>('/api/agents').catch(() => ({ enabled: false, agents: [] as Agent[] })),
+        api<any>('/api/config/provider').catch(() => null),
+        api<any>('/api/workers').catch(() => null),
       ])
       // A newer refresh (or a decision that bumped the generation) started
       // while this one was in flight. Drop it so a late poll cannot restore
       // a pending approval or an old job state.
       if (isStale(gen, refreshGen.current)) return
+      setInitialLoaded(true)
+      setPollFailed(false)
+      // 服务器认下了这个令牌：解锁表单再也不需要出现。
+      setCheckingStoredToken(false)
       const taskSessions = taskSessionsOnly(sessionData.sessions)
+      // 对话 (webchat) sessions are filtered out of the 任务 list, but a message there still counts as the first message.
+      setAnySessionHasMessages(sessionData.sessions.some(s => (s.message_count || 0) > 0 || (s.job_count || 0) > 0))
+      setChatSessions(chatSessionsOnly(sessionData.sessions))
       setSessions(taskSessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
       setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setTokenDraft(''); setError('')
       setAgentState(agentData)
+      if (providerData) {
+        setProviderConfig(providerData.config || providerData)
+      }
+      if (workersPayload) {
+        setWorkersData(workersPayload)
+      }
       const pinned = agentData.enabled
         ? (agentData.agents.find(agent => agent.id === (localStorage.getItem('conveyor-agent') || '')) || agentData.agents[0])?.session_id
         : ''
@@ -631,8 +769,21 @@ export default function App() {
           }
         }
       }
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not connect') }
+    } catch (reason) {
+      if (reason instanceof Error && reason.name === 'AbortError') return
+      setPollFailed(true)
+      // 令牌被拒（或网络不通）：落回解锁表单，连同它的错误提示。
+      setCheckingStoredToken(false)
+      setError(reason instanceof Error ? reason.message : 'Could not connect')
+    }
   }, [api, creatingSession, selectedJobId, selectedSessionId, token])
+
+  // The chat panel reports the conversation it is showing (restored, opened or new),
+  // so the 对话 sidebar can highlight it and the session list stays current.
+  const handleChatSessionChange = useCallback((sessionId: string) => {
+    setChatSessionId(sessionId)
+    void refresh()
+  }, [refresh])
 
   const refreshTranscript = useCallback(async () => {
     if (selectedSessionId !== transcriptSessionRef.current) return
@@ -662,21 +813,61 @@ export default function App() {
 
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
-    if (!authenticated) return
+    if (!authenticated || isLockedRef.current) return
     const timer = window.setInterval(() => { void refresh(); void refreshTranscript() }, 3_000)
-    return () => window.clearInterval(timer)
+    pollTimerRef.current = timer
+    return () => { window.clearInterval(timer); pollTimerRef.current = null }
   }, [authenticated, refresh, refreshTranscript])
+
+  useEffect(() => {
+    const handleOnline = () => { setIsOnline(true); void refresh() }
+    const handleOffline = () => setIsOnline(false)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [refresh])
+
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(''), 4000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+
+  useEffect(() => {
+    if (!agentState.enabled || agentState.agents.length === 0) return
+    const params = new URLSearchParams(window.location.search)
+    const urlAgent = params.get('agent')
+    if (urlAgent) {
+      const match = agentState.agents.find(a => a.id === urlAgent)
+      if (!match) {
+        params.delete('agent')
+        const search = params.toString() ? `?${params.toString()}` : ''
+        const nextUrl = `${window.location.pathname}${search}${window.location.hash}`
+        window.history.replaceState(window.history.state, '', nextUrl)
+        const defaultAgent = agentState.agents.find(a => a.is_default) || agentState.agents[0]
+        if (defaultAgent) {
+          setSelectedAgentId(defaultAgent.id)
+          localStorage.setItem('conveyor-agent', defaultAgent.id)
+        }
+        setNotice('找不到这个助手，已切换到 Conveyor')
+      }
+    }
+  }, [agentState])
 
   useEffect(() => {
     void refreshTranscript()
   }, [refreshTranscript])
 
   const fetchApprovalInboxCount = useCallback(async () => {
-    if (!system?.features?.approval_inbox || !authenticated) return
+    if (!system?.features?.approval_inbox || !authenticated || !token || isLockedRef.current) return
     const gen = ++approvalInboxFetchGen.current
     try {
       const res = await fetch('/api/approval-inbox', {
         headers: { Authorization: `Bearer ${token}` },
+        signal: pollAbortRef.current.signal,
       })
       if (isStale(gen, approvalInboxFetchGen.current)) return
       if (!res.ok) return
@@ -694,14 +885,15 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!system?.features?.approval_inbox || !authenticated) return
+    if (!system?.features?.approval_inbox || !authenticated || isLockedRef.current) return
     void fetchApprovalInboxCount()
     const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible' && !isLockedRef.current) {
         void fetchApprovalInboxCount()
       }
     }, 5_000)
-    return () => window.clearInterval(timer)
+    approvalTimerRef.current = timer
+    return () => { window.clearInterval(timer); approvalTimerRef.current = null }
   }, [fetchApprovalInboxCount, system?.features?.approval_inbox, authenticated])
 
   useEffect(() => {
@@ -838,6 +1030,12 @@ export default function App() {
   }, [api, authenticated, changesJobId, changedFilesJob?.updated_at, selectedSessionId])
   const changedFiles = changedFilesJob?.changed_files || []
   const changesBusy = Boolean(changedFilesJob && !terminalJobState(changedFilesJob.state))
+  // A chain only reads as "in progress" while its latest run is still going.
+  // Once that run finishes, the chain is either waiting for Apply/Discard or
+  // produced nothing to apply; neither is an in-progress refinement.
+  const refinementRunning = Boolean(activeRefinement && changesBusy)
+  const refinementAwaitingApply = Boolean(activeRefinement && !changesBusy && activeChangedFiles > 0)
+  const refinementNoChanges = Boolean(activeRefinement && !changesBusy && activeChangedFiles === 0)
   const changeApprovalPending = pendingForJob.some(item => item.job_id === changesJobId)
   // What happened to the last Apply/Discard: the decision reply, or the job's own events after a reload.
   const changesEventOutcome = useMemo(() => {
@@ -847,11 +1045,20 @@ export default function App() {
   const changesOutcomeNow = changesResult?.jobId === changesJobId ? changesResult.outcome : changesEventOutcome
   const liveAssistantText = useMemo(() => {
     if (!selectedJob || terminalJobState(selectedJob.state)) return ''
-    return events
+    // Ordered concatenation of the deltas: a cumulative snapshot replaces what came
+    // before it instead of being appended (Pi re-sends the whole answer so far).
+    return streamedText(events
       .filter(item => item.kind === 'assistant.delta')
-      .map(item => String(item.payload.text || ''))
-      .join('')
+      .map(item => String(item.payload.text || '')))
   }, [events, selectedJob])
+  // A failed/cancelled run that a newer run has replaced is history: it lives in the run list,
+  // not in the badge or notice above the newer conversation.
+  const [explicitRunId, setExplicitRunId] = useState('')
+  const staleTerminalRun = useMemo(() => {
+    if (!selectedJob || selectedJob.id === explicitRunId || !terminalJobState(selectedJob.state) || selectedJob.state === 'completed') return false
+    const at = (value?: string) => Date.parse(value || '') || 0
+    return [...(sessionDetail?.runs || []), ...(sessionDetail?.jobs || [])].some(run => run.id !== selectedJob.id && at(run.created_at) > at(selectedJob.created_at))
+  }, [explicitRunId, selectedJob, sessionDetail])
   const promptAlreadyInTranscript = useMemo(() => {
     if (!selectedJob) return true
     return transcript.some(m =>
@@ -859,6 +1066,28 @@ export default function App() {
       (m.role === 'user' && m.content.trim() === selectedJob.prompt_preview.trim())
     )
   }, [selectedJob, transcript])
+  // Task runs written before the transcript kept them have no rows; show the
+  // request and the run's final event from the run itself, so the session
+  // still reads correctly after completion and after a reload.
+  const runReplyText = useMemo(() => {
+    if (!selectedJobId) return ''
+    const done = [...events].reverse().find(item => item.job_id === selectedJobId && (item.kind === 'assistant.completed' || item.kind === 'assistant.failed'))
+    return done ? String(done.payload.text || '') : ''
+  }, [events, selectedJobId])
+  const runTurnFallback = useMemo<TranscriptMessage[]>(() => {
+    if (!selectedJob || selectedJob.state !== 'completed' || staleTerminalRun) return []
+    if (transcript.some(m => m.job_id === selectedJob.id)) return []
+    const at = selectedJob.finished_at || selectedJob.updated_at || selectedJob.created_at
+    const base = { session_id: selectedSessionId, job_id: selectedJob.id, kind: 'codex', created_at: at }
+    const out: TranscriptMessage[] = []
+    if (!promptAlreadyInTranscript && selectedJob.prompt_preview) {
+      out.push({ ...base, id: `run-${selectedJob.id}-request`, role: 'user', content: selectedJob.prompt_preview })
+    }
+    if (runReplyText.trim()) {
+      out.push({ ...base, id: `run-${selectedJob.id}-reply`, role: 'assistant', content: runReplyText })
+    }
+    return out
+  }, [promptAlreadyInTranscript, runReplyText, selectedJob, selectedSessionId, staleTerminalRun, transcript])
 
   useEffect(() => {
     const node = streamRef.current
@@ -867,25 +1096,61 @@ export default function App() {
 
   async function openSettings() {
     setSettingsOpen(true); setError('')
-    try { setProviderConfig(await api<ProviderConfig>('/api/config/provider')) }
+    try {
+      const p = await api<any>('/api/config/provider')
+      if (p) setProviderConfig(p.config || p)
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not load settings') }
   }
 
-  async function submit(event: FormEvent) {
-    event.preventDefault(); if (!prompt.trim() || busy) return
-    setBusy(true); setError('')
+  // The draft is cleared once the server accepts it; if the run then fails, give it back.
+  const lastSubmitted = useRef<{ jobId: string; prompt: string; mode: 'run' | 'fix' } | null>(null)
+  useEffect(() => {
+    const sent = lastSubmitted.current
+    if (!sent || selectedJob?.id !== sent.jobId || selectedJob.state !== 'failed') return
+    lastSubmitted.current = null
+    setPrompt(current => current.trim() ? current : sent.prompt)
+    setMode(sent.mode)
+  }, [selectedJob])
+  const coarsePointer = useMediaQuery('(pointer: coarse)')
+  // A phone keyboard has no Enter key: the composer hint drops that part on narrow screens too.
+  const narrowComposer = useMediaQuery('(max-width: 640px)')
+  const touchComposer = coarsePointer || narrowComposer
+  // N24: the newest line of this conversation. When it is a failure (a model call that could
+  // not be made), the transcript shows it as an error line with 重试 beside the composer.
+  const lastTranscriptMessage = transcript.length ? transcript[transcript.length - 1] : null
+  const failureBesideComposer = Boolean(lastTranscriptMessage
+    && (lastTranscriptMessage.kind === 'error' || lastTranscriptMessage.content.startsWith('[error]')))
+
+  // One place sends to 任务: the composer's 发送 and the 重试 button on a failure line (N24).
+  async function sendPrompt(text: string, executionOnlySend = executionOnly) {
+    const body = text.trim()
+    if (!body || busy) return
+    setBusy(true); setError(''); setSubmitError(null)
     try {
       const result = await api<{ job_id: string; session_id?: string }>('/api/tasks', {
-        method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSessionId || undefined, execution_only: executionOnly }),
+        method: 'POST', body: JSON.stringify({ prompt: body, mode, session_id: selectedSessionId || undefined, execution_only: executionOnlySend }),
       })
+      lastSubmitted.current = result.job_id ? { jobId: result.job_id, prompt: body, mode } : null
       setPrompt('')
+      setExplicitRunId('')
       setExecutionOnly(false)
       setCreatingSession(false)
       if (result.session_id) setSelectedSessionId(result.session_id)
       setSelectedJobId(result.job_id || '')
       await Promise.all([refresh(), refreshTranscript()])
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Submit failed') }
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Submit failed'
+      // The server's own reason (Chinese when it has one) belongs next to the composer,
+      // not only in the banner at the top of the page (N17).
+      setSubmitError(shellErrorText(message))
+      setError(message)
+    }
     finally { setBusy(false) }
+  }
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    await sendPrompt(prompt)
   }
   async function action(path: string, body: object = {}) {
     setBusy(true); setError('')
@@ -924,6 +1189,8 @@ export default function App() {
   }
   function unlock(event: FormEvent) {
     event.preventDefault(); const value = tokenDraft.trim(); if (!value) return
+    isLockedRef.current = false
+    pollAbortRef.current = new AbortController()
     sessionStorage.setItem('conveyor-token', value)
     try { if (rememberToken) localStorage.setItem('conveyor-token', value); else localStorage.removeItem('conveyor-token') } catch { /* storage unavailable */ }
     // The draft stays until the server accepts it, so a rejected token can be corrected in place.
@@ -935,6 +1202,24 @@ export default function App() {
     selectSession(agent.session_id)
     setView('chat')
     setSessionsDrawerOpen(false)
+  }
+  // A conversation found by 记忆 → 「搜索过去的对话」 opens where the 对话 / 任务 lists
+  // would open it: an agent's conversation on its 对话 page, a web chat in 对话,
+  // anything else (task runs, Telegram, 飞书) in 任务.
+  const openSearchedSession = (sessionId: string) => {
+    if (!sessionId) return
+    historyModeRef.current = 'push'
+    if (isSupervisorWorktreeSessionId(sessionId)) { setView('code'); return }
+    const agent = agentState.enabled ? agentState.agents.find(item => item.session_id === sessionId) : undefined
+    if (agent) { selectAgent(agent); return }
+    if (isChatSessionId(sessionId) && !agentState.enabled) {
+      setChatOpenRequest(previous => ({ id: sessionId, nonce: (previous?.nonce ?? 0) + 1 }))
+      setView('chat')
+      return
+    }
+    const known = sessions.find(item => item.id === sessionId)
+    selectSession(sessionId, known?.latest_job?.id)
+    setView('tasks')
   }
   const saveAgent = async (draft: AgentDraft, agent?: Agent) => {
     const saved = await api<Agent>(agent ? `/api/agents/${encodeURIComponent(agent.id)}` : '/api/agents', {
@@ -949,23 +1234,135 @@ export default function App() {
     await refresh()
   }
   function lock() {
+    isLockedRef.current = true
+    pollAbortRef.current.abort()
+    pollAbortRef.current = new AbortController()
+
+    if (pollTimerRef.current !== null) { window.clearInterval(pollTimerRef.current); pollTimerRef.current = null }
+    if (approvalTimerRef.current !== null) { window.clearInterval(approvalTimerRef.current); approvalTimerRef.current = null }
+    if (inboxTimerRef.current !== null) { window.clearInterval(inboxTimerRef.current); inboxTimerRef.current = null }
+    if (goalsTimerRef.current !== null) { window.clearInterval(goalsTimerRef.current); goalsTimerRef.current = null }
+    if (staleTimerRef.current !== null) { window.clearTimeout(staleTimerRef.current); staleTimerRef.current = null }
+
     // With PWA disabled, locking retains exactly the legacy console behaviour.
     if (system?.features?.pwa) void leavePwa(token).catch(() => undefined)
     forgetToken(); sessionStorage.removeItem('conveyor-token')
     setToken(''); setAuthenticated(false); setRememberToken(false)
   }
 
-  if (!authenticated) return <UnlockScreen
-    tokenDraft={tokenDraft} onTokenDraftChange={value => { setTokenDraft(value); if (error) setError('') }}
-    rememberToken={rememberToken} onRememberTokenChange={setRememberToken}
-    error={error} canRetry={Boolean(token)} onRetry={() => { setError(''); void refresh() }}
-    onSubmit={event => {
-      // Submitting the same token again (e.g. after a network error) must retry, not do nothing.
-      const retry = Boolean(tokenDraft.trim()) && tokenDraft.trim() === token
-      setError(''); unlock(event)
-      if (retry) void refresh()
-    }}
-  />
+  // ② 算的是「服务器上任何一个能用的对话模型」：模型设置里存下来的，或者服务器用环境
+  // 变量自己配好的（GET /api/config/provider 与 /api/system/status 都会说明这件事）。
+  const modelConfigured = Boolean(
+    (providerConfig && providerConfig.api_key_configured && providerConfig.model)
+    || providerConfig?.chat_model_configured
+    || system?.features?.chat_model_configured
+  )
+  const workersEnabled = Boolean(system?.features?.workers)
+  const hasEligibleWorker = Boolean(
+    workersData?.active ||
+    (Array.isArray(workersData?.workers) && workersData.workers.some((w: any) =>
+      w.enabled && w.installed && w.runnable && w.auth !== 'needs_login' && w.quota?.state !== 'cooling'
+    ))
+  )
+  // The built-in Pi has no login of its own: it works as soon as 模型设置 has a provider, so
+  // checklist step ① says that instead of 「并登录」 (QA N28).
+  const builtinPiInstalled = Boolean(
+    Array.isArray(workersData?.workers) && workersData.workers.some((w: any) =>
+      w.id === 'pi' && w.installed && w.enabled !== false
+    )
+  )
+  // Step ③ ticks from data that survives a reload (any session with messages, or a
+  // job) plus the message being sent right now, so it never depends on one poll.
+  const hasSentFirstMessage = Boolean(
+    chatMessageSent ||
+    anySessionHasMessages ||
+    (sessions && sessions.length > 0 && sessions.some(s => (s.message_count || 0) > 0 || (s.job_count || 0) > 0)) ||
+    (jobs && jobs.length > 0) ||
+    (transcript && transcript.length > 0)
+  )
+  const hasNoUsableWay = Boolean(initialLoaded && !modelConfigured && (!workersEnabled || !hasEligibleWorker))
+  // ① only asks for work when the 执行者 feature is on; otherwise the owner cannot act on it.
+  const executorStepDone = !workersEnabled || hasEligibleWorker
+  const onboardingStepsOpen = Boolean(hasNoUsableWay || !executorStepDone || !modelConfigured || !hasSentFirstMessage)
+
+  const ONBOARDING_DISMISSED_KEY = 'conveyor-onboarding-dismissed'
+  const ONBOARDING_HEALTHY_KEY = 'conveyor-onboarding-healthy'
+
+  useEffect(() => {
+    if (!initialLoaded) return
+    if (hasNoUsableWay) {
+      try {
+        if (localStorage.getItem(ONBOARDING_HEALTHY_KEY) === 'true') {
+          localStorage.removeItem(ONBOARDING_DISMISSED_KEY)
+          localStorage.removeItem(ONBOARDING_HEALTHY_KEY)
+          setChecklistDismissed(false)
+        }
+      } catch { /* ignore */ }
+    } else {
+      try {
+        localStorage.setItem(ONBOARDING_HEALTHY_KEY, 'true')
+      } catch { /* ignore */ }
+    }
+  }, [hasNoUsableWay, initialLoaded])
+
+  const handleDismissChecklist = useCallback(() => {
+    setChecklistDismissed(true)
+    try {
+      localStorage.setItem(ONBOARDING_DISMISSED_KEY, 'true')
+    } catch { /* ignore */ }
+  }, [])
+
+  // N2: when the last step finishes on this page the card is shown once more, all three ticked
+  // with 「都准备好了」, so the owner actually sees ③ tick. A reload (or 关闭) hides it for good.
+  // Declared above every early return: hooks must run on every render of this component.
+  const stepsOpenAtLoadRef = useRef<boolean | null>(null)
+  const [checklistFinished, setChecklistFinished] = useState(false)
+  useEffect(() => {
+    if (!initialLoaded || checklistDismissed) return
+    // Whether the steps were still open when this page opened: only then is there a
+    // completed state worth showing once. A page that opens already finished shows nothing.
+    if (stepsOpenAtLoadRef.current === null) stepsOpenAtLoadRef.current = onboardingStepsOpen
+    if (!stepsOpenAtLoadRef.current) return
+    if (!onboardingStepsOpen) setChecklistFinished(true)
+  }, [checklistDismissed, initialLoaded, onboardingStepsOpen])
+
+  // 带着记住的令牌刷新时，先显示「正在打开…」；只有真的没有令牌、或者令牌被拒了，
+  // 才亮出解锁表单（连同它的错误提示）。
+  if (!authenticated) {
+    if (checkingStoredToken) return <OpeningScreen />
+    return <UnlockScreen
+      tokenDraft={tokenDraft} onTokenDraftChange={value => { setTokenDraft(value); if (error) setError('') }}
+      rememberToken={rememberToken} onRememberTokenChange={setRememberToken}
+      error={error} canRetry={Boolean(token)} onRetry={() => { setError(''); void refresh() }}
+      onSubmit={event => {
+        // Submitting the same token again (e.g. after a network error) must retry, not do nothing.
+        const retry = Boolean(tokenDraft.trim()) && tokenDraft.trim() === token
+        setError(''); unlock(event)
+        if (retry) void refresh()
+      }}
+    />
+  }
+
+  // Derived from server state on every load (no in-memory flag): the checklist stays until every step is done or it is dismissed.
+  const showChecklist = initialLoaded && !checklistDismissed
+    && (onboardingStepsOpen || (checklistFinished && stepsOpenAtLoadRef.current === true))
+
+  const checklistNode = showChecklist ? (
+    <SetupChecklist
+      workersEnabled={workersEnabled}
+      builtinPiInstalled={builtinPiInstalled}
+      hasEligibleWorker={hasEligibleWorker}
+      modelConfigured={modelConfigured}
+      hasSentFirstMessage={hasSentFirstMessage}
+      allDone={checklistFinished}
+      onNavigateWorkers={() => {
+        historyModeRef.current = 'push'
+        setView('workers')
+      }}
+      onOpenSettings={() => void openSettings()}
+      onDismiss={handleDismissChecklist}
+    />
+  ) : null
 
   const conversationProps: ChatPanelProps = {
     token, active: view === 'chat',
@@ -978,8 +1375,13 @@ export default function App() {
       setView('tasks')
     },
     onApprovalDecided: () => { void refresh(); void fetchApprovalInboxCount() },
-    onSessionChange: refresh, initialInput: chatDraft,
+    onSessionChange: handleChatSessionChange, initialInput: chatDraft,
     onInitialInputConsumed: () => setChatDraft(''),
+    // A 会话 sidebar row in 对话 asks the panel to open that conversation.
+    openSessionRequest: chatOpenRequest,
+    // Sending from 对话 counts as the first message immediately (step ③ of the checklist).
+    onMessageSent: () => setChatMessageSent(true),
+    setupChecklist: view === 'chat' ? checklistNode : undefined,
   }
 
   // Shell values for this render: right panel, connection, navigation groups and header text.
@@ -999,7 +1401,15 @@ export default function App() {
   }
   // Close button of the phone 助手 / 会话 drawer; it sits in the list heading (hidden on desktop).
   const listDrawerClose = <button type="button" className="drawer-close-btn" aria-label="关闭" onClick={() => setSessionsDrawerOpen(false)}>×</button>
-  const connection: ConnectionState = syncStale ? 'reconnecting' : selectedJobId ? realtimeState : 'live'
+  const connection: ConnectionState = !isOnline
+    ? 'offline'
+    : !initialLoaded
+      ? (pollFailed ? 'reconnecting' : 'connecting')
+      : (pollFailed || syncStale)
+        ? 'reconnecting'
+        : (selectedJobId && realtimeState !== 'live')
+          ? realtimeState
+          : 'live'
   const runningCount = system?.queue.states.running || 0
   const errorMessage = error ? shellErrorText(error) : null
   const mainNav = navItems.filter(item => item.group === 'main')
@@ -1018,14 +1428,16 @@ export default function App() {
       onClick={() => { setView(item.view); setNavMenuOpen(false) }}>
       {inMenu && <ShellIcon name={item.view} size={16} />}
       <span>{VIEW_LABELS[item.view]}</span>
-      {item.badge ? <span className="shell-nav-badge">{item.badge > 99 ? '99+' : item.badge}</span> : null}
+      {item.badge ? <span className="shell-nav-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge > 99 ? '99+' : item.badge}</span> : null}
       {inMenu && shortcut && <kbd aria-hidden="true">{shortcut}</kbd>}
     </button>
   }
   const agentRole = selectedAgent ? [selectedAgent.is_default ? '默认助手' : '助手', agentTag(selectedAgent)].filter(Boolean).join(' · ') : ''
   const scopedAgent = selectedAgent && !selectedAgent.is_default ? selectedAgent : undefined
+  const taskTitle = (selectedSession?.title && selectedSession.title !== '新会话' ? selectedSession.title : '')
+    || selectedSession?.latest_job?.prompt_preview?.trim() || selectedJob?.prompt_preview?.trim() || '新会话'
   const headerTitle = view === 'chat' ? (selectedAgent?.name || VIEW_LABELS.chat)
-    : view === 'tasks' ? (executionOnly ? '继续聊天任务' : creatingSession ? '新会话' : sessionLabel(selectedSession))
+    : view === 'tasks' ? (executionOnly ? '继续聊天任务' : creatingSession ? '新会话' : taskTitle)
     : VIEW_LABELS[view]
   const headerSubtitle = view === 'chat' && agentRole ? agentRole
     : view === 'memory' && scopedAgent ? `${scopedAgent.name} 长期记住的信息`
@@ -1052,7 +1464,7 @@ export default function App() {
       <div className="top-actions">
         {system?.features?.pwa && <PwaNotifications token={token} />}
         <div className="top-status" data-connection={connection}
-          title={`${connection === 'live' ? '已连接服务器' : connection === 'connecting' ? '正在连接实时进度' : '连接中断，正在重新连接'}${system?.queue.paused ? ' · 队列已暂停' : ''}`}>
+          title={`${connection === 'live' ? '已连接服务器' : connection === 'connecting' ? '正在连接实时进度' : connection === 'offline' ? '网络已断开' : '连接中断，正在重新连接'}${system?.queue.paused ? ' · 队列已暂停' : ''}`}>
           <span className="live-dot" aria-hidden="true" />
           <span className="top-status-label">{CONNECTION_LABELS[connection]}</span>
           <span className="separator" aria-hidden="true" />
@@ -1067,6 +1479,10 @@ export default function App() {
       <span className="shell-error-text">{errorMessage.text}{errorMessage.detail && <small>{errorMessage.detail}</small>}</span>
       <button type="button" aria-label="关闭提示" onClick={() => setError('')}>×</button>
     </div>}
+    {notice && <div className="shell-notice global" role="status" aria-live="polite">
+      <span>{notice}</span>
+      <button type="button" aria-label="关闭提示" onClick={() => setNotice('')}>×</button>
+    </div>}
     <section className={`workspace ${contextShown ? 'shell-context-open' : 'shell-context-closed'}`}>
       <aside ref={sessionsDrawerRef} id="shell-side-panel" tabIndex={sessionsDrawerOpen ? -1 : undefined} role={sessionsDrawerOpen ? 'dialog' : undefined} aria-modal={sessionsDrawerOpen ? true : undefined} aria-label={agentState.enabled ? '助手' : '会话'} className={`sessions-panel panel ${sessionsDrawerOpen ? 'drawer-open' : ''}`}>
         {/* In the phone drawer the list heading doubles as the drawer header (title, 新建, close). */}
@@ -1075,17 +1491,17 @@ export default function App() {
           : <>
         <div className="panel-heading session-list-heading"><h2>会话</h2><button type="button" className="agent-new-btn" onClick={() => { selectSession('', ''); setCreatingSession(true); setPrompt(''); setSessionsDrawerOpen(false); }} aria-label="新建会话" title="新建会话"><span aria-hidden="true">+</span> 新建</button>{listDrawerClose}</div>
         <div className="session-list">
-          {sessions.map(session => (
+          {sidebarSessions.map(session => (
             <div key={session.id} className="session-item-row">
               <button
-                className={`session-item ${session.id === selectedSessionId ? 'active' : ''}`}
+                className={`session-item ${session.id === sidebarActiveId ? 'active' : ''}`}
                 title={sessionLabel(session)}
-                aria-pressed={session.id === selectedSessionId}
-                onClick={() => { selectSession(session.id, session.latest_job?.id); setSessionsDrawerOpen(false); }}
+                aria-pressed={session.id === sidebarActiveId}
+                onClick={() => { openConversation(session); setSessionsDrawerOpen(false); }}
               >
                 <span className={`status-rail ${session.latest_job?.state || ''}`} />
                 <span>
-                  <span className="session-item-title"><strong>{session.title || '未命名会话'}</strong><time dateTime={session.last_activity} title={formatTime(session.last_activity)}>{relativeTime(session.last_activity)}</time></span>
+                  <span className="session-item-title"><strong>{sessionListTitle(session)}</strong><time dateTime={session.last_activity} title={formatTime(session.last_activity)}>{relativeTime(session.last_activity)}</time></span>
                   <small>{session.message_count ?? 0} 条消息 · {session.job_count} 次运行</small>
                 </span>
               </button>
@@ -1100,7 +1516,7 @@ export default function App() {
               </button>
             </div>
           ))}
-          {!sessions.length && <Empty text="还没有会话，点“新建”开始。" />}
+          {!sidebarSessions.length && <Empty text="还没有会话，点“新建”开始。" />}
         </div>
           </>}
         <QueueSummary states={system?.queue.states} />
@@ -1117,7 +1533,7 @@ export default function App() {
           </button>}
           <div className="shell-heading">
             <h2 title={headerTitle}>{headerTitle}</h2>
-            {view === 'tasks' && selectedJob && <StatusBadge state={selectedJob.state} />}
+            {view === 'tasks' && selectedJob && !staleTerminalRun && <StatusBadge state={selectedJob.state} />}
             {headerSubtitle && <p className="shell-subtitle">{headerSubtitle}</p>}
           </div>
           <div className="shell-header-actions">
@@ -1129,7 +1545,7 @@ export default function App() {
             </button>}
           </div>
         </div>
-        <div style={{ display: view === 'chat' ? 'flex' : 'none', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%' }} aria-hidden={view !== 'chat'}>
+        <div className="stream-chat-column" style={{ display: view === 'chat' ? 'flex' : 'none', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%', flex: '1 1 auto', overflow: 'hidden' }} aria-hidden={view !== 'chat'}>
           {selectedAgent
             ? <AgentWorkspace key={selectedAgent.id} agent={selectedAgent} agents={agentState.agents} onSelectAgent={selectAgent} {...conversationProps} />
             : <ChatPanel key="free-chat" {...conversationProps} />}
@@ -1159,14 +1575,17 @@ export default function App() {
           <ConnectorsPanel token={token} />
         ) : view === 'secrets' ? (
           <SecretsPanel token={token} />
+        ) : view === 'workers' ? (
+          <WorkersPanel token={token} />
         ) : view === 'memory' ? (
-          <MemoryPanel key={selectedAgent?.id || 'operator'} token={token} agentId={selectedAgent && !selectedAgent.is_default ? selectedAgent.id : undefined} agentName={selectedAgent?.name} />
+          <MemoryPanel key={selectedAgent?.id || 'operator'} token={token} agentId={selectedAgent && !selectedAgent.is_default ? selectedAgent.id : undefined} agentName={selectedAgent?.name} onOpenSession={openSearchedSession} />
         ) : view === 'inbox' ? (
           <InboxPanel
             agentId={selectedAgent && !selectedAgent.is_default ? selectedAgent.id : undefined}
             agentName={selectedAgent?.name}
             token={token}
             webhooksEnabled={Boolean(system?.features?.webhooks)}
+            routinesEnabled={Boolean(system?.features?.routines)}
             onUnreadChange={setInboxUnread}
             onApprovalDecided={() => {
               void refresh()
@@ -1181,11 +1600,12 @@ export default function App() {
               <p>当前服务器未开启 <code>agent_supervisor</code> 功能开关。</p>
             </div>
           ) : (
-            <Suspense fallback={<div className="empty">正在加载 Code 工作台…</div>}>
+            <Suspense fallback={<div className="empty">正在加载项目…</div>}>
               <SupervisorWorkspace
                 token={token}
                 active={view === 'code'}
                 coordinatorFallbackName={providerConfig ? `${providerConfig.provider_name} · ${providerConfig.model}` : selectedAgent?.name}
+                onOpenWorkers={workersEnabled ? () => { historyModeRef.current = 'push'; setView('workers') } : undefined}
               />
             </Suspense>
           )
@@ -1200,24 +1620,65 @@ export default function App() {
         ) : (
           <>
             <div className="event-stream task-stream" ref={streamRef}>
-              {activeRefinement && <div className="job-notice task-notice task-notice--sticky"><strong>改动还没应用</strong><span>已连续修改 {refinementTurn} 轮，{activeChangedFiles} 个文件有改动。继续输入会在同一个隔离副本里接着改；满意后在右侧「改动」里应用或放弃。</span></div>}
-              {selectedJob?.state === 'failed' && <div className="job-notice failed task-notice" role="alert"><strong>任务执行失败</strong><span>可以补充说明后重新发送。</span>{selectedJob.error && <small className="task-notice-detail">{selectedJob.error}</small>}</div>}
-              {selectedJob?.state === 'cancelled' && <div className="job-notice task-notice" role="status"><strong>任务已取消</strong><span>已有记录已保留，可以在下方输入下一步。</span></div>}
-              {selectedJob?.state === 'interrupted' && <div className="job-notice task-notice" role="status"><strong>任务已中断</strong><span>已有记录已保留，可以在下方补充说明继续处理。</span>{selectedJob.error && <small className="task-notice-detail">{selectedJob.error}</small>}</div>}
+              {view === 'tasks' && checklistNode}
+              {refinementRunning && <div className="job-notice task-notice task-notice--sticky" role="status"><strong>正在继续修改</strong><span>第 {refinementTurn} 轮还在运行。继续输入会在同一个隔离副本里接着改。</span></div>}
+              {refinementAwaitingApply && <div className="job-notice task-notice task-notice--sticky"><strong>改动还没应用</strong><span>已连续修改 {refinementTurn} 轮，{activeChangedFiles} 个文件有改动。继续输入会在同一个隔离副本里接着改；满意后在右侧「改动」里应用或放弃。</span></div>}
+              {refinementNoChanges && <div className="job-notice task-notice" role="status"><strong>这次没有改动文件</strong><span>可以在下方重新描述要做的事，再试一次。</span></div>}
               {selectedJob && !terminalJobState(selectedJob.state) && realtimeState === 'reconnecting' && <div className="job-notice task-notice" role="status"><strong>正在重新连接任务进度</strong><span>已收到的记录会保留，连接恢复后继续同步。</span></div>}
-              {selectedJob?.state === 'completed' && !transcript.length && <div className="job-notice task-notice" role="status"><strong>任务已完成</strong><span>对话记录暂不可用，可以在右侧「运行日志」里查看结果。</span></div>}
+              {selectedJob?.state === 'completed' && !transcript.length && !runTurnFallback.length && <div className="job-notice task-notice" role="status"><strong>任务已完成</strong><span>这次运行没有保存文字回复，可以在右侧「运行日志」里查看结果。</span></div>}
 
               {transcriptError && <div className="job-notice task-notice" role="status"><strong>暂时无法更新会话记录</strong><span>已收到的内容会保留。</span><button type="button" onClick={() => void refreshTranscript()}>重试读取</button></div>}
 
-              {transcript.length > 0 && <TranscriptPanel messages={transcript} agent={selectedAgent} />}
+              {transcript.length > 0 && <TranscriptPanel messages={transcript} agent={selectedAgent} onRetry={question => void sendPrompt(question, false)} />}
+              {runTurnFallback.length > 0 && <TranscriptPanel messages={runTurnFallback} agent={selectedAgent} />}
 
-              {selectedJob && !terminalJobState(selectedJob.state) && !promptAlreadyInTranscript && (
+              {selectedJob && selectedJob.prompt_preview && selectedJob.state !== 'completed' && !staleTerminalRun && !promptAlreadyInTranscript && (
                 <article className="transcript-message role-user pending-turn">
                   <div className="transcript-content">
                     <p className="formatted-paragraph">{selectedJob.prompt_preview}</p>
                   </div>
                 </article>
               )}
+
+              {selectedJob?.state === 'failed' && !staleTerminalRun && (() => {
+                const info = describeJobError(selectedJob.error)
+                return (
+                  <div className="job-notice failed task-notice" role="alert">
+                    <strong>任务执行失败</strong>
+                    <span>{info.message}</span>
+                    {info.retryable !== false && <small className="task-notice-hint">这段内容已留在下方输入框，修改后可以重新发送。</small>}
+                    {info.action === 'workers' && (
+                      <button
+                        type="button"
+                        className="task-notice-action"
+                        onClick={() => {
+                          historyModeRef.current = 'push'
+                          setView('workers')
+                        }}
+                      >
+                        {info.actionLabel || '去执行者'}
+                      </button>
+                    )}
+                    {info.action === 'settings' && (
+                      <button
+                        type="button"
+                        className="task-notice-action"
+                        onClick={() => void openSettings()}
+                      >
+                        {info.actionLabel || '去设置'}
+                      </button>
+                    )}
+                    {selectedJob.error && (
+                      <details className="task-notice-raw">
+                        <summary>详情</summary>
+                        <small className="task-notice-detail">{selectedJob.error}</small>
+                      </details>
+                    )}
+                  </div>
+                )
+              })()}
+              {selectedJob?.state === 'cancelled' && !staleTerminalRun && <div className="job-notice task-notice" role="status"><strong>任务已取消</strong><span>已有记录已保留，可以在下方输入下一步。</span></div>}
+              {selectedJob?.state === 'interrupted' && !staleTerminalRun && <div className="job-notice task-notice" role="status"><strong>任务已中断</strong><span>已有记录已保留，可以在下方补充说明继续处理。</span>{selectedJob.error && <details className="task-notice-raw"><summary>详情</summary><small className="task-notice-detail">{selectedJob.error}</small></details>}</div>}
 
               {selectedJob && !terminalJobState(selectedJob.state) && (
                 <div className="live-job-turn">
@@ -1289,18 +1750,48 @@ export default function App() {
                 </div>
               )}
             </div>
-            <form className="composer task-composer" onSubmit={submit}>
+            {submitError && (
+              <div className="composer task-composer task-composer--notice" role="alert">
+                <div className="composer-handoff-note task-composer-error-text">
+                  <span>{submitError.text}</span>
+                  {submitError.detail && <small>{submitError.detail}</small>}
+                </div>
+                <div className="task-composer-bar">
+                  <button type="button" className="shell-button" onClick={() => setSubmitError(null)}>知道了</button>
+                </div>
+              </div>
+            )}
+            {isSupervisorWorktreeSessionId(selectedSessionId) ? (
+              // 项目 里的工作目录对话：在这里发送只会被服务器拒绝（409）。说清楚，并给出两条出路。
+              <div className="composer task-composer task-composer--notice" role="status">
+                <div className="composer-handoff-note task-composer-readonly-text">
+                  <span>这是「项目」里的工作目录对话，请到「项目」页讨论或派发。</span>
+                </div>
+                <div className="task-composer-bar">
+                  <button type="button" className="shell-button primary" onClick={() => { historyModeRef.current = 'push'; setView('code') }}>去项目</button>
+                  <button
+                    type="button"
+                    className="shell-button"
+                    onClick={() => { selectSession('', ''); setCreatingSession(true); setPrompt(''); setSubmitError(null) }}
+                  >
+                    新建会话
+                  </button>
+                </div>
+              </div>
+            ) : (
+            <form className={`composer task-composer ${failureBesideComposer ? 'task-composer--settled' : ''}`} onSubmit={submit}>
               {executionOnly && <div className="composer-handoff-note" role="status">原请求已带入任务页。你可以编辑内容，再点击发送执行。</div>}
-              <textarea aria-label="任务内容" value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={activeRefinement ? '继续说明要怎么改…' : '描述要做的事…'} rows={2} maxLength={8000} onKeyDown={event => { if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
+              <textarea aria-label="任务内容" value={prompt} onChange={event => { setPrompt(event.target.value); if (submitError) setSubmitError(null) }} placeholder={activeRefinement ? '继续说明要怎么改…' : '描述要做的事…'} rows={2} maxLength={8000} onKeyDown={event => { if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return; if (coarsePointer) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
               <div className="task-composer-bar">
                 <div className="mode-switch task-mode-switch" role="group" aria-label="运行方式">
                   <button type="button" className={mode === 'run' ? 'active' : ''} aria-pressed={mode === 'run'} title="提问：只回答问题、查资料，不修改项目文件" onClick={() => setMode('run')}>提问</button>
                   <button type="button" className={mode === 'fix' ? 'active' : ''} aria-pressed={mode === 'fix'} title="改代码：在一份隔离的项目副本里修改。完成后你先查看差异，再决定是否应用改动。" onClick={() => setMode('fix')}>改代码</button>
                 </div>
-                <span className="task-composer-hint">{mode === 'fix' ? '在隔离副本里改，看过差异再应用' : <>Enter 发送<span className="chat-hint-newline"> · Shift + Enter 换行</span></>}</span>
-                <button className="send-button" disabled={!prompt.trim() || busy}>{busy ? '发送中…' : '发送'}</button>
+                <span className="task-composer-hint">{mode === 'fix' ? '在隔离副本里改，看过差异再应用' : touchComposer ? '点「发送」提交' : <>Enter 发送<span className="chat-hint-newline"> · Shift + Enter 换行</span></>}</span>
+                <button className="send-button" onPointerDown={event => event.preventDefault()} onMouseDown={event => event.preventDefault()} disabled={!prompt.trim() || busy}>{busy ? '发送中…' : '发送'}</button>
               </div>
             </form>
+            )}
           </>
         )}
       </section>
@@ -1392,8 +1883,8 @@ export default function App() {
           autoExpandKey={runsAutoExpandKey}
           meta={sessionDetail?.runs?.length ? `${sessionDetail.runs.length} 条` : (!sessionDetailError ? '这个会话还没有运行' : undefined)}
         >
-          {activeRefinement && <div className="session-chain-summary">
-            <strong>正在继续修改 · 第 {refinementTurn} 轮</strong>
+          {(refinementRunning || refinementAwaitingApply) && <div className="session-chain-summary">
+            <strong>{refinementRunning ? `正在继续修改 · 第 ${refinementTurn} 轮` : `修改待应用 · 第 ${refinementTurn} 轮`}</strong>
             <small>这些运行共用一个隔离副本，应用或放弃改动后结束。</small>
           </div>}
           <div className="session-run-list" role="group" aria-label="本会话的运行记录">
@@ -1404,7 +1895,7 @@ export default function App() {
                   <button key={run.id} type="button"
                     className={`session-run ${run.id === selectedJobId ? 'selected' : ''}`}
                     aria-pressed={run.id === selectedJobId}
-                    onClick={() => setSelectedJobId(run.id)}>
+                    onClick={() => { setExplicitRunId(run.id); setSelectedJobId(run.id) }}>
                     <span className="session-run-heading">
                       <strong>{run.prompt_preview || run.id}</strong>
                       <span className={`status-rail ${run.state}`} />
@@ -1427,7 +1918,7 @@ export default function App() {
             </div>
             <KeyValue label="开始时间" value={formatTime(selectedJob.started_at || selectedJob.created_at)} />
             {selectedJob.finished_at && <KeyValue label="结束时间" value={formatTime(selectedJob.finished_at)} />}
-            {activeRefinement && <KeyValue label="继续修改" value={`第 ${refinementTurn} 轮 · 进行中`} />}
+            {activeRefinement && <KeyValue label="继续修改" value={`第 ${refinementTurn} 轮 · ${refinementRunning ? '进行中' : refinementAwaitingApply ? '待应用' : '没有改动'}`} />}
             <KeyValue label="运行编号" value={selectedJob.id} mono />
             {!terminalJobState(selectedJob.state) && <RuntimeOwnerCard owner={runtimeOwner} state={selectedJob.state} />}
             {events.length > 0 && (
@@ -1463,7 +1954,7 @@ export default function App() {
               <span>自动操作电脑</span>
               <strong className={computer?.armed ? 'on' : ''}>{computer?.armed ? (computer.arm_remaining_seconds > 0 ? `已开启 · 还剩 ${durationText(computer.arm_remaining_seconds)}` : '已开启') : '未开启'}</strong>
             </div>
-            <button type="button" className="emergency" title="立即停止助手对电脑的所有自动操作" onClick={() => action('/api/computer/stop')}>紧急停止</button>
+            <button type="button" className={`emergency ${computer?.armed ? '' : 'is-idle'}`.trim()} title="立即停止助手对电脑的所有自动操作（仅在助手正在操作电脑时需要）" onClick={() => action('/api/computer/stop')}>紧急停止</button>
           </div>
           {computer?.active_task && <KeyValue label="正在执行" value={computer.active_task.status ? stateLabel(String(computer.active_task.status)) : String(computer.active_task.task_id || '进行中')} />}
           <LiveScreenPanel key={selectedAgent?.id || 'host'} token={token} agentId={selectedAgent?.id} agentName={selectedAgent?.name} />
@@ -1528,7 +2019,7 @@ export default function App() {
                 aria-current={view === item.view ? 'page' : undefined}
                 onClick={() => { setView(item.view); setMoreSheetOpen(false) }}>
                 <span className="mobile-sheet-label"><ShellIcon name={item.view} size={20} />{VIEW_LABELS[item.view]}</span>
-                {item.badge ? <span className="mobile-badge">{item.badge}</span> : null}
+                {item.badge ? <span className="mobile-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge}</span> : null}
               </button>
             ))}
           </div>
@@ -1548,10 +2039,11 @@ export default function App() {
         {bottomNav.map(item => (
           <button key={item.view} type="button" className={`mobile-nav-item ${view === item.view && !moreSheetOpen ? 'active' : ''}`}
             aria-current={view === item.view ? 'page' : undefined}
+            aria-label={item.badgeLabel ? `${VIEW_LABELS[item.view]}，${item.badgeLabel}` : undefined}
             onClick={() => { setView(item.view); setMoreSheetOpen(false) }}>
             <span className="mobile-nav-icon" style={{ position: 'relative' }}>
               <ShellIcon name={item.view} size={22} />
-              {item.badge ? <span className="mobile-badge-pill">{item.badge > 99 ? '99+' : item.badge}</span> : null}
+              {item.badge ? <span className="mobile-badge-pill" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge > 99 ? '99+' : item.badge}</span> : null}
             </span>
             <span>{VIEW_LABELS[item.view]}</span>
           </button>
@@ -1568,6 +2060,7 @@ export default function App() {
     {lockConfirmOpen && <LockConfirmDialog onCancel={() => setLockConfirmOpen(false)} onConfirm={() => { setLockConfirmOpen(false); lock() }} />}
     {agentDialog && <AgentDialog
       agent={agentDialog.agent}
+      existingAgents={agentState.agents}
       onClose={() => setAgentDialog(null)}
       onSave={draft => saveAgent(draft, agentDialog.agent)}
       onArchive={agentDialog.agent ? () => archiveAgent(agentDialog.agent as Agent) : undefined}
@@ -1607,6 +2100,16 @@ function keepTabInside(event: React.KeyboardEvent<HTMLElement>) {
   const first = items[0]; const last = items[items.length - 1]
   if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) { event.preventDefault(); last.focus() }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+}
+
+/** 令牌正在被服务器确认时的那一秒：只有一个牌子，没有任何输入框。 */
+function OpeningScreen() {
+  return <main className="unlock-shell">
+    <div className="unlock-card unlock-card--opening">
+      <div className="brand-mark" aria-hidden="true">C</div>
+      <p className="unlock-lead" role="status">正在打开…</p>
+    </div>
+  </main>
 }
 
 function UnlockScreen({ tokenDraft, onTokenDraftChange, rememberToken, onRememberTokenChange, error, canRetry, onRetry, onSubmit }: {
@@ -1683,17 +2186,19 @@ type ProviderDraft = Record<ProviderField, string>
 const PROVIDER_FIELDS: ProviderField[] = ['provider_id', 'provider_name', 'base_url', 'model', 'wire_api', 'reasoning_effort', 'env_key', 'api_key']
 const REASONING_LABELS: [string, string][] = [['none', '不推理'], ['minimal', '最低'], ['low', '低'], ['medium', '中'], ['high', '高'], ['xhigh', '最高']]
 const PROVIDER_HINTS: Partial<Record<ProviderField, string>> = {
-  provider_id: '小写字母开头，可用数字、- 和 _',
-  base_url: 'OpenAI 兼容接口的地址，远程服务必须用 https',
-  wire_api: '多数兼容服务选 Chat Completions',
+  provider_id: '给这家服务商起个英文小名，选了上面的预设会自动填好',
+  base_url: '服务商给你的接口网址，远程服务必须用 https',
+  wire_api: '不确定就选「通用聊天接口」，选了预设会自动填好',
+  model: '点「获取模型列表」从服务商读取可用模型',
   reasoning_effort: '越高越仔细，也越慢',
-  env_key: '服务器上保存密钥的变量名',
+  env_key: '密钥在服务器上的存放名称，选了预设会自动填好，一般不用改',
 }
 
 function providerDraft(config: ProviderConfig | null): ProviderDraft {
   return {
     provider_id: config?.provider_id || '', provider_name: config?.provider_name || '', base_url: config?.base_url || '',
-    model: config?.model || '', wire_api: config?.wire_api || 'responses', reasoning_effort: config?.reasoning_effort || 'minimal',
+    // Chat Completions is what most OpenAI-compatible providers speak; Responses is only chosen explicitly (see OpenAI preset).
+    model: config?.model || '', wire_api: config?.wire_api || 'chat', reasoning_effort: config?.reasoning_effort || 'minimal',
     env_key: config?.env_key || 'OPENAI_API_KEY', api_key: '',
   }
 }
@@ -1701,7 +2206,7 @@ function providerDraft(config: ProviderConfig | null): ProviderDraft {
 function validateProvider(draft: ProviderDraft, keyConfigured: boolean): Partial<Record<ProviderField, string>> {
   const errors: Partial<Record<ProviderField, string>> = {}
   const providerId = draft.provider_id.trim().toLowerCase()
-  if (!providerId) errors.provider_id = '请填写服务商 ID'
+  if (!providerId) errors.provider_id = '请填写服务商代号'
   else if (!/^[a-z][a-z0-9_-]{0,39}$/.test(providerId)) errors.provider_id = '需以小写字母开头，只能用小写字母、数字、- 和 _'
   if (!draft.provider_name.trim()) errors.provider_name = '请填写显示名称'
   else if (draft.provider_name.trim().length > 80) errors.provider_name = '显示名称最多 80 个字'
@@ -1721,6 +2226,38 @@ function validateProvider(draft: ProviderDraft, keyConfigured: boolean): Partial
   return errors
 }
 
+// Name prefixes the server refuses for 密钥名称 (provider_config.py _RUNTIME_PREFIXES).
+const RESERVED_ENV_PREFIXES = ['LD_', 'PYTHON', 'CONVEYOR_', 'CODEX_', 'GIT_', 'NODE_', 'PI_', 'SSL_', 'REQUESTS_', 'CURL_', 'HTTP', 'NO_PROXY', 'PATH', 'HOME', 'SHELL', 'TELEGRAM_', 'LARK_']
+
+/** 服务商代号 for a custom provider: from 显示名称, else from the 接口地址 host. Always [a-z][a-z0-9-]{0,39}. */
+function deriveProviderCode(name: string, address: string): string {
+  const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  let code = slug(name)
+  if (!code) {
+    let host = ''
+    try { host = new URL(address.trim()).hostname } catch {
+      try { host = new URL(`https://${address.trim()}`).hostname } catch { host = '' }
+    }
+    code = slug(host.replace(/^www\./, ''))
+  }
+  if (!code) return 'custom'
+  if (!/^[a-z]/.test(code)) code = `p-${code}`
+  return code.slice(0, 40).replace(/-+$/, '')
+}
+
+/** 密钥名称 default: <CODE>_API_KEY, moved under PROVIDER_ when the plain name would hit a reserved prefix. */
+function deriveEnvKey(code: string): string {
+  const name = `${code.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`
+  return RESERVED_ENV_PREFIXES.some(prefix => name.startsWith(prefix)) ? `PROVIDER_${name}` : name
+}
+
+/** A custom provider can be saved without opening 高级: fill only the two hidden fields that are still empty. */
+function withDerivedIdentity(draft: ProviderDraft): ProviderDraft {
+  const providerId = draft.provider_id.trim() ? draft.provider_id : deriveProviderCode(draft.provider_name, draft.base_url)
+  const envKey = draft.env_key.trim() ? draft.env_key : deriveEnvKey(providerId.trim().toLowerCase())
+  return { ...draft, provider_id: providerId, env_key: envKey }
+}
+
 /** Server messages (English) → a Chinese sentence, attached to the field it is about. */
 function describeProviderError(message: string): { field?: ProviderField; text: string; detail?: string } {
   const rules: [RegExp, ProviderField, string][] = [
@@ -1729,15 +2266,71 @@ function describeProviderError(message: string): { field?: ProviderField; text: 
     [/^model must/i, 'model', '模型名称需要 1–120 个字符'],
     [/must use https/i, 'base_url', '远程服务必须使用 https'],
     [/^base_url/i, 'base_url', '请填写完整网址，且不能带用户名或密码'],
-    [/^wire_api/i, 'wire_api', '请重新选择接口协议'],
+    [/^wire_api/i, 'wire_api', '请重新选择接口类型'],
     [/reasoning effort/i, 'reasoning_effort', '不支持这个推理强度'],
     [/environment key name/i, 'env_key', '只能用大写字母、数字和下划线，并以字母开头'],
-    [/^api_key is required/i, 'api_key', '这个变量名下还没有密钥，请填写 API 密钥'],
+    [/^api_key is required/i, 'api_key', '这个密钥名称下还没有密钥，请填写 API 密钥'],
     [/^api_key must be/i, 'api_key', '密钥长度应为 8–4096 个字符，且不能换行'],
   ]
   const rule = rules.find(([pattern]) => pattern.test(message))
   return rule ? { field: rule[1], text: rule[2] } : describeFailure(message, '保存没有成功，请稍后再试。')
 }
+
+/** Owner-facing (Chinese only) reason a model-list fetch failed. The raw server text is shown only under 技术详情. */
+function describeModelsFailure(raw: string, code?: string): string {
+  if (code === 'api_key_required') return '获取模型列表失败：请先填写 API 密钥。'
+  const upstream = Number(raw.match(/(?:HTTP |returned )(\d{3})/)?.[1] ?? raw.match(/\b(401|403|404)\b/)?.[1]) || 0
+  if (upstream === 501 || upstream === 405) return '这个服务商不支持自动获取模型列表，请直接在「模型」里填写模型名称。'
+  if (upstream === 401 || upstream === 403) return `获取模型列表失败：API 密钥不对或没有权限（${upstream}）。请检查后再试。`
+  if (upstream === 404) return '获取模型列表失败：接口地址不对（404）。请检查后再试。'
+  if (/超时|网络|连接|timeout|network|refused|ECONN/i.test(raw)) return '获取模型列表失败：连不上服务商。请检查网络和接口地址后再试。'
+  if (/服务地址|base url|接口地址/i.test(raw)) return '获取模型列表失败：接口地址还没填好或格式不对。请检查后再试。'
+  return `获取模型列表失败：服务商没有正常返回${upstream ? `（${upstream}）` : ''}。请检查接口地址和 API 密钥后再试。`
+}
+
+/** Fields that live under the collapsed 高级 section of 模型设置. */
+const PROVIDER_ADVANCED_FIELDS: ProviderField[] = ['provider_id', 'env_key', 'reasoning_effort']
+/** The two machine names (服务商代号 / 密钥名称) sit one level deeper, under 技术设置 (QA N26). */
+const PROVIDER_TECH_FIELDS: ProviderField[] = ['provider_id', 'env_key']
+
+const PROVIDER_PRESETS = [
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    provider_id: 'deepseek',
+    provider_name: 'DeepSeek',
+    base_url: 'https://api.deepseek.com/v1',
+    wire_api: 'chat',
+    env_key: 'DEEPSEEK_API_KEY',
+  },
+  {
+    id: 'stepfun',
+    label: 'StepFun',
+    provider_id: 'stepfun',
+    provider_name: 'StepFun',
+    base_url: 'https://api.stepfun.com/v1',
+    wire_api: 'chat',
+    env_key: 'STEPFUN_API_KEY',
+  },
+  {
+    id: 'moonshot',
+    label: 'Moonshot',
+    provider_id: 'moonshot',
+    provider_name: 'Moonshot',
+    base_url: 'https://api.moonshot.cn/v1',
+    wire_api: 'chat',
+    env_key: 'MOONSHOT_API_KEY',
+  },
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    provider_id: 'openai',
+    provider_name: 'OpenAI',
+    base_url: 'https://api.openai.com/v1',
+    wire_api: 'responses',
+    env_key: 'OPENAI_API_KEY',
+  },
+] as const
 
 function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
   config: ProviderConfig | null; loadError: string; onClose: () => void; onRetry: () => void
@@ -1746,13 +2339,137 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
   const [draft, setDraft] = useState<ProviderDraft>(() => providerDraft(config))
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [error, setError] = useState<{ text: string; detail?: string } | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<ProviderField, string>>>({})
+  const [fetchingModels, setFetchingModels] = useState(false)
+  const [fetchedModels, setFetchedModels] = useState<string[]>([])
+  const [fetchModelsError, setFetchModelsError] = useState('')
+  const [fetchModelsNote, setFetchModelsNote] = useState('')
+  const [fetchModelsDetail, setFetchModelsDetail] = useState('')
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  // 技术设置 (服务商代号 / 密钥名称) is nested inside 高级; opening either opens both.
+  const [techOpen, setTechOpen] = useState(false)
+  const [selectedPreset, setSelectedPreset] = useState<string>('')
   const sheetRef = useRef<HTMLElement>(null)
+  const discardCancelRef = useRef<HTMLButtonElement>(null)
   const controls = useRef<Partial<Record<ProviderField, HTMLInputElement | HTMLSelectElement | null>>>({})
-  useEffect(() => { if (config) setDraft(providerDraft(config)) }, [config])
+  // The app polls /api/config/provider and hands back a new object each time. Adopt the server values only
+  // while nothing here is edited, so a poll never wipes what the owner is typing or has just picked.
+  const baselineRef = useRef<ProviderDraft | null>(null)
+  // After a successful save the server's copy wins, even if it normalised a field differently.
+  const adoptServerRef = useRef(false)
+  useEffect(() => {
+    if (!config) return
+    const next = providerDraft(config)
+    const previous = baselineRef.current
+    baselineRef.current = next
+    const adopt = adoptServerRef.current
+    adoptServerRef.current = false
+    setDraft(current => (adopt || previous === null || PROVIDER_FIELDS.every(field => current[field] === previous[field]) ? next : current))
+  }, [config])
   const baseline = providerDraft(config)
   const dirty = Boolean(config) && PROVIDER_FIELDS.some(field => draft[field] !== baseline[field])
+
+  const activePreset =
+    selectedPreset === 'custom'
+      ? 'custom'
+      : PROVIDER_PRESETS.find(
+          p =>
+            draft.provider_id === p.provider_id &&
+            draft.base_url === p.base_url &&
+            draft.wire_api === p.wire_api
+        )?.id || (selectedPreset || (draft.provider_id.trim() || draft.base_url.trim() ? 'custom' : ''))
+
+  function applyPreset(preset: typeof PROVIDER_PRESETS[number]) {
+    setSaved(false)
+    setSelectedPreset(preset.id)
+    // A model name (and the list fetched for it) belongs to one provider: switching provider drops both.
+    const providerChanged = draft.provider_id.trim().toLowerCase() !== preset.provider_id
+    setDraft(previous => ({
+      ...previous,
+      provider_id: preset.provider_id,
+      provider_name: preset.provider_name,
+      base_url: preset.base_url,
+      wire_api: preset.wire_api,
+      env_key: preset.env_key,
+      ...(providerChanged ? { model: '' } : {}),
+    }))
+    setFieldErrors(previous => ({
+      ...previous,
+      provider_id: undefined,
+      provider_name: undefined,
+      base_url: undefined,
+      wire_api: undefined,
+      env_key: undefined,
+      ...(providerChanged ? { model: undefined } : {}),
+    }))
+    if (providerChanged) {
+      setFetchedModels([]); setFetchModelsNote(''); setFetchModelsError(''); setFetchModelsDetail('')
+    }
+  }
+
+  /** 自定义 starts from a blank provider: nothing from the previous preset is carried over. */
+  function chooseCustom() {
+    if (activePreset === 'custom') return
+    setSaved(false)
+    setSelectedPreset('custom')
+    setDraft(previous => ({
+      ...previous,
+      // A custom provider starts blank, on Chat Completions (the usual OpenAI-compatible interface).
+      provider_id: '', provider_name: '', base_url: '', env_key: '', model: '', api_key: '', wire_api: 'chat', reasoning_effort: 'minimal',
+    }))
+    setFieldErrors({})
+    setFetchedModels([]); setFetchModelsNote(''); setFetchModelsError(''); setFetchModelsDetail('')
+  }
+
+  async function fetchProviderModels() {
+    const filled = withDerivedIdentity(draft)
+    setFetchingModels(true)
+    setFetchModelsError('')
+    setFetchModelsNote('')
+    setFetchModelsDetail('')
+    try {
+      const token = sessionStorage.getItem('conveyor-token') || storedToken()
+      // Send what is on screen (not only what was saved): a first-time setup can fetch before saving.
+      // An empty api_key tells the server to fall back to the key it already stores.
+      const response = await fetch('/api/config/provider/models', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider_id: filled.provider_id.trim().toLowerCase(),
+          base_url: filled.base_url.trim(),
+          wire_api: filled.wire_api,
+          env_key: filled.env_key.trim().toUpperCase(),
+          api_key: filled.api_key.trim(),
+        }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => null) as { error?: string; code?: string } | null
+        const raw = data?.error || `HTTP ${response.status}`
+        setFetchModelsError(describeModelsFailure(raw, data?.code))
+        setFetchModelsDetail(raw)
+        return
+      }
+      const data = await response.json() as { models?: { id: string }[] }
+      if (data && Array.isArray(data.models)) {
+        const ids = data.models.map(m => m.id).filter(Boolean)
+        setFetchedModels(ids)
+        if (ids.length === 0) setFetchModelsError('服务商返回的模型列表为空。')
+        else setFetchModelsNote(`已获取 ${ids.length} 个模型，点一下「模型」输入框就能选择。`)
+      } else {
+        setFetchModelsError('获取模型列表失败：服务商返回的内容看不懂。请稍后再试。')
+      }
+    } catch {
+      setFetchModelsError('获取模型列表失败：连不上服务器。请检查网络后再试。')
+    } finally {
+      setFetchingModels(false)
+    }
+  }
+
+  useEffect(() => {
+    if (confirmDiscard) discardCancelRef.current?.focus()
+  }, [confirmDiscard])
 
   // Focus the sheet (not a field: no phone keyboard popping up); give focus back on close.
   useEffect(() => {
@@ -1761,61 +2478,110 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
     return () => { if (opener?.isConnected) opener.focus() }
   }, [])
   const requestClose = useCallback(() => {
-    if (dirty && !saving && !window.confirm('放弃还没保存的修改？')) return
+    if (confirmDiscard) {
+      setConfirmDiscard(false)
+      return
+    }
+    if (dirty && !saving) {
+      setConfirmDiscard(true)
+      return
+    }
     onClose()
-  }, [dirty, onClose, saving])
+  }, [confirmDiscard, dirty, onClose, saving])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
-      event.preventDefault(); requestClose()
+      event.preventDefault()
+      if (confirmDiscard) {
+        setConfirmDiscard(false)
+        return
+      }
+      if (dirty && !saving) {
+        setConfirmDiscard(true)
+        return
+      }
+      onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [requestClose])
+  }, [confirmDiscard, dirty, onClose, saving])
 
   function update(name: ProviderField, value: string) {
+    adoptServerRef.current = false
     setSaved(false)
     setDraft(previous => ({ ...previous, [name]: value }))
-    if (fieldErrors[name]) setFieldErrors(previous => ({ ...previous, [name]: undefined }))
+    // QA N27: the red border belongs to the message under the field. Typing in a field
+    // drops both, so a form that has just been filled never still looks invalid.
+    setFieldErrors(previous => (previous[name] ? { ...previous, [name]: undefined } : previous))
   }
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (saving || !config) return
-    const errors = validateProvider(draft, config.api_key_configured)
+    const filled = withDerivedIdentity(draft)
+    const errors = validateProvider(filled, config.api_key_configured)
     setFieldErrors(errors); setError(null); setSaved(false)
+    if (filled.provider_id !== draft.provider_id || filled.env_key !== draft.env_key) {
+      setDraft(previous => ({ ...previous, provider_id: filled.provider_id, env_key: filled.env_key }))
+    }
     const first = PROVIDER_FIELDS.find(field => errors[field])
-    if (first) { controls.current[first]?.focus(); return }
+    if (first) {
+      // A field inside the collapsed 高级 section must be opened before it can take focus;
+      // 服务商代号 / 密钥名称 live one level deeper, inside 技术设置.
+      if (PROVIDER_ADVANCED_FIELDS.includes(first)) {
+        setAdvancedOpen(true)
+        if (PROVIDER_TECH_FIELDS.includes(first)) setTechOpen(true)
+      }
+      window.setTimeout(() => controls.current[first]?.focus(), 0)
+      return
+    }
     setSaving(true)
+    adoptServerRef.current = true
     try {
       await onSave({
-        ...draft, provider_id: draft.provider_id.trim().toLowerCase(), provider_name: draft.provider_name.trim(),
-        base_url: draft.base_url.trim(), model: draft.model.trim(), env_key: draft.env_key.trim().toUpperCase(), api_key: draft.api_key.trim(),
+        ...filled, provider_id: filled.provider_id.trim().toLowerCase(), provider_name: filled.provider_name.trim(),
+        base_url: filled.base_url.trim(), model: filled.model.trim(), env_key: filled.env_key.trim().toUpperCase(), api_key: filled.api_key.trim(),
       })
       setSaved(true)
       setDraft(previous => ({ ...previous, api_key: '' }))
     } catch (reason) {
+      adoptServerRef.current = false
       const described = describeProviderError(reason instanceof Error ? reason.message : '')
-      if (described.field) { setFieldErrors({ [described.field]: described.text }); controls.current[described.field]?.focus() }
+      if (described.field) {
+        const field = described.field
+        setFieldErrors({ [field]: described.text })
+        if (PROVIDER_ADVANCED_FIELDS.includes(field)) {
+          setAdvancedOpen(true)
+          if (PROVIDER_TECH_FIELDS.includes(field)) setTechOpen(true)
+        }
+        window.setTimeout(() => controls.current[field]?.focus(), 0)
+      }
       else setError({ text: described.text, detail: described.detail })
     } finally { setSaving(false) }
   }
   const hint = (name: ProviderField) => name === 'api_key' && config && !config.api_key_configured ? '还没有配置密钥，首次保存必须填写' : PROVIDER_HINTS[name]
+  // QA N27: a field's red state follows its current value, not only the stored message, so a
+  // field the owner has just filled can never keep a red border (a filled form looks valid).
+  const stillInvalid = (name: ProviderField) =>
+    Boolean(fieldErrors[name]) && Boolean(validateProvider(draft, Boolean(config?.api_key_configured))[name])
   const control = (name: ProviderField) => ({
     id: `provider-${name}`,
     ref: (element: HTMLInputElement | HTMLSelectElement | null) => { controls.current[name] = element },
     value: draft[name],
-    'aria-invalid': Boolean(fieldErrors[name]),
+    'aria-invalid': stillInvalid(name),
     'aria-describedby': fieldErrors[name] || hint(name) ? `provider-${name}-note` : undefined,
   })
-  const field = (name: ProviderField, label: string, input: React.ReactNode, wide = false) => (
-    <div className={`dialog-field ${wide ? 'wide' : ''} ${fieldErrors[name] ? 'has-error' : ''}`}>
-      <label htmlFor={`provider-${name}`}>{label}</label>
-      {input}
-      {fieldErrors[name]
-        ? <p className="field-error" id={`provider-${name}-note`}>{fieldErrors[name]}</p>
-        : hint(name) ? <p className="field-hint" id={`provider-${name}-note`}>{hint(name)}</p> : null}
-    </div>
-  )
+  const field = (name: ProviderField, label: string, input: React.ReactNode, wide = false) => {
+    const message = stillInvalid(name) ? fieldErrors[name] : undefined
+    return (
+      <div className={`dialog-field ${wide ? 'wide' : ''} ${message ? 'has-error' : ''}`}>
+        <label htmlFor={`provider-${name}`}>{label}</label>
+        {input}
+        {message
+          ? <p className="field-error" id={`provider-${name}-note`}>{message}</p>
+          : hint(name) ? <p className="field-hint" id={`provider-${name}-note`}>{hint(name)}</p> : null}
+      </div>
+    )
+  }
   const text = { autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false, autoComplete: 'off' } as const
 
   return <div className="settings-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) requestClose() }}>
@@ -1829,28 +2595,116 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
         : <div className="settings-loading" role="status">加载中…</div>)
       : <form onSubmit={event => void submit(event)} noValidate>
         <div className="sheet-body">
+          <div className="provider-presets-section" role="group" aria-label="服务商预设">
+            <span className="provider-presets-label">服务商预设：</span>
+            <div className="provider-presets-chips">
+              {PROVIDER_PRESETS.map(preset => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className={`provider-preset-chip ${activePreset === preset.id ? 'is-active' : ''}`}
+                  onClick={() => applyPreset(preset)}
+                >
+                  {preset.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className={`provider-preset-chip ${activePreset === 'custom' ? 'is-active' : ''}`}
+                onClick={chooseCustom}
+              >
+                自定义
+              </button>
+            </div>
+          </div>
           <div className="form-grid">
-            {field('provider_id', '服务商 ID', <input {...control('provider_id')} {...text} className="mono-input" placeholder="deepseek" onChange={event => update('provider_id', event.target.value)} />)}
-            {field('provider_name', '显示名称', <input {...control('provider_name')} autoComplete="off" placeholder="DeepSeek" onChange={event => update('provider_name', event.target.value)} />)}
-            {field('base_url', '接口地址', <input {...control('base_url')} {...text} type="url" inputMode="url" className="mono-input" placeholder="https://api.deepseek.com/v1" onChange={event => update('base_url', event.target.value)} />, true)}
-            {field('model', '模型', <input {...control('model')} {...text} className="mono-input" placeholder="deepseek-chat" onChange={event => update('model', event.target.value)} />)}
-            {field('wire_api', '接口协议', <select {...control('wire_api')} onChange={event => update('wire_api', event.target.value)}><option value="chat">Chat Completions</option><option value="responses">Responses</option></select>)}
-            {field('reasoning_effort', '推理强度', <select {...control('reasoning_effort')} onChange={event => update('reasoning_effort', event.target.value)}>{REASONING_LABELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>)}
-            {field('env_key', '密钥变量名', <input {...control('env_key')} {...text} className="mono-input" placeholder="OPENAI_API_KEY" onChange={event => update('env_key', event.target.value.toUpperCase())} />)}
+            {field('provider_name', '显示名称', <input {...control('provider_name')} autoComplete="off" placeholder="我的模型" onChange={event => update('provider_name', event.target.value)} />)}
+            {field('base_url', '接口地址', <input {...control('base_url')} {...text} type="url" inputMode="url" className="mono-input" placeholder="https://你的服务地址/v1" onChange={event => update('base_url', event.target.value)} />, true)}
+            {field('model', '模型', (
+              <div className="provider-model-wrapper">
+                <div className="provider-model-row">
+                  <input
+                    {...control('model')}
+                    {...text}
+                    className="mono-input"
+                    placeholder="模型名称，例如 gpt-4o-mini"
+                    list={fetchedModels.length > 0 ? 'provider-models-datalist' : undefined}
+                    onChange={event => update('model', event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="guard-btn guard-btn-small provider-fetch-models-btn"
+                    disabled={fetchingModels}
+                    onClick={() => { void fetchProviderModels() }}
+                  >
+                    {fetchingModels ? '获取中…' : '获取模型列表'}
+                  </button>
+                </div>
+                {fetchedModels.length > 0 && (
+                  <datalist id="provider-models-datalist">
+                    {fetchedModels.map(id => (
+                      <option key={id} value={id} />
+                    ))}
+                  </datalist>
+                )}
+                {fetchModelsNote && !fetchModelsError && (
+                  <p className="field-hint provider-fetch-note" role="status">{fetchModelsNote}</p>
+                )}
+                {fetchModelsError && (
+                  <p className="field-error provider-fetch-error" role="alert">{fetchModelsError}</p>
+                )}
+                {fetchModelsError && fetchModelsDetail && (
+                  <details className="guard-tech-details provider-fetch-tech">
+                    <summary>技术详情</summary>
+                    <span className="guard-tech">{fetchModelsDetail}</span>
+                  </details>
+                )}
+              </div>
+            ))}
+            {field('wire_api', '接口类型', <select {...control('wire_api')} onChange={event => update('wire_api', event.target.value)}><option value="chat">通用聊天接口</option><option value="responses">新版应答接口</option></select>)}
             {field('api_key', 'API 密钥', <input {...control('api_key')} {...text} type="password" placeholder={config.api_key_configured ? `已配置 ${config.api_key_hint}，留空则保持不变` : '粘贴 API 密钥'} onChange={event => update('api_key', event.target.value)} />, true)}
+            <details className="provider-advanced wide" open={advancedOpen} onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
+              <summary>高级</summary>
+              <div className="form-grid provider-advanced-grid">
+                {/* 服务商代号 and 密钥名称 are machine names the owner never types: they sit one
+                    level deeper, under 技术设置, with one line saying they fill themselves in (QA N26). */}
+                <details className="provider-tech wide" open={techOpen} onToggle={event => setTechOpen(event.currentTarget.open)}>
+                  <summary>技术设置</summary>
+                  <p className="provider-tech-note">这两项按上面的「显示名称」和「接口地址」自动填好，一般不用改。</p>
+                  <div className="form-grid provider-tech-grid">
+                    {field('provider_id', '服务商代号', <input {...control('provider_id')} {...text} className="mono-input" placeholder="deepseek" onChange={event => update('provider_id', event.target.value)} />)}
+                    {field('env_key', '密钥名称', <input {...control('env_key')} {...text} className="mono-input" placeholder="OPENAI_API_KEY" onChange={event => update('env_key', event.target.value.toUpperCase())} />)}
+                  </div>
+                </details>
+                {field('reasoning_effort', '推理强度', <select {...control('reasoning_effort')} onChange={event => update('reasoning_effort', event.target.value)}>{REASONING_LABELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>)}
+              </div>
+            </details>
           </div>
           <div className="config-note">
             <strong>密钥只保存在服务器上</strong>
             <span>浏览器拿不到完整密钥。保存后，从下一个新任务开始生效。</span>
-            <small>会更新服务器上的 <code>config.toml</code> 和 <code>.env</code></small>
+            <small>设置保存在服务器上。</small>
           </div>
         </div>
-        <footer>
-          {error && <div className="error-banner dialog-error" role="alert"><span>{error.text}</span>{error.detail && <small>{error.detail}</small>}</div>}
-          <span className={`save-status ${saved ? 'visible' : ''}`} role="status">{saved ? '✓ 已保存，新任务会使用这个配置。' : ''}</span>
-          <button type="button" onClick={onClose}>{saved && !dirty ? '完成' : '取消'}</button>
-          <button type="submit" className="primary" disabled={saving}>{saving ? '正在保存…' : '保存'}</button>
-        </footer>
+        {confirmDiscard ? (
+          <footer className="settings-discard-confirm" role="group" aria-label="确认放弃修改">
+            <p>
+              <strong>放弃还没保存的修改？</strong>
+              <span>未保存的配置项变动将会丢失。</span>
+            </p>
+            <div className="settings-confirm-buttons">
+              <button type="button" ref={discardCancelRef} onClick={() => setConfirmDiscard(false)}>继续编辑</button>
+              <button type="button" className="danger-solid" onClick={onClose}>放弃修改</button>
+            </div>
+          </footer>
+        ) : (
+          <footer>
+            {error && <div className="error-banner dialog-error" role="alert"><span>{error.text}</span>{error.detail && <small>{error.detail}</small>}</div>}
+            <span className={`save-status ${saved ? 'visible' : ''}`} role="status">{saved ? '✓ 已保存，新任务会使用这个配置。' : ''}</span>
+            <button type="button" onClick={requestClose}>{saved && !dirty ? '完成' : dirty ? '取消' : '关闭'}</button>
+            <button type="submit" className="primary" disabled={saving}>{saving ? '正在保存…' : '保存'}</button>
+          </footer>
+        )}
       </form>}
     </section>
   </div>

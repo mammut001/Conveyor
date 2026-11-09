@@ -204,7 +204,10 @@ class RelayFailClosedTests(unittest.TestCase):
         isolated_env.start()
         self.addCleanup(isolated_env.stop)
         clear_all_pending()
-        self.temp = tempfile.TemporaryDirectory()
+        if approval_relay._notify_executor is not None:
+            approval_relay._notify_executor.shutdown(wait=True)
+            approval_relay._notify_executor = None
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)
         self.settings = SimpleNamespace(
@@ -218,6 +221,9 @@ class RelayFailClosedTests(unittest.TestCase):
 
     def tearDown(self):
         clear_all_pending()
+        if approval_relay._notify_executor is not None:
+            approval_relay._notify_executor.shutdown(wait=True)
+            approval_relay._notify_executor = None
         # Checkpoint and close the SQLite handle before TemporaryDirectory
         # cleanup; tests may have used WAL mode on Windows as well as Linux.
         if self.settings.approval_relay_db.is_file():

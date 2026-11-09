@@ -16,7 +16,7 @@
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
-  min-height: 480px;
+  min-height: 0;
   overflow: hidden;
   background: #f5f6f7;
 }
@@ -212,12 +212,14 @@
   box-shadow: none;
 }
 .primary-interface .top-status[data-connection="connecting"] .live-dot { background: #b54708; }
-.primary-interface .top-status[data-connection="reconnecting"] .live-dot {
+.primary-interface .top-status[data-connection="reconnecting"] .live-dot,
+.primary-interface .top-status[data-connection="offline"] .live-dot {
   background: #b42318;
   animation: shell-pulse 1.2s ease-in-out infinite;
 }
 .primary-interface .top-status[data-connection="connecting"] .top-status-label { color: #b54708; }
-.primary-interface .top-status[data-connection="reconnecting"] .top-status-label { color: #b42318; }
+.primary-interface .top-status[data-connection="reconnecting"] .top-status-label,
+.primary-interface .top-status[data-connection="offline"] .top-status-label { color: #b42318; }
 .primary-interface .top-status .separator {
   height: 12px;
   margin: 0 4px;
@@ -312,6 +314,41 @@
 }
 .primary-interface .app-shell > .error-banner.global > button:hover { background: #fde4e1; }
 
+/* Global notice banner: for auto-dismiss system notices. */
+.primary-interface .app-shell > .shell-notice.global {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 8px 16px;
+  border: 0;
+  border-bottom: 1px solid #d0d5dd;
+  background: #f8f9fa;
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.primary-interface .app-shell > .shell-notice.global > button {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #667085;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.primary-interface .app-shell > .shell-notice.global > button:hover {
+  background: #eaecf0;
+}
+
 /* ---------------------------------------------------------------------------
    Workspace: the right panel (详情) only on 对话 / 任务, and only when opened.
    --------------------------------------------------------------------------- */
@@ -337,7 +374,8 @@
 
 /* Every page scrolls inside the middle column (the column itself never grows). */
 .primary-interface .stream-panel > :not(.stream-header):not(.composer) { min-height: 0; }
-.primary-interface .stream-panel > :not(.stream-header):not(.composer):not(.event-stream) { overflow-y: auto; }
+.primary-interface .stream-panel > :not(.stream-header):not(.composer):not(.event-stream):not(.stream-chat-column) { overflow-y: auto; }
+.primary-interface .stream-panel > .stream-chat-column { overflow: hidden !important; }
 
 /* Page header: one line — title, task state, a muted subtitle; 详情 toggle on the right. */
 .primary-interface .stream-header {
@@ -957,8 +995,82 @@
 .primary-interface .stream-panel > :is(.kn-page, .guard-page, .event-stream.task-stream) { animation: shell-page-in .16s ease-out; }
 .shell-nav-item { transition: background-color .15s ease, color .15s ease; }
 
+.primary-interface .settings-sheet footer.settings-discard-confirm {
+  display: grid;
+  justify-content: stretch;
+  gap: 10px;
+  border-top-color: #f4c7c3;
+  background: #fef3f2;
+}
+.primary-interface .settings-sheet .settings-discard-confirm p {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  color: #1f2328;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.primary-interface .settings-sheet .settings-discard-confirm p strong {
+  color: #b42318;
+  font-size: 14px;
+}
+.primary-interface .settings-sheet .settings-discard-confirm p span {
+  flex: none;
+}
+.primary-interface .settings-sheet .settings-confirm-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-height: 500px) {
+  html, body {
+    height: 100%;
+    overflow: hidden;
+  }
+  .primary-interface .app-shell {
+    min-height: 0 !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    overflow: hidden !important;
+  }
+  .primary-interface .topbar,
+  .primary-interface .app-shell.mobile-ui > .topbar {
+    height: 38px !important;
+    min-height: 38px !important;
+    padding: 0 12px !important;
+  }
+  .primary-interface .stream-header,
+  .primary-interface .app-shell.mobile-ui .stream-header {
+    height: 36px !important;
+    min-height: 36px !important;
+    padding: 2px 10px !important;
+  }
+}
+
+@media (forced-colors: active) {
+  button,
+  .shell-nav-item,
+  .mobile-nav-item,
+  .settings-button,
+  .shell-lock-button,
+  .shell-header-button,
+  .mobile-sheet-item,
+  .top-status {
+    border: 1px solid ButtonText !important;
+  }
+  .primary-interface .top-status .live-dot {
+    forced-color-adjust: none;
+    border: 1px solid ButtonText !important;
+    background: currentColor !important;
+  }
+  .primary-interface .top-status .top-status-label {
+    display: inline !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .primary-interface .top-status[data-connection="reconnecting"] .live-dot { animation: none; }
+  .primary-interface .top-status:is([data-connection="reconnecting"], [data-connection="offline"]) .live-dot { animation: none; }
   .primary-interface .stream-panel > :is(.kn-page, .guard-page, .event-stream.task-stream) { animation: none; }
   .shell-nav-item { transition: none; }
 }

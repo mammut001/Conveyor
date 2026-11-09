@@ -191,6 +191,8 @@ def _test_registry() -> CheckResult:
             "memory.forget",
             "memory.list",
             "memory.search",
+            "memory.note",
+            "session.search",
             # P2-4 Skills library
             "skill.list",
             "skill.load",

@@ -159,7 +159,7 @@ class TestChatToolsSchemas(unittest.TestCase):
                 self.assertIsInstance(key, str)
                 self.assertIsInstance(prop, dict, f"{fn}.{key} has no schema")
                 self.assertTrue(prop, f"{fn}.{key} has an empty schema")
-            if not fn.startswith(("subagent__", "mcp__")):
+            if not fn.startswith(("subagent__", "mcp__")) and fn != "session__search":
                 self.assertIn("arg", properties, f"{fn} lost its arg parameter")
                 if original not in ("browser.browse_site", "browser.prepare_submit"):
                     self.assertIn("Free-text argument", properties["arg"]["description"])
@@ -168,6 +168,10 @@ class TestChatToolsSchemas(unittest.TestCase):
                 self.assertEqual(required, [] if original not in (
                     "browser.browse_site", "browser.prepare_submit"
                 ) else ["arg"])
+            if fn == "session__search":
+                self.assertEqual(required, ["query"])
+                self.assertEqual(properties["query"]["type"], "string")
+                self.assertEqual(properties["limit"]["type"], "integer")
             if fn == "subagent__spawn":
                 self.assertEqual(required, ["goal", "tools_subset"])
                 self.assertEqual(properties["goal"]["type"], "string")

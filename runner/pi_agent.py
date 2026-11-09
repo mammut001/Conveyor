@@ -66,6 +66,183 @@ def pi_api_key_env(provider: str) -> str:
     slug = re.sub(r"[^A-Z0-9]+", "_", (prov or "").upper()).strip("_")
     return f"{slug}_API_KEY"
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+
+
+def vendored_pi_bin() -> Path:
+    """Path of the Pi binary installed by scripts/install_pi.sh (may not exist)."""
+    return _REPO_ROOT / "vendor" / "pi" / "node_modules" / ".bin" / "pi"
+
+
+def resolve_pi_bin(settings: Any) -> str:
+    """CONVEYOR_PI_BIN > settings.pi_bin > vendored binary > `pi` on PATH."""
+    explicit = str(os.getenv("CONVEYOR_PI_BIN") or getattr(settings, "pi_bin", "") or "").strip()
+    if explicit:
+        return explicit
+    vendored = vendored_pi_bin()
+    if vendored.is_file():
+        return str(vendored)
+    return "pi"
+
+
+def sanitize_pi_provider_id(raw: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9-]+", "-", str(raw or "").strip().lower()).strip("-")
+    return cleaned[:40] or "conveyor"
+
+
+def build_pi_models_json(saved: dict[str, str]) -> dict[str, Any]:
+    """models.json for Pi from the saved 模型设置 provider. Never contains the key."""
+    api = "openai-responses" if saved.get("wire_api") == "responses" else "openai-completions"
+    model = saved["model"]
+    return {
+        "providers": {
+            sanitize_pi_provider_id(saved["provider_id"]): {
+                "baseUrl": saved["base_url"],
+                "api": api,
+                "apiKey": "$" + saved["env_key"],
+                "models": [{"id": model, "name": model}],
+            }
+        }
+    }
+
+
+@dataclass(frozen=True)
+class PiProviderSelection:
+    """Resolved Pi provider/model/credential for one child run.
+
+    Follows Conveyor's precedence: explicit ``CONVEYOR_PI_*`` (or
+    ``settings.pi_*``) wins; otherwise the saved 模型设置 provider is bridged
+    (``models_json`` is set); otherwise Pi's own default. Exactly one provider
+    key is named in ``api_key_env``; the caller must hand only that key to the
+    child and strip every other name in ``PI_PROVIDER_KEY_ENV``.
+    """
+    provider: str                  # --provider value (always non-empty)
+    model: str                     # --model value ("" means omit it)
+    api_key_env: str               # env var name carrying the single key
+    api_key: str                   # resolved key value ("" when none)
+    models_json: str | None        # models.json content to bridge, or None
+
+
+def pi_provider_id(settings: Any) -> str:
+    """Pi provider id from CONVEYOR_PI_PROVIDER / settings.pi_provider."""
+    return str(
+        os.getenv("CONVEYOR_PI_PROVIDER")
+        or getattr(settings, "pi_provider", "")
+        or "deepseek"
+    ).strip().lower() or "deepseek"
+
+
+def pi_model_raw(settings: Any, *, default_model: str = "deepseek-v4-flash",
+                 chat_model: bool = True) -> str:
+    """Raw (un-normalized) Pi model name from CONVEYOR_PI_MODEL / settings.
+
+    ``chat_model=False`` drops the chat-tier fallback (used by the Supervisor,
+    whose precedence is explicit CONVEYOR_PI_* > saved 模型设置 > Pi default and
+    must not silently adopt the chat model). ``default_model`` is the terminal
+    fallback; pass "" so ``--model`` is omitted and Pi picks its own default.
+    """
+    raw = os.getenv("CONVEYOR_PI_MODEL") or getattr(settings, "pi_model", "")
+    if chat_model:
+        raw = raw or getattr(settings, "chat_model", "")
+    return str(raw or default_model).strip()
+
+
+def read_pi_console_secret(settings: Any, key: str) -> str:
+    """Read one provider key from the Web Console secret store.
+
+    Mirrors ``subprocess_env.build_child_env``'s use of the secrets file so an
+    operator-stored key still reaches pi under credential isolation. Never
+    logs or returns anything but the value; failures are silent.
+    """
+    try:
+        from console_secrets import path_for, read_secret
+        secrets_path = getattr(settings, "secrets_file", None)
+        if secrets_path is None and getattr(settings, "codex_memory_root", None) is not None:
+            secrets_path = path_for(settings)
+        if secrets_path is None:
+            return ""
+        stored = read_secret(secrets_path, key)
+    except Exception:
+        return ""
+    return stored.strip() if isinstance(stored, str) else ""
+
+
+def pi_explicit_provider_config(settings: Any) -> bool:
+    """True when CONVEYOR_PI_PROVIDER/MODEL or settings.pi_provider/model is set."""
+    return any(
+        str(value or "").strip()
+        for value in (
+            os.getenv("CONVEYOR_PI_PROVIDER"),
+            os.getenv("CONVEYOR_PI_MODEL"),
+            getattr(settings, "pi_provider", ""),
+            getattr(settings, "pi_model", ""),
+        )
+    )
+
+
+def pi_saved_provider(settings: Any) -> dict[str, str] | None:
+    """Saved 模型设置 provider to bridge into Pi, unless explicit config exists."""
+    if pi_explicit_provider_config(settings):
+        return None
+    from provider_config import get_saved_provider
+    saved = get_saved_provider(settings)
+    if saved is None or not _ENV_KEY_RE.fullmatch(saved.get("env_key", "")):
+        return None
+    return saved
+
+
+def resolve_pi_provider(
+    settings: Any,
+    *,
+    base_env: Any = None,
+    model_fallback: str = "deepseek-v4-flash",
+    chat_model: bool = True,
+    allow_saved: bool = True,
+) -> PiProviderSelection:
+    """Resolve provider/model/credential for a Pi child run.
+
+    Precedence: explicit CONVEYOR_PI_* / settings.pi_* > saved 模型设置 provider
+    (bridged via ``models_json``) > Pi default. The worker keeps the historical
+    ``deepseek-v4-flash`` fallback and chat-tier model adoption; the Supervisor
+    passes ``model_fallback=""`` and ``chat_model=False`` so ``--model`` is
+    omitted unless a model is explicitly configured. ``allow_saved=False``
+    forces the selected/default provider (used when a saved bridge cannot be
+    written). Only the single chosen provider key is ever resolved.
+    """
+    env = os.environ if base_env is None else base_env
+    saved = pi_saved_provider(settings) if allow_saved else None
+    if saved is not None:
+        return PiProviderSelection(
+            provider=sanitize_pi_provider_id(saved["provider_id"]),
+            model=saved["model"],
+            api_key_env=saved["env_key"],
+            api_key=saved["api_key"],
+            models_json=json.dumps(build_pi_models_json(saved), ensure_ascii=False, indent=2) + "\n",
+        )
+    provider = pi_provider_id(settings)
+    raw_model = pi_model_raw(settings, default_model=model_fallback, chat_model=chat_model)
+    # An empty raw model means nothing is configured: omit --model and let Pi
+    # pick its own default (normalize would otherwise force deepseek-v4-flash).
+    model = normalize_pi_model(provider, raw_model) if raw_model else ""
+    api_key_env = pi_api_key_env(provider)
+    value = str(env.get(api_key_env) or os.getenv(api_key_env) or "").strip()
+    if not value and provider == "deepseek":
+        value = str(
+            os.getenv("CONVEYOR_CHAT_API_KEY")
+            or getattr(settings, "chat_api_key", None)
+            or ""
+        ).strip()
+    if not value:
+        value = read_pi_console_secret(settings, api_key_env)
+    return PiProviderSelection(
+        provider=provider,
+        model=model,
+        api_key_env=api_key_env,
+        api_key=value,
+        models_json=None,
+    )
+
 
 @dataclass(frozen=True)
 class _PiEvent:
@@ -106,23 +283,9 @@ class PiBackend(CodexRunner):
 
     def __init__(self, settings: Any) -> None:
         super().__init__(settings)
-        self.pi_bin = str(
-            os.getenv("CONVEYOR_PI_BIN")
-            or getattr(settings, "pi_bin", "")
-            or "pi"
-        ).strip() or "pi"
-        self.pi_provider = str(
-            os.getenv("CONVEYOR_PI_PROVIDER")
-            or getattr(settings, "pi_provider", "")
-            or "deepseek"
-        ).strip().lower() or "deepseek"
-        raw_model = str(
-            os.getenv("CONVEYOR_PI_MODEL")
-            or getattr(settings, "pi_model", "")
-            or getattr(settings, "chat_model", "")
-            or "deepseek-v4-flash"
-        ).strip()
-        self.pi_model = normalize_pi_model(self.pi_provider, raw_model)
+        self.pi_bin = resolve_pi_bin(settings)
+        self.pi_provider = pi_provider_id(settings)
+        self.pi_model = normalize_pi_model(self.pi_provider, pi_model_raw(settings))
         self.pi_api_key_env = pi_api_key_env(self.pi_provider)
 
     def _provider_credential_keys(self) -> set[str]:
@@ -136,23 +299,8 @@ class PiBackend(CodexRunner):
         }
 
     def _console_secret(self, key: str) -> str:
-        """Read one provider key from the Web Console secret store.
-
-        Mirrors ``subprocess_env.build_child_env``'s use of the secrets file so
-        an operator-stored key still reaches pi under credential isolation.
-        Never logs or returns anything but the value; failures are silent.
-        """
-        try:
-            from console_secrets import path_for, read_secret
-            secrets_path = getattr(self.settings, "secrets_file", None)
-            if secrets_path is None and getattr(self.settings, "codex_memory_root", None) is not None:
-                secrets_path = path_for(self.settings)
-            if secrets_path is None:
-                return ""
-            stored = read_secret(secrets_path, key)
-        except Exception:
-            return ""
-        return stored.strip() if isinstance(stored, str) else ""
+        """Read one provider key from the Web Console secret store."""
+        return read_pi_console_secret(self.settings, key)
 
     async def validate(self) -> None:
         await super().validate()
@@ -160,11 +308,10 @@ class PiBackend(CodexRunner):
         if os.path.sep in binary:
             path = Path(binary).expanduser()
             if not path.is_file():
-                raise RuntimeError(f"Pi CLI not found: {path}")
+                raise RuntimeError(f"找不到 Pi 可执行文件：{path}。请到「执行者」页面安装内置 Pi，或检查 CONVEYOR_PI_BIN。")
         elif shutil.which(binary) is None:
             raise RuntimeError(
-                "Pi CLI is not installed or not on PATH. "
-                "Install `@mariozechner/pi-coding-agent` or set CONVEYOR_PI_BIN."
+                "尚未安装 Pi。请到「执行者」页面点击安装内置 Pi，或设置 CONVEYOR_PI_BIN。"
             )
 
     async def _create_worktree(self, job: Job) -> Path:
@@ -217,8 +364,17 @@ class PiBackend(CodexRunner):
             "to confirm it first."
         )
 
-    def _pi_command(self, job: Job) -> list[str]:
+    def _explicit_provider_config(self) -> bool:
+        return pi_explicit_provider_config(self.settings)
+
+    def _saved_provider(self) -> dict[str, str] | None:
+        """Saved 模型设置 provider to bridge into Pi, unless explicit config exists."""
+        return pi_saved_provider(self.settings)
+
+    def _pi_command(self, job: Job, provider: str | None = None, model: str | None = None) -> list[str]:
         tools = "read,bash,edit,write,grep,find,ls"
+        # Empty model: omit --model so pi picks its own default.
+        model_name = model or self.pi_model
         command = [
             self.pi_bin,
             "--mode", "json",
@@ -229,10 +385,11 @@ class PiBackend(CodexRunner):
             "--no-prompt-templates",
             "--no-themes",
             "--no-context-files",
-            "--provider", self.pi_provider,
         ]
-        if self.pi_model:
-            command += ["--model", self.pi_model]
+        # pi requires --model whenever --provider is given, so pass both or
+        # neither (with no model, let Pi choose its own default provider).
+        if model_name:
+            command += ["--provider", provider or self.pi_provider, "--model", model_name]
         command += [
             "--tools", tools,
             "--append-system-prompt", self._pi_system_prompt(job),
@@ -241,33 +398,41 @@ class PiBackend(CodexRunner):
 
     async def _run_codex_attempt(self, job: Job, on_progress: ProgressCallback) -> None:
         """Run one Pi CLI attempt while preserving Conveyor lifecycle APIs."""
-        command = self._pi_command(job)
         from runner.operators.run import job_child_env
         env = job_child_env(self, job)
-
-        # Ensure the API key of the selected provider is available to Pi.
-        # Only DeepSeek keeps the legacy Conveyor fallbacks so a non-DeepSeek
-        # provider never receives a credential it cannot use (and DeepSeek
-        # behaviour is unchanged).
-        key_name = self.pi_api_key_env
-        value = str(env.get(key_name) or os.getenv(key_name) or "").strip()
-        if not value and self.pi_provider == "deepseek":
-            value = str(
-                os.getenv("CONVEYOR_CHAT_API_KEY")
-                or getattr(self.settings, "chat_api_key", None)
-                or ""
-            ).strip()
-        if not value:
-            value = self._console_secret(key_name)
-        if value:
-            env[key_name] = value
-
+        selection = resolve_pi_provider(self.settings, base_env=env)
         pi_dir = Path(self.settings.codex_task_root) / "pi-agent"
+        dir_ready = False
         try:
             pi_dir.mkdir(parents=True, exist_ok=True)
             env["PI_CODING_AGENT_DIR"] = str(pi_dir)
+            dir_ready = True
         except OSError:
             pass
+
+        if selection.models_json is not None:
+            # Saved 模型设置 provider: bridge it via models.json so Pi knows the
+            # provider's baseUrl/api, and hand only that provider's key.
+            bridged = False
+            if dir_ready:
+                try:
+                    from provider_config import _atomic_write
+                    _atomic_write(pi_dir / "models.json", selection.models_json, 0o600)
+                    bridged = True
+                except OSError:
+                    bridged = False
+            if not bridged:
+                # Could not write models.json: fall back to the selected/default
+                # provider, exactly as before the resolver refactor.
+                selection = resolve_pi_provider(self.settings, base_env=env, allow_saved=False)
+
+        command = self._pi_command(job, selection.provider, selection.model)
+        chosen_key = selection.api_key_env
+        if selection.api_key:
+            env[chosen_key] = selection.api_key
+        # The child must hold exactly the chosen provider's key, never another's.
+        for other_key in set(PI_PROVIDER_KEY_ENV.values()) - {chosen_key}:
+            env.pop(other_key, None)
         env["PI_OFFLINE"] = "1"
         env["PI_TELEMETRY"] = "0"
 

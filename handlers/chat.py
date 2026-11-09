@@ -41,7 +41,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ChatOutcome = Literal["answered", "escalate", "unavailable"]
+#   answered    - the reply was delivered
+#   escalate    - the model asked for the agent (Codex/Pi) to act
+#   unavailable - no chat model is configured or the reply was unusable; the caller may hand over to an agent
+#   error       - the chat provider failed (HTTP error, cut stream); the owner gets a Chinese error and
+#                 NO agent run starts. Checked.body holds the Chinese sentence, Checked.reason the raw text.
+ChatOutcome = Literal["answered", "escalate", "unavailable", "error"]
 
 ESCALATE_TOKEN = "[[ESCALATE]]"
 SEARCH_TOKEN = "[[SEARCH:"
@@ -49,6 +54,37 @@ MAX_SEARCH_QUERY_CHARS = 200
 HISTORY_TTL_SECONDS = 30 * 60
 EDIT_INTERVAL_SECONDS = 1.2
 DEEP_HINT = "发 /deep 让 Codex 深入查证。"
+# The web console has no slash commands: name the surface, not a command, and never
+# promise a deeper check when no executor can actually run one.
+WEB_DEEP_HINT = "想更深入地查证，可以让执行者再查一遍。"
+
+
+async def _executor_can_run(settings: "Settings | None") -> bool:
+    """Whether an executor is installed, logged in and usable right now."""
+    if settings is None:
+        return False
+    try:
+        import workers
+
+        payload = await workers.async_get_workers_payload(settings)
+    except Exception:
+        return False
+    if not payload.get("enabled"):
+        return False
+    return any(
+        worker.get("enabled") and worker.get("installed") and worker.get("runnable")
+        and worker.get("auth") != "needs_login"
+        and (worker.get("quota") or {}).get("state") != "cooling"
+        for worker in payload.get("workers") or []
+    )
+
+
+async def deep_hint(channel: str, settings: "Settings | None") -> str:
+    """The "dig deeper" line for an answer, or "" when nobody can dig."""
+    if not await _executor_can_run(settings):
+        return ""
+    return WEB_DEEP_HINT if channel == "web" else DEEP_HINT
+
 
 _CONFIDENCE_RE = re.compile(r"\[\[\s*CONFIDENCE\s*:\s*(high|medium|low)\s*\]\]", re.IGNORECASE)
 _CONTROL_RE = re.compile(
@@ -389,12 +425,14 @@ def reset(
 def system_prompt(
     settings: "Settings", *, has_evidence: bool, can_search: bool = False, worktree_info: str = "", tools_enabled: bool = False,
     operator_id: str = "", memory_query: str = "", memory_allowed: bool = True, active_skill: str = "",
-    agent_name: str = "", agent_instructions: str = "",
+    agent_name: str = "", agent_instructions: str = "", agent_notes: str = "",
 ) -> str:
     from config import load_operator_profile
 
     # Group chats (or memory flag off): no durable memory in the prompt at all.
     memory_on = bool(getattr(settings, "long_term_memory_enabled", False) or getattr(settings, "memory_v2_enabled", False)) and memory_allowed
+    import agent_memory
+    notes_on = agent_memory.enabled(settings) and memory_allowed
 
     try:
         live = load_operator_profile(settings.codex_memory_root)
@@ -429,6 +467,8 @@ def system_prompt(
             "Every write action needs its own tool call, even if a similar one was requested "
             "earlier in the conversation; never reply that confirmation was requested without "
             "calling the tool.\n"
+            "You can search past conversations with session.search when the owner refers to "
+            "something discussed before.\n"
         )
         if memory_on:
             tool_section += (
@@ -436,6 +476,12 @@ def system_prompt(
                 "one fact, call memory.remember or memory.forget with that single sentence. "
                 "Do not remember the whole chat, and never store secrets, tokens, or keys. "
                 "This is not the daily journal (/memo).\n"
+            )
+        if notes_on:
+            tool_section += (
+                "You may keep brief notes of your own about the environment and the operator's "
+                "projects with memory.note (add, replace or remove; no confirmation needed). "
+                "Never store secrets, passwords, tokens or keys in notes.\n"
             )
         rule_1 = (
             f"1. If a good answer needs complex execution or capabilities beyond your tools, "
@@ -466,6 +512,9 @@ def system_prompt(
         block = prompt_block(settings, operator_id, memory_query)
         if block:
             memory_section = block + "\n"
+    if notes_on and agent_notes:
+        # Frozen per-session snapshot (agent_memory.session_snapshot).
+        memory_section += agent_notes + "\n"
     skills_section = ""
     if getattr(settings, "skills_enabled", False):
         from personal_tools.skills import prompt_block as skills_prompt_block
@@ -622,14 +671,14 @@ def visible_partial(buf: str) -> str:
     return text.strip()
 
 
-def finalize(checked: Checked, *, time_sensitive_unverified: bool) -> str:
+def finalize(checked: Checked, *, time_sensitive_unverified: bool, deep: str = DEEP_HINT) -> str:
     notes: list[str] = []
     if checked.removed_links:
         notes.append(f"⚠️ 已移除 {checked.removed_links} 个无法核实来源的链接。")
     if checked.confidence == "low":
-        notes.append("⚠️ 把握不大，别直接当真。" + DEEP_HINT)
+        notes.append("⚠️ 把握不大，别直接当真。" + deep)
     elif time_sensitive_unverified:
-        notes.append("ℹ️ 未联网核实，信息可能过时。" + DEEP_HINT)
+        notes.append("ℹ️ 未联网核实，信息可能过时。" + deep)
     return checked.body + ("\n\n" + "\n".join(notes) if notes else "")
 
 
@@ -687,6 +736,33 @@ def _extract_skill_invocation(text: str) -> tuple[str, str, str, str] | None:
         return prefix, slug, remaining, suffix
 
     return None
+
+
+def _provider_error_text(exc: Exception) -> str:
+    """Text for a non-ChatError provider failure, redacted like a ChatError."""
+    from redaction import redact_text
+
+    return redact_text(str(exc).strip())[:200] or type(exc).__name__
+
+
+async def _chat_tier_failed(
+    msg: InboundMessage, port: OutboundPort, placeholder: str | None, exc: Exception,
+) -> tuple[ChatOutcome, "Checked"]:
+    """The chat provider failed: say so in Chinese and stop. No agent run is started behind the owner's back."""
+    from runner.chat_client import owner_chat_error_text
+
+    raw = str(exc)
+    text = owner_chat_error_text(raw)
+    logger.warning("chat tier failed (no agent fallback): %s", raw)
+    # Ports that own their own transcript (web) keep the owner's question plus
+    # this reason, so a failed model call is visible after a reload instead of
+    # silently dropping the turn. Bot ports show the sentence in the placeholder.
+    note_failure = getattr(port, "note_provider_failure", None)
+    if note_failure is not None:
+        note_failure(msg, text)
+    elif placeholder and not getattr(port, "handles_transcript_directly", False):
+        await port.edit_progress(msg, placeholder, text)
+    return "error", Checked(body=text, confidence="low", removed_links=0, escalate=False, reason=raw)
 
 
 async def ask_chat(
@@ -765,6 +841,14 @@ async def ask_chat(
     from personal_tools.long_term_memory import owner_for_chat as _owner_for_chat
     _memory_owner = _owner_for_chat(settings, msg.operator_id, msg.channel, msg.chat_id)
 
+    # Hermes-style agent notes: one snapshot per session, computed at its first
+    # turn (no short-term history yet) and frozen for the turns after it.
+    agent_notes_block = ""
+    if memory_allowed:
+        import agent_memory
+        if agent_memory.enabled(settings):
+            agent_notes_block = agent_memory.session_snapshot(settings, key, new_session=not past)
+
     def _messages(content, *, has_evidence: bool, may_search: bool) -> list[dict]:
         return (
             [{"role": "system", "content": system_prompt(
@@ -779,6 +863,7 @@ async def ask_chat(
                 active_skill=active_skill_block,
                 agent_name=agent_name,
                 agent_instructions=agent_instructions,
+                agent_notes=agent_notes_block,
             )}]
             + past
             + [{"role": "user", "content": content}]
@@ -793,10 +878,9 @@ async def ask_chat(
         try:
             loop_res = await run_tool_loop(msg, port, settings, tool_messages, config, placeholder=placeholder)
         except ChatError as exc:
-            logger.warning("chat tier failed, falling back to agent: %s", exc)
-            if placeholder:
-                await port.edit_progress(msg, placeholder, "↪️ 对话模型暂不可用，转交 Codex…")
-            return "unavailable", None
+            return await _chat_tier_failed(msg, port, placeholder, exc)
+        except Exception as exc:  # a provider/library error is still a provider failure
+            return await _chat_tier_failed(msg, port, placeholder, ChatError(_provider_error_text(exc)))
 
         if loop_res.confirmation_requested:
             note = loop_res.text.strip() or "已请求确认"
@@ -839,31 +923,28 @@ async def ask_chat(
         searched = ""
         search_failed = False
     else:
-        async def _stream(messages: list[dict]) -> str | None:
+        async def _stream(messages: list[dict]) -> str:
             buf = ""
             shown = ""
             last_edit = 0.0
-            try:
-                async for chunk in stream_chat(config, messages):
-                    buf += chunk
-                    if _held_back(buf.lstrip()):
-                        continue  # might be an escalation / search request
-                    now = time.monotonic()
-                    view = visible_partial(buf)
-                    if placeholder and view and view != shown and now - last_edit >= EDIT_INTERVAL_SECONDS:
-                        if await port.edit_progress(msg, placeholder, view + " ▍"):
-                            shown = view
-                        last_edit = now
-            except ChatError as exc:
-                logger.warning("chat tier failed, falling back to agent: %s", exc)
-                if placeholder:
-                    await port.edit_progress(msg, placeholder, "↪️ 对话模型暂不可用，转交 Codex…")
-                return None
+            async for chunk in stream_chat(config, messages):
+                buf += chunk
+                if _held_back(buf.lstrip()):
+                    continue  # might be an escalation / search request
+                now = time.monotonic()
+                view = visible_partial(buf)
+                if placeholder and view and view != shown and now - last_edit >= EDIT_INTERVAL_SECONDS:
+                    if await port.edit_progress(msg, placeholder, view + " ▍"):
+                        shown = view
+                    last_edit = now
             return buf
 
-        buf = await _stream(_messages(user_content, has_evidence=bool(evidence), may_search=can_search))
-        if buf is None:
-            return "unavailable", None
+        try:
+            buf = await _stream(_messages(user_content, has_evidence=bool(evidence), may_search=can_search))
+        except ChatError as exc:
+            return await _chat_tier_failed(msg, port, placeholder, exc)
+        except Exception as exc:  # a provider/library error is still a provider failure
+            return await _chat_tier_failed(msg, port, placeholder, ChatError(_provider_error_text(exc)))
 
         # One model-requested web search, then a second round with the results.
         searched = ""
@@ -886,9 +967,12 @@ async def ask_chat(
                     "\n\n(Web search returned nothing usable. Answer from what you know and "
                     "say clearly that it is unverified.)"
                 )
-            buf = await _stream(_messages(user_content, has_evidence=bool(evidence), may_search=False))
-            if buf is None:
-                return "unavailable", None
+            try:
+                buf = await _stream(_messages(user_content, has_evidence=bool(evidence), may_search=False))
+            except ChatError as exc:
+                return await _chat_tier_failed(msg, port, placeholder, exc)
+            except Exception as exc:  # a provider/library error is still a provider failure
+                return await _chat_tier_failed(msg, port, placeholder, ChatError(_provider_error_text(exc)))
 
     allowed = evidence_urls(evidence) | extract_urls(question)
     if reply is not None:
@@ -921,7 +1005,10 @@ async def ask_chat(
         key, checked.confidence, checked.removed_links, bool(evidence), bool(searched),
         len(checked.body),
     )
-    final = finalize(checked, time_sensitive_unverified=unverified)
+    # Only ask whether an executor can run when a note is actually going to be added.
+    needs_deep = checked.confidence == "low" or unverified
+    deep = await deep_hint(msg.channel, settings) if needs_deep else ""
+    final = finalize(checked, time_sensitive_unverified=unverified, deep=deep)
     delivered = bool(placeholder) and await port.edit_progress(msg, placeholder, final)
     if not delivered:
         await port.send_new(msg, final)
@@ -979,6 +1066,13 @@ async def chat_or_agent(
         set_last(key, LastRequest(codex_prompt=codex_prompt, confirm=False), settings=settings)
         if checked is not None and checked.confidence == "low":
             await _offer_deep(msg, port, "要让 Codex 用工具深入查一下吗？")
+        return
+    if outcome == "error":
+        # The chat provider failed and the owner has been told why; an agent run is not a silent retry.
+        # Bot channels get a button so the owner can still hand the request to an agent on purpose.
+        set_last(key, LastRequest(codex_prompt=codex_prompt, confirm=False), settings=settings)
+        if getattr(port, "supports_inline_buttons", False):
+            await _offer_deep(msg, port, "对话模型这次没回上来。要直接交给执行者处理吗？")
         return
     if outcome == "escalate" and untrusted:
         # The model read someone else's content; do not let that start an

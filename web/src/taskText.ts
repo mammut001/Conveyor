@@ -6,7 +6,7 @@ export type FileTone = 'added' | 'modified' | 'deleted' | 'renamed'
 
 /** `git status --short` code (already trimmed, e.g. "M", "??", "AM", "R") → chip. */
 export function fileStatusInfo(status?: string): { label: string; tone: FileTone } {
-  const code = (status || '').toUpperCase()
+  const code = (typeof status === 'string' ? status : '').toUpperCase()
   if (code.includes('R')) return { label: '重命名', tone: 'renamed' }
   if (code.includes('D')) return { label: '删除', tone: 'deleted' }
   if (code === '??' || code.includes('A') || code.includes('C')) return { label: '新增', tone: 'added' }
@@ -15,7 +15,8 @@ export function fileStatusInfo(status?: string): { label: string; tone: FileTone
 
 /** Splits "web/src/App.tsx" into name + folder; renames ("a -> b") keep the new path. */
 export function splitPath(raw: string): { name: string; dir: string; from?: string } {
-  const [from, to] = raw.includes(' -> ') ? raw.split(' -> ', 2) : [undefined, raw]
+  const source = typeof raw === 'string' ? raw : ''
+  const [from, to] = source.includes(' -> ') ? source.split(' -> ', 2) : [undefined, source]
   const path = (to || '').replace(/^"|"$/g, '')
   const clean = path.replace(/\/+$/, '')
   const cut = clean.lastIndexOf('/')
@@ -252,4 +253,194 @@ export function durationText(seconds: number) {
   if (minutes >= 60) return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`
   if (minutes > 0) return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`
   return `${rest} 秒`
+}
+
+// ---------------------------------------------------------------------------
+// 目标循环创建的任务标题（supervisor_goals._continuation_prompt / _first_iteration_prompt）
+//
+//   第 N 轮：`这是目标「<title>」的第 N 轮。目标：<outcome>\n\n本轮要做：<instruction>`
+//   第 1 轮：`<outcome>\n\n这是目标的第 1 轮。`
+//
+// 老板只看中文短标题，所以解析成「目标第 N 轮：<这一轮要做的事>」，解析不了就返回空串
+// （调用方退回显示原始 goal 文本）。纯函数，方便单测。
+// ---------------------------------------------------------------------------
+
+const GOAL_ROUND_TITLE_MAX_CHARS = 40
+const GOAL_ROUND_MARKER = '本轮要做：'
+
+export type GoalRoundTaskInfo = {
+  round: number
+  /** 目标标题（第 1 轮的任务文本里没有，只有 outcome）。 */
+  goalTitle: string
+  /** 这一轮围绕的目标结果，用来把同一个目标的多轮任务认成一组。 */
+  outcome: string
+  /** 这一轮要做的事（可能多行，取第一行）。 */
+  instruction: string
+}
+
+function firstMeaningfulLine(text: string): string {
+  return text
+    .split('\n')
+    .map(line => line.trim())
+    .find(line => line.length > 0) || ''
+}
+
+/** 解析目标循环写下的任务目标文本；不是目标循环创建的任务返回 null。 */
+export function parseGoalRoundTask(goal?: string | null): GoalRoundTaskInfo | null {
+  const raw = typeof goal === 'string' ? goal.trim() : ''
+  if (!raw) return null
+
+  // 第 2 轮及以后：开头就是「这是目标「…」的第 N 轮。目标：…」
+  const later = raw.match(/^这是目标「([^」]*)」的第 (\d+) 轮。目标：([^\n]*)/)
+  if (later) {
+    const round = Number.parseInt(later[2], 10)
+    if (!Number.isFinite(round) || round < 1) return null
+    const rest = raw.slice(later[0].length)
+    const marker = rest.indexOf(GOAL_ROUND_MARKER)
+    const source = marker >= 0 ? rest.slice(marker + GOAL_ROUND_MARKER.length) : rest
+    return {
+      round,
+      goalTitle: (later[1] || '').trim(),
+      outcome: (later[3] || '').trim(),
+      instruction: firstMeaningfulLine(source),
+    }
+  }
+
+  // 第 1 轮：`<outcome>\n\n这是目标的第 1 轮。`
+  const first = raw.match(/这是目标的第 (\d+) 轮。/)
+  if (first && typeof first.index === 'number') {
+    const round = Number.parseInt(first[1], 10)
+    if (!Number.isFinite(round) || round < 1) return null
+    const outcome = firstMeaningfulLine(raw.slice(0, first.index))
+    return { round, goalTitle: '', outcome, instruction: outcome }
+  }
+  return null
+}
+
+/** 同一个目标的多轮任务靠 outcome（第 1 轮没有标题）认成一组。 */
+export function goalRoundKey(info: GoalRoundTaskInfo): string {
+  return info.outcome || info.goalTitle || `round-${info.round}`
+}
+
+/** 任务标题里这一行短话：`目标第 N 轮：<这一轮要做的事>`，最长 40 个字再加「…」。 */
+export function goalRoundTaskTitle(goal?: string | null): string {
+  const info = parseGoalRoundTask(goal)
+  if (!info) return ''
+  const collapsed = info.instruction.replace(/\s+/g, ' ').trim()
+  const cut = collapsed.length > GOAL_ROUND_TITLE_MAX_CHARS
+    ? `${collapsed.slice(0, GOAL_ROUND_TITLE_MAX_CHARS)}…`
+    : collapsed
+  return cut ? `目标第 ${info.round} 轮：${cut}` : `目标第 ${info.round} 轮`
+}
+
+/** 按 `diff --git` 把一段 unified diff 切成每个文件一块（每块保留自己的文件头，
+ *  这样 diffLines 仍然认识它）。文件头之前的统计前言直接丢掉。 */
+export function splitDiffByFile(diff?: string | null): { path: string; text: string }[] {
+  const raw = typeof diff === 'string' ? diff : ''
+  if (!raw.trim()) return []
+  const chunks: { path: string; text: string }[] = []
+  let current: string[] | null = null
+  for (const line of raw.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      if (current && current.length > 0) chunks.push({ path: diffChunkPath(current), text: current.join('\n') })
+      current = [line]
+      continue
+    }
+    if (current) current.push(line)
+  }
+  if (current && current.length > 0) chunks.push({ path: diffChunkPath(current), text: current.join('\n') })
+  return chunks
+}
+
+function diffChunkPath(lines: string[]): string {
+  const head = lines[0] || ''
+  const match = head.match(/^diff --git a\/(.*) b\/(.*)$/)
+  return match ? match[2] : head.slice('diff --git '.length)
+}
+
+export type JobErrorInfo = {
+  message: string
+  action?: 'workers' | 'settings'
+  actionLabel?: string
+  /** False for configuration errors: sending the same text again cannot fix them. */
+  retryable?: boolean
+}
+
+export function describeJobError(error?: string | null): JobErrorInfo {
+  const raw = (error || '').trim()
+  if (!raw) {
+    return { message: '任务没能启动，请稍后重试。' }
+  }
+
+  const isMissingWorkerPool = /No eligible worker available in worker pool/i.test(raw)
+  const isMissingCli = /(?:No such file or directory|not found|ENOENT)[\s\S]*?\b(codex|claude|pi|agy|cmd)\b|\b(codex|claude|pi|agy|cmd)\b[\s\S]*?(?:No such file or directory|not found|ENOENT)/i.test(raw)
+
+  if (isMissingWorkerPool || isMissingCli) {
+    return {
+      message: '还没有可用的执行者，先去「执行者」页安装并登录一个',
+      action: 'workers',
+      actionLabel: '去执行者',
+    }
+  }
+
+  // The model answered, but not in a form the agent could finish: usually the wrong 接口类型 for this provider.
+  if (/stream ended|finish_reason|terminal response event|Responses (API|stream)|invalid (JSON|response)/i.test(raw)) {
+    return {
+      message: '模型服务返回不完整，可以在模型设置里把接口类型换成「通用聊天接口」再试',
+      action: 'settings',
+      actionLabel: '去设置',
+    }
+  }
+
+  // Provider HTTP failures. Configuration problems (401/403/404) say what to change instead of "retype and resend".
+  const providerStatus = /HTTP|status|provider|completions|responses/i.test(raw) ? raw.match(/\b(4\d\d|5\d\d)\b/)?.[1] : undefined
+  if (providerStatus === '401' || providerStatus === '403') {
+    return { message: `模型服务拒绝了这次请求（${providerStatus}），请在模型设置里检查 API 密钥`, action: 'settings', actionLabel: '去设置' }
+  }
+  if (providerStatus === '404') {
+    return { message: '模型服务的接口地址不对（404），请在模型设置里检查接口地址', action: 'settings', actionLabel: '去设置' }
+  }
+  if (providerStatus === '429') {
+    return { message: '模型服务请求太频繁或额度已用完（429），可以稍后再试，或在模型设置里换一个服务商', action: 'settings', actionLabel: '去设置' }
+  }
+  if (providerStatus && providerStatus.startsWith('5')) {
+    return { message: `模型服务暂时出错（${providerStatus}），可以稍后再试` }
+  }
+
+  // Server setup problems (workspace folder, environment variables). Resending the same request cannot fix them.
+  const isServerConfigError = /CODEX_WORKSPACE_ROOT|CODEX_TASK_ROOT|workspace root|git repo root|not a git (repo|repository)|is not a directory|does not exist or is not a directory/i.test(raw)
+  const isMissingEnvVar = /\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b[^\n]{0,40}\b(is not set|is required|must be set|missing)\b/.test(raw)
+  if (isServerConfigError) {
+    return {
+      message: '项目文件夹没有设置好，任务无法在里面运行。请在服务器上检查项目文件夹设置，修好后再重新发起任务。',
+      retryable: false,
+    }
+  }
+  if (isMissingEnvVar) {
+    return {
+      message: '服务器配置缺少必要的设置，任务无法运行。请检查服务器配置，修好后再重新发起任务。',
+      retryable: false,
+    }
+  }
+
+  const isModelProviderError = /chat tier is disabled|no model configured|provider|api[-_]?key|OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY|model_providers/i.test(raw)
+
+  if (isModelProviderError) {
+    return {
+      message: '还没有可用的模型，先在「设置」里配置模型',
+      action: 'settings',
+      actionLabel: '去设置',
+    }
+  }
+
+  if (/No such file or directory|Errno|ENOENT|not found|spawn|Permission denied|Traceback|command/i.test(raw)) {
+    return { message: '任务没能启动，请稍后重试。' }
+  }
+
+  return { message: '任务没能完成，可以补充说明后重新发送。' }
+}
+
+/** Raw job error (English, technical) → one short Chinese sentence for the failed-task card. */
+export function jobErrorSummary(error?: string | null): string {
+  return describeJobError(error).message
 }

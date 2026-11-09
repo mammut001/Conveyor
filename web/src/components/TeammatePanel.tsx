@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { BAD_SHAPE_MESSAGE, techDetail, useLoadingTimeout } from '../ux/knowledgeKit';
 
 export type SentryAlert = {
   source: string;
@@ -50,8 +51,9 @@ const SOURCE_LABELS: Record<string, string> = {
   'host.cpu': 'CPU 负载',
   'host.service': '系统服务',
   'host.logs': '错误日志',
-  'repo.git': 'Git 工作区',
-  'repo.ci': 'GitHub CI',
+  // Plain Chinese: the owner never needs the backend source codes (QA N29).
+  'repo.git': '代码改动',
+  'repo.ci': '自动构建',
 };
 
 const SERVICE_LABELS: Record<string, string> = {
@@ -194,6 +196,8 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
   const [actionBusy, setActionBusy] = useState(false);
   const [newMuteSource, setNewMuteSource] = useState('');
 
+  useLoadingTimeout(loading && !status, () => { setLoading(false); setProblem({ message: '加载太久了，请重试。' }); });
+
   const loadStatus = useCallback(async () => {
     if (!token) return;
     try {
@@ -205,7 +209,11 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
         setProblem(await failure(res, '无法读取值守状态，请稍后重试。'));
         return;
       }
-      const data = (await res.json()) as TeammateStatus;
+      const data = await res.json().catch(() => null) as TeammateStatus | null;
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        setProblem({ message: BAD_SHAPE_MESSAGE });
+        return;
+      }
       setStatus(data);
       setProblem(null);
     } catch {
@@ -299,26 +307,32 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
 
   const thresholds = status?.thresholds;
   const services = status?.monitored_services ?? [];
-  const modules = [
+  const modules: Array<{
+    key: string; title: string; sources: string[]; command: string; action: string
+    description: string
+    /** Technical names belong in the 详情 disclosure, never in the visible line (QA N29). */
+    detail?: string
+  }> = [
     {
-      key: 'disk', title: '磁盘空间', sources: ['host.disk'], command: '/clean',
+      key: 'disk', title: '磁盘空间', sources: ['host.disk'], command: '/clean', action: '查看磁盘',
       description: `使用率超过 ${thresholds?.disk_pct ?? 90}% 或剩余空间少于 ${thresholds?.disk_gb ?? 3} GB 时提醒。`,
     },
     {
-      key: 'cpu', title: 'CPU 负载', sources: ['host.cpu'], command: '/ps',
+      key: 'cpu', title: 'CPU 负载', sources: ['host.cpu'], command: '/ps', action: '查看 CPU 占用',
       description: `1 分钟平均负载超过 CPU 核数的 ${thresholds?.load_ratio ?? 2} 倍时提醒，并列出最耗资源的进程。`,
     },
     {
-      key: 'services', title: '系统服务', sources: ['host.service'], command: '/status',
+      key: 'services', title: '系统服务', sources: ['host.service'], command: '/status', action: '查看系统服务',
       description: '下面这些后台服务停止运行时立即提醒。',
     },
     {
-      key: 'logs', title: '错误日志', sources: ['host.logs'], command: '/diagnose',
+      key: 'logs', title: '错误日志', sources: ['host.logs'], command: '/diagnose', action: '查看错误日志',
       description: `10 分钟内出现 ${thresholds?.error_burst ?? 5} 条以上错误日志时提醒。`,
     },
     {
-      key: 'repo', title: 'Git 与 GitHub CI', sources: ['repo.git', 'repo.ci'], command: '/github_ci',
-      description: '未提交的改动积压过多，或 main 分支的 GitHub CI 构建失败时提醒。',
+      key: 'repo', title: '代码仓库与自动构建', sources: ['repo.git', 'repo.ci'], command: '/github_ci', action: '查看代码与构建',
+      description: '未提交的改动积压过多，或默认分支的自动构建失败时提醒。',
+      detail: '检查代码仓库里未提交的改动，以及默认分支（main）上的自动构建是否通过。',
     },
   ];
 
@@ -387,7 +401,7 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
             {problem && (
               <p role="alert" className="guard-feedback guard-feedback-error">
                 {problem.message}
-                {problem.detail && <span className="guard-tech">{problem.detail}</span>}
+                {techDetail(problem.detail) && <span className="guard-tech">{techDetail(problem.detail)}</span>}
               </p>
             )}
           </div>
@@ -482,8 +496,13 @@ export function TeammatePanel({ token, onSendToChat }: TeammatePanelProps) {
                     title={SEND_HINT}
                     onClick={() => onSendToChat?.(module.command)}
                   >
-                    在对话中执行 <code className="guard-cmd">{module.command}</code>
+                    {module.action}
                   </button>
+                  <details className="guard-module-detail">
+                    <summary>详情</summary>
+                    <small>点按钮会在对话中发送 <code className="guard-cmd">{module.command}</code></small>
+                    {module.detail && <small>{module.detail}</small>}
+                  </details>
                 </article>
               );
             })}

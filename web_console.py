@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import socket
+import sqlite3
 import sys
 import threading
 import time
@@ -81,10 +82,75 @@ class WebOutbound:
         self.last_job: Any = None
         self.turn_id = uuid.uuid4().hex
         self._delivered_final = False
+        self._user_persisted = False
         self.handles_transcript_directly = True
 
     def on_job_submitted(self, job: Any) -> None:
         self.last_job = job
+
+    def persist_request(self, msg: InboundMessage, text: str | None = None) -> None:
+        """Store the session row and the owner's message before any model call.
+
+        A failed model call must not lose the owner's question: once the request
+        is accepted the session exists, so the transcript keeps the question and
+        the failure reason after a reload instead of 404-ing.
+        """
+        if self._user_persisted or not self.settings or not self.durable_session_id:
+            return
+        user_text = (text if text is not None else (self.prompt or msg.text)) or ""
+        if not user_text.strip():
+            return
+        try:
+            from transcript_store import get_transcript_store
+            get_transcript_store(self.settings).append(
+                self.durable_session_id, "user", user_text, kind="chat",
+                channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id,
+            )
+            self._user_persisted = True
+        except Exception:
+            logger.exception("Failed to persist web task request to TranscriptStore")
+
+    def note_provider_failure(self, msg: InboundMessage, text: str) -> None:
+        """Keep the question plus a plain-Chinese reason when the model call failed.
+
+        The 提问 request is accepted (202) before the model answers, so the
+        session detail must show what failed; otherwise the owner reloads into a
+        session that does not exist and the question is gone.
+        """
+        if not self.settings or not self.durable_session_id:
+            return
+        self.persist_request(msg)
+        if self._delivered_final or not text:
+            return
+        self._delivered_final = True
+        try:
+            from transcript_store import get_transcript_store
+            get_transcript_store(self.settings).append(
+                self.durable_session_id, "assistant", text, kind="error",
+                channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id,
+            )
+        except Exception:
+            logger.exception("Failed to persist web task failure to TranscriptStore")
+
+    def record_task_turn(self, msg: InboundMessage, job_id: str, user_text: str, assistant_text: str) -> None:
+        """Keep a finished task run's request and final answer in the session transcript."""
+        if not self.settings or not self.durable_session_id:
+            return
+        from transcript_store import get_transcript_store
+        store = get_transcript_store(self.settings)
+        if self._user_persisted:
+            # The request was stored when it was accepted; only the answer is new.
+            store.append(
+                self.durable_session_id, "assistant", assistant_text or "",
+                job_id=job_id, kind="codex", channel=msg.channel,
+                operator_id=msg.operator_id, source_chat_id=msg.chat_id,
+            )
+            return
+        store.append_turn(
+            self.durable_session_id, user_text or "", assistant_text or "",
+            job_id=job_id, kind="codex", channel=msg.channel,
+            operator_id=msg.operator_id, source_chat_id=msg.chat_id,
+        )
 
     async def reply(self, msg: InboundMessage, text: str) -> str | None:
         if text in ("💭 …", "⏳ 收到，处理中...", "⏳ 收到, 处理中..."):
@@ -136,15 +202,22 @@ class WebOutbound:
         user_text = self.prompt or msg.text
         try:
             from transcript_store import get_transcript_store
-            get_transcript_store(self.settings).append_turn(
-                self.durable_session_id,
-                user_text,
-                text,
-                channel=msg.channel,
-                operator_id=msg.operator_id,
-                source_chat_id=msg.chat_id,
-                kind=kind,
-            )
+            store = get_transcript_store(self.settings)
+            if self._user_persisted:
+                store.append(
+                    self.durable_session_id, "assistant", text, kind=kind,
+                    channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id,
+                )
+            else:
+                store.append_turn(
+                    self.durable_session_id,
+                    user_text,
+                    text,
+                    channel=msg.channel,
+                    operator_id=msg.operator_id,
+                    source_chat_id=msg.chat_id,
+                    kind=kind,
+                )
         except Exception:
             logger.exception("Failed to persist web turn to TranscriptStore")
         try:
@@ -417,6 +490,56 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return None
         return settings
 
+    def _agent_notes_route(self, method: str, parts: list[str], query: dict[str, list[str]],
+                           body: dict[str, Any] | None = None) -> bool:
+        """/api/memory/notes[/<id>]: the owner's view of the agent's own notes.
+
+        Returns False when the path is not a notes route. Every error the owner
+        can see is Chinese and carries a machine-readable ``code``.
+        """
+        if parts[:3] != ["api", "memory", "notes"] or len(parts) > 4:
+            return False
+        import agent_memory
+        settings = getattr(self.server.control, "settings", None)
+        if settings is None:
+            from config import load_runtime_settings
+            settings = load_runtime_settings()
+        if not agent_memory.enabled(settings):
+            self._json(HTTPStatus.CONFLICT, {"error": agent_memory.MESSAGES["disabled"],
+                                             "code": "agent_notes_disabled"})
+            return True
+        body = body or {}
+        status_for = {"not_found": HTTPStatus.NOT_FOUND, "notes_full": HTTPStatus.CONFLICT,
+                      "duplicate": HTTPStatus.CONFLICT}
+        try:
+            if len(parts) == 3 and method == "GET":
+                scope = (query.get("scope") or [agent_memory.GLOBAL_SCOPE])[0]
+                self._json(HTTPStatus.OK, agent_memory.api_list(settings, scope))
+            elif len(parts) == 3 and method == "POST":
+                scope = body.get("scope", agent_memory.GLOBAL_SCOPE)
+                note = agent_memory.add_note(settings, scope, body.get("text"), "owner")
+                self._json(HTTPStatus.CREATED, {"ok": True, "note": note})
+            elif len(parts) == 4 and method in ("PUT", "DELETE"):
+                if not parts[3].isdigit():
+                    raise agent_memory.AgentMemoryError("invalid_id")
+                if method == "PUT":
+                    note = agent_memory.replace_note(settings, int(parts[3]), body.get("text"), "owner")
+                    self._json(HTTPStatus.OK, {"ok": True, "note": note})
+                elif agent_memory.remove_note(settings, int(parts[3])):
+                    self._json(HTTPStatus.OK, {"ok": True, "deleted": int(parts[3])})
+                else:
+                    raise agent_memory.AgentMemoryError("not_found")
+            else:
+                self._json(HTTPStatus.METHOD_NOT_ALLOWED, {"error": "不支持这个操作", "code": "method_not_allowed"})
+        except agent_memory.AgentMemoryError as exc:
+            self._json(status_for.get(exc.code, HTTPStatus.BAD_REQUEST),
+                       {"error": exc.message_zh, "code": exc.code})
+        except (OSError, sqlite3.Error):
+            logger.warning("agent notes API failed", exc_info=True)
+            self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "笔记暂时读写不了，请稍后再试",
+                                                        "code": "storage_unavailable"})
+        return True
+
     def _skills_settings(self) -> Any:
         """Settings when skills library is on; otherwise answer 409 and return None."""
         settings = getattr(self.server.control, "settings", None)
@@ -519,6 +642,16 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, self.server.control.system_status())
             elif path == "/api/config/provider":
                 self._json(HTTPStatus.OK, self.server.control.provider_config())
+            elif path == "/api/config/provider/models":
+                from provider_config import fetch_provider_models, ProviderModelsError
+                try:
+                    models = fetch_provider_models(self.server.control.settings)
+                    self._json(HTTPStatus.OK, {"models": models})
+                except ProviderModelsError as exc:
+                    self._json(HTTPStatus.BAD_GATEWAY, {"code": "models_fetch_failed", "error": str(exc)})
+                except Exception as exc:
+                    logger.exception("Failed to fetch provider models")
+                    self._json(HTTPStatus.BAD_GATEWAY, {"code": "models_fetch_failed", "error": "获取模型列表失败"})
             elif path == "/api/sessions":
                 self._json(HTTPStatus.OK, {"sessions": self.server.control.list_sessions()})
             elif len(parts) == 3 and parts[:2] == ["api", "sessions"]:
@@ -559,6 +692,42 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     counts["telegram"] = sum(1 for it in items if it.get("origin_channel") == "telegram" or it.get("source") == "telegram")
                     counts["feishu"] = sum(1 for it in items if it.get("origin_channel") == "feishu" or it.get("source") == "feishu")
                 self._json(HTTPStatus.OK, {"items": items, "counts": counts})
+            elif self._agent_notes_route("GET", parts, query):
+                pass
+            elif path == "/api/memory/sessions/search":
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                raw_q = (query.get("q") or [""])[0].strip()
+                if not raw_q:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "请输入搜索关键词（1 到 200 个字）。"})
+                    return
+                if len(raw_q) > 200:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "搜索关键词不能超过 200 个字。"})
+                    return
+                raw_limit = (query.get("limit") or [""])[0].strip()
+                if not raw_limit:
+                    limit = 20
+                else:
+                    try:
+                        limit = int(raw_limit)
+                    except ValueError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "返回数量必须在 1 到 50 之间。"})
+                        return
+                    if limit < 1 or limit > 50:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "返回数量必须在 1 到 50 之间。"})
+                        return
+                channel = (query.get("channel") or [""])[0].strip() or None
+                include_archived = (query.get("include_archived") or [""])[0].strip().lower() in ("1", "true", "yes")
+                from transcript_store import get_transcript_store
+                results = get_transcript_store(settings).search(
+                    raw_q,
+                    limit=limit,
+                    channel=channel,
+                    include_archived=include_archived,
+                )
+                self._json(HTTPStatus.OK, {"results": results, "query": raw_q})
             elif path == "/api/memory":
                 settings = self._memory_settings()
                 if settings is None:
@@ -625,6 +794,49 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     logger.warning("MCP discovery for status failed", exc_info=True)
                 result = manager.get_servers_status(settings)
                 self._json(HTTPStatus.OK, result)
+            elif parts[:2] == ["api", "workers"]:
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                if not getattr(settings, "workers_enabled", False):
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                    return
+                import workers
+                if len(parts) == 2:
+                    payload = workers.get_workers_payload(settings)
+                    self._json(HTTPStatus.OK, payload)
+                    return
+                if len(parts) == 4 and parts[3] == "models":
+                    worker_id = parts[2]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    try:
+                        models, cached_at = workers.get_worker_models(worker_id, settings=settings)
+                        self._json(HTTPStatus.OK, {"models": models, "cached_at": cached_at})
+                    except workers.ModelsUnsupportedError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "该执行者不支持选择模型", "code": "models_unsupported"})
+                    except workers.ModelsFetchError as exc:
+                        self._json(HTTPStatus.BAD_GATEWAY, {"error": str(exc), "code": "models_fetch_failed"})
+                    return
+                if len(parts) == 5 and parts[3] == "login":
+                    worker_id = parts[2]
+                    session_id = parts[4]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    import workers_login
+                    try:
+                        session_info = workers_login.get_login_session(settings, worker_id, session_id)
+                        self._json(HTTPStatus.OK, session_info)
+                    except workers_login.SessionNotFoundError:
+                        self._json(HTTPStatus.NOT_FOUND, {"error": workers_login.SESSION_NOT_FOUND_MESSAGE, "code": "session_not_found"})
+                    return
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
             elif path == "/api/routines" or path.startswith("/api/routines"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
@@ -667,14 +879,14 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                             settings = None
                     if not sup_svc.is_enabled(settings):
                         self._json(HTTPStatus.CONFLICT, {
-                            "error": "agent supervisor is disabled (set CONVEYOR_AGENT_SUPERVISOR_ENABLED=true)",
+                            "error": "项目功能还没有打开（需要在服务端设置 CONVEYOR_AGENT_SUPERVISOR_ENABLED=true）",
                             "code": "agent_supervisor_disabled",
                         })
                         return
                     binding = sup_svc.resolve_supervisor_chat_session(settings, session_id)
                     if binding is None:
                         self._json(HTTPStatus.NOT_FOUND, {
-                            "error": "supervisor worktree session not found",
+                            "error": "找不到这个项目会话",
                             "code": "session_not_found",
                         })
                         return
@@ -1044,6 +1256,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
 
+            if self._agent_notes_route("POST", self._segments(parsed.path), parse_qs(parsed.query), body):
+                return
+
             if parsed.path == "/api/memory":
                 settings = self._memory_settings()
                 if settings is None:
@@ -1251,7 +1466,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                             sup_settings = None
                     if not sup_svc.is_enabled(sup_settings):
                         self._json(HTTPStatus.CONFLICT, {
-                            "error": "agent supervisor is disabled (set CONVEYOR_AGENT_SUPERVISOR_ENABLED=true)",
+                            "error": "项目功能还没有打开（需要在服务端设置 CONVEYOR_AGENT_SUPERVISOR_ENABLED=true）",
                             "code": "agent_supervisor_disabled",
                         })
                         return
@@ -1310,12 +1525,12 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                             sup_settings = None
                     if not sup_svc.is_enabled(sup_settings):
                         self._json(HTTPStatus.CONFLICT, {
-                            "error": "agent supervisor is disabled (set CONVEYOR_AGENT_SUPERVISOR_ENABLED=true)",
+                            "error": "项目功能还没有打开（需要在服务端设置 CONVEYOR_AGENT_SUPERVISOR_ENABLED=true）",
                             "code": "agent_supervisor_disabled",
                         })
                         return
                     self._json(HTTPStatus.CONFLICT, {
-                        "error": "supervisor worktree sessions are read-only in chat; dispatch tasks via /api/supervisor/tasks",
+                        "error": "这是项目的工作目录，请在「项目」里派发任务",
                         "code": "supervisor_session_read_only",
                     })
                     return
@@ -1338,6 +1553,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     settings, durable_session_id,
                     is_codex=(mode == JobMode.FIX), prompt=prompt,
                 )
+                # Store the session and the owner's question before the model
+                # call: a provider failure then leaves the question and the
+                # Chinese reason in the transcript instead of a lost session.
+                outbound.persist_request(msg)
                 if body.get("execution_only") is True:
                     # Explicit chat-to-task handoff: do not send the same request
                     # through the chat model a second time.
@@ -1354,6 +1573,19 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     "ok": ok, "message": message, "job_id": job.id if job else None,
                     "session_id": durable_session_id,
                 })
+            elif parsed.path == "/api/config/provider/models":
+                from provider_config import fetch_provider_models, ProviderModelsError, ApiKeyRequiredError
+                draft = body if isinstance(body, dict) else {}
+                try:
+                    models = fetch_provider_models(self.server.control.settings, draft=draft)
+                    self._json(HTTPStatus.OK, {"models": models})
+                except ApiKeyRequiredError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"code": "api_key_required", "error": str(exc)})
+                except ProviderModelsError as exc:
+                    self._json(HTTPStatus.BAD_GATEWAY, {"code": "models_fetch_failed", "error": str(exc)})
+                except Exception:
+                    logger.exception("Failed to fetch provider models")
+                    self._json(HTTPStatus.BAD_GATEWAY, {"code": "models_fetch_failed", "error": "获取模型列表失败"})
             elif parsed.path == "/api/config/provider":
                 result = self.server.control.update_provider_config(body)
                 self._json(HTTPStatus.OK, {"ok": True, "config": result})
@@ -1610,6 +1842,160 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 val = body.get("value")
                 result = self.server.control.teammate_action(action, val)
                 self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
+            elif parts[:2] == ["api", "workers"]:
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                if not getattr(settings, "workers_enabled", False):
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                    return
+                import workers
+                if len(parts) == 3 and parts[2] == "detect":
+                    payload = workers.get_workers_payload(settings, force_detect=True)
+                    self._json(HTTPStatus.OK, payload)
+                    return
+                if len(parts) == 3 and parts[2] == "order":
+                    order = body.get("order") if isinstance(body, dict) else None
+                    enabled = body.get("enabled") if isinstance(body, dict) else None
+                    if not isinstance(order, list) or not isinstance(enabled, list):
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "order and enabled must be lists", "code": "invalid_format"})
+                        return
+                    catalog_ids = set(workers.get_catalog_ids())
+                    for wid in order:
+                        if wid not in catalog_ids:
+                            self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{wid}'", "code": "unknown_worker"})
+                            return
+                    for wid in enabled:
+                        if wid not in catalog_ids:
+                            self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{wid}'", "code": "unknown_worker"})
+                            return
+                    payload = workers.update_order_and_enabled(settings, order, enabled)
+                    self._json(HTTPStatus.OK, payload)
+                    return
+                if len(parts) == 4 and parts[3] == "install":
+                    worker_id = parts[2]
+                    if not getattr(settings, "workers_install_enabled", False):
+                        self._json(HTTPStatus.FORBIDDEN, {"error": "install disabled", "code": "install_disabled"})
+                        return
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    if not isinstance(body, dict) or body.get("confirm") is not True:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "confirmation required", "code": "confirm_required"})
+                        return
+                    if not catalog_worker.get("install_command"):
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "install unsupported", "code": "install_unsupported"})
+                        return
+                    result = workers.install_worker(settings, worker_id)
+                    self._json(HTTPStatus.OK, result)
+                    return
+                if len(parts) == 4 and parts[3] == "reset-quota":
+                    worker_id = parts[2]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    workers.reset_quota(settings, worker_id)
+                    payload = workers.get_workers_payload(settings)
+                    self._json(HTTPStatus.OK, payload)
+                    return
+                if len(parts) == 4 and parts[3] == "model":
+                    worker_id = parts[2]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    if not isinstance(body, dict) or "model" not in body:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "model field is required", "code": "missing_model"})
+                        return
+                    model = body.get("model")
+                    try:
+                        payload = workers.set_worker_model(settings, worker_id, model)
+                        self._json(HTTPStatus.OK, payload)
+                    except workers.ModelsUnsupportedError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "该执行者不支持选择模型", "code": "models_unsupported"})
+                    except workers.UnknownModelError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown model '{model}'", "code": "unknown_model"})
+                    except workers.ModelsFetchError as exc:
+                        self._json(HTTPStatus.BAD_GATEWAY, {"error": str(exc), "code": "models_fetch_failed"})
+                    return
+                if len(parts) == 4 and parts[2] == "usage" and parts[3] == "refresh":
+                    payload = workers.refresh_usage_now(settings)
+                    self._json(HTTPStatus.OK, payload)
+                    return
+                if len(parts) == 4 and parts[3] == "threshold":
+                    worker_id = parts[2]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    value = body.get("threshold_percent") if isinstance(body, dict) else None
+                    try:
+                        payload = workers.set_worker_threshold(settings, worker_id, value)
+                    except workers.BadThresholdError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "阈值需要是 1 到 100 之间的整数", "code": "bad_threshold"})
+                        return
+                    self._json(HTTPStatus.OK, payload)
+                    return
+                if len(parts) == 5 and parts[3] == "login" and parts[4] == "start":
+                    worker_id = parts[2]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    import workers_login
+                    try:
+                        session_info = workers_login.start_login_session(settings, worker_id)
+                        self._json(HTTPStatus.OK, session_info)
+                    except workers_login.LoginUnsupportedError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "该执行者不支持在线登录", "code": "login_unsupported"})
+                    return
+                if len(parts) == 6 and parts[3] == "login" and parts[5] == "code":
+                    worker_id = parts[2]
+                    session_id = parts[4]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    code = body.get("code") if isinstance(body, dict) else None
+                    import workers_login
+                    try:
+                        session_info = workers_login.send_login_code(settings, worker_id, session_id, code)
+                        self._json(HTTPStatus.OK, session_info)
+                    except workers_login.BadCodeError:
+                        # The login session stays alive: the owner can fix the code and resubmit.
+                        extra: dict[str, Any] = {}
+                        try:
+                            current = workers_login.get_login_session(settings, worker_id, session_id)
+                            extra = {"session": current["session"], "state": current["state"]}
+                        except Exception:
+                            pass
+                        self._json(HTTPStatus.BAD_REQUEST, {
+                            "error": workers_login.BAD_CODE_MESSAGE, "code": "bad_code", **extra,
+                        })
+                    except workers_login.SessionNotFoundError:
+                        self._json(HTTPStatus.NOT_FOUND, {"error": workers_login.SESSION_NOT_FOUND_MESSAGE, "code": "session_not_found"})
+                    except workers_login.SessionInactiveError:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": workers_login.SESSION_INACTIVE_MESSAGE, "code": "session_inactive"})
+                    return
+                if len(parts) == 6 and parts[3] == "login" and parts[5] == "cancel":
+                    worker_id = parts[2]
+                    session_id = parts[4]
+                    catalog_worker = workers.get_catalog_worker(worker_id)
+                    if catalog_worker is None:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
+                        return
+                    import workers_login
+                    try:
+                        session_info = workers_login.cancel_login_session(settings, worker_id, session_id)
+                        self._json(HTTPStatus.OK, session_info)
+                    except workers_login.SessionNotFoundError:
+                        self._json(HTTPStatus.NOT_FOUND, {"error": workers_login.SESSION_NOT_FOUND_MESSAGE, "code": "session_not_found"})
+                    return
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
             elif parsed.path == "/api/supervisor" or parsed.path.startswith("/api/supervisor/"):
                 import web_supervisor_api
                 web_supervisor_api.handle_post(self, parsed.path, parts, body)
@@ -1636,6 +2022,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
         parts = self._segments(parsed.path)
         try:
+            if self._agent_notes_route("PUT", parts, parse_qs(parsed.query), body):
+                return
             if len(parts) == 3 and parts[:2] == ["api", "memory"]:
                 settings = self._memory_settings()
                 if settings is None:
@@ -1766,6 +2154,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.OK, {"ok": True, "slug": slug})
                 except skills.SkillNotFoundError:
                     self._json(HTTPStatus.NOT_FOUND, {"error": f"skill '{slug}' not found"})
+                return
+
+            if self._agent_notes_route("DELETE", parts, parse_qs(parsed.query)):
                 return
 
             if len(parts) == 3 and parts[:2] == ["api", "memory"]:
@@ -2175,6 +2566,8 @@ def main() -> None:
     delegation_worker = start_delegation(loop, settings)
     import agent_security
     agent_retention_worker = agent_security.start(loop, settings)
+    import worker_usage
+    usage_refresh = worker_usage.start_background_refresh(loop, settings)
     import supervisor_service
     if supervisor_service.is_enabled(settings):
         loop.call_soon(lambda: supervisor_service.ensure_server_worker(server, settings, wake=True))
@@ -2193,6 +2586,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if usage_refresh is not None:
+            usage_refresh.cancel()
         if agent_retention_worker is not None:
             agent_retention_worker.cancel()
         if delegation_worker is not None:

@@ -1,5 +1,7 @@
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { channelLabel, ErrorNote, formatDateTime, formatWhen, friendlyError, responseError, type FriendlyError } from '../ux/knowledgeKit';
+import { channelLabel, ErrorNote, formatDateTime, formatWhen, friendlyError, responseError, readJson, BadShapeError, useLoadingTimeout, type FriendlyError } from '../ux/knowledgeKit';
+import { NotesEditor } from './NotesEditor';
+import { SessionSearch } from './SessionSearch';
 
 export type MemoryItem = {
   id: number;
@@ -22,7 +24,8 @@ type MemoryList = {
 
 type Tier = 'profile' | 'facts' | 'log';
 
-const TIER_LABEL: Record<Tier, string> = { profile: '常用档案', facts: '事实', log: '记忆日志' };
+// Plain Chinese tier names: the owner never sees the backend kind codes (QA N29).
+const TIER_LABEL: Record<Tier, string> = { profile: '常用信息', facts: '记住的事', log: '历史记录' };
 const FACT_MAX = 280;
 const LOG_MAX = 4000;
 
@@ -33,9 +36,15 @@ function fromChannel(channel: string) {
 }
 
 /** With `agentId` the panel shows that agent's own memory; without, the operator's. */
-export type MemoryPanelProps = { token: string; agentId?: string; agentName?: string };
+export type MemoryPanelProps = {
+  token: string;
+  agentId?: string;
+  agentName?: string;
+  /** Opens a past conversation found by 「搜索过去的对话」 (same as the 对话 / 任务 lists). */
+  onOpenSession?: (sessionId: string) => void;
+};
 
-export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanelProps) {
+export function MemoryPanel({ token, agentId = '', agentName = '', onOpenSession }: MemoryPanelProps) {
   const [disabled, setDisabled] = useState(false);
   const disabledRef = useRef(false);
   const [data, setData] = useState<MemoryList | null>(null);
@@ -64,6 +73,8 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
     box.style.height = `${Math.min(box.scrollHeight + box.offsetHeight - box.clientHeight, 168)}px`;
   }, [newText]);
 
+  useLoadingTimeout(!data && !error, () => setError(friendlyError('timeout', '加载太久了，请重试')));
+
   const load = useCallback(async () => {
     if (disabledRef.current || !token) return;
     const gen = ++fetchGen.current;
@@ -81,7 +92,19 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
         return;
       }
       if (!res.ok) throw await responseError(res);
-      const next = (await res.json()) as MemoryList;
+      const body = await readJson(res) as Partial<MemoryList> | null;
+      if (!body || typeof body !== 'object' || Array.isArray(body) || !Array.isArray(body.items)) throw new BadShapeError('memory');
+      const rawCounts = body.counts && typeof body.counts === 'object' ? body.counts : null;
+      const next: MemoryList = {
+        items: body.items.filter((item): item is MemoryItem => !!item && typeof item === 'object' && typeof item.text === 'string'),
+        counts: {
+          profile: Number(rawCounts?.profile) || 0,
+          log: Number(rawCounts?.log) || 0,
+          ...(rawCounts && rawCounts.facts !== undefined ? { facts: Number(rawCounts.facts) || 0 } : {}),
+        },
+        shared: !!body.shared,
+        profile_cap: Number(body.profile_cap) || 0,
+      };
       if (gen !== fetchGen.current) return;
       setData(next);
       setError(null);
@@ -116,7 +139,7 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
   const handleAdd = async (e?: FormEvent) => {
     e?.preventDefault();
     const text = newText.trim();
-    if (!text || formBusy) return;
+    if (!text || formBusy || text.length > limit) return;
     setFormBusy(true);
     setFormError(null);
     try {
@@ -181,10 +204,31 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
     setActiveQuery('');
   };
 
+  // The agent's own notes and the past-conversation search belong to the main
+  // assistant, so a named agent's memory page leaves them out.
+  const extraSections = agentId ? null : (
+    <>
+      <section className="kn-card kn-extra-section" aria-label="它自己记下的笔记">
+        <p className="kn-extra-title">它自己记下的笔记</p>
+        <NotesEditor
+          token={token}
+          scope="global"
+          label="它自己记下的笔记"
+          explain="对话开始时它会带上这些笔记；改动从下一次对话起生效。"
+        />
+      </section>
+      <section className="kn-card kn-extra-section" aria-label="搜索过去的对话">
+        <p className="kn-extra-title">搜索过去的对话</p>
+        <SessionSearch token={token} onOpenSession={onOpenSession} />
+      </section>
+    </>
+  );
+
   if (disabled) {
     return (
       <div className="stream-body kn-page kn-memory">
         <p className="kn-off">记忆功能未开启。</p>
+        {extraSections}
       </div>
     );
   }
@@ -204,7 +248,8 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
     ...(hasFacts ? [{ id: 'facts' as const, label: TIER_LABEL.facts, count: counts?.facts }] : []),
     { id: 'log', label: TIER_LABEL.log, count: counts?.log },
   ];
-  const near = newText.length >= limit - 20;
+  const isOver = newText.length > limit;
+  const near = !isOver && newText.length >= limit - 20;
 
   return (
     <div className="stream-body kn-page kn-memory">
@@ -227,7 +272,6 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
             className="kn-input kn-memory-textarea"
             value={newText}
             rows={1}
-            maxLength={limit}
             placeholder="例如：我习惯用中文回复"
             onChange={(e) => {
               setNewText(e.target.value);
@@ -237,12 +281,17 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
               if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                void handleAdd();
+                if (!isOver) void handleAdd();
               }
             }}
             aria-describedby={`kn-memory-count-${agentId || 'me'}`}
           />
-          <button type="submit" className="kn-btn kn-btn-primary" disabled={formBusy || !newText.trim()}>
+          <button
+            type="submit"
+            className="kn-btn kn-btn-primary"
+            disabled={formBusy || !newText.trim() || isOver}
+            title={isOver ? `字数超出限制（最多 ${limit} 字）` : undefined}
+          >
             {formBusy ? '保存中…' : '记住'}
           </button>
         </div>
@@ -253,12 +302,17 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
               <select className="kn-input" value={newTier} onChange={(e) => setNewTier(e.target.value as Tier)} aria-label="记忆类型">
                 <option value="facts">{TIER_LABEL.facts}</option>
                 <option value="profile">{TIER_LABEL.profile}</option>
-                <option value="log">日志</option>
+                <option value="log">历史记录</option>
               </select>
             </label>
           )}
-          <span id={`kn-memory-count-${agentId || 'me'}`} className={`kn-counter${near ? ' is-near' : ''}`}>
+          <span
+            id={`kn-memory-count-${agentId || 'me'}`}
+            className={`kn-counter${isOver ? ' is-over' : near ? ' is-near' : ''}`}
+            role={isOver ? 'alert' : undefined}
+          >
             {limit === FACT_MAX ? '一次一句话 · ' : ''}{newText.length} / {limit}
+            {isOver && `（超出 ${newText.length - limit} 字）`}
           </span>
         </div>
         {formError && <ErrorNote error={formError} className="kn-error-inline" />}
@@ -385,7 +439,7 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
                     {item.source_channel && <span>{fromChannel(item.source_channel)}</span>}
                     {item.source === 'untrusted' && <span>来自外部内容</span>}
                     {item.expires_at && <span>{formatDateTime(item.expires_at)} 到期</span>}
-                    <span className="kn-memory-id" title="在对话里可以用这个编号，例如“忘掉 #12”">#{item.id}</span>
+                    <span className="kn-memory-id" title="在对话里可以用这个编号，例如「忘掉 12」">编号 {item.id}</span>
                   </div>
                   {!editing && (
                     <div className="kn-row-actions">
@@ -431,8 +485,10 @@ export function MemoryPanel({ token, agentId = '', agentName = '' }: MemoryPanel
       )}
 
       {data && !hasFacts && total > 0 && (
-        <p className="kn-footnote">最先记住的 {data.profile_cap} 条是常用档案，每次对话都会参考；之后的存进记忆日志，需要时再查。</p>
+        <p className="kn-footnote">最先记住的 {data.profile_cap} 条每次对话都会参考；之后的存进历史记录，需要时再查。</p>
       )}
+
+      {extraSections}
     </div>
   );
 }

@@ -7,7 +7,7 @@ from typing import Any
 
 from personal_tools.base import ToolResult
 from personal_tools import memory_v2
-from personal_tools.long_term_memory import Screened, owner_for_chat
+from personal_tools.long_term_memory import Screened, owner_for_chat, session_search
 from redaction import redact_text
 
 

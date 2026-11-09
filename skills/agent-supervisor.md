@@ -29,7 +29,7 @@ collapsed unless a failure or user action is required.
    - Read-only by default; enforced strictly by runtime/CLI permission policy.
    - Never takes over file edits.
 
-3. Implementer (pluggable executor: Antigravity, Claude Code, Command-Code)
+3. Implementer (pluggable executor: Antigravity, Claude Code, Command-Code, or the pool `pool`)
    - Receives the analysis plan and acceptance criteria.
    - Modifies code and runs checks inside the assigned isolated worktree (`accept-edits` mode).
    - Returns plain-text change summary, commands actually run, results and the commit SHA.
@@ -66,8 +66,28 @@ Implementer and role choices in this build:
 - **Provider Quota Notice**: For CLI adapters, `available()` verifies local binary
   presence. Account/provider rate limits, quota exhaustion, or network failures
   are runtime execution errors, not availability guarantees.
+- **Pool (`pool`)**: chooses one worker from the 执行者 pool per role call and
+  delegates to that worker's adapter. See the pool section below.
 - **Codex (`codex`)**: adapter is unsupported / NOT wired in this build; reports
   unavailable with an explicit diagnostic message if selected.
+
+## 执行者池 / pool executor
+
+`pool` picks a worker from the 执行者 pool for each role call and delegates to that
+worker's Supervisor adapter (Claude Code → `claude`, Antigravity → `antigravity`,
+Command Code → `command-code`), so the adapter's read-only rules still apply. Pi,
+Super Grok and Codex never run through the pool.
+
+- Select it in the 项目 page role dropdown (listed first), via
+  `CONVEYOR_AGENT_SUPERVISOR_<ROLE>_EXECUTOR=pool`, or `supervisor_roles.json`.
+- Owner's drag order first; workers over their usage threshold are tried last.
+- Rotates only on quota failures (the worker cools until its reset). An
+  implementer that already changed the worktree is not re-run elsewhere.
+- Workers use their own saved model, never the Supervisor role model.
+
+Full rules: docs/agent-supervisor.md.
+
+## Verification & host validation commands
 
 Runtime status and recovery track process handles and PIDs across daemon
 restarts. Note that stdio streams cannot reconnect across daemon restarts.

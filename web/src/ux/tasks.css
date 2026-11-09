@@ -717,6 +717,7 @@
   font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow-wrap: anywhere;
 }
+.primary-interface .task-stream .task-notice-raw summary { cursor: pointer; color: #6b7280; font-size: 12px; }
 .primary-interface .task-stream .task-notice button {
   justify-self: start;
   min-height: 32px;
@@ -860,8 +861,19 @@
   box-shadow: 0 1px 2px rgba(16, 24, 40, .05);
 }
 .primary-interface .composer.task-composer:focus-within { border-color: #bd5c40; box-shadow: 0 0 0 3px rgba(189, 92, 64, .12); }
+/* QA N24: when the conversation already shows the failure (with 重试) beside it, the composer
+   itself is not in an error state — it keeps the neutral border, red focus ring and all. */
+.primary-interface .composer.task-composer--settled:focus-within { border-color: #d0d5dd; box-shadow: 0 1px 2px rgba(16, 24, 40, .05); }
 .primary-interface .composer.task-composer::after { content: none; display: none; }
 .primary-interface .task-composer .composer-handoff-note { padding: 0 0 2px; color: #6b7280; font-size: 12px; }
+/* A composer slot that only explains something (a failed send, a read-only 工作目录对话):
+   no textarea, so the note takes the full width and the buttons sit on their own row. */
+.primary-interface .composer.task-composer--notice { gap: 8px; }
+.primary-interface .task-composer--notice .task-composer-error-text { color: #b42318; font-size: 13px; line-height: 1.6; }
+.primary-interface .task-composer--notice .task-composer-error-text small { display: block; margin-top: 2px; color: #6b7280; font-size: 12px; }
+.primary-interface .task-composer--notice .task-composer-readonly-text { color: #1f2328; font-size: 13px; line-height: 1.6; }
+.primary-interface .task-composer--notice .task-composer-bar { flex-wrap: wrap; row-gap: 8px; }
+.primary-interface .task-composer--notice .shell-button { min-height: 40px; padding: 8px 18px; border-radius: 8px; font-family: inherit; font-size: 14px; font-weight: 600; }
 .primary-interface .task-composer textarea {
   width: 100%;
   min-height: 48px;
@@ -934,7 +946,7 @@
   .primary-interface .composer.task-composer { width: calc(100% - 20px); margin: 6px auto 10px; padding: 8px 8px 8px 12px; }
   .primary-interface .task-composer-bar { flex-wrap: wrap; row-gap: 6px; }
   .primary-interface .task-composer-hint { order: -1; flex-basis: 100%; }
-  .primary-interface .task-composer .task-mode-switch button { min-height: 36px; padding: 6px 14px; }
+  .primary-interface .task-composer .task-mode-switch button { min-height: 40px; padding: 6px 14px; }
   .primary-interface .task-composer .send-button { min-height: 40px; margin-left: auto; padding: 8px 20px; }
   .primary-interface .task-stream .tool-call-time { display: none; }
   /* Same gutters as 对话 on phones. */
@@ -960,3 +972,16 @@
   .primary-interface .agent-card--compact .agent-tabs button { min-height: 40px; }
   .primary-interface .context-panel .session-run { min-height: 44px; }
 }
+
+@media (pointer: coarse) {
+  .primary-interface .task-composer .task-mode-switch button { min-height: 40px; }
+}
+
+/* r4 onboarding QA: touch targets on phones are at least 40px; the idle emergency stop reads as secondary. */
+@media (pointer: coarse) {
+  .primary-interface .session-archive-btn,
+  .primary-interface .task-notice-action,
+  .primary-interface .setup-checklist-action-btn { min-width: 40px; min-height: 40px; }
+}
+.primary-interface .emergency.is-idle { color: #6b7280; border-color: #d7dde7; background: transparent; }
+.primary-interface .task-notice-hint { display: block; margin-top: 4px; color: #6b7280; font-size: 12px; }

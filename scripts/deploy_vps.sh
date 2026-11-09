@@ -273,6 +273,14 @@ log "Syncing production Python dependencies..."
 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 .venv/bin/python -m pip install -q -r requirements.txt \
   || rollback_release "dependency sync"
 
+# Bundled Pi coding agent (vendor/pi). Non-fatal: a failure must not block or roll back the deploy.
+log "Installing bundled Pi (vendor/pi)..."
+if bash scripts/install_pi.sh; then
+  log "Bundled Pi ready."
+else
+  log "WARN: bundled Pi install failed; continuing deploy (Pi can be installed later from the executors page)."
+fi
+
 log "Running production smoke tests with isolated non-secret fixture..."
 write_smoke_fixture "${DEPLOY_PATH}"
 if ! make smoke; then

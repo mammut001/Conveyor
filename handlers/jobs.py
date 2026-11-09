@@ -439,8 +439,42 @@ async def _execute_codex_job(
     # a new message and recorded in last_progress). Re-send only if the
     # final summary differs from what we already delivered, so the user does
     # not see the same paragraph twice.
-    while job.state == JobState.RUNNING:
-        await _sleep(0.3)
+    retried_quota = False
+    while True:
+        while job.state == JobState.RUNNING:
+            await _sleep(0.3)
+
+        from runner.pooled import PooledRunner
+        if (
+            isinstance(runner, PooledRunner)
+            and getattr(runner.settings, "workers_enabled", False)
+            and getattr(job, "state", None) in (JobState.FAILED, "failed")
+        ):
+            quota_failure = await runner.handle_job_failure(job)
+            if quota_failure and not retried_quota:
+                has_changes = await runner.has_job_changes(job)
+                if not has_changes:
+                    next_worker = await runner.peek_next_worker()
+                    if next_worker:
+                        retried_quota = True
+                        next_label = next_worker.get("label") or next_worker.get("id") or "执行者"
+                        retry_notice = f"当前执行者额度用完，已换用 {next_label} 重试"
+                        if hasattr(port, "send_new"):
+                            await port.send_new(msg, retry_notice)
+                        elif hasattr(port, "reply"):
+                            await port.reply(msg, retry_notice)
+
+                        try:
+                            job = await runner.start(mode, effective_body, progress, **start_options)
+                            if queue_job_id:
+                                job.external_id = queue_job_id
+                                from handlers.job_queue import get_job_queue
+                                get_job_queue().bind_runtime_job(queue_job_id, job)
+                            continue
+                        except Exception as retry_start_exc:
+                            logger.warning("Retry start failed: %s", retry_start_exc)
+                            break
+        break
 
     # Determine the final assistant text for session recording.
     final_answer = ""
@@ -499,6 +533,15 @@ async def _execute_codex_job(
         final_answer,
         mirror_transcript=not skip_transcript,
     )
+    # Task runs (e.g. web 改代码) never stream through the chat transcript path.
+    # Let the port record the request and the final answer against this run,
+    # so the session shows them after completion and after a reload.
+    record_task_turn = getattr(port, "record_task_turn", None)
+    if record_task_turn is not None and queue_job_id:
+        try:
+            record_task_turn(msg, queue_job_id, user_text_for_session, final_answer)
+        except Exception:
+            logger.exception("Could not persist task turn to transcript store")
 
     # Bridge job summary to Flash chat memory so follow-up conversations have full context.
     try:

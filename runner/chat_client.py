@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import os
+import re
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
 import httpx
@@ -32,6 +34,14 @@ _EXPANDED_MAX_TOKENS = 16384
 
 _REASONING_FIELDS = ("reasoning", "reasoning_content")
 
+# A provider the machine cannot reach at all (DNS failure, refused connection,
+# no route): the owner needs to check the 接口地址, not wait.
+_CONNECTION_ERROR_RE = re.compile(
+    r"(cannot connect|connection (error|refused|reset|failed)|connect(ion)? (timeout|error)|"
+    r"name or service not known|nodename nor servname|temporary failure in name resolution|"
+    r"getaddrinfo|unreachable|ssl (error|verify|certificate)|max retries)"
+)
+
 
 class ChatError(RuntimeError):
     """Chat call failed; callers fall back to the Codex agent."""
@@ -40,7 +50,7 @@ class ChatError(RuntimeError):
 @dataclass(frozen=True)
 class ChatConfig:
     base_url: str
-    api_key: str
+    api_key: str = field(repr=False)
     model: str
     timeout: float = 60
     max_tokens: int = 1500
@@ -60,18 +70,61 @@ def clean_reasoning_effort(value: Any) -> str | None:
 
 def config_from_settings(settings: Any) -> ChatConfig | None:
     """ChatConfig when the chat tier is enabled and configured, else None."""
-    if str(getattr(settings, "chat_mode", "off") or "off").lower() != "auto":
+    mode = str(getattr(settings, "conveyor_chat_mode", None) or getattr(settings, "chat_mode", "") or "").strip().lower()
+    env_mode = os.getenv("CONVEYOR_CHAT_MODE", "").strip().lower()
+
+    # Rule 1: if CONVEYOR_CHAT_MODE is explicitly "off" -> off (unchanged).
+    if mode in ("off", "false", "0", "disabled") or env_mode in ("off", "false", "0", "disabled"):
         return None
-    api_key = getattr(settings, "chat_api_key", None)
-    model = getattr(settings, "chat_model", None)
-    if not api_key or not model:
+
+    timeout = int(getattr(settings, "chat_timeout_seconds", 60) or 60)
+    max_tokens = int(getattr(settings, "chat_max_tokens", 1500) or 1500)
+
+    # Rule 2: If the CONVEYOR_CHAT_* key+model are set -> use them (unchanged).
+    # Keep DEFAULT_BASE_URL behaviour for explicit chat config.
+    explicit_api_key = (
+        getattr(settings, "conveyor_chat_api_key", None)
+        or getattr(settings, "chat_api_key", None)
+        or os.getenv("CONVEYOR_CHAT_API_KEY")
+        or os.getenv("MINIMAX_API_KEY")
+    )
+    explicit_model = (
+        getattr(settings, "conveyor_chat_model", None)
+        or getattr(settings, "chat_model", None)
+        or os.getenv("CONVEYOR_CHAT_MODEL")
+        or os.getenv("MINIMAX_CHAT_MODEL")
+    )
+    if explicit_api_key and explicit_model:
+        explicit_base_url = (
+            getattr(settings, "conveyor_chat_base_url", None)
+            or getattr(settings, "chat_base_url", None)
+            or os.getenv("CONVEYOR_CHAT_BASE_URL")
+            or os.getenv("MINIMAX_BASE_URL")
+            or DEFAULT_BASE_URL
+        ).rstrip("/")
+        return ChatConfig(
+            base_url=explicit_base_url,
+            api_key=explicit_api_key,
+            model=explicit_model,
+            timeout=timeout,
+            max_tokens=max_tokens,
+            reasoning_effort=clean_reasoning_effort(getattr(settings, "chat_reasoning_effort", None)),
+        )
+
+    # Rule 3: Otherwise (mode unset or auto, no chat-specific config) ->
+    # use the saved provider (base_url, model, key read via provider_config, never logged).
+    from provider_config import get_saved_provider_credentials
+
+    provider = get_saved_provider_credentials(settings)
+    if not provider:
         return None
+
     return ChatConfig(
-        base_url=(getattr(settings, "chat_base_url", None) or DEFAULT_BASE_URL).rstrip("/"),
-        api_key=api_key,
-        model=model,
-        timeout=int(getattr(settings, "chat_timeout_seconds", 60) or 60),
-        max_tokens=int(getattr(settings, "chat_max_tokens", 1500) or 1500),
+        base_url=provider["base_url"].rstrip("/"),
+        api_key=provider["api_key"],
+        model=provider["model"],
+        timeout=timeout,
+        max_tokens=max_tokens,
         reasoning_effort=clean_reasoning_effort(getattr(settings, "chat_reasoning_effort", None)),
     )
 
@@ -119,6 +172,33 @@ def _provider_error(obj: Any) -> None:
     base = obj.get("base_resp") if isinstance(obj, dict) else None
     if isinstance(base, dict) and base.get("status_code"):
         raise ChatError(f"provider error: {base}")
+
+
+def owner_chat_error_text(raw: str) -> str:
+    """One short Chinese sentence for a failed chat-model call (owner-facing).
+
+    The raw ChatError text stays with the caller for 技术详情; this only picks
+    the sentence, and says what to change when the cause is configuration.
+    """
+    text = raw or ""
+    lowered = text.lower()
+    code_match = re.search(r"\b(4\d\d|5\d\d)\b", text)
+    code = code_match.group(1) if code_match else ""
+    if "timed out" in lowered or "timeout" in lowered:
+        return "模型服务响应超时了，可以稍后再试。"
+    if code in ("401", "403"):
+        return f"模型服务拒绝了这次请求（{code}），请在「设置」里检查 API 密钥。"
+    if code == "404":
+        return "模型服务的接口地址不对（404），请在「设置」里检查接口地址。"
+    if code == "429":
+        return "模型服务请求太频繁或额度已用完（429），可以稍后再试，或在「设置」里换一个服务商。"
+    if code.startswith("5"):
+        return f"模型服务暂时出错（{code}），可以稍后再试。"
+    if _CONNECTION_ERROR_RE.search(lowered):
+        return "连不上模型服务，请检查「设置 → 模型设置」里的接口地址，或稍后再试。"
+    if "invalid" in lowered or "stream" in lowered or "finish" in lowered:
+        return "模型服务返回的内容不完整，可以在「设置」里把接口类型换成 Chat Completions 再试。"
+    return "模型服务暂时不可用，可以稍后再试。"
 
 
 def _choice0(obj: Any) -> dict | None:
@@ -342,4 +422,4 @@ async def complete_chat(config: ChatConfig, messages: list[dict], tools: list[di
     except httpx.HTTPStatusError as exc:
         raise ChatError(f"HTTP {exc.response.status_code}") from exc
     except Exception as exc:
-        raise ChatError(_clean_chat_error(str(exc), config.api_key)) from exc
+        raise ChatError(_clean_chat_error(str(exc), config.api_key)) from None

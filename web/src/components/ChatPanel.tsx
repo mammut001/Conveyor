@@ -1,7 +1,8 @@
-import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { FormattedText } from './FormattedText';
 import { VoiceRecorder } from './VoiceRecorder';
 import { CopyButton } from './CopyButton';
+import { buildGoalDraft } from './chatGoalDraft';
 import { useMediaQuery } from '../ux/shellNav';
 import {
   CHANNEL_LABELS, ChatRequestError, STREAM_INTERRUPTED, describeApproval, describeChatError, formatChatTime, formatFullTime,
@@ -28,6 +29,8 @@ export type ChatMessage = {
   interrupted?: boolean;
   /** A stored reply that was really a backend error: shown as a short notice, raw text under 详情. */
   failedReply?: string;
+  /** The chat provider failed this turn: `text` is the Chinese sentence, `detail` the raw error (under 详情). */
+  failure?: { text: string; detail?: string };
   taskSuggestion?: TaskSuggestion;
   originChannel?: 'web' | 'telegram' | 'feishu';
   pendingApproval?: {
@@ -69,9 +72,19 @@ export type ChatPanelProps = {
   /** The Agent's colour, used for its avatar beside replies. */
   agentColor?: string;
   onBusyChange?: (busy: boolean) => void;
+  setupChecklist?: ReactNode;
+  /** A conversation another surface (the 会话 sidebar in 对话) asks this panel to open. */
+  openSessionRequest?: { id: string; nonce: number } | null;
+  /** Called when the owner sends a message from this panel (used by the first-run checklist). */
+  onMessageSent?: () => void;
   /** When true, this conversation is a worktree-scoped planning/discussion surface
    *  that prepares task goals rather than directly running commands or nightly jobs. */
   discussionOnly?: boolean;
+  /** 「项目」讨论专用：每条回复下面出现「设为目标」，把草稿（老板最后的要求 + 这条回复）交出去。
+   *  主「对话」页不传，就不会出现这个按钮。 */
+  onMakeGoal?: (draft: string) => void;
+  /** 有值时「设为目标」不能点，这句话作为悬停提示。 */
+  makeGoalDisabledReason?: string;
 };
 
 const VOICE_PLACEHOLDER = '🎤 正在识别语音…';
@@ -171,9 +184,11 @@ function approvalLabel(status: string): string {
     : '已处理';
 }
 
-export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, discussionOnly = false }: ChatPanelProps) {
+export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, discussionOnly = false, onMakeGoal, makeGoalDisabledReason = '' }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Reading a restored conversation must not flash the welcome state first.
+  const [historyLoading, setHistoryLoading] = useState(false);
   const draftKey = `conveyor-chat-draft:v1:${agentSessionId || 'free-chat'}`;
   const [input, setInput] = useState(() => {
     try { return sessionStorage.getItem(draftKey) || ''; }
@@ -210,13 +225,22 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
   const [showLatest, setShowLatest] = useState(false);
   const [unseen, setUnseen] = useState(false);
   const displayName = agentName || 'Conveyor';
+  // Replies wear a robot avatar, not a Latin letter: the owner reads Chinese only (QA N29).
   const avatar = (
     <div className="transcript-avatar chat-avatar" aria-hidden="true" style={agentColor ? { background: agentColor } : undefined}>
-      {(displayName.trim()[0] || 'C').toUpperCase()}
+      <span aria-hidden="true">🤖</span>
     </div>
   );
 
-  useEffect(() => () => { requestRef.current?.abort(); }, []);
+  useEffect(() => {
+    // A reload or tab close cancels the request too; mark it as ours so the pending message is kept for next time.
+    const leaving = () => { requestRef.current?.abort(); };
+    window.addEventListener('pagehide', leaving);
+    return () => {
+      window.removeEventListener('pagehide', leaving);
+      requestRef.current?.abort();
+    };
+  }, []);
 
   // A message sent while the reply was still streaming is remembered per conversation until the
   // reply ends. Leaving mid-reply (switching assistant, reload) aborts the request and the server
@@ -232,6 +256,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     }
   }, [inflightKey]);
   const restoreInterrupted = useCallback((pending: string, stored: HistoryMessage[] | null) => {
+    // A new message was already sent while history loaded: that is not an interrupted one.
     if (!pending || sendingRef.current) return;
     // The server did keep that turn after all: nothing was lost, so do not offer it again.
     const lastUser = [...(stored || [])].reverse().find(m => m.role === 'user');
@@ -247,6 +272,9 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     }
   }, [initialInput, onInitialInputConsumed]);
 
+  const onSessionChangeRef = useRef(onSessionChange);
+  onSessionChangeRef.current = onSessionChange;
+
   const loadHistory = useCallback(async (sid: string): Promise<HistoryMessage[] | null> => {
     if (!sid) {
       setMessages([]);
@@ -254,6 +282,9 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     }
     const version = ++historyVersionRef.current;
     setError(null);
+    setHistoryLoading(true);
+    // The panel says which conversation it is showing, so the 会话 sidebar can highlight it.
+    onSessionChangeRef.current?.(sid);
     try {
       const res = await fetch(`/api/chat/history?session_id=${encodeURIComponent(sid)}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -301,6 +332,8 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
           ? { message: human.message, detail: human.detail }
           : { message: '暂时无法读取聊天记录', detail: human.detail, action: 'history' });
       }
+    } finally {
+      if (version === historyVersionRef.current) setHistoryLoading(false);
     }
     return null;
   }, [token]);
@@ -320,6 +353,36 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
       restoreInterrupted(pending, null);
     }
   }, [loadHistory, takeInflight, restoreInterrupted]);
+
+  // Open a conversation another surface asked for (a 会话 sidebar row in 对话):
+  // the panel becomes that session and reads its messages.
+  const openConversation = useCallback((sid: string) => {
+    historyVersionRef.current++;
+    followStreamRef.current = true;
+    failedSendRef.current = null;
+    setShowLatest(false);
+    setUnseen(false);
+    setNotice('');
+    setError(null);
+    setInput('');
+    setStreamingDelta('');
+    setStatusText('');
+    setSubagents([]);
+    subagentsRef.current = [];
+    setSessionId(sid);
+    if (!agentSessionId) localStorage.setItem('conveyor-chat-session', sid);
+    onSessionChangeRef.current?.(sid);
+    void loadHistory(sid);
+    textareaRef.current?.focus();
+  }, [agentSessionId, loadHistory]);
+  const openedNonceRef = useRef(0);
+  useEffect(() => {
+    // An agent's conversation is fixed, and a reply in flight is never interrupted.
+    const request = openSessionRequest;
+    if (!request || agentSessionId || request.nonce === openedNonceRef.current || busy) return;
+    openedNonceRef.current = request.nonce;
+    openConversation(request.id);
+  }, [openSessionRequest, agentSessionId, busy, openConversation]);
 
   const scrollToLatest = useCallback(() => {
     const node = streamRef.current;
@@ -391,6 +454,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     setInput('');
     localStorage.removeItem('conveyor-chat-session');
     setMessages([]);
+    setHistoryLoading(false);
     setStreamingDelta('');
     setStatusText('');
     setSubagents([]);
@@ -495,6 +559,8 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
       created_at: new Date().toISOString(),
     };
     setMessages(prev => [...prev, userMsg]);
+    // The owner has now sent a message: checklist step ③ ticks without waiting for a poll.
+    onMessageSent?.();
 
     try {
       const res = await fetch(
@@ -625,6 +691,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                   taskSuggestion: payload.task_suggestion,
                   created_at: new Date().toISOString(),
                   subagents: finishedSubagents,
+                  failure: payload.failure ? { text: String(payload.text || ''), detail: String(payload.failure.detail || '') || undefined } : undefined,
                 },
               ]);
               setSubagents([]);
@@ -690,7 +757,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
   };
 
   const placeholder = `给 ${displayName} 发消息…`;
-  const showWelcome = messages.length === 0 && !streamingDelta && !busy && error?.action !== 'history';
+  const showWelcome = messages.length === 0 && !historyLoading && !streamingDelta && !busy && error?.action !== 'history';
 
   return (
     <div className="chat-panel-container" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -706,10 +773,11 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
           if (followStreamRef.current) setUnseen(false);
         }}>
         <div ref={contentRef} className="chat-stream-content">
+        {setupChecklist}
         {showWelcome && (
           <div className="welcome-state">
             <div className="chat-welcome-avatar" aria-hidden="true" style={agentColor ? { background: agentColor } : undefined}>
-              {(displayName.trim()[0] || 'C').toUpperCase()}
+              <span aria-hidden="true">🤖</span>
             </div>
             {discussionOnly ? (
               <>
@@ -721,7 +789,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                 <h2>{agentName ? `和 ${agentName} 聊点什么？` : '想聊点什么？'}</h2>
                 <p>可以帮你查资料、跑命令、改代码，删除等危险操作会先问你。</p>
                 <details className="welcome-nightly-commands">
-                  <summary>夜间任务怎么用？</summary>
+                  <summary>高级：夜间任务（不用也能正常使用）</summary>
                   <p>夜间任务只在预览环境运行，不碰生产；默认运行 1 小时，最多处理 12 个任务，达到时间限制或任务配额会自动停止，发现的 Issue 会保留，方便之后继续处理。</p>
                   <p>示例：<code>{'/nightly_start 检查预览环境并修复失败的测试'}</code></p>
                   <ul>
@@ -736,7 +804,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
           </div>
         )}
 
-        {messages.map(message => {
+        {messages.map((message, messageIndex) => {
           const source = sourceLabel(message);
           if (message.role === 'user') {
             return (
@@ -749,7 +817,6 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                 <footer className="transcript-footer chat-meta">
                   {source && (
                     <span className="chat-source-pill is-user">
-                      <i className="chat-source-hash" aria-hidden="true">#</i>
                       <span className="transcript-source">{source}</span>
                     </span>
                   )}
@@ -828,6 +895,25 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
             );
           }
 
+          if (message.failure) {
+            return (
+              <article key={message.id} className="transcript-message role-assistant chat-turn">
+                {avatar}
+                <div className="transcript-body">
+                  <div className="transcript-content chat-failed-reply" role="alert">
+                    <p className="formatted-paragraph">{message.failure.text}</p>
+                    {message.failure.detail && (
+                      <details>
+                        <summary>详情</summary>
+                        <code>{message.failure.detail}</code>
+                      </details>
+                    )}
+                  </div>
+                </div>
+              </article>
+            );
+          }
+
           if (message.failedReply) {
             return (
               <article key={message.id} className="transcript-message role-assistant chat-turn">
@@ -852,12 +938,11 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
               <div className="transcript-body">
                 <div className="chat-bubble-head">
                   <span className="chat-bubble-avatar" aria-hidden="true" style={agentColor ? { background: agentColor } : undefined}>
-                    {(displayName.trim()[0] || 'C').toUpperCase()}
+                    <span aria-hidden="true">🤖</span>
                   </span>
                   <span className="chat-bubble-author" aria-hidden="true">{displayName}</span>
                   {source && (
                     <span className="chat-source-pill">
-                      <i className="chat-source-hash" aria-hidden="true">#</i>
                       <span className="transcript-source">{source}</span>
                       <i className="chat-source-arrow" aria-hidden="true">›</i>
                     </span>
@@ -881,6 +966,29 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                   {message.interrupted && <span>回答中断 · 已保留收到的内容</span>}
                   <MessageTime value={message.created_at} />
                   <CopyButton text={shownText} className="chat-copy-button" title="复制这条回复" />
+                  {onMakeGoal && (
+                    <button
+                      type="button"
+                      className="chat-goal-button"
+                      disabled={Boolean(makeGoalDisabledReason)}
+                      title={makeGoalDisabledReason || '把这段讨论填进「目标」，你检查修改后再点「开始」'}
+                      onClick={() => {
+                        if (makeGoalDisabledReason) return;
+                        // 老板在这条回复之前最后一次说的话。
+                        let request = '';
+                        for (let i = messageIndex - 1; i >= 0; i -= 1) {
+                          const prev = messages[i];
+                          if (prev.role === 'user' && prev.text.trim() && prev.text !== VOICE_PLACEHOLDER) {
+                            request = prev.text;
+                            break;
+                          }
+                        }
+                        onMakeGoal(buildGoalDraft(request, shownText));
+                      }}
+                    >
+                      设为目标
+                    </button>
+                  )}
                 </footer>
               </div>
             </article>
@@ -916,6 +1024,13 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
             {avatar}
             <span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span>
             <span>{statusText || '正在思考…'}</span>
+          </div>
+        )}
+
+        {historyLoading && !messages.length && !busy && (
+          <div className="chat-thinking" role="status">
+            {avatar}
+            <span>正在读取记录…</span>
           </div>
         )}
 
@@ -995,6 +1110,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
             <button className="chat-send-button" type="submit" disabled={!input.trim() || busy || input.length > MAX_LENGTH}
               // Tapping 发送 must not pull focus off the message box: on a phone that closes the
               // keyboard, the layout shifts and the tap misses the button.
+              onPointerDown={e => e.preventDefault()}
               onMouseDown={e => e.preventDefault()}>
               发送
             </button>

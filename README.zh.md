@@ -16,6 +16,22 @@
 
 </div>
 
+> **架构说明（2026-11）**：下方 README 包含旧版 Codex 路径与界面描述，不能代表当前使用的执行器或部署。请以 [架构总览](docs/architecture-overview.md) 和 [路线图](docs/roadmap.md) 中区分的代码现状与目标为准。截图为本地旧界面，并非新版 Supervisor 的运行证明。
+
+
+![Conveyor vision: a person guides agents through an iterative software development loop](docs/assets/conveyor-vision.png)
+
+**我们的愿景：你负责灵感和方向，Agent 负责规划、编码、验证与持续迭代。** 这张图描绘的是最终目标，具体实现进展见[路线图](docs/roadmap.md)。
+
+
+### 架构方向
+
+![Conveyor 架构概念图](docs/assets/conveyor-architecture-concept.png)
+
+从上到下：用户提出目标，经对话入口交给 Supervisor；协调、分析、实现和审阅角色协作，使用可配置的执行器与工作区。审阅结果可以反馈给实现角色继续迭代。右侧是任务状态等持久化记录。
+
+这是**目标架构示意**：入口与完整执行循环尚待接通，图中的连线不代表线上已实现。具体代码现状及限制见[架构总览](docs/architecture-overview.md)。
+
 ---
 
 ## ⚡ 什么是 Conveyor？
@@ -41,6 +57,16 @@
 ```
 
 **这不是又一个面向公众的多租户聊天机器人。** 这里没有第三方共享工作区，也没有用完即丢、无法沉淀本地依赖的临时容器。**一位受信 Operator，带着严密的 `/diff`、`/apply`、`/discard` 与 `/cancel`，牢牢掌控属于自己的开发机器。**
+
+---
+
+## 📸 Web 控制台实拍
+
+截图来自本地旧版 Web 界面和隔离数据；手机界面启用了 `CONVEYOR_WEB_MOBILE_UI`。截图不代表当前线上部署或 Supervisor 界面。
+
+![Web Console desktop](docs/assets/web-console/desktop.png)
+
+[Mobile](docs/assets/web-console/mobile.png) · [Chat](docs/assets/web-console/chat.png) · [架构总览 / Architecture diagrams](docs/architecture-overview.md) · [Roadmap](docs/roadmap.md)
 
 ---
 
@@ -121,12 +147,12 @@ Conveyor 坚守**四大不可妥协的工程不变量**：
 | 核心能力 | Telegram Bot | 飞书 / Lark | Web 控制台 (PWA) | Mac / Linux 节点 |
 | :--- | :---: | :---: | :---: | :---: |
 | **自然语言编程** | ✅ (`/run`, `/fix`) | ✅ (`/run`, `/fix`) | ✅ 实时 SSE 流 | ⚡ 执行宿主 |
-| **Worktree `/diff` & `/apply`** | ✅ 终端格式 | ✅ 交互式富文本卡片 | ✅ 双栏对比视觉 Diff | ⚡ Git Worktree |
+| **Worktree `/diff` & `/apply`** | ✅ 终端格式 | ✅ 交互式富文本卡片 | ✅ 差异高亮与文件改动列表 | ⚡ Git Worktree |
 | **持久化任务队列** | ✅ 全指令操作 | ✅ 交互卡片控制 | ✅ 可视化队列列表 | ⚡ SQLite 存储 |
 | **主机运维诊断 (`/load`, `/ps`)** | ✅ 极速回传 | ✅ 极速回传 | ✅ 实时图表遥测 | ⚡ 原生系统调用 |
-| **交互式审批确认** | ✅ 内联按钮 | ✅ 飞书交互按钮 | ✅ 弹窗审批流 | ⚡ 校验加密 Token |
+| **交互式审批确认** | ✅ 内联按钮 | ✅ 飞书交互按钮 | ✅ 审批卡片与独立审批视图 | ⚡ 校验加密 Token |
 | **桌面 Computer Use (物理点击)** | ✅ Cua / `/dev/uinput` | ✅ Cua / `/dev/uinput` | ✅ 截屏预览与流 | 🖥️ 内核虚拟驱动 |
-| **个人记忆与随手记** | ✅ `MEMORY.md` | ✅ `MEMORY.md` | ✅ 在线阅读与编辑 | ⚡ 本地 Markdown |
+| **个人记忆与随手记** | ✅ `MEMORY.md` | ✅ `MEMORY.md` | ✅ 常用档案/事实/日志分级管理 | ⚡ 本地 Markdown |
 | **MCP 工具协议 & 技能库** | ✅ 动态加载 | ✅ 动态加载 | ✅ 可视化检查器 | ⚡ 沙箱运行环境 |
 
 ---
@@ -306,6 +332,8 @@ Conveyor 允许 Codex 在隔离的 Git Worktree 内以 `danger-full-access` 权�
 
 ## 🗺️ 路线图 (Roadmap)
 
+完整规划及长期目标见 [路线图](docs/roadmap.md)。
+
 ### 当前已实现特性 (v0.2.0)
 - [x] **Git Worktree 物理沙箱隔离** — 每个代码任务独立在 Detached Worktree 执行，具备严苛的 Apply 安全策略（路径白名单、二进制/软链接拦截、体积配额）。
 - [x] **持久化单并发 FIFO 任务队列** — 基于 SQLite 的任务队列，支持暂停/恢复、重启自愈、崩溃断点保留，进程重启任务不丢。
@@ -314,10 +342,11 @@ Conveyor 允许 Codex 在隔离的 Git Worktree 内以 `danger-full-access` 权�
 - [x] **双脑系统架构 (Dual-Tier Brain)** — DeepSeek Flash 极速自然对话层（<1 秒首字返回）+ Codex 深度沙箱工具执行层协同运作。
 - [x] **硬件级桌面 Computer Use** — Linux `/dev/uinput` 虚拟鼠标物理点击 + X11 多指针机制 (MPX) 以及 macOS 本地 Cua 桌面驱动。
 - [x] **可配置密码登录策略** — 支持常规登录密码免阻断填入，同时死守支付/转账/钱包等底线安全。
-- [x] **现代化实时 Web Console** — 支持 SSE 低延迟流式传输、会话归档/一键删除、按任务绑定的 Apply/Discard 审批授权、暗黑/精简模式与无干扰排版。
+- [x] **现代化实时 Web 控制台** — 全中文界面，提供对话/任务/收件箱/记忆/值守/网站授权/密钥等完整视图，支持 SSE 低延迟流式传输、会话归档、按任务绑定的「应用改动」/「放弃改动」服务端审批门闩、手机端自适应抽屉与底部导航。
 - [x] **实时屏幕与一键接管** — Web 控制台内嵌主机桌面实时画面，点一下即可接管鼠标键盘，Agent 自动暂停（`docs/live_screen.md`）。
 - [x] **主动巡检哨兵 (Always-On Teammate)** — 定时巡检主机负载、磁盘、服务、错误日志与 CI，去重后多端告警。
 - [x] **零中断事务部署与 CI 门禁** — 部署前全自动 Smoke 烟测与单元测试，健康检查失败自动回滚，120+ 测试用例保障稳定性。
+- [x] **目标驱动闭环（目标）** — 在「项目」页按目标多轮迭代、勾选自动检查、查看改动、确认合并到主分支并发送通知提醒，需开启 Supervisor 功能开关（`CONVEYOR_AGENT_SUPERVISOR_ENABLED`，详见 [`docs/goals.md`](docs/goals.md)）。
 
 ### 即将推出计划 (Upcoming Milestones)
 - [ ] **更多主动式守护项 (Proactive Watchers)** — 主机/服务/日志/CI 巡检与 `/teammate pulse` 早晚报已上线；待做：定时 GitHub PR 审查提醒、依赖漏洞自动排查。

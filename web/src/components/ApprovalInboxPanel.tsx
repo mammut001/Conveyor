@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { isStale } from '../approvalFreshness';
 import { OutboundDraftCard } from './OutboundDraftCard';
-import { formatDateTime, friendlyError } from '../ux/knowledgeKit';
+import { BAD_SHAPE_MESSAGE, formatDateTime, friendlyError, useLoadingTimeout } from '../ux/knowledgeKit';
 
 export type ApprovalInboxItem = {
   id: string;
@@ -154,6 +154,8 @@ export function ApprovalInboxPanel({
     [onPendingCountChange],
   );
 
+  useLoadingTimeout(loading, () => { setGlobalError('加载太久了，请重试'); setLoading(false); });
+
   const fetchItems = useCallback(async () => {
     const gen = ++fetchGen.current;
     try {
@@ -171,11 +173,16 @@ export function ApprovalInboxPanel({
         }
         throw new Error(`HTTP ${res.status}`);
       }
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (isStale(gen, fetchGen.current)) return;
-      const fetchedItems: ApprovalInboxItem[] = data.items || [];
+      if (!data || typeof data !== 'object' || !Array.isArray(data.items)) {
+        setGlobalError(BAD_SHAPE_MESSAGE);
+        setLoading(false);
+        return;
+      }
+      const fetchedItems: ApprovalInboxItem[] = data.items.filter((it: unknown) => it && typeof it === 'object');
       setItems(fetchedItems);
-      onPendingCountChange?.(data.counts?.total ?? fetchedItems.length);
+      onPendingCountChange?.(Number(data.counts?.total) || fetchedItems.length);
       setGlobalError('');
       setLoading(false);
     } catch (err) {
@@ -360,7 +367,7 @@ export function ApprovalInboxPanel({
 
   return (
     <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {globalError && <div className="error-banner">{globalError}</div>}
+      {globalError && <div className="error-banner" role="alert">{globalError}{' '}<button type="button" className="kn-btn" onClick={() => { setGlobalError(''); void fetchItems(); }}>重试</button></div>}
 
       {items.length === 0 && !globalError && (
         <div className="empty" style={{ padding: '36px 12px', textAlign: 'center' }}>

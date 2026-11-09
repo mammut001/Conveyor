@@ -13,7 +13,15 @@
 
 /* ---------- Conversation bar: picker + 新会话 + secondary views ---------- */
 
-.primary-interface .agent-screen { min-width: 0; }
+.primary-interface .agent-screen {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
 
 .primary-interface .chat-conversation-bar {
   position: relative;
@@ -337,6 +345,10 @@
   user-select: none;
 }
 .primary-interface .chat-panel-container .chat-avatar { width: 28px; height: 28px; margin-top: 1px; font-size: 13px; }
+/* The avatar is an emoji, not a Latin letter (QA N29): keep it proportional to the circle. */
+.primary-interface .chat-avatar > span,
+.primary-interface .chat-welcome-avatar > span,
+.primary-interface .chat-panel-container .chat-bubble-avatar > span { font-size: 1.2em; line-height: 1; }
 
 .primary-interface .chat-panel-container .chat-meta {
   display: flex;
@@ -370,10 +382,36 @@
   cursor: pointer;
 }
 .primary-interface .copy-button:hover { background: #f2f4f7; color: #1f2328; }
+/* Phone: a 40px-high touch target without changing the desktop look. */
+@media (max-width: 600px), (pointer: coarse) {
+  .primary-interface .copy-button { min-height: 40px; min-width: 40px; justify-content: center; }
+}
 .primary-interface .copy-button:focus-visible { outline: 2px solid #bd5c40; outline-offset: 1px; }
 .primary-interface .copy-button.is-copied { color: #15803d; }
 .primary-interface .copy-button.is-failed { color: #b42318; }
 .primary-interface .chat-panel-container .chat-copy-button { margin-left: -4px; }
+
+/* 「项目」讨论：回复下面的「设为目标」，和「复制」同样大小的小按钮。 */
+.chat-goal-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid #e4e7ec;
+  border-radius: 6px;
+  background: transparent;
+  color: #9a4a33;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.chat-goal-button:hover:not(:disabled) { background: #fbf1ec; border-color: #e8c3b4; }
+.chat-goal-button:focus-visible { outline: 2px solid #bd5c40; outline-offset: 1px; }
+.chat-goal-button:disabled { color: #98a2b3; cursor: not-allowed; }
+@media (max-width: 600px), (pointer: coarse) {
+  .chat-goal-button { min-height: 40px; }
+}
 
 /* Thinking / streaming / approval */
 .primary-interface .chat-thinking {
@@ -1128,7 +1166,6 @@
   background: #f2f4f7;
   color: #4b5563;
 }
-.primary-interface .chat-panel-container .chat-source-hash,
 .primary-interface .chat-panel-container .chat-source-arrow {
   font-style: normal;
   opacity: .85;
@@ -1161,5 +1198,46 @@
   .primary-interface .chat-body-with-rail .chat-composer-hint {
     font-size: 11px;
     white-space: nowrap;
+  }
+}
+
+@media (max-width: 340px) {
+  .primary-interface .chat-topic-rail {
+    display: none !important;
+  }
+  .primary-interface .chat-body-with-rail .chat-panel-container .composer.chat-composer,
+  .primary-interface .chat-panel-container .composer.chat-composer {
+    padding: 4px 4px 6px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  .primary-interface .chat-composer-box {
+    display: flex !important;
+    flex-direction: column !important;
+    padding: 6px 8px 4px !important;
+    gap: 4px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  .primary-interface .chat-panel-container .composer.chat-composer textarea {
+    width: 100% !important;
+    min-height: 36px !important;
+    box-sizing: border-box !important;
+    font-size: 13px !important;
+    line-height: 20px !important;
+  }
+  .primary-interface .chat-composer-hint {
+    display: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .primary-interface :is(.chat-send-button, .chat-voice-button, .chat-composer .chat-new-button, .chat-copy-button, .chat-jump-latest, .chat-rail-toggle, .chat-rail-item) {
+    border: 1px solid ButtonText !important;
+  }
+  .primary-interface .chat-rail-dot {
+    forced-color-adjust: none;
+    border: 1px solid ButtonText !important;
+    background: currentColor !important;
   }
 }

@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+
 // Shared helpers for the knowledge pages: 记忆 (MemoryPanel), 收件箱 (InboxPanel)
 // and the agent 资料 tab (AgentLibrary). Chinese labels, times and error text.
 
@@ -94,6 +96,25 @@ export function stripConfigHint(text: string): string {
     .trim();
 }
 
+export const BAD_SHAPE_MESSAGE = '数据格式不对，请稍后重试';
+
+/** Thrown when a 200 response does not have the expected JSON shape. */
+export class BadShapeError extends Error {
+  constructor(what = '') { super(`bad shape${what ? `: ${what}` : ''}`); this.name = 'BadShapeError'; }
+}
+
+/** One short muted line (~80 chars) of technical detail; never a traceback. */
+export function shortDetail(text: string, max = 80): string {
+  const line = text.split(/\r?\n/)[0].trim();
+  if (!line || /traceback|\bat \S+ \(|\.py\b|\.tsx?\b|node_modules/i.test(text)) return '';
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/** Parse JSON; a body that is not valid JSON counts as a bad shape. */
+export async function readJson(res: Response): Promise<unknown> {
+  try { return await res.json(); } catch { throw new BadShapeError('json'); }
+}
+
 const KNOWN_ERRORS: Array<[RegExp, string]> = [
   [/routines are disabled/i, '定时任务功能未开启'],
   [/memory is disabled/i, '记忆功能未开启'],
@@ -108,15 +129,23 @@ const KNOWN_ERRORS: Array<[RegExp, string]> = [
   [/prompt must be 1-2000/i, '要做的事需要 1–2000 个字'],
   [/maximum of \d+ routines/i, '定时任务已达上限（最多 50 个），请先删除不用的'],
   [/unsupported delivery channel|deliver must be/i, '不支持这个发送渠道'],
+  [/in minute\b/i, '分钟只能是 0–59'],
+  [/in hour\b/i, '小时只能是 0–23'],
+  [/in day-of-month\b/i, '日期只能是 1–31'],
+  [/in month\b/i, '月份只能是 1–12'],
+  [/in day-of-week\b/i, '星期只能是 0–7'],
+  [/must have exactly 5 fields/i, 'cron 需要 5 段，用空格分开：分 时 日 月 周，例如 0 9 * * *'],
   [/cron|field|day-of-week|day-of-month|invalid (?:step|range|element|expression|empty item)|out of range|range start|no matching fire time/i,
     '运行时间的格式不对，请从常用时间里选，或检查 cron 表达式'],
   [/secrets and credentials/i, '不能保存密码、密钥等敏感信息'],
-  [/untrusted sources cannot create profile/i, '外部来源的内容不能存入常用档案'],
-  [/log entry must contain/i, '日志需要 1–4000 个字'],
-  [/profile exceeds/i, '常用档案已满，请改存为“事实”'],
+  [/untrusted sources cannot create profile/i, '外部来源的内容不能存入常用信息'],
+  [/log entry must contain/i, '这条记录需要 1–4000 个字'],
+  [/profile exceeds/i, '常用信息已满，请改存为“记住的事”'],
   [/tier must be/i, '请选择记忆类型'],
   [/text is required|numeric memory id and text/i, '请先写下要记住的内容'],
-  [/internal error/i, '服务器出错了，请稍后重试'],
+  [/internal (?:server )?error|traceback|http 5\d\d|bad gateway|service unavailable|gateway time-?out/i, '服务器出错了，请稍后重试'],
+  [/unexpected (?:end of json|token)|json\.parse|is not valid json|in json at position|bad shape|cannot read propert|is not a function|is not iterable|undefined \(reading|null \(reading/i, BAD_SHAPE_MESSAGE],
+  [/timed? ?out|超时/i, '等了太久没有响应，请重试'],
   [/token rejected|unauthori[sz]ed/i, '登录已失效，请重新解锁控制台'],
   [/failed to fetch|networkerror|load failed|network request failed/i, '网络连接失败，请检查网络后重试'],
 ];
@@ -131,7 +160,9 @@ export function friendlyError(reason: unknown, fallback: string): FriendlyError 
   if (stripped && HAS_CJK.test(stripped)) return { message: stripped, detail: '', raw };
   const known = KNOWN_ERRORS.find(([pattern]) => pattern.test(raw));
   const message = known ? known[1] : fallback;
-  return { message, detail: stripped && stripped !== message ? stripped : '', raw };
+  // Known raw strings are fully explained by the Chinese sentence; anything else keeps one short muted line.
+  const detail = known ? '' : stripped && stripped !== message ? shortDetail(stripped) : '';
+  return { message, detail, raw };
 }
 
 /** Read `{error}` from a failed response, falling back to "HTTP <status>". */
@@ -164,6 +195,87 @@ const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '�
 
 export function splitCron(expr: string): string[] {
   return expr.trim().split(/\s+/).filter(Boolean);
+}
+
+export type CronFieldSpec = {
+  name: string;
+  min: number;
+  max: number;
+  error: string;
+};
+
+export const CRON_FIELD_SPECS: CronFieldSpec[] = [
+  { name: 'minute', min: 0, max: 59, error: '分钟只能是 0–59' },
+  { name: 'hour', min: 0, max: 23, error: '小时只能是 0–23' },
+  { name: 'dom', min: 1, max: 31, error: '日期只能是 1–31' },
+  { name: 'month', min: 1, max: 12, error: '月份只能是 1–12' },
+  { name: 'dow', min: 0, max: 7, error: '星期只能是 0–7' },
+];
+
+export function validateCronField(field: string, spec: CronFieldSpec): string | null {
+  const trimmed = field.trim();
+  if (!trimmed) return spec.error;
+  const parts = trimmed.split(',');
+  if (parts.some((p) => !p.trim())) return spec.error;
+  for (const rawPart of parts) {
+    const part = rawPart.trim();
+    let base = part;
+    if (part.includes('/')) {
+      const slashParts = part.split('/');
+      if (slashParts.length !== 2) return spec.error;
+      const [b, stepStr] = slashParts;
+      if (!/^\d+$/.test(stepStr) || Number(stepStr) <= 0) return spec.error;
+      base = b;
+    }
+    if (base === '*') {
+      continue;
+    }
+    if (base.includes('-')) {
+      const rangeParts = base.split('-');
+      if (rangeParts.length !== 2) return spec.error;
+      const [sStr, eStr] = rangeParts;
+      if (!/^\d+$/.test(sStr) || !/^\d+$/.test(eStr)) return spec.error;
+      const s = Number(sStr);
+      const e = Number(eStr);
+      if (s < spec.min || s > spec.max || e < spec.min || e > spec.max || s > e) {
+        return spec.error;
+      }
+    } else {
+      if (!/^\d+$/.test(base)) return spec.error;
+      const n = Number(base);
+      if (n < spec.min || n > spec.max) {
+        return spec.error;
+      }
+    }
+  }
+  return null;
+}
+
+export function validateCron(expr: string): string | null {
+  const parts = splitCron(expr);
+  if (parts.length !== 5) {
+    return 'cron 需要 5 段，用空格分开：分 时 日 月 周，例如 0 9 * * *';
+  }
+  for (let i = 0; i < 5; i++) {
+    const err = validateCronField(parts[i], CRON_FIELD_SPECS[i]);
+    if (err) return err;
+  }
+  return null;
+}
+
+export function mapCronServerError(err: unknown): string | null {
+  const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  if (!raw) return null;
+  if (/in minute\b/i.test(raw)) return '分钟只能是 0–59';
+  if (/in hour\b/i.test(raw)) return '小时只能是 0–23';
+  if (/in day-of-month\b/i.test(raw)) return '日期只能是 1–31';
+  if (/in month\b/i.test(raw)) return '月份只能是 1–12';
+  if (/in day-of-week\b/i.test(raw)) return '星期只能是 0–7';
+  if (/must have exactly 5 fields/i.test(raw)) return 'cron 需要 5 段，用空格分开：分 时 日 月 周，例如 0 9 * * *';
+  if (/cron|field|day-of-week|day-of-month|invalid (?:step|range|element|expression|empty item)|out of range|range start|no matching fire time/i.test(raw)) {
+    return '运行时间的格式不对，请检查 cron 表达式';
+  }
+  return null;
 }
 
 /** Plain-Chinese reading of a cron expression, or null when it is not a common shape. */
@@ -258,4 +370,32 @@ export function withClock(expr: string, clock: string): string {
   parts[0] = String(Number(match[2]));
   parts[1] = String(Number(match[1]));
   return parts.join(' ');
+}
+
+// ---- Loading / shape guards --------------------------------------------------
+
+/** Pick the array under `key` (or a bare array) from a response body; anything else is a bad shape. */
+export function pickArray<T = unknown>(data: unknown, key: string): T[] {
+  const list = Array.isArray(data) ? data : data && typeof data === 'object' ? (data as Record<string, unknown>)[key] : undefined;
+  if (!Array.isArray(list)) throw new BadShapeError(key);
+  return list.filter(item => item !== null && item !== undefined) as T[];
+}
+
+/** Calls `onTimeout` when `loading` stays true for `ms` (default 15s), so a page never spins forever. */
+export function useLoadingTimeout(loading: boolean, onTimeout: () => void, ms = 15_000) {
+  useEffect(() => {
+    if (!loading) return;
+    const timer = window.setTimeout(onTimeout, ms);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, ms]);
+}
+
+/** Muted detail line under an error: known raw strings become short Chinese, the rest is cut to one short line. */
+export function techDetail(detail?: string | null): string {
+  const text = (detail || '').trim();
+  if (!text) return '';
+  if (HAS_CJK.test(text)) return shortDetail(text);
+  const known = KNOWN_ERRORS.find(([pattern]) => pattern.test(text));
+  return known ? known[1] : shortDetail(text);
 }

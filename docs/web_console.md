@@ -52,6 +52,10 @@ CONVEYOR_WEB_TOKEN=<generated 64-hex-character value>
 CONVEYOR_EVENT_RETENTION_PER_JOB=2000
 ```
 
+> **Zero-config onboarding**: On fresh installs, the worker pool (`CONVEYOR_WORKERS_ENABLED`) and worker install (`CONVEYOR_WORKERS_INSTALL`) default to enabled. Setting a model provider via the Web Console "设置" dialog automatically powers both the runner and the chat tier without requiring manual edits to `.env` or setting `CONVEYOR_CHAT_*` variables. Explicit `CONVEYOR_CHAT_MODE=off` or `CONVEYOR_WORKERS_ENABLED=false` still disables them.
+>
+> `GET /api/config/provider` and `features` in `GET /api/system/status` both report `chat_model_configured`: true when the server can already run a chat model, whether it was saved in "设置" or configured from the environment (`CONVEYOR_CHAT_MODEL` + `CONVEYOR_CHAT_API_KEY`). The first-run checklist ticks ② from it, so an env-configured model does not keep asking for "设置".
+
 The standard installer installs both `conveyor-web.service` and
 `conveyor-handoff.service`. For a manual source deployment:
 
@@ -99,6 +103,52 @@ are documented in [Web chat interaction regression checks](testing/web-chat-expe
 `make web-build` requires Node.js only on the build machine and writes static
 assets to `web/dist`. Deploy those assets with the Python source. ARM64 runtime
 has no new compiled Python dependency.
+
+## 界面导览（中文界面）
+
+Web 控制台已全面重构为简体中文原生界面，提供清晰的导航结构、即时状态反馈、右侧详情面板以及完善的移动端适配。
+
+### 视图与导航栏
+
+顶部导航栏包含两级视图组：
+- **主视图组**：`对话`（Chat）、`任务`（Tasks）、`收件箱`（Inbox）、`记忆`（Memory）、`值守`（Teammate）；启用统一审批收件箱时还会展示 `审批`（Approvals）。
+- **次级视图组**：`网站授权`（Browser Sites）、`密钥`（Secrets）；在启用相应功能或空间紧凑时，通过“更多”下拉菜单访问 `技能`（Skills）、`工作流`（Workflows）和 `连接器`（Connectors）。
+
+**URL Hash 路由**：当前视图状态自动保存在 URL Hash 中（例如 `#chat`、`#tasks`、`#inbox`、`#memory`、`#teammate`、`#browser`、`#secrets` 等）。在多视图间跳转、刷新页面或通过浏览器前进/后退切换时，均可无缝保持当前视图。
+
+### 快捷键
+
+| 快捷键 | 功能 | 说明 |
+| :--- | :--- | :--- |
+| `Alt+1` ~ `Alt+9`（macOS: `⌥1` ~ `⌥9`） | 切换视图 | 快速跳转至主导航前 9 个对应视图（对话、任务、收件箱等） |
+| `/` | 聚焦输入框 | 快速聚焦当前页面（对话或任务）的消息输入框（未处于输入元素时生效） |
+| `Esc` | 关闭弹窗与抽屉 | 快速退出设置对话框、锁定确认框、移动端侧滑抽屉或下拉菜单 |
+
+### 右侧「详情」面板
+
+右侧详情栏（Context Panel）仅在 **`对话`** 与 **`任务`** 视图显示，其余功能视图自动隐藏：
+- **桌面端折叠**：视口宽度 ≥1200px 时默认展开，较窄窗口默认折叠。点击顶栏右上角「详情」按钮可随时展开或收起，折叠偏好会保存在本地存储中。
+- **助手面板选项卡**：在多助手模式下，详情面板提供三个主要选项卡：
+  - **`详情`**：展示代码改动清单（Changed Files）、助手长期设定（长期指令与项目目录）、运行记录列表（Runs）以及当前选定运行的遥测日志（Telemetry）。
+  - **`资料`**：汇总该助手沉淀的运行资产，展示其记忆（常用档案与记忆日志）、定时任务、改过的文件列表以及电脑截图。
+  - **`电脑`**：显示自动操作电脑状态、紧急停止按钮、主机截图只读截取与缩略图预览、执行节点状态以及人工接管卡片。
+- **改动审阅与安全审批**：在「改动」区块中展开「查看差异」，可查看 DiffStat 增删统计与彩色差异。提供 **`应用改动`** 与 **`放弃改动`** 按钮，点击后均需经过服务端 5 分钟安全审批流程（二次确认卡片），只有经过显式批准才会写入工作区或清理隔离分支。
+
+### 移动端布局（≤820px 屏幕）
+
+在宽度 ≤820px 的移动设备或开启 `CONVEYOR_WEB_MOBILE_UI` 时，控制台自动切换为手机专属布局：
+- **底部导航栏**：常驻屏幕底部，提供 `对话`、`任务`、`收件箱`、`记忆` 以及 `更多` 入口。
+- **「更多」抽屉 (More Sheet)**：点击底部「更多」滑出菜单，可直达 `值守`、`网站授权`、`密钥`（以及其他次级页面），并在底部提供 `设置` 与 `锁定` 入口。
+- **侧边抽屉**：
+  - 顶栏左侧按钮唤出 **`助手` / `会话`** 抽屉，支持快速切换会话或点「＋ 新建」开始新会话。
+  - 顶栏右侧按钮唤出 **`详情`** 抽屉，在手机上完整审阅差异、运行状态与电脑画面。
+  - 抽屉带半透明遮罩，支持点击遮罩、点击 `×` 按钮或按 `Esc` 退出。
+
+### 顶栏操作与会话安全
+
+- **实时状态指示**：顶栏显示连接状态（`在线`、`连接中`、`重连中`）、当前运行中任务数与队列深度。
+- **设置**：配置模型服务商参数，包括服务商 ID（服务商代号）、显示名称、接口地址、模型、接口协议（接口类型）、推理强度、密钥变量名（密钥名称）与 API 密钥。在 Web 对话框保存后，对话层（Chat tier）在未配置 `CONVEYOR_CHAT_*` 专属密钥与模型时会自动回退使用此服务商，新安装无需编辑 `.env` 即可直接在网页端使用完整功能；显式配置 `CONVEYOR_CHAT_MODE=off` 可关闭对话层。
+- **锁定**：点击顶栏「锁定」按钮会弹出二次确认对话框（`锁定控制台？`），提示将清除这台设备上保存的访问令牌。确认后才清除 Token，按 `Esc` 或点「取消」安全保留会话。
 
 ## API
 
@@ -215,7 +265,7 @@ waits for already-claimed work to finish. The systemd handoff sidecar then
 starts the fixed noVNC transport.
 
 `complete` and `cancel` are intentionally asynchronous close requests. They do
-**not** immediately release the lease. The Web Workbench continues showing
+**not** immediately release the lease. The Web Console continues showing
 Privacy Mode while `conveyor-handoff.service` removes remote access and verifies
 cleanup; only then is the takeover transitioned to its terminal state and Agent
 GUI automation allowed to continue.
@@ -232,7 +282,7 @@ VPS for the authenticated Web Console. The original stays on the Mac. The
 browser does not start a continuous stream and gains no mouse or keyboard
 control from this feature. Thumbnail upload remains disabled by default.
 
-Apply and discard endpoints create a five-minute, job-scoped approval. They do
+Apply and discard endpoints ("应用改动" / "放弃改动") create a five-minute, job-scoped approval. They do
 not mutate the worktree until the matching authenticated approval endpoint is
 called. Browser disconnects never approve, apply, discard, cancel, or arm CUA.
 
@@ -260,7 +310,7 @@ unchanged status writes.
 The Web Console serves as the execution host and inbox for [General Routines](routines.md).
 Because pending tool approvals live in-memory in the process that spawned them, routine
 execution runs on the server loop of `web_console.py`. Scheduled runs and tool approvals
-appear directly in the Web Console Inbox tab.
+appear directly in the Web Console "收件箱" (Inbox) and "审批" (Approvals) views.
 
 ## Current limitations
 

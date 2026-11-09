@@ -1309,6 +1309,9 @@ async def run_single_routine(
         elif outcome == "unavailable":
             status = "unavailable"
             raw_output = "对话模型当时不可用，这次没有运行。"
+        elif outcome == "error":
+            status = "error"
+            raw_output = checked.body if checked else "对话模型出错，这次没有运行。"
         else:
             status = "ok"
             raw_output = port.last_text

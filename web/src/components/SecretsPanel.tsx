@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { BAD_SHAPE_MESSAGE, techDetail, useLoadingTimeout } from '../ux/knowledgeKit';
 
 type Secret = { name: string; set: boolean; updated_at: string | null };
 type Problem = { message: string; detail?: string };
@@ -66,6 +67,8 @@ export function SecretsPanel({ token }: { token: string }) {
   const valueRef = useRef<HTMLInputElement>(null);
   const deleteButtons = useRef(new Map<string, HTMLButtonElement>());
 
+  useLoadingTimeout(!loaded, () => { setLoadProblem({ message: '加载太久了，请重试。' }); setLoaded(true); });
+
   const load = useCallback(async () => {
     try {
       const response = await fetch('/api/secrets', {
@@ -76,8 +79,12 @@ export function SecretsPanel({ token }: { token: string }) {
         setLoadProblem(describeServerError(await readError(response), '无法读取密钥列表，请稍后重试。'));
         return;
       }
-      const body = await response.json() as { items?: Secret[] };
-      setItems(Array.isArray(body.items) ? body.items : []);
+      const body = await response.json().catch(() => null) as { items?: Secret[] } | null;
+      if (!body || typeof body !== 'object' || !Array.isArray(body.items)) {
+        setLoadProblem({ message: BAD_SHAPE_MESSAGE });
+        return;
+      }
+      setItems(body.items.filter(item => item && typeof item.name === 'string'));
       setLoadProblem(null);
     } catch {
       setLoadProblem({ message: '无法连接服务器，密钥列表暂时读取不到。' });
@@ -108,6 +115,8 @@ export function SecretsPanel({ token }: { token: string }) {
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (saveState === 'saving') return;
+    if (saveState === 'saved' && !name.trim() && !value) return;
     const trimmedName = name.trim();
     const badName = !trimmedName
       ? '请填写名称。'
@@ -137,6 +146,8 @@ export function SecretsPanel({ token }: { token: string }) {
       }
       setValue('');
       setName('');
+      setNameError('');
+      setValueError('');
       setShowValue(false);
       setSavedName(trimmedName);
       setSaveState('saved');
@@ -256,7 +267,7 @@ export function SecretsPanel({ token }: { token: string }) {
               </p>}
               {saveState === 'error' && saveProblem && <p role="alert" className="guard-feedback guard-feedback-error">
                 {saveProblem.message}
-                {saveProblem.detail && <span className="guard-tech">{saveProblem.detail}</span>}
+                {techDetail(saveProblem.detail) && <span className="guard-tech">{techDetail(saveProblem.detail)}</span>}
               </p>}
             </div>
           </div>
@@ -272,13 +283,13 @@ export function SecretsPanel({ token }: { token: string }) {
           {listNotice && <p role="status" className="guard-feedback guard-feedback-ok">{listNotice}</p>}
           {listProblem && <p role="alert" className="guard-feedback guard-feedback-error">
             {listProblem.message}
-            {listProblem.detail && <span className="guard-tech">{listProblem.detail}</span>}
+            {techDetail(listProblem.detail) && <span className="guard-tech">{techDetail(listProblem.detail)}</span>}
           </p>}
         </div>}
         {!loaded ? <p className="guard-empty">加载中…</p>
           : loadProblem ? <div className="guard-empty" role="alert">
             <p>{loadProblem.message}</p>
-            {loadProblem.detail && <p className="guard-tech">{loadProblem.detail}</p>}
+            {techDetail(loadProblem.detail) && <p className="guard-tech">{techDetail(loadProblem.detail)}</p>}
             <button type="button" className="guard-btn" onClick={() => { void load(); }}>重试</button>
           </div>
           : ordered.length === 0 ? <p className="guard-empty">还没有保存任何密钥</p>

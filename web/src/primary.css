@@ -298,6 +298,13 @@
   width: 100%;
   margin-top: 8px;
 }
+/* Nothing is armed: the stop control stays available but is not a red alarm on the first screen. */
+.emergency.is-idle,
+.primary-interface .emergency.is-idle {
+  color: #6b7280;
+  border-color: #d7dde7;
+  background: #fff;
+}
 
 /* Make serious work comfortable on a laptop without sacrificing the 3-column model. */
 @media (max-width: 1180px) {

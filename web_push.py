@@ -26,6 +26,13 @@ _QUEUE: "queue.Queue[tuple[object, str, str]]" = queue.Queue(maxsize=128)
 _WORKER_LOCK = threading.Lock()
 _WORKER_STARTED = False
 
+# Push payloads are stored and rendered by the browser vendor, so only opaque ids
+# and a generic title ever leave the machine. A goal notification carries the
+# goal id and a Chinese title only — never the goal text.
+NOTIFY_KINDS = ("approval", "draft", "goal")
+KIND_TITLES = {"goal": "Conveyor：目标需要你看一下"}
+DEFAULT_TITLE = "Conveyor needs your review"
+
 
 def enabled(settings: object) -> bool:
     return bool(getattr(settings, "pwa_enabled", False))
@@ -237,7 +244,7 @@ def notify_pending(settings: object, item_id: str, kind: str = "approval", *, se
     """Send safe minimal payloads. Injectable sender enables offline tests."""
     if not enabled(settings) or (sender is None and not public_config(settings)["enabled"]):
         return 0
-    if kind not in ("approval", "draft") or not isinstance(item_id, str) or not 1 <= len(item_id) <= 128:
+    if kind not in NOTIFY_KINDS or not isinstance(item_id, str) or not 1 <= len(item_id) <= 128:
         return 0
     if not re.fullmatch(r"[A-Za-z0-9_-]+", item_id):
         return 0
@@ -247,7 +254,12 @@ def notify_pending(settings: object, item_id: str, kind: str = "approval", *, se
     with _connection(settings) as db:
         rows = db.execute("SELECT id,endpoint,p256dh,auth FROM push_subscriptions WHERE operator=?",
                           (operator(settings),)).fetchall()
-    data = json.dumps({"title": "Conveyor needs your review", "id": item_id}, separators=(",", ":"))
+    # `kind` is only added for goals: it is what makes sw.js deep-link the click
+    # to the 项目 page instead of the approvals list. Existing payloads stay byte-identical.
+    payload: dict[str, str] = {"title": KIND_TITLES.get(kind, DEFAULT_TITLE), "id": item_id}
+    if kind == "goal":
+        payload["kind"] = kind
+    data = json.dumps(payload, separators=(",", ":"))
     sent = 0
     for row in rows:
         sub = {"endpoint": row["endpoint"], "keys": {"p256dh": row["p256dh"], "auth": row["auth"]}}
@@ -286,7 +298,7 @@ def queue_notification(settings: object, item_id: str, kind: str = "approval") -
     global _WORKER_STARTED
     if not enabled(settings) or not public_config(settings)["enabled"]:
         return
-    if kind not in ("approval", "draft") or not isinstance(item_id, str):
+    if kind not in NOTIFY_KINDS or not isinstance(item_id, str):
         return
     with _WORKER_LOCK:
         if not _WORKER_STARTED:

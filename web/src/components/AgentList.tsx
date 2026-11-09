@@ -169,11 +169,29 @@ const INSTRUCTIONS_MAX = 4000
 const PATH_MAX = 512
 const FIELD_ORDER: AgentField[] = ['name', 'instructions', 'color', 'workspace_path']
 
-function validateAgent(draft: AgentDraft): FieldErrors {
+const SYSTEM_DIRS = ['/etc', '/usr', '/bin', '/System']
+
+/** null when the folder is acceptable, else the Chinese reason. */
+export function folderProblem(folder: string): string | null {
+  const value = folder.trim()
+  if (!value) return null
+  if (!value.startsWith('/')) return '请填写以 / 开头的完整路径，例如 /home/me/project'
+  const clean = value.replace(/\/+/g, '/').replace(/\/$/, '')
+  if (clean === '' || clean.split('/').includes('..')) return '请填写具体的项目文件夹，不能是根目录或带 .. 的路径'
+  if (SYSTEM_DIRS.some(dir => clean === dir || clean.startsWith(`${dir}/`))) return '不能使用系统目录，请换成你的项目文件夹'
+  return null
+}
+
+function validateAgent(draft: AgentDraft, others: Agent[] = [], selfId = ''): FieldErrors {
   const errors: FieldErrors = {}
-  if (!draft.name.trim()) errors.name = '请填写名称'
-  const folder = draft.workspace_path.trim()
-  if (folder && !folder.startsWith('/')) errors.workspace_path = '请填写以 / 开头的完整路径，例如 /home/me/project'
+  const name = draft.name.trim()
+  if (!name) errors.name = '请填写名称'
+  else if (Array.from(name).length > NAME_MAX) errors.name = `名称最多 ${NAME_MAX} 个字`
+  else if (others.some(other => other.id !== selfId && other.name.trim().toLowerCase() === name.toLowerCase())) {
+    errors.name = `已经有一个叫“${name}”的助手了，换个名字吧（不分大小写）`
+  }
+  const problem = folderProblem(draft.workspace_path)
+  if (problem) errors.workspace_path = problem
   return errors
 }
 
@@ -208,8 +226,10 @@ function holdImeEnter(event: ReactKeyboardEvent<HTMLInputElement>) {
   if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault()
 }
 
-export function AgentDialog({ agent, onClose, onSave, onArchive }: {
+export function AgentDialog({ agent, existingAgents = [], onClose, onSave, onArchive }: {
   agent?: Agent
+  /** Other agents, to reject duplicate names. */
+  existingAgents?: Agent[]
   onClose: () => void
   onSave: (draft: AgentDraft) => Promise<void>
   onArchive?: () => Promise<void>
@@ -225,12 +245,14 @@ export function AgentDialog({ agent, onClose, onSave, onArchive }: {
   const [error, setError] = useState<{ text: string; detail?: string } | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [confirmingArchive, setConfirmingArchive] = useState(false)
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false)
   const id = useId()
   const nameRef = useRef<HTMLInputElement>(null)
   const instructionsRef = useRef<HTMLTextAreaElement>(null)
   const folderRef = useRef<HTMLInputElement>(null)
   const colorsRef = useRef<HTMLDivElement>(null)
   const archiveCancelRef = useRef<HTMLButtonElement>(null)
+  const discardCancelRef = useRef<HTMLButtonElement>(null)
   const colors = AGENT_COLORS.includes(initial.color) ? AGENT_COLORS : [initial.color, ...AGENT_COLORS]
   const dirty = FIELD_ORDER.some(field => initial[field] !== draft[field])
   const canArchive = Boolean(agent && !agent.is_default && onArchive)
@@ -247,13 +269,15 @@ export function AgentDialog({ agent, onClose, onSave, onArchive }: {
     return () => { if (opener?.isConnected) opener.focus() }
   }, [])
   useEffect(() => { if (confirmingArchive) archiveCancelRef.current?.focus() }, [confirmingArchive])
+  useEffect(() => { if (confirmingDiscard) discardCancelRef.current?.focus() }, [confirmingDiscard])
 
-  // Esc first backs out of the archive question, then closes (asking before dropping edits).
+  // Esc first backs out of the archive / discard questions, then closes (asking before dropping edits).
   const requestClose = useCallback(() => {
     if (confirmingArchive) { setConfirmingArchive(false); return }
-    if (dirty && !busy && !window.confirm('放弃还没保存的修改？')) return
+    if (confirmingDiscard) { setConfirmingDiscard(false); return }
+    if (dirty && !busy) { setConfirmingDiscard(true); return }
     onClose()
-  }, [busy, confirmingArchive, dirty, onClose])
+  }, [busy, confirmingArchive, confirmingDiscard, dirty, onClose])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
@@ -283,7 +307,7 @@ export function AgentDialog({ agent, onClose, onSave, onArchive }: {
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (busy) return
-    const errors = validateAgent(draft)
+    const errors = validateAgent(draft, existingAgents, agent?.id || '')
     setFieldErrors(errors)
     const first = FIELD_ORDER.find(field => errors[field])
     if (first) { setError(null); focusField(first); return }
@@ -322,7 +346,10 @@ export function AgentDialog({ agent, onClose, onSave, onArchive }: {
               <input id={`${id}-name`} ref={nameRef} value={draft.name} maxLength={NAME_MAX} autoComplete="off"
                 aria-invalid={Boolean(fieldErrors.name)} aria-describedby={`${id}-name-note`}
                 onChange={event => update('name', event.target.value)} onKeyDown={holdImeEnter} placeholder="例如：财务助理" />
-              {note('name', '显示在助手列表和对话顶部。')}
+              {note('name', <>
+                <span>显示在助手列表和对话顶部。</span>
+                <span className={`field-count ${Array.from(draft.name).length >= NAME_MAX - 10 ? 'is-near' : ''}`}>{Array.from(draft.name).length}/{NAME_MAX}</span>
+              </>)}
             </div>
             <div className={`dialog-field ${fieldErrors.instructions ? 'has-error' : ''}`}>
               <label htmlFor={`${id}-instructions`}>职责说明</label>
@@ -361,9 +388,25 @@ export function AgentDialog({ agent, onClose, onSave, onArchive }: {
                 onChange={event => update('workspace_path', event.target.value)} onKeyDown={holdImeEnter} placeholder="/home/conveyor/my-project"
                 spellCheck={false} autoCapitalize="off" autoCorrect="off" autoComplete="off" />
               {note('workspace_path', '服务器上 Git 仓库的根目录，它的改代码任务会在这里进行；留空则用共享工作区。')}
+              {draft.workspace_path.trim() && !fieldErrors.workspace_path && <p className="field-warn">请确认这个文件夹已经在服务器上存在，网页不会帮你创建。</p>}
             </div>
           </div>
-          {confirmingArchive && agent ? (
+          {confirmingDiscard ? (
+            <footer className="agent-dialog-actions agent-archive-confirm" role="group" aria-labelledby={`${id}-discard-question`}>
+              <p id={`${id}-discard-question`}>
+                <strong>放弃还没保存的修改？</strong>
+                <span>未保存的内容将会丢失。</span>
+              </p>
+              <div className="agent-archive-buttons">
+                <button type="button" ref={discardCancelRef} disabled={Boolean(busy)} onClick={() => { setConfirmingDiscard(false); nameRef.current?.focus(); }}>
+                  继续编辑
+                </button>
+                <button type="button" className="danger-solid" disabled={Boolean(busy)} onClick={onClose}>
+                  放弃修改
+                </button>
+              </div>
+            </footer>
+          ) : confirmingArchive && agent ? (
             <footer className="agent-dialog-actions agent-archive-confirm" role="group" aria-labelledby={`${id}-archive-question`}>
               <p id={`${id}-archive-question`}>
                 <strong>归档「{agent.name}」？</strong>
@@ -381,7 +424,7 @@ export function AgentDialog({ agent, onClose, onSave, onArchive }: {
               {error && <div className="error-banner dialog-error" role="alert"><span>{error.text}</span>{error.detail && <small>{error.detail}</small>}</div>}
               {canArchive && <button type="button" className="danger" disabled={Boolean(busy)} onClick={() => setConfirmingArchive(true)}>归档</button>}
               <span />
-              <button type="button" disabled={Boolean(busy)} onClick={onClose}>取消</button>
+              <button type="button" disabled={Boolean(busy)} onClick={requestClose}>取消</button>
               <button type="submit" className="primary" disabled={Boolean(busy)}>
                 {busy === 'save' ? '正在保存…' : agent ? '保存' : '创建助手'}
               </button>

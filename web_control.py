@@ -18,7 +18,7 @@ from redaction import redact_text, truncate
 from runtime_control import COMMAND_CANCEL, get_runtime_control
 from transcript_store import get_transcript_store, session_identity
 from refinement_store import RefinementStore
-from provider_config import get_provider_config, save_provider_config
+from provider_config import chat_model_configured, get_provider_config, save_provider_config
 
 
 class WebControl:
@@ -138,6 +138,47 @@ class WebControl:
         session["latest_job"] = jobs[0] if jobs else None
         return session
 
+    @staticmethod
+    def _identity_of(session: dict[str, Any]) -> tuple[str, str, str]:
+        return (
+            str(session.get("channel") or ""),
+            str(session.get("operator_id") or ""),
+            str(session.get("source_chat_id") or ""),
+        )
+
+    @staticmethod
+    def _activity_key(session: dict[str, Any]) -> float:
+        raw = str(session.get("last_activity") or "")
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
+
+    def _grouped_job_sessions(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Sessions reconstructed from queue jobs (task runs, legacy chats)."""
+        grouped: dict[str, dict[str, Any]] = {}
+        for job in jobs:
+            chat_id = str(job.get("chat_id") or "")
+            session_id = self._session_key(job, source_key="chat_id")
+            if not session_id:
+                continue
+            session = grouped.setdefault(session_id, {
+                "id": session_id,
+                "channel": job.get("channel"),
+                "operator_id": job.get("operator_id"),
+                "source_chat_id": chat_id,
+                "created_at": job.get("created_at"),
+                "last_activity": job.get("updated_at") or job.get("created_at"),
+                "job_count": 0,
+                "message_count": 0,
+                "latest_job": None,
+                "title": job.get("prompt_preview") or "Session",
+            })
+            session["job_count"] += 1
+            if session["latest_job"] is None:
+                session["latest_job"] = job
+        return list(grouped.values())
+
     def list_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
         transcript_sessions = get_transcript_store(self.settings).list_sessions(limit)
         jobs = self.queue.list_jobs(500)
@@ -164,40 +205,26 @@ class WebControl:
                 )
                 session["latest_job"] = latest_by_session.get(key)
                 session["active_refinement"] = chain_by_session.get(ref_keys.get(id(session)) or "")
-            return transcript_sessions
 
-        # Backward-compatible projection for installations that have not yet
-        # written a structured transcript.
-        grouped: dict[str, dict[str, Any]] = {}
-        for job in jobs:
-            chat_id = str(job.get("chat_id") or "")
-            session_id = self._session_key(job, source_key="chat_id")
-            if not session_id:
-                continue
-            session = grouped.setdefault(session_id, {
-                "id": session_id,
-                "channel": job.get("channel"),
-                "operator_id": job.get("operator_id"),
-                "source_chat_id": chat_id,
-                "created_at": job.get("created_at"),
-                "last_activity": job.get("updated_at") or job.get("created_at"),
-                "job_count": 0,
-                "message_count": 0,
-                "latest_job": None,
-                "title": job.get("prompt_preview") or "Session",
-            })
-            session["job_count"] += 1
-            if session["latest_job"] is None:
-                session["latest_job"] = job
-        rows = list(grouped.values())[:limit]
-        summaries = RefinementStore(self.settings).active_summaries([
-            key for session in rows if (key := self._refinement_key(session))
-        ])
-        for session in rows:
-            session["active_refinement"] = summaries.get(
-                self._refinement_key(session) or ""
-            )
-        return rows
+        # Job-only sessions (task runs whose transcript was never written, or
+        # installs without a transcript yet) are listed too. A session that has
+        # both a transcript row and jobs is already in the list, once.
+        known_ids = {str(session.get("id") or "") for session in transcript_sessions}
+        known_identities = {self._identity_of(session) for session in transcript_sessions}
+        job_only = [
+            session for session in self._grouped_job_sessions(jobs)
+            if session["id"] not in known_ids
+            and self._identity_of(session) not in known_identities
+        ]
+        if job_only:
+            summaries = RefinementStore(self.settings).active_summaries([
+                key for session in job_only if (key := self._refinement_key(session))
+            ])
+            for session in job_only:
+                session["active_refinement"] = summaries.get(self._refinement_key(session) or "")
+        rows = [*transcript_sessions, *job_only]
+        rows.sort(key=self._activity_key, reverse=True)
+        return rows[:limit]
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         transcript = get_transcript_store(self.settings).get_session(session_id)
@@ -730,6 +757,9 @@ class WebControl:
                 "skills": bool(getattr(self.settings, "skills_enabled", False)),
                 "workflows": bool(getattr(self.settings, "workflows_enabled", False)),
                 "provider_key_scoping": bool(getattr(self.settings, "child_env_scope_provider_keys", False)),
+                # A chat model the server already has (saved or from .env), so the console
+                # does not keep asking for 模型设置 when one is configured by env vars.
+                "chat_model_configured": chat_model_configured(self.settings),
                 "mobile_ui": bool(getattr(self.settings, "web_mobile_ui", False)),
                 "pwa": bool(getattr(self.settings, "pwa_enabled", False)),
                 "mcp": bool(getattr(self.settings, "mcp_enabled", False)),
@@ -739,9 +769,14 @@ class WebControl:
                 "teammate": bool(getattr(self.settings, "teammate_enabled", True)),
                 "live_screen": bool(getattr(self.settings, "live_screen_enabled", False)),
                 "agents": getattr(self.settings, "agents_enabled", False) is True,
+                "workers": bool(getattr(self.settings, "workers_enabled", False)),
                 "agent_supervisor": bool(__import__("supervisor_service").is_enabled(self.settings)),
             },
         }
+
+    def workers_payload(self, force_detect: bool = False) -> dict[str, Any]:
+        import workers
+        return workers.get_workers_payload(self.settings, force_detect=force_detect)
 
     # ---- agents -----------------------------------------------------------
 

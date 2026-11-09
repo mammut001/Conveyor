@@ -3,8 +3,8 @@ import { applyInboxDecision, isStale } from '../approvalFreshness';
 import { FormattedText } from './FormattedText';
 import {
   channelLabel, cronClock, describeCron, ErrorNote, formatDateTime, formatUpcoming, formatWhen, friendlyError,
-  presetFor, responseError, SCHEDULE_PRESETS, scheduleLabel, splitCron, withClock, type FriendlyError,
-} from '../ux/knowledgeKit';
+  mapCronServerError, presetFor, responseError, SCHEDULE_PRESETS, scheduleLabel, splitCron, validateCron, withClock,
+  type FriendlyError, pickArray, readJson, useLoadingTimeout } from '../ux/knowledgeKit';
 
 export type RoutineHook = {
   hook_id: string;
@@ -55,6 +55,8 @@ export type InboxPanelProps = {
   onUnreadChange?: (count: number) => void;
   onApprovalDecided?: () => void;
   webhooksEnabled?: boolean;
+  /** The 定时任务 feature flag: when it is off the page says so instead of calling the API. */
+  routinesEnabled?: boolean;
   /** New routines are created for this agent and report into its conversation. */
   agentId?: string;
   agentName?: string;
@@ -147,7 +149,7 @@ const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 const MINUTES = Array.from({ length: 12 }, (_, step) => step * 5);
 const pad2 = (value: number) => String(value).padStart(2, '0');
 
-export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksEnabled, agentId, agentName }: InboxPanelProps) {
+export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksEnabled, routinesEnabled = true, agentId, agentName }: InboxPanelProps) {
   const [disabled, setDisabled] = useState(false);
   const disabledRef = useRef(false);
   const [items, setItems] = useState<InboxItem[]>([]);
@@ -181,11 +183,17 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
   const [deliverFs, setDeliverFs] = useState(false);
   const [formBusy, setFormBusy] = useState(false);
   const [formError, setFormError] = useState<FriendlyError | null>(null);
+  const [nameError, setNameError] = useState('');
+  const [promptError, setPromptError] = useState('');
   const [channels, setChannels] = useState<{ telegram?: boolean; feishu?: boolean } | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const cronRef = useRef<HTMLInputElement>(null);
   const inboxRef = useRef<HTMLElement>(null);
   const newRoutineRef = useRef<HTMLButtonElement>(null);
   const formWasOpen = useRef(false);
+
+  useLoadingTimeout(!error && (!loaded.inbox || !loaded.routines), () => setError(friendlyError('timeout', '加载太久了，请重试')));
 
   const fetchInbox = useCallback(async () => {
     if (disabledRef.current || !token) return;
@@ -200,11 +208,12 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
         return;
       }
       if (!res.ok) throw await responseError(res);
-      const data = await res.json();
+      const data = await readJson(res);
+      const list = pickArray<InboxItem>(data, 'items');
       if (isStale(gen, fetchGen.current)) return;
-      setItems(data.items || []);
+      setItems(list);
       setLoaded((prev) => (prev.inbox ? prev : { ...prev, inbox: true }));
-      const count = Number(data.unread || 0);
+      const count = Number((data as { unread?: unknown })?.unread || 0) || 0;
       setUnreadCount(count);
       onUnreadChange?.(count);
     } catch (err) {
@@ -225,8 +234,8 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
         return;
       }
       if (!res.ok) throw await responseError(res);
-      const data = await res.json();
-      setRoutinesList(data.routines || []);
+      const list = pickArray<Routine>(await readJson(res), 'routines');
+      setRoutinesList(list);
       setLoaded((prev) => (prev.routines ? prev : { ...prev, routines: true }));
     } catch (err) {
       if (!disabledRef.current) {
@@ -236,12 +245,19 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
   }, [token]);
 
   useEffect(() => {
+    // The feature is off: the page says so without asking the server (no 409 in the console).
+    if (!routinesEnabled) {
+      disabledRef.current = true;
+      setDisabled(true);
+      setLoaded({ inbox: true, routines: true });
+      return;
+    }
     void fetchInbox();
     void fetchRoutines();
-  }, [fetchInbox, fetchRoutines]);
+  }, [fetchInbox, fetchRoutines, routinesEnabled]);
 
   useEffect(() => {
-    if (disabled || disabledRef.current) return;
+    if (disabled || disabledRef.current || !routinesEnabled) return;
     const timer = window.setInterval(() => {
       if (disabledRef.current) return;
       void fetchInbox();
@@ -455,14 +471,42 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
     setDeliverTg(false);
     setDeliverFs(false);
     setFormError(null);
+    setNameError('');
+    setPromptError('');
   };
 
   const handleCreateRoutine = async (e: FormEvent) => {
     e.preventDefault();
-    if (splitCron(schedule).length !== 5) {
-      setFormError({ message: '运行时间的格式不对：cron 需要 5 段，例如 0 9 * * *', detail: '', raw: '' });
+    const trimmedName = name.trim();
+    const trimmedPrompt = prompt.trim();
+    const badName = !trimmedName ? '请填写名称' : '';
+    const badPrompt = !trimmedPrompt ? '请写下要做的事' : '';
+
+    setNameError(badName);
+    setPromptError(badPrompt);
+
+    if (badName) {
+      nameRef.current?.focus();
       return;
     }
+    if (badPrompt) {
+      promptRef.current?.focus();
+      return;
+    }
+
+    const fieldCount = splitCron(schedule).length;
+    if (fieldCount !== 5) {
+      setFormError({ message: 'cron 需要 5 段，用空格分开：分 时 日 月 周，例如 0 9 * * *', detail: '', raw: '' });
+      cronRef.current?.focus();
+      return;
+    }
+    const cronValidationError = validateCron(schedule);
+    if (cronValidationError) {
+      setFormError({ message: cronValidationError, detail: '', raw: '' });
+      cronRef.current?.focus();
+      return;
+    }
+
     setFormBusy(true);
     setFormError(null);
     const deliver = ['web'];
@@ -478,20 +522,26 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
         },
         body: JSON.stringify({
           ...(agentId ? { agent: agentId } : {}),
-          name: name.trim(),
+          name: trimmedName,
           schedule: splitCron(schedule).join(' '),
-          prompt: prompt.trim(),
+          prompt: trimmedPrompt,
           deliver,
         }),
       });
       if (!res.ok) throw await responseError(res);
       const created = await res.json().catch(() => null) as Routine | null;
-      setNotice({ text: `已创建定时任务“${created?.name || name.trim()}”${created?.next_run_at ? `，下次运行：${formatUpcoming(created.next_run_at)}` : ''}。` });
+      setNotice({ text: `已创建定时任务“${created?.name || trimmedName}”${created?.next_run_at ? `，下次运行：${formatUpcoming(created.next_run_at)}` : ''}。` });
       resetForm();
       setFormOpen(false);
       await fetchRoutines();
     } catch (err) {
-      setFormError(friendlyError(err, '创建失败，请检查后重试'));
+      const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+      const mapped = mapCronServerError(raw);
+      if (mapped) {
+        setFormError({ message: mapped, detail: '', raw });
+      } else {
+        setFormError(friendlyError(err, '创建失败，请检查后重试'));
+      }
     } finally {
       setFormBusy(false);
     }
@@ -510,14 +560,17 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
   const scheduleClock = cronClock(schedule);
   const clockEditable = Boolean(scheduleClock) || !schedule.trim();
   const fieldCount = splitCron(schedule).length;
+  const cronError = fieldCount === 5 ? validateCron(schedule) : null;
   const described = describeCron(schedule);
   const reading = !schedule.trim()
     ? { text: '请选一个常用时间，或直接填写 cron 表达式。', bad: false }
     : fieldCount !== 5
       ? { text: 'cron 需要 5 段，用空格分开：分 时 日 月 周，例如 0 9 * * *', bad: true }
-      : described
-        ? { text: `${described}${/\d$/.test(described) ? ' ' : ''}运行（服务器时间）`, bad: false }
-        : { text: '自定义时间，创建时会检查格式。', bad: false };
+      : cronError
+        ? { text: cronError, bad: true }
+        : described
+          ? { text: `${described}${/\d$/.test(described) ? ' ' : ''}运行（服务器时间）`, bad: false }
+          : { text: '自定义时间，创建时会检查格式。', bad: false };
 
   const applyPreset = (id: string) => {
     const preset = SCHEDULE_PRESETS.find((p) => p.id === id);
@@ -798,10 +851,13 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
           <form
             className="kn-card kn-routine-form"
             onSubmit={handleCreateRoutine}
+            noValidate
             onKeyDown={(e) => {
               if (e.key === 'Escape' && !formBusy && !e.nativeEvent.isComposing) {
                 setFormOpen(false);
                 setFormError(null);
+                setNameError('');
+                setPromptError('');
               }
             }}
             aria-label="新建定时任务"
@@ -821,23 +877,34 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
                 placeholder="例如：每日邮件摘要"
                 value={name}
                 maxLength={80}
-                onChange={(e) => setName(e.target.value)}
-                required
+                onChange={(e) => {
+                  setName(e.target.value);
+                  if (nameError) setNameError('');
+                }}
+                aria-invalid={nameError ? true : undefined}
+                aria-describedby={nameError ? 'kn-routine-name-error' : undefined}
               />
+              {nameError && <p id="kn-routine-name-error" className="kn-field-error">{nameError}</p>}
             </div>
 
             <div className="kn-field">
               <label htmlFor="kn-routine-task">要做的事</label>
               <textarea
                 id="kn-routine-task"
+                ref={promptRef}
                 className="kn-input"
                 placeholder="像平时交代事情一样写，例如：看看我今天新收到的邮件，挑出需要回复的，用几句话总结给我。"
                 value={prompt}
                 maxLength={2000}
-                onChange={(e) => setPrompt(e.target.value)}
+                onChange={(e) => {
+                  setPrompt(e.target.value);
+                  if (promptError) setPromptError('');
+                }}
                 rows={3}
-                required
+                aria-invalid={promptError ? true : undefined}
+                aria-describedby={promptError ? 'kn-routine-task-error' : undefined}
               />
+              {promptError && <p id="kn-routine-task-error" className="kn-field-error">{promptError}</p>}
               <small className="kn-hint">{prompt.length} / 2000</small>
             </div>
 
@@ -884,6 +951,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
                 <label className="kn-inline-field kn-cron-field">
                   <span>cron 表达式（高级）</span>
                   <input
+                    ref={cronRef}
                     className="kn-input kn-mono"
                     type="text"
                     value={schedule}
@@ -893,7 +961,6 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
                     autoCorrect="off"
                     onChange={(e) => { setSchedule(e.target.value); if (formError) setFormError(null); }}
                     aria-describedby="kn-cron-reading"
-                    required
                   />
                 </label>
               </div>
@@ -917,10 +984,10 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
 
             {formError && <ErrorNote error={formError} className="kn-error-inline" />}
             <div className="kn-form-actions">
-              <button type="submit" disabled={formBusy || !name.trim() || !prompt.trim() || !schedule.trim()} className="kn-btn kn-btn-primary">
+              <button type="submit" disabled={formBusy} className="kn-btn kn-btn-primary">
                 {formBusy ? '创建中…' : '创建定时任务'}
               </button>
-              <button type="button" className="kn-btn" onClick={() => { setFormOpen(false); setFormError(null); }}>
+              <button type="button" className="kn-btn" onClick={() => { setFormOpen(false); setFormError(null); setNameError(''); setPromptError(''); }}>
                 取消
               </button>
             </div>
