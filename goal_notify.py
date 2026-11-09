@@ -15,6 +15,10 @@ Delivery is non-blocking (own bounded queue + one daemon thread, exactly like
 recorded in the goals database keyed by `(goal_id, state, updated_at)`, so a
 restart or a second loop tick never tells the owner the same thing twice.
 `stopped` is deliberately absent: the owner stopped the goal themselves.
+
+A `waiting_user` message also ends with a one-line hint naming the command the
+owner answers with on that channel (`REPLY_HINTS`, served by
+`handlers/goal_commands.py`), so the phone is enough — no web console needed.
 """
 from __future__ import annotations
 
@@ -35,6 +39,16 @@ PUSH_KIND = "goal"
 NOTIFY_STATES = ("waiting_user", "achieved", "exhausted", "failed")
 
 OPEN_HINT = "打开 Conveyor 的「项目」页查看。"
+
+# The owner answers a `waiting_user` goal from the phone, so the message says how.
+# Both Telegram and Feishu serve the `/goal_reply` family through the shared
+# `COMMAND_TABLE` (`handlers/commands.py`), so both get a hint — always worded for
+# the channel the owner is actually looking at. Web Push carries no text at all.
+TELEGRAM_REPLY_HINT = "在 Telegram 里回复：/goal_reply {short_id} 你的回答"
+FEISHU_REPLY_HINT = "在 Feishu 里回复：/goal_reply {short_id} 你的回答"
+REPLY_HINTS = {"telegram": TELEGRAM_REPLY_HINT, "feishu": FEISHU_REPLY_HINT}
+# `_CHANNELS` entry -> channel name the owner reads it on.
+_CHANNEL_NAMES = {"_deliver_telegram": "telegram", "_deliver_feishu": "feishu"}
 
 # How much of the owner-facing question / stop_reason is repeated in the message.
 MAX_DETAIL_CHARS = 200
@@ -112,8 +126,13 @@ def _rounds(settings: Any, goal: dict) -> int:
         return 0
 
 
-def notification_text(settings: Any, goal: dict, new_state: str) -> str:
-    """The Simplified-Chinese message for one goal transition ('' when not notifiable)."""
+def notification_text(settings: Any, goal: dict, new_state: str, channel: str = "") -> str:
+    """The Simplified-Chinese message for one goal transition ('' when not notifiable).
+
+    `channel` is the channel the owner reads the message on ("telegram" /
+    "feishu"); a `waiting_user` message then ends with the one-line `/goal_reply`
+    hint for that channel. Web Push gets no text, so it passes nothing.
+    """
     if not isinstance(goal, dict):
         return ""
     state = str(new_state or "")
@@ -132,7 +151,36 @@ def notification_text(settings: Any, goal: dict, new_state: str) -> str:
     else:  # failed
         reason = _clip(goal.get("stop_reason")) or "具体原因没有记录下来。"
         body = f"目标「{title}」没能完成：{reason}"
-    return f"{body}\n\n{OPEN_HINT}"
+    text = f"{body}\n\n{OPEN_HINT}"
+    if state == "waiting_user":
+        hint = reply_hint(_goal_id(goal), channel)
+        if hint:
+            text = f"{text}\n\n{hint}"
+    return text
+
+
+def reply_hint(goal_id: str, channel: str) -> str:
+    """One line telling the owner how to answer this goal on `channel` ('' when the
+    channel carries no `/goal_reply` command, or the goal has no usable id)."""
+    template = REPLY_HINTS.get(str(channel or ""))
+    if not template or not goal_id:
+        return ""
+    try:
+        from supervisor_goals import short_goal_id
+        short_id = short_goal_id(goal_id)
+    except Exception:  # pragma: no cover - defensive: the hint is optional
+        return ""
+    if not short_id:
+        return ""
+    return template.format(short_id=short_id)
+
+
+def _channel_text(base: str, state: str, channel_name: str, goal_id: str) -> str:
+    """`base` plus the channel's reply hint (only `waiting_user` on a hint channel)."""
+    if state != "waiting_user":
+        return base
+    hint = reply_hint(goal_id, _CHANNEL_NAMES.get(channel_name, ""))
+    return f"{base}\n\n{hint}" if hint else base
 
 
 # ---------------------------------------------------------------------------
@@ -217,13 +265,13 @@ def _deliver_feishu(settings: Any, goal_id: str, text: str) -> None:
 _CHANNELS = ("_deliver_push", "_deliver_telegram", "_deliver_feishu")
 
 
-def _fan_out(settings: Any, goal_id: str, text: str) -> None:
+def _fan_out(settings: Any, goal_id: str, base: str, state: str) -> None:
     for name in _CHANNELS:
         channel = globals().get(name)
         if channel is None:  # pragma: no cover - defensive
             continue
         try:
-            channel(settings, goal_id, text)
+            channel(settings, goal_id, _channel_text(base, state, name, goal_id))
         except Exception:
             # One broken channel must never stop the others, kill the worker, or
             # print a transport error that may embed secrets.
@@ -236,10 +284,10 @@ def _deliver(settings: Any, goal: dict, state: str) -> None:
     goal_id = _goal_id(goal)
     if not _claim(settings, goal_id, state, str(goal.get("updated_at") or "")):
         return
-    text = notification_text(settings, goal, state)
-    if not text:
+    base = notification_text(settings, goal, state)
+    if not base:
         return
-    _fan_out(settings, goal_id, text)
+    _fan_out(settings, goal_id, base, state)
     log.info("goal %s -> %s: owner notified", goal_id, state)
 
 

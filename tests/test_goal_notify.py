@@ -211,10 +211,18 @@ class GoalNotifyDeliveryTests(unittest.TestCase):
 
     def test_telegram_and_feishu_get_the_full_chinese_text(self) -> None:
         self._notify()
-        expected = goal_notify.notification_text(self.settings, _goal(), "waiting_user")
-        self.assertEqual([text for _settings, text in self.telegram], [expected])
-        self.assertEqual([text for _settings, text in self.feishu], [expected])
+        # Each channel gets the full text plus its own `/goal_reply` hint line.
+        expected_telegram = goal_notify.notification_text(
+            self.settings, _goal(), "waiting_user", "telegram")
+        expected_feishu = goal_notify.notification_text(
+            self.settings, _goal(), "waiting_user", "feishu")
+        self.assertEqual([text for _settings, text in self.telegram], [expected_telegram])
+        self.assertEqual([text for _settings, text in self.feishu], [expected_feishu])
         self.assertIn(QUESTION, self.telegram[0][1])
+        self.assertTrue(self.telegram[0][1].endswith(
+            goal_notify.TELEGRAM_REPLY_HINT.format(short_id=GOAL_ID.split("-", 1)[1][:6])))
+        self.assertIn(goal_notify.FEISHU_REPLY_HINT.format(
+            short_id=GOAL_ID.split("-", 1)[1][:6]), self.feishu[0][1])
 
     def test_push_uses_the_goal_kind_and_only_the_goal_id(self) -> None:
         # Hand the push channel back to the real function, then capture the actual
@@ -284,9 +292,17 @@ class GoalNotifyDeliveryTests(unittest.TestCase):
                    side_effect=lambda settings, text, **_kw: sentry_calls.append(("feishu", text))):
             self._notify()
         self.assertEqual([channel for channel, _text in sentry_calls], ["telegram", "feishu"])
-        self.assertEqual(len({text for _channel, text in sentry_calls}), 1)
-        expected = goal_notify.notification_text(self.settings, _goal(), "waiting_user")
-        self.assertEqual([text for _channel, text in sentry_calls], [expected, expected])
+        # One message body per channel: the same Chinese text, plus that channel's
+        # own `/goal_reply` hint (Telegram and Feishu both serve the command).
+        self.assertEqual(len({text for _channel, text in sentry_calls}), 2)
+        short_id = GOAL_ID.split("-", 1)[1][:6]
+        expected = [
+            goal_notify.notification_text(self.settings, _goal(), "waiting_user", "telegram"),
+            goal_notify.notification_text(self.settings, _goal(), "waiting_user", "feishu"),
+        ]
+        self.assertEqual([text for _channel, text in sentry_calls], expected)
+        self.assertIn(goal_notify.TELEGRAM_REPLY_HINT.format(short_id=short_id), expected[0])
+        self.assertIn(goal_notify.FEISHU_REPLY_HINT.format(short_id=short_id), expected[1])
 
     # ------------------------------------------------------------------
     # dedupe
