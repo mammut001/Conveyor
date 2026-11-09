@@ -148,6 +148,19 @@ enabled, existing legacy API/search/schema behavior is retained; PUT needs v2.
 会话仍用同一份快照；超过 24 小时的快照会重新计算。例外：删除或改写一条笔记时，含有
 旧内容的快照会被立即清掉，保证删掉的内容不再留存，相关会话下一轮会拿到新快照。
 
+### 记忆提醒（memory nudge）
+
+仿照 Hermes 定期提醒模型把耐用的事实落库：在 `CONVEYOR_CHAT_TOOLS=true` 的聊天工具循环里，
+当会话每到第 N 个主人轮次时（N 取自 `CONVEYOR_AGENT_NOTES_NUDGE_EVERY`，默认 8，设为 0 关闭），
+会在当轮消息末尾追加一句系统提示：
+
+    「如果这次对话里出现了以后还用得上的环境或项目事实（不是任务进度、不是密钥），
+    可以用 memory.note 简短记一条；没有就不用记。」
+
+- 只在开启了代理笔记、且当轮聊天模型确实带工具时才提醒；群聊、以及当轮已含不可信内容
+  （工具结果、引用消息、网页证据、webhook 等，复用 `turn_has_untrusted`）的轮次一律不提醒。
+- 轮次计数按会话持久化在 `agent_notes_nudge(session_key, turns)` 表里，服务重启不会清零。
+
 ### 网页接口
 
 与 /api/memory 相同的令牌校验：

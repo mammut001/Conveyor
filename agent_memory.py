@@ -47,6 +47,14 @@ SNAPSHOT_CAP_CHARS = 2200
 SNAPSHOT_MAX_AGE_SECONDS = 24 * 3600
 SNAPSHOT_LRU_SIZE = 200
 SNAPSHOT_MAX_ROWS = 2000
+# Hermes-style memory nudge: on every N-th owner turn of a session, remind the
+# chat model it may persist one durable fact. CONVEYOR_AGENT_NOTES_NUDGE_EVERY
+# overrides N; 0 disables. Counted per session in SQLite so a restart keeps it.
+NUDGE_EVERY_DEFAULT = 8
+NUDGE_MESSAGE = (
+    "如果这次对话里出现了以后还用得上的环境或项目事实（不是任务进度、不是密钥），"
+    "可以用 memory.note 简短记一条；没有就不用记。"
+)
 SOURCES = ("agent", "owner", "untrusted")
 # Same id grammar as supervisor_service._ID_TOKEN_RE.
 _REPO_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -160,6 +168,10 @@ CREATE TABLE IF NOT EXISTS agent_notes_snapshots (
     scopes TEXT NOT NULL,
     text TEXT NOT NULL,
     created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_notes_nudge (
+    session_key TEXT PRIMARY KEY,
+    turns INTEGER NOT NULL
 );
 """
 
@@ -443,6 +455,47 @@ def session_snapshot(settings: Any, session_key: str, scopes: Iterable[str] = (G
     except (AgentMemoryError, OSError, sqlite3.Error) as exc:
         log.warning("agent notes snapshot unavailable: %s", type(exc).__name__)
         return ""
+
+
+# ---- memory nudge ----------------------------------------------------------
+
+
+def nudge_every(settings: Any) -> int:
+    """CONVEYOR_AGENT_NOTES_NUDGE_EVERY: nudge on every N-th owner turn; 0 off."""
+    raw = getattr(settings, "agent_notes_nudge_every", NUDGE_EVERY_DEFAULT)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return NUDGE_EVERY_DEFAULT
+    return value if value > 0 else 0
+
+
+def note_nudge(settings: Any, session_key: str, every: int, *, may_nudge: bool = True) -> str:
+    """Advance the durable owner-turn counter; return the nudge line on an N-th turn.
+
+    The counter lives in SQLite (``agent_notes_nudge``), so a restart keeps the
+    cadence instead of resetting it. ``may_nudge`` is False on turns that already
+    carry untrusted content: those turns still count, but never trigger the
+    reminder. Never raises: a storage problem costs the nudge, not the turn.
+    """
+    if not session_key or every <= 0:
+        return ""
+    try:
+        with _write(settings) as db:
+            db.execute(
+                "INSERT INTO agent_notes_nudge(session_key, turns) VALUES(?, 1) "
+                "ON CONFLICT(session_key) DO UPDATE SET turns = turns + 1",
+                (session_key,),
+            )
+            turns = int(db.execute(
+                "SELECT turns FROM agent_notes_nudge WHERE session_key=?", (session_key,),
+            ).fetchone()["turns"])
+    except (OSError, sqlite3.Error) as exc:
+        log.warning("agent notes nudge counter unavailable: %s", type(exc).__name__)
+        return ""
+    if may_nudge and turns % every == 0:
+        return NUDGE_MESSAGE
+    return ""
 
 
 # ---- chat tool -------------------------------------------------------------

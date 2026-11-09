@@ -244,6 +244,9 @@ class Settings:
     # Hermes-style agent notes (agent_memory.py). None = automatic: on exactly
     # when long-term memory or memory v2 is on. CONVEYOR_AGENT_NOTES overrides.
     agent_notes_enabled: bool | None = None
+    # Hermes-style memory nudge: on every N-th owner turn of a session the chat
+    # tool loop reminds the model it may persist a durable fact. 0 disables.
+    agent_notes_nudge_every: int = 8
     long_term_memory_shared: bool = True
     long_term_memory_groups: bool = False
     approval_inbox_enabled: bool = False
@@ -779,6 +782,8 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
             None if not os.getenv("CONVEYOR_AGENT_NOTES", "").strip()
             else os.getenv("CONVEYOR_AGENT_NOTES", "").strip().lower() in ("1", "true", "yes", "on")
         ),
+        # Memory nudge cadence: every N-th owner turn; 0 turns the nudge off.
+        "agent_notes_nudge_every": max(0, _int_env("CONVEYOR_AGENT_NOTES_NUDGE_EVERY", 8)),
         # Durable cross-chat memory. Off: tools hidden, prompts unchanged.
         "long_term_memory_enabled": os.getenv(
             "CONVEYOR_LONG_TERM_MEMORY", "false"
