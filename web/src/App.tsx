@@ -49,6 +49,8 @@ type Session = {
   id: string; channel?: string; title?: string; created_at: string; updated_at?: string; last_activity: string
   operator_id?: string; source_chat_id?: string; job_count: number; message_count?: number; latest_job?: Job
   active_refinement?: ActiveRefinement | null
+  /** kind of the newest stored message: 'error' means the last turn failed (QA N30). */
+  last_message_kind?: string | null
 }
 type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[]; runs?: RunSummary[] }
 // Chat-only sessions stay in Chat; promoted conversations with jobs also appear in Tasks.
@@ -161,6 +163,11 @@ function stateLabel(state?: string) {
 }
 function sessionLabel(session: Session | undefined) {
   return session?.title || session?.latest_job?.prompt_preview || '新会话'
+}
+// A session whose last turn failed is marked in the list, so it never reads like a finished one (N30).
+function sessionListTitle(session: Session) {
+  const base = session.title || '未命名会话'
+  return session.last_message_kind === 'error' ? `${base}（没有完成）` : base
 }
 function storedToken() {
   try { return localStorage.getItem('conveyor-token') || '' } catch { return '' }
@@ -1109,15 +1116,22 @@ export default function App() {
   // A phone keyboard has no Enter key: the composer hint drops that part on narrow screens too.
   const narrowComposer = useMediaQuery('(max-width: 640px)')
   const touchComposer = coarsePointer || narrowComposer
+  // N24: the newest line of this conversation. When it is a failure (a model call that could
+  // not be made), the transcript shows it as an error line with 重试 beside the composer.
+  const lastTranscriptMessage = transcript.length ? transcript[transcript.length - 1] : null
+  const failureBesideComposer = Boolean(lastTranscriptMessage
+    && (lastTranscriptMessage.kind === 'error' || lastTranscriptMessage.content.startsWith('[error]')))
 
-  async function submit(event: FormEvent) {
-    event.preventDefault(); if (!prompt.trim() || busy) return
+  // One place sends to 任务: the composer's 发送 and the 重试 button on a failure line (N24).
+  async function sendPrompt(text: string, executionOnlySend = executionOnly) {
+    const body = text.trim()
+    if (!body || busy) return
     setBusy(true); setError(''); setSubmitError(null)
     try {
       const result = await api<{ job_id: string; session_id?: string }>('/api/tasks', {
-        method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), mode, session_id: selectedSessionId || undefined, execution_only: executionOnly }),
+        method: 'POST', body: JSON.stringify({ prompt: body, mode, session_id: selectedSessionId || undefined, execution_only: executionOnlySend }),
       })
-      lastSubmitted.current = result.job_id ? { jobId: result.job_id, prompt: prompt.trim(), mode } : null
+      lastSubmitted.current = result.job_id ? { jobId: result.job_id, prompt: body, mode } : null
       setPrompt('')
       setExplicitRunId('')
       setExecutionOnly(false)
@@ -1133,6 +1147,10 @@ export default function App() {
       setError(message)
     }
     finally { setBusy(false) }
+  }
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    await sendPrompt(prompt)
   }
   async function action(path: string, body: object = {}) {
     setBusy(true); setError('')
@@ -1246,6 +1264,13 @@ export default function App() {
       w.enabled && w.installed && w.runnable && w.auth !== 'needs_login' && w.quota?.state !== 'cooling'
     ))
   )
+  // The built-in Pi has no login of its own: it works as soon as 模型设置 has a provider, so
+  // checklist step ① says that instead of 「并登录」 (QA N28).
+  const builtinPiInstalled = Boolean(
+    Array.isArray(workersData?.workers) && workersData.workers.some((w: any) =>
+      w.id === 'pi' && w.installed && w.enabled !== false
+    )
+  )
   // Step ③ ticks from data that survives a reload (any session with messages, or a
   // job) plus the message being sent right now, so it never depends on one poll.
   const hasSentFirstMessage = Boolean(
@@ -1325,6 +1350,7 @@ export default function App() {
   const checklistNode = showChecklist ? (
     <SetupChecklist
       workersEnabled={workersEnabled}
+      builtinPiInstalled={builtinPiInstalled}
       hasEligibleWorker={hasEligibleWorker}
       modelConfigured={modelConfigured}
       hasSentFirstMessage={hasSentFirstMessage}
@@ -1475,7 +1501,7 @@ export default function App() {
               >
                 <span className={`status-rail ${session.latest_job?.state || ''}`} />
                 <span>
-                  <span className="session-item-title"><strong>{session.title || '未命名会话'}</strong><time dateTime={session.last_activity} title={formatTime(session.last_activity)}>{relativeTime(session.last_activity)}</time></span>
+                  <span className="session-item-title"><strong>{sessionListTitle(session)}</strong><time dateTime={session.last_activity} title={formatTime(session.last_activity)}>{relativeTime(session.last_activity)}</time></span>
                   <small>{session.message_count ?? 0} 条消息 · {session.job_count} 次运行</small>
                 </span>
               </button>
@@ -1603,7 +1629,7 @@ export default function App() {
 
               {transcriptError && <div className="job-notice task-notice" role="status"><strong>暂时无法更新会话记录</strong><span>已收到的内容会保留。</span><button type="button" onClick={() => void refreshTranscript()}>重试读取</button></div>}
 
-              {transcript.length > 0 && <TranscriptPanel messages={transcript} agent={selectedAgent} />}
+              {transcript.length > 0 && <TranscriptPanel messages={transcript} agent={selectedAgent} onRetry={question => void sendPrompt(question, false)} />}
               {runTurnFallback.length > 0 && <TranscriptPanel messages={runTurnFallback} agent={selectedAgent} />}
 
               {selectedJob && selectedJob.prompt_preview && selectedJob.state !== 'completed' && !staleTerminalRun && !promptAlreadyInTranscript && (
@@ -1753,7 +1779,7 @@ export default function App() {
                 </div>
               </div>
             ) : (
-            <form className="composer task-composer" onSubmit={submit}>
+            <form className={`composer task-composer ${failureBesideComposer ? 'task-composer--settled' : ''}`} onSubmit={submit}>
               {executionOnly && <div className="composer-handoff-note" role="status">原请求已带入任务页。你可以编辑内容，再点击发送执行。</div>}
               <textarea aria-label="任务内容" value={prompt} onChange={event => { setPrompt(event.target.value); if (submitError) setSubmitError(null) }} placeholder={activeRefinement ? '继续说明要怎么改…' : '描述要做的事…'} rows={2} maxLength={8000} onKeyDown={event => { if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return; if (coarsePointer) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
               <div className="task-composer-bar">
@@ -2162,7 +2188,7 @@ const REASONING_LABELS: [string, string][] = [['none', '不推理'], ['minimal',
 const PROVIDER_HINTS: Partial<Record<ProviderField, string>> = {
   provider_id: '给这家服务商起个英文小名，选了上面的预设会自动填好',
   base_url: '服务商给你的接口网址，远程服务必须用 https',
-  wire_api: '不确定就选 Chat Completions，选了预设会自动填好',
+  wire_api: '不确定就选「通用聊天接口」，选了预设会自动填好',
   model: '点「获取模型列表」从服务商读取可用模型',
   reasoning_effort: '越高越仔细，也越慢',
   env_key: '密钥在服务器上的存放名称，选了预设会自动填好，一般不用改',
@@ -2264,6 +2290,8 @@ function describeModelsFailure(raw: string, code?: string): string {
 
 /** Fields that live under the collapsed 高级 section of 模型设置. */
 const PROVIDER_ADVANCED_FIELDS: ProviderField[] = ['provider_id', 'env_key', 'reasoning_effort']
+/** The two machine names (服务商代号 / 密钥名称) sit one level deeper, under 技术设置 (QA N26). */
+const PROVIDER_TECH_FIELDS: ProviderField[] = ['provider_id', 'env_key']
 
 const PROVIDER_PRESETS = [
   {
@@ -2320,6 +2348,8 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
   const [fetchModelsNote, setFetchModelsNote] = useState('')
   const [fetchModelsDetail, setFetchModelsDetail] = useState('')
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  // 技术设置 (服务商代号 / 密钥名称) is nested inside 高级; opening either opens both.
+  const [techOpen, setTechOpen] = useState(false)
   const [selectedPreset, setSelectedPreset] = useState<string>('')
   const sheetRef = useRef<HTMLElement>(null)
   const discardCancelRef = useRef<HTMLButtonElement>(null)
@@ -2480,7 +2510,9 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
     adoptServerRef.current = false
     setSaved(false)
     setDraft(previous => ({ ...previous, [name]: value }))
-    if (fieldErrors[name]) setFieldErrors(previous => ({ ...previous, [name]: undefined }))
+    // QA N27: the red border belongs to the message under the field. Typing in a field
+    // drops both, so a form that has just been filled never still looks invalid.
+    setFieldErrors(previous => (previous[name] ? { ...previous, [name]: undefined } : previous))
   }
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -2493,8 +2525,12 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
     }
     const first = PROVIDER_FIELDS.find(field => errors[field])
     if (first) {
-      // A field inside the collapsed 高级 section must be opened before it can take focus.
-      if (PROVIDER_ADVANCED_FIELDS.includes(first)) setAdvancedOpen(true)
+      // A field inside the collapsed 高级 section must be opened before it can take focus;
+      // 服务商代号 / 密钥名称 live one level deeper, inside 技术设置.
+      if (PROVIDER_ADVANCED_FIELDS.includes(first)) {
+        setAdvancedOpen(true)
+        if (PROVIDER_TECH_FIELDS.includes(first)) setTechOpen(true)
+      }
       window.setTimeout(() => controls.current[first]?.focus(), 0)
       return
     }
@@ -2513,29 +2549,39 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
       if (described.field) {
         const field = described.field
         setFieldErrors({ [field]: described.text })
-        if (PROVIDER_ADVANCED_FIELDS.includes(field)) setAdvancedOpen(true)
+        if (PROVIDER_ADVANCED_FIELDS.includes(field)) {
+          setAdvancedOpen(true)
+          if (PROVIDER_TECH_FIELDS.includes(field)) setTechOpen(true)
+        }
         window.setTimeout(() => controls.current[field]?.focus(), 0)
       }
       else setError({ text: described.text, detail: described.detail })
     } finally { setSaving(false) }
   }
   const hint = (name: ProviderField) => name === 'api_key' && config && !config.api_key_configured ? '还没有配置密钥，首次保存必须填写' : PROVIDER_HINTS[name]
+  // QA N27: a field's red state follows its current value, not only the stored message, so a
+  // field the owner has just filled can never keep a red border (a filled form looks valid).
+  const stillInvalid = (name: ProviderField) =>
+    Boolean(fieldErrors[name]) && Boolean(validateProvider(draft, Boolean(config?.api_key_configured))[name])
   const control = (name: ProviderField) => ({
     id: `provider-${name}`,
     ref: (element: HTMLInputElement | HTMLSelectElement | null) => { controls.current[name] = element },
     value: draft[name],
-    'aria-invalid': Boolean(fieldErrors[name]),
+    'aria-invalid': stillInvalid(name),
     'aria-describedby': fieldErrors[name] || hint(name) ? `provider-${name}-note` : undefined,
   })
-  const field = (name: ProviderField, label: string, input: React.ReactNode, wide = false) => (
-    <div className={`dialog-field ${wide ? 'wide' : ''} ${fieldErrors[name] ? 'has-error' : ''}`}>
-      <label htmlFor={`provider-${name}`}>{label}</label>
-      {input}
-      {fieldErrors[name]
-        ? <p className="field-error" id={`provider-${name}-note`}>{fieldErrors[name]}</p>
-        : hint(name) ? <p className="field-hint" id={`provider-${name}-note`}>{hint(name)}</p> : null}
-    </div>
-  )
+  const field = (name: ProviderField, label: string, input: React.ReactNode, wide = false) => {
+    const message = stillInvalid(name) ? fieldErrors[name] : undefined
+    return (
+      <div className={`dialog-field ${wide ? 'wide' : ''} ${message ? 'has-error' : ''}`}>
+        <label htmlFor={`provider-${name}`}>{label}</label>
+        {input}
+        {message
+          ? <p className="field-error" id={`provider-${name}-note`}>{message}</p>
+          : hint(name) ? <p className="field-hint" id={`provider-${name}-note`}>{hint(name)}</p> : null}
+      </div>
+    )
+  }
   const text = { autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false, autoComplete: 'off' } as const
 
   return <div className="settings-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) requestClose() }}>
@@ -2615,13 +2661,21 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
                 )}
               </div>
             ))}
-            {field('wire_api', '接口类型', <select {...control('wire_api')} onChange={event => update('wire_api', event.target.value)}><option value="chat">Chat Completions</option><option value="responses">Responses</option></select>)}
+            {field('wire_api', '接口类型', <select {...control('wire_api')} onChange={event => update('wire_api', event.target.value)}><option value="chat">通用聊天接口</option><option value="responses">新版应答接口</option></select>)}
             {field('api_key', 'API 密钥', <input {...control('api_key')} {...text} type="password" placeholder={config.api_key_configured ? `已配置 ${config.api_key_hint}，留空则保持不变` : '粘贴 API 密钥'} onChange={event => update('api_key', event.target.value)} />, true)}
             <details className="provider-advanced wide" open={advancedOpen} onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
               <summary>高级</summary>
               <div className="form-grid provider-advanced-grid">
-                {field('provider_id', '服务商代号', <input {...control('provider_id')} {...text} className="mono-input" placeholder="deepseek" onChange={event => update('provider_id', event.target.value)} />)}
-                {field('env_key', '密钥名称', <input {...control('env_key')} {...text} className="mono-input" placeholder="OPENAI_API_KEY" onChange={event => update('env_key', event.target.value.toUpperCase())} />)}
+                {/* 服务商代号 and 密钥名称 are machine names the owner never types: they sit one
+                    level deeper, under 技术设置, with one line saying they fill themselves in (QA N26). */}
+                <details className="provider-tech wide" open={techOpen} onToggle={event => setTechOpen(event.currentTarget.open)}>
+                  <summary>技术设置</summary>
+                  <p className="provider-tech-note">这两项按上面的「显示名称」和「接口地址」自动填好，一般不用改。</p>
+                  <div className="form-grid provider-tech-grid">
+                    {field('provider_id', '服务商代号', <input {...control('provider_id')} {...text} className="mono-input" placeholder="deepseek" onChange={event => update('provider_id', event.target.value)} />)}
+                    {field('env_key', '密钥名称', <input {...control('env_key')} {...text} className="mono-input" placeholder="OPENAI_API_KEY" onChange={event => update('env_key', event.target.value.toUpperCase())} />)}
+                  </div>
+                </details>
                 {field('reasoning_effort', '推理强度', <select {...control('reasoning_effort')} onChange={event => update('reasoning_effort', event.target.value)}>{REASONING_LABELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>)}
               </div>
             </details>

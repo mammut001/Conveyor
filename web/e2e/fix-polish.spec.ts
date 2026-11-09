@@ -220,9 +220,12 @@ test('settings and secrets use plain wording and no file names', async ({ page }
   await page.locator('header.topbar').getByRole('button', { name: '设置' }).click()
   const dialog = page.getByRole('dialog', { name: '模型设置' })
   await expect(dialog.getByLabel('接口类型', { exact: true })).toBeVisible()
-  // 服务商代号 and 密钥名称 live under the collapsed 高级 section (QA F9).
+  // 服务商代号 and 密钥名称 live under 高级 → 技术设置 (QA F9, N26).
   await dialog.locator('.provider-advanced > summary').click()
+  await dialog.locator('.provider-tech > summary').click()
   for (const label of ['服务商代号', '密钥名称']) await expect(dialog.getByLabel(label, { exact: true })).toBeVisible()
+  // 推理强度 stays directly under 高级: its labels are plain Chinese already.
+  await expect(dialog.getByLabel('推理强度', { exact: true })).toBeVisible()
   const text = await dialog.innerText()
   for (const old of ['服务商 ID', '接口协议', '密钥变量名', 'config.toml', '.env']) expect(text).not.toContain(old)
   await expect(dialog.getByText('保存在服务器上').first()).toBeVisible()

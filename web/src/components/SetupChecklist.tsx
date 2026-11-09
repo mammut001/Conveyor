@@ -1,5 +1,7 @@
 export interface SetupChecklistProps {
   workersEnabled: boolean
+  /** The built-in Pi is installed: it needs a model in 模型设置, never a login (QA N28). */
+  builtinPiInstalled?: boolean
   hasEligibleWorker: boolean
   modelConfigured: boolean
   hasSentFirstMessage: boolean
@@ -12,6 +14,7 @@ export interface SetupChecklistProps {
 
 export function SetupChecklist({
   workersEnabled,
+  builtinPiInstalled = false,
   hasEligibleWorker,
   modelConfigured,
   hasSentFirstMessage,
@@ -26,6 +29,11 @@ export function SetupChecklist({
   const step2Done = Boolean(modelConfigured)
   const step3Done = Boolean(hasSentFirstMessage)
   const finished = allDone || (step1Done && step2Done && step3Done)
+  // Pi（内置）never asks for a login: it only needs a model. Saying 「并登录」 sends the owner
+  // looking for a login that does not exist (QA N28).
+  const step1Label = builtinPiInstalled
+    ? '选一个执行者（内置 Pi 只要配好模型就能用）'
+    : '选一个执行者并登录'
 
   return (
     <div className="setup-checklist-card" role="region" aria-label="还差几步就能用">
@@ -61,13 +69,13 @@ export function SetupChecklist({
                   onNavigateWorkers()
                 }}
               >
-                选一个执行者并登录
+                {step1Label}
               </a>
               <span className="setup-checklist-muted">提问不需要执行者；改代码需要</span>
               </div>
             ) : (
               <div className="setup-checklist-text-wrap">
-                <span className="setup-checklist-label">选一个执行者并登录</span>
+                <span className="setup-checklist-label">{step1Label}</span>
                 <span className="setup-checklist-muted">管理员可以开启「执行者」功能</span>
               </div>
             )}

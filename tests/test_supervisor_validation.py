@@ -190,7 +190,7 @@ class DetectCandidatesTests(unittest.TestCase):
         cands = _by_id(val.detect_candidates(str(d)))
         self.assertIn("npm-test", cands)
         self.assertEqual(cands["npm-test"]["argv"], ["npm", "test", "--silent"])
-        self.assertEqual(cands["npm-test"]["reason"], "package.json 的 scripts.test")
+        self.assertEqual(cands["npm-test"]["reason"], "项目里配好了测试命令")
 
     def test_pnpm_lockfile_uses_pnpm_ids(self) -> None:
         d = self._repo("pnpm")
@@ -263,10 +263,12 @@ class DetectCandidatesTests(unittest.TestCase):
         )
         cands = _by_id(val.detect_candidates(str(d)))
         self.assertEqual(_ids(list(cands.values())), ["unittest"])
+        self.assertEqual(cands["unittest"]["label"], "运行测试")
         self.assertEqual(
             cands["unittest"]["argv"],
             ["python3", "-m", "unittest", "discover", "-s", "tests"],
         )
+        self.assertNotIn("test_*.py", cands["unittest"]["reason"])
 
     def test_pytest_config_wins_over_unittest_fallback(self) -> None:
         d = self._repo("pytest-and-tests")

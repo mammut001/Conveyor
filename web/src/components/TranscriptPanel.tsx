@@ -2,27 +2,51 @@ import type { TranscriptMessage } from '../runtime';
 import { FormattedText } from './FormattedText';
 import { formatChatTime, formatFullTime } from './chatFormat';
 
-type Props = { messages: TranscriptMessage[]; agent?: { name: string; color?: string } };
+type Props = {
+  messages: TranscriptMessage[];
+  agent?: { name: string; color?: string };
+  /** 重试 on a failure line: resend the question that was asked just before it. */
+  onRetry?: (question: string) => void;
+};
 
-export function TranscriptPanel({ messages, agent }: Props) {
+/** A provider failure is stored with kind="error" (web_console WebOutbound.note_provider_failure). */
+function isFailureMessage(message: TranscriptMessage): boolean {
+  return message.kind === 'error' || message.content.startsWith('[error]');
+}
+
+function failureText(message: TranscriptMessage): string {
+  return message.content.replace(/^\[error\]\s*/i, '').trim();
+}
+
+export function TranscriptPanel({ messages, agent, onRetry }: Props) {
   const agentName = agent?.name?.trim() || 'Conveyor';
   if (!messages.length) return <div className="empty-state">还没有对话记录。</div>;
 
   return (
     <div className="transcript-panel" aria-live="polite">
-      {messages.map((message) => {
-        const isError = message.content.startsWith('[error]');
+      {messages.map((message, index) => {
+        const isError = isFailureMessage(message);
         const cleanContent = isError
-          ? message.content.replace(/^\[error\]\s*/i, '').trim()
+          ? failureText(message)
           : message.content;
 
         if (isError) {
+          // The question that failed: the closest user message above this line. 重试 sends it again.
+          let question = '';
+          for (let i = index - 1; i >= 0; i -= 1) {
+            if (messages[i].role === 'user') { question = messages[i].content.trim(); break }
+          }
           return (
-            <div key={message.id} className="transcript-error-card">
+            <div key={message.id} className="transcript-error-card" role="alert">
               <span className="error-icon" aria-hidden="true">⚠️</span>
               <div className="error-body">
-                <span className="error-title">执行异常</span>
+                <span className="error-title">发送没有成功</span>
                 <p className="error-message">{cleanContent}</p>
+                {onRetry && question && (
+                  <button type="button" className="transcript-error-retry" onClick={() => onRetry(question)}>
+                    重试
+                  </button>
+                )}
               </div>
             </div>
           );

@@ -516,6 +516,41 @@
   font-size: 11px;
 }
 
+/* Raw executor code + model id: only inside the 技术详情 disclosure (QA N29). */
+.sup-chat-pane-header .sup-chat-tech {
+  margin-top: 2px;
+}
+.sup-chat-pane-header .sup-chat-tech > summary {
+  width: fit-content;
+  color: #98a2b3;
+  font-size: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.sup-chat-pane-header .sup-chat-tech > span {
+  display: block;
+  color: #6b7280;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.sup-role-Static .sup-role-tech {
+  margin-top: 3px;
+}
+.sup-role-Static .sup-role-tech > summary {
+  width: fit-content;
+  color: #98a2b3;
+  font-size: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.sup-role-Static .sup-role-tech > span {
+  display: block;
+  color: #6b7280;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
 .sup-chat-pane-badge {
   flex: none;
   padding: 2px 8px;
@@ -592,6 +627,14 @@
   background: #fbede7;
   color: #8e4632;
   font-size: 12px;
+}
+
+/* N25: a small line saying the typed draft is kept on this device. */
+.sup-draft-hint {
+  margin: 0;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .sup-banner {
@@ -2705,6 +2748,24 @@
   color: #b42318;
   font-size: 11.5px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* The raw command behind 技术详情 (QA N29). */
+.sup-checks-tech {
+  margin-left: 24px;
+}
+.sup-checks-tech > summary {
+  width: fit-content;
+  color: #98a2b3;
+  font-size: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.sup-checks-tech > code {
+  display: block;
+  color: #6b7280;
+  font-size: 10.5px;
   overflow-wrap: anywhere;
 }
 

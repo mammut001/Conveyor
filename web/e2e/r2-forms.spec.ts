@@ -224,7 +224,7 @@ test.describe('Round 2 forms fixes', () => {
     await goto(page, 'memory');
 
     const textarea = page.getByLabel('添加一条记忆');
-    const submitBtn = page.getByRole('button', { name: '记住' });
+    const submitBtn = page.getByRole('button', { name: '记住', exact: true });
     const counter = page.locator('#kn-memory-count-me');
 
     // Verify textarea has NO maxLength attribute

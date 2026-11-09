@@ -104,7 +104,7 @@ export function AgentLibrary({ agentId, token }: { agentId: string; token: strin
       {data.memory && <section aria-label="记忆">
         <h4>记忆</h4>
         {memoryCount
-          ? <p className="kn-library-memory"><span><strong>{data.memory.profile}</strong> 条常用档案</span><span><strong>{data.memory.log}</strong> 条记忆日志</span></p>
+          ? <p className="kn-library-memory"><span><strong>{data.memory.profile}</strong> 条常用信息</span><span><strong>{data.memory.log}</strong> 条历史记录</span></p>
           : <p className="kn-library-muted">还没有记住任何内容。</p>}
       </section>}
       {data.routines.length > 0 && <section aria-label="定时任务">

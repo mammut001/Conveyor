@@ -225,9 +225,10 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
   const [showLatest, setShowLatest] = useState(false);
   const [unseen, setUnseen] = useState(false);
   const displayName = agentName || 'Conveyor';
+  // Replies wear a robot avatar, not a Latin letter: the owner reads Chinese only (QA N29).
   const avatar = (
     <div className="transcript-avatar chat-avatar" aria-hidden="true" style={agentColor ? { background: agentColor } : undefined}>
-      {(displayName.trim()[0] || 'C').toUpperCase()}
+      <span aria-hidden="true">🤖</span>
     </div>
   );
 
@@ -776,7 +777,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
         {showWelcome && (
           <div className="welcome-state">
             <div className="chat-welcome-avatar" aria-hidden="true" style={agentColor ? { background: agentColor } : undefined}>
-              {(displayName.trim()[0] || 'C').toUpperCase()}
+              <span aria-hidden="true">🤖</span>
             </div>
             {discussionOnly ? (
               <>
@@ -816,7 +817,6 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                 <footer className="transcript-footer chat-meta">
                   {source && (
                     <span className="chat-source-pill is-user">
-                      <i className="chat-source-hash" aria-hidden="true">#</i>
                       <span className="transcript-source">{source}</span>
                     </span>
                   )}
@@ -938,12 +938,11 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
               <div className="transcript-body">
                 <div className="chat-bubble-head">
                   <span className="chat-bubble-avatar" aria-hidden="true" style={agentColor ? { background: agentColor } : undefined}>
-                    {(displayName.trim()[0] || 'C').toUpperCase()}
+                    <span aria-hidden="true">🤖</span>
                   </span>
                   <span className="chat-bubble-author" aria-hidden="true">{displayName}</span>
                   {source && (
                     <span className="chat-source-pill">
-                      <i className="chat-source-hash" aria-hidden="true">#</i>
                       <span className="transcript-source">{source}</span>
                       <i className="chat-source-arrow" aria-hidden="true">›</i>
                     </span>

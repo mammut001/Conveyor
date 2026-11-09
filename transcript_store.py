@@ -436,7 +436,10 @@ class TranscriptStore:
                            (SELECT COUNT(*) FROM queued_jobs q
                             WHERE q.chat_id = COALESCE(s.source_chat_id, s.id)
                               AND (s.channel IS NULL OR q.channel = s.channel)
-                              AND (s.operator_id IS NULL OR q.operator_id = s.operator_id)) AS job_count
+                              AND (s.operator_id IS NULL OR q.operator_id = s.operator_id)) AS job_count,
+                           (SELECT m.kind FROM session_messages m
+                            WHERE m.session_id = s.id
+                            ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1) AS last_message_kind
                     FROM sessions s {where}
                     ORDER BY updated_at DESC LIMIT ?""",
                 (min(max(1, int(limit)), 200),),
