@@ -11,7 +11,7 @@ chat model; the Codex job path is patched. Pins:
     tokens never shown
   - escalation: the model's [[ESCALATE]] hands the operator's own request
     to Codex; with a quote/image it waits for /deep confirmation
-  - chat failure falls back to Codex; /fix never uses the chat tier;
+  - chat failure explains in Chinese and never falls back to Codex; /fix never uses the chat tier;
     short-term history is sent on follow-ups; images need CHAT_VISION
 
 Run: .venv/bin/python scripts/chat_tier_smoke.py
@@ -292,8 +292,11 @@ def check_chat_failure_falls_back():
     _reset({"status": 502})
     port = _Port()
     jobs = _dispatch(_msg("讲个笑话"), port, _settings())
-    ok = len(jobs) == 1 and any("转交 Codex" in e for e in port.edits)
-    return CheckResult("dispatch: chat model failure falls back to Codex", ok, "")
+    # Since onboarding QA round 4 a failed chat model says why in Chinese and
+    # stops: no agent run is started behind the owner's back.
+    has_chinese = any(any("\u4e00" <= ch <= "\u9fff" for ch in e) for e in port.edits)
+    ok = not jobs and has_chinese and not any("转交 Codex" in e for e in port.edits)
+    return CheckResult("dispatch: chat model failure explains in Chinese, no Codex fallback", ok, repr(port.edits[-1:]))
 
 
 def check_low_confidence_and_links():

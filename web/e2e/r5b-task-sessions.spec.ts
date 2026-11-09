@@ -152,7 +152,7 @@ test('N3: a finished run with no file changes shows the request, the reply and n
   await expectFinishedRun(page)
   // The run history of this session lists the run once the session detail has loaded.
   await expect(page.locator('.context-section--runs')).toContainText('1 条')
-  await page.screenshot({ path: '/Users/dogecoin/Documents/GitHub/Conveyor-worktrees/_agentpool/qa/shots/r5b-completed-run.png', fullPage: true })
+  await page.screenshot({ path: test.info().outputPath('r5b-completed-run.png'), fullPage: true })
 
   // After a reload the run is still there, with the same reading.
   await page.reload()
@@ -184,5 +184,5 @@ test('N4: task sessions stay in the sidebar after a reload, listed once', async 
   await page.reload()
   await expect(page.getByRole('button', { name: new RegExp(chatTitle) })).toBeVisible()
   await expect(sidebar()).toHaveCount(1)
-  await page.screenshot({ path: '/Users/dogecoin/Documents/GitHub/Conveyor-worktrees/_agentpool/qa/shots/r5b-sidebar-after-reload.png', fullPage: true })
+  await page.screenshot({ path: test.info().outputPath('r5b-sidebar-after-reload.png'), fullPage: true })
 })
