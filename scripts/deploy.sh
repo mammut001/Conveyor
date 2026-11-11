@@ -50,6 +50,8 @@ log "Syncing to ${REMOTE}:${REMOTE_DIR} ..."
 for sub in \
   scripts runner agent_coordination bot.py feishu_bot.py web_console.py web_console_takeover.py web_control.py web_takeover.py handoff_sidecar.py human_takeover.py logging_setup.py desktop_observe_requests.py security provider_config.py agent_events.py config.py runner.py redaction.py \
   transcript_store.py runtime_control.py refinement_store.py \
+  agent_conversations.py agent_mailbox.py agent_mailbox_db.py agent_security_controls.py \
+  agent_switcher.py agents.py main_router.py main_router_results.py web_agent_screens.py \
   desktop_agent.py desktop_agent_server.py desktop_cua.py \
   desktop_computer_loop.py desktop_computer_planner.py desktop_computer_requests.py \
   desktop_screenshot.py requirements.txt systemd channel handlers nodes web tests personal_tools Makefile; do
