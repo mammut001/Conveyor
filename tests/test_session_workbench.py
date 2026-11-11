@@ -9,9 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from handlers.job_queue import JobQueue
-from refinement_store import RefinementStore
-from transcript_store import get_transcript_store, session_identity
-from web_control import WebControl
+from conveyor.core.refinement_store import RefinementStore
+from conveyor.core.transcript_store import get_transcript_store, session_identity
+from conveyor.web.web_control import WebControl
 
 
 class SessionWorkbenchTests(unittest.TestCase):

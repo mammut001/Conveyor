@@ -119,7 +119,7 @@ conversation ─▶ task {takeover_scope: agent:<id>} ─▶ X11ComputerBackend 
 - The host desktop is driven through kernel input devices, which every X
   server on the machine would receive. An agent's desktop is driven with
   XTEST (`xdotool`) and captured with `import`, both addressed by `DISPLAY`,
-  so input can only land on that agent's screen (`desktop_x11.py`).
+  so input can only land on that agent's screen (`conveyor/desktop/desktop_x11.py`).
 - The planner gets a simpler contract there: one full-screen screenshot per
   observation, click coordinates in its pixels, and type / hotkey / scroll go
   to whatever has focus. `cmd` in a shortcut is treated as `ctrl`.
@@ -191,7 +191,7 @@ CONVEYOR_AGENT_PARALLEL_JOBS=2     # 1 (default) = one Codex job at a time
 ```
 
 Above 1, every agent **with its own project folder** gets a lane
-(`job_lanes.py`). Jobs in one lane never overlap; jobs in different lanes
+(`conveyor/core/job_lanes.py`). Jobs in one lane never overlap; jobs in different lanes
 may, up to the limit. Everything else — the default agent, Telegram, Feishu,
 agents without a folder — shares the `default` lane, because those jobs all
 work in the configured workspace.

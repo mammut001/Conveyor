@@ -1222,7 +1222,7 @@ async def _deploy_status(msg, port, _runner, settings, _arg):
 async def _deploy_verify(msg, port, _runner, settings, _arg):
     """P5.2 deployment-readiness check for desktop screenshot observe."""
     import subprocess
-    from desktop_screenshot import (
+    from conveyor.desktop.desktop_screenshot import (
         helper_configuration_error,
         latest_screenshot_metadata,
         resolve_helper_path,
@@ -1287,7 +1287,7 @@ async def _deploy_verify(msg, port, _runner, settings, _arg):
     else:
         lines.append("Desktop node: not enabled")
 
-    from desktop_observe_requests import observe_requests_path
+    from conveyor.desktop.desktop_observe_requests import observe_requests_path
 
     observe_path = observe_requests_path(settings)
     lines.append(f"Observe request store: {observe_path}")
@@ -1378,7 +1378,7 @@ async def _computer_task(msg, port, _runner, settings, _arg):
 async def _launch_computer_task(msg, port, settings, goal: str, task_id: str, *, retry_of: str = ""):
     """Start one prepared task in the background and acknowledge it."""
     from handlers.tools.executors import exec_computer_task
-    from desktop_computer_requests import set_task_status
+    from conveyor.desktop.desktop_computer_requests import set_task_status
 
     async def finish() -> None:
         try:
@@ -1481,7 +1481,7 @@ async def _computer_arm(msg, port, _runner, settings, _arg):
     Requires USE + DIRECT enabled. No effect if ALWAYS_DIRECT is already on
     (and both flags are set).
     """
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         arm_direct_mode,
         arm_remaining_seconds,
         is_direct_mode_active,
@@ -1526,7 +1526,7 @@ async def _computer_arm(msg, port, _runner, settings, _arg):
 
 async def _computer_log(msg, port, _runner, settings, _arg):
     """Show Computer Use task trajectory / recent tasks."""
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         get_computer_task,
         list_recent_computer_tasks,
     )
@@ -1732,7 +1732,7 @@ async def _tools(msg, port, _runner, _settings, _arg):
         lines.append("  /plan_today /plan_dev /planner_health /inbox_triage /schedule_review /planners")
         for name in sorted(PERSONAL_TOOL_REGISTRY):
             if name == "browser.login":
-                from browser_login_credentials import enabled as login_enabled
+                from conveyor.browser.browser_login_credentials import enabled as login_enabled
                 if not login_enabled():
                     continue
             pspec = PERSONAL_TOOL_REGISTRY[name]

@@ -5,7 +5,7 @@ import time
 
 from channel.types import InboundMessage
 from config import Settings
-from desktop_observe_requests import (
+from conveyor.desktop.desktop_observe_requests import (
     cancel_observe_request,
     create_observe_request,
     list_recent_observe_requests,
@@ -253,11 +253,11 @@ async def exec_desktop_observe_request(
     """
     import asyncio
     import re
-    from desktop_observe_requests import (
+    from conveyor.desktop.desktop_observe_requests import (
         create_observe_request,
         get_observe_request,
     )
-    from desktop_upload_requests import ensure_upload_request_for_observe, get_upload_request
+    from conveyor.desktop.desktop_upload_requests import ensure_upload_request_for_observe, get_upload_request
 
     text = (user_request or "").strip()
     # Parse flags (support from slash arg or embedded in NL text)
@@ -427,7 +427,7 @@ async def exec_desktop_observe_request(
 
 
 async def exec_desktop_observe_status(settings: Settings, _arg: str) -> str:
-    from desktop_screenshot import latest_screenshot_metadata
+    from conveyor.desktop.desktop_screenshot import latest_screenshot_metadata
     from nodes.registry import list_nodes
     from nodes.types import NodeStatus, NodeType
 
@@ -556,8 +556,8 @@ async def exec_desktop_upload_request(
     msg: InboundMessage,
     arg: str,
 ) -> str:
-    from desktop_observe_requests import load_observe_requests
-    from desktop_upload_requests import create_upload_request
+    from conveyor.desktop.desktop_observe_requests import load_observe_requests
+    from conveyor.desktop.desktop_upload_requests import create_upload_request
 
     temp_dir_err = upload_temp_dir_configuration_error(settings)
     if temp_dir_err:
@@ -640,7 +640,7 @@ async def exec_desktop_upload_status(
 ) -> str:
     import logging
     from pathlib import Path
-    from desktop_upload_requests import (
+    from conveyor.desktop.desktop_upload_requests import (
         load_upload_requests,
         list_recent_upload_requests,
         mark_upload_delivered,
@@ -752,7 +752,7 @@ async def exec_desktop_upload_status(
 
 
 async def exec_desktop_upload_cancel(settings: Settings, arg: str) -> str:
-    from desktop_upload_requests import cancel_upload_request
+    from conveyor.desktop.desktop_upload_requests import cancel_upload_request
     upload_id = (arg or "").strip()
     if not upload_id:
         return "用法: /upload_cancel <upload_id>"
@@ -783,7 +783,7 @@ async def exec_desktop_upload_resend(
     """
     import logging
     from pathlib import Path
-    from desktop_upload_requests import (
+    from conveyor.desktop.desktop_upload_requests import (
         get_upload_request,
         list_recent_upload_requests,
         mark_upload_delivered,
@@ -943,7 +943,7 @@ async def deliver_completed_uploads(
     """
     import logging
     from pathlib import Path
-    from desktop_upload_requests import (
+    from conveyor.desktop.desktop_upload_requests import (
         load_upload_requests,
         mark_upload_delivered,
         mark_upload_delivery_failed,

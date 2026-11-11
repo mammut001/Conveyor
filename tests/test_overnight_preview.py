@@ -2,7 +2,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from overnight_preview import PreviewReleases
+from conveyor.automation.overnight_preview import PreviewReleases
 
 
 class PreviewTests(unittest.TestCase):

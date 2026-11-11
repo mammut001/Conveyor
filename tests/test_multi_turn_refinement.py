@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from channel.types import InboundMessage
 from handlers.job_queue import JobQueue
-from refinement_store import (
+from conveyor.core.refinement_store import (
     APPLIED,
     DISCARDED,
     RefinementStore,

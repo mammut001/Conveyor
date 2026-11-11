@@ -1,6 +1,6 @@
 # P3-2 named-agent policy extension
 
-The existing `agents.py` named agents, separate memory ownership, agent-owned routines,
+The existing `conveyor/agents/agents.py` named agents, separate memory ownership, agent-owned routines,
 workspaces and desktops already exist on main. This opt-in extension adds
 **per-agent personas, memory scopes, tool allowlists and transcript messages**
 without introducing a competing AgentStore.

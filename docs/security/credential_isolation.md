@@ -11,7 +11,7 @@ process environment variables. The parent holds Web Console, Telegram, Feishu,
 GitHub, cloud and provider secrets; these should not be inherited by Codex,
 Claude Code, desktop planners, job Git helpers, or GUI browser helpers.
 
-When enabled, subprocess_env.py builds a **fresh dict from a named allowlist**.
+When enabled, conveyor/core/subprocess_env.py builds a **fresh dict from a named allowlist**.
 Basic OS variables are PATH, HOME, LANG, LC_*, TERM, TMPDIR, USER, LOGNAME,
 SHELL, selected TLS certificate paths and XDG paths. Recognized non-secret
 Codex and model endpoint configuration names also pass. There are no wildcard
@@ -37,9 +37,9 @@ environment, existing human approvals or network egress.
 Current integration points:
 - runner/operators/run.py: direct Codex job and provider-aware worktree;
 - runner/claude_code.py: Claude Code job;
-- desktop_computer_planner.py: standalone desktop Codex planner;
+- conveyor/desktop/desktop_computer_planner.py: standalone desktop Codex planner;
 - runner/worktree.py and runner/operators/jobs.py: job's git worktree and apply;
-- desktop_linux_browser.py: browser/xdotool children (GUI variables explicitly
+- conveyor/desktop/desktop_linux_browser.py: browser/xdotool children (GUI variables explicitly
   granted). agent_desktops.py already constructs its own limited GUI env;
 - MCP stdio children already have strict, independent allowlist and per-server
   MCP_ allowlist; existing MCP filtering is preserved rather than weakened.

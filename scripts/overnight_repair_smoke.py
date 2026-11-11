@@ -15,8 +15,8 @@ import sys
 import tempfile
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from overnight_process import Workspaces,IndependentVerifier
-from overnight_repair import PiRepair
+from conveyor.automation.overnight_process import Workspaces,IndependentVerifier
+from conveyor.automation.overnight_repair import PiRepair
 
 
 async def rehearse(report):

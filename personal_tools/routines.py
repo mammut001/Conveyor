@@ -5,7 +5,7 @@ from typing import Any
 
 from config import Settings
 from personal_tools.base import ToolResult
-import routines
+from conveyor.automation import routines
 
 
 async def routine_list(
@@ -18,7 +18,7 @@ async def routine_list(
 ) -> ToolResult:
     """List configured routines."""
     items = routines.list_routines(settings)
-    import named_agents
+    from conveyor.agents import named_agents
     if named_agents.enabled(settings):
         items = [r for r in items if named_agents.routine_belongs(settings, channel, chat_id, r)]
     if not items:
@@ -94,7 +94,7 @@ async def routine_pause(
     if not raw.isdigit():
         return ToolResult(False, "用法: routine.pause <id>")
 
-    import named_agents
+    from conveyor.agents import named_agents
     if not named_agents.routine_belongs(settings, channel, chat_id,
                                        routines.get_routine(settings, int(raw))):
         return ToolResult(False, "routine belongs to another agent")
@@ -117,7 +117,7 @@ async def routine_resume(
     if not raw.isdigit():
         return ToolResult(False, "用法: routine.resume <id>")
 
-    import named_agents
+    from conveyor.agents import named_agents
     if not named_agents.routine_belongs(settings, channel, chat_id,
                                        routines.get_routine(settings, int(raw))):
         return ToolResult(False, "routine belongs to another agent")
@@ -141,7 +141,7 @@ async def routine_delete(
         return ToolResult(False, "用法: routine.delete <id>")
 
     existing = routines.get_routine(settings, int(raw))
-    import named_agents
+    from conveyor.agents import named_agents
     if not named_agents.routine_belongs(settings, channel, chat_id, existing):
         return ToolResult(False, "routine belongs to another agent")
     name = existing["name"] if existing else f"#{raw}"
@@ -165,7 +165,7 @@ async def routine_run(
         return ToolResult(False, "用法: routine.run <id>")
 
     # Only queue it: the web console executes routines (it holds their approvals).
-    import named_agents
+    from conveyor.agents import named_agents
     if not named_agents.routine_belongs(settings, channel, chat_id,
                                        routines.get_routine(settings, int(raw))):
         return ToolResult(False, "routine belongs to another agent")

@@ -173,8 +173,8 @@ class WebTakeoverApiTests(unittest.TestCase):
     def test_disabled_flag_creates_no_lease_or_gate_files(self):
         import tempfile
         from types import SimpleNamespace
-        from human_takeover import HumanTakeoverStore
-        from web_takeover import WebTakeover, close_request_path, transport_gate_path
+        from conveyor.desktop.human_takeover import HumanTakeoverStore
+        from conveyor.desktop.web_takeover import WebTakeover, close_request_path, transport_gate_path
 
         with tempfile.TemporaryDirectory() as root:
             settings = SimpleNamespace(

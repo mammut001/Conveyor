@@ -14,9 +14,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import approval_inbox
+from conveyor.channels import approval_inbox
 import handlers.tools.executors  # register builtin tools
-import routines
+from conveyor.automation import routines
 from handlers.tools.audit import read_audit_tail
 from handlers.tools.confirm import (
     clear_all_pending,
@@ -28,7 +28,7 @@ from handlers.tools.registry import register_tool, ToolSpec, DangerLevel
 from personal_tools.registry import register_personal_tools
 from handlers.job_queue import JobQueue
 from web_console import WebConsoleHandler, WebConsoleServer
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 TOKEN = "test-approval-inbox-token-12345"
 

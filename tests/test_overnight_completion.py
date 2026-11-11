@@ -2,9 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock,Mock,patch
-from overnight_store import OvernightStore
-from overnight_pipeline import OvernightPipeline
-from overnight_worker import execute_claim
+from conveyor.automation.overnight_store import OvernightStore
+from conveyor.automation.overnight_pipeline import OvernightPipeline
+from conveyor.automation.overnight_worker import execute_claim
 
 
 class CompletionTests(unittest.IsolatedAsyncioTestCase):
@@ -30,7 +30,7 @@ class CompletionTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as root:
             store=OvernightStore(Path(root)/'run.db');run=store.create('preview smoke')
             store.enqueue(run,'discover','initial',{})
-            with patch('overnight_store.time.time',return_value=10**12):
+            with patch('conveyor.automation.overnight_store.time.time',return_value=10**12):
                 status=store.reconcile(run)
             self.assertEqual(status['state'],'expired')
             self.assertEqual(status['tasks'][0]['state'],'cancelled')

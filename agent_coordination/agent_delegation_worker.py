@@ -5,11 +5,11 @@ import asyncio
 import logging
 import time
 
-import agent_context as ac
+from conveyor.agents import agent_context as ac
 from agent_coordination import agent_delegation
 from agent_coordination import agent_delegation_queue as queue
-import agent_mailbox as mailbox
-import agent_mailbox_db as db
+from conveyor.agents import agent_mailbox as mailbox
+from conveyor.agents import agent_mailbox_db as db
 
 log = logging.getLogger("agent_delegation_worker")
 _running: dict[tuple[str, str], asyncio.Task] = {}
@@ -22,7 +22,7 @@ def enabled(settings):
 def cancel_operator(settings, operator_id):
     """Authenticated emergency stop makes all queued/running tasks terminal."""
     # Stop remains available even while the kill switch disables enqueues.
-    import agent_security
+    from conveyor.agents import agent_security
     if not agent_security.delegation_configured(settings):
         return 0
     count = queue.cancel_operator(settings, operator_id)
@@ -41,12 +41,12 @@ def cancel_all(settings):
     Delegations currently share the canonical Web Console operator, even
     when the authenticated stop arrives from Telegram or Feishu.
     """
-    import agents
+    from conveyor.agents import agents
     return cancel_operator(settings, agents.WEB_OPERATOR)
 
 
 async def _finish(settings, record, worker_id):
-    import agents
+    from conveyor.agents import agents
     from agent_coordination.agent_delegation_turn import execute
     try:
         target = ac.resolve(settings, "web",
@@ -70,7 +70,7 @@ async def _finish(settings, record, worker_id):
                 log.warning("Delegation lease expired or stopped: %s", record["id"])
             else:
                 # Only a committed result is reported to its original owner.
-                from main_router_results import deliver
+                from conveyor.agents.main_router_results import deliver
                 try:
                     deliver(settings, record, summary)
                 except Exception:
@@ -100,7 +100,7 @@ async def poll_once(settings):
     """One bounded scan; ideal for tests and safe startup polling."""
     if not enabled(settings):
         return 0
-    import agents
+    from conveyor.agents import agents
     started = 0
     for info in agents.AgentStore(settings).list():
         if not enabled(settings):
@@ -131,7 +131,7 @@ class Worker:
         self.task = None
 
     async def run(self):
-        import agent_security
+        from conveyor.agents import agent_security
         killed_seen = False
         while True:
             if agent_security.killed(self.settings):
@@ -160,7 +160,7 @@ class Worker:
 
 def start(loop, settings):
     """Start when configured even if killed; unkill must not need a restart."""
-    import agent_security
+    from conveyor.agents import agent_security
     if not agent_security.delegation_configured(settings):
         return None
     worker = Worker(settings)

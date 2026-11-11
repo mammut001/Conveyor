@@ -372,7 +372,7 @@ def github_create_issue(
 ) -> ToolResult:
     """Create a new issue. WRITE_SAFE with audit."""
     if getattr(settings, "outbound_allowlist", ""):
-        from outbound_draft_cards import _repo_allowed
+        from conveyor.channels.outbound_draft_cards import _repo_allowed
         if not _repo_allowed(settings, settings.github_default_repo):
             return ToolResult(ok=False, text="⚠️ GitHub repo not in outbound allowlist")
     err = _check_config(settings)
@@ -410,7 +410,7 @@ def github_comment(
 ) -> ToolResult:
     """Comment on an issue or PR. WRITE, requires confirmation."""
     if getattr(settings, "outbound_allowlist", ""):
-        from outbound_draft_cards import _repo_allowed
+        from conveyor.channels.outbound_draft_cards import _repo_allowed
         if not _repo_allowed(settings, settings.github_default_repo):
             return ToolResult(ok=False, text="⚠️ GitHub repo not in outbound allowlist")
     err = _check_config(settings)

@@ -9,7 +9,7 @@ User=ubuntu
 Group=conveyor-preview
 WorkingDirectory=/srv/conveyor-preview/coordinator/controller
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/srv/conveyor-preview/venv/bin/python overnight_control.py
+ExecStart=/srv/conveyor-preview/venv/bin/python -m conveyor.automation.overnight_control
 Restart=on-failure
 RestartSec=5
 PrivateTmp=true

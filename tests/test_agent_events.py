@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_events import AgentEvent, EventStore, SCHEMA_VERSION, emit_codex_event
+from conveyor.agents.agent_events import AgentEvent, EventStore, SCHEMA_VERSION, emit_codex_event
 
 
 class AgentEventTests(unittest.TestCase):

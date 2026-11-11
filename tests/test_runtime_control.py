@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from runtime_control import COMMAND_CANCEL, RuntimeControl, watch_runtime_commands
+from conveyor.core.runtime_control import COMMAND_CANCEL, RuntimeControl, watch_runtime_commands
 
 
 class FakeRunner:

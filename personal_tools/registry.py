@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from config import Settings
 from handlers.tools.registry import DangerLevel
 from personal_tools.base import PersonalToolSpec, ToolResult
-import overnight_chat
+from conveyor.automation import overnight_chat
 from personal_tools import notes as notes_tools
 from personal_tools import reminders as reminders_tools
 from personal_tools import gmail_imap as gmail_tools
@@ -740,7 +740,7 @@ def register_personal_tools() -> None:
     # Hermes-style agent notes (flag CONVEYOR_AGENT_NOTES; see agent_memory.py).
     # WRITE_SAFE, and the chat tool loop runs it without approval: notes are
     # only ever injected as untrusted data and the owner can edit them.
-    import agent_memory
+    from conveyor.agents import agent_memory
     _register(
         "memory.note",
         "代理自己的简短笔记：环境与主人项目（JSON {action: add|replace|remove, text, id?}；不存密钥）",

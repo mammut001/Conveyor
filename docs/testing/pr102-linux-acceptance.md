@@ -17,13 +17,13 @@ PR：https://github.com/mammut001/Conveyor/pull/102 。保持 Draft，不合并�
 
 | 根因 | 文件 | 改进 |
 |---|---|---|
-| Snap 包装器、profile 和 WM_CLASS 与原假设不符；Ubuntu xdotool 缺少 classname 子命令 | `desktop_linux_browser.py` | 可信固定 executable；按 DISPLAY 隔离 Snap profile；xprop 核实正常窗口、PID/class，恢复最小化窗口，验证真实前台 |
-| 工具返回成功不代表焦点正确；Launcher、错误 PID 和任意应用启动可能被当作可用目标 | `desktop_cua.py`, `desktop_x11.py` | 输入前检查映射、PID/window ID、焦点和应用策略；Linux 限制浏览器启动；保留 Mac AX/Safari 路径 |
-| 仅凭相同截图判定无进展，或过早接受 done | `desktop_computer_loop.py`, `desktop_computer_requests.py` | 比较动作、窗口与像素；一次不同恢复后停止；完成必须有新截图、对应浏览器及 loaded 页面状态；不保存原始窗口标题 |
-| Enter 后仍读旧正文；网址输入但没提交也被当作已导航 | `desktop_computer_loop.py` | 提交后有界等待与采样；未提交的地址编辑拒绝完成；按窗口绑定状态；慢页面允许一次有界重新采样。动态网页必须等满绘制预算，且有多次同前台 loaded 新截图，不能仅因广告使全图 hash 改变而失败；加载中/错误/缺图/焦点改变仍被拒绝 |
-| 长期恢复的视觉线程包含旧截图，动作轨迹缺少地址栏阶段信息 | `desktop_computer_planner.py` | 全屏模式每次规划只传当前截图、完整目标及脱敏历史；提供聚焦/等待提交状态；Mac 原有 resume 保持；错误 JSON 仅重试一次 |
+| Snap 包装器、profile 和 WM_CLASS 与原假设不符；Ubuntu xdotool 缺少 classname 子命令 | `conveyor/desktop/desktop_linux_browser.py` | 可信固定 executable；按 DISPLAY 隔离 Snap profile；xprop 核实正常窗口、PID/class，恢复最小化窗口，验证真实前台 |
+| 工具返回成功不代表焦点正确；Launcher、错误 PID 和任意应用启动可能被当作可用目标 | `conveyor/desktop/desktop_cua.py`, `conveyor/desktop/desktop_x11.py` | 输入前检查映射、PID/window ID、焦点和应用策略；Linux 限制浏览器启动；保留 Mac AX/Safari 路径 |
+| 仅凭相同截图判定无进展，或过早接受 done | `conveyor/desktop/desktop_computer_loop.py`, `conveyor/desktop/desktop_computer_requests.py` | 比较动作、窗口与像素；一次不同恢复后停止；完成必须有新截图、对应浏览器及 loaded 页面状态；不保存原始窗口标题 |
+| Enter 后仍读旧正文；网址输入但没提交也被当作已导航 | `conveyor/desktop/desktop_computer_loop.py` | 提交后有界等待与采样；未提交的地址编辑拒绝完成；按窗口绑定状态；慢页面允许一次有界重新采样。动态网页必须等满绘制预算，且有多次同前台 loaded 新截图，不能仅因广告使全图 hash 改变而失败；加载中/错误/缺图/焦点改变仍被拒绝 |
+| 长期恢复的视觉线程包含旧截图，动作轨迹缺少地址栏阶段信息 | `conveyor/desktop/desktop_computer_planner.py` | 全屏模式每次规划只传当前截图、完整目标及脱敏历史；提供聚焦/等待提交状态；Mac 原有 resume 保持；错误 JSON 仅重试一次 |
 | 旧 smoke 在 Linux 上假设 Mac Calculator generic launcher 可用 | `scripts/desktop_computer_smoke.py` | 显式检查 Mac 成功与 Linux 拒绝两条路径，保留原 PID/调用顺序断言 |
-| 共享 Host Cua 在 Linux 上因 socket 丢失、TCC 权限误判、键盘 background 模式及无 AX 元素时被后台 Launcher 劫持 PID | `desktop_cua.py` | 转发 `--socket` 参数与 `DEVNULL` stdin；Linux 探测旁路 Mac 专有权限；Linux 键盘操作默认 `delivery_mode="foreground"`；规范化应用名匹配并防止后台有 AX 元素的应用劫持无 AX 元素的前台目标窗口 |
+| 共享 Host Cua 在 Linux 上因 socket 丢失、TCC 权限误判、键盘 background 模式及无 AX 元素时被后台 Launcher 劫持 PID | `conveyor/desktop/desktop_cua.py` | 转发 `--socket` 参数与 `DEVNULL` stdin；Linux 探测旁路 Mac 专有权限；Linux 键盘操作默认 `delivery_mode="foreground"`；规范化应用名匹配并防止后台有 AX 元素的应用劫持无 AX 元素的前台目标窗口 |
 | 测试验收脚本缺少共享 Host Cua 端到端编排；测试环境目录权限与空配置兼容性 | `scripts/linux_browser_e2e.py`, `config.py`, `scripts/jobs_dedupe_smoke.py` | 增加 `--backend host-cua` 与独立 Cua 服务上下文管理器；`load_dotenv` 严格检查 `is_file()`；烟测脚本隔离 `TMPDIR` 避免多用户权限冲突 |
 
 测试覆盖真实延迟映射、错误焦点、窗口消失、最小化、加载等待、重复动作、错误页、过早完成、错误窗口输入、接管/取消/超时、应用策略和脱敏。完整测试不读取生产任务状态作为 fixture。
@@ -81,8 +81,8 @@ Firefox 启动（`4016a23` 实机）：
 先准备私有 X server、0600 Xauthority、私有 Firefox profile，以及 localhost fixture 服务。`session.json` 和 expected.json 必须符合 `scripts/linux_browser_e2e.py` 的检查；不要连接生产 DISPLAY。参见 [host desktop](../host_desktop.md)。
 
 ```bash
-python -m compileall -q desktop_linux_browser.py desktop_cua.py \
-  desktop_computer_loop.py desktop_computer_planner.py desktop_computer_requests.py
+python -m compileall -q conveyor/desktop/desktop_linux_browser.py conveyor/desktop/desktop_cua.py \
+  conveyor/desktop/desktop_computer_loop.py conveyor/desktop/desktop_computer_planner.py conveyor/desktop/desktop_computer_requests.py
 python -m unittest discover -s tests -p 'test_linux_computer_reliability.py' -v
 python -m unittest discover -s tests -v
 make smoke PY=/opt/conveyor/.venv/bin/python

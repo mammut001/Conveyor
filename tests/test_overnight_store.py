@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from overnight_store import OvernightStore
+from conveyor.automation.overnight_store import OvernightStore
 
 
 class OvernightStoreTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class OvernightStoreTests(unittest.TestCase):
     def test_expired_worker_cannot_finish_reclaimed_task(self):
         task = self.store.enqueue(self.run, 'repair', 'issue-1', {})
         worker = self.store.claim(self.run, 'repair', lease_seconds=1)
-        with patch('overnight_store.time.time', return_value=worker['lease_until']+1):
+        with patch('conveyor.automation.overnight_store.time.time', return_value=worker['lease_until']+1):
             successor = OvernightStore(self.path).claim(self.run, 'repair')
             self.assertIsNotNone(successor)
             self.assertFalse(self.store.finish(task, worker['lease'], {}))
@@ -36,7 +36,7 @@ class OvernightStoreTests(unittest.TestCase):
         self.store.enqueue(self.run, 'discover', 'b', {})
         with self.assertRaises(ValueError):
             self.store.enqueue(self.run, 'discover', 'c', {})
-        with patch('overnight_store.time.time', return_value=10**12):
+        with patch('conveyor.automation.overnight_store.time.time', return_value=10**12):
             self.assertIsNone(self.store.claim(self.run, 'discover'))
 
     def test_configuration_snapshot_survives_restart_and_rejects_drift(self):

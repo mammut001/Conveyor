@@ -12,12 +12,12 @@ from personal_tools.base import ToolResult
 from personal_tools.browser_read import (
     _db, _operator_key, _requested_url, approval_required as path_approval_required,
 )
-from workflow_browser_external_approvals import ApprovalLedger
-from workflow_browser_egress import EgressAudit
-from workflow_browser_external_identity import ExternalPolicyDenied, canonical_url
-from workflow_browser_g3 import G3Browser, enabled, validate_request
-from workflow_browser_g3_store import save, claim, review, advance, digest
-from workflow_browser_g3_transport import send_once
+from conveyor.browser.workflow_browser_external_approvals import ApprovalLedger
+from conveyor.browser.workflow_browser_egress import EgressAudit
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied, canonical_url
+from conveyor.browser.workflow_browser_g3 import G3Browser, enabled, validate_request
+from conveyor.browser.workflow_browser_g3_store import save, claim, review, advance, digest
+from conveyor.browser.workflow_browser_g3_transport import send_once
 
 TOOL_NAME="browser.prepare_submit"
 CONFIRMED_NAME="browser.g3_dispatch"  # NEVER register or expose to models
@@ -74,7 +74,7 @@ async def prepare(settings,arg,*,operator_id,channel="web",chat_id="",**_kwargs)
         token,hashval=save(settings,operator_id=operator_id,url=url,
                            form_ref=index,fields=fields,preview=preview,screenshot=screen)
         if channel == "telegram" and os.getenv("CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT") == "1":
-            from browser_g3_telegram import send_preview
+            from conveyor.browser.browser_g3_telegram import send_preview
             if not await asyncio.to_thread(send_preview, settings, chat_id,
                     json.dumps({"token":token,"hash":hashval})):
                 advance(settings,token,"pending","denied")
@@ -84,7 +84,7 @@ async def prepare(settings,arg,*,operator_id,channel="web",chat_id="",**_kwargs)
         channels = getattr(settings,"approval_relay_channels",()) or ()
         telegram_target = getattr(settings,"telegram_allowed_user_id",None)
         if (channel == "web" and "telegram" in channels and telegram_target and getattr(settings,"telegram_bot_token",None) and os.getenv("CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT") == "1"):
-            from browser_g3_telegram import send_preview
+            from conveyor.browser.browser_g3_telegram import send_preview
             if not await asyncio.to_thread(send_preview, settings, str(telegram_target),
                     json.dumps({"token":token,"hash":hashval})):
                 advance(settings,token,"pending","denied")
@@ -94,7 +94,7 @@ async def prepare(settings,arg,*,operator_id,channel="web",chat_id="",**_kwargs)
                  operator_id=operator_id,chat_id=chat_id,channel=channel)
         # The durable token, not the page, determines executable state.
         try:
-            import approval_relay
+            from conveyor.channels import approval_relay
             visible=(f"G3 FORM SUBMIT — HUMAN REVIEW REQUIRED; "
                      f"{preview['method']} {preview['target']}; "
                      f"fields={json.dumps(preview['fields'],ensure_ascii=True)}; "
@@ -114,7 +114,7 @@ async def prepare(settings,arg,*,operator_id,channel="web",chat_id="",**_kwargs)
         # Relay only notifies OTHER channels; send Telegram-origin requests
         # an actionable card in their own chat after DB publication.
         if channel == "telegram":
-            from browser_g3_notifications import origin_telegram
+            from conveyor.browser.browser_g3_notifications import origin_telegram
             if not await origin_telegram(settings,pending,visible):
                 from handlers.tools.confirm import pop_pending
                 pop_pending(pending.token)
@@ -132,7 +132,7 @@ async def approve_and_submit(settings,arg,*,operator_id):
     """Only handlers.tools.runner.execute_confirmed calls this from human approval."""
     try:
         _ensure()
-        from browser_g3_kill import refusal
+        from conveyor.browser.browser_g3_kill import refusal
         if refusal(settings, CONFIRMED_NAME):
             raise ExternalPolicyDenied("external_kill_switch")
         payload=json.loads(arg)
@@ -175,7 +175,7 @@ async def approve_and_submit(settings,arg,*,operator_id):
     except ExternalPolicyDenied as exc:
         return f"browser denied: {exc}"
     except Exception:
-        from workflow_browser_g3_store import state
+        from conveyor.browser.workflow_browser_g3_store import state
         try:
             current = state(settings, token)
         except Exception:

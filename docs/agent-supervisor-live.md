@@ -101,7 +101,7 @@ python3 scripts/agent_supervisor_live.py \
 
 ## 目标闭环实测（`scripts/goal_live.py`）
 
-用来验证「目标闭环」（`supervisor_goals.py`）在真实模型下能不能自己一轮一轮把事情做完。默认只做准备检查，不调用任何模型、不花额度。
+用来验证「目标闭环」（`conveyor/agents/supervisor_goals.py`）在真实模型下能不能自己一轮一轮把事情做完。默认只做准备检查，不调用任何模型、不花额度。
 
 **准备检查（默认）**：在 `--root` 里建一个小练习仓库（`calc.py` 的 `add` / `multiply` / `divide` 都还没写，`tests/test_calc.py` 目前不通过），登记仓库、新建托管工作目录（分支 `goal-calc`）、选中服务器检测到的 `unittest` 检查，先跑一次确认它确实不通过；再列出每个执行者能不能用、三个角色和评估器会用谁，以及实测时具体会做哪些事（`would_do`）。报告写到 `<root>/goal_live_preflight.json`，`ready_for_live` 为 `false` 时 `blockers` 里写着原因。
 

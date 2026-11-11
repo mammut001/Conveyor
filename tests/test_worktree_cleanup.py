@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from config import load_settings
-from refinement_store import RefinementStore
+from conveyor.core.refinement_store import RefinementStore
 from runner import CodexRunner
 from runner.types import Job, JobMode, JobState
 from web_console import validate_codex_bin

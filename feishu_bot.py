@@ -141,7 +141,7 @@ async def _handle_card_action(msg: Any) -> None:
                 await port.send_new(inbound, "无效的确认 token。")
                 return
             approve = action in ("relay_approve", "relay_confirm")
-            import approval_relay
+            from conveyor.channels import approval_relay
             outcome = await asyncio.to_thread(
                 approval_relay.decide,
                 settings,
@@ -161,7 +161,7 @@ async def _handle_card_action(msg: Any) -> None:
                 await port.send_new(inbound, "未找到该审批或已失效。")
             return
         if action == "agent_switcher":
-            import agent_switcher
+            from conveyor.agents import agent_switcher
             await agent_switcher.handle(settings, inbound, port, payload.get("token", ""))
             return
         cmd = action_to_command(action)
@@ -190,7 +190,7 @@ def _stale_card_job(runner: Any, inbound: Any, action: str, card_job_id: Any) ->
     if action not in ("apply", "discard", "diff", "cancel") or not card_job_id:
         return ""
     try:
-        from job_lanes import runner_for_chat
+        from conveyor.core.job_lanes import runner_for_chat
         lane_runner = runner_for_chat(runner, settings, inbound.channel, inbound.chat_id)
         if action == "cancel":
             current = getattr(getattr(lane_runner, "current_job", None), "id", None)
@@ -323,7 +323,7 @@ async def main() -> None:
     consumer = None
     if getattr(settings, "approval_relay_enabled", False):
         try:
-            import approval_relay
+            from conveyor.channels import approval_relay
             def make_feishu_port(chat_id: str):
                 return FeishuOutbound(_get_channel())
             consumer = approval_relay.RelayConsumer(settings, channel="feishu", port_factory=make_feishu_port)

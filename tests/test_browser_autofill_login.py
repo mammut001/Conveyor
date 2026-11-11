@@ -15,15 +15,15 @@ from types import SimpleNamespace
 from unittest.mock import patch, AsyncMock
 from urllib.parse import quote
 
-from browser_auth_policy import _origin
-from browser_login_credentials import put, read_for_executor, public_list, remove, enabled
-from browser_login_audit import reserve, finish, public_audit, LoginQuotaDenied
-from workflow_browser_external_identity import ExternalPolicyDenied
-from console_secrets import path_for
-from browser_auth_orphans import cleanup
+from conveyor.browser.browser_auth_policy import _origin
+from conveyor.browser.browser_login_credentials import put, read_for_executor, public_list, remove, enabled
+from conveyor.browser.browser_login_audit import reserve, finish, public_audit, LoginQuotaDenied
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied
+from conveyor.web.console_secrets import path_for
+from conveyor.browser.browser_auth_orphans import cleanup
 from personal_tools.browser_login import login, login_adapter
-from browser_auth_sessions import manager_for
-from browser_auth_timeout import wait_for_step
+from conveyor.browser.browser_auth_sessions import manager_for
+from conveyor.browser.browser_auth_timeout import wait_for_step
 
 REAL = os.getenv("CONVEYOR_REQUIRE_REAL_BROWSER") == "1"
 
@@ -122,7 +122,7 @@ class StoreAndAuditTests(unittest.IsolatedAsyncioTestCase):
 
     def test_legacy_failed_rows_preserve_existing_lockout(self):
         import sqlite3
-        from workflow_browser_egress import private_database_path
+        from conveyor.browser.workflow_browser_egress import private_database_path
         db = private_database_path(
             self.settings.codex_memory_root / "browser_external" /
             "browser_login_attempts.sqlite3")
@@ -147,7 +147,7 @@ class StoreAndAuditTests(unittest.IsolatedAsyncioTestCase):
 
     async def _run_mocked_post(self, attempt, *, status=None, fail_fetch=False):
         """Exercise the real G4 route, with transport replaced by a fake."""
-        from browser_auth_sessions import AuthSession
+        from conveyor.browser.browser_auth_sessions import AuthSession
         frame = object()
         url = self.origin + "/login"
         request = SimpleNamespace(
@@ -219,8 +219,8 @@ class StoreAndAuditTests(unittest.IsolatedAsyncioTestCase):
 
     def test_crashed_dispatched_attempt_stays_charged_after_120_seconds(self):
         import sqlite3
-        from browser_login_audit import mark_submitted
-        from workflow_browser_egress import private_database_path
+        from conveyor.browser.browser_login_audit import mark_submitted
+        from conveyor.browser.workflow_browser_egress import private_database_path
         path = private_database_path(
             self.settings.codex_memory_root / "browser_external" /
             "browser_login_attempts.sqlite3")
@@ -285,7 +285,7 @@ class StoreAndAuditTests(unittest.IsolatedAsyncioTestCase):
         orphan = root/"session-leftover"
         (orphan/"profile").mkdir(parents=True)
         (orphan/"profile"/"Cookies").write_bytes(b"token")
-        import browser_auth_orphans as m
+        from conveyor.browser import browser_auth_orphans as m
         actual_rm = m.shutil.rmtree
         calls = []
         def slow_remove(path):
@@ -426,17 +426,17 @@ class BrowserLoginRealTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.http.posts, 0)
 
     async def test_mfa_needs_human_keeps_same_session_and_completes_otp(self):
-        from human_takeover import HumanTakeoverStore
+        from conveyor.desktop.human_takeover import HumanTakeoverStore
         put(self.settings, self.origin, "alice", "TOP_SECRET_TEST")
         self.http.challenge = True
         # Real WebTakeover.start records a real protected lease; only the
         # external desktop sidecar and unrelated computer steps are mocked.
-        with patch("web_takeover.read_transport_gate", return_value=None), \
-             patch("web_takeover.allow_transport"), \
-             patch("web_takeover.cancel_pending_computer_steps"), \
-             patch("web_takeover.cancel_pending_observe_requests"), \
-             patch("web_takeover.has_claimed_computer_steps", return_value=False), \
-             patch("web_takeover.has_claimed_observe_requests", return_value=False):
+        with patch("conveyor.desktop.web_takeover.read_transport_gate", return_value=None), \
+             patch("conveyor.desktop.web_takeover.allow_transport"), \
+             patch("conveyor.desktop.web_takeover.cancel_pending_computer_steps"), \
+             patch("conveyor.desktop.web_takeover.cancel_pending_observe_requests"), \
+             patch("conveyor.desktop.web_takeover.has_claimed_computer_steps", return_value=False), \
+             patch("conveyor.desktop.web_takeover.has_claimed_observe_requests", return_value=False):
             result, reason = await login(self.settings, self.origin, "owner")
         self.assertEqual((result, reason), ("needs_human", "authentication_challenge"))
         manager = manager_for(self.settings)
@@ -500,7 +500,7 @@ class BrowserLoginRealTests(unittest.IsolatedAsyncioTestCase):
                              x["submitted"] for x in audit), 3)
 
     async def test_forced_pre_submit_timeout_does_not_consume_password_quota(self):
-        from browser_auth_sessions import AuthSession
+        from conveyor.browser.browser_auth_sessions import AuthSession
         put(self.settings, self.origin, "alice", "TOP_SECRET_TEST")
         self.http.reject = True
         # Do not even start Chromium: this is an injected browser-open failure.

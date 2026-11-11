@@ -28,7 +28,7 @@ from handlers.intent import COMPUTER_STOP_TEXTS, RouteResult, desktop_followup_r
 from handlers.jobs import handle_codex_job
 from handlers.memo import detect_memory_intent, handle_memo
 from handlers.tools.runner import handle_hybrid, handle_route, try_resolve_confirmation
-from refinement_store import should_route_refinement
+from conveyor.core.refinement_store import should_route_refinement
 from runner import CodexRunner, JobMode
 
 logger = logging.getLogger(__name__)
@@ -48,8 +48,8 @@ def _edit_overrides_snapshot(text: str, route: RouteResult) -> bool:
     return host_edit_imperative(text)
 
 
-from agent_context import scoped_inbound
-from agent_conversations import scoped as scoped_conversation
+from conveyor.agents.agent_context import scoped_inbound
+from conveyor.agents.agent_conversations import scoped as scoped_conversation
 from handlers.agent_emergency_stop import stop_before_identity
 
 
@@ -74,7 +74,7 @@ async def dispatch(
 
     # The runtime kill control is a separate, owner-only command. It must
     # remain reachable even if Agent routing/context is disabled by kill.
-    import agent_security_controls
+    from conveyor.agents import agent_security_controls
     if await agent_security_controls.owner_command(settings, msg, port):
         return
 
@@ -83,7 +83,7 @@ async def dispatch(
     from agent_coordination import agent_channel_routing
     if await agent_channel_routing.maybe_command(settings, msg, port):
         return
-    import agent_conversations
+    from conveyor.agents import agent_conversations
     if await agent_conversations.maybe_command(settings, msg, port):
         return
     if agent_channel_routing.authorized(settings, msg):
@@ -92,7 +92,7 @@ async def dispatch(
 
     # Commands in a conversation act on that conversation's lane: /status,
     # /cancel, /diff and /apply in an agent's chat mean that agent's jobs.
-    from job_lanes import runner_for_chat
+    from conveyor.core.job_lanes import runner_for_chat
     runner = runner_for_chat(runner, settings, msg.channel, msg.chat_id)
 
     if await try_resolve_confirmation(msg, port, settings):
@@ -113,7 +113,7 @@ async def dispatch(
             await handle_deep(msg, port, runner, settings=settings)
             return
         if cmd_name == "chat_clear":
-            import subagents
+            from conveyor.agents import subagents
             if subagents.enabled(settings):
                 subagents.cancel_parent(settings, operator_id=msg.operator_id,
                                         channel=msg.channel, chat_id=msg.chat_id)
@@ -142,7 +142,7 @@ async def dispatch(
         if cmd_name == "cancel":
             from agent_coordination.agent_delegation_worker import cancel_all
             cancel_all(settings)
-            import subagents
+            from conveyor.agents import subagents
             if subagents.enabled(settings):
                 subagents.cancel_parent(settings, operator_id=msg.operator_id,
                                         channel=msg.channel, chat_id=msg.chat_id)
@@ -155,7 +155,7 @@ async def dispatch(
     text_clean = msg.text.strip().lower()
     if text_clean in COMPUTER_STOP_TEXTS:
         from handlers.tools.runner import run_tool
-        import agent_context
+        from conveyor.agents import agent_context
         scope = (dict(operator_id=msg.operator_id, channel=msg.channel,
                       chat_id=msg.chat_id) if agent_context.enabled(settings) else {})
         text = await run_tool(settings, "computer.stop", "", **scope)
@@ -194,7 +194,7 @@ async def dispatch(
 
     # Owner-only main router: never intercept confirmations, commands, safety
     # stops or attachments. A decision does not authorize delegation.
-    import main_router
+    from conveyor.agents import main_router
     if await main_router.maybe_route(msg, port, settings):
         return
 

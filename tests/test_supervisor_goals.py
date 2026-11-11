@@ -20,11 +20,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import agent_memory
-import agent_supervisor as ags
-import goal_notify
-import supervisor_goals as goals
-import supervisor_service as svc
+from conveyor.agents import agent_memory
+from conveyor.agents import agent_supervisor as ags
+from conveyor.agents import goal_notify
+from conveyor.agents import supervisor_goals as goals
+from conveyor.agents import supervisor_service as svc
 from config import Settings
 
 OUTCOME = "在 managed worktree 里新增 feature.txt，内容为 hello-goal，并干净提交"
@@ -811,7 +811,7 @@ class SupervisorGoalTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_http_goal_routes(self) -> None:
-        from web_supervisor_api import handle_get, handle_post
+        from conveyor.web.web_supervisor_api import handle_get, handle_post
 
         def _post(path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             handler = _FakeHandler(self.settings)
@@ -860,7 +860,7 @@ class SupervisorGoalTests(unittest.TestCase):
     def test_http_goal_routes_require_feature_enabled(self) -> None:
         from http import HTTPStatus
 
-        from web_supervisor_api import handle_get, handle_post
+        from conveyor.web.web_supervisor_api import handle_get, handle_post
 
         off_settings = dataclasses.replace(
             _make_settings(self.root / "off"),
@@ -912,7 +912,7 @@ class SupervisorGoalTests(unittest.TestCase):
 
         async def _drive() -> None:
             loop_thread_id.append(threading.get_ident())
-            with patch("supervisor_goals.asyncio.to_thread", side_effect=_spy_to_thread):
+            with patch("conveyor.agents.supervisor_goals.asyncio.to_thread", side_effect=_spy_to_thread):
                 await goals.advance_goals(None, self.settings)
                 task_id = self._current_task_id(goal["id"])
                 self._set_task_state(task_id, "completed")
@@ -952,7 +952,7 @@ class SupervisorGoalTests(unittest.TestCase):
             orig_record(*args, **kwargs)
             raise RuntimeError("injected crash right after _record_decision")
 
-        with patch("supervisor_goals._record_decision", side_effect=_record_then_crash):
+        with patch("conveyor.agents.supervisor_goals._record_decision", side_effect=_record_then_crash):
             self._advance()
 
         # After the crash: iteration has decision='achieved' committed, goal is still running.
@@ -992,7 +992,7 @@ class SupervisorGoalTests(unittest.TestCase):
             orig_record(*args, **kwargs)
             raise RuntimeError("injected crash right after _record_decision")
 
-        with patch("supervisor_goals._record_decision", side_effect=_record_then_crash):
+        with patch("conveyor.agents.supervisor_goals._record_decision", side_effect=_record_then_crash):
             self._advance()
 
         mid = self._goal(goal["id"])
@@ -1024,7 +1024,7 @@ class SupervisorGoalTests(unittest.TestCase):
             created_task_ids.append(str(task["id"]))
             return task, created
 
-        with patch("supervisor_goals.svc.create_scoped_task", side_effect=_create_while_stop_interleaves):
+        with patch("conveyor.agents.supervisor_goals.svc.create_scoped_task", side_effect=_create_while_stop_interleaves):
             # Force _start_iteration past the initial _goal_is_running check so stop_goal happens
             # right between _ensure_iteration and create_scoped_task / dispatch_scoped_task.
             goals._ensure_iteration(self.settings, goal["id"], 1, goals._first_iteration_prompt(goal))
@@ -1038,7 +1038,7 @@ class SupervisorGoalTests(unittest.TestCase):
                     return True
                 return orig_is_running(settings, gid)
 
-            with patch("supervisor_goals._goal_is_running", side_effect=_is_running_first_true):
+            with patch("conveyor.agents.supervisor_goals._goal_is_running", side_effect=_is_running_first_true):
                 ret = goals._start_iteration(
                     None, self.settings, goal, 1, goals._first_iteration_prompt(goal)
                 )
@@ -1074,7 +1074,7 @@ class SupervisorGoalTests(unittest.TestCase):
             )
             return res
 
-        with patch("supervisor_goals.svc.dispatch_scoped_task", side_effect=_dispatch_then_stop):
+        with patch("conveyor.agents.supervisor_goals.svc.dispatch_scoped_task", side_effect=_dispatch_then_stop):
             self._advance()
 
         self.assertEqual(len(dispatched_task_ids), 1)
@@ -1187,7 +1187,7 @@ class SupervisorGoalTests(unittest.TestCase):
                 conn.close()
             return row
 
-        with patch("supervisor_goals._get_goal_row", side_effect=_stale_waiting_row):
+        with patch("conveyor.agents.supervisor_goals._get_goal_row", side_effect=_stale_waiting_row):
             with self.assertRaises(svc.SupervisorServiceError) as ctx:
                 goals.reply_goal(None, self.settings, goal2["id"], {"message": "并发第二次回复"})
         self.assertEqual(ctx.exception.status, HTTPStatus.CONFLICT)

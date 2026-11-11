@@ -17,11 +17,11 @@ from unittest.mock import patch
 from handlers.tools.confirm import clear_all_pending, get_pending_for_context
 from personal_tools.browser_read import _connect, _operator_key
 from personal_tools.browser_submit import approve_and_submit, prepare
-from workflow_browser_external import ExternalReadOnlyBrowser
-from workflow_browser_external_identity import ExternalPolicyDenied
-from workflow_browser_g3 import enabled, validate_request
-from workflow_browser_g3_store import review, state
-from web_chat import decide_tool_approval
+from conveyor.browser.workflow_browser_external import ExternalReadOnlyBrowser
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied
+from conveyor.browser.workflow_browser_g3 import enabled, validate_request
+from conveyor.browser.workflow_browser_g3_store import review, state
+from conveyor.web.web_chat import decide_tool_approval
 
 HOST="g3.fixture.test"
 FLAGS={"CONVEYOR_REAL_BROWSER":"1","CONVEYOR_BROWSER_EXTERNAL_READONLY":"1",
@@ -108,7 +108,7 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
                 conn.execute("INSERT INTO browser_agent_grants VALUES(?,?,?,?)",
                     (_operator_key("person"),self.url+suffix,time.time()+3600,time.time()))
                 conn.commit()
-        dns=patch("workflow_browser_external.resolve_public_ipv4",
+        dns=patch("conveyor.browser.workflow_browser_external.resolve_public_ipv4",
                   return_value="127.0.0.1")
         dns.start();self.addCleanup(dns.stop)
         original=ExternalReadOnlyBrowser._context_options
@@ -132,7 +132,7 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.server.posts,[])
         token=json.loads(pending.arg)["token"]
         detail=review(self.settings,token)
-        from browser_g3_approval_gate import matches
+        from conveyor.browser.browser_g3_approval_gate import matches
         self.assertTrue(matches(self.settings,pending.arg,detail["hash"]))
         self.assertFalse(matches(self.settings,pending.arg,"0"*64))
         self.assertEqual(detail["preview"]["target"],self.url+"/submit")
@@ -167,7 +167,7 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
     async def test_expiration_rejects_submit(self):
         pending=await self.prepare()
         token=json.loads(pending.arg)["token"]
-        from workflow_browser_g3_store import _conn
+        from conveyor.browser.workflow_browser_g3_store import _conn
         with _conn(self.settings) as conn:
             conn.execute("UPDATE browser_g3_submits SET expires_at=0 WHERE token=?",(token,))
         self.assertIn("expired",await approve_and_submit(self.settings,pending.arg,operator_id="person"))
@@ -188,9 +188,9 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import AsyncMock
         self.settings.approval_relay_enabled=True
         with patch.dict(os.environ,{"CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT":"1"}), \
-             patch("browser_g3_telegram.send_preview",return_value=True) as image, \
-             patch("approval_relay.publish",return_value=True), \
-             patch("browser_g3_notifications.origin_telegram",new_callable=AsyncMock,
+             patch("conveyor.browser.browser_g3_telegram.send_preview",return_value=True) as image, \
+             patch("conveyor.channels.approval_relay.publish",return_value=True), \
+             patch("conveyor.browser.browser_g3_notifications.origin_telegram",new_callable=AsyncMock,
                    return_value=True) as card:
             result=await prepare(self.settings,self.arg,operator_id="person",
                                  channel="telegram",chat_id="telegram-chat")
@@ -423,7 +423,7 @@ class G3ChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.server.posts,[])
 
     async def test_kill_switch_refuses_before_dispatch(self):
-        from browser_g3_kill import path
+        from conveyor.browser.browser_g3_kill import path
         pending=await self.prepare()
         token=json.loads(pending.arg)["token"]
         kill_file=path(self.settings)

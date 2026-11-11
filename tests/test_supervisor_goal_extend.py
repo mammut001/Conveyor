@@ -18,10 +18,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import agent_supervisor as ags
-import goal_notify
-import supervisor_goals as goals
-import supervisor_service as svc
+from conveyor.agents import agent_supervisor as ags
+from conveyor.agents import goal_notify
+from conveyor.agents import supervisor_goals as goals
+from conveyor.agents import supervisor_service as svc
 from config import Settings
 
 OUTCOME = "把构建时间压到 30 秒以内，并且保证所有测试通过"
@@ -489,7 +489,7 @@ class SupervisorGoalExtendTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_http_extend_goal_route(self) -> None:
-        from web_supervisor_api import handle_post
+        from conveyor.web.web_supervisor_api import handle_post
 
         def _post(path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             handler = _FakeHandler(self.settings)

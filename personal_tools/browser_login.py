@@ -10,10 +10,10 @@ import re
 import secrets
 from urllib.parse import urlsplit
 
-from browser_auth_timeout import wait_for_step
-from browser_login_credentials import enabled, canonical_domain, read_for_executor
-from browser_login_audit import reserve, finish, LoginQuotaDenied
-from workflow_browser_external_identity import ExternalPolicyDenied
+from conveyor.browser.browser_auth_timeout import wait_for_step
+from conveyor.browser.browser_login_credentials import enabled, canonical_domain, read_for_executor
+from conveyor.browser.browser_login_audit import reserve, finish, LoginQuotaDenied
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied
 from personal_tools.base import ToolResult
 
 
@@ -138,8 +138,8 @@ async def login(settings, domain, operator_id):
         return "failed", "credential_missing"
     # Busy retries must not burn the password attempt quota; the reservation
     # in AuthSessionManager.open remains the atomic concurrent-authority check.
-    from browser_auth_sessions import manager_for
-    from browser_login_domain_gate import login_domain_busy
+    from conveyor.browser.browser_auth_sessions import manager_for
+    from conveyor.browser.browser_login_domain_gate import login_domain_busy
     try:
         if login_domain_busy(manager_for(settings), origin):
             return "failed", "busy"
@@ -159,7 +159,7 @@ async def login(settings, domain, operator_id):
     try:
         operator = "login_" + hashlib.sha256(operator_id.encode()).hexdigest()[:24]
         task = "login_" + secrets.token_hex(12)
-        from browser_auth_sessions import manager_for  # lazy: avoid G4/personal_tools import cycle
+        from conveyor.browser.browser_auth_sessions import manager_for  # lazy: avoid G4/personal_tools import cycle
         session = await wait_for_step(
             manager_for(settings).open(operator, task, origin, automated=True),
             12, "login.open")
@@ -196,7 +196,7 @@ async def login(settings, domain, operator_id):
         session._autofill_target = None
         session._automated_login = False
         try:
-            from web_takeover import WebTakeover
+            from conveyor.desktop.web_takeover import WebTakeover
             await wait_for_step(asyncio.to_thread(WebTakeover(settings).start, {
                 "reason": "login", "task_id": session.task, "ttl_seconds": 300
             }), 6, "login.takeover")

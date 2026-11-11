@@ -6,9 +6,9 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock,patch
-from overnight_objective import ObjectiveChecks,validate_checks
-from overnight_process import CommandFailure
-from overnight_store import OvernightStore
+from conveyor.automation.overnight_objective import ObjectiveChecks,validate_checks
+from conveyor.automation.overnight_process import CommandFailure
+from conveyor.automation.overnight_store import OvernightStore
 
 
 class ObjectiveTests(unittest.IsolatedAsyncioTestCase):
@@ -35,14 +35,14 @@ class ObjectiveTests(unittest.IsolatedAsyncioTestCase):
             if cancel:
                 self.store.cancel(self.run)
             return ''
-        with patch('overnight_objective.command',side_effect=agent):
+        with patch('conveyor.automation.overnight_objective.command',side_effect=agent):
             return await self.adapter.prepare(self.task)
 
     async def test_goal_plan_is_frozen_and_reused_after_restart(self):
         metadata=await self.prepare()
         self.assertEqual(metadata['scenarios'],['nightly controls'])
         self.assertEqual(len(metadata['sha256']),64)
-        with patch('overnight_objective.command',new_callable=AsyncMock) as agent:
+        with patch('conveyor.automation.overnight_objective.command',new_callable=AsyncMock) as agent:
             again=ObjectiveChecks(OvernightStore(self.root/'runs.sqlite3'),self.run,self.adapter.workspaces)
             self.assertEqual(await again.prepare(self.task),metadata)
             agent.assert_not_awaited()
@@ -55,7 +55,7 @@ class ObjectiveTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_frozen_checks_reproduce_twice_then_create_finding(self):
         await self.prepare()
         failure=CommandFailure('failed',category='nonzero_exit')
-        with patch('overnight_objective.command',new_callable=AsyncMock,side_effect=failure) as process:
+        with patch('conveyor.automation.overnight_objective.command',new_callable=AsyncMock,side_effect=failure) as process:
             findings=await self.adapter.discover({'revision':'a'*40})
         self.assertEqual(process.await_count,2)
         self.assertEqual(findings[0]['scenario'],'nightly controls')
@@ -67,9 +67,9 @@ class ObjectiveTests(unittest.IsolatedAsyncioTestCase):
     async def test_transient_failure_is_not_an_issue_and_verify_uses_pinned_head(self):
         await self.prepare()
         failure=CommandFailure('failed',category='nonzero_exit')
-        with patch('overnight_objective.command',new_callable=AsyncMock,side_effect=[failure,'']) as process:
+        with patch('conveyor.automation.overnight_objective.command',new_callable=AsyncMock,side_effect=[failure,'']) as process:
             self.assertEqual(await self.adapter.discover({'revision':'a'*40}),[])
-        with patch('overnight_objective.command',new_callable=AsyncMock,return_value='') as process:
+        with patch('conveyor.automation.overnight_objective.command',new_callable=AsyncMock,return_value='') as process:
             checks=await self.adapter.verify({'candidate':{'head':'b'*40}})
         self.assertEqual(self.revisions[-1],'b'*40)
         self.assertIn(self.adapter.frozen()['digest'],checks[0])
@@ -77,7 +77,7 @@ class ObjectiveTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_runner_failure_is_not_misreported_as_application_bug(self):
         await self.prepare()
-        with patch('overnight_objective.command',new_callable=AsyncMock,side_effect=CommandFailure('limit',category='output_limit')):
+        with patch('conveyor.automation.overnight_objective.command',new_callable=AsyncMock,side_effect=CommandFailure('limit',category='output_limit')):
             with self.assertRaises(CommandFailure):
                 await self.adapter.discover({'revision':'a'*40})
 
@@ -98,7 +98,7 @@ class ObjectiveTests(unittest.IsolatedAsyncioTestCase):
         self.store.enqueue(repeat,'discover','initial',{'revision':'c'*40})
         claim=self.store.claim(repeat,'discover')
         adapter=ObjectiveChecks(self.store,repeat,self.adapter.workspaces)
-        with patch('overnight_objective.command',new_callable=AsyncMock) as agent:
+        with patch('conveyor.automation.overnight_objective.command',new_callable=AsyncMock) as agent:
             await adapter.prepare(claim)
             agent.assert_not_awaited()
         self.assertEqual(adapter.frozen()['document']['checks'],self.generated['checks'])

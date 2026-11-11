@@ -53,11 +53,7 @@ def _test_deploy_script_exists() -> CheckResult:
 def _test_deploy_agent_coordination_files() -> CheckResult:
     """A partial sync must not mix old and new worker-module instances."""
     name = "deploy (rsync): includes agent coordination dependants"
-    required = {
-        "agent_coordination", "agent_conversations.py", "agent_mailbox.py",
-        "agent_mailbox_db.py", "agent_security_controls.py", "agent_switcher.py",
-        "agents.py", "main_router.py", "main_router_results.py", "web_agent_screens.py",
-    }
+    required = {"conveyor", "agent_coordination", "handlers", "bot.py", "feishu_bot.py", "web_console.py"}
     content = DEPLOY_SH.read_text(encoding="utf-8")
     try:
         paths = content.split("for sub in \\\n", 1)[1].split("; do", 1)[0]

@@ -78,7 +78,7 @@ def _active_refinement(self, worktree_path: Path | None):
     if not worktree_path:
         return None, None
     try:
-        from refinement_store import RefinementStore
+        from conveyor.core.refinement_store import RefinementStore
         store = RefinementStore(self.settings)
         return store, store.active_for_worktree(worktree_path)
     except Exception as exc:
@@ -98,7 +98,7 @@ def _emit_refinement_closed(self, chain: dict | None, *, state: str, reason: str
     if not job_id:
         return
     try:
-        from agent_events import emit_event
+        from conveyor.agents.agent_events import emit_event
         emit_event(
             self.settings,
             "refinement.closed",
@@ -284,7 +284,7 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
                     "git", "apply", *flags, "-",
                     cwd=apply_root, stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    env=__import__("subprocess_env").utility_env(self.settings),
+                    env=__import__("conveyor.core.subprocess_env", fromlist=["*"]).utility_env(self.settings),
                 )
                 try:
                     stdout, stderr = await proc.communicate(patch.encode("utf-8"))

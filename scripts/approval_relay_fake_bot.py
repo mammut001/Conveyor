@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import approval_relay
+from conveyor.channels import approval_relay
 from channel.types import InboundMessage, OutboundPort
 from handlers.tools.confirm import PendingToolAction, create_pending, get_pending
 from redaction import redact_text

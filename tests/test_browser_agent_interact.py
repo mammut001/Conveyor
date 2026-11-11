@@ -14,8 +14,8 @@ from personal_tools.browser_interact import (
     approval_required, _approved_paths, _query_paths, approve_query_path
 )
 from personal_tools.browser_read import _connect, _operator_key
-from workflow_browser_external_identity import ExternalPolicyDenied
-from workflow_browser_g2 import enabled, parse_query_url, validate_actions
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied
+from conveyor.browser.workflow_browser_g2 import enabled, parse_query_url, validate_actions
 
 URL = "https://public.example.org/approved"
 FLAGS = {"CONVEYOR_REAL_BROWSER": "1",

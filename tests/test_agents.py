@@ -11,9 +11,9 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-import agents
-from agents import AgentError, AgentStore
-from transcript_store import get_transcript_store
+from conveyor.agents import agents
+from conveyor.agents.agents import AgentError, AgentStore
+from conveyor.core.transcript_store import get_transcript_store
 
 TOKEN = "t" * 40
 
@@ -145,7 +145,7 @@ class HttpTests(Case):
     def setUp(self) -> None:
         super().setUp()
         from web_console import WebConsoleHandler, WebConsoleServer
-        from web_control import WebControl
+        from conveyor.web.web_control import WebControl
 
         # The session list joins against the queue table, which the real queue creates.
         import sqlite3

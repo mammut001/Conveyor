@@ -282,7 +282,7 @@ async def _run_job(self, job: Job, on_progress: ProgressCallback) -> None:
                 if not has_changes:
                     await self._remove_worktree(wt_path)
                     try:
-                        from refinement_store import RefinementStore
+                        from conveyor.core.refinement_store import RefinementStore
                         store = RefinementStore(self.settings)
                         closed = store.close_active_for_worktree(
                             wt_path,
@@ -291,7 +291,7 @@ async def _run_job(self, job: Job, on_progress: ProgressCallback) -> None:
                         )
                         if closed:
                             try:
-                                from agent_events import emit_event
+                                from conveyor.agents.agent_events import emit_event
                                 q_id = str(closed.get("latest_queue_job_id") or closed.get("root_queue_job_id") or "")
                                 if q_id:
                                     emit_event(
@@ -330,14 +330,14 @@ def job_child_env(self, job: Job, *, claude: bool = False) -> dict[str, str]:
     folder, in the wrong repository altogether.
     """
     if getattr(self.settings, "env_isolation", False):
-        from subprocess_env import agent_env
+        from conveyor.core.subprocess_env import agent_env
         env = agent_env(self.settings, claude=claude,
                         overrides={"CODEX_TELEGRAM_JOB": "1", "CODEX_RUNNER_HOME": str(RUNNER_HOME)})
     else:
         env = self._child_env()
     if job.worktree_path is not None:
         env["CODEX_WORKSPACE_ROOT"] = str(job.worktree_path)
-    from egress_proxy import proxy_env
+    from conveyor.browser.egress_proxy import proxy_env
     return proxy_env(env, self.settings)
 
 
@@ -549,7 +549,7 @@ def _codex_command(self, job: Job) -> list[str]:
 
 def _provider_credential_keys(self) -> set[str]:
     try:
-        from provider_config import get_provider_config
+        from conveyor.core.provider_config import get_provider_config
         cfg = get_provider_config(self.settings)
         env_key = str(cfg.get("env_key") or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY"
         return {env_key}
@@ -563,7 +563,7 @@ def _provider_credential_keys(self) -> set[str]:
 
 def _child_env(self) -> dict[str, str]:
     if getattr(self.settings, "env_isolation", False):
-        from subprocess_env import agent_env
+        from conveyor.core.subprocess_env import agent_env
         return agent_env(self.settings, overrides={"CODEX_TELEGRAM_JOB": "1", "CODEX_RUNNER_HOME": str(RUNNER_HOME)})
     from security.secrets import child_env_from
     env = child_env_from(os.environ)

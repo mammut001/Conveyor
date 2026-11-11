@@ -57,12 +57,12 @@ USAGE_STOP = "用法：/goal_stop <短编号>"
 
 def _goals_module():
     """Lazy import: `supervisor_goals` pulls in the whole supervisor stack."""
-    import supervisor_goals
+    from conveyor.agents import supervisor_goals
     return supervisor_goals
 
 
 def _service_module():
-    import supervisor_service
+    from conveyor.agents import supervisor_service
     return supervisor_service
 
 

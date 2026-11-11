@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from provider_config import get_provider_config
-from provider_health import get_provider_health
+from conveyor.core.provider_config import get_provider_config
+from conveyor.core.provider_health import get_provider_health
 from runner.operators.run import _run_codex_attempt as _base_run_codex_attempt
 
 

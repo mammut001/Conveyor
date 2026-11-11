@@ -87,7 +87,7 @@ CONVEYOR_DESKTOP_OBSERVE_MAX_PENDING=3
 | Piece | Repo | Role |
 |---|---|---|
 | `capture-screen-helper` | `capture-your-screen` | macOS ScreenCaptureKit CLI; writes PNG + JSON metadata |
-| `desktop_screenshot.py` | `Conveyor` | Validates helper output, stores metadata JSON |
+| `conveyor/desktop/desktop_screenshot.py` | `Conveyor` | Validates helper output, stores metadata JSON |
 | `desktop_agent.py --observe-once` | `Conveyor` | Local one-shot capture entry point |
 | `desktop.screenshot.status` | `Conveyor` | Deterministic tool / NL route for observe status |
 | `scripts/deploy_verify_p5_2.py` | `Conveyor` | Deployment-readiness checks (no capture) |

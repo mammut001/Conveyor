@@ -93,7 +93,7 @@ When `CONVEYOR_SKILLS_ENABLED=true` and `CONVEYOR_CHAT_TOOLS=true`:
 - **`skill.create`** (`DangerLevel.WRITE`):
   Argument: `<name> | <description> | <body>`.
   Allows the assistant to save a procedure the operator asked it to remember. Because it is a `WRITE` tool, it requires operator confirmation.
-  Supports editable drafts in the Unified Approval Inbox (`approval_inbox.py`).
+  Supports editable drafts in the Unified Approval Inbox (`conveyor/channels/approval_inbox.py`).
 
 ## Invocation in Chat & Routines
 

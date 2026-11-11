@@ -12,8 +12,8 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-import agents
-from agents import AgentStore
+from conveyor.agents import agents
+from conveyor.agents.agents import AgentStore
 from personal_tools import long_term_memory as ltm
 
 TOKEN = "t" * 40
@@ -48,7 +48,7 @@ class Case(unittest.TestCase):
 
 class OwnerTests(Case):
     def test_owner_of_each_kind_of_conversation(self) -> None:
-        import agent_context
+        from conveyor.agents import agent_context
         strict = agent_context.enabled(self.settings)
 
         def own(channel, chat, *, operator="op"):
@@ -122,7 +122,7 @@ class RoutineTests(Case):
 
     def setUp(self) -> None:
         super().setUp()
-        import routines
+        from conveyor.automation import routines
 
         self.routines = routines
         self.settings = _settings(self.root, routines_enabled=True)
@@ -143,7 +143,7 @@ class RoutineTests(Case):
         return asyncio.run(self.routines.run_single_routine(self.settings, None, routine))
 
     def test_agents_routine_runs_as_the_agent_and_reports_into_its_conversation(self) -> None:
-        from transcript_store import get_transcript_store
+        from conveyor.core.transcript_store import get_transcript_store
 
         run = self.run_routine(origin_chat_id=self.chat_a)
         self.assertEqual(run["status"], "ok")
@@ -161,7 +161,7 @@ class RoutineTests(Case):
         self.assertEqual(listed["agent_id"], self.a["id"])
 
     def test_ordinary_routines_are_unchanged(self) -> None:
-        from transcript_store import get_transcript_store
+        from conveyor.core.transcript_store import get_transcript_store
 
         self.run_routine()
         self.assertTrue(self.seen[0].chat_id.startswith("routine-"))
@@ -179,7 +179,7 @@ class HttpTests(Case):
     def setUp(self) -> None:
         super().setUp()
         from web_console import WebConsoleHandler, WebConsoleServer
-        from web_control import WebControl
+        from conveyor.web.web_control import WebControl
 
         conn = sqlite3.connect(str(self.root / "state" / "job_queue.sqlite3"))
         conn.execute("CREATE TABLE IF NOT EXISTS queued_jobs (id TEXT, channel TEXT, operator_id TEXT, chat_id TEXT)")
@@ -255,8 +255,8 @@ class HttpTests(Case):
                 conn.close()
 
     def test_library_collects_what_belongs_to_the_agent(self) -> None:
-        import routines
-        from desktop_screenshot import resolve_screenshot_dir
+        from conveyor.automation import routines
+        from conveyor.desktop.desktop_screenshot import resolve_screenshot_dir
 
         a, b = self.a["id"], self.b["id"]
         self.server.control.settings = self.settings = _settings(
@@ -307,7 +307,7 @@ class HttpTests(Case):
 # long-term memory tests above.
 # ---------------------------------------------------------------------------
 
-import agent_memory  # noqa: E402
+from conveyor.agents import agent_memory  # noqa: E402
 
 
 def _notes_settings(root: Path, **overrides):
@@ -740,7 +740,7 @@ class AgentNotesHttpTests(_NotesCase):
     def setUp(self) -> None:
         super().setUp()
         from web_console import WebConsoleHandler, WebConsoleServer
-        from web_control import WebControl
+        from conveyor.web.web_control import WebControl
 
         (self.root / "state").mkdir(parents=True, exist_ok=True)
         queue = mock.MagicMock()

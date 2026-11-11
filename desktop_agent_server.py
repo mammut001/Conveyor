@@ -16,13 +16,13 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 from config import load_runtime_settings
-from desktop_observe_requests import (
+from conveyor.desktop.desktop_observe_requests import (
     claim_observe_request,
     complete_observe_request,
     fail_observe_request,
     list_pending_observe_requests,
 )
-from desktop_computer_requests import (
+from conveyor.desktop.desktop_computer_requests import (
     claim_computer_step,
     complete_computer_step,
     fail_computer_step,
@@ -218,7 +218,7 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                 return
 
             # Verify upload request exists and is claimed BEFORE reading/writing large body
-            from desktop_upload_requests import load_upload_requests
+            from conveyor.desktop.desktop_upload_requests import load_upload_requests
             store = load_upload_requests(settings)
             upload_req = store.get(upload_id)
             if not upload_req or not isinstance(upload_req, dict):
@@ -286,7 +286,7 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
                         pass
                 return
 
-            from desktop_upload_requests import complete_upload_request
+            from conveyor.desktop.desktop_upload_requests import complete_upload_request
             result_meta = {
                 "upload_id": upload_id,
                 "thumbnail_path": str(dest_path),
@@ -485,7 +485,7 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
             if not isinstance(upload_id, str) or not upload_id.strip():
                 self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid or missing upload_id"})
                 return
-            from desktop_upload_requests import claim_upload_request
+            from conveyor.desktop.desktop_upload_requests import claim_upload_request
             result = claim_upload_request(settings, upload_id.strip(), node_id)
             status = HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT
             self.send_json(status, result)
@@ -506,7 +506,7 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
             if message is not None and not isinstance(message, str):
                 self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid message"})
                 return
-            from desktop_upload_requests import fail_upload_request
+            from conveyor.desktop.desktop_upload_requests import fail_upload_request
             result = fail_upload_request(
                 settings,
                 upload_id.strip(),
@@ -637,7 +637,7 @@ class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
             validated = self._validate_node_id(node_id)
             if validated is None:
                 return
-            from desktop_upload_requests import list_pending_upload_requests
+            from conveyor.desktop.desktop_upload_requests import list_pending_upload_requests
             requests = list_pending_upload_requests(settings, validated, limit=1)
             self.send_json(HTTPStatus.OK, {"ok": True, "requests": requests})
 

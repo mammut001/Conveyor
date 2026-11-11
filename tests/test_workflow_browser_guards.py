@@ -9,12 +9,12 @@ import socketserver
 import threading
 import unittest
 
-from workflow_browser_guards import (
+from conveyor.browser.workflow_browser_guards import (
     EXTRA_INIT_SCRIPT, inspect_cdp_dom, inspect_page_via_cdp,
 )
-from workflow_browser_contract import parse_plan
-from workflow_browser_journal import DENIAL_CODES
-from workflow_browser_playwright import (
+from conveyor.browser.workflow_browser_contract import parse_plan
+from conveyor.browser.workflow_browser_journal import DENIAL_CODES
+from conveyor.browser.workflow_browser_playwright import (
     BrowserPolicyError, FIXTURE_ROOT, LocalPlaywrightBrowser,
 )
 

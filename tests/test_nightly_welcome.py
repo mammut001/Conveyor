@@ -2,7 +2,7 @@ from pathlib import Path
 import re
 import unittest
 
-from overnight_chat import route
+from conveyor.automation.overnight_chat import route
 
 
 ROOT = Path(__file__).resolve().parents[1]

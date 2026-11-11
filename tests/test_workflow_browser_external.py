@@ -16,10 +16,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-from workflow_browser_egress import EgressAudit
-from workflow_browser_external import ExternalReadOnlyBrowser
-from workflow_browser_external_approvals import ApprovalLedger
-from workflow_browser_external_identity import (
+from conveyor.browser.workflow_browser_egress import EgressAudit
+from conveyor.browser.workflow_browser_external import ExternalReadOnlyBrowser
+from conveyor.browser.workflow_browser_external_approvals import ApprovalLedger
+from conveyor.browser.workflow_browser_external_identity import (
     ExternalPolicyDenied, canonical_host, canonical_url, resolve_public_ipv4,
 )
 
@@ -66,11 +66,11 @@ class PolicyTests(unittest.TestCase):
                           [result("255.255.255.255")],
                           [result("8.8.8.8"), result("224.0.0.1")]):
             with self.subTest(addresses=addresses), patch(
-                "workflow_browser_external_identity.socket.getaddrinfo",
+                "conveyor.browser.workflow_browser_external_identity.socket.getaddrinfo",
                 return_value=addresses
             ), self.assertRaisesRegex(ExternalPolicyDenied, "dns_private"):
                 resolve_public_ipv4(HOST, 443)
-        with patch("workflow_browser_external_identity.socket.getaddrinfo",
+        with patch("conveyor.browser.workflow_browser_external_identity.socket.getaddrinfo",
                    return_value=[result("8.8.8.8")]):
             self.assertEqual(resolve_public_ipv4(HOST, 443), "8.8.8.8")
 
@@ -166,7 +166,7 @@ class StartupDenialAuditTests(unittest.IsolatedAsyncioTestCase):
             ledger.approve(
                 task="dns_refusal", host=HOST, approver="operator",
                 expires_at=time.time() + 300, safe_paths=("/safe",))
-            with patch("workflow_browser_external.resolve_public_ipv4",
+            with patch("conveyor.browser.workflow_browser_external.resolve_public_ipv4",
                        side_effect=ExternalPolicyDenied("dns_private_address_denied")):
                 browser = ExternalReadOnlyBrowser(task="dns_refusal", ledger=ledger, audit=audit)
                 with self.assertRaisesRegex(ExternalPolicyDenied, "dns_private_address_denied"):
@@ -285,11 +285,11 @@ class OfflineChromiumTests(unittest.IsolatedAsyncioTestCase):
                         "/redirect-https"))
         # Test-only stubs: production rejects loopback DNS and bad TLS. The
         # real Chromium still connects over HTTPS via --host-resolver-rules.
-        self.pinned = patch("workflow_browser_external.resolve_public_ipv4",
+        self.pinned = patch("conveyor.browser.workflow_browser_external.resolve_public_ipv4",
                             return_value="127.0.0.1")
         self.pinned.start()
         self.addCleanup(self.pinned.stop)
-        from workflow_browser_external import ExternalReadOnlyBrowser
+        from conveyor.browser.workflow_browser_external import ExternalReadOnlyBrowser
         original = ExternalReadOnlyBrowser._context_options
         self.cert_override = patch.object(
             ExternalReadOnlyBrowser, "_context_options",

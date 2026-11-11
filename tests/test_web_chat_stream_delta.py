@@ -5,7 +5,7 @@ import queue
 import unittest
 
 from channel.types import InboundMessage
-from web_chat import WebChatPort
+from conveyor.web.web_chat import WebChatPort
 
 
 class WebChatStreamDeltaWhitespaceTests(unittest.TestCase):

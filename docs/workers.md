@@ -171,7 +171,7 @@ Conveyor 执行者池（Worker Pool）允许系统将任务动态分配给多个
 
 所有者按拖拽顺序排列执行者，Conveyor 使用第一个可用的执行者，并在它**用完之前**切换：某个执行者任一窗口（5h / weekly）的已用百分比达到其阈值（默认 95%）时，在该窗口重置前跳过它；全部执行者都超过阈值时，退回到旧行为（配额错误后重试一次），并选用“用量最低”的那个。
 
-**用量来源**（`worker_usage.py`，改写自 Kanjo (MIT)，Linux + macOS）：
+**用量来源**（`conveyor/agents/worker_usage.py`，改写自 Kanjo (MIT)，Linux + macOS）：
 
 | 执行者 | 来源 | 窗口 |
 |---|---|---|

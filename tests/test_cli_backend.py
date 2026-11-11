@@ -88,7 +88,7 @@ class CommandTests(unittest.TestCase):
             self.assertIn("other/model", backend._cli_command(job, "P"))
 
     def test_model_comes_from_workers_state(self) -> None:
-        import workers
+        from conveyor.agents import workers
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             backend = self._backend("cmd", root)
@@ -127,7 +127,7 @@ class ModeTests(unittest.TestCase):
             self.assertIn("--sandbox", c)
 
     def test_fix_gated_by_unsandboxed_setting(self) -> None:
-        import workers
+        from conveyor.agents import workers
         off = _settings(Path("/tmp/x"), unsandboxed=False)
         on = _settings(Path("/tmp/x"), unsandboxed=True)
         for wid in ("cmd", "grok"):
@@ -143,7 +143,7 @@ class ModeTests(unittest.TestCase):
         self.assertEqual(reason, "Super Grok 暂不支持只读提问")
 
     def test_pick_worker_skips_ineligible_per_mode(self) -> None:
-        import workers
+        from conveyor.agents import workers
 
         def w(wid):
             return {"id": wid, "enabled": True, "installed": True, "runnable": True,
@@ -216,7 +216,7 @@ class RunTests(unittest.TestCase):
             self.assertNotIn("web-secret-token-value", job.log_path.read_text(encoding="utf-8"))
 
     def test_failure_propagates_quota_text(self) -> None:
-        import workers
+        from conveyor.agents import workers
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "wt"
             root.mkdir()

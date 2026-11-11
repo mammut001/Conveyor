@@ -15,7 +15,7 @@ from channel.types import InboundMessage
 from handlers.job_queue import JobQueue
 from handlers.tools.confirm import clear_all_pending, create_pending
 from web_console import WebConsoleHandler, WebConsoleServer
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 TOKEN = "test-token-0123456789-abcdefghijklmnopqrstuvwxyz"
 
@@ -174,7 +174,7 @@ class WebChatTests(unittest.TestCase):
         self.settings.chat_mode = "off"
         self.settings.conveyor_chat_mode = "off"
         result={"id":"a"*32,"state":"running","objective":"检查预览","tasks":[]}
-        with patch.dict("os.environ",{"CONVEYOR_NIGHTLY_CONTROL":"1"}), patch("overnight_chat.client",return_value=result) as client:
+        with patch.dict("os.environ",{"CONVEYOR_NIGHTLY_CONTROL":"1"}), patch("conveyor.automation.overnight_chat.client",return_value=result) as client:
             status,events=self.request_sse("/api/chat",{"message":"/nightly_start 检查预览"})
         self.assertEqual(status,200)
         client.assert_called_once_with({"action":"start","objective":"检查预览"})
@@ -204,7 +204,7 @@ class WebChatTests(unittest.TestCase):
         self.assertTrue(any(name == "done" and data.get("outcome") == "answered" for name, data in events))
 
     def test_main_router_web_chat_sse_uses_human_approval_card(self):
-        from agents import AgentStore
+        from conveyor.agents.agents import AgentStore
         from handlers.tools.confirm import get_pending
         import os
 
@@ -243,7 +243,7 @@ class WebChatTests(unittest.TestCase):
             ask.assert_not_awaited()
             # The actual Web approval endpoint executes PR4 delegation only
             # after the human confirms. No route decision enqueues by itself.
-            with patch("approval_relay.claim_local", return_value="ok"):
+            with patch("conveyor.channels.approval_relay.claim_local", return_value="ok"):
                 code, decided = self.request(
                     "POST", f"/api/approvals/{token}/approve", {})
             self.assertEqual(code, 200)
@@ -304,7 +304,7 @@ class WebChatTests(unittest.TestCase):
                 asyncio.get_running_loop().create_task(finish())
                 raise
 
-        with patch("web_chat.run_web_chat", new=slow_agent), \
+        with patch("conveyor.web.web_chat.run_web_chat", new=slow_agent), \
                 patch("handlers.intent.computer_chat_budget_seconds", return_value=0.2):
             status, events = self.request_sse("/api/chat", {"message": "跑一个很久的任务"})
         self.assertEqual(status, 200)
@@ -327,7 +327,7 @@ class WebChatTests(unittest.TestCase):
 
     def test_request_is_in_history_as_soon_as_a_job_exists(self):
         """A dropped phone stream must not lead to resending a request the server already runs."""
-        from web_chat import WebChatPort
+        from conveyor.web.web_chat import WebChatPort
         import asyncio, queue as _queue
         sid = "web:web-console:submitted-1"
         port = WebChatPort(_queue.Queue(), self.settings, sid, prompt="跑全部测试")
@@ -351,7 +351,7 @@ class WebChatTests(unittest.TestCase):
         self.assertIsNotNone(get_pending(action.token))  # still pending, nothing ran
 
     def test_queued_notice_does_not_swallow_the_later_answer(self):
-        from web_chat import WebChatPort
+        from conveyor.web.web_chat import WebChatPort
         import asyncio, queue as _queue
         port = WebChatPort(_queue.Queue(), self.settings, "web:web-console:queued-1", prompt="排队的问题")
         msg = InboundMessage(channel="web", operator_id="web-console", chat_id="queued-1",
@@ -517,7 +517,7 @@ class WebChatTests(unittest.TestCase):
     def test_conversation_picker_http_auth_creation_and_web_identity(self):
         import os
         from config import Settings
-        from agents import AgentStore
+        from conveyor.agents.agents import AgentStore
         from dataclasses import replace
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
@@ -557,7 +557,7 @@ class WebChatTests(unittest.TestCase):
                 self.assertTrue(sid.startswith('web:web-console:topic-'))
                 created=body['conversation']
                 self.assertEqual(created['last_activity'],created['created_at'])
-                from agent_context import resolve
+                from conveyor.agents.agent_context import resolve
                 ctx=resolve(settings,'web',sid.split(':',2)[2],'web-console')
                 self.assertEqual(ctx.agent_id,agent['id'])
                 self.assertEqual(ctx.origin_channel,'web')
@@ -574,7 +574,7 @@ class WebChatTests(unittest.TestCase):
                 self.assertIn('Topic response',str(history['messages']))
                 # After a reply the topic's last activity is its newest message.
                 from datetime import datetime
-                from transcript_store import get_transcript_store
+                from conveyor.core.transcript_store import get_transcript_store
                 _,listing=self.request('GET',path)
                 topic=next(row for row in listing['conversations'] if row['session_id']==sid)
                 self.assertEqual(topic['created_at'],created['created_at'])
@@ -642,7 +642,7 @@ class WebChatTests(unittest.TestCase):
         self.assertEqual({a["tool_name"] for a in result}, {"service_restart"})
 
     def test_history_legacy_prompt_without_metadata_is_closed(self):
-        from web_chat import build_history
+        from conveyor.web.web_chat import build_history
         session = {"messages": [
             {"role": "user", "content": "add note", "kind": "chat", "metadata": {}},
             {"role": "assistant", "content": "⚠️ 危险操作需确认\n\n工具: notes.add\n\n确认执行？", "kind": "chat", "metadata": {}},

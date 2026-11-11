@@ -26,10 +26,10 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("CONVEYOR_AGENT_SUPERVISOR_ENABLED", "true")
 
-import agent_supervisor as ags
-from agent_supervisor import PiExecutor, RoleConfig
+from conveyor.agents import agent_supervisor as ags
+from conveyor.agents.agent_supervisor import PiExecutor, RoleConfig
 from config import Settings
-from supervisor_service import _UI_EXPOSED_EXECUTORS
+from conveyor.agents.supervisor_service import _UI_EXPOSED_EXECUTORS
 
 ANALYST = RoleConfig(name="analyst", executor="pi", tools=["read"], location="worktree")
 REVIEWER = RoleConfig(name="reviewer", executor="pi", tools=["read"], location="worktree")
@@ -148,7 +148,7 @@ class PiExecutorArgvTests(unittest.TestCase):
             self.assertIn("--no-context-files", argv, role.name)
 
     def test_argv_falls_back_when_models_json_write_fails(self) -> None:
-        import provider_config
+        from conveyor.core import provider_config
         env_file = self.tmp / "provider.env"
         payload = {
             "provider_id": "step-fun", "provider_name": "StepFun", "model": "step-3",
@@ -157,7 +157,7 @@ class PiExecutorArgvTests(unittest.TestCase):
         }
         with patch.dict(os.environ, _clean_env(CONVEYOR_ENV_FILE=str(env_file)), clear=True):
             provider_config.save_provider_config(self.settings, payload)
-            with patch("provider_config._atomic_write", side_effect=OSError("disk full")):
+            with patch("conveyor.core.provider_config._atomic_write", side_effect=OSError("disk full")):
                 argv = PiExecutor(self.settings)._argv(REVIEWER, "/tmp")
         # Saved provider requires models.json; when writing fails, argv must not
         # reference the unavailable saved provider.
@@ -323,7 +323,7 @@ class PiChildEnvTests(unittest.TestCase):
             self.assertNotIn(leaked, child)
 
     def test_saved_provider_grants_only_its_key_and_bridges_models_json(self) -> None:
-        import provider_config
+        from conveyor.core import provider_config
         env_file = self.tmp / "provider.env"
         payload = {
             "provider_id": "step-fun", "provider_name": "StepFun", "model": "step-3",
@@ -344,7 +344,7 @@ class PiChildEnvTests(unittest.TestCase):
         self.assertIn("$STEPFUN_API_KEY", models.read_text(encoding="utf-8"))
 
     def test_saved_provider_models_json_oserror_falls_back_cleanly(self) -> None:
-        import provider_config
+        from conveyor.core import provider_config
         env_file = self.tmp / "provider.env"
         payload = {
             "provider_id": "step-fun", "provider_name": "StepFun", "model": "step-3",
@@ -357,7 +357,7 @@ class PiChildEnvTests(unittest.TestCase):
             clear=True,
         ):
             provider_config.save_provider_config(self.settings, payload)
-            with patch("provider_config._atomic_write", side_effect=OSError("read-only fs")):
+            with patch("conveyor.core.provider_config._atomic_write", side_effect=OSError("read-only fs")):
                 child = ags._child_env(self.settings, executors="pi")
                 argv = PiExecutor(self.settings)._argv(ANALYST, "/tmp")
         self.assertNotIn("PI_CODING_AGENT_DIR", child)

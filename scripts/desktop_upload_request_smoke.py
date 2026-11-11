@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).parent.parent.resolve()))
 
 from config import load_settings
 from channel.types import InboundMessage
-from desktop_upload_requests import (
+from conveyor.desktop.desktop_upload_requests import (
     create_upload_request,
     claim_upload_request,
     complete_upload_request,
@@ -117,7 +117,7 @@ def run_tests():
         # ----------------------------------------------------
         # Atomic delivery tests
         # ----------------------------------------------------
-        from desktop_upload_requests import (
+        from conveyor.desktop.desktop_upload_requests import (
             get_upload_request,
             mark_upload_delivered,
             mark_upload_delivery_failed,
@@ -281,7 +281,7 @@ def run_tests():
         # ----------------------------------------------------
         # P5.4.2 Delivery correctness tests
         # ----------------------------------------------------
-        from desktop_upload_requests import (
+        from conveyor.desktop.desktop_upload_requests import (
             mark_upload_delivered,
             mark_upload_delivery_failed,
             reset_upload_delivery,
@@ -446,7 +446,7 @@ def run_tests():
         print("✓ P5.4.2: upload_resend re-delivers a delivery-failed request")
 
         # P5.4.3 idempotent ensure
-        from desktop_upload_requests import ensure_upload_request_for_observe
+        from conveyor.desktop.desktop_upload_requests import ensure_upload_request_for_observe
         os.environ["CONVEYOR_DESKTOP_UPLOAD_ENABLED"] = "true"
         settings = load_settings()
         obs_e = {"request_id": "obs_e_1", "node_id": "macbook-payton", "status": "completed", "result": {"screenshot_id": "s1"}}

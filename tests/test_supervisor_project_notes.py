@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import agent_memory
-import agent_supervisor as ags
-import supervisor_service as svc
+from conveyor.agents import agent_memory
+from conveyor.agents import agent_supervisor as ags
+from conveyor.agents import supervisor_service as svc
 from config import Settings
 
 

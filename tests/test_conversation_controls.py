@@ -48,7 +48,7 @@ class ConversationControlsTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(channel=channel, text=text):
                     port, runner = AsyncMock(), Mock()
                     runner.status_text.return_value = "正在运行：测试任务"
-                    with patch("main_router.maybe_route", new=AsyncMock()) as model_route:
+                    with patch("conveyor.agents.main_router.maybe_route", new=AsyncMock()) as model_route:
                         await dispatch(self.msg(channel, text), port, self.settings, runner)
                     model_route.assert_not_awaited()
                     port.reply.assert_awaited_once()
@@ -67,7 +67,7 @@ class ConversationControlsTests(unittest.IsolatedAsyncioTestCase):
                     msg = replace(self.msg(channel, "清空对话"), **extra)
                     with patch.object(importlib.import_module("handlers.dispatch"), "handle_context_job", new=AsyncMock()) as context, \
                             patch.object(importlib.import_module("handlers.dispatch"), "handle_chat_clear", new=AsyncMock()) as clear, \
-                            patch("main_router.maybe_route", new=AsyncMock(return_value=False)):
+                            patch("conveyor.agents.main_router.maybe_route", new=AsyncMock(return_value=False)):
                         await dispatch(msg, AsyncMock(), self.settings, Mock())
                     clear.assert_not_awaited()
                     context.assert_awaited_once()

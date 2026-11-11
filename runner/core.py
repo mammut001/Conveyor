@@ -39,7 +39,7 @@ class CodexRunner:
         self._lock_obj: asyncio.Lock | None = None
         self.current_job: "Job | None" = None
         self.last_job: "Job | None" = None
-        from runtime_control import register_runtime_runner
+        from conveyor.core.runtime_control import register_runtime_runner
         self.runtime_owner_id = register_runtime_runner(self)
 
     @property

@@ -9,10 +9,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import agent_context
-import agent_mailbox
-import agent_messaging_v2
-from agents import AgentStore, chat_id_for, session_id_for
+from conveyor.agents import agent_context
+from conveyor.agents import agent_mailbox
+from conveyor.agents import agent_messaging_v2
+from conveyor.agents.agents import AgentStore, chat_id_for, session_id_for
 from channel.types import InboundMessage
 from config import Settings
 from handlers.chat_tools import build_tool_schemas, _get_tool_spec
@@ -20,7 +20,7 @@ from handlers.tools.confirm import create_pending
 from handlers.tools.runner import (
     _request_confirmation, _requires_confirmation, execute_confirmed, run_tool)
 from handlers.tools.registry import DangerLevel
-from transcript_store import get_transcript_store
+from conveyor.core.transcript_store import get_transcript_store
 
 
 def make_settings(root: Path):
@@ -81,7 +81,7 @@ class MessagingV2Tests(unittest.IsolatedAsyncioTestCase):
         msg = self.msg(chat or self.a_chat)
         pending = create_pending(name, arg, msg.operator_id, msg.chat_id, msg.channel)
         port = Port()
-        with patch("approval_relay.claim_local", return_value="ok"):
+        with patch("conveyor.channels.approval_relay.claim_local", return_value="ok"):
             handled = await execute_confirmed(msg, port, self.settings, pending.token)
         self.assertTrue(handled)
         return port.replies[-1]
@@ -122,7 +122,7 @@ class MessagingV2Tests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Queue", spec.summary)
         self.assertEqual(await self.tool("agent.message", arg), "human approval required")
         # Legacy direct helper is not a mailbox/approval escape hatch.
-        import named_agents
+        from conveyor.agents import named_agents
         self.assertEqual(named_agents.send_message(
             self.settings, arg, channel="web", chat_id=self.a_chat,
             operator_id="web-console"), "human approval required")
@@ -151,7 +151,7 @@ class MessagingV2Tests(unittest.IsolatedAsyncioTestCase):
         from handlers.tools.confirm import get_pending_for_context
         pending = get_pending_for_context("web-console", self.a_chat, "web")
         self.assertIsNotNone(pending)
-        with patch("approval_relay.claim_local", return_value="ok"):
+        with patch("conveyor.channels.approval_relay.claim_local", return_value="ok"):
             await execute_confirmed(msg, port, self.settings, pending.token)
         self.assertEqual(len([x for x in self.rows() if x["body"] == "To be approved"]), 1)
         self.assertEqual(self.rows()[-1]["idempotency_key"], f"approval-{pending.token}")
@@ -223,20 +223,20 @@ class MessagingV2Tests(unittest.IsolatedAsyncioTestCase):
                                 msg.chat_id, msg.channel)
         self.store.update(self.a["id"], {"tools_allowlist": ["agent.inbox"]})
         port = Port()
-        with patch("approval_relay.claim_local", return_value="ok"):
+        with patch("conveyor.channels.approval_relay.claim_local", return_value="ok"):
             await execute_confirmed(msg, port, self.settings, action.token)
         self.assertIn("agent tool denied", port.replies[-1])
         self.assertFalse(any(row["body"] == "not authorized" for row in self.rows()))
 
     async def test_egress_taint_blocks_direct_sends_and_replies(self):
         data = json.dumps({"to": self.b["id"], "text": "sensitive"})
-        with patch("egress_taint.enabled", return_value=True):
-            from egress_taint import mark_read
+        with patch("conveyor.browser.egress_taint.enabled", return_value=True):
+            from conveyor.browser.egress_taint import mark_read
             mark_read(self.settings, "notes.search", operator_id="web-console",
                       channel="web", chat_id=self.a_chat)
             self.assertIn("Outbound blocked", await self.tool("agent.message", data))
             # Approval remains explicit despite the READ tool, and reply is outbound.
-            import egress_taint
+            from conveyor.browser import egress_taint
             self.assertTrue(egress_taint.outbound(self.settings, "agent.reply"))
             self.assertFalse(egress_taint.outbound(self.settings, "agent.inbox"))
 

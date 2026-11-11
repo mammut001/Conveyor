@@ -28,8 +28,8 @@ from web_console import (
     validate_codex_bin,
     validate_web_config,
 )
-from web_control import WebControl
-from web_takeover import WebTakeover
+from conveyor.web.web_control import WebControl
+from conveyor.desktop.web_takeover import WebTakeover
 
 logger = logging.getLogger("conveyor.web")
 
@@ -180,16 +180,16 @@ def main() -> None:
         daemon=True,
     )
     thread.start()
-    import routines
+    from conveyor.automation import routines
     routines.start_routines_worker(loop, settings, runner)
     if getattr(settings, "memory_v2_enabled", False):
         from personal_tools.memory_v2 import start_purge_worker
         start_purge_worker(loop, settings)
-    import approval_relay
+    from conveyor.channels import approval_relay
     relay_consumer = approval_relay.start_relay_worker(loop, settings, channel="web")
     from agent_coordination.agent_delegation_worker import start as start_delegation
     delegation_worker = start_delegation(loop, settings)
-    import agent_security
+    from conveyor.agents import agent_security
     agent_retention_worker = agent_security.start(loop, settings)
     logger.info(
         "Conveyor Web Workbench listening on http://%s:%d",
@@ -199,7 +199,7 @@ def main() -> None:
     start_extra_listeners(server, settings)
     def _resume_goals() -> None:
         try:
-            from web_chat import resume_goal_loops
+            from conveyor.web.web_chat import resume_goal_loops
             count = resume_goal_loops(settings, runner)
             if count:
                 logger.info("resumed %d /goal run(s)", count)

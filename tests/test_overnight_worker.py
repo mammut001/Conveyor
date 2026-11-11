@@ -2,8 +2,8 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from overnight_store import OvernightStore
-from overnight_worker import execute_claim
+from conveyor.automation.overnight_store import OvernightStore
+from conveyor.automation.overnight_worker import execute_claim
 
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
@@ -39,7 +39,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('secret-provider-credential',task['result'])
 
     async def test_nonzero_process_exit_retries_without_exceeding_attempt_cap(self):
-        from overnight_process import CommandFailure
+        from conveyor.automation.overnight_process import CommandFailure
         with tempfile.TemporaryDirectory() as root:
             store=OvernightStore(Path(root)/'run.db');run=store.create('retry process')
             store.enqueue(run,'repair','issue',{})

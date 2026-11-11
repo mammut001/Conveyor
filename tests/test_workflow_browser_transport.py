@@ -15,7 +15,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from workflow_browser_external_fetch import fetch_single_https_response
+from conveyor.browser.workflow_browser_external_fetch import fetch_single_https_response
 
 
 class FakeSocket:
@@ -70,7 +70,7 @@ class FakeConnection:
 class FetchPolicyTests(unittest.TestCase):
     def setUp(self):
         FakeConnection.instances.clear()
-        self.mock = patch("workflow_browser_external_fetch._PinnedHTTPSConnection",
+        self.mock = patch("conveyor.browser.workflow_browser_external_fetch._PinnedHTTPSConnection",
                           FakeConnection)
         self.mock.start()
         self.addCleanup(self.mock.stop)
@@ -109,7 +109,7 @@ class FetchPolicyTests(unittest.TestCase):
     def test_body_limit_and_deadline(self):
         with self.assertRaisesRegex(ValueError, "oversized_response"):
             self.fetch([], b"x" * (1024 * 1024 + 1))
-        with patch("workflow_browser_external_fetch.FETCH_DEADLINE_SECONDS", 0.05):
+        with patch("conveyor.browser.workflow_browser_external_fetch.FETCH_DEADLINE_SECONDS", 0.05):
             with self.assertRaisesRegex(TimeoutError, "fetch_deadline_exceeded"):
                 self.fetch([], b"hello", pause=0.15)
 
@@ -224,7 +224,7 @@ class SlowDripTLSTests(unittest.TestCase):
                     else:
                         result.put(None)
                 with patch.dict(os.environ, {"SSL_CERT_FILE": str(cert)}), patch(
-                    "workflow_browser_external_fetch.FETCH_DEADLINE_SECONDS", deadline
+                    "conveyor.browser.workflow_browser_external_fetch.FETCH_DEADLINE_SECONDS", deadline
                 ):
                     worker = threading.Thread(target=run_fetch, daemon=True)
                     start = time.monotonic()

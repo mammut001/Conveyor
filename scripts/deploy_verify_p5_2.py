@@ -76,7 +76,7 @@ def _check_run_py_imports_file_lock() -> None:
 
 def _check_desktop_screenshot_import() -> None:
     try:
-        import desktop_screenshot  # noqa: F401
+        from conveyor.desktop import desktop_screenshot  # noqa: F401
     except Exception as exc:
         _fail("desktop_screenshot_import", str(exc))
         return
@@ -92,7 +92,7 @@ def _settings(helper: str | None, screenshot_dir: Path):
 
 
 def _check_metadata_on_empty_dir() -> None:
-    from desktop_screenshot import latest_screenshot_metadata, list_screenshot_metadata
+    from conveyor.desktop.desktop_screenshot import latest_screenshot_metadata, list_screenshot_metadata
 
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings("/usr/local/bin/fake-capture-screen-helper", Path(tmp))
@@ -108,7 +108,7 @@ def _check_metadata_on_empty_dir() -> None:
 
 
 def _check_relative_helper_rejected() -> None:
-    from desktop_screenshot import helper_configuration_error
+    from conveyor.desktop.desktop_screenshot import helper_configuration_error
 
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings("relative/helper", Path(tmp))
@@ -120,7 +120,7 @@ def _check_relative_helper_rejected() -> None:
 
 
 def _check_absolute_helper_accepted() -> None:
-    from desktop_screenshot import helper_configuration_error, resolve_helper_path
+    from conveyor.desktop.desktop_screenshot import helper_configuration_error, resolve_helper_path
 
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings("/usr/local/bin/fake-capture-screen-helper", Path(tmp))
@@ -224,7 +224,7 @@ def _check_observe_request_store_transitions() -> None:
     from unittest import mock
 
     from channel.types import InboundMessage
-    from desktop_observe_requests import (
+    from conveyor.desktop.desktop_observe_requests import (
         claim_observe_request,
         complete_observe_request,
         create_observe_request,
@@ -278,7 +278,7 @@ def _check_observe_request_store_transitions() -> None:
 
 
 def _check_observe_lock_and_concurrency() -> None:
-    from desktop_observe_requests import observe_requests_lock_path, validate_observe_result
+    from conveyor.desktop.desktop_observe_requests import observe_requests_lock_path, validate_observe_result
     from runner.file_lock import file_lock
     import tempfile
 
@@ -323,7 +323,7 @@ def _check_observe_lock_and_concurrency() -> None:
 
         # 3. concurrent create mini-check
         from nodes.state import register_desktop_node
-        from desktop_observe_requests import create_observe_request, load_observe_requests
+        from conveyor.desktop.desktop_observe_requests import create_observe_request, load_observe_requests
         from channel.types import InboundMessage
         import threading
 
@@ -358,7 +358,7 @@ def _check_no_capture_in_status_executor() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings("/usr/local/bin/fake-capture-screen-helper", Path(tmp))
-        with mock.patch("desktop_screenshot.capture_screenshot_once") as capture_mock:
+        with mock.patch("conveyor.desktop.desktop_screenshot.capture_screenshot_once") as capture_mock:
             text = asyncio.run(exec_desktop_screenshot_status(settings, ""))
             capture_mock.assert_not_called()
         for phrase in (

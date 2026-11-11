@@ -11,7 +11,7 @@ from functools import wraps
 def stop_before_identity(func):
     @wraps(func)
     async def wrapped(msg, port, settings, *args, **kwargs):
-        import agent_context
+        from conveyor.agents import agent_context
         if agent_context.enabled(settings):
             from handlers.intent import COMPUTER_STOP_TEXTS
             if (isinstance(msg.text, str)

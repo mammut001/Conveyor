@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import agent_supervisor as ags
+from conveyor.agents import agent_supervisor as ags
 from scripts.agent_supervisor_live import (
     CLAMP_STUB_SOURCE,
     run_frozen_validator_cmd,

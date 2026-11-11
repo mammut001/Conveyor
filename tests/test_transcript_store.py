@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from transcript_store import TranscriptStore, session_identity
+from conveyor.core.transcript_store import TranscriptStore, session_identity
 
 
 class TranscriptStoreTests(unittest.TestCase):

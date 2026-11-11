@@ -24,7 +24,7 @@ from typing import Any
 
 from config import Settings
 from handlers.job_queue import JobQueue
-from supervisor_service import (
+from conveyor.agents.supervisor_service import (
     DISCUSSION_KINDS,
     MAX_SNAPSHOT_BYTES,
     MAX_SNAPSHOT_TURNS,
@@ -33,9 +33,9 @@ from supervisor_service import (
     create_scoped_task,
     register_repository,
 )
-from transcript_store import get_transcript_store
+from conveyor.core.transcript_store import get_transcript_store
 from web_console import WebConsoleHandler, WebConsoleServer
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 
 TOKEN = "test-token-poll-archive-regression-9876543210"

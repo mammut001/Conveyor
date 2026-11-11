@@ -78,7 +78,7 @@ async def main():
         print(status_text)
         return
 
-    from desktop_observe_requests import load_observe_requests
+    from conveyor.desktop.desktop_observe_requests import load_observe_requests
     store = load_observe_requests(settings)
     req_record = store.get(req_id)
     screenshot_id = None

@@ -58,7 +58,7 @@ def _low_confidence_answer(deep: str) -> str:
 
 class DeepHintTests(unittest.TestCase):
     def _hint(self, channel: str, payload: dict) -> str:
-        with patch("workers.async_get_workers_payload", new=AsyncMock(return_value=payload)):
+        with patch("conveyor.agents.workers.async_get_workers_payload", new=AsyncMock(return_value=payload)):
             return asyncio.run(deep_hint(channel, _settings()))
 
     def test_web_hint_names_no_command_and_no_executor_brand(self):
@@ -110,11 +110,11 @@ class AskChatWebAnswerTests(unittest.TestCase):
                 patch("runner.chat_client.stream_chat", new=fake_stream), \
                 patch.object(chat_handlers, "history", return_value=[]), \
                 patch.object(chat_handlers, "remember"), \
-                patch("agent_context.enabled", return_value=False), \
+                patch("conveyor.agents.agent_context.enabled", return_value=False), \
                 patch("personal_tools.long_term_memory.allowed_for", return_value=False), \
                 patch("personal_tools.long_term_memory.owner_for_chat", return_value=None), \
-                patch("agents.instructions_for_chat", return_value=("", "")), \
-                patch("workers.async_get_workers_payload", new=AsyncMock(return_value=payload)):
+                patch("conveyor.agents.agents.instructions_for_chat", return_value=("", "")), \
+                patch("conveyor.agents.workers.async_get_workers_payload", new=AsyncMock(return_value=payload)):
             outcome, _checked = asyncio.run(chat_handlers.ask_chat(
                 msg, port, _settings(), question="今天比特币价格多少"))
         self.assertEqual(outcome, "answered")
@@ -143,7 +143,7 @@ class RoutinesOffConsoleContractTests(unittest.TestCase):
 
     def test_status_payload_reports_the_flag_the_console_gates_on(self):
         from handlers.job_queue import JobQueue
-        from web_control import WebControl
+        from conveyor.web.web_control import WebControl
 
         root = Path(tempfile.mkdtemp(prefix="conveyor-routines-off-"))
         settings = SimpleNamespace(

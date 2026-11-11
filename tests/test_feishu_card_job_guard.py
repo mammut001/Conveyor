@@ -21,7 +21,7 @@ def _runner(last_id: str, running_id: str | None = None):
 class FeishuCardJobGuardTest(unittest.TestCase):
     def _check(self, runner, action, card_job_id):
         inbound = SimpleNamespace(channel="feishu", chat_id="oc_1")
-        with patch("job_lanes.runner_for_chat", lambda r, *a, **k: r):
+        with patch("conveyor.core.job_lanes.runner_for_chat", lambda r, *a, **k: r):
             return feishu_bot._stale_card_job(runner, inbound, action, card_job_id)
 
     def test_old_card_apply_is_refused(self) -> None:

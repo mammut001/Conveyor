@@ -19,9 +19,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import live_screen
-from human_takeover import HumanTakeoverStore, takeover_blocks_automation
-from live_screen import LiveScreen, LiveScreenError
+from conveyor.desktop import live_screen
+from conveyor.desktop.human_takeover import HumanTakeoverStore, takeover_blocks_automation
+from conveyor.desktop.live_screen import LiveScreen, LiveScreenError
 
 TOKEN = "t" * 40
 
@@ -283,7 +283,7 @@ class ControlTests(LiveScreenCase):
         self.assertEqual(self.screen.status()["blocked_by"], "web-console")
 
     def test_take_waits_for_in_flight_agent_action_then_gives_up(self) -> None:
-        with mock.patch("desktop_computer_requests.has_claimed_computer_steps", return_value=True), \
+        with mock.patch("conveyor.desktop.desktop_computer_requests.has_claimed_computer_steps", return_value=True), \
                 mock.patch.object(live_screen, "IN_FLIGHT_WAIT_SECONDS", 0.3):
             with self.assertRaises(LiveScreenError):
                 self.screen.take_control()

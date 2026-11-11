@@ -2,9 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
-from overnight_store import OvernightStore
-from overnight_worker import execute_claim
-from overnight_pipeline import OvernightPipeline
+from conveyor.automation.overnight_store import OvernightStore
+from conveyor.automation.overnight_worker import execute_claim
+from conveyor.automation.overnight_pipeline import OvernightPipeline
 
 
 class PipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -51,7 +51,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_multiple_failed_contracts_are_repaired_as_one_complete_candidate(self):
         import asyncio
-        from overnight_worker import serve
+        from conveyor.automation.overnight_worker import serve
         with tempfile.TemporaryDirectory() as root:
             store=OvernightStore(Path(root)/'runs.sqlite3')
             run=store.create('Restore both independent contracts',hours=1,max_tasks=12)

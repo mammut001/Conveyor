@@ -36,9 +36,9 @@ _HYBRID_DEFAULT_TOOLS = ("load", "ps", "disk", "service_status")
 
 def _requires_confirmation(tool_name: str, settings: Settings | None = None) -> bool:
     if tool_name == "main.route_delegate":
-        import main_router
+        from conveyor.agents import main_router
         return main_router.enabled(settings)
-    import agent_messaging_v2
+    from conveyor.agents import agent_messaging_v2
     from agent_coordination import agent_delegation
     if agent_delegation.enabled(settings) and tool_name == "agent.delegate":
         return True
@@ -93,8 +93,8 @@ async def run_tool(
     placeholder: str | None = None,
     egress_approved: bool = False,
 ) -> str:
-    import agent_context
-    from agent_security import killed
+    from conveyor.agents import agent_context
+    from conveyor.agents.agent_security import killed
     if killed(settings) and (tool_name.startswith("agent.")
                      or tool_name == "main.route_delegate"):
         return "agent tools disabled by emergency kill switch"
@@ -111,15 +111,15 @@ async def run_tool(
             # Match a validated request binding, never invent a default agent.
             channel, operator_id = bound.origin_channel, bound.operator_identity
             chat_id = agent_context._chat_id(bound)
-    import named_agents
+    from conveyor.agents import named_agents
     if not named_agents.tool_allowed(settings, channel, chat_id, tool_name,
                                      operator_id=operator_id):
         return "agent tool denied"
-    import egress_taint
+    from conveyor.browser import egress_taint
     if egress_taint.requires_approval(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id) and not egress_approved:
         return "Outbound blocked: private data was read; approval required"
     egress_taint.mark_read(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id)
-    import agent_messaging_v2
+    from conveyor.agents import agent_messaging_v2
     from agent_coordination import agent_delegation
     if agent_delegation.enabled(settings) and tool_name == "agent.delegate":
         return agent_delegation.enqueue(settings, arg, operator_id=operator_id,
@@ -212,7 +212,7 @@ async def run_tools_collected(
 
 def _danger_label(tool_name: str, settings: Settings | None = None) -> str:
     if tool_name == "main.route_delegate":
-        import main_router
+        from conveyor.agents import main_router
         spec = main_router.spec(settings)
         return spec.danger.value if spec is not None else "unknown"
     if tool_name == "agents.parallel":
@@ -223,7 +223,7 @@ def _danger_label(tool_name: str, settings: Settings | None = None) -> str:
         if spec is not None:
             return spec.danger.value
         return "write"
-    import agent_messaging_v2
+    from conveyor.agents import agent_messaging_v2
     from agent_coordination import agent_delegation
     mail_spec = (agent_delegation.spec(settings) if tool_name == "agent.delegate"
                  else agent_messaging_v2.spec(settings, tool_name))
@@ -238,7 +238,7 @@ def _danger_label(tool_name: str, settings: Settings | None = None) -> str:
 
 async def _tainted_network_guard(msg, port, settings, items):
     """Check multi-tool routes before any network-reaching READ is executed."""
-    import egress_taint
+    from conveyor.browser import egress_taint
     for name, arg in items:
         if egress_taint.requires_approval(
                 settings, name, operator_id=msg.operator_id,
@@ -361,10 +361,10 @@ async def _invoke_tool(
     from personal_tools.registry import get_personal_tool
 
     spec = get_tool(tool_name)
-    import agent_messaging_v2
+    from conveyor.agents import agent_messaging_v2
     extra = agent_messaging_v2.spec(settings, tool_name)
     if tool_name == "main.route_delegate":
-        import main_router
+        from conveyor.agents import main_router
         extra = main_router.spec(settings)
     if tool_name == "agent.delegate":
         from agent_coordination.agent_delegation import spec as delegation_spec
@@ -372,7 +372,7 @@ async def _invoke_tool(
     if spec is None and get_personal_tool(tool_name) is None and extra is None and not tool_name.startswith("mcp."):
         await port.reply(msg, f"未知工具: {tool_name}")
         return
-    import agent_context
+    from conveyor.agents import agent_context
     if agent_context.enabled(settings) and not agent_context.allowed(
             settings, tool_name, channel=msg.channel, chat_id=msg.chat_id,
             operator_id=msg.operator_id):
@@ -395,7 +395,7 @@ async def _invoke_tool(
         if needs_approval:
             await _request_confirmation(msg, port, settings, tool_name, arg)
             return
-    import egress_taint
+    from conveyor.browser import egress_taint
     if (_requires_confirmation(tool_name, settings) or
             egress_taint.requires_approval(settings, tool_name, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)):
         await _request_confirmation(msg, port, settings, tool_name, arg)
@@ -502,9 +502,9 @@ async def _request_confirmation(
             await port.reply(msg, str(exc))
             return
     spec = get_tool(tool_name)
-    import agent_messaging_v2
+    from conveyor.agents import agent_messaging_v2
     from agent_coordination.agent_delegation import spec as delegation_spec
-    import main_router
+    from conveyor.agents import main_router
     mailbox_spec = (main_router.spec(settings) if tool_name == "main.route_delegate"
                     else delegation_spec(settings) if tool_name == "agent.delegate"
                     else agent_messaging_v2.spec(settings, tool_name))
@@ -527,12 +527,12 @@ async def _request_confirmation(
         except Exception:
             await port.reply(msg, "browser denied: invalid_or_unavailable")
             return
-    import egress_taint
+    from conveyor.browser import egress_taint
     if (egress_taint.requires_approval(settings, tool_name, operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)
             and not (getattr(settings, "approval_inbox_enabled", False) or getattr(settings, "draft_cards_enabled", False))):
         await port.reply(msg, "Outbound blocked: private-data session requires Approval Inbox or Draft Cards")
         return
-    import outbound_draft_cards as cards
+    from conveyor.channels import outbound_draft_cards as cards
     is_outbound_draft = cards.enabled(settings) and cards.is_outbound(settings, tool_name)
     if is_outbound_draft:
         try:
@@ -566,7 +566,7 @@ async def _request_confirmation(
     source = "routine" if msg.chat_id.startswith("routine-") else "chat"
     published_to_relay = False
     try:
-        import approval_relay
+        from conveyor.channels import approval_relay
         published_to_relay = approval_relay.publish(
             settings,
             pending,
@@ -576,7 +576,7 @@ async def _request_confirmation(
         )
     except Exception:
         logger.debug("Failed to publish to approval relay", exc_info=True)
-    from web_push import queue_notification
+    from conveyor.web.web_push import queue_notification
     if not published_to_relay:
         queue_notification(settings, pending.token, "draft" if is_outbound_draft else "approval")
     audit_tool_event(
@@ -669,7 +669,7 @@ async def _relay_gate(
     local pending action is dropped and the operator is told why.
     """
     try:
-        import approval_relay
+        from conveyor.channels import approval_relay
         verdict = approval_relay.claim_local(settings, action.token, approve)
     except Exception:
         logger.exception("approval relay gate unavailable; blocking local action")
@@ -711,7 +711,7 @@ async def execute_confirmed(
         return True
     # Re-check at confirmation time, including browser tools that bypass
     # run_tool() below. Permissions may have changed since preview/approval.
-    import named_agents
+    from conveyor.agents import named_agents
     if not named_agents.tool_allowed(settings, action.channel, action.chat_id,
                                      action.tool_name, operator_id=action.operator_id):
         pop_pending(token)
@@ -719,12 +719,12 @@ async def execute_confirmed(
         await port.reply(msg, "agent tool denied")
         return True
     if action.tool_name.startswith("browser."):
-        from browser_g3_kill import refusal
+        from conveyor.browser.browser_g3_kill import refusal
         reason = refusal(settings, action.tool_name)
         if reason:
             await port.reply(msg, reason)
             return True
-    import outbound_draft_cards as cards
+    from conveyor.channels import outbound_draft_cards as cards
     if cards.is_draft_token(settings, token):
         outcome = await cards.approve_original(settings, token)
         pop_pending(token)
@@ -763,10 +763,10 @@ async def execute_confirmed(
             result = await approve_and_read(settings, action.arg,
                                             operator_id=action.operator_id)
         elif action.tool_name == "main.route_delegate":
-            import main_router
+            from conveyor.agents import main_router
             result = main_router.confirm(settings, action, token)
         else:
-            import agent_messaging_v2
+            from conveyor.agents import agent_messaging_v2
             from agent_coordination import agent_delegation
             approved_arg = (agent_delegation.approval_arg(action.arg, token)
                             if action.tool_name == "agent.delegate" and agent_delegation.enabled(settings)
@@ -799,7 +799,7 @@ async def execute_confirmed(
             error_preview=str(exc),
         )
         try:
-            import approval_relay
+            from conveyor.channels import approval_relay
             approval_relay.mark_local(settings, token, "failed", result_preview=str(exc))
         except Exception:
             pass
@@ -817,7 +817,7 @@ async def execute_confirmed(
         result_preview=result,
     )
     try:
-        import approval_relay
+        from conveyor.channels import approval_relay
         approval_relay.mark_local(settings, token, "done", result_preview=result)
     except Exception:
         pass
@@ -847,12 +847,12 @@ async def cancel_pending(
         _audit_rejected(settings, action, msg)
         await port.reply(msg, "Unauthorized.")
         return True
-    import outbound_draft_cards as cards
+    from conveyor.channels import outbound_draft_cards as cards
     if cards.is_draft_token(settings, token):
         cards.deny(settings, token)
         pop_pending(token)
         try:
-            import approval_relay
+            from conveyor.channels import approval_relay
             approval_relay.mark_local(settings, token, 'cancelled')
         except Exception:
             pass
@@ -875,7 +875,7 @@ async def cancel_pending(
         action="cancelled",
     )
     try:
-        import approval_relay
+        from conveyor.channels import approval_relay
         approval_relay.mark_local(settings, token, "cancelled")
     except Exception:
         pass

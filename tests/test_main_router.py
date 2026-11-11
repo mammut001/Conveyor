@@ -11,17 +11,17 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
-import agent_context as ac
+from conveyor.agents import agent_context as ac
 from agent_coordination import agent_delegation_queue as queue
 from agent_coordination import agent_delegation_worker as worker
-import main_router as router
-import main_router_results as results
-from agents import AgentStore, chat_id_for, WEB_OPERATOR
+from conveyor.agents import main_router as router
+from conveyor.agents import main_router_results as results
+from conveyor.agents.agents import AgentStore, chat_id_for, WEB_OPERATOR
 from channel.types import InboundMessage
 from config import Settings
 from handlers.tools.confirm import create_pending
 from handlers.tools.runner import execute_confirmed
-from transcript_store import get_transcript_store, session_identity
+from conveyor.core.transcript_store import get_transcript_store, session_identity
 
 
 def settings_for(root):
@@ -261,7 +261,7 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
         pending = create_pending("main.route_delegate", data, msg.operator_id,
                                  msg.chat_id, msg.channel)
         self.assertFalse(self.rows())  # Routing alone never executes.
-        with patch("approval_relay.claim_local", return_value="ok"):
+        with patch("conveyor.channels.approval_relay.claim_local", return_value="ok"):
             await execute_confirmed(msg, port, self.settings, pending.token)
         self.assertIn("agent task queued:", port.replies[-1])
         tasks = [r for r in self.rows() if r["kind"] == "task"]
@@ -290,7 +290,7 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
             "to":self.finance["id"],"task":"finance",
             "tools_subset":[]}), msg.operator_id, msg.chat_id, msg.channel)
         self.assertFalse(self.rows())
-        with patch("approval_relay.claim_local", return_value="ok"):
+        with patch("conveyor.channels.approval_relay.claim_local", return_value="ok"):
             await execute_confirmed(msg, port, self.settings, pending.token)
         self.assertIn("正在排队", port.replies[-1])
         task = next(r for r in self.rows() if r["kind"] == "task")

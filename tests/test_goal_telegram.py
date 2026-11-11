@@ -22,9 +22,9 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-import goal_notify
-import supervisor_goals as goals
-import supervisor_service as svc
+from conveyor.agents import goal_notify
+from conveyor.agents import supervisor_goals as goals
+from conveyor.agents import supervisor_service as svc
 from channel.types import InboundMessage
 from handlers import goal_commands as gc
 from handlers.commands import COMMAND_TABLE, run_command
@@ -534,7 +534,7 @@ class GoalNotificationHintTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         # Keep the real `_deliver_push` so the test proves it never forwards text.
-        import web_push
+        from conveyor.web import web_push
         patcher = patch.object(web_push, "queue_notification", push)
         patcher.start()
         self.addCleanup(patcher.stop)

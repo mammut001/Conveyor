@@ -8,10 +8,10 @@ import asyncio, json, os, sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts import linux_browser_e2e as qa
-from desktop_computer_loop import build_backend, run_computer_loop
-from desktop_computer_requests import create_computer_task, get_computer_task
-from human_takeover import HumanTakeoverStore
-import agents
+from conveyor.desktop.desktop_computer_loop import build_backend, run_computer_loop
+from conveyor.desktop.desktop_computer_requests import create_computer_task, get_computer_task
+from conveyor.desktop.human_takeover import HumanTakeoverStore
+from conveyor.agents import agents
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--root", type=Path, required=True)

@@ -114,7 +114,7 @@ def test_non_str_arg_and_bare_token_redaction() -> CheckResult:
 
 def test_desktop_observe_validation() -> CheckResult:
     # Test path traversal and symlink rejection inside validate_observe_result
-    from desktop_observe_requests import validate_observe_result
+    from conveyor.desktop.desktop_observe_requests import validate_observe_result
     import tempfile
     
     with tempfile.TemporaryDirectory() as tmp:

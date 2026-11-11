@@ -49,7 +49,7 @@ _CODE_FENCE_PATTERN = re.compile(r"^\s*(`{3,}|~{3,})")
 def feature_enabled(settings: Settings) -> bool:
     """Return True if both channel routing and main router features are enabled."""
     from agent_coordination import agent_channel_routing as routing
-    import main_router
+    from conveyor.agents import main_router
     return bool(routing.enabled(settings) and main_router.enabled(settings))
 
 
@@ -61,7 +61,7 @@ def validate_route_target(settings: Settings, arg: str) -> bool:
         target_id = req.get("to")
         if not target_id or not isinstance(target_id, str):
             return False
-        from agents import AgentStore
+        from conveyor.agents.agents import AgentStore
         agent = AgentStore(settings).get(target_id)
         if agent is None or agent.get("archived", False):
             return False
@@ -98,7 +98,7 @@ def format_route_confirmation_card(settings: Settings, arg: str) -> str:
     from agent_coordination import agent_delegation
     req = agent_delegation.parse_request(arg)
     target_id = req["to"]
-    from agents import AgentStore
+    from conveyor.agents.agents import AgentStore
     agent = AgentStore(settings).get(target_id)
     raw_name = agent["name"] if agent else target_id
     safe_agent_name = truncate(redact_text(str(raw_name)), 40)
@@ -136,7 +136,7 @@ def format_queue_ack(
         try:
             from agent_coordination import agent_delegation
             req = agent_delegation.parse_request(action.arg)
-            from agents import AgentStore
+            from conveyor.agents.agents import AgentStore
             agent = AgentStore(settings).get(req["to"])
             if agent:
                 agent_name = agent["name"]
@@ -260,7 +260,7 @@ def query_delegated_task_status(
     deadline = row["deadline"]
     lease_expires = row["lease_expires_at"]
 
-    from agents import AgentStore
+    from conveyor.agents.agents import AgentStore
     store = AgentStore(settings)
     target_agent = store.get(row["agent_id"])
     is_archived = target_agent is None or bool(target_agent.get("archived", False))

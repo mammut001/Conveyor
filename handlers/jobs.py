@@ -137,7 +137,7 @@ async def submit_codex_job(
     Browser requests return immediately after enqueue (``wait=False``), while
     existing chat adapters retain their wait-for-final-response behavior.
     """
-    import agent_context
+    from conveyor.agents import agent_context
     if agent_context.enabled(runner.settings):
         try:
             agent_context.for_request(runner.settings, msg.channel, msg.chat_id,
@@ -237,7 +237,7 @@ def _run_in_background(coro) -> "asyncio.Task":
     return task
 
 
-from agent_conversations import scoped_job
+from conveyor.agents.agent_conversations import scoped_job
 
 
 @scoped_job
@@ -251,7 +251,7 @@ async def _execute_codex_job(
     queue_job_id: str | None = None,
 ) -> None:
     """Execute a Codex job directly (not through queue)."""
-    import agent_context
+    from conveyor.agents import agent_context
     if agent_context.enabled(runner.settings):
         try:
             agent_context.for_request(runner.settings, msg.channel, msg.chat_id,
@@ -267,14 +267,14 @@ async def _execute_codex_job(
             return
     # Each lane has its own runner, so jobs of different agents can overlap
     # and "the current job" means this conversation's.
-    from job_lanes import runner_for_chat
+    from conveyor.core.job_lanes import runner_for_chat
     runner = runner_for_chat(runner, getattr(runner, "settings", None), msg.channel, msg.chat_id)
     # Session context injection: prepend recent turns so the LLM has
     # continuity when the user says "继续" / "continue". Only for LLM
     # jobs (handle_codex_job is only called for /run, /fix, and free
     # text fallback — never for deterministic commands).
     from handlers.session import build_context_prompt, append_turn
-    from agents import instructions_for_chat, profile_block
+    from conveyor.agents.agents import instructions_for_chat, profile_block
     ctx_prompt = (
         profile_block(*instructions_for_chat(runner.settings, msg.channel, msg.chat_id))
         + build_context_prompt(runner.settings, msg)
@@ -285,7 +285,7 @@ async def _execute_codex_job(
 
     if queue_job_id:
         try:
-            from agent_events import emit_event
+            from conveyor.agents.agent_events import emit_event
             emit_event(
                 runner.settings, "assistant.started", queue_job_id, {},
                 session_id=msg.chat_id,
@@ -308,7 +308,7 @@ async def _execute_codex_job(
         outgoing = truncate(message_text)
         if queue_job_id:
             try:
-                from agent_events import emit_event
+                from conveyor.agents.agent_events import emit_event
                 emit_event(
                     runner.settings, "assistant.delta", queue_job_id,
                     {"text": outgoing}, session_id=msg.chat_id,
@@ -380,7 +380,7 @@ async def _execute_codex_job(
 
     # An agent with its own project folder works there. Passed only when set,
     # so callers and fakes that predate agents see the same call as before.
-    from agents import workspace_for_chat
+    from conveyor.agents.agents import workspace_for_chat
     agent_workspace = workspace_for_chat(runner.settings, msg.channel, msg.chat_id)
     start_options = {"workspace_root": agent_workspace} if agent_workspace is not None else {}
     try:
@@ -562,7 +562,7 @@ async def _execute_codex_job(
 
     if queue_job_id:
         try:
-            from agent_events import emit_event
+            from conveyor.agents.agent_events import emit_event
             emit_event(
                 runner.settings,
                 "assistant.completed" if not job.error else "assistant.failed",

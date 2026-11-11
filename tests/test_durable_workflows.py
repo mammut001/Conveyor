@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from durable_workflows import WorkflowConflict, WorkflowNotFound, WorkflowStore
+from conveyor.automation.durable_workflows import WorkflowConflict, WorkflowNotFound, WorkflowStore
 
 
 STEPS = [

@@ -3,7 +3,7 @@
 Conveyor keeps two intentionally separate session representations:
 
 1. `handlers/session.py` JSONL remains the small bounded prompt-context cache used to make follow-up requests such as “continue” useful.
-2. `transcript_store.py` stores durable, redacted user/assistant messages in SQLite for the Web Console and future clients.
+2. `conveyor/core/transcript_store.py` stores durable, redacted user/assistant messages in SQLite for the Web Console and future clients.
 
 The transcript is not hidden reasoning. It stores only user-visible conversation text and optional display metadata.
 

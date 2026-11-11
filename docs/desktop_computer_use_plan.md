@@ -3,7 +3,7 @@
 > **Status**: Historical P5.2 design document. The implementation described
 > below is retained for design history only and is not the current contract.
 > The shipped P5.6/P5.6.2 direct Computer Use stack is implemented through
-> `desktop_computer_requests.py`, `desktop_computer_loop.py`, `desktop_cua.py`,
+> `conveyor/desktop/desktop_computer_requests.py`, `conveyor/desktop/desktop_computer_loop.py`, `conveyor/desktop/desktop_cua.py`,
 > and the local Mac agent. For current behavior and safety limits, read
 > `docs/desktop_security.md` and `docs/desktop_capabilities.md`.
 
@@ -29,7 +29,7 @@ current runtime specification.
 | Control plane | `desktop_agent_server.py` | partial | Bearer-auth HTTP on `127.0.0.1:8766` (`ThreadingHTTPServer`). Has register/heartbeat/observe/upload/status. **No task/step endpoints.** |
 | Local agent | `desktop_agent.py` | partial | `urllib`-based polling (`_control_plane_url()`, `_post_json` helper). `--poll-observe` + upload polling loops. **No task polling, no action executors.** |
 | Menubar app | `menubar-agent/Sources/.../AgentSupervisor.swift` | implemented | Spawns `desktop_agent.py --poll-observe --poll-computer` as a TCC-attributed child. Needs **Accessibility** TCC for input synthesis. |
-| Request store | `desktop_observe_requests.py` / `desktop_upload_requests.py` | DONE | **The template pattern** for tasks: cross-process file lock, `ALLOWED/RESULT_FORBIDDEN` fields, claim/complete/fail/cancel, TTL expiry. |
+| Request store | `conveyor/desktop/desktop_observe_requests.py` / `conveyor/desktop/desktop_upload_requests.py` | DONE | **The template pattern** for tasks: cross-process file lock, `ALLOWED/RESULT_FORBIDDEN` fields, claim/complete/fail/cancel, TTL expiry. |
 | Tool layer | `handlers/tools/registry.py`, `executors.py` | stub | `computer.status` registered but stubbed. `register_builtin_tools()` is the registration point. |
 | Intent | `handlers/intent.py` | stub | `_COMPUTER_USE_PATTERNS` already routes to `computer.status`. Needs a real route target. |
 | Confirmation | `handlers/tools/confirm.py`, `runner.py` | DONE | Token binding (`create_pending`/`get_pending`/`matches_context`) + Telegram/Feishu inline buttons. **Reused for steps.** |
@@ -114,7 +114,7 @@ new file-backed store (next section), exactly like `desktop_nodes.json`.
 
 ## 5. New request store — `desktop_task_requests.py`
 
-Copy the *shape* of `desktop_observe_requests.py` (it is the cleanest
+Copy the *shape* of `conveyor/desktop/desktop_observe_requests.py` (it is the cleanest
 reference: `_load_unlocked`/`_save_unlocked` with `.tmp`+`os.replace`,
 `file_lock`, TTL expiry, claim/complete/fail/cancel, `ALLOWED/RESULT_FORBIDDEN`
 field validation). Differences:

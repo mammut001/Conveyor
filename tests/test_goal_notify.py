@@ -18,9 +18,9 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-import goal_notify
-import supervisor_goals as goals
-import web_push
+from conveyor.agents import goal_notify
+from conveyor.agents import supervisor_goals as goals
+from conveyor.web import web_push
 from config import load_runtime_settings
 
 GOAL_ID = "goal-0123456789abcdef"
@@ -329,7 +329,7 @@ class GoalNotifyDeliveryTests(unittest.TestCase):
         self.assertEqual(len(self.telegram), 2)
 
     def test_dedupe_table_is_bounded(self) -> None:
-        from supervisor_goals import _connect
+        from conveyor.agents.supervisor_goals import _connect
         for index in range(goal_notify.MAX_DEDUPE_ROWS + 20):
             goal_notify.notify_goal_change(
                 self.settings, _goal(updated_at=f"2024-05-01T10:{index // 60:02d}:{index % 60:02d}+00:00"),

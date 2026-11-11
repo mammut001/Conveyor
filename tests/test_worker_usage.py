@@ -14,12 +14,12 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import worker_usage
-import workers
+from conveyor.agents import worker_usage
+from conveyor.agents import workers
 from handlers.job_queue import JobQueue
 from tests.test_workers import TOKEN, _make_settings
 from web_console import WebConsoleHandler, WebConsoleServer
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 NOW = 1_800_000_000.0
 
@@ -429,7 +429,7 @@ class ThresholdPickTests(unittest.TestCase):
         workers.clear_detection_cache()
         self._tmp = tempfile.TemporaryDirectory()
         self.settings = _make_settings(Path(self._tmp.name))
-        p = patch("workers.detect_all_workers", return_value=_detections())
+        p = patch("conveyor.agents.workers.detect_all_workers", return_value=_detections())
         p.start()
         self.addCleanup(p.stop)
         self.addCleanup(self._tmp.cleanup)
@@ -573,7 +573,7 @@ class ThresholdPickTests(unittest.TestCase):
 class UsageApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls._detect = patch("workers.detect_all_workers", side_effect=lambda force=False: _detections())
+        cls._detect = patch("conveyor.agents.workers.detect_all_workers", side_effect=lambda force=False: _detections())
         cls._detect.start()
         cls._tmp = tempfile.TemporaryDirectory()
         cls.settings = _make_settings(Path(cls._tmp.name), workers_enabled=True, workers_install_enabled=True)
@@ -685,9 +685,9 @@ class GrokDetectionTests(unittest.TestCase):
             (home / ".grok" / "auth.json").write_text("{}")
         version = MagicMock(returncode=0, stdout="grok 1.0\n", stderr="")
         models = MagicMock(returncode=rc, stdout="grok-4\n", stderr="")
-        with patch("workers.shutil.which", return_value="/bin/grok"), \
-             patch("workers.os.path.expanduser", return_value=str(home)), \
-             patch("workers.subprocess.run", side_effect=[version, models]):
+        with patch("conveyor.agents.workers.shutil.which", return_value="/bin/grok"), \
+             patch("conveyor.agents.workers.os.path.expanduser", return_value=str(home)), \
+             patch("conveyor.agents.workers.subprocess.run", side_effect=[version, models]):
             return workers.detect_worker(workers.get_catalog_worker("grok"))["auth"]
 
     def test_auth_needs_file_and_models_ok(self) -> None:

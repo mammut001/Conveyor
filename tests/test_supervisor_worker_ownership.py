@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import agent_supervisor as ags
+from conveyor.agents import agent_supervisor as ags
 from config import Settings
-from supervisor_service import (
+from conveyor.agents.supervisor_service import (
     SupervisorWorker,
     SupervisorWorkerManager,
     cancel_scoped_task,
@@ -542,7 +542,7 @@ class SupervisorWorkerOwnershipTests(unittest.TestCase):
         )
         time.sleep(0.05)
 
-        with patch("agent_supervisor.get_task", side_effect=sqlite3.OperationalError("database disk image is malformed")):
+        with patch("conveyor.agents.agent_supervisor.get_task", side_effect=sqlite3.OperationalError("database disk image is malformed")):
             # Must not crash worker loop or raise unhandled exception
             try:
                 self.worker._on_flow_done(self.settings, task_id, fault_fut)

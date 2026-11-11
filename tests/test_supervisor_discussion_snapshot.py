@@ -20,10 +20,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import agent_supervisor as ags
+from conveyor.agents import agent_supervisor as ags
 from config import Settings
 from handlers.job_queue import JobQueue
-from supervisor_service import (
+from conveyor.agents.supervisor_service import (
     MAX_SNAPSHOT_BYTES,
     MAX_SNAPSHOT_TURNS,
     SupervisorServiceError,
@@ -33,9 +33,9 @@ from supervisor_service import (
     get_scoped_task,
     register_repository,
 )
-from transcript_store import get_transcript_store
+from conveyor.core.transcript_store import get_transcript_store
 from web_console import WebConsoleHandler, WebConsoleServer
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 
 TOKEN = "test-token-discussion-snapshot-1234567890"
@@ -441,7 +441,7 @@ class SupervisorDiscussionSnapshotTests(unittest.TestCase):
         self.store.append(sid, "user", "Critical specification that must not be lost")
 
         with patch.object(self.store, "recent_messages", side_effect=sqlite3.OperationalError("disk I/O error")):
-            with patch("supervisor_service.get_transcript_store", return_value=self.store):
+            with patch("conveyor.agents.supervisor_service.get_transcript_store", return_value=self.store):
                 with self.assertRaises(SupervisorServiceError) as cm:
                     create_scoped_task(self.settings, {
                         "repo_id": self.repo["id"],

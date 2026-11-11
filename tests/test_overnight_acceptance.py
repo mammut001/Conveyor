@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from overnight_store import OvernightStore
+from conveyor.automation.overnight_store import OvernightStore
 
 
 class AcceptanceTests(unittest.TestCase):

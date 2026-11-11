@@ -140,7 +140,7 @@ def _check_root(root: Path) -> Path:
 
 
 def _production_paths_rejected(settings, root: Path) -> None:
-    from desktop_screenshot import resolve_screenshot_dir
+    from conveyor.desktop.desktop_screenshot import resolve_screenshot_dir
 
     paths = [
         Path(settings.codex_workspace_root),
@@ -423,7 +423,7 @@ def _setup_scenario(name: str, display: int, authority: str, page: str) -> dict:
     ``LinuxBrowserController.ensure`` on this private display. A raw
     Firefox command would use the default profile and can cross displays.
     """
-    from desktop_linux_browser import LinuxBrowserController
+    from conveyor.desktop.desktop_linux_browser import LinuxBrowserController
 
     env = _display_env(display, authority)
     record: dict = {"scenario": name, "phase": "setup", "commands": [], "setup_ok": False}
@@ -616,8 +616,8 @@ def _event_types(log_path: Path, before: int) -> list[str]:
 def _assign_display(settings, display: int) -> tuple[str, str]:
     import sqlite3
 
-    import agents
-    from agents import AgentStore
+    from conveyor.agents import agents
+    from conveyor.agents.agents import AgentStore
 
     store = AgentStore(settings)
     agent = store.create({"name": "linux-e2e", "workspace_path": str(settings.codex_workspace_root)})
@@ -634,7 +634,7 @@ def _assign_display(settings, display: int) -> tuple[str, str]:
 def _save_screenshot(settings, screenshot_id: str, dest: Path) -> str | None:
     if not screenshot_id:
         return None
-    from desktop_screenshot import resolve_screenshot_dir
+    from conveyor.desktop.desktop_screenshot import resolve_screenshot_dir
 
     source = resolve_screenshot_dir(settings) / f"{screenshot_id}.png"
     if not source.is_file():
@@ -673,7 +673,7 @@ class _MeasuredPlanner:
     """
 
     def __init__(self, settings, **kwargs) -> None:
-        from desktop_computer_planner import CodexPlanner
+        from conveyor.desktop.desktop_computer_planner import CodexPlanner
 
         class _Planner(CodexPlanner):
             def __init__(self) -> None:
@@ -693,7 +693,7 @@ class _MeasuredPlanner:
                     return
                 if observation.get("browser_page_state") == "loading":
                     return
-                from desktop_computer_loop import _focus_identity, _mutation_identity
+                from conveyor.desktop.desktop_computer_loop import _focus_identity, _mutation_identity
 
                 key = (
                     _mutation_identity(action),
@@ -722,8 +722,8 @@ class _MeasuredPlanner:
 async def _one(settings, *, case: str, round_index: int, scenario: str, display: int,
                authority: str, chat_id: str, expected: dict, artifact: Path, log_path: Path,
                backend_mode: str = "x11") -> dict:
-    from desktop_computer_loop import build_backend, run_computer_loop
-    from desktop_computer_requests import create_computer_task, get_computer_task
+    from conveyor.desktop.desktop_computer_loop import build_backend, run_computer_loop
+    from conveyor.desktop.desktop_computer_requests import create_computer_task, get_computer_task
 
     goal = _goal(case, round_index)
     code = _code_for(case, round_index, expected)
@@ -761,7 +761,7 @@ async def _one(settings, *, case: str, round_index: int, scenario: str, display:
         if desktop_env.get("XAUTHORITY") != authority or desktop_env.get("DISPLAY") != f":{display}":
             _refuse("backend desktop is not the private display")
     else:
-        from desktop_computer_loop import HttpComputerBackend
+        from conveyor.desktop.desktop_computer_loop import HttpComputerBackend
         if not isinstance(backend, HttpComputerBackend):
             _refuse(f"backend is {type(backend).__name__}, expected HttpComputerBackend")
         backend.poll_interval = 0.25

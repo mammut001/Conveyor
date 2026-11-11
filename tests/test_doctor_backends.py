@@ -200,7 +200,7 @@ class PiBackendCheckTests(unittest.TestCase):
             # No STEPFUN_API_KEY; console store also returns nothing.
             with mock.patch.dict(os.environ, env, clear=True), \
                     mock.patch("harness_common.shutil.which", return_value="/usr/bin/pi"), \
-                    mock.patch("console_secrets.read_secret", return_value=None):
+                    mock.patch("conveyor.web.console_secrets.read_secret", return_value=None):
                 results = check_pi_backend(settings)
             by_name = _by_name(results)
             self.assertFalse(by_name["pi api key"].ok)

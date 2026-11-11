@@ -446,7 +446,7 @@ def main() -> int:
 
         # 25–28. Observe pending / claim / complete / fail
         print("Testing observe pending/claim/complete/fail flow...")
-        from desktop_observe_requests import save_observe_requests
+        from conveyor.desktop.desktop_observe_requests import save_observe_requests
 
         observe_store_path = (
             desktop_agent_server.settings.codex_memory_root
@@ -600,7 +600,7 @@ def main() -> int:
 
         # 30-38. Upload pending / claim / fail / complete validations
         print("Testing upload integration endpoints...")
-        from desktop_upload_requests import save_upload_requests
+        from conveyor.desktop.desktop_upload_requests import save_upload_requests
         test_upload_id = "upl_20260702T120000Z_test1234"
         save_upload_requests(desktop_agent_server.settings, {
             test_upload_id: {

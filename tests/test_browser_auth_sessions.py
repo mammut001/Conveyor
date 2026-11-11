@@ -12,10 +12,10 @@ import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from browser_auth_policy import check_request, enabled, origins
-from browser_auth_sessions import AuthSession, AuthSessionManager
-from workflow_browser_external_identity import ExternalPolicyDenied
-from human_takeover import HumanTakeoverStore
+from conveyor.browser.browser_auth_policy import check_request, enabled, origins
+from conveyor.browser.browser_auth_sessions import AuthSession, AuthSessionManager
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied
+from conveyor.desktop.human_takeover import HumanTakeoverStore
 
 RUN_REAL = os.getenv("CONVEYOR_REQUIRE_REAL_BROWSER") == "1"
 
@@ -69,7 +69,7 @@ class G4OfflineTests(unittest.IsolatedAsyncioTestCase):
                 os.environ[name] = "1"
 
     def test_bare_domain_normalization(self):
-        from browser_auth_policy import _origin
+        from conveyor.browser.browser_auth_policy import _origin
         self.assertEqual(_origin("approved.example.com"), "https://approved.example.com")
         self.assertEqual(_origin("https://approved.example.com:443"),
                          "https://approved.example.com")
@@ -77,7 +77,7 @@ class G4OfflineTests(unittest.IsolatedAsyncioTestCase):
             _origin("*.example.com")
 
     def test_loopback_fixture_refuses_display_and_non_test(self):
-        from browser_auth_policy import _origin, fixture_loopback_enabled
+        from conveyor.browser.browser_auth_policy import _origin, fixture_loopback_enabled
         origin = "http://127.0.0.1:8765"
         self.assertTrue(fixture_loopback_enabled())
         with patch.dict(os.environ, {"CONVEYOR_REQUIRE_REAL_BROWSER": "0"}):
@@ -128,7 +128,7 @@ class G4OfflineTests(unittest.IsolatedAsyncioTestCase):
         b = await self._open_fake()
         cookie2 = b.directory / "cookie"
         cookie2.write_bytes(b"secret")
-        from browser_g3_kill import path as kill_path
+        from conveyor.browser.browser_g3_kill import path as kill_path
         kill = kill_path(self.settings)
         kill.touch(mode=0o600)
         self.assertEqual(await self.manager.list_public(operator="operator"), [])
@@ -287,7 +287,7 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
         await s.navigate_for_human(self.domain + "/login")
         profile = s.directory / "profile"
         self.assertTrue(profile.exists())
-        from browser_auth_owner import owner_alive
+        from conveyor.browser.browser_auth_owner import owner_alive
         self.assertTrue(owner_alive(s.directory))
         other_manager = AuthSessionManager(self.settings)
         self.assertIsNot(self.mgr, other_manager)
@@ -345,7 +345,7 @@ class G4RealBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(directory.exists())
         t, lease2 = await self._session("bob", "task5")
         self.store.complete(lease2)
-        from browser_g3_kill import path as kill_path
+        from conveyor.browser.browser_g3_kill import path as kill_path
         kill = kill_path(self.settings)
         kill.touch()
         self.assertEqual(await self.mgr.list_public(operator="bob"), [])

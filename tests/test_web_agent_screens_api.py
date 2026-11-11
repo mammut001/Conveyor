@@ -11,13 +11,13 @@ import threading
 import unittest
 from unittest.mock import patch
 
-import agent_context as ac
-import agent_mailbox as mailbox
-from agents import AgentStore, WEB_OPERATOR, chat_id_for
+from conveyor.agents import agent_context as ac
+from conveyor.agents import agent_mailbox as mailbox
+from conveyor.agents.agents import AgentStore, WEB_OPERATOR, chat_id_for
 from handlers.job_queue import JobQueue
 from config import Settings
 from web_console import WebConsoleHandler, WebConsoleServer
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 
 def test_settings(root):
@@ -107,7 +107,7 @@ class AgentScreensHTTPTests(unittest.TestCase):
             self.assertEqual(self.req("GET", url)[0], 404)
 
     def test_runtime_kill_api_auth_csrf_and_audit(self):
-        import agent_security
+        from conveyor.agents import agent_security
         endpoint = "/api/agents/kill"
         ajax = {"X-Requested-With": "XMLHttpRequest"}
         self.assertEqual(self.req("POST", endpoint, {"enabled": True},

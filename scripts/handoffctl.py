@@ -14,9 +14,9 @@ import time
 from pathlib import Path
 
 from config import load_runtime_settings
-from desktop_computer_requests import cancel_pending_computer_steps, has_claimed_computer_steps
-from desktop_observe_requests import cancel_pending_observe_requests, has_claimed_observe_requests
-from human_takeover import ALLOWED_REASONS, HumanTakeoverStore
+from conveyor.desktop.desktop_computer_requests import cancel_pending_computer_steps, has_claimed_computer_steps
+from conveyor.desktop.desktop_observe_requests import cancel_pending_observe_requests, has_claimed_observe_requests
+from conveyor.desktop.human_takeover import ALLOWED_REASONS, HumanTakeoverStore
 
 
 def _print(value: object) -> None:

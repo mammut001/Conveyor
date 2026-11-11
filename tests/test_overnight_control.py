@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import Mock
-from overnight_control import Controller
+from conveyor.automation.overnight_control import Controller
 
 
 class ControlTests(unittest.TestCase):

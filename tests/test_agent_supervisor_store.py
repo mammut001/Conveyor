@@ -18,8 +18,8 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("CONVEYOR_AGENT_SUPERVISOR_ENABLED", "true")
 
 from config import Settings
-import agent_supervisor as ags
-from agent_supervisor import (
+from conveyor.agents import agent_supervisor as ags
+from conveyor.agents.agent_supervisor import (
     SupervisorLockError, SupervisorStateError,
     acquire_worktree_lock, cancel_task, claim_task, create_task,
     dispatch_task, effective_acceptance, get_task, has_active_task_for_worktree,

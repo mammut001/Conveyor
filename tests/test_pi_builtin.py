@@ -10,8 +10,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import provider_config
-import workers
+from conveyor.core import provider_config
+from conveyor.agents import workers
 from config import Settings
 from runner import pi_agent
 from runner.pi_agent import PiBackend, build_pi_models_json, resolve_pi_bin, sanitize_pi_provider_id
@@ -209,7 +209,7 @@ class PiProviderBridgeTests(unittest.TestCase):
 
 class PiCatalogTests(unittest.TestCase):
     def setUp(self) -> None:
-        patcher = patch("worker_usage.fetch_usage", return_value=None)
+        patcher = patch("conveyor.agents.worker_usage.fetch_usage", return_value=None)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -229,9 +229,9 @@ class PiCatalogTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             args, kwargs = run.call_args
             self.assertEqual(args[0], ["bash", "scripts/install_pi.sh"])
-            self.assertEqual(kwargs["cwd"], str(Path(workers.__file__).resolve().parent))
+            self.assertEqual(kwargs["cwd"], str(Path(__file__).resolve().parents[1]))
             self.assertFalse(kwargs.get("shell", False))
-        self.assertTrue((Path(workers.__file__).resolve().parent / "scripts" / "install_pi.sh").is_file())
+        self.assertTrue((Path(__file__).resolve().parents[1] / "scripts" / "install_pi.sh").is_file())
 
     def test_auth_needs_login_without_provider(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

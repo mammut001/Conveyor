@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Any
 
 from redaction import redact_text, truncate
-from refinement_store import RefinementStore, stable_session_id
+from conveyor.core.refinement_store import RefinementStore, stable_session_id
 
 if TYPE_CHECKING:
     from channel.types import InboundMessage, OutboundPort
@@ -144,7 +144,7 @@ class JobQueue:
             conn.close()
 
     def _parallel_limit(self) -> int:
-        from job_lanes import parallel_limit
+        from conveyor.core.job_lanes import parallel_limit
         return parallel_limit(self._settings) if self._settings is not None else 1
 
     @staticmethod
@@ -199,7 +199,7 @@ class JobQueue:
         if self._settings is None:
             return
         try:
-            from agent_events import emit_event
+            from conveyor.agents.agent_events import emit_event
             emit_event(self._settings, kind, job_id, payload or {}, session_id=session_id)
         except Exception:
             logger.exception("Could not persist agent event %s for %s", kind, job_id)
@@ -406,7 +406,7 @@ class JobQueue:
     def _lane_for(self, msg: Any, runner: Any) -> str:
         """Lane of a new job. A conversation only gets its own lane when a
         separate runner can actually be created for it."""
-        from job_lanes import DEFAULT_LANE, lane_for_chat, runner_for_lane
+        from conveyor.core.job_lanes import DEFAULT_LANE, lane_for_chat, runner_for_lane
 
         settings = getattr(runner, "settings", None) or self._settings
         lane = lane_for_chat(settings, msg.channel, msg.chat_id)
@@ -424,8 +424,8 @@ class JobQueue:
         original_text: str | None = None,
     ) -> tuple[bool, str, QueuedJob | None]:
         """Add a queue job and persist whether it expects chain continuation."""
-        import agent_conversations
-        import agents
+        from conveyor.agents import agent_conversations
+        from conveyor.agents import agents
         settings = self._settings or getattr(runner, "settings", None)
         session_id = agent_conversations.refinement_id(settings, msg)
         agent = agents.agent_for_chat(settings, msg.channel, msg.chat_id) if agent_conversations.enabled(settings) else None
@@ -433,7 +433,7 @@ class JobQueue:
             msg.operator_id, agent["id"]) if agent else None
         conversation_context = {}
         if conversation:
-            import agent_context
+            from conveyor.agents import agent_context
             ctx = agent_context.for_request(settings, msg.channel, msg.chat_id, msg.operator_id)
             conversation_context = dict(vars(ctx), tool_capabilities=sorted(ctx.tool_capabilities))
         # Resolved before the write transaction below: looking up the agent
@@ -904,7 +904,7 @@ class JobQueue:
         current_job = getattr(self._runner, "current_job", None) if self._runner else None
         if queue_job_id and self._runner is not None:
             # The job may have run on another lane's runner.
-            from job_lanes import runner_of_job
+            from conveyor.core.job_lanes import runner_of_job
             lane_runner = runner_of_job(self._runner, queue_job_id)
             if lane_runner is not None:
                 current_job = lane_runner.current_job

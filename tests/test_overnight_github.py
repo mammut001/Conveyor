@@ -1,6 +1,6 @@
 import unittest
 from copy import deepcopy
-from overnight_github import assert_mergeable, GitHubDelivery
+from conveyor.automation.overnight_github import assert_mergeable, GitHubDelivery
 
 
 class GitHubGateTests(unittest.TestCase):

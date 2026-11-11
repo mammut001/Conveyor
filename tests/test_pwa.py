@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import web_push
+from conveyor.web import web_push
 from config import load_runtime_settings
 from web_console import WebConsoleHandler, WebConsoleServer
 

@@ -1,6 +1,6 @@
 import json
 import unittest
-from overnight_report import format_run
+from conveyor.automation.overnight_report import format_run
 
 
 class ReportTests(unittest.TestCase):

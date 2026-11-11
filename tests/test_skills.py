@@ -24,7 +24,7 @@ from handlers.tools.confirm import (
     PendingToolAction,
 )
 from handlers.tools.registry import DangerLevel
-import approval_inbox
+from conveyor.channels import approval_inbox
 from personal_tools import skills
 from personal_tools.registry import (
     get_personal_tool,
@@ -32,7 +32,7 @@ from personal_tools.registry import (
     requires_personal_confirmation,
 )
 from web_console import WebConsoleHandler, WebConsoleServer
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 
 def _settings(tmp: Path, **overrides) -> Settings:

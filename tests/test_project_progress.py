@@ -65,7 +65,7 @@ class ProjectProgressTests(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import AsyncMock
         from tests.test_pi_backend import _make_settings
         from channel.types import InboundMessage
-        from web_chat import WebChatPort, run_web_chat
+        from conveyor.web.web_chat import WebChatPort, run_web_chat
         from personal_tools.base import ToolResult
         with tempfile.TemporaryDirectory() as raw:
             settings = _make_settings(Path(raw))

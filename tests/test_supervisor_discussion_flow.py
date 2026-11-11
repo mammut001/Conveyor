@@ -36,9 +36,9 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("CONVEYOR_AGENT_SUPERVISOR_ENABLED", "true")
 
-import agent_supervisor as ags
+from conveyor.agents import agent_supervisor as ags
 from config import Settings
-from agent_supervisor import (
+from conveyor.agents.agent_supervisor import (
     RoleConfig,
     SupervisorStateError,
     build_reviewer_prompt,

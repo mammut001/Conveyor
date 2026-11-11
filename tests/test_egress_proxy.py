@@ -16,8 +16,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-import egress_proxy
-import subprocess_env
+from conveyor.browser import egress_proxy
+from conveyor.core import subprocess_env
 
 
 class Echo(BaseHTTPRequestHandler):
@@ -208,7 +208,7 @@ class ProxyTests(unittest.TestCase):
                 ("198.18.0.1", "private_cidr_allowlisted"))
 
     def test_private_ip_literal_needs_cidr_and_forbidden_always_denied(self):
-        from egress_policy import private_cidrs
+        from conveyor.browser.egress_policy import private_cidrs
         with patch.dict("os.environ", {"CONVEYOR_EGRESS_ALLOW_PRIVATE_CIDRS": "198.18.0.0/15"}):
             cidrs = private_cidrs()
         self.assertEqual(egress_proxy.destination(

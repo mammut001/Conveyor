@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from agents import AgentStore, chat_id_for
+from conveyor.agents.agents import AgentStore, chat_id_for
 from channel.types import InboundMessage
 from config import Settings
 from handlers.chat import chat_key, history, remember

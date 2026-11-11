@@ -193,12 +193,12 @@ def owner_for_chat(settings: Any, operator_id: str, channel: str, chat_id: str) 
     other agent's. The default agent (Telegram, Feishu, older web sessions)
     uses the operator's store exactly as before.
     """
-    import agent_context
+    from conveyor.agents import agent_context
     if agent_context.enabled(settings):
         return agent_context.for_request(
             settings, channel, chat_id, operator_id).memory_owner
     try:
-        import agents
+        from conveyor.agents import agents
 
         agent = agents.agent_for_chat(settings, channel, chat_id)
     except Exception:
@@ -827,7 +827,7 @@ async def session_search(
     q_str, lim = _parse_session_search_input(arg, query=query, limit=limit)
     if not q_str:
         return ToolResult(False, "请输入要搜索的过去对话关键词。")
-    from transcript_store import get_transcript_store
+    from conveyor.core.transcript_store import get_transcript_store
     allowed_ops = _allowed_session_operators(settings, operator_id)
     hits = get_transcript_store(settings).search(
         q_str,

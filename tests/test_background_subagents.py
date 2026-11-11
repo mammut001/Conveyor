@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 from channel.types import InboundMessage
 from handlers.tools.registry import DangerLevel, ToolSpec
 from runner.chat_client import ChatConfig
-import subagents
+from conveyor.agents import subagents
 
 
 class Port:
@@ -75,7 +75,7 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
                                      parent_tools=tools or {})
 
     async def test_completion_and_short_message(self):
-        with patch("subagents.complete_chat", new=AsyncMock(return_value={"content": "summary"})):
+        with patch("conveyor.agents.subagents.complete_chat", new=AsyncMock(return_value={"content": "summary"})):
             result = await self.spawn()
             self.assertEqual(result["status"], "queued")
             record = await self.wait_done(result["id"])
@@ -92,7 +92,7 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
             await gate.wait()
             return {"content": "done"}
 
-        with patch("subagents.complete_chat", side_effect=pending):
+        with patch("conveyor.agents.subagents.complete_chat", side_effect=pending):
             first = await self.spawn()
             with self.assertRaisesRegex(ValueError, "concurrency cap"):
                 await self.spawn()
@@ -108,7 +108,7 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
         async def blocked(*_args, **_kwargs):
             await asyncio.Event().wait()
 
-        with patch("subagents.complete_chat", side_effect=blocked):
+        with patch("conveyor.agents.subagents.complete_chat", side_effect=blocked):
             task = await self.spawn()
             record = await self.wait_done(task["id"], timeout=2.3)
         self.assertEqual(record["status"], "timed_out")
@@ -119,7 +119,7 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
         async def blocked(*_args, **_kwargs):
             await gate.wait()
 
-        with patch("subagents.complete_chat", side_effect=blocked):
+        with patch("conveyor.agents.subagents.complete_chat", side_effect=blocked):
             task = await self.spawn()
             self.assertTrue(subagents.cancel(self.settings, task["id"]))
             self.assertEqual((await self.wait_done(task["id"]))["status"], "cancelled")
@@ -130,7 +130,7 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
         async def blocked(*_args, **_kwargs):
             await gate.wait()
 
-        with patch("subagents.complete_chat", side_effect=blocked):
+        with patch("conveyor.agents.subagents.complete_chat", side_effect=blocked):
             children = [await self.spawn() for _ in range(2)]
             self.assertEqual(subagents.cancel_parent(
                 self.settings, operator_id="other", channel="telegram", chat_id="chat"), 0)
@@ -155,7 +155,7 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_private_read_taints_parent(self):
         from handlers import chat_tools
-        import egress_taint
+        from conveyor.browser import egress_taint
         calls = iter([
             {"content": "", "tool_calls": [{"id":"call-1", "type":"function", "function":{
                 "name":"gmail__recent", "arguments":json.dumps({"arg":"inbox"})}}]},
@@ -166,7 +166,7 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
             egress_taint.mark_read(self.settings, "gmail.recent", **kwargs)
             return "private info"
 
-        with (patch("subagents.complete_chat", new=AsyncMock(side_effect=lambda *_a, **_k: next(calls))),
+        with (patch("conveyor.agents.subagents.complete_chat", new=AsyncMock(side_effect=lambda *_a, **_k: next(calls))),
               patch.object(chat_tools, "_get_tool_spec", return_value=spec),
               patch.object(chat_tools, "is_exposed", return_value=True),
               patch("handlers.tools.runner.run_tool", side_effect=fake_run)):
@@ -178,7 +178,7 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_inherits_parent_taint_and_routes_network_read_to_approval(self):
         from handlers import chat_tools
-        import egress_taint
+        from conveyor.browser import egress_taint
         self.settings.approval_inbox_enabled = True
         egress_taint.mark_read(self.settings, "gmail.recent",
                               operator_id="user", channel="telegram", chat_id="chat")
@@ -189,7 +189,7 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
             "name":"web__fetch", "arguments":'{"arg":"https://example.com"}'}}]}]
         schema = {"type":"function", "function":{"name":"web__fetch",
                   "parameters":{"type":"object", "properties":{"arg":{"type":"string"}}}}}
-        with (patch("subagents.complete_chat", new=AsyncMock(side_effect=model_calls)),
+        with (patch("conveyor.agents.subagents.complete_chat", new=AsyncMock(side_effect=model_calls)),
               patch.object(chat_tools, "_get_tool_spec", return_value=spec),
               patch.object(chat_tools, "is_exposed", return_value=True),
               patch("handlers.tools.runner._request_confirmation", new_callable=AsyncMock) as confirm,
@@ -206,7 +206,7 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
             "name":"test__write", "arguments":'{"arg":"do it"}'}}]}]
         self.settings.approval_inbox_enabled = True
         spec = ToolSpec("test.write", "Write", DangerLevel.WRITE, executor=None)
-        with (patch("subagents.complete_chat", new=AsyncMock(side_effect=calls)),
+        with (patch("conveyor.agents.subagents.complete_chat", new=AsyncMock(side_effect=calls)),
               patch.object(chat_tools, "_get_tool_spec", return_value=spec),
               patch.object(chat_tools, "is_exposed", return_value=True),
               patch("handlers.tools.runner._request_confirmation", new_callable=AsyncMock) as confirm,
@@ -239,7 +239,7 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
         async def blocked(*_args, **_kwargs):
             await asyncio.Event().wait()
 
-        with patch("subagents.complete_chat", side_effect=blocked):
+        with patch("conveyor.agents.subagents.complete_chat", side_effect=blocked):
             child = await self.spawn()
             self.assertEqual(subagents.kill_all(self.settings), 1)
             self.assertFalse(subagents.enabled(self.settings))
@@ -254,7 +254,7 @@ class BackgroundTests(unittest.IsolatedAsyncioTestCase):
             confs.append(conf)
             return {"content": "done"}
 
-        with patch("subagents.complete_chat", side_effect=fake_llm):
+        with patch("conveyor.agents.subagents.complete_chat", side_effect=fake_llm):
             child = await self.spawn()
             self.assertEqual((await self.wait_done(child["id"]))["status"], "completed")
         self.assertLessEqual(confs[0].max_tokens, 256 // 3)

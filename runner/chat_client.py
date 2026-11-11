@@ -113,7 +113,7 @@ def config_from_settings(settings: Any) -> ChatConfig | None:
 
     # Rule 3: Otherwise (mode unset or auto, no chat-specific config) ->
     # use the saved provider (base_url, model, key read via provider_config, never logged).
-    from provider_config import get_saved_provider_credentials
+    from conveyor.core.provider_config import get_saved_provider_credentials
 
     provider = get_saved_provider_credentials(settings)
     if not provider:

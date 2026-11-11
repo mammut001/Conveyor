@@ -11,10 +11,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import egress_host_rules
-import egress_proxy
-from browser_login_domain_gate import login_domain_busy, reserve_login_domain
-from workflow_browser_external_identity import ExternalPolicyDenied
+from conveyor.browser import egress_host_rules
+from conveyor.browser import egress_proxy
+from conveyor.browser.browser_login_domain_gate import login_domain_busy, reserve_login_domain
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied
 from channel.feishu_audio import _convert_opus
 from channel.feishu_ffmpeg_policy import opus_to_ogg_command
 
@@ -125,7 +125,7 @@ class FeishuFFmpegPolicyTests(unittest.TestCase):
 
 class LoginDomainAdmissionTests(unittest.IsolatedAsyncioTestCase):
     async def test_atomic_open_busy_during_start_and_until_revoked(self):
-        from browser_auth_sessions import AuthSession, manager_for
+        from conveyor.browser.browser_auth_sessions import AuthSession, manager_for
         origin = "http://127.0.0.1:18098"
         flags = {
             "CONVEYOR_REAL_BROWSER": "1",

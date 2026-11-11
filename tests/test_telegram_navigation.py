@@ -6,10 +6,10 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from telegram_navigation import (
+from conveyor.channels.telegram_navigation import (
     callback_action, legacy_action, navigation_screen, sessions_screen, workers_screen,
 )
-from transcript_store import get_transcript_store, session_identity
+from conveyor.core.transcript_store import get_transcript_store, session_identity
 
 
 class FakeQueue:
@@ -107,7 +107,7 @@ class TelegramNavigationTests(unittest.TestCase):
         )
 
     def test_agents_card_is_scoped_and_never_leaks_paths_or_instructions(self):
-        import agents
+        from conveyor.agents import agents
         self.settings.agents_enabled = True
         store = agents.AgentStore(self.settings)
         created = store.create({

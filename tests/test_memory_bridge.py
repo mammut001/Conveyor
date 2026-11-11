@@ -12,7 +12,7 @@ from config import load_settings
 from handlers import chat, chat_memory, session
 from handlers.session import append_turn, build_context_prompt, get_recent_turns
 from runner.types import Job, JobMode, JobState
-from transcript_store import TranscriptStore, get_transcript_store, session_identity
+from conveyor.core.transcript_store import TranscriptStore, get_transcript_store, session_identity
 
 
 class MemoryBridgeTests(unittest.TestCase):

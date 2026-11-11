@@ -13,15 +13,15 @@ import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
-import agent_context as ac
+from conveyor.agents import agent_context as ac
 from agent_coordination import agent_delegation as delegation
 from agent_coordination import agent_delegation_queue as queue
 from agent_coordination import agent_result_outbox as outbox
 from agent_coordination import agent_channel_results as adapter
-import agent_security
-import agent_security_controls
-import main_router_results
-from agents import AgentStore, chat_id_for
+from conveyor.agents import agent_security
+from conveyor.agents import agent_security_controls
+from conveyor.agents import main_router_results
+from conveyor.agents.agents import AgentStore, chat_id_for
 from config import Settings
 from channel.types import InboundMessage
 
@@ -110,7 +110,7 @@ class ResultOutboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending["channel"],"telegram")
         self.assertIn("[result:"+pending["result_id"][:12]+"]",pending["text"])
         send = AsyncMock(return_value="message-42")
-        with patch("egress_taint.requires_approval",return_value=False):
+        with patch("conveyor.browser.egress_taint.requires_approval",return_value=False):
             self.assertEqual(await adapter.consume_once(self.settings,"telegram",send),1)
             self.assertEqual(await adapter.consume_once(self.settings,"telegram",send),0)
         send.assert_awaited_once()
@@ -120,7 +120,7 @@ class ResultOutboxTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_send_retries_with_backoff_no_double_success(self):
         self.commit_result("retry",channel="feishu")
         sender = AsyncMock(side_effect=[TimeoutError("uncertain"),"feishu-ack"])
-        with patch("egress_taint.requires_approval",return_value=False):
+        with patch("conveyor.browser.egress_taint.requires_approval",return_value=False):
             self.assertEqual(await outbox.consume_once(self.settings,"feishu",sender),0)
             row = self.records()[0]
             self.assertEqual(row["state"],"retry")
@@ -143,7 +143,7 @@ class ResultOutboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(agent_security.set_kill(
             self.settings,enabled=True,operator="web-console",source="web"))
         self.assertTrue(outbox.configured(self.settings))
-        with patch("egress_taint.requires_approval",return_value=False):
+        with patch("conveyor.browser.egress_taint.requires_approval",return_value=False):
             self.assertEqual(await outbox.consume_once(
                 self.settings,"telegram",sender),0)
             self.assertEqual(self.records()[0]["state"],"pending")
@@ -181,7 +181,7 @@ class ResultOutboxTests(unittest.IsolatedAsyncioTestCase):
 
         agent_security.set_kill(
             self.settings, enabled=False, operator="web-console", source="web")
-        with patch("egress_taint.requires_approval", return_value=False):
+        with patch("conveyor.browser.egress_taint.requires_approval", return_value=False):
             self.assertEqual(
                 await outbox.consume_once(self.settings, "telegram", sender), 1)
         sender.assert_awaited_once()
@@ -207,7 +207,7 @@ class ResultOutboxTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await agent_security_controls.owner_command(
                 self.settings, owner, port))
             port.reply.assert_not_awaited()
-            with (patch("job_lanes.runner_for_chat", return_value=object()),
+            with (patch("conveyor.core.job_lanes.runner_for_chat", return_value=object()),
                   patch.object(importlib.import_module("handlers.dispatch"), "try_resolve_confirmation",
                         new_callable=AsyncMock, return_value=False)):
                 await dispatch(owner, port, self.settings, object())
@@ -243,7 +243,7 @@ class ResultOutboxTests(unittest.IsolatedAsyncioTestCase):
     async def test_egress_refusal_does_not_send_and_retries_or_dead(self):
         self.commit_result("egress")
         sender=AsyncMock()
-        with patch("egress_taint.requires_approval",return_value=True):
+        with patch("conveyor.browser.egress_taint.requires_approval",return_value=True):
             self.assertEqual(await outbox.consume_once(
                 self.settings,"telegram",sender),0)
         sender.assert_not_awaited()
@@ -251,7 +251,7 @@ class ResultOutboxTests(unittest.IsolatedAsyncioTestCase):
         with outbox._db(self.settings) as db:
             db.execute("UPDATE agent_result_notifications SET attempts=?,next_attempt=0",
                        (outbox.MAX_ATTEMPTS-1,))
-        with patch("egress_taint.requires_approval",return_value=True):
+        with patch("conveyor.browser.egress_taint.requires_approval",return_value=True):
             self.assertEqual(await outbox.consume_once(
                 self.settings,"telegram",sender),0)
         self.assertEqual(self.records()[0]["state"],"dead")

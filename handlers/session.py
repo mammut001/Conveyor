@@ -34,15 +34,15 @@ def _safe_filename(channel: str, chat_id: str, operator_id: str) -> str:
 
 
 def session_path(settings: Settings, msg: InboundMessage) -> Path:
-    import agent_context
+    from conveyor.agents import agent_context
     filename = _safe_filename(msg.channel, msg.chat_id, msg.operator_id)
     if agent_context.enabled(settings):
         ctx = agent_context.for_request(settings, msg.channel, msg.chat_id, msg.operator_id)
-        import agent_conversations
+        from conveyor.agents import agent_conversations
         conversation = agent_conversations.current(settings, msg.channel, msg.chat_id,
                                                    msg.operator_id, ctx.agent_id)
         if conversation:
-            import agents
+            from conveyor.agents import agents
             if agent_conversations.legacy_entry_root(conversation):
                 filename = _safe_filename(conversation["origin_channel"],
                                           conversation["origin_chat_id"], conversation["origin_operator"])
@@ -101,7 +101,7 @@ def _mirror_transcript(
     kind: str,
 ) -> None:
     try:
-        from transcript_store import get_transcript_store, session_identity
+        from conveyor.core.transcript_store import get_transcript_store, session_identity
         store = get_transcript_store(settings)
         store.append_turn(
             session_identity(msg.channel, msg.chat_id, msg.operator_id),
@@ -112,8 +112,8 @@ def _mirror_transcript(
             source_chat_id=msg.chat_id,
             kind=kind,
         )
-        import agent_context
-        import agent_conversations
+        from conveyor.agents import agent_context
+        from conveyor.agents import agent_conversations
         if agent_context.enabled(settings):
             ctx = agent_context.for_request(settings, msg.channel, msg.chat_id, msg.operator_id)
             conversation = agent_conversations.current(settings, msg.channel, msg.chat_id,

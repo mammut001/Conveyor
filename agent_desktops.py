@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-import agents
+from conveyor.agents import agents
 
 logger = logging.getLogger("conveyor.agent_desktops")
 

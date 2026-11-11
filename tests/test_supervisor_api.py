@@ -26,11 +26,11 @@ from typing import Any
 from unittest.mock import patch
 from urllib.parse import urlencode
 
-import agent_supervisor as ags
+from conveyor.agents import agent_supervisor as ags
 from config import Settings
 from handlers.job_queue import JobQueue
 from web_console import WebConsoleHandler, WebConsoleServer
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 TOKEN = "sup-http-test-token-0123456789-abcdefghijklmnop"
 

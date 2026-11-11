@@ -12,13 +12,13 @@ import time
 import unittest
 from unittest.mock import patch
 
-import agent_context as ac
-import agent_mailbox as mailbox
+from conveyor.agents import agent_context as ac
+from conveyor.agents import agent_mailbox as mailbox
 from agent_coordination import agent_delegation_queue as q
 from agent_coordination import agent_delegation_worker as worker
-import agent_security as security
-import main_router
-from agents import AgentStore, WEB_OPERATOR, chat_id_for
+from conveyor.agents import agent_security as security
+from conveyor.agents import main_router
+from conveyor.agents.agents import AgentStore, WEB_OPERATOR, chat_id_for
 from config import Settings
 
 
@@ -103,7 +103,7 @@ class SecurityFollowups(unittest.IsolatedAsyncioTestCase):
 
     async def test_owner_command_while_killed_and_nonowner_silent(self):
         from channel.types import InboundMessage
-        from agent_security_controls import owner_command
+        from conveyor.agents.agent_security_controls import owner_command
 
         class Port:
             def __init__(self):

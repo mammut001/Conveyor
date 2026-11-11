@@ -11,10 +11,10 @@ from personal_tools.base import ToolResult
 from personal_tools.browser_read import (
     _connect, _db, _operator_key, _requested_url, GRANT_SECONDS, TEXT_LIMIT,
 )
-from workflow_browser_external_approvals import ApprovalLedger
-from workflow_browser_egress import EgressAudit
-from workflow_browser_external_identity import ExternalPolicyDenied
-from workflow_browser_g2 import G2Browser, enabled, validate_actions, FIELD_RE
+from conveyor.browser.workflow_browser_external_approvals import ApprovalLedger
+from conveyor.browser.workflow_browser_egress import EgressAudit
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied
+from conveyor.browser.workflow_browser_g2 import G2Browser, enabled, validate_actions, FIELD_RE
 
 TOOL_NAME = "browser.browse_site"
 

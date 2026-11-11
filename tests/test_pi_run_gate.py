@@ -19,7 +19,7 @@ class PiRunGateTest(unittest.IsolatedAsyncioTestCase):
             confirm, job = AsyncMock(), AsyncMock()
             with patch("handlers.tools.runner._request_confirmation", confirm), \
                     patch("handlers.dispatch.handle_codex_job", job), \
-                    patch("job_lanes.runner_for_chat", lambda r, *a, **k: r):
+                    patch("conveyor.core.job_lanes.runner_for_chat", lambda r, *a, **k: r):
                 await dispatch(_msg(text), FakePort(), settings, runner)
             return confirm, job
 
@@ -46,7 +46,7 @@ class PiRunGateTest(unittest.IsolatedAsyncioTestCase):
             confirm, ctx = AsyncMock(), AsyncMock()
             with patch("handlers.tools.runner._request_confirmation", confirm), \
                     patch("handlers.dispatch.handle_context_job", ctx), \
-                    patch("job_lanes.runner_for_chat", lambda r, *a, **k: r):
+                    patch("conveyor.core.job_lanes.runner_for_chat", lambda r, *a, **k: r):
                 await dispatch(msg, FakePort(), settings, SimpleNamespace(name="pi"))
             self.assertEqual(confirm.await_count, 1)
             self.assertEqual(ctx.await_count, 0)

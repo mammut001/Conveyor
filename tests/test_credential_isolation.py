@@ -13,8 +13,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import console_secrets
-import subprocess_env
+from conveyor.web import console_secrets
+from conveyor.core import subprocess_env
 from web_console import WebConsoleHandler, WebConsoleServer
 
 
@@ -86,7 +86,7 @@ class TestSubprocessIsolation(unittest.TestCase):
     def test_claude_grants_are_scoped(self):
         self.assertEqual(subprocess_env.model_grants(None, claude=True),
                          {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"})
-        with patch("provider_config.get_provider_config", return_value={"env_key": "DEEPSEEK_API_KEY"}):
+        with patch("conveyor.core.provider_config.get_provider_config", return_value={"env_key": "DEEPSEEK_API_KEY"}):
             self.assertEqual(subprocess_env.model_grants(None), {"DEEPSEEK_API_KEY"})
 
     def test_managed_secrets_only_selected_grant(self):
@@ -102,7 +102,7 @@ class TestSubprocessIsolation(unittest.TestCase):
     def test_startup_logs_only_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = SimpleNamespace(env_isolation=True, secrets_file=Path(tmp) / "secrets.json")
-            with patch("subprocess_env.model_grants", return_value={"OPENAI_API_KEY"}):
+            with patch("conveyor.core.subprocess_env.model_grants", return_value={"OPENAI_API_KEY"}):
                 with self.assertLogs("conveyor.security", level="INFO") as logs:
                     subprocess_env.log_startup_check(settings, self.SAMPLE)
             message = "\n".join(logs.output)
@@ -134,7 +134,7 @@ class TestSecretStore(unittest.TestCase):
         self.assertIn("GOOD_NAME", listing)
         self.assertNotIn(secret_value, listing)
         old_data = self.path.read_bytes()
-        with patch("console_secrets.os.replace", side_effect=OSError("failure")):
+        with patch("conveyor.web.console_secrets.os.replace", side_effect=OSError("failure")):
             with self.assertRaises(OSError):
                 console_secrets.set_secret(self.settings, "GOOD_NAME", "other-private")
         self.assertEqual(self.path.read_bytes(), old_data)

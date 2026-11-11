@@ -27,7 +27,7 @@ For CLI operation, record objective, deployed revision, acceptance checks, deadl
 
 ```sh
 cd /srv/conveyor-preview/coordinator/controller
-/srv/conveyor-preview/venv/bin/python overnight_cli.py --db /srv/conveyor-preview/coordinator/runs.sqlite3 create --objective 'Check Conveyor preview health and session browsing' --revision FULL_DEPLOYED_SHA --hours 1 --max-tasks 12 --config /srv/conveyor-preview/coordinator/config.json
+/srv/conveyor-preview/venv/bin/python conveyor/automation/overnight_cli.py --db /srv/conveyor-preview/coordinator/runs.sqlite3 create --objective 'Check Conveyor preview health and session browsing' --revision FULL_DEPLOYED_SHA --hours 1 --max-tasks 12 --config /srv/conveyor-preview/coordinator/config.json
 ```
 
 Start the returned run ID using `sudo systemctl start conveyor-nightly@RUN_ID.service`. Use the CLI `status RUN_ID` to inspect durable outcomes and `cancel RUN_ID` to revoke claims; stop the service as well for immediate process termination. `journalctl -u conveyor-nightly@RUN_ID.service` shows process errors without printing provider output. Never put secrets in objectives or issue evidence.

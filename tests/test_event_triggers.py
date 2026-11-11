@@ -14,12 +14,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-import event_triggers as hooks
+from conveyor.automation import event_triggers as hooks
 from personal_tools import hooks as hook_tools
-import routines
+from conveyor.automation import routines
 from handlers.job_queue import JobQueue
 from web_console import WebConsoleHandler, WebConsoleServer
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 
 TOKEN = "integration-test-hook-token-0123456789"
@@ -79,7 +79,7 @@ class EventTriggerTests(unittest.TestCase):
         finally:
             con.close()
         self.server._active_routine_runs = set()
-        self.run_patch = patch("routines.run_single_routine", new_callable=AsyncMock)
+        self.run_patch = patch("conveyor.automation.routines.run_single_routine", new_callable=AsyncMock)
         self.mock_run = self.run_patch.start()
         self.mock_run.return_value = {"status": "ok"}
 
