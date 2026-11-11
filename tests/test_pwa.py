@@ -14,8 +14,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from conveyor.web import web_push
-from config import load_runtime_settings
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.core.config import load_runtime_settings
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 
 TOKEN = "pwa-test-token-" + "0123456789abcdef" * 3
 SUB = {

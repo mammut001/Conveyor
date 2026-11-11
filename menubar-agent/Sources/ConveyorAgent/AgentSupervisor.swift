@@ -5,7 +5,7 @@ import Foundation
 /// On macOS 26, launchd-spawned CLI binaries (bash/python) can't be granted
 /// Full Disk Access to reach `~/Documents`, but a proper `.app` bundle can.
 /// So the menu bar app owns the agent: it spawns
-///   `<conveyorDir>/.venv/bin/python desktop_agent.py --poll-observe --poll-computer`
+///   `<conveyorDir>/.venv/bin/python conveyor.entrypoints.desktop_agent --poll-observe --poll-computer`
 /// with the env vars from `<conveyorDir>/.desktop-agent.env`, appends the
 /// child's stdout/stderr to `~/Library/Logs/conveyor-desktop-agent.log`, and
 /// restarts it (with throttle) if it exits unexpectedly.
@@ -71,7 +71,7 @@ final class AgentSupervisor: ObservableObject {
     private func killOrphanAgents() {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        task.arguments = ["-f", "desktop_agent.py --poll-observe"]
+        task.arguments = ["-f", "(desktop_agent[.]py|conveyor[.]entrypoints[.]desktop_agent) --poll-observe"]
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
         // pkill exits 1 if nothing matched; ignore.
@@ -118,7 +118,7 @@ final class AgentSupervisor: ObservableObject {
             appendLog("[supervisor] python not executable: \(py)\n")
             return
         }
-        guard FileManager.default.fileExists(atPath: "\(dir)/desktop_agent.py") else {
+        guard FileManager.default.fileExists(atPath: "\(dir)/conveyor/entrypoints/desktop_agent.py") else {
             lastExitCode = -1
             busy = false
             appendLog("[supervisor] desktop_agent.py not found in \(dir)\n")
@@ -135,7 +135,7 @@ final class AgentSupervisor: ObservableObject {
         // Keep read-only observe and direct computer-use polling in the same
         // supervised child so the production entry point cannot silently lose
         // the direct poller.
-        p.arguments = ["-u", "desktop_agent.py", "--poll-observe", "--poll-computer"]
+        p.arguments = ["-u", "-m", "conveyor.entrypoints.desktop_agent", "--poll-observe", "--poll-computer"]
         p.currentDirectoryURL = URL(fileURLWithPath: dir)
         p.environment = env
         // Pipe child output to the shared log file.

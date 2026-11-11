@@ -17,7 +17,7 @@ Output of `make smoke` on a clean checkout, in a fenced block:
 ... (pass) ...
 make smoke: 6/7 env-free smokes green
 (1 red: compress_day_smoke.py - documented pre-existing hour-gate
-bug, see project.md "Honest gaps"; not introduced by this PR)
+bug, see docs/project-history.md "Honest gaps"; not introduced by this PR)
 ```
 
 If you introduce a new smoke, add it to the `SMOKE_FREE` list in

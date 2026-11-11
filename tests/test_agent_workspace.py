@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from conveyor.agents import agents
 from conveyor.agents.agents import AgentStore
-from config import load_settings
+from conveyor.core.config import load_settings
 from runner import CodexRunner
 from runner.types import Job, JobMode
 

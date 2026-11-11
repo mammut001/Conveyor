@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from config import Settings
+from conveyor.core.config import Settings
 from runner.claude_code import ClaudeCodeBackend
 from runner.core import CodexRunner
 from security.secrets import child_env_from, scope_provider_keys

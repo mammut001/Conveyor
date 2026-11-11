@@ -14,7 +14,7 @@ from conveyor.agents import agent_memory
 
 
 def _settings(root: Path, **overrides):
-    from config import Settings
+    from conveyor.core.config import Settings
 
     base = Settings(
         telegram_bot_token="test-token", telegram_allowed_user_id=1, codex_workspace_root=root,
@@ -196,7 +196,7 @@ class MemoryNudgeConfigTests(unittest.TestCase):
         self.assertEqual(agent_memory.nudge_every(_nudge_settings(self.root, agent_notes_nudge_every=-5)), 0)
 
     def test_env_wiring(self) -> None:
-        from config import load_runtime_settings
+        from conveyor.core.config import load_runtime_settings
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import load_settings
+from conveyor.core.config import load_settings
 from scripts.harness_common import latest_attempt_file, latest_final_file
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 

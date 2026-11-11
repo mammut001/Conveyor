@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-import handoff_sidecar
+from conveyor.entrypoints import handoff_sidecar
 from conveyor.desktop.human_takeover import HumanTakeoverStore, takeover_blocks_automation
 from conveyor.desktop.web_takeover import (
     WebTakeover,
@@ -69,8 +69,8 @@ class WebTakeoverTests(unittest.TestCase):
             settings = self.settings(root)
             HumanTakeoverStore(settings).start(reason="operator_requested", ttl_seconds=300)
             with (
-                mock.patch("handoff_sidecar.transport_running", return_value=False),
-                mock.patch("handoff_sidecar._run_transport") as transport,
+                mock.patch("conveyor.entrypoints.handoff_sidecar.transport_running", return_value=False),
+                mock.patch("conveyor.entrypoints.handoff_sidecar._run_transport") as transport,
             ):
                 handoff_sidecar.run_once(settings)
 
@@ -89,9 +89,9 @@ class WebTakeoverTests(unittest.TestCase):
             request_close(settings, lease["id"], "complete")
 
             with (
-                mock.patch("handoff_sidecar.transport_running", side_effect=[True, False]),
+                mock.patch("conveyor.entrypoints.handoff_sidecar.transport_running", side_effect=[True, False]),
                 mock.patch(
-                    "handoff_sidecar._run_transport",
+                    "conveyor.entrypoints.handoff_sidecar._run_transport",
                     return_value=(True, "", None, None),
                 ) as stop,
             ):
@@ -113,9 +113,9 @@ class WebTakeoverTests(unittest.TestCase):
             request_close(settings, lease["id"], "cancel")
 
             with (
-                mock.patch("handoff_sidecar.transport_running", side_effect=[True, True]),
+                mock.patch("conveyor.entrypoints.handoff_sidecar.transport_running", side_effect=[True, True]),
                 mock.patch(
-                    "handoff_sidecar._run_transport",
+                    "conveyor.entrypoints.handoff_sidecar._run_transport",
                     return_value=(False, "cleanup failed", None, None),
                 ),
             ):
@@ -137,9 +137,9 @@ class WebTakeoverTests(unittest.TestCase):
             )
             allow_transport(settings, lease["id"])
             with (
-                mock.patch("handoff_sidecar.transport_running", side_effect=[False, True]),
+                mock.patch("conveyor.entrypoints.handoff_sidecar.transport_running", side_effect=[False, True]),
                 mock.patch(
-                    "handoff_sidecar._run_transport",
+                    "conveyor.entrypoints.handoff_sidecar._run_transport",
                     return_value=(
                         True,
                         "",
@@ -185,8 +185,8 @@ class WebTakeoverTests(unittest.TestCase):
             HumanTakeoverStore(settings).start(reason="operator_requested", ttl_seconds=300)
             allow_transport(settings, "fake-session")
             with (
-                mock.patch("handoff_sidecar.transport_running", return_value=False),
-                mock.patch("handoff_sidecar._run_transport") as transport,
+                mock.patch("conveyor.entrypoints.handoff_sidecar.transport_running", return_value=False),
+                mock.patch("conveyor.entrypoints.handoff_sidecar._run_transport") as transport,
             ):
                 handoff_sidecar.run_once(settings)
 
@@ -205,9 +205,9 @@ class WebTakeoverTests(unittest.TestCase):
             request_close(settings, lease["id"], "complete")
 
             with (
-                mock.patch("handoff_sidecar.transport_running", side_effect=[True, False]),
+                mock.patch("conveyor.entrypoints.handoff_sidecar.transport_running", side_effect=[True, False]),
                 mock.patch(
-                    "handoff_sidecar._run_transport",
+                    "conveyor.entrypoints.handoff_sidecar._run_transport",
                     return_value=(True, "", None, None),
                 ) as stop,
             ):
@@ -230,9 +230,9 @@ class WebTakeoverTests(unittest.TestCase):
             allow_transport(settings, lease["id"])
 
             with (
-                mock.patch("handoff_sidecar.transport_running", side_effect=[True, False, False]),
+                mock.patch("conveyor.entrypoints.handoff_sidecar.transport_running", side_effect=[True, False, False]),
                 mock.patch(
-                    "handoff_sidecar._run_transport",
+                    "conveyor.entrypoints.handoff_sidecar._run_transport",
                     return_value=(True, "", None, None),
                 ) as transport,
             ):
@@ -248,7 +248,7 @@ class TakeoverSettingsTests(unittest.TestCase):
     def test_settings_default_and_env_flag(self):
         import os
         from pathlib import Path
-        from config import Settings, load_runtime_settings, load_settings
+        from conveyor.core.config import Settings, load_runtime_settings, load_settings
 
         s = Settings(
             telegram_bot_token="token",
@@ -305,12 +305,12 @@ class TakeoverEntrypointConfigTests(unittest.TestCase):
         from pathlib import Path
 
         root = Path(__file__).resolve().parents[1]
-        for rel in ("web_console_takeover.py", "handoff_sidecar.py", "scripts/handoffctl.py"):
+        for rel in ("conveyor/entrypoints/web_console_takeover.py", "conveyor/entrypoints/handoff_sidecar.py", "scripts/handoffctl.py"):
             text = (root / rel).read_text(encoding="utf-8")
             with self.subTest(file=rel):
                 self.assertIn("load_runtime_settings", text)
                 self.assertNotRegex(text, r"\bload_settings\(")
-        for rel in ("web_console_takeover.py", "handoff_sidecar.py"):
+        for rel in ("conveyor/entrypoints/web_console_takeover.py", "conveyor/entrypoints/handoff_sidecar.py"):
             text = (root / rel).read_text(encoding="utf-8")
             with self.subTest(file=rel):
                 self.assertIn("configure_logging(", text)

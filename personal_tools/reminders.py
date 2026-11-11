@@ -1,7 +1,7 @@
 """personal_tools/reminders.py — local reminder tool implementations."""
 from __future__ import annotations
 
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
 from personal_tools.reminder_parse import REMIND_USAGE, parse_reminder_text
 from personal_tools.store import PersonalToolsStore

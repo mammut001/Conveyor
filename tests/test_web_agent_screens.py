@@ -14,7 +14,7 @@ from conveyor.agents import agent_context as ac
 from conveyor.agents import agent_mailbox as mailbox
 from conveyor.web import web_agent_screens as screens
 from conveyor.agents.agents import AgentStore, WEB_OPERATOR, chat_id_for
-from config import Settings
+from conveyor.core.config import Settings
 
 
 def test_settings(root):

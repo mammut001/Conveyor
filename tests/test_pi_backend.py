@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.chat import is_destructive_request, routes_to_agent
 from runner.pi_agent import (
     PI_PROVIDER_KEY_ENV,

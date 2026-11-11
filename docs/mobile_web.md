@@ -119,7 +119,7 @@ Then open `http://10.10.0.1:<CONVEYOR_WEB_PORT>` on the phone.
 - The extra listeners are the same server: same bearer token, same sessions,
   same live screen. Loopback keeps working for local tools and SSH tunnels.
 - They speak plain HTTP, so only private addresses are accepted. `0.0.0.0`,
-  `::` and public addresses fail `web_console.py --check` and refuse to start.
+  `::` and public addresses fail `conveyor/entrypoints/web_console.py --check` and refuse to start.
   The VPN is what encrypts the connection.
 - Allow the port on the VPN interface only, e.g.
   `ufw allow in on wg0 to 10.10.0.1 port 18787 proto tcp`. Never open it on

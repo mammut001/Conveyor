@@ -18,7 +18,7 @@ from conveyor.agents import worker_usage
 from conveyor.agents import workers
 from handlers.job_queue import JobQueue
 from tests.test_workers import TOKEN, _make_settings
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.web.web_control import WebControl
 
 NOW = 1_800_000_000.0

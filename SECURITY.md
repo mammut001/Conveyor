@@ -24,7 +24,7 @@ You should hear back within a week. We will coordinate a fix and a release note 
 
 ### Mitigation Layers
 1. **Channel Allowlists:** Access is gated by strict allowlists (`TELEGRAM_ALLOWED_USER_ID`, `CONVEYOR_FEISHU_ALLOWED_USERS`).
-2. **Output Redaction:** The redaction layer in `redaction.py` strips API tokens, credentials, and sensitive patterns from logs, stdout, stderr, and exception tracebacks before they return to the operator. Note: any Telegram bot token that may have leaked into logs must be rotated via BotFather `/revoke`.
+2. **Output Redaction:** The redaction layer in `conveyor/core/redaction.py` strips API tokens, credentials, and sensitive patterns from logs, stdout, stderr, and exception tracebacks before they return to the operator. Note: any Telegram bot token that may have leaked into logs must be rotated via BotFather `/revoke`.
 3. **Low-Privilege User:** The service runs under a dedicated, low-privilege system user.
 4. **Worktree Isolation:** Codex execution occurs inside temporary per-day or per-job Git worktrees rather than modifying the main repository directly.
 5. **Apply Gate:** Merging changes back into the main repository requires explicit `/diff` and `/apply` commands.
@@ -56,7 +56,7 @@ To prevent disk space exhaustion or queue flooding on the VPS, Conveyor enforces
 
 When applying worktree changes back to the main repository, Conveyor validates all paths to protect sensitive configuration files and block untracked file abuses:
 
-* **High-Risk File Blocks:** Any modification to high-risk files (such as `requirements.txt`, `setup.py`, `redaction.py`, files inside the `security/` directory, systemd configurations, or deployment scripts) blocks `/apply` unless `CONVEYOR_APPLY_ALLOW_HIGH_RISK=true` is explicitly set in settings.
+* **High-Risk File Blocks:** Any modification to high-risk files (such as `requirements.txt`, `setup.py`, `conveyor/core/redaction.py`, files inside the `security/` directory, systemd configurations, or deployment scripts) blocks `/apply` unless `CONVEYOR_APPLY_ALLOW_HIGH_RISK=true` is explicitly set in settings.
 * **Untracked Bytes Limit:** The total size of all untracked files being applied in a single batch is limited to `CONVEYOR_APPLY_MAX_UNTRACKED_BYTES` (default: 1MB).
 * **Always Denied:** Certain files, such as `.env` files, private keys (`*.pem`, `*.key`), and files containing the words `token`, `secret`, or `password`, are always blocked and can never be applied.
 

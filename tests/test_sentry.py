@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import dataclasses
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 from handlers.intent import route_intent
 from personal_tools.registry import execute_personal_tool, get_personal_tool
 from personal_tools.sentry import (

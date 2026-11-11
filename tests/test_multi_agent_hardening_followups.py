@@ -19,7 +19,7 @@ from agent_coordination import agent_delegation_worker as worker
 from conveyor.agents import agent_security as security
 from conveyor.agents import main_router
 from conveyor.agents.agents import AgentStore, WEB_OPERATOR, chat_id_for
-from config import Settings
+from conveyor.core.config import Settings
 
 
 class SecurityFollowups(unittest.IsolatedAsyncioTestCase):

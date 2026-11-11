@@ -15,7 +15,7 @@ When `/apply` is executed, Conveyor verifies that changes are safe before copyin
 - **Path Checking:** All changed paths (both tracked and untracked) are normalized as POSIX relative paths.
 - **Rejections:** Any path containing `..` (traversal), absolute paths, path components containing control characters/NUL, or extremely long paths are strictly rejected.
 - **Secrets Denylist:** Paths matching patterns like `.env`, `*.pem`, `*.key`, `id_rsa`, `.ssh`, or containing keywords like `token`, `secret`, `password`, `credential` are always blocked.
-- **High-Risk Files:** By default, changes to system files and bot code (e.g., `.github/workflows/**`, `config.py`, `bot.py`, `feishu_bot.py`, systemd unit files, `scripts/install.sh`) are rejected.
+- **High-Risk Files:** By default, changes to system files and bot code (e.g., `.github/workflows/**`, `conveyor/core/config.py`, `conveyor/entrypoints/bot.py`, `conveyor/entrypoints/feishu_bot.py`, systemd unit files, `scripts/install.sh`) are rejected.
 - **Overrides:** The setting `CONVEYOR_APPLY_ALLOW_HIGH_RISK=true` can be enabled to allow changes to these high-risk files, but always continues to block private keys and `.env` files.
 - **Untracked Copy Safety:** Directories, symlinks, binary files, and files larger than `1MB` (or `CONVEYOR_APPLY_MAX_UNTRACKED_BYTES`) are rejected from copy.
 

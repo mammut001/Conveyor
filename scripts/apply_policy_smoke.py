@@ -101,7 +101,7 @@ def test_apply_policy() -> list[CheckResult]:
         results.append(CheckResult("setup_py_blocked_by_default", res is not None and "high-risk file rejected" in res, f"res={res}"))
         res = policy.validate_path("security/helper.py", kind="tracked")
         results.append(CheckResult("security_dir_blocked_by_default", res is not None and "high-risk file rejected" in res, f"res={res}"))
-        res = policy.validate_path("redaction.py", kind="tracked")
+        res = policy.validate_path("conveyor/core/redaction.py", kind="tracked")
         results.append(CheckResult("redaction_py_blocked_by_default", res is not None and "high-risk file rejected" in res, f"res={res}"))
         res = policy.validate_path("runner/apply_policy.py", kind="tracked")
         results.append(CheckResult("apply_policy_py_blocked_by_default", res is not None and "high-risk file rejected" in res, f"res={res}"))

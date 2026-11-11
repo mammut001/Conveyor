@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 KINDS = frozenset({"work", "browser", "documents", "human", "submission"})
 HUMAN_KINDS = frozenset({"human", "submission"})

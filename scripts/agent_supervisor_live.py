@@ -45,9 +45,9 @@ CONVEYOR_ROOT = Path(__file__).resolve().parents[1]
 if str(CONVEYOR_ROOT) not in sys.path:
     sys.path.insert(0, str(CONVEYOR_ROOT))
 
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.agents import agent_supervisor as ags
-from redaction import redact_obj, redact_text
+from conveyor.core.redaction import redact_obj, redact_text
 from conveyor.core import subprocess_env
 
 log = logging.getLogger("agent_supervisor_live")

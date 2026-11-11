@@ -10,8 +10,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import load_settings
-from redaction import truncate
+from conveyor.core.config import load_settings
+from conveyor.core.redaction import truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 
 

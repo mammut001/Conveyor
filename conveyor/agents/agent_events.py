@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 from security.secrets import is_sensitive_key
 
 SCHEMA_VERSION = 1

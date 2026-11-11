@@ -18,8 +18,8 @@ from datetime import datetime
 from typing import Awaitable, Callable
 
 from channel.types import InboundMessage, OutboundPort
-from config import Settings
-from redaction import truncate
+from conveyor.core.config import Settings
+from conveyor.core.redaction import truncate
 from runner import CodexRunner
 from scripts.auto_maintain import run_maintenance
 from scripts.diagnostics import diagnostics_report
@@ -1120,7 +1120,7 @@ async def _scheduler_probe_live(msg, port, _runner, settings, _arg):
 
 async def _audit_tools(msg, port, _runner, settings, arg):
     from handlers.tools.audit import read_audit_tail
-    from redaction import redact_text, truncate
+    from conveyor.core.redaction import redact_text, truncate
     n = _int_arg(arg.strip().split()[0] if arg.strip() else "", default=10, lo=1, hi=50)
     records = read_audit_tail(settings, n)
     if not records:

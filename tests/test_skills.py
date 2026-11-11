@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from handlers import chat
 from handlers.chat_tools import is_exposed
 from handlers.tools.confirm import (
@@ -31,7 +31,7 @@ from personal_tools.registry import (
     register_personal_tools,
     requires_personal_confirmation,
 )
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.web.web_control import WebControl
 
 
@@ -86,7 +86,7 @@ class TestSkillsStore(unittest.TestCase):
         field = Settings.__dataclass_fields__["skills_enabled"]
         self.assertFalse(field.default)
         root = Path(__file__).resolve().parents[1]
-        self.assertIn('CONVEYOR_SKILLS_ENABLED", "false"', (root / "config.py").read_text(encoding="utf-8"))
+        self.assertIn('CONVEYOR_SKILLS_ENABLED", "false"', (root / "conveyor/core/config.py").read_text(encoding="utf-8"))
         self.assertIn("CONVEYOR_SKILLS_ENABLED=false", (root / ".env.example").read_text(encoding="utf-8"))
 
     def test_create_and_get_skill(self) -> None:

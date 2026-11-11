@@ -23,7 +23,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from personal_tools.base import ToolResult
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 logger = logging.getLogger(__name__)
 

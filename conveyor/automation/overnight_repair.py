@@ -104,7 +104,7 @@ class PiRepair:
             changes=_staged_changes(await command(git+['diff','--cached','--raw','--no-renames'],cwd=path))
             names=[name for _mode,_status,name in changes]
             allowed_roots=('web/src/','tests/')
-            allowed_files={'web_console.py','conveyor/web/web_chat.py','conveyor/web/web_control.py'}
+            allowed_files={'web_console.py','web_chat.py','web_control.py','conveyor/entrypoints/web_console.py','conveyor/web/web_chat.py','conveyor/web/web_control.py'}
             if not names or any(name not in allowed_files and not name.startswith(allowed_roots) for name in names):
                 raise ValueError('repair changed files outside workbench scope or made no changes')
             if any(status=='D' for _mode,status,_name in changes):

@@ -21,7 +21,7 @@ def make_seed_settings(state_dir: str | Path | None = None) -> Any:
         resolved = Path(state_dir).expanduser().resolve()
         resolved.mkdir(parents=True, exist_ok=True)
         try:
-            from config import Settings
+            from conveyor.core.config import Settings
 
             return Settings(
                 telegram_bot_token="",
@@ -44,11 +44,11 @@ def make_seed_settings(state_dir: str | Path | None = None) -> Any:
             return _IsolatedSettings(resolved)
 
     try:
-        from config import load_runtime_settings
+        from conveyor.core.config import load_runtime_settings
 
         return load_runtime_settings()
     except Exception:
-        from config import load_settings
+        from conveyor.core.config import load_settings
 
         return load_settings()
 

@@ -18,7 +18,7 @@ import os
 import time
 from typing import Iterable, Mapping
 
-from config import Settings
+from conveyor.core.config import Settings
 
 from nodes.types import (
     DESKTOP_DIRECT_CAPABILITIES,

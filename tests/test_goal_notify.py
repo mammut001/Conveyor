@@ -21,7 +21,7 @@ from unittest.mock import patch
 from conveyor.agents import goal_notify
 from conveyor.agents import supervisor_goals as goals
 from conveyor.web import web_push
-from config import load_runtime_settings
+from conveyor.core.config import load_runtime_settings
 
 GOAL_ID = "goal-0123456789abcdef"
 QUESTION = "这一轮的改动已经做完，请检查结果后告诉我是否达成，或者还要改什么。"

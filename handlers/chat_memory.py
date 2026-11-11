@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from config import Settings
+    from conveyor.core.config import Settings
 
 logger = logging.getLogger(__name__)
 

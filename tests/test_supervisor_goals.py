@@ -25,7 +25,7 @@ from conveyor.agents import agent_supervisor as ags
 from conveyor.agents import goal_notify
 from conveyor.agents import supervisor_goals as goals
 from conveyor.agents import supervisor_service as svc
-from config import Settings
+from conveyor.core.config import Settings
 
 OUTCOME = "在 managed worktree 里新增 feature.txt，内容为 hello-goal，并干净提交"
 

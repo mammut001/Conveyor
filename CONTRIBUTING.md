@@ -46,7 +46,7 @@ make smoke-all    # also runs memo_smoke, which needs a real .env
 * Imperative-mood subject line, ~50 chars (`runner: gate jobs by chat id`).
 * One bounded change per commit. The CHANGELOG and `project.md` are kept
   in sync with the code on `main`.
-* Reference the `scripts/<name>.py` path or `bot.py:<line>` in the body
+* Reference the `scripts/<name>.py` path or `conveyor/entrypoints/bot.py:<line>` in the body
   when the change is non-obvious.
 * No `Co-Authored-By` trailers for AI assistants on a contributor's
   behalf. Attribute your own work.

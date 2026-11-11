@@ -183,7 +183,7 @@ def _settings(root: Path, wrapper: Path, backend_mode: str = "x11"):
         os.environ["CONVEYOR_CONTROL_PLANE_URL"] = "http://127.0.0.1:18766"
         os.environ["CONVEYOR_DESKTOP_AGENT_SERVER_PORT"] = "18766"
         os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
-    from config import load_runtime_settings
+    from conveyor.core.config import load_runtime_settings
 
     settings = load_runtime_settings(PRODUCTION_ENV)
     from dataclasses import replace
@@ -961,7 +961,7 @@ def _host_cua_services(root: Path, display: int, authority: str, settings):
     # 2. desktop_agent_server.py
     srv_log = open(log_dir / "agent_server.log", "a", encoding="utf-8")
     p_srv = subprocess.Popen(
-        [sys.executable, str(ROOT / "desktop_agent_server.py")],
+        [sys.executable, "-m", "conveyor.entrypoints.desktop_agent_server"],
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=srv_log,
@@ -985,7 +985,7 @@ def _host_cua_services(root: Path, display: int, authority: str, settings):
     # 3. desktop_agent.py --poll-computer
     agent_log = open(log_dir / "agent_poll.log", "a", encoding="utf-8")
     p_agent = subprocess.Popen(
-        [sys.executable, str(ROOT / "desktop_agent.py"), "--poll-computer"],
+        [sys.executable, "-m", "conveyor.entrypoints.desktop_agent", "--poll-computer"],
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=agent_log,

@@ -27,7 +27,7 @@ from runner._paths import RUNNER_HOME
 from runner.attachments import prompt_images
 from runner.file_lock import file_lock, async_gate
 from runner.types import Job, JobMode, JobState, ProgressCallback
-from redaction import redact_text, safe_json, truncate
+from conveyor.core.redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 
 logger = logging.getLogger("conveyor.worktree")

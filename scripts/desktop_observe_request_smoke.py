@@ -23,7 +23,7 @@ os.environ.setdefault("CONVEYOR_DESKTOP_SCREENSHOT_HELPER", "/usr/local/bin/capt
 import asyncio
 
 from channel.types import InboundMessage
-from config import load_settings
+from conveyor.core.config import load_settings
 from conveyor.desktop.desktop_observe_requests import (
     claim_observe_request,
     complete_observe_request,
@@ -46,7 +46,7 @@ FAILURES: list[str] = []
 def run_concurrent_create(temp_dir: str, index: int) -> None:
     os.environ["CODEX_MEMORY_ROOT"] = temp_dir
     os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
-    from config import load_settings
+    from conveyor.core.config import load_settings
     from conveyor.desktop.desktop_observe_requests import create_observe_request
     from scripts.desktop_observe_request_smoke import _msg
     settings = load_settings()
@@ -57,7 +57,7 @@ def run_concurrent_create(temp_dir: str, index: int) -> None:
 def run_claim_worker(temp_dir: str, request_id: str, results_dir: str, worker_id: int) -> None:
     os.environ["CODEX_MEMORY_ROOT"] = temp_dir
     os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
-    from config import load_settings
+    from conveyor.core.config import load_settings
     from conveyor.desktop.desktop_observe_requests import claim_observe_request
     settings = load_settings()
     res = claim_observe_request(settings, request_id, "macbook-payton")
@@ -68,7 +68,7 @@ def run_claim_worker(temp_dir: str, request_id: str, results_dir: str, worker_id
 def run_complete_worker(temp_dir: str, request_id: str, result_val: dict, results_dir: str) -> None:
     os.environ["CODEX_MEMORY_ROOT"] = temp_dir
     os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
-    from config import load_settings
+    from conveyor.core.config import load_settings
     from conveyor.desktop.desktop_observe_requests import complete_observe_request
     settings = load_settings()
     res = complete_observe_request(settings, request_id, "macbook-payton", result_val)
@@ -78,7 +78,7 @@ def run_complete_worker(temp_dir: str, request_id: str, result_val: dict, result
 def run_fail_worker(temp_dir: str, request_id: str, results_dir: str) -> None:
     os.environ["CODEX_MEMORY_ROOT"] = temp_dir
     os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
-    from config import load_settings
+    from conveyor.core.config import load_settings
     from conveyor.desktop.desktop_observe_requests import fail_observe_request
     settings = load_settings()
     res = fail_observe_request(settings, request_id, "macbook-payton", "error_code", "error message")
@@ -88,7 +88,7 @@ def run_fail_worker(temp_dir: str, request_id: str, results_dir: str) -> None:
 def run_cancel_worker(temp_dir: str, request_id: str, results_dir: str) -> None:
     os.environ["CODEX_MEMORY_ROOT"] = temp_dir
     os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
-    from config import load_settings
+    from conveyor.core.config import load_settings
     from conveyor.desktop.desktop_observe_requests import cancel_observe_request
     settings = load_settings()
     res = cancel_observe_request(settings, request_id)
@@ -98,7 +98,7 @@ def run_cancel_worker(temp_dir: str, request_id: str, results_dir: str) -> None:
 def run_claim_worker_t5(temp_dir: str, request_id: str, results_dir: str) -> None:
     os.environ["CODEX_MEMORY_ROOT"] = temp_dir
     os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
-    from config import load_settings
+    from conveyor.core.config import load_settings
     from conveyor.desktop.desktop_observe_requests import claim_observe_request
     settings = load_settings()
     res = claim_observe_request(settings, request_id, "macbook-payton")

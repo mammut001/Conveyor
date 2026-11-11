@@ -70,7 +70,7 @@ CONVEYOR_AGENT_DESKTOP_SIZE=1440x900
 Every agent except `default` gets its own virtual desktop that is always on:
 
 ```text
-conveyor-agent-desktops.service  (agent_desktops.py, one supervisor)
+conveyor-agent-desktops.service  (conveyor/entrypoints/agent_desktops.py, one supervisor)
    ├─ agent A  →  Xvfb :101 + xfwm4 [+ browser, profile A]
    ├─ agent B  →  Xvfb :102 + xfwm4 [+ browser, profile B]
    └─ …

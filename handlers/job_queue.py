@@ -21,13 +21,13 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Any
 
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 from conveyor.core.refinement_store import RefinementStore, stable_session_id
 
 if TYPE_CHECKING:
     from channel.types import InboundMessage, OutboundPort
     from runner import CodexRunner
-    from config import Settings
+    from conveyor.core.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +219,7 @@ class JobQueue:
             root = Path(self._settings.codex_memory_root)
         else:
             try:
-                from config import load_settings
+                from conveyor.core.config import load_settings
                 root = Path(load_settings().codex_memory_root)
             except Exception:
                 root = Path(os.getenv("CODEX_MEMORY_ROOT", "~/.codex")).expanduser().resolve()

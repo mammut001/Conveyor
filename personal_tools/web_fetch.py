@@ -16,9 +16,9 @@ import socket
 import subprocess
 from urllib.parse import urlparse
 
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 logger = logging.getLogger(__name__)
 

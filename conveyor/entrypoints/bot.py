@@ -21,7 +21,7 @@ from channel.telegram import (
     make_outbound,
     send_text,
 )
-from config import load_settings
+from conveyor.core.config import load_settings
 from handlers import dispatch
 from handlers.context import is_addressed_to_bot
 from handlers.onboarding import (
@@ -31,7 +31,7 @@ from handlers.onboarding import (
     save_operator_profile,
 )
 from handlers.tools.runner import cancel_pending, execute_confirmed, parse_tool_callback
-from logging_setup import configure_logging
+from conveyor.core.logging_setup import configure_logging
 from runner import CodexRunner, create_runtime_runner
 from agent_coordination.agent_result_poller_lifecycle import AgentResultPollingApplication, configure_telegram_poller
 from conveyor.channels.telegram_navigation import callback_action, legacy_action, navigation_screen

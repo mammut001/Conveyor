@@ -8,7 +8,7 @@ P5.2 adds **read-only screenshot observe** on the operator's MacBook. Screenshot
 
 ## P5.2.1 supports
 
-- Local one-shot screenshot capture on Mac via `python desktop_agent.py --observe-once`
+- Local one-shot screenshot capture on Mac via `python -m conveyor.entrypoints.desktop_agent --observe-once`
 - Metadata listing through `/desktop_screenshot_status` and `/screenshot_status`
 - Feishu read-only status card (metadata only; no capture/upload/preview buttons)
 - Absolute-path validation for `CONVEYOR_DESKTOP_SCREENSHOT_HELPER`
@@ -19,7 +19,7 @@ P5.2 adds **read-only screenshot observe** on the operator's MacBook. Screenshot
 **Supported:**
 
 - Chat creates a pending observe request (`/observe_request`, NL phrases like `截图看看我电脑现在是什么`)
-- Mac desktop agent polls the VPS (`python desktop_agent.py --poll-observe --poll-computer`)
+- Mac desktop agent polls the VPS (`python -m conveyor.entrypoints.desktop_agent --poll-observe --poll-computer`)
 - Mac captures one local screenshot via `capture-screen-helper`
 - Mac returns **metadata only** to the VPS (no image bytes, no base64)
 - Chat shows metadata/status (`/observe_status`, `/screenshot_status`)
@@ -38,7 +38,7 @@ On VPS:
 ```bash
 export CONVEYOR_DESKTOP_NODE_ENABLED=true
 export CONVEYOR_DESKTOP_AGENT_TOKEN=...
-python desktop_agent_server.py
+python -m conveyor.entrypoints.desktop_agent_server
 ```
 
 On Mac:
@@ -47,7 +47,7 @@ On Mac:
 export CONVEYOR_CONTROL_PLANE_URL=https://your-control-plane.example.com
 export CONVEYOR_DESKTOP_AGENT_TOKEN=...
 export CONVEYOR_DESKTOP_SCREENSHOT_HELPER=/usr/local/bin/capture-screen-helper
-python desktop_agent.py --poll-observe --poll-computer
+python -m conveyor.entrypoints.desktop_agent --poll-observe --poll-computer
 ```
 
 In Feishu:
@@ -61,7 +61,7 @@ In Feishu:
 Request store: `CODEX_MEMORY_ROOT/state/desktop_observe_requests.json`
 
 P5.3.1 hardens the observe request store with a cross-process file lock.
-This prevents lost updates when Telegram, Feishu, and desktop_agent_server.py
+This prevents lost updates when Telegram, Feishu, and conveyor/entrypoints/desktop_agent_server.py
 read/write CODEX_MEMORY_ROOT/state/desktop_observe_requests.json concurrently.
 
 
@@ -88,7 +88,7 @@ CONVEYOR_DESKTOP_OBSERVE_MAX_PENDING=3
 |---|---|---|
 | `capture-screen-helper` | `capture-your-screen` | macOS ScreenCaptureKit CLI; writes PNG + JSON metadata |
 | `conveyor/desktop/desktop_screenshot.py` | `Conveyor` | Validates helper output, stores metadata JSON |
-| `desktop_agent.py --observe-once` | `Conveyor` | Local one-shot capture entry point |
+| `conveyor/entrypoints/desktop_agent.py --observe-once` | `Conveyor` | Local one-shot capture entry point |
 | `desktop.screenshot.status` | `Conveyor` | Deterministic tool / NL route for observe status |
 | `scripts/deploy_verify_p5_2.py` | `Conveyor` | Deployment-readiness checks (no capture) |
 
@@ -111,7 +111,7 @@ CONVEYOR_DESKTOP_SCREENSHOT_ALLOW_UPLOAD=false
 
 ```bash
 export CONVEYOR_DESKTOP_SCREENSHOT_HELPER=/usr/local/bin/capture-screen-helper
-.venv/bin/python desktop_agent.py --observe-once
+.venv/bin/python -m conveyor.entrypoints.desktop_agent --observe-once
 ```
 
 On success the agent prints safe JSON and writes:
@@ -137,13 +137,13 @@ Status phrases such as `截图状态` route to `desktop.observe.status`.
 Local one-shot capture remains:
 
 ```bash
-python desktop_agent.py --observe-once
+python -m conveyor.entrypoints.desktop_agent --observe-once
 ```
 
 Remote observe polling:
 
 ```bash
-python desktop_agent.py --poll-observe --poll-computer
+python -m conveyor.entrypoints.desktop_agent --poll-observe --poll-computer
 ```
 
 No base64, OCR text, window titles, secrets, or prompt content are stored.
@@ -171,7 +171,7 @@ sudo cp build/Release/capture-screen-helper /usr/local/bin/capture-screen-helper
 cd /path/to/Conveyor
 export CONVEYOR_DESKTOP_SCREENSHOT_HELPER=/usr/local/bin/capture-screen-helper
 export CONVEYOR_DESKTOP_SCREENSHOT_DIR="$HOME/.codex/desktop/screenshots"
-python desktop_agent.py --observe-once
+python -m conveyor.entrypoints.desktop_agent --observe-once
 ```
 
 ### In Feishu

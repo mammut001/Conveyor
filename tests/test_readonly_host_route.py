@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.dispatch import dispatch
 
 _dispatch_mod = importlib.import_module("handlers.dispatch")

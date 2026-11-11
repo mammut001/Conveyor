@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from redaction import truncate
+from conveyor.core.redaction import truncate
 from scripts.harness_common import CheckResult, print_results
 
 

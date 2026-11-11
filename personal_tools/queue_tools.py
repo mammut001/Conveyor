@@ -5,7 +5,7 @@ as the /queue command.
 """
 from __future__ import annotations
 
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
 
 

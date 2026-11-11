@@ -16,7 +16,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.chat_tools import is_exposed
 from handlers.job_queue import JobQueue
 from handlers.tools.confirm import clear_all_pending, create_pending, get_pending
@@ -28,7 +28,7 @@ from personal_tools.registry import (
     register_personal_tools,
 )
 from conveyor.automation import routines
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.web.web_control import WebControl
 
 TOKEN = "test-token-0123456789-abcdefghijklmnopqrstuvwxyz"
@@ -875,7 +875,7 @@ class TestReviewFixes(unittest.TestCase):
 class TestApprovalTTL(unittest.TestCase):
     def test_default_and_clamped_ttl(self):
         import os
-        from config import load_settings  # noqa: F401  (import check only)
+        from conveyor.core.config import load_settings  # noqa: F401  (import check only)
         self.assertEqual(routines.approval_ttl_seconds(SimpleNamespace()), 86_400)
         self.assertEqual(routines.approval_ttl_seconds(SimpleNamespace(routines_approval_ttl_seconds=10)), 300)
         self.assertEqual(routines.approval_ttl_seconds(SimpleNamespace(routines_approval_ttl_seconds=10**9)), 7 * 86_400)

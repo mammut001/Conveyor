@@ -35,7 +35,7 @@ def _fail(label: str, detail: str) -> None:
 def _settings(**overrides):
     """Create a test Settings with sensible defaults."""
     from dataclasses import replace
-    from config import load_settings
+    from conveyor.core.config import load_settings
     base = load_settings()
     return replace(
         base,

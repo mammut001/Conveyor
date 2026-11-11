@@ -39,8 +39,8 @@ server_port = 18766
 os.environ["CONVEYOR_DESKTOP_AGENT_SERVER_HOST"] = server_host
 os.environ["CONVEYOR_DESKTOP_AGENT_SERVER_PORT"] = str(server_port)
 
-import desktop_agent_server
-from config import Settings
+from conveyor.entrypoints import desktop_agent_server
+from conveyor.core.config import Settings
 from nodes.registry import list_nodes
 from nodes.types import NodeStatus, NodeType
 from nodes.state import get_desktop_runtime
@@ -63,7 +63,7 @@ def main() -> int:
         conveyor_desktop_screenshot_dir="/tmp"
     )
     # Spin up ThreadingHTTPServer in background thread
-    from desktop_agent_server import ThreadingHTTPServer
+    from conveyor.entrypoints.desktop_agent_server import ThreadingHTTPServer
     httpd = ThreadingHTTPServer((server_host, server_port), desktop_agent_server.DesktopAgentHTTPHandler)
 
     server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)

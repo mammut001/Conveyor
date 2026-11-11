@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from config import Settings
+from conveyor.core.config import Settings
 from runner.claude_code import ClaudeCodeBackend
 from runner.providers import create_agent_backend
 from runner.types import Job, JobMode, JobState

@@ -27,9 +27,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import Settings, load_settings  # noqa: E402
+from conveyor.core.config import Settings, load_settings  # noqa: E402
 from personal_tools.store import PersonalToolsStore, ReminderRow, _connect, db_path  # noqa: E402
-from redaction import redact_text, truncate  # noqa: E402
+from conveyor.core.redaction import redact_text, truncate  # noqa: E402
 from scripts import scheduler_tick  # noqa: E402
 
 logger = logging.getLogger("scheduler_probe")

@@ -212,7 +212,7 @@ def select(settings, msg, reference):
 
 
 def new(settings, msg, title='新话题'):
-    from redaction import redact_text, truncate
+    from conveyor.core.redaction import redact_text, truncate
     agent = _entry_agent(settings, msg)
     cid = uuid.uuid4().hex
     db = _connect(settings)

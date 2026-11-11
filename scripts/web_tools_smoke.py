@@ -34,7 +34,7 @@ os.environ.setdefault("CODEX_TASK_ROOT", "/tmp/codex-smoke-task")
 os.environ.setdefault("CODEX_BIN", "codex")
 os.environ.setdefault("USER_TIMEZONE", "UTC")
 
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 from handlers.tools.registry import DangerLevel
 from personal_tools.registry import get_personal_tool
 from personal_tools.web_fetch import validate_url, _curl_argv, html_to_text
@@ -115,7 +115,7 @@ async def _test_html_to_text():
 
 async def _test_output_redacted():
     """Outputs are redacted."""
-    from redaction import redact_text
+    from conveyor.core.redaction import redact_text
     text = "token=secret123abc"
     assert "secret123abc" not in redact_text(text)
 

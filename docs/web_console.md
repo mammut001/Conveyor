@@ -8,7 +8,7 @@ does not require a browser or Node.js process on the VPS.
 ## Runtime shape
 
 ```text
-browser ── bearer-authenticated REST + SSE ── web_console_takeover.py
+browser ── bearer-authenticated REST + SSE ── conveyor/entrypoints/web_console_takeover.py
                                                    │
 Telegram ─┐                                        │
 Feishu ───┼── shared SQLite FIFO ── CodexRunner ── worktrees
@@ -255,7 +255,7 @@ For advanced review with editable drafts across Web Chat, routines, webhooks, an
 Secure Human Takeover is off by default (`CONVEYOR_TAKEOVER_ENABLED=false`).
 To enable takeover endpoints and the transport sidecar, set
 `CONVEYOR_TAKEOVER_ENABLED=true` in `.env` (honored by both the web entrypoint
-`web_console_takeover.py` and the sidecar `handoff_sidecar.py`). When disabled,
+`conveyor/entrypoints/web_console_takeover.py` and the sidecar `conveyor/entrypoints/handoff_sidecar.py`). When disabled,
 `/api/takeover/status` returns `enabled: false` and mutation endpoints respond
 with `403 Forbidden` (`"code": "takeover_disabled"`).
 
@@ -309,7 +309,7 @@ unchanged status writes.
 
 The Web Console serves as the execution host and inbox for [General Routines](routines.md).
 Because pending tool approvals live in-memory in the process that spawned them, routine
-execution runs on the server loop of `web_console.py`. Scheduled runs and tool approvals
+execution runs on the server loop of `conveyor/entrypoints/web_console.py`. Scheduled runs and tool approvals
 appear directly in the Web Console "收件箱" (Inbox) and "审批" (Approvals) views.
 
 ## Current limitations

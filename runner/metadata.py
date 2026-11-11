@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from runner.types import Job, JobRecord
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 
 MEMORY_FILENAME = "MEMORY.md"

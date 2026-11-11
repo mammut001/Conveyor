@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from config import Settings
+from conveyor.core.config import Settings
 from scripts.job_metadata import job_sort_time
 
 

@@ -56,7 +56,7 @@ struct Config {
             "\(NSHomeDirectory())/Documents/GitHub/Conveyor"
         ]
         for c in candidates {
-            if let c = c, FileManager.default.fileExists(atPath: "\(c)/desktop_agent.py") {
+            if let c = c, FileManager.default.fileExists(atPath: "\(c)/conveyor/entrypoints/desktop_agent.py") {
                 return c
             }
         }

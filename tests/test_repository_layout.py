@@ -4,16 +4,10 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-LAUNCHERS_AND_CONFIG = {
-    'bot.py', 'feishu_bot.py', 'web_console.py', 'web_console_takeover.py',
-    'desktop_agent.py', 'desktop_agent_server.py', 'desktop_chat_window.py',
-    'agent_desktops.py', 'handoff_sidecar.py', 'runner.py',
-    'config.py', 'redaction.py', 'logging_setup.py',
-}
 
 class RepositoryLayoutTests(unittest.TestCase):
-    def test_root_contains_only_established_launchers_and_config(self):
-        self.assertEqual({p.name for p in ROOT.glob('*.py')}, LAUNCHERS_AND_CONFIG)
+    def test_no_python_source_remains_in_root(self):
+        self.assertEqual({p.name for p in ROOT.glob('*.py')}, set())
 
     def test_runtime_imports_do_not_load_removed_root_modules(self):
         moved = {p.stem for p in (ROOT / 'conveyor').glob('*/*.py') if p.stem != '__init__'}

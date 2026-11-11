@@ -8,8 +8,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from config import Settings, load_runtime_settings
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.core.config import Settings, load_runtime_settings
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 
 
 TOKEN = "test-token-0123456789-abcdefghijklmnopqrstuvwxyz"

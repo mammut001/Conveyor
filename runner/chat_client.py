@@ -18,7 +18,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
 

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 from security.secrets import is_sensitive_key
 
 logger = logging.getLogger("transcript_store")

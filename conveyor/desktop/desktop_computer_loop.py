@@ -28,7 +28,7 @@ import asyncio
 import time
 from typing import Any, Awaitable, Callable
 
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.desktop.desktop_computer_planner import (
     infer_target_app,
     goal_needs_browser,

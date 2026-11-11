@@ -27,7 +27,7 @@ audited change that re-validates this document.
    to `observe_only` and `off` — a typo falls back to
    `observe_only` with a logged warning.
 4. **P5.2/P5.3 add read-only screenshot observe only** via
-   `capture-screen-helper`. Local: `desktop_agent.py --observe-once`.
+   `capture-screen-helper`. Local: `conveyor/entrypoints/desktop_agent.py --observe-once`.
    Remote (P5.3): chat creates observe requests; Mac agent polls
    with `--poll-observe` and returns **metadata only** — no image
    bytes cross the network. Screenshots stay on the Mac by default;
@@ -162,11 +162,11 @@ In P5.1 and P5.1.1, the desktop agent registration and heartbeat endpoint has be
 * **Constant-Time Token Comparison**: Direct string equality check for tokens was replaced with `hmac.compare_digest` to prevent timing attacks.
 * **Request Hardening & Payload Size Enforcement**: Overly large payload requests are rejected immediately; bodies are capped at 16 KB and unbounded body streams are not read.
 * **Input Sanitization and Validation**: Strict validations are performed on registration and heartbeat fields (e.g. max key sizes, expected `node_id` matching, host parameter keys platform/hostname/arch parsing), preventing arbitrary JSON bloat.
-* **Token Redaction**: The shared secret token is listed under `SENSITIVE_FIELDS` in `config.py` and is never printed in server logs or application runtime logs.
+* **Token Redaction**: The shared secret token is listed under `SENSITIVE_FIELDS` in `conveyor/core/config.py` and is never printed in server logs or application runtime logs.
 * **Control Plane Binding**: By default, the control plane server binds to localhost `127.0.0.1`. Binding to `0.0.0.0` is disabled by default. Exposing this interface publicly requires secure routing (e.g. Tailscale, Cloudflare Tunnel, or a VPN) and HTTPS.
 * **File-backed Persistence Isolation**: Status info is shared across processes using `CODEX_MEMORY_ROOT/state/desktop_nodes.json`. This JSON state file is guaranteed to contain NO tokens, secrets, or request headers, and only stores general connection metadata (node ID, version, host summary). No screenshots, mouse, keyboard, or action data are written or stored.
 * **P5.2 observe**: Read-only screenshot capture is local-only through `capture-screen-helper`. Metadata JSON is stored under `CODEX_MEMORY_ROOT/desktop/screenshots/`; image bytes are not sent to the VPS.
-* **P5.3.1 request store hardening**: The observe request store is hardened with a cross-process file lock. This prevents lost updates when Telegram, Feishu, and `desktop_agent_server.py` read/write `CODEX_MEMORY_ROOT/state/desktop_observe_requests.json` concurrently.
+* **P5.3.1 request store hardening**: The observe request store is hardened with a cross-process file lock. This prevents lost updates when Telegram, Feishu, and `conveyor/entrypoints/desktop_agent_server.py` read/write `CODEX_MEMORY_ROOT/state/desktop_observe_requests.json` concurrently.
 * **Safety Non-goals**: No mouse/keyboard control, browser automation, remote screenshot trigger, or Gemini Computer Use API calls are active by default. Computer Use control is implemented in P5.6 behind the gated **direct mode** (see §7); it is **OFF by default** and never exposes the Cua driver to the network.
 
 ---
@@ -249,7 +249,7 @@ of armed/always-direct, every step is still gated by:
 - The VPS `HttpComputerBackend` only polls the shared file store
   (`CODEX_MEMORY_ROOT/state/desktop_computer_requests.json`) for step completion; it
   never opens a Cua/automation connection. No Cua traffic crosses the network.
-- The Mac agent executes steps in `desktop_agent.py --poll-computer`, calling
+- The Mac agent executes steps in `conveyor/entrypoints/desktop_agent.py --poll-computer`, calling
   `build_driver` → `CuaDriver.execute`, then reports the (allow-listed, redacted)
   result back to the control plane.
 
@@ -277,7 +277,7 @@ P5.6.1 hardens the computer-use implementation for safer and more debuggable han
 
 6. **Explicit target app**: When a goal explicitly names a supported running app, the local Mac agent may send `target_app` on `observe`. It resolves the app PID with `list_apps`, calls local `bring_to_front`, and then collects AX hints for that PID. It does not launch an absent app or inspect window titles; an absent app returns `target_app_not_running` or `target_app_not_found`.
 
-7. **Control-plane lifecycle**: VPS deployments manage `conveyor-desktop-agent.service` alongside Telegram and Feishu. The service is restart-on-failure and is included in deploy health status, preventing a manually started `desktop_agent_server.py` from silently running stale code after deploy.
+7. **Control-plane lifecycle**: VPS deployments manage `conveyor-desktop-agent.service` alongside Telegram and Feishu. The service is restart-on-failure and is included in deploy health status, preventing a manually started `conveyor/entrypoints/desktop_agent_server.py` from silently running stale code after deploy.
 
 8. **Legacy state migration**: New state never persists AX `element_token`. Existing installations can run `python3 scripts/redact_computer_state.py` for a dry-run, then `--apply` after the normal state backup to remove that legacy field from the request store and JSONL trajectories.
 

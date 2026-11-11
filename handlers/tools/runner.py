@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 
 from channel.types import InboundMessage, OutboundPort
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.intent import RouteResult
 from handlers.jobs import handle_codex_job
 from handlers.tools.audit import audit_tool_event
@@ -600,7 +600,7 @@ async def _request_confirmation(
             f"风险: {danger_label}\n"
         )
         if is_outbound_draft:
-            from redaction import redact_text
+            from conveyor.core.redaction import redact_text
             draft_preview = cards._parse(settings, tool_name, arg)
             for field, value in draft_preview.items():
                 text += f"{field}: {redact_text(value)[:500]}\n"

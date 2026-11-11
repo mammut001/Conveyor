@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from conveyor.agents import agents
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.desktop.desktop_computer_requests import claim_computer_step, complete_computer_step, x11_node_id
 
 logger = logging.getLogger("conveyor.desktop_x11")
@@ -612,7 +612,7 @@ class X11ComputerBackend:
             logger.warning("agent %s: browser bootstrap skipped", self.agent_id)
             self._prepared = True
             return
-        from agent_desktops import request_browser
+        from conveyor.entrypoints.agent_desktops import request_browser
 
         request_browser(self.settings, self.agent_id)
         deadline = time.monotonic() + BROWSER_WAIT_SECONDS

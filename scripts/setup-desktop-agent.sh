@@ -72,19 +72,9 @@ EOF
 echo ""
 echo "Created $ENV_FILE"
 
-# 5. Create a simple run script
-RUN_SCRIPT="$CONVEYOR_DIR/run-desktop-agent.sh"
-cat > "$RUN_SCRIPT" << 'EOF'
-#!/bin/bash
-set -a
-source "$(dirname "$0")/.desktop-agent.env"
-set +a
-cd "$(dirname "$0")"
-.venv/bin/python desktop_agent.py --poll-observe --poll-computer
-EOF
-chmod +x "$RUN_SCRIPT"
-
-echo "Created $RUN_SCRIPT"
+# 5. Use the versioned desktop-agent launcher.
+RUN_SCRIPT="$CONVEYOR_DIR/scripts/run-desktop-agent.sh"
+echo "Desktop launcher: $RUN_SCRIPT"
 
 # 6. Optional: launchd plist for the SSH tunnel (auto start + auto reconnect).
 # The desktop agent itself is supervised by the ConveyorAgent menu bar app,

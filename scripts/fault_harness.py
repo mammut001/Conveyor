@@ -13,7 +13,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 from runner import CodexRunner, Job, JobMode, JobState
 from scripts.harness_common import CheckResult, print_results
 from scripts.job_metadata import load_job_metadata

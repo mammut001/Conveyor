@@ -9,8 +9,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from logging_setup import configure_logging, install_redacting_excepthook
-from redaction import SecretRedactingFilter
+from conveyor.core.logging_setup import configure_logging, install_redacting_excepthook
+from conveyor.core.redaction import SecretRedactingFilter
 
 TOKEN_RE_1 = re.compile(r"\d{6,}:[A-Za-z0-9_-]{20,}")
 TOKEN_RE_2 = re.compile(r"bot\d+:[A-Za-z0-9_-]{20,}")
@@ -173,7 +173,7 @@ class TestLogRedaction(unittest.TestCase):
     def test_desktop_agent_stdlib_imports(self) -> None:
         code = (
             "import sys\n"
-            "import logging_setup\n"
+            "from conveyor.core import logging_setup\n"
             "for mod in ('telegram', 'httpx', 'config', 'lark_oapi'):\n"
             "    if mod in sys.modules:\n"
             "        sys.exit(f'Unexpected imported module: {mod}')\n"

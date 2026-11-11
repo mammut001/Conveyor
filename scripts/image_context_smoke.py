@@ -37,7 +37,7 @@ sys.path.insert(0, str(REPO))
 from channel.feishu import FeishuOutbound, inbound_from_event, reply_from_payload  # noqa: E402
 from channel.telegram import TelegramOutbound, inbound_from_update  # noqa: E402
 from channel.types import Attachment, InboundMessage, ReplyContext  # noqa: E402
-from config import load_settings  # noqa: E402
+from conveyor.core.config import load_settings  # noqa: E402
 from runner import attachments as store  # noqa: E402
 from runner.types import Job, JobMode  # noqa: E402
 from scripts.harness_common import CheckResult, print_results  # noqa: E402

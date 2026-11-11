@@ -26,8 +26,8 @@ DAY_BRIEF_STATE_FILENAME = "last_day_brief.txt"
 DAY_BRIEF_PREVIEW_CHARS = 500
 DAY_BRIEF_RECENT_JOBS = 3
 DAILY_WORKTREE_FORMAT = "%Y-%m-%d"
-from config import Settings, load_settings
-from redaction import redact_text, safe_json, truncate
+from conveyor.core.config import Settings, load_settings
+from conveyor.core.redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 def _day_brief_state_path(self) -> Path:
     return self.settings.codex_memory_root / "state" / DAY_BRIEF_STATE_FILENAME

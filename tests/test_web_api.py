@@ -7,7 +7,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 
 
 TOKEN = "test-token-0123456789-abcdefghijklmnopqrstuvwxyz"
@@ -185,7 +185,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 200); self.assertEqual(replay["events"], [])
 
     def test_task_cancel_and_authorized_mutations(self):
-        with patch("web_console.submit_codex_job", fake_submit):
+        with patch("conveyor.entrypoints.web_console.submit_codex_job", fake_submit):
             status, task = self.request("POST", "/api/tasks", {"prompt": "hello", "session_id": "web-a", "execution_only": True})
         self.assertEqual(status, 202); self.assertEqual(task["job_id"], "q2")
         self.assertEqual(self.request("POST", "/api/jobs/q1/cancel", {})[0], 200)
@@ -210,7 +210,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_web_task_fix_mode_and_fast_command(self):
         # Fix mode directly submits Codex job
-        with patch("web_console.submit_codex_job", fake_submit):
+        with patch("conveyor.entrypoints.web_console.submit_codex_job", fake_submit):
             status, task = self.request("POST", "/api/tasks", {
                 "prompt": "fix a typo", "mode": "fix", "session_id": "web-a"
             })

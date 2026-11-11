@@ -13,7 +13,7 @@ from agent_coordination import agent_channel_routing as routing
 from conveyor.agents import agent_conversations as conversations
 from conveyor.agents.agents import AgentStore, chat_id_for, session_id_for
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from handlers import chat
 from handlers.session import append_turn, get_recent_turns, session_path
 from conveyor.core.transcript_store import get_transcript_store

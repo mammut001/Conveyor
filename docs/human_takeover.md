@@ -282,8 +282,8 @@ server logs.
 
 Secure Human Takeover is off by default (`CONVEYOR_TAKEOVER_ENABLED=false`).
 To enable it, set `CONVEYOR_TAKEOVER_ENABLED=true` in the environment. Both the
-web entrypoint (`web_console_takeover.py`) and the systemd sidecar
-(`handoff_sidecar.py`) honor this setting:
+web entrypoint (`conveyor/entrypoints/web_console_takeover.py`) and the systemd sidecar
+(`conveyor/entrypoints/handoff_sidecar.py`) honor this setting:
 - When disabled, `GET /api/takeover/status` reports `enabled: false`, mutation routes return `403 Forbidden`, and the Web Workbench displays a compact disabled card.
 - When disabled, the sidecar refuses to start the transport (`phase: disabled`), while safety cleanup of owned transports and close requests remains operational.
 

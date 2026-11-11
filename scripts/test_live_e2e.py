@@ -7,7 +7,7 @@ from pathlib import Path
 # Add project root to sys.path
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
 
-from config import load_settings
+from conveyor.core.config import load_settings
 from channel.types import InboundMessage
 from handlers.tools.observe_tools import (
     exec_desktop_observe_request,

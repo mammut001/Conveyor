@@ -49,9 +49,7 @@ die() { log "ERROR: $*" >&2; exit 1; }
 log "Syncing to ${REMOTE}:${REMOTE_DIR} ..."
 for sub in \
   conveyor agent_coordination scripts runner channel handlers nodes web tests personal_tools security mcp_client vendor \
-  bot.py feishu_bot.py web_console.py web_console_takeover.py handoff_sidecar.py \
-  logging_setup.py config.py runner.py redaction.py desktop_agent.py desktop_agent_server.py \
-  desktop_chat_window.py agent_desktops.py requirements.txt systemd Makefile; do
+  requirements.txt systemd Makefile; do
   if [[ -e "$LOCAL_DIR/$sub" ]]; then
     rsync -az "${EXCLUDES[@]}" \
       "$LOCAL_DIR/$sub" "$REMOTE:$REMOTE_DIR/"
@@ -99,8 +97,11 @@ cd "${REMOTE_DIR}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_PATH="${BACKUP_DIR}/${TIMESTAMP}"
 mkdir -p "${BACKUP_PATH}"
-for f in Makefile config.py runner.py bot.py feishu_bot.py; do
-  [[ -f "$f" ]] && cp "$f" "${BACKUP_PATH}/" 2>/dev/null || true
+for f in Makefile conveyor/core/config.py conveyor/entrypoints/bot.py conveyor/entrypoints/feishu_bot.py; do
+  if [[ -f "$f" ]]; then
+    mkdir -p "${BACKUP_PATH}/$(dirname "$f")"
+    cp "$f" "${BACKUP_PATH}/$f"
+  fi
 done
 # Keep only last 5 backups
 if [[ -d "${BACKUP_DIR}" ]]; then
@@ -175,7 +176,7 @@ if [[ -n "$DESKTOP_SERVER_PID" ]]; then
     sleep 1
   fi
   DESKTOP_SERVER_LOG="/tmp/conveyor_desktop_agent_server-${USER:-ubuntu}.log"
-  nohup .venv/bin/python desktop_agent_server.py \
+  nohup .venv/bin/python -m conveyor.entrypoints.desktop_agent_server \
     >"$DESKTOP_SERVER_LOG" 2>&1 </dev/null &
   DESKTOP_SERVER_PID="$!"
   sleep 2
@@ -192,7 +193,7 @@ fi
 # ---- rollback guard --------------------------------------------------------
 if [[ "$ALL_ACTIVE" == "false" ]]; then
   log "Some services are not active. Attempting rollback ..."
-  for f in Makefile config.py runner.py bot.py feishu_bot.py; do
+  for f in Makefile conveyor/core/config.py conveyor/entrypoints/bot.py conveyor/entrypoints/feishu_bot.py; do
     if [[ -f "${BACKUP_PATH}/$f" ]]; then
       cp "${BACKUP_PATH}/$f" "${REMOTE_DIR}/$f" 2>/dev/null || true
     fi

@@ -20,7 +20,7 @@ from unittest import mock
 
 import httpx
 
-from config import Settings, _reasoning_effort_env, load_runtime_settings
+from conveyor.core.config import Settings, _reasoning_effort_env, load_runtime_settings
 from runner.chat_client import (
     ChatConfig,
     _expanded_max_tokens,

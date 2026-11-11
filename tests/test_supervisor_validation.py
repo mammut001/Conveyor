@@ -38,7 +38,7 @@ if str(ROOT) not in sys.path:
 from conveyor.agents import agent_supervisor as ags
 from conveyor.agents import supervisor_service as svc
 from conveyor.agents import supervisor_validation as val
-from config import Settings
+from conveyor.core.config import Settings
 
 _ENV_KEYS_TO_CLEAR = (
     "CONVEYOR_AGENT_SUPERVISOR_ENABLED",

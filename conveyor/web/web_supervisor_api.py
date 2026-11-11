@@ -9,7 +9,7 @@ from conveyor.agents import supervisor_service as svc
 from conveyor.agents import supervisor_goals as goals_mod
 from conveyor.agents import supervisor_merge as merge_mod
 from conveyor.agents import supervisor_validation as validation_mod
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 logger = logging.getLogger("conveyor.web_supervisor_api")
 
@@ -18,7 +18,7 @@ def _resolve_settings(handler: Any) -> Any:
     settings = getattr(getattr(handler, "server", None), "control", None)
     settings = getattr(settings, "settings", None)
     if settings is None:
-        from config import load_runtime_settings
+        from conveyor.core.config import load_runtime_settings
         try:
             settings = load_runtime_settings()
         except Exception:

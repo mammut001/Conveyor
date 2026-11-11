@@ -17,10 +17,10 @@ import urllib.error
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
 from personal_tools.web_fetch import validate_url
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 logger = logging.getLogger(__name__)
 

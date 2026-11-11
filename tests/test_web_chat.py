@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 from channel.types import InboundMessage
 from handlers.job_queue import JobQueue
 from handlers.tools.confirm import clear_all_pending, create_pending
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.web.web_control import WebControl
 
 TOKEN = "test-token-0123456789-abcdefghijklmnopqrstuvwxyz"
@@ -369,7 +369,7 @@ class WebChatTests(unittest.TestCase):
             with self.subTest(outcome=outcome):
                 prompt = f"修复项目测试并说明结果 ({outcome})"
                 with patch("handlers.chat.ask_chat", new=AsyncMock(return_value=(outcome, None))), \
-                        patch("web_console.submit_codex_job", new=AsyncMock()) as submit:
+                        patch("conveyor.entrypoints.web_console.submit_codex_job", new=AsyncMock()) as submit:
                     status, events = self.request_sse("/api/chat", {"message": prompt})
                     submit.assert_not_called()
                 self.assertEqual(status, 200)
@@ -383,8 +383,8 @@ class WebChatTests(unittest.TestCase):
                 self.assertEqual(body["messages"][-1]["kind"], "task_suggestion")
 
                 submit = AsyncMock(return_value=(True, "queued", SimpleNamespace(id="handoff-job")))
-                with patch("web_console.submit_codex_job", new=submit), \
-                        patch("web_console.WebConsoleHandler._handle_task", new=AsyncMock()) as dispatch:
+                with patch("conveyor.entrypoints.web_console.submit_codex_job", new=submit), \
+                        patch("conveyor.entrypoints.web_console.WebConsoleHandler._handle_task", new=AsyncMock()) as dispatch:
                     status, body = self.request("POST", "/api/tasks", {
                         "prompt": suggestion["prompt"], "session_id": suggestion["session_id"],
                         "mode": "run", "execution_only": True,
@@ -516,7 +516,7 @@ class WebChatTests(unittest.TestCase):
 
     def test_conversation_picker_http_auth_creation_and_web_identity(self):
         import os
-        from config import Settings
+        from conveyor.core.config import Settings
         from conveyor.agents.agents import AgentStore
         from dataclasses import replace
         with tempfile.TemporaryDirectory() as tmp:

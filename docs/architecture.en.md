@@ -6,7 +6,7 @@
 
 > **Current desktop status**: The P5.0 desktop-stub text below is historical.
 > The current implementation is the P5.6/P5.6.2 Mac-local Cua direct loop:
-> `desktop_agent_server.py` is managed by `conveyor-desktop-agent.service`,
+> `conveyor/entrypoints/desktop_agent_server.py` is managed by `conveyor-desktop-agent.service`,
 > while `conveyor/desktop/desktop_computer_loop.py` drives the local `cua-driver`. See
 > `docs/desktop_security.md` and `docs/desktop_capabilities.md` for current behavior.
 
@@ -34,7 +34,7 @@ Telegram                            Feishu                 Web browser
    │                                  │
    │ Update                           │ WebSocket
    ▼                                  ▼
- bot.py                          feishu_bot.py
+ conveyor/entrypoints/bot.py                          conveyor/entrypoints/feishu_bot.py
  _TelegramOutbound               FeishuOutbound
    │                                  │
    └──────────┬───────────────────────┴──── REST + SSE ───────┐
@@ -82,7 +82,7 @@ Telegram                            Feishu                 Web browser
 | `runner/` | `config`, `redaction`, `scripts/*` | `telegram`, `lark_oapi`, `handlers` |
 | `handlers/` | `runner`, `channel.types`, `redaction` | `telegram`, `lark_oapi` |
 | `channel/*.py` | own SDK + `handlers` + `channel.types` | business command logic |
-| `bot.py` / `feishu_bot.py` | channel adapter + `handlers.dispatch` | direct `runner` (except wire-up) |
+| `conveyor/entrypoints/bot.py` / `conveyor/entrypoints/feishu_bot.py` | channel adapter + `handlers.dispatch` | direct `runner` (except wire-up) |
 
 ---
 
@@ -143,7 +143,7 @@ across Telegram and Feishu.
 Adding a new command = add a row to `COMMAND_TABLE` and write the
 handler. Both channels pick it up.
 
-Telegram-only routing: `bot.py` registers explicit `CommandHandler`
+Telegram-only routing: `conveyor/entrypoints/bot.py` registers explicit `CommandHandler`
 entries for the legacy commands and a single generic
 `MessageHandler(filters.COMMAND, …)` fallback after them, so any new
 slash command in `COMMAND_TABLE` is reachable without per-command
@@ -1177,12 +1177,12 @@ picked up opportunistically.
   SDK in `handlers/`, no lark_oapi in `channel/telegram.py`, no
   Telegram SDK in `channel/feishu.py`, no `runner` import in
   `channel/*.py`).
-- `bot.py` / `feishu_bot.py` are now entrypoints only: handler
+- `conveyor/entrypoints/bot.py` / `conveyor/entrypoints/feishu_bot.py` are now entrypoints only: handler
   registration, onboarding, `tool_callback` wiring, and the Feishu
   WebSocket connect. The legacy `_start_job` / `_typing_loop` (which
   bypassed `TelegramOutbound`) have been removed — all job execution
   now goes through `handlers.dispatch` → `handlers.jobs`. Auth
-  checking in `bot.py` uses `channel/auth.is_allowed`.
+  checking in `conveyor/entrypoints/bot.py` uses `channel/auth.is_allowed`.
 
 ### P2.2 Feishu progress card / throttle (done)
 
@@ -1199,7 +1199,7 @@ picked up opportunistically.
 
 - Pure profile helpers (`operator_profile_exists`, `save_operator_profile`,
   `profile_text`) live in `handlers/onboarding.py` (no Telegram SDK import).
-- Telegram-specific ConversationHandler steps stay in `bot.py` because
+- Telegram-specific ConversationHandler steps stay in `conveyor/entrypoints/bot.py` because
   they need Update / CallbackQuery types.
 - Import boundary: `handlers/onboarding.py` passes `import_boundary_smoke.py`.
 
@@ -1343,7 +1343,7 @@ speaks the Cua protocol.
   `is_direct_mode_active` (enabled and always_direct or unexpired arm),
   `contains_blocked_keyword` / `is_action_allowed` /
   `normalize_action` / `redact_computer_action`.
-- **Control plane**: `desktop_agent_server.py` gains
+- **Control plane**: `conveyor/entrypoints/desktop_agent_server.py` gains
   `/desktop/computer/task/step/claim|complete|fail`,
   `/desktop/computer/task/pending`, `/desktop/computer/status`
   (Bearer + `hmac.compare_digest`, bound to `127.0.0.1`).
@@ -1351,7 +1351,7 @@ speaks the Cua protocol.
   locates the configured local `cua-driver` binary and executes through
   `cua-driver call <tool> <json>`; `FakeCuaTransport` for tests, never
   retains plaintext). `/computer_status` also reads the metadata-only
-  `permissions status --json` state; `desktop_agent.py --poll-computer`
+  `permissions status --json` state; `conveyor/entrypoints/desktop_agent.py --poll-computer`
   polls the control plane, claims a pending step, runs `build_driver`,
   reports the result back.
 - **VPS loop**: `conveyor/desktop/desktop_computer_planner.py` (`CodexPlanner` drives
@@ -1411,6 +1411,6 @@ P5.6.1 hardens the computer-use implementation for safer and more debuggable han
 | 2.2 | 2026-06-11 | Added auto VPS deploy (GitHub Actions + deploy_vps.sh). |
 | 2.3 | 2026-06-11 | Deploy hardening (flock/smoke/rollback/.deploy-status.json); added `/deploy_status` command. |
 | 2.5 | 2026-06-11 | P2.2 Feishu card-based progress (interactive cards + `update_card`); P2.3 onboarding extraction (`handlers/onboarding.py` pure helpers); P2.5 audit log rotation (1 MB size-based, 3 rotated files). |
-| 2.4 | 2026-06-11 | bot.py cleanup (removed dead `_start_job`/`_typing_loop`, auth uses `is_allowed`); P2.4 session summary (`handlers/session.py`, `/context`, `/forget`, prompt injection). |
+| 2.4 | 2026-06-11 | conveyor/entrypoints/bot.py cleanup (removed dead `_start_job`/`_typing_loop`, auth uses `is_allowed`); P2.4 session summary (`handlers/session.py`, `/context`, `/forget`, prompt injection). |
 | 2.0 | 2026-06-11 | English translation, added agent tool layer, Telegram live smoke, bilingual sync. |
 | 1.0 | 2026-06-09 | Original Chinese architecture doc. |

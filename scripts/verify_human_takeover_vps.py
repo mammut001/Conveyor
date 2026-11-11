@@ -28,7 +28,7 @@ sys.path.insert(0, str(REPO_ROOT))
 # Ensure CONVEYOR_ENV_FILE is set before config is imported
 os.environ.setdefault("CONVEYOR_ENV_FILE", str(REPO_ROOT / ".env"))
 
-from config import load_settings
+from conveyor.core.config import load_settings
 from conveyor.desktop.desktop_computer_requests import (
     cancel_pending_computer_steps,
     claim_computer_step,

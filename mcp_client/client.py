@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp_client.types import MCPToolSpec, ServerConfig
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 logger = logging.getLogger("conveyor.mcp.client")
 

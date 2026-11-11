@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import load_settings  # noqa: E402
+from conveyor.core.config import load_settings  # noqa: E402
 from handlers import dispatch  # noqa: E402
 from channel.types import InboundMessage  # noqa: E402
 from runner import CodexRunner  # noqa: E402

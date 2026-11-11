@@ -44,7 +44,7 @@ os.environ["CONVEYOR_CHAT_MODE"] = "off"
 
 from conveyor.agents import workers  # noqa: E402
 from conveyor.agents import agent_supervisor as ags  # noqa: E402
-from config import Settings  # noqa: E402
+from conveyor.core.config import Settings  # noqa: E402
 
 POOL_ROLES = ("analyst", "implementer", "reviewer")
 VALIDATION_NAME = "feature-present"

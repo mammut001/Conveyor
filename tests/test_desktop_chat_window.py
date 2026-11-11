@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from desktop_chat_window import (
+from conveyor.entrypoints.desktop_chat_window import (
     enable_system_gtk,
     local_screenshot_file,
     post_chat,
@@ -39,7 +39,7 @@ class DesktopChatWindowTest(unittest.TestCase):
         saved = list(sys.path)
         try:
             sys.path = [item for item in sys.path if item != extra]
-            with mock.patch("desktop_chat_window.os.path.isdir", return_value=True):
+            with mock.patch("conveyor.entrypoints.desktop_chat_window.os.path.isdir", return_value=True):
                 enable_system_gtk()
                 self.assertEqual(sys.path[-1], extra)
                 enable_system_gtk()

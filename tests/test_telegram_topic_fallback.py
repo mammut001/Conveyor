@@ -180,7 +180,7 @@ class TelegramChatOutboundDeadTopicTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(bot.calls), 1)
 
     async def test_fallback_prefix_cannot_overflow_the_limit(self) -> None:
-        from redaction import MAX_TELEGRAM_MESSAGE, truncate
+        from conveyor.core.redaction import MAX_TELEGRAM_MESSAGE, truncate
 
         bot = FakeBot()
         port = TelegramChatOutbound(bot, TOPIC_CHAT_ID)

@@ -28,7 +28,7 @@ os.environ.setdefault("CODEX_TASK_ROOT", "/tmp/codex-smoke-task")
 os.environ.setdefault("CODEX_BIN", "codex")
 os.environ.setdefault("USER_TIMEZONE", "UTC")
 
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 from handlers.tools.registry import DangerLevel
 from personal_tools.registry import PERSONAL_TOOL_REGISTRY, get_personal_tool
 

@@ -19,7 +19,7 @@ from handlers.tools.runner import _request_confirmation
 from personal_tools.browser_read import _connect, _db, _operator_key
 from personal_tools.browser_approval_scope import status
 from conveyor.web.web_chat import decide_tool_approval
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.browser.workflow_browser_egress import EgressAudit
 from conveyor.browser.workflow_browser_external import UntrustedPageText
 

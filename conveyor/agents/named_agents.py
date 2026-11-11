@@ -12,7 +12,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 _TOOL = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 _ID = re.compile(r"^[a-z0-9]{1,32}$")

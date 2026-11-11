@@ -24,7 +24,7 @@ PR：https://github.com/mammut001/Conveyor/pull/102 。保持 Draft，不合并�
 | 长期恢复的视觉线程包含旧截图，动作轨迹缺少地址栏阶段信息 | `conveyor/desktop/desktop_computer_planner.py` | 全屏模式每次规划只传当前截图、完整目标及脱敏历史；提供聚焦/等待提交状态；Mac 原有 resume 保持；错误 JSON 仅重试一次 |
 | 旧 smoke 在 Linux 上假设 Mac Calculator generic launcher 可用 | `scripts/desktop_computer_smoke.py` | 显式检查 Mac 成功与 Linux 拒绝两条路径，保留原 PID/调用顺序断言 |
 | 共享 Host Cua 在 Linux 上因 socket 丢失、TCC 权限误判、键盘 background 模式及无 AX 元素时被后台 Launcher 劫持 PID | `conveyor/desktop/desktop_cua.py` | 转发 `--socket` 参数与 `DEVNULL` stdin；Linux 探测旁路 Mac 专有权限；Linux 键盘操作默认 `delivery_mode="foreground"`；规范化应用名匹配并防止后台有 AX 元素的应用劫持无 AX 元素的前台目标窗口 |
-| 测试验收脚本缺少共享 Host Cua 端到端编排；测试环境目录权限与空配置兼容性 | `scripts/linux_browser_e2e.py`, `config.py`, `scripts/jobs_dedupe_smoke.py` | 增加 `--backend host-cua` 与独立 Cua 服务上下文管理器；`load_dotenv` 严格检查 `is_file()`；烟测脚本隔离 `TMPDIR` 避免多用户权限冲突 |
+| 测试验收脚本缺少共享 Host Cua 端到端编排；测试环境目录权限与空配置兼容性 | `scripts/linux_browser_e2e.py`, `conveyor/core/config.py`, `scripts/jobs_dedupe_smoke.py` | 增加 `--backend host-cua` 与独立 Cua 服务上下文管理器；`load_dotenv` 严格检查 `is_file()`；烟测脚本隔离 `TMPDIR` 避免多用户权限冲突 |
 
 测试覆盖真实延迟映射、错误焦点、窗口消失、最小化、加载等待、重复动作、错误页、过早完成、错误窗口输入、接管/取消/超时、应用策略和脱敏。完整测试不读取生产任务状态作为 fixture。
 

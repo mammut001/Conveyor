@@ -10,7 +10,7 @@ from typing import Any
 
 from channel.types import InboundMessage, OutboundPort
 from handlers.tools.confirm import PendingToolAction, get_pending, _CONFIRM_TTL_SECONDS
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 from conveyor.core.transcript_store import get_transcript_store, session_identity
 
 logger = logging.getLogger("conveyor.web_chat")
@@ -687,7 +687,7 @@ def build_history(session: dict[str, Any] | None) -> list[dict[str, Any]]:
 def _goal_web_driver(msg: InboundMessage, settings: Any, runner: Any) -> Any:
     """Queue-backed /goal driver whose iterations and progress land in this web session."""
     from conveyor.agents import goal_loop
-    from web_console import WebOutbound
+    from conveyor.entrypoints.web_console import WebOutbound
 
     durable = session_identity(msg.channel, msg.chat_id, msg.operator_id)
     notifier = WebOutbound(settings, durable)

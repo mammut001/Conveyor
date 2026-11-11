@@ -11,9 +11,9 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 logger = logging.getLogger(__name__)
 

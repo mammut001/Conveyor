@@ -1,7 +1,7 @@
 """personal_tools/notes.py — local notes tool implementations."""
 from __future__ import annotations
 
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
 from personal_tools.store import PersonalToolsStore
 

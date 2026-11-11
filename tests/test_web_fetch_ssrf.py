@@ -36,7 +36,7 @@ class WebFetchSsrfTest(unittest.TestCase):
             self.assertEqual(validate_and_pin("http://v6.example:8080/")[2],
                              ["--resolve", "v6.example:8080:[2606:2800:21f:cb07:6820:80da:af6b:8b2c]"])
 
-            from config import load_settings
+            from conveyor.core.config import load_settings
             settings = dataclasses.replace(load_settings(".env.test.example"), web_fetch_enabled=True)
             calls = []
 

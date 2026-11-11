@@ -1,6 +1,6 @@
 # Repository layout
 
-Application implementation lives under `conveyor/`. The root keeps project metadata, configuration, and the established service launchers.
+Application implementation lives under `conveyor/`. The root keeps standard project metadata and dependency configuration. Python service entrypoints live under `conveyor/entrypoints/`.
 
 | Directory | Responsibility |
 |---|---|
@@ -27,6 +27,8 @@ from conveyor.browser import egress_policy
 from conveyor.desktop import live_screen
 ```
 
-Root launchers such as `bot.py`, `feishu_bot.py`, `web_console_takeover.py`, and `desktop_agent_server.py` retain their existing invocation paths. Overnight services use `python -m conveyor.automation.overnight_cli` and `python -m conveyor.automation.overnight_control` from the repository root.
+Invoke services with `python -m conveyor.entrypoints.<name>` from the repository root. The old `runner.py` shim is replaced by the existing `python -m runner` command. See [entrypoint migration](entrypoint-migration.md) before updating an existing installation. Overnight services use `python -m conveyor.automation.overnight_cli` and `python -m conveyor.automation.overnight_control`.
 
-The former top-level imports for moved modules are no longer supported. Scripts outside this repository that import them must adopt the package paths. Source-file locations do not change configured storage directories or database schemas. Deploy the complete revision together; the rsync deployment list includes `conveyor/` as a whole.
+Python implementation modules are imported through their package paths, including `conveyor.core.config`, `conveyor.core.redaction`, and `conveyor.core.logging_setup`. Source-file locations do not change configured storage directories or database schemas. Deploy the complete revision together; the rsync deployment list includes `conveyor/` as a whole.
+
+The MCP example is in `deploy/examples/mcp_servers.toml`; historical project notes are in `docs/project-history.md`. Standard `requirements.txt`, README files, contribution policies and the Makefile remain at the root for tooling and repository navigation.

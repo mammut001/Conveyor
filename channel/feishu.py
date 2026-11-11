@@ -21,7 +21,7 @@ from lark_oapi.channel import FeishuChannel
 
 from channel.mentions import strip_mention
 from channel.types import Attachment, InboundMessage, ReplyContext
-from redaction import truncate
+from conveyor.core.redaction import truncate
 
 logger = logging.getLogger("conveyor.channel.feishu")
 

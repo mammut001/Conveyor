@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Awaitable, Callable
 
-from config import Settings
+from conveyor.core.config import Settings
 
 ToolExecutor = Callable[[Settings, str], Awaitable[str]]
 

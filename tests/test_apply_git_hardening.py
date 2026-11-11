@@ -97,7 +97,7 @@ class WorktreeOwnershipTest(unittest.TestCase):
 
 class AutoRunFilesPolicyTest(unittest.TestCase):
     def test_git_hooks_and_direnv_files_are_high_risk(self):
-        from config import load_settings
+        from conveyor.core.config import load_settings
         from runner.apply_policy import validate_apply_paths
         settings = load_settings(".env.test.example")
         for path in (".husky/pre-commit", ".githooks/post-checkout", ".envrc", "web/.envrc",

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 # Add parent directory to sys.path so we can import from top level
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
 
-from config import load_settings
+from conveyor.core.config import load_settings
 from channel.types import InboundMessage
 from conveyor.desktop.desktop_upload_requests import (
     create_upload_request,
@@ -189,7 +189,7 @@ def run_tests():
         # ----------------------------------------------------
         # Mac agent local screenshot source path validation tests
         # ----------------------------------------------------
-        from desktop_agent import resolve_local_screenshot_source
+        from conveyor.entrypoints.desktop_agent import resolve_local_screenshot_source
         import os
         
         # Setup screenshots dir

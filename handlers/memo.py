@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 
 from channel.types import InboundMessage, OutboundPort
-from redaction import truncate
+from conveyor.core.redaction import truncate
 from runner import CodexRunner
 
 MEMORY_KEYWORD_PATTERN = re.compile(r"^\s*(memo|备忘|记下|记一下|记住|记录|记\b)", re.IGNORECASE)

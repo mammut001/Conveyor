@@ -30,7 +30,7 @@ from conveyor.agents import goal_notify
 from conveyor.agents import supervisor_diff as diff_mod
 from conveyor.agents import supervisor_goals as goals
 from conveyor.agents import supervisor_service as svc
-from config import Settings
+from conveyor.core.config import Settings
 
 _ENV_KEYS_TO_CLEAR = (
     "CONVEYOR_AGENT_SUPERVISOR_ENABLED",

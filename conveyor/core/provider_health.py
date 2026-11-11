@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 
 def _utc_now() -> str:

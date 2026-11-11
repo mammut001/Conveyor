@@ -24,7 +24,7 @@ import uuid
 from zoneinfo import ZoneInfo
 
 from channel.types import InboundMessage, OutboundPort
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 logger = logging.getLogger("conveyor.routines")
 

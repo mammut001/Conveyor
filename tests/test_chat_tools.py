@@ -22,7 +22,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from channel.types import InboundMessage, OutboundPort
-from config import Settings
+from conveyor.core.config import Settings
 from handlers import chat
 from handlers.chat_tools import (
     ToolLoopResult,

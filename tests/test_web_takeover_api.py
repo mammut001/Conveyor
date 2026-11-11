@@ -6,7 +6,7 @@ import json
 import threading
 import unittest
 
-from web_console_takeover import TakeoverWebConsoleHandler, TakeoverWebConsoleServer
+from conveyor.entrypoints.web_console_takeover import TakeoverWebConsoleHandler, TakeoverWebConsoleServer
 
 TOKEN = "test-token-0123456789-abcdefghijklmnopqrstuvwxyz"
 

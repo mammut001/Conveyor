@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.desktop.desktop_observe_requests import (
     cancel_observe_request,
     create_observe_request,

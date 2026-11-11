@@ -18,7 +18,7 @@ from conveyor.automation import event_triggers as hooks
 from personal_tools import hooks as hook_tools
 from conveyor.automation import routines
 from handlers.job_queue import JobQueue
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.web.web_control import WebControl
 
 

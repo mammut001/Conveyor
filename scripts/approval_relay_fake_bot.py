@@ -25,7 +25,7 @@ if str(ROOT) not in sys.path:
 from conveyor.channels import approval_relay
 from channel.types import InboundMessage, OutboundPort
 from handlers.tools.confirm import PendingToolAction, create_pending, get_pending
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 
 class FakeOutboundPort(OutboundPort):

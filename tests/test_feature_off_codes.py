@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from handlers.job_queue import JobQueue
-from web_console import FEATURE_OFF_ERRORS, WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import FEATURE_OFF_ERRORS, WebConsoleHandler, WebConsoleServer
 from conveyor.web.web_control import WebControl
 
 TOKEN = "test-token-0123456789-abcdefghijklmnopqrstuvwxyz"

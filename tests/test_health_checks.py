@@ -132,7 +132,7 @@ class FeishuCardActionTests(unittest.TestCase):
     def test_bot_registers_the_sdk_card_action_event(self) -> None:
         from lark_oapi.channel import _coerce
 
-        source = (ROOT / "feishu_bot.py").read_text(encoding="utf-8")
+        source = (ROOT / "conveyor/entrypoints/feishu_bot.py").read_text(encoding="utf-8")
         self.assertIn('channel.on("cardAction", _handle_card_action)', source)
         self.assertIn("cardAction", _coerce.VALID_EVENTS)
         self.assertNotIn(_coerce.normalize_event_name("card.action.trigger"), _coerce.VALID_EVENTS)
@@ -157,7 +157,7 @@ class FeishuCardActionTests(unittest.TestCase):
 
 class LogRedactionTests(unittest.TestCase):
     def test_feishu_session_credentials_are_redacted(self) -> None:
-        from redaction import redact_text
+        from conveyor.core.redaction import redact_text
 
         line = "connected to wss://msg-frontier.feishu.cn/ws/v2?fpid=493&access_key=c353f06271cc&service_id=3&ticket=63145737-95ce [conn_id=7]"
         out = redact_text(line)

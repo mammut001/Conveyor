@@ -17,7 +17,7 @@ from unittest.mock import patch
 from conveyor.agents import agent_memory
 from conveyor.agents import agent_supervisor as ags
 from conveyor.agents import supervisor_service as svc
-from config import Settings
+from conveyor.core.config import Settings
 
 
 def _git(*argv: str, cwd: Path) -> str:

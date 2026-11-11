@@ -100,7 +100,7 @@ def enqueue_committed(conn, settings, task, result_id, result_text, *, now=None)
     if (channel not in ("telegram", "feishu") or not chat_id
             or operator != routing._owner(settings, channel)):
         return False
-    from redaction import redact_text
+    from conveyor.core.redaction import redact_text
     now = time.time() if now is None else now
     ensure(conn)
     result_tag = result_id[:12]

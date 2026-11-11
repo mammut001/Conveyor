@@ -22,7 +22,7 @@ from conveyor.agents import agent_security
 from conveyor.agents import agent_security_controls
 from conveyor.agents import main_router_results
 from conveyor.agents.agents import AgentStore, chat_id_for
-from config import Settings
+from conveyor.core.config import Settings
 from channel.types import InboundMessage
 
 

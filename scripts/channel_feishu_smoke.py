@@ -324,7 +324,7 @@ def _test_feishu_bootstrap_fail_closed() -> CheckResult:
     import os
     os.environ.setdefault("LARK_APP_ID", "test-app-id")
     os.environ.setdefault("LARK_APP_SECRET", "test-app-secret")
-    import feishu_bot
+    from conveyor.entrypoints import feishu_bot
     from unittest import mock
     
     mock_settings = SimpleNamespace(
@@ -334,7 +334,7 @@ def _test_feishu_bootstrap_fail_closed() -> CheckResult:
         conveyor_feishu_require_allowlist=False,
     )
     
-    with mock.patch("feishu_bot.settings", mock_settings):
+    with mock.patch("conveyor.entrypoints.feishu_bot.settings", mock_settings):
         try:
             asyncio.run(feishu_bot.main())
             ok = False

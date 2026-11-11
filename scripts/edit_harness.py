@@ -12,7 +12,7 @@ from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import load_settings
+from conveyor.core.config import load_settings
 from runner import CodexRunner, JobMode, JobState
 from scripts.harness_common import CheckResult, attempt_completed, print_results, run_command
 from scripts.telegram_api import send_message

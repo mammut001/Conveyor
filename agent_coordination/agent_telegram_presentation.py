@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from channel.types import InboundMessage
-from config import Settings
-from redaction import redact_text, truncate
+from conveyor.core.config import Settings
+from conveyor.core.redaction import redact_text, truncate
 
 log = logging.getLogger("agent_telegram_presentation")
 

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from channel.types import InboundMessage, OutboundPort
-from config import Settings, is_subagents_enabled
+from conveyor.core.config import Settings, is_subagents_enabled
 from handlers.tools.audit import audit_tool_event
 from handlers.tools.registry import DangerLevel, ToolSpec
 from runner.chat_client import ChatConfig, complete_chat, config_from_settings

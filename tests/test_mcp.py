@@ -24,7 +24,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.chat_tools import (
     REVERSE_TOOL_MAP,
     build_tool_schemas,
@@ -46,7 +46,7 @@ from mcp_client.manager import MCPManager, get_mcp_manager
 from mcp_client.types import MCPToolSpec, ServerConfig
 from runner.chat_client import ChatConfig
 from tests.fixtures.mcp_test_server import create_http_server
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 
 
 def validate_server_config(name: str, raw: dict) -> tuple[ServerConfig, str | None]:
@@ -148,7 +148,7 @@ class TestMCPConfigValidation(unittest.TestCase):
         field = Settings.__dataclass_fields__["mcp_enabled"]
         self.assertFalse(field.default)
         root = Path(__file__).resolve().parents[1]
-        self.assertIn('CONVEYOR_MCP_ENABLED", "false"', (root / "config.py").read_text(encoding="utf-8"))
+        self.assertIn('CONVEYOR_MCP_ENABLED", "false"', (root / "conveyor/core/config.py").read_text(encoding="utf-8"))
         self.assertIn("CONVEYOR_MCP_ENABLED=false", (root / ".env.example").read_text(encoding="utf-8"))
 
     def test_missing_config_returns_empty(self) -> None:

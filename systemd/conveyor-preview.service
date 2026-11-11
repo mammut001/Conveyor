@@ -9,7 +9,7 @@ Group=conveyor-preview
 WorkingDirectory=/srv/conveyor-preview/current
 EnvironmentFile=/srv/conveyor-preview/runtime/preview.env
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/srv/conveyor-preview/venv/bin/python /srv/conveyor-preview/current/web_console_takeover.py
+ExecStart=/srv/conveyor-preview/venv/bin/python -m conveyor.entrypoints.web_console_takeover
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

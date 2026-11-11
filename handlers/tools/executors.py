@@ -10,7 +10,7 @@ import logging
 import os
 import socket
 
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.ops import _load_snapshot, _ps_snapshot, _htop_snapshot, _run, _safe_truncate
 from handlers.tools.registry import DangerLevel, ToolSpec, register_tool
 

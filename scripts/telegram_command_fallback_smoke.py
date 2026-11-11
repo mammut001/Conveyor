@@ -30,7 +30,7 @@ os.environ["USER_TIMEZONE"] = "UTC"
 
 import handlers.tools.executors  # noqa: F401
 from channel import InboundMessage
-from config import load_settings
+from conveyor.core.config import load_settings
 from handlers.commands import COMMAND_TABLE
 from scripts.harness_common import CheckResult, print_results
 
@@ -38,7 +38,7 @@ from scripts.harness_common import CheckResult, print_results
 DISPATCH_MODULE = importlib.import_module("handlers.dispatch")
 dispatch = DISPATCH_MODULE.dispatch
 
-BOT_PY = Path(__file__).resolve().parents[1] / "bot.py"
+BOT_PY = Path(__file__).resolve().parents[1] / "conveyor/entrypoints/bot.py"
 
 
 @dataclass

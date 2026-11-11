@@ -19,7 +19,7 @@ TOKEN = "t" * 40
 
 
 def _settings(root: Path, **overrides):
-    from config import Settings
+    from conveyor.core.config import Settings
 
     base = Settings(
         telegram_bot_token="test-token",
@@ -144,7 +144,7 @@ class PromptTests(Case):
 class HttpTests(Case):
     def setUp(self) -> None:
         super().setUp()
-        from web_console import WebConsoleHandler, WebConsoleServer
+        from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
         from conveyor.web.web_control import WebControl
 
         # The session list joins against the queue table, which the real queue creates.

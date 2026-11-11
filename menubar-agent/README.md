@@ -151,4 +151,4 @@ CONVEYOR_SSH_HOST=vps-oracle CONVEYOR_LOCAL_PORT=8766 bash scripts/install-launc
   can't get this grant.
 - **Duplicate agents after relaunch** — `AgentSupervisor.start()` pkills
   pre-existing desktop-agent poller orphans first; if you see
-  duplicates, kill them: `pkill -f "desktop_agent.py --poll-observe"`.
+  duplicates, kill them: `pkill -f "conveyor/entrypoints/desktop_agent.py --poll-observe"`.

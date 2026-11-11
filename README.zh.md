@@ -278,7 +278,7 @@ sudo conveyor update  # 拉取最新代码，烟测未通过自动秒级回滚
 3. **运行门禁烟测并启动**：
    ```bash
    make smoke
-   .venv/bin/python bot.py
+   .venv/bin/python -m conveyor.entrypoints.bot
    ```
 
 ---

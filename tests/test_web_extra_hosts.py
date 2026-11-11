@@ -11,7 +11,7 @@ import time
 import unittest
 from types import SimpleNamespace
 
-from web_console import (
+from conveyor.entrypoints.web_console import (
     WebConsoleHandler,
     WebConsoleServer,
     _validate_extra_host,
@@ -43,7 +43,7 @@ class ValidationTests(unittest.TestCase):
     def test_env_is_parsed_into_a_tuple(self) -> None:
         from unittest import mock
 
-        from config import load_runtime_settings
+        from conveyor.core.config import load_runtime_settings
 
         with tempfile.TemporaryDirectory() as tmp:
             env = {

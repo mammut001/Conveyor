@@ -17,11 +17,11 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
 from personal_tools.web_fetch import fetch_text, validate_url
 from personal_tools.web_search import SearchResult, search_web
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 
 class SearchProvider(Protocol):

@@ -131,7 +131,7 @@ class RoutineDstTest(unittest.TestCase):
 class TimezoneConfigTest(unittest.TestCase):
     def test_invalid_user_timezone_falls_back_to_utc_everywhere(self) -> None:
         import os
-        from config import load_settings
+        from conveyor.core.config import load_settings
         with patch.dict(os.environ, {"USER_TIMEZONE": "Mars/Olympus"}):
             self.assertEqual(load_settings(".env.test.example").user_timezone, "UTC")
         with patch.dict(os.environ, {"USER_TIMEZONE": "Asia/Shanghai"}):

@@ -10,7 +10,7 @@ import logging
 
 from channel.auth import is_allowed
 from channel.types import InboundMessage, OutboundPort
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.chat import (
     chat_enabled,
     chat_or_agent,

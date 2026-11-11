@@ -24,7 +24,7 @@ os.environ.setdefault("CODEX_BIN", "codex")
 os.environ.setdefault("USER_TIMEZONE", "UTC")
 
 from channel import InboundMessage
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 from handlers.commands import COMMAND_TABLE, run_command
 from handlers.tools.confirm import clear_all_pending
 from handlers.tools.registry import DangerLevel
