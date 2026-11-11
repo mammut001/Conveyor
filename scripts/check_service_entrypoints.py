@@ -32,7 +32,8 @@ def deployment_root(source: Path) -> Path:
 def main() -> int:
     if not shutil.which('systemctl'):
         return 0
-    repo = deployment_root(Path(__file__).resolve().parents[1])
+    repo = (Path(sys.argv[1]).resolve() if len(sys.argv) == 2
+            else deployment_root(Path(__file__).resolve().parents[1]))
     failures = []
     for unit in UNITS:
         result = subprocess.run(['systemctl', 'show', unit, '-p', 'ExecStart', '--value'],

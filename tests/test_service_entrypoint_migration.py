@@ -12,6 +12,11 @@ class EntrypointMigrationTests(unittest.TestCase):
         self.assertFalse(obsolete_command('/opt/conveyor/.venv/bin/python -m conveyor.entrypoints.bot', repo))
         self.assertFalse(obsolete_command('python /srv/other/bot.py', repo))
 
+    def test_rsync_preflight_runs_before_any_source_copy(self):
+        source = (Path(__file__).resolve().parents[1] / 'scripts' / 'deploy.sh').read_text()
+        self.assertLess(source.index('python3 - ${quoted_remote_dir}'), source.index('rsync -az'))
+        self.assertIn('die "Service entrypoint migration is required before source sync"', source)
+
     def test_candidate_checks_the_live_checkout_location(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw).resolve() / 'live'

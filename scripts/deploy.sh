@@ -45,6 +45,12 @@ EXCLUDES=(
 log() { echo "[deploy] $*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
 
+# Verify the remote effective startup commands before copying any live files.
+printf -v quoted_remote_dir '%q' "$REMOTE_DIR"
+if ! ssh "$REMOTE" "python3 - ${quoted_remote_dir}" < "$LOCAL_DIR/scripts/check_service_entrypoints.py"; then
+  die "Service entrypoint migration is required before source sync"
+fi
+
 # ---- rsync ----------------------------------------------------------------
 log "Syncing to ${REMOTE}:${REMOTE_DIR} ..."
 for sub in \
