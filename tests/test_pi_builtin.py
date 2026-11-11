@@ -229,9 +229,9 @@ class PiCatalogTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             args, kwargs = run.call_args
             self.assertEqual(args[0], ["bash", "scripts/install_pi.sh"])
-            self.assertEqual(kwargs["cwd"], str(Path(workers.__file__).resolve().parent))
+            self.assertEqual(kwargs["cwd"], str(Path(__file__).resolve().parents[1]))
             self.assertFalse(kwargs.get("shell", False))
-        self.assertTrue((Path(workers.__file__).resolve().parent / "scripts" / "install_pi.sh").is_file())
+        self.assertTrue((Path(__file__).resolve().parents[1] / "scripts" / "install_pi.sh").is_file())
 
     def test_auth_needs_login_without_provider(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
