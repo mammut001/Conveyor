@@ -13,9 +13,9 @@ from pathlib import Path
 import sqlite3
 import time
 
-import agent_channel_routing as routing
+from agent_coordination import agent_channel_routing as routing
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("agent_channel_results")
 
 
 @contextmanager
@@ -103,7 +103,7 @@ async def consume_once(settings, channel, send):
 
     Legacy pre-migration rows keep their existing at-most-once semantics.
     """
-    import agent_result_outbox
+    from agent_coordination import agent_result_outbox
     result = await agent_result_outbox.consume_once(settings, channel, send)
     if result is not None:
         return result
@@ -135,7 +135,7 @@ async def consume_once(settings, channel, send):
 
 
 async def run(settings, channel, send):
-    import agent_result_outbox
+    from agent_coordination import agent_result_outbox
     import agent_security
     last_purge = 0.0
     while routing.enabled(settings) or agent_result_outbox.configured(settings):

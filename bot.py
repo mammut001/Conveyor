@@ -33,7 +33,7 @@ from handlers.onboarding import (
 from handlers.tools.runner import cancel_pending, execute_confirmed, parse_tool_callback
 from logging_setup import configure_logging
 from runner import CodexRunner, create_runtime_runner
-from agent_result_poller_lifecycle import AgentResultPollingApplication, configure_telegram_poller
+from agent_coordination.agent_result_poller_lifecycle import AgentResultPollingApplication, configure_telegram_poller
 from telegram_navigation import callback_action, legacy_action, navigation_screen
 
 
@@ -479,7 +479,7 @@ async def task_status_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         raw=update,
     )
     port = make_outbound(update)
-    import agent_telegram_presentation as tg_pres
+    from agent_coordination import agent_telegram_presentation as tg_pres
     status_text, buttons = tg_pres.get_task_status_display(settings, inbound, task_ref)
     if buttons and getattr(port, "supports_inline_buttons", False):
         await port.reply_with_buttons(inbound, status_text, buttons)
@@ -506,7 +506,7 @@ async def agent_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         raw=update,
     )
     port = make_outbound(update)
-    import agent_telegram_presentation as tg_pres
+    from agent_coordination import agent_telegram_presentation as tg_pres
     status_text, buttons = tg_pres.get_task_status_display(settings, inbound, task_ref)
     if buttons and getattr(port, "supports_inline_buttons", False):
         await port.reply_with_buttons(inbound, status_text, buttons)
@@ -742,7 +742,7 @@ async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # This works with already-sent reply keyboards without recreating them.
     menu_action = legacy_action(inbound.text) if inbound.chat_type == "p2p" else None
     if menu_action:
-        import agent_channel_routing
+        from agent_coordination import agent_channel_routing
         if agent_channel_routing.authorized(settings, inbound):
             import agent_switcher
             await agent_switcher.show(settings, inbound, make_outbound(update),
@@ -900,7 +900,7 @@ async def generic_command_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def post_init(application: Application) -> None:
     await runner.validate()
-    import agent_telegram_presentation as tg_pres
+    from agent_coordination import agent_telegram_presentation as tg_pres
     extra_cmds = [("agentstatus", "查看转交任务状态")] if tg_pres.feature_enabled(settings) else []
     await application.bot.set_my_commands(
         [
@@ -963,10 +963,10 @@ async def post_init(application: Application) -> None:
             consumer.start()
         except Exception:
             logger.exception("Failed to start approval relay consumer in telegram bot")
-    import agent_channel_routing
-    import agent_result_outbox
+    from agent_coordination import agent_channel_routing
+    from agent_coordination import agent_result_outbox
     if agent_channel_routing.enabled(settings) or agent_result_outbox.configured(settings):
-        import agent_channel_results
+        from agent_coordination import agent_channel_results
         from channel.telegram import TelegramChatOutbound
         async def send_agent_result(chat_id, text):
             from channel.types import InboundMessage

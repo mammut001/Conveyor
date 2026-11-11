@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 
 from telegram.ext import Application
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("agent_result_poller_lifecycle")
 
 PollerFactory = Callable[[], Awaitable[None]]
 _POLLER_KEY = "agent_result_poller"

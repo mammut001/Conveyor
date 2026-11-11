@@ -47,7 +47,7 @@ def transaction(settings) -> Iterator[sqlite3.Connection]:
     connection.row_factory = sqlite3.Row
     try:
         connection.execute("PRAGMA busy_timeout=10000")
-        import agent_delegation
+        from agent_coordination import agent_delegation
         delegation_on = bool(agent_delegation.enabled(settings))
         rebuild = False
         ready_key = (path.resolve(), path.stat().st_ino if path.exists() else None, delegation_on)
@@ -79,7 +79,7 @@ def transaction(settings) -> Iterator[sqlite3.Connection]:
                 "'message','task_request','task_result','task','result'")
             connection.execute(upgraded if delegation_on and not rebuild else _SCHEMA)
             if rebuild:
-                from agent_delegation_schema import ensure
+                from agent_coordination.agent_delegation_schema import ensure
                 ensure(connection)
             connection.execute(_INDEX)
             _SCHEMA_READY.add((path.resolve(), path.stat().st_ino if path.exists() else None, delegation_on))

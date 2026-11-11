@@ -12,8 +12,8 @@ import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
-import agent_channel_routing as routing
-import agent_channel_results as outbox
+from agent_coordination import agent_channel_routing as routing
+from agent_coordination import agent_channel_results as outbox
 import agent_context as ac
 import main_router
 from agents import AgentStore, session_id_for

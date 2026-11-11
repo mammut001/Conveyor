@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import agent_context as context
-import agent_channel_routing as routing
+from agent_coordination import agent_channel_routing as routing
 import agent_conversations as conversations
 from agents import AgentStore, chat_id_for, session_id_for
 from channel.types import InboundMessage

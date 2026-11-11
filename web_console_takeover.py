@@ -187,7 +187,7 @@ def main() -> None:
         start_purge_worker(loop, settings)
     import approval_relay
     relay_consumer = approval_relay.start_relay_worker(loop, settings, channel="web")
-    from agent_delegation_worker import start as start_delegation
+    from agent_coordination.agent_delegation_worker import start as start_delegation
     delegation_worker = start_delegation(loop, settings)
     import agent_security
     agent_retention_worker = agent_security.start(loop, settings)

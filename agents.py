@@ -362,7 +362,7 @@ def agent_for_chat(settings: Any, channel: str, chat_id: str) -> dict[str, Any] 
     # An authenticated owner can bind a private Telegram/Feishu chat to a
     # live named Agent. The lookup never trusts the inbound message body.
     if channel in ("telegram", "feishu"):
-        import agent_channel_routing
+        from agent_coordination import agent_channel_routing
         selected = agent_channel_routing.bound(settings, channel, chat_id)
         if selected:
             return store.get(selected)

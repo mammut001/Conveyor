@@ -12,7 +12,7 @@ from pathlib import Path
 
 import agent_context as ac
 import agent_mailbox
-import agent_delegation
+from agent_coordination import agent_delegation
 
 
 def enabled(settings):
@@ -129,7 +129,7 @@ def cancel_task(settings, agent_id, task_id, *, operator="web-console"):
             return False
     # The worker may run on the Web Console's event loop, not this request
     # thread. Schedule cancellation there instead of touching the loop here.
-    import agent_delegation_worker as worker
+    from agent_coordination import agent_delegation_worker as worker
     task = worker._running.get((ctx.operator_identity, task_id))
     if task is not None and not task.done():
         try:

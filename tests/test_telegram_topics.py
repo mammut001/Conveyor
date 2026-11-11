@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-import agent_channel_routing as routing
+from agent_coordination import agent_channel_routing as routing
 import agent_context as ac
 from agents import AgentStore
 from channel.telegram import TelegramChatOutbound, inbound_from_update, split_chat_thread

@@ -1853,7 +1853,7 @@ async def _help(msg, port, _runner, _settings, _arg):
         "• 确认目标达成：/goal_done <短编号> · 停止目标：/goal_stop <短编号>\n\n"
         "更多示例：/nl_help · 完整命令：/commands"
     )
-    import agent_channel_routing
+    from agent_coordination import agent_channel_routing
     if agent_channel_routing.authorized(_settings, msg):
         text = text.replace("更多示例：", "• 切换 Agent：说“切换助手”，或 /agents\n"
                             "• 接续会话：说“接着已有会话聊”，或 /conversations\n\n更多示例：")

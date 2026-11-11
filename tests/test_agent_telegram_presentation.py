@@ -42,10 +42,10 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "dummy_token")
 os.environ.setdefault("TELEGRAM_ALLOWED_USER_ID", "12345")
 
 import agent_context as ac
-import agent_delegation as delegation
-import agent_delegation_queue as queue
-import agent_result_outbox as outbox
-import agent_telegram_presentation as tg_pres
+from agent_coordination import agent_delegation as delegation
+from agent_coordination import agent_delegation_queue as queue
+from agent_coordination import agent_result_outbox as outbox
+from agent_coordination import agent_telegram_presentation as tg_pres
 import config
 from config import Settings
 import main_router as router

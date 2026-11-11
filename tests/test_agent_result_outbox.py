@@ -14,10 +14,10 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import agent_context as ac
-import agent_delegation as delegation
-import agent_delegation_queue as queue
-import agent_result_outbox as outbox
-import agent_channel_results as adapter
+from agent_coordination import agent_delegation as delegation
+from agent_coordination import agent_delegation_queue as queue
+from agent_coordination import agent_result_outbox as outbox
+from agent_coordination import agent_channel_results as adapter
 import agent_security
 import agent_security_controls
 import main_router_results

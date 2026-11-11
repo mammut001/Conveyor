@@ -66,7 +66,7 @@ async def dispatch(
         return
 
     if not is_allowed(msg, settings):
-        import agent_channel_routing
+        from agent_coordination import agent_channel_routing
         if agent_channel_routing.is_agent_command(settings, msg):
             return  # no Agent existence information leaks to nonowners
         await port.reply(msg, "Unauthorized.")
@@ -80,7 +80,7 @@ async def dispatch(
 
     # Only authenticated owner DMs can select an Agent. Never intercept
     # emergency stop or /cancel, which retain their existing dispatch path.
-    import agent_channel_routing
+    from agent_coordination import agent_channel_routing
     if await agent_channel_routing.maybe_command(settings, msg, port):
         return
     import agent_conversations
@@ -140,7 +140,7 @@ async def dispatch(
             await handle_codex_job(msg, port, runner, mode=mode, prompt=arg)
             return
         if cmd_name == "cancel":
-            from agent_delegation_worker import cancel_all
+            from agent_coordination.agent_delegation_worker import cancel_all
             cancel_all(settings)
             import subagents
             if subagents.enabled(settings):

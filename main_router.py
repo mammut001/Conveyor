@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 
 import agent_context as ac
-import agent_delegation
+from agent_coordination import agent_delegation
 
 log = logging.getLogger(__name__)
 _SELECTION = re.compile(r"^@([\w-]{1,60})(?:\s+|$)", re.UNICODE)
@@ -99,7 +99,7 @@ def _needed(text):
 
 
 def _tools(settings, source, candidate, needed):
-    from agent_delegation import allowed_tools
+    from agent_coordination.agent_delegation import allowed_tools
     if not all(source.permits(t) and candidate.permits(t) for t in needed):
         return None
     available = allowed_tools(settings, source, candidate, list(needed))

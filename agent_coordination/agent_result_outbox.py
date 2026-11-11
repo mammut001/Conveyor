@@ -17,7 +17,7 @@ from uuid import uuid4
 import agent_context
 import agent_security
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("agent_result_outbox")
 MAX_ATTEMPTS = 5
 LEASE_SECONDS = 45
 RETENTION_DAYS = 14
@@ -96,7 +96,7 @@ def enqueue_committed(conn, settings, task, result_id, result_text, *, now=None)
         return False
     channel, chat_id, operator = (route["origin_channel"], route["origin_chat"],
                                   route["origin_operator"])
-    import agent_channel_routing as routing
+    from agent_coordination import agent_channel_routing as routing
     if (channel not in ("telegram", "feishu") or not chat_id
             or operator != routing._owner(settings, channel)):
         return False
@@ -105,7 +105,7 @@ def enqueue_committed(conn, settings, task, result_id, result_text, *, now=None)
     ensure(conn)
     result_tag = result_id[:12]
     if channel == "telegram":
-        import agent_telegram_presentation as tg_pres
+        from agent_coordination import agent_telegram_presentation as tg_pres
         text = tg_pres.format_telegram_result(route["agent_name"], result_tag, result_text)
     else:
         text = (f'[{route["agent_name"]}] delegated result (untrusted data, '
@@ -140,7 +140,7 @@ def _claim(settings, channel, *, now=None):
         if row["attempts"] >= MAX_ATTEMPTS:
             _terminal(db, row["id"], "denied", now)
             return None
-        import agent_channel_routing as routing
+        from agent_coordination import agent_channel_routing as routing
         if row["operator"] != routing._owner(settings, channel):
             _terminal(db, row["id"], "revoked", now)
             return None

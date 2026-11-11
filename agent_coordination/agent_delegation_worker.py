@@ -6,12 +6,12 @@ import logging
 import time
 
 import agent_context as ac
-import agent_delegation
-import agent_delegation_queue as queue
+from agent_coordination import agent_delegation
+from agent_coordination import agent_delegation_queue as queue
 import agent_mailbox as mailbox
 import agent_mailbox_db as db
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("agent_delegation_worker")
 _running: dict[tuple[str, str], asyncio.Task] = {}
 
 
@@ -47,7 +47,7 @@ def cancel_all(settings):
 
 async def _finish(settings, record, worker_id):
     import agents
-    from agent_delegation_turn import execute
+    from agent_coordination.agent_delegation_turn import execute
     try:
         target = ac.resolve(settings, "web",
                             agents.chat_id_for(record["to_agent"]),

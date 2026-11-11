@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from telegram.ext import Application
 
-from agent_result_poller_lifecycle import (
+from agent_coordination.agent_result_poller_lifecycle import (
     AgentResultPollingApplication, cancel_poller, configure_telegram_poller,
     create_poller,
 )

@@ -39,7 +39,7 @@ def _requires_confirmation(tool_name: str, settings: Settings | None = None) -> 
         import main_router
         return main_router.enabled(settings)
     import agent_messaging_v2
-    import agent_delegation
+    from agent_coordination import agent_delegation
     if agent_delegation.enabled(settings) and tool_name == "agent.delegate":
         return True
     if agent_messaging_v2.enabled(settings) and tool_name in ("agent.message", "agent.reply"):
@@ -120,7 +120,7 @@ async def run_tool(
         return "Outbound blocked: private data was read; approval required"
     egress_taint.mark_read(settings, tool_name, operator_id=operator_id, channel=channel, chat_id=chat_id)
     import agent_messaging_v2
-    import agent_delegation
+    from agent_coordination import agent_delegation
     if agent_delegation.enabled(settings) and tool_name == "agent.delegate":
         return agent_delegation.enqueue(settings, arg, operator_id=operator_id,
                                         channel=channel, chat_id=chat_id, approved=egress_approved)
@@ -224,7 +224,7 @@ def _danger_label(tool_name: str, settings: Settings | None = None) -> str:
             return spec.danger.value
         return "write"
     import agent_messaging_v2
-    import agent_delegation
+    from agent_coordination import agent_delegation
     mail_spec = (agent_delegation.spec(settings) if tool_name == "agent.delegate"
                  else agent_messaging_v2.spec(settings, tool_name))
     if mail_spec is not None:
@@ -367,7 +367,7 @@ async def _invoke_tool(
         import main_router
         extra = main_router.spec(settings)
     if tool_name == "agent.delegate":
-        from agent_delegation import spec as delegation_spec
+        from agent_coordination.agent_delegation import spec as delegation_spec
         extra = delegation_spec(settings)
     if spec is None and get_personal_tool(tool_name) is None and extra is None and not tool_name.startswith("mcp."):
         await port.reply(msg, f"未知工具: {tool_name}")
@@ -503,7 +503,7 @@ async def _request_confirmation(
             return
     spec = get_tool(tool_name)
     import agent_messaging_v2
-    from agent_delegation import spec as delegation_spec
+    from agent_coordination.agent_delegation import spec as delegation_spec
     import main_router
     mailbox_spec = (main_router.spec(settings) if tool_name == "main.route_delegate"
                     else delegation_spec(settings) if tool_name == "agent.delegate"
@@ -541,7 +541,7 @@ async def _request_confirmation(
             await port.reply(msg, f"Outbound draft blocked: {exc}")
             return
     if msg.channel == "telegram" and tool_name == "main.route_delegate":
-        import agent_telegram_presentation as tg_pres
+        from agent_coordination import agent_telegram_presentation as tg_pres
         if not tg_pres.validate_route_target(settings, arg):
             await port.reply(msg, "无法转交任务：目标 Agent 不存在或已归档。")
             return
@@ -590,7 +590,7 @@ async def _request_confirmation(
         action="requested",
     )
     if msg.channel == "telegram" and tool_name == "main.route_delegate":
-        import agent_telegram_presentation as tg_pres
+        from agent_coordination import agent_telegram_presentation as tg_pres
         text = tg_pres.format_route_confirmation_card(settings, arg)
     else:
         text = (
@@ -767,7 +767,7 @@ async def execute_confirmed(
             result = main_router.confirm(settings, action, token)
         else:
             import agent_messaging_v2
-            import agent_delegation
+            from agent_coordination import agent_delegation
             approved_arg = (agent_delegation.approval_arg(action.arg, token)
                             if action.tool_name == "agent.delegate" and agent_delegation.enabled(settings)
                             else agent_messaging_v2.approval_arg(action.tool_name, action.arg, token)
@@ -822,7 +822,7 @@ async def execute_confirmed(
     except Exception:
         pass
     if msg.channel == "telegram" and action.tool_name == "main.route_delegate":
-        import agent_telegram_presentation as tg_pres
+        from agent_coordination import agent_telegram_presentation as tg_pres
         ack_text, buttons = tg_pres.format_queue_ack(settings, msg, action, result)
         if buttons and getattr(port, "supports_inline_buttons", False):
             await port.reply_with_buttons(msg, ack_text, buttons)

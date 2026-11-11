@@ -22,7 +22,7 @@ from channel.types import InboundMessage
 from config import Settings
 from redaction import redact_text, truncate
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("agent_telegram_presentation")
 
 # Capability cues to human-readable Chinese capability labels
 _TOOL_LABELS: dict[str, str] = {
@@ -48,7 +48,7 @@ _CODE_FENCE_PATTERN = re.compile(r"^\s*(`{3,}|~{3,})")
 
 def feature_enabled(settings: Settings) -> bool:
     """Return True if both channel routing and main router features are enabled."""
-    import agent_channel_routing as routing
+    from agent_coordination import agent_channel_routing as routing
     import main_router
     return bool(routing.enabled(settings) and main_router.enabled(settings))
 
@@ -56,7 +56,7 @@ def feature_enabled(settings: Settings) -> bool:
 def validate_route_target(settings: Settings, arg: str) -> bool:
     """Validate target agent exists and is active; fail-closed on invalid/archived."""
     try:
-        import agent_delegation
+        from agent_coordination import agent_delegation
         req = agent_delegation.parse_request(arg)
         target_id = req.get("to")
         if not target_id or not isinstance(target_id, str):
@@ -95,7 +95,7 @@ def _summarize_capabilities(settings: Settings, tools_subset: Sequence[str]) -> 
 
 def format_route_confirmation_card(settings: Settings, arg: str) -> str:
     """Generate human-readable Chinese confirmation card for main.route_delegate on Telegram."""
-    import agent_delegation
+    from agent_coordination import agent_delegation
     req = agent_delegation.parse_request(arg)
     target_id = req["to"]
     from agents import AgentStore
@@ -134,7 +134,7 @@ def format_queue_ack(
 
         agent_name = "Agent"
         try:
-            import agent_delegation
+            from agent_coordination import agent_delegation
             req = agent_delegation.parse_request(action.arg)
             from agents import AgentStore
             agent = AgentStore(settings).get(req["to"])
@@ -193,7 +193,7 @@ def query_delegated_task_status(
         return None, "任务编号格式无效。"
 
     from channel.auth import is_allowed
-    import agent_channel_routing as routing
+    from agent_coordination import agent_channel_routing as routing
 
     if not is_allowed(msg, settings) or msg.chat_type != "p2p" or msg.channel != "telegram":
         return None, "未找到该任务或无权查看。"

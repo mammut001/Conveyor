@@ -48,7 +48,7 @@ def web_post(handler, path, body):
             source="web")
         if active:
             # Cancel leases immediately, not only at next worker poll.
-            from agent_delegation_worker import cancel_all
+            from agent_coordination.agent_delegation_worker import cancel_all
             cancel_all(settings)
     except OSError:
         handler._json(HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -81,7 +81,7 @@ async def owner_command(settings, msg, port):
         settings, enabled=desired == "on",
         operator=msg.operator_id, source=msg.channel)
     if actual:
-        from agent_delegation_worker import cancel_all
+        from agent_coordination.agent_delegation_worker import cancel_all
         cancel_all(settings)
     await port.reply(msg, "[Agent safety] Kill switch " + (
         "ON (delegations stopped)" if actual else "OFF (delegations resumed)"))

@@ -20,7 +20,7 @@ _SCHEMA_READY: set[Path] = set()
 
 
 def enabled(settings):
-    import agent_channel_routing
+    from agent_coordination import agent_channel_routing
     return agent_channel_routing.enabled(settings)
 
 
@@ -49,7 +49,7 @@ def _connect(settings):
 
 
 def _owner(settings, channel):
-    import agent_channel_routing
+    from agent_coordination import agent_channel_routing
     return 'web-console' if channel == 'web' else agent_channel_routing._owner(settings, channel)
 
 
@@ -68,7 +68,7 @@ def _agent(settings, agent_id):
 
 def _entry_agent(settings, msg):
     import agents
-    import agent_channel_routing
+    from agent_coordination import agent_channel_routing
     if not enabled(settings):
         raise PermissionError('会话选择未开启')
     if msg.channel == 'web':
@@ -240,7 +240,7 @@ def summary(settings, msg):
 
 
 async def maybe_command(settings, msg, port):
-    import agent_channel_routing
+    from agent_coordination import agent_channel_routing
     if not enabled(settings) or msg.channel not in ('telegram', 'feishu'):
         return False
     raw = msg.text.strip()
@@ -284,7 +284,7 @@ def scoped(fn):
     """Pin conversation selection for one inbound request across awaits/tasks."""
     @wraps(fn)
     async def wrapped(msg, port, settings, *args, **kwargs):
-        import agent_channel_routing as routing
+        from agent_coordination import agent_channel_routing as routing
         controls = {'接着已有会话聊', '查看会话', '切换会话', '会话列表', '回到本入口会话'}
         word = (msg.text.strip().split(maxsplit=1) or [''])[0].split('@', 1)[0].lower()
         if (not enabled(settings) or routing.is_agent_command(settings, msg)

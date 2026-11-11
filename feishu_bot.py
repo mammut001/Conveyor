@@ -35,7 +35,7 @@ from handlers.tools.runner import cancel_pending, execute_confirmed
 from logging_setup import configure_logging
 from redaction import redact_text
 from runner import CodexRunner, create_runtime_runner
-from agent_result_poller_lifecycle import cancel_poller, create_poller
+from agent_coordination.agent_result_poller_lifecycle import cancel_poller, create_poller
 
 configure_logging(
     service_name="codex_feishu_bot",
@@ -331,11 +331,11 @@ async def main() -> None:
         except Exception:
             logger.exception("Failed to start approval relay consumer in feishu bot")
 
-    import agent_channel_routing
+    from agent_coordination import agent_channel_routing
     result_poller = None
-    import agent_result_outbox
+    from agent_coordination import agent_result_outbox
     if agent_channel_routing.enabled(settings) or agent_result_outbox.configured(settings):
-        import agent_channel_results
+        from agent_coordination import agent_channel_results
         async def send_agent_result(chat_id, text):
             # Existing FeishuChannel plain-text send path: avoid card
             # Markdown interpretation of untrusted Agent output.
