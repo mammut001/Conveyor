@@ -40,7 +40,7 @@ Current integration points:
 - conveyor/desktop/desktop_computer_planner.py: standalone desktop Codex planner;
 - runner/worktree.py and runner/operators/jobs.py: job's git worktree and apply;
 - conveyor/desktop/desktop_linux_browser.py: browser/xdotool children (GUI variables explicitly
-  granted). agent_desktops.py already constructs its own limited GUI env;
+  granted). conveyor/entrypoints/agent_desktops.py already constructs its own limited GUI env;
 - MCP stdio children already have strict, independent allowlist and per-server
   MCP_ allowlist; existing MCP filtering is preserved rather than weakened.
 

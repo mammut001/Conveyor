@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from config import Settings
+from conveyor.core.config import Settings
 from mcp_client.manager import MCPManager, get_mcp_manager
 from mcp_client.types import MCPToolSpec, ServerConfig
 

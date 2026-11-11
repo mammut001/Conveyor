@@ -26,7 +26,7 @@ os.environ["USER_TIMEZONE"] = "UTC"
 
 import handlers.tools.executors  # noqa: F401
 from channel import InboundMessage
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 from handlers.dispatch import dispatch
 from handlers.intent import RouteResult
 from handlers.tools.registry import get_tool, requires_confirmation

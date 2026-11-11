@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from config import Settings
-from redaction import redact_text, truncate
+from conveyor.core.config import Settings
+from conveyor.core.redaction import redact_text, truncate
 
 logger = logging.getLogger(__name__)
 

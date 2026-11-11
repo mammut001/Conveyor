@@ -27,7 +27,7 @@ from handlers.tools.confirm import (
     get_pending,
     list_pending as confirm_list_pending,
 )
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 logger = logging.getLogger("conveyor.approval_relay")
 

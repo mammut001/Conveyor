@@ -20,7 +20,7 @@ from typing import Any
 from unittest.mock import patch
 
 from conveyor.agents import agent_supervisor as ags
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.agents.supervisor_service import (
     SupervisorWorker,
     SupervisorWorkerManager,

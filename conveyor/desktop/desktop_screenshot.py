@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import Settings
+from conveyor.core.config import Settings
 
 logger = logging.getLogger("conveyor.desktop_screenshot")
 

@@ -9,7 +9,7 @@ import zlib
 from pathlib import Path
 from unittest import mock
 
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.desktop.desktop_computer_loop import run_computer_loop
 from conveyor.desktop.desktop_computer_planner import (
     CodexPlanner,

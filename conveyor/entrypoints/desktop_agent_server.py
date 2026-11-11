@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
-from config import load_runtime_settings
+from conveyor.core.config import load_runtime_settings
 from conveyor.desktop.desktop_observe_requests import (
     claim_observe_request,
     complete_observe_request,
@@ -35,7 +35,7 @@ from nodes.state import register_desktop_node, record_heartbeat
 from nodes.registry import list_nodes
 
 
-from logging_setup import configure_logging
+from conveyor.core.logging_setup import configure_logging
 
 configure_logging(
     service_name="desktop_agent_server",

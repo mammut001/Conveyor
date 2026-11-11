@@ -7,8 +7,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import load_settings
-from redaction import truncate
+from conveyor.core.config import load_settings
+from conveyor.core.redaction import truncate
 from scripts.job_metadata import load_job_metadata
 from scripts.log_summary import _resolve_job_dir
 

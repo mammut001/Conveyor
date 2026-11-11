@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Literal
 from channel.types import InboundMessage, OutboundPort, ReplyContext
 
 if TYPE_CHECKING:
-    from config import Settings
+    from conveyor.core.config import Settings
     from runner import CodexRunner
 
 logger = logging.getLogger(__name__)

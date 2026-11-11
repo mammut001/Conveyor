@@ -171,7 +171,7 @@ async def maybe_command(settings, msg, port):
         return True
     if word == "/agents":
         from conveyor.agents import agents
-        from redaction import truncate
+        from conveyor.core.redaction import truncate
         items = [a for a in agents.AgentStore(settings).list() if not a["archived"]]
         selected_id = bound(settings, msg.channel, msg.chat_id) or "default"
         lines = [conversation_card(settings, msg), "", "可切换的助手：",

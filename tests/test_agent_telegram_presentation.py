@@ -46,8 +46,8 @@ from agent_coordination import agent_delegation as delegation
 from agent_coordination import agent_delegation_queue as queue
 from agent_coordination import agent_result_outbox as outbox
 from agent_coordination import agent_telegram_presentation as tg_pres
-import config
-from config import Settings
+from conveyor.core import config
+from conveyor.core.config import Settings
 from conveyor.agents import main_router as router
 from conveyor.agents.agents import AgentStore, chat_id_for, WEB_OPERATOR
 from channel.types import InboundMessage, OutboundPort
@@ -56,8 +56,8 @@ from handlers.tools.runner import _request_confirmation, execute_confirmed
 
 # Ensure config.load_settings for initial bot import uses isolated dummy env, no real .env.
 # Preserve previous module settings/runner state rather than leave per-test temp roots.
-if "bot" in sys.modules:
-    import bot
+if "conveyor.entrypoints.bot" in sys.modules:
+    from conveyor.entrypoints import bot
 else:
     with patch.dict(os.environ, {
         "CONVEYOR_ENV_FILE": os.devnull,
@@ -72,7 +72,7 @@ else:
             isolated_env = os.devnull if env_file == ".env" else env_file
             return _orig_load_settings(env_file=isolated_env)
         with patch.object(config, "load_settings", side_effect=_dummy_load_settings):
-            import bot
+            from conveyor.entrypoints import bot
 
 
 def _settings(root: Path) -> Settings:
@@ -858,7 +858,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
     # 9. Bot callback and command path integration
     # -------------------------------------------------------------------------
     async def test_bot_callback_integration_anchored_and_valid(self):
-        import bot
+        from conveyor.entrypoints import bot
 
         task_id = "11111111111111111111111111111111"
         self._create_task_in_db(task_id, status="queued")
@@ -873,7 +873,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
         update_valid.effective_chat.id = 12345
         update_valid.effective_chat.type = "private"
 
-        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+        with patch("conveyor.entrypoints.bot._guard", return_value=True), patch("conveyor.entrypoints.bot.make_outbound") as mock_outbound:
             outbound = MockPort(supports_inline_buttons=True)
             mock_outbound.return_value = outbound
             await bot.task_status_callback(update_valid, AsyncMock())
@@ -886,12 +886,12 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
         update_invalid = AsyncMock()
         update_invalid.callback_query = invalid_query
 
-        with patch("bot._guard", return_value=True):
+        with patch("conveyor.entrypoints.bot._guard", return_value=True):
             await bot.task_status_callback(update_invalid, AsyncMock())
             invalid_query.answer.assert_called_with("无效的任务请求", show_alert=True)
 
     async def test_bot_agent_status_cmd_integration(self):
-        import bot
+        from conveyor.entrypoints import bot
 
         task_id = "22222222222222222222222222222222"
         self._create_task_in_db(task_id, status="queued")
@@ -902,7 +902,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
         update_cmd.effective_chat.type = "private"
         context = SimpleNamespace(args=[task_id])
 
-        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+        with patch("conveyor.entrypoints.bot._guard", return_value=True), patch("conveyor.entrypoints.bot.make_outbound") as mock_outbound:
             outbound = MockPort(supports_inline_buttons=True)
             mock_outbound.return_value = outbound
             await bot.agent_status_cmd(update_cmd, context)
@@ -910,20 +910,20 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
 
         # Command with no args prompts usage
         context_empty = SimpleNamespace(args=[])
-        with patch("bot._guard", return_value=True), patch("bot._reply") as mock_reply:
+        with patch("conveyor.entrypoints.bot._guard", return_value=True), patch("conveyor.entrypoints.bot._reply") as mock_reply:
             await bot.agent_status_cmd(update_cmd, context_empty)
             mock_reply.assert_called_with(update_cmd, "用法: /agentstatus <任务编号>")
 
         # Command with invalid hex
         context_invalid = SimpleNamespace(args=["bad_ref!"])
-        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+        with patch("conveyor.entrypoints.bot._guard", return_value=True), patch("conveyor.entrypoints.bot.make_outbound") as mock_outbound:
             outbound = MockPort()
             mock_outbound.return_value = outbound
             await bot.agent_status_cmd(update_cmd, context_invalid)
             self.assertIn("任务编号格式无效。", outbound.replies[0])
 
     async def test_bot_callback_and_command_denials(self):
-        import bot
+        from conveyor.entrypoints import bot
 
         task_id = "33333333333333333333333333333333"
         self._create_task_in_db(task_id, status="queued", origin_chat="12345", origin_operator="12345")
@@ -937,7 +937,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
         update_forged.effective_chat.id = 99999
         update_forged.effective_chat.type = "private"
 
-        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+        with patch("conveyor.entrypoints.bot._guard", return_value=True), patch("conveyor.entrypoints.bot.make_outbound") as mock_outbound:
             outbound = MockPort()
             mock_outbound.return_value = outbound
             await bot.task_status_callback(update_forged, AsyncMock())
@@ -952,7 +952,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
         update_group.effective_chat.id = 12345
         update_group.effective_chat.type = "group"
 
-        with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+        with patch("conveyor.entrypoints.bot._guard", return_value=True), patch("conveyor.entrypoints.bot.make_outbound") as mock_outbound:
             outbound = MockPort()
             mock_outbound.return_value = outbound
             await bot.task_status_callback(update_group, AsyncMock())
@@ -961,7 +961,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
         # 3. Flags-off callback and command without DB
         with patch.dict(os.environ, {"CONVEYOR_MAIN_ROUTER": "0"}):
             self.assertFalse(tg_pres.feature_enabled(self.settings))
-            with patch("bot._guard", return_value=True), patch("bot.make_outbound") as mock_outbound:
+            with patch("conveyor.entrypoints.bot._guard", return_value=True), patch("conveyor.entrypoints.bot.make_outbound") as mock_outbound:
                 outbound = MockPort()
                 mock_outbound.return_value = outbound
                 valid_query = AsyncMock()

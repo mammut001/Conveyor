@@ -14,7 +14,7 @@ from conveyor.agents import agent_mailbox
 from conveyor.agents import agent_messaging_v2
 from conveyor.agents.agents import AgentStore, chat_id_for, session_id_for
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.chat_tools import build_tool_schemas, _get_tool_spec
 from handlers.tools.confirm import create_pending
 from handlers.tools.runner import (

@@ -29,7 +29,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from channel.types import InboundMessage, OutboundPort
-from config import Settings, is_subagents_enabled
+from conveyor.core.config import Settings, is_subagents_enabled
 from handlers.chat_tools import (
     build_tool_schemas,
     func_to_tool_name,
@@ -506,7 +506,7 @@ class TestSubagentsSuite(unittest.IsolatedAsyncioTestCase):
         with patch("handlers.subagents.complete_chat", side_effect=fake_complete):
             raw_res = await execute_parallel_subagents(self.settings, arg, config=self.cfg)
 
-        from redaction import redact_text
+        from conveyor.core.redaction import redact_text
         redacted = redact_text(raw_res)
         self.assertNotIn(fake_secret, redacted)
         self.assertIn("[REDACTED]", redacted)

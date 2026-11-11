@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from channel.types import InboundMessage
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 from handlers import chat
 from handlers.dispatch import dispatch
 from handlers.session import session_path

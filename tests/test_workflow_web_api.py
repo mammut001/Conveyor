@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 
 
 _TOKEN = "workflow-api-test-token-0123456789"

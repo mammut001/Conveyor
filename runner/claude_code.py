@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from conveyor.agents.agent_events import emit_event
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 from runner.attachments import attachments_root, prompt_images
 from runner.core import CodexRunner
 from runner.types import Job, JobMode, ProgressCallback

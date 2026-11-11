@@ -27,7 +27,7 @@ from handlers.tools.confirm import (
 from handlers.tools.registry import register_tool, ToolSpec, DangerLevel
 from personal_tools.registry import register_personal_tools
 from handlers.job_queue import JobQueue
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.web.web_control import WebControl
 
 TOKEN = "test-approval-inbox-token-12345"

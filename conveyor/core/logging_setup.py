@@ -6,7 +6,7 @@ import threading
 import traceback
 from typing import Any
 
-from redaction import SecretRedactingFilter, redact_text
+from conveyor.core.redaction import SecretRedactingFilter, redact_text
 
 DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 NOISY_LOGGERS = ("httpx", "httpcore", "urllib3", "googleapiclient", "google_auth_httplib2", "lark_oapi")

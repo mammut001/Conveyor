@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
 from personal_tools.web_runtime import WebRuntime
 from personal_tools.web_search import SearchResult

@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Protocol
 
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 log = logging.getLogger("agent_supervisor")
 

@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import dataclasses
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 from handlers import chat, chat_memory
 from handlers.chat import LastRequest
 

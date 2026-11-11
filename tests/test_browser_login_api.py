@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import quote
 
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.web.console_secrets import path_for
 
 TOKEN = "login-api-test-token-long-long-long"

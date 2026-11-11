@@ -11,7 +11,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 from conveyor.core.transcript_store import get_transcript_store, session_identity
 
 _NAV_PREFIX = "tgn:"

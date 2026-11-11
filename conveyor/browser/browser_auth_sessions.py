@@ -26,7 +26,7 @@ from conveyor.browser.browser_g3_kill import active as kill_active
 from conveyor.desktop.human_takeover import HumanTakeoverStore
 from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied
 from conveyor.browser.workflow_browser_guards import EXTRA_INIT_SCRIPT, inspect_cdp_dom
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 
 def _private_root(settings):

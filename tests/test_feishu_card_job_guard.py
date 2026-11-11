@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 with patch.dict(os.environ, {"LARK_APP_ID": "cli_test", "LARK_APP_SECRET": "sec_test",
                              "LARK_ALLOWED_OPEN_ID": "ou_test_user"}):
-    import feishu_bot
+    from conveyor.entrypoints import feishu_bot
 
 
 def _runner(last_id: str, running_id: str | None = None):

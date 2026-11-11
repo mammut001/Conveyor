@@ -27,9 +27,9 @@ from unittest.mock import patch
 from urllib.parse import urlencode
 
 from conveyor.agents import agent_supervisor as ags
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.job_queue import JobQueue
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.web.web_control import WebControl
 
 TOKEN = "sup-http-test-token-0123456789-abcdefghijklmnop"

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from channel.types import Attachment, InboundMessage, ReplyContext
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.commands import parse_command, parse_conversation_control, run_command
 from handlers.dispatch import dispatch
 

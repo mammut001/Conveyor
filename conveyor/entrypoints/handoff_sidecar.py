@@ -24,9 +24,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from config import load_runtime_settings
+from conveyor.core.config import load_runtime_settings
 from conveyor.desktop.human_takeover import HumanTakeoverStore
-from logging_setup import configure_logging
+from conveyor.core.logging_setup import configure_logging
 from conveyor.desktop.web_takeover import (
     clear_close_request,
     clear_transport_gate,
@@ -110,7 +110,7 @@ def _extract_urls(output: str) -> tuple[str | None, str | None]:
 
 
 def _script_path() -> Path:
-    return Path(__file__).resolve().parent / "scripts" / "novnc_handoff.sh"
+    return Path(__file__).resolve().parents[2] / "scripts" / "novnc_handoff.sh"
 
 
 def _run_transport(command: str) -> tuple[bool, str, str | None, str | None]:

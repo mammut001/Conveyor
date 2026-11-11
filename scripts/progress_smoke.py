@@ -39,7 +39,7 @@ from scripts.harness_common import CheckResult, print_results
 # before the round-10 mode filter was added. New behavior for
 # compact/quiet is covered by the dedicated
 # scripts/jobs_progress_mode_smoke.py.
-import config as _config_mod  # noqa: E402
+from conveyor.core import config as _config_mod  # noqa: E402
 import runner as _runner_mod  # noqa: E402
 import runner.streaming as _streaming_mod  # noqa: E402
 
@@ -75,7 +75,7 @@ except Exception:  # pragma: no cover - dataclass manipulation
 # CodexRunner class so the existing walks keep working.
 RUNNER_PY = Path(__file__).resolve().parents[1] / "runner.py"
 RUNNER_CORE_PY = Path(__file__).resolve().parents[1] / "runner" / "core.py"
-BOT_PY = Path(__file__).resolve().parents[1] / "bot.py"
+BOT_PY = Path(__file__).resolve().parents[1] / "conveyor/entrypoints/bot.py"
 
 # All runner/ submodules whose top-level functions get bound
 # to CodexRunner via setattr in runner/core.py
@@ -95,7 +95,7 @@ RUNNER_METHOD_MODULES = [
 # ---- AST helpers ---------------------------------------------------------
 
 def _parse_runner() -> ast.Module:
-    if RUNNER_PY.stat().st_size < 5000:
+    if RUNNER_CORE_PY.is_file():
         # Post-refactor: synthesize CodexRunner with all
         # methods lifted from the focused modules.
         core_tree = ast.parse(RUNNER_CORE_PY.read_text(encoding="utf-8"))
@@ -157,7 +157,7 @@ def _bot_in_tmp_env(tmp: Path):
         "USER_TIMEZONE": "UTC",
     }
     with mock.patch.dict(os.environ, overrides, clear=False):
-        import bot  # type: ignore[import-not-found]  # noqa: PLC0415
+        from conveyor.entrypoints import bot  # type: ignore[import-not-found]  # noqa: PLC0415
         yield bot
 
 
@@ -2621,7 +2621,7 @@ def _test_load_settings_reads_operator_json_overrides() -> CheckResult:
     over the deployer's defaults."""
     name = "behavior: load_settings reads operator.json and overrides the 4 operator_* fields (onboarding-C)"
     try:
-        import config as config_mod
+        from conveyor.core import config as config_mod
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
             memory_root = tmp_p / "memory"
@@ -2679,7 +2679,7 @@ def _test_load_settings_falls_back_to_env_when_no_operator_json() -> CheckResult
     sensible defaults before the user has run /onboard."""
     name = "behavior: load_settings falls back to env defaults when codex_memory_root/operator.json is absent (onboarding-C)"
     try:
-        import config as config_mod
+        from conveyor.core import config as config_mod
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
             memory_root = tmp_p / "memory"
@@ -2944,7 +2944,7 @@ def _test_start_cmd_first_run_welcome_with_button() -> CheckResult:
                 "USER_TIMEZONE": "UTC",
             }
             with mock.patch.dict(os.environ, overrides, clear=False):
-                import bot as bot_mod
+                from conveyor.entrypoints import bot as bot_mod
                 # _guard reads settings.telegram_allowed_user_id;
                 # the patched env has it as "0" (string), and the
                 # _allowed() helper compares to .id which we set
@@ -3000,7 +3000,7 @@ def _test_text_cmd_first_run_nudge_with_button() -> CheckResult:
                 "USER_TIMEZONE": "UTC",
             }
             with mock.patch.dict(os.environ, overrides, clear=False):
-                import bot as bot_mod
+                from conveyor.entrypoints import bot as bot_mod
                 update, context = _make_fake_handler_update(text="hi")
                 asyncio.run(bot_mod.text_cmd(update, context))
                 # First-run nudge path: reply was called, NO job
@@ -3059,7 +3059,7 @@ def _test_onboard_flow_3_steps_writes_operator_json() -> CheckResult:
                 "USER_TIMEZONE": "UTC",
             }
             with mock.patch.dict(os.environ, overrides, clear=False):
-                import bot as bot_mod
+                from conveyor.entrypoints import bot as bot_mod
                 # bot.py loads settings at module import time, before
                 # this env override took effect. Re-read so settings
                 # point at THIS test's tmpdir, otherwise
@@ -3160,7 +3160,7 @@ def _test_profile_cmd_shows_current_profile() -> CheckResult:
                 "USER_TIMEZONE": "UTC",
             }
             with mock.patch.dict(os.environ, overrides, clear=False):
-                import bot as bot_mod
+                from conveyor.entrypoints import bot as bot_mod
                 # Same env-reload as the onboarding-flow test:
                 # bot.py imported settings at first import, so
                 # settings.codex_memory_root points at the first
@@ -3225,9 +3225,9 @@ def _test_save_operator_profile_handles_oserror() -> CheckResult:
                 "USER_TIMEZONE": "UTC",
             }
             with mock.patch.dict(os.environ, overrides, clear=False):
-                import bot as bot_mod
+                from conveyor.entrypoints import bot as bot_mod
                 # Patch the path to point at the blocker
-                from config import OPERATOR_PROFILE_FIELDS
+                from conveyor.core.config import OPERATOR_PROFILE_FIELDS
                 bad_path = blocker / "operator.json"
                 # Force the helper to use bad_path
                 # P2.3: save_operator_profile moved to handlers.onboarding.

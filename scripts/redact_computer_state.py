@@ -92,7 +92,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="rewrite files; default is dry-run")
     args = parser.parse_args()
-    from config import load_settings
+    from conveyor.core.config import load_settings
 
     root = Path(load_settings().codex_memory_root)
     changed = migrate(root, apply=args.apply)

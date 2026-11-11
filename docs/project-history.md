@@ -88,10 +88,10 @@ worktree, but that nesting is no longer in use.
 
 ```text
 conveyor/
-  bot.py                          24 KB   Telegram command handlers
-  config.py                        4 KB   .env loading + Settings dataclass
+  conveyor/entrypoints/bot.py                          24 KB   Telegram command handlers
+  conveyor/core/config.py                        4 KB   .env loading + Settings dataclass
   runner.py                       60 KB   CodexRunner, job queue, worktrees, codex subprocess
-  redaction.py                     2 KB   Output redaction + truncation
+  conveyor/core/redaction.py                     2 KB   Output redaction + truncation
   requirements.txt                 48 B
   .env.example                   600 B    template (no secrets)
   .env                            -      local only, .gitignored, contains live secrets
@@ -152,7 +152,7 @@ CONVEYOR_REMOTE_DIR=/opt/conveyor
 
 Steps (verbatim from the script):
 
-1. For each of `scripts bot.py config.py runner.py redaction.py
+1. For each of `scripts conveyor/entrypoints/bot.py conveyor/core/config.py runner.py conveyor/core/redaction.py
    requirements.txt systemd`, run
    `rsync -avz --exclude=.env --exclude=.env.* --exclude=__pycache__
    --exclude=*.pyc --exclude=.venv LOCAL/... REMOTE:/opt/...`
@@ -175,7 +175,7 @@ These are deployed manually when they change:
 - `CHANGELOG.md` — not in the script; sync with
   `rsync -avz CHANGELOG.md $REMOTE:/opt/conveyor/CHANGELOG.md  # $REMOTE = $CONVEYOR_REMOTE`
 - `README.md` — same manual treatment if you care about the live doc
-- `Makefile` — same; the bot service runs `bot.py` directly, Makefile is
+- `Makefile` — same; the bot service runs `conveyor/entrypoints/bot.py` directly, Makefile is
   local-only
 - `.env` — local-only, never deploy. The VPS `.env` is provisioned at
   install time and lives in `/opt/conveyor/.env`
@@ -232,7 +232,7 @@ Persistent=true / RandomizedDelaySec=5min
 | `/run <prompt>` | danger-full-access | yes | chat-first default |
 | `/fix <prompt>` | danger-full-access | yes | alias; merges via `/apply` |
 | `/memo [cat] <x>` | n/a | **no** | fast path, see §6.3 |
-| bare `记 x` | n/a | **no** | fast path, regex matched in bot.py |
+| bare `记 x` | n/a | **no** | fast path, regex matched in conveyor/entrypoints/bot.py |
 | `/memory [cat]` | n/a | no | read today's MEMORY.md |
 | `/apply <job_id>` | n/a | no | merge worktree back to main, only if main clean |
 | `/cancel` | n/a | no | terminate running codex process |
@@ -350,7 +350,7 @@ at the 12pm gate.
 
 ### 6.3 The fast path (the one that bypasses codex)
 
-`bot.py:_handle_memo_fast_path` (lines 73-100) handles `记 x` and `/memo`
+`conveyor/entrypoints/bot.py:_handle_memo_fast_path` (lines 73-100) handles `记 x` and `/memo`
 **without** spawning codex. It:
 
 1. Strips the leading keyword via `MEMORY_KEYWORD_PATTERN`
@@ -554,7 +554,7 @@ when you don't want to fire off a Telegram message.
 
 ---
 
-## 10. Configuration (config.py)
+## 10. Configuration (conveyor/core/config.py)
 
 All env vars, with defaults:
 
@@ -612,10 +612,10 @@ or manage):
 | `runner.py:851-902` | `reclassify_unfiled` (12pm gate body) |
 | `runner.py:997` | `async def classify_memo` |
 | `runner.py:1264+` | CLI subcommands (`memorize`, `recall-memory`, ...) |
-| `bot.py:14` | imports (`CodexRunner`, `JobMode`, `SecretRedactingFilter`) |
-| `bot.py:36-50` | `SecretRedactingFilter` |
-| `bot.py:55` | `runner = CodexRunner(settings)` single instance |
-| `bot.py:73-100` | `_handle_memo_fast_path` (bypasses codex) |
+| `conveyor/entrypoints/bot.py:14` | imports (`CodexRunner`, `JobMode`, `SecretRedactingFilter`) |
+| `conveyor/entrypoints/bot.py:36-50` | `SecretRedactingFilter` |
+| `conveyor/entrypoints/bot.py:55` | `runner = CodexRunner(settings)` single instance |
+| `conveyor/entrypoints/bot.py:73-100` | `_handle_memo_fast_path` (bypasses codex) |
 | `scripts/auto_maintain.py:60-100` | `run_maintenance` body |
 | `scripts/auto_maintain.py:80-87` | the summary `join` that the `2a81056` fix changed |
 | `scripts/deploy.sh` | the rsync + restart deploy |
@@ -710,7 +710,7 @@ Inherited from CHANGELOG.md, expanded with current state:
   not write.
 - **Hermes-agent-style parsed tool-call routing** — see §13.1.
 - **Channel decouple (Telegram + Feishu)** — duplicate memo/command logic
-  in `bot.py` vs `feishu_bot.py`; harness is Telegram-shaped only. Design:
+  in `conveyor/entrypoints/bot.py` vs `conveyor/entrypoints/feishu_bot.py`; harness is Telegram-shaped only. Design:
   `docs/003-channel-decoupling.md` (P0: extract `handlers/`, shared dispatch).
 - **Maintain-failure alerting** — the 13:25 incident on 2026-06-04 had a
   57-minute silent window because the maintain unit has no

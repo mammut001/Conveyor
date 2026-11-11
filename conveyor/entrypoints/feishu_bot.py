@@ -28,12 +28,12 @@ from channel.feishu import FeishuOutbound, fetch_reply, inbound_from_event
 from channel.feishu_cards import action_to_command, extract_card_action
 from channel.feishu_audio import audio_enabled, handle_audio, is_audio_message
 from channel.types import InboundMessage
-from config import load_feishu_settings
+from conveyor.core.config import load_feishu_settings
 from handlers import dispatch
 from handlers.context import is_addressed_to_bot
 from handlers.tools.runner import cancel_pending, execute_confirmed
-from logging_setup import configure_logging
-from redaction import redact_text
+from conveyor.core.logging_setup import configure_logging
+from conveyor.core.redaction import redact_text
 from runner import CodexRunner, create_runtime_runner
 from agent_coordination.agent_result_poller_lifecycle import cancel_poller, create_poller
 

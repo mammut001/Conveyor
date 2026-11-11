@@ -10,7 +10,7 @@ import time
 from conveyor.agents import agent_context as ac
 from agent_coordination import agent_delegation
 from conveyor.agents import agent_mailbox
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 from runner.chat_client import complete_chat, config_from_settings
 
 log = logging.getLogger("agent_delegation_turn")

@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 MEMORY_FILENAME = "MEMORY.md"
 

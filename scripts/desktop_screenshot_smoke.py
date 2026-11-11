@@ -21,7 +21,7 @@ os.environ.setdefault("TELEGRAM_ALLOWED_USER_ID", "1")
 import asyncio
 from unittest import mock
 
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.desktop.desktop_screenshot import (
     capture_screenshot_once,
     latest_screenshot_metadata,
@@ -111,7 +111,7 @@ sys.exit(2)
 
 
 def _settings(helper: str | None, screenshot_dir: Path) -> Settings:
-    from config import load_settings
+    from conveyor.core.config import load_settings
 
     os.environ["CONVEYOR_DESKTOP_SCREENSHOT_HELPER"] = helper or ""
     os.environ["CONVEYOR_DESKTOP_SCREENSHOT_DIR"] = str(screenshot_dir)

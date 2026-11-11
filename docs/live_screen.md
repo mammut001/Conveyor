@@ -37,7 +37,7 @@ Browser (Web Console, bearer token)
    │  POST /api/screen/control         take | release
    │  POST /api/screen/input           pointer / key / text events
    ▼
-web_console.py ── conveyor/desktop/live_screen.py ──▶ import -window root   (capture)
+conveyor/entrypoints/web_console.py ── conveyor/desktop/live_screen.py ──▶ import -window root   (capture)
                          │        └─▶ xdotool               (input, only with lease)
                          ▼
                  human_takeover.sqlite3  (exclusive GUI lease)

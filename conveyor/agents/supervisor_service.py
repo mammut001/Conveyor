@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from conveyor.agents import agent_supervisor as ags
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 from conveyor.core.subprocess_env import utility_env
 from conveyor.core.transcript_store import get_transcript_store, session_identity
 

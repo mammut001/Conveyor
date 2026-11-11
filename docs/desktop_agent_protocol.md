@@ -12,7 +12,7 @@ discovering the design later.
 
 P5.1 wired register + heartbeat. **P5.2** adds local read-only
 screenshot observe via `capture-screen-helper` and
-`desktop_agent.py --observe-once`. **P5.3** adds remote observe
+`conveyor/entrypoints/desktop_agent.py --observe-once`. **P5.3** adds remote observe
 requests: chat creates pending requests, Mac agent polls
 `/desktop/observe/pending`, captures locally, and returns metadata
 only. **P5.3.1** hardens the observe request store with a cross-process file lock.
@@ -185,7 +185,7 @@ In P5.1, we implemented the heartbeat mechanism between the VPS control plane an
   - Authentication requires header: `Authorization: Bearer <CONVEYOR_DESKTOP_AGENT_TOKEN>`.
 * **MacBook (Local Agent)**: Actively connects to the VPS. Periodically posts registration and heartbeats.
 * **Online/Offline state**: If no heartbeat is received within `CONVEYOR_DESKTOP_HEARTBEAT_TTL_SECONDS` (default: 90s), `/nodes` or `/node_status` shows the desktop node as `offline`.
-* **Cross-Process Status Sharing**: Because the desktop agent server (`desktop_agent_server.py`) and the bot listeners (e.g. `conveyor-feishu-bot`, `conveyor-telegram-bot`) run as separate processes, the runtime status is persisted to a shared JSON file at `settings.codex_memory_root / "state" / "desktop_nodes.json"`.
+* **Cross-Process Status Sharing**: Because the desktop agent server (`conveyor/entrypoints/desktop_agent_server.py`) and the bot listeners (e.g. `conveyor-feishu-bot`, `conveyor-telegram-bot`) run as separate processes, the runtime status is persisted to a shared JSON file at `settings.codex_memory_root / "state" / "desktop_nodes.json"`.
   - The file contains *only* basic metadata like `node_id`, `display_name`, `agent_version`, `host`, `last_seen_at`, `agent_state`, and `last_action`.
   - **Security Guarantee**: It does *not* contain the token, secrets, screenshots, or any control action data.
   - State updates are written atomically (via a temporary file replacement), and corrupt JSON files are handled gracefully by treating them as empty.
@@ -201,7 +201,7 @@ export CONVEYOR_DESKTOP_NODE_ENABLED=true
 export CONVEYOR_DESKTOP_AGENT_TOKEN=...
 sudo systemctl enable --now conveyor-desktop-agent.service
 
-For development-only foreground debugging, `.venv/bin/python desktop_agent_server.py` is still valid.
+For development-only foreground debugging, `.venv/bin/python -m conveyor.entrypoints.desktop_agent_server` is still valid.
 ```
 
 Example startup command on MacBook:
@@ -210,13 +210,13 @@ export CONVEYOR_CONTROL_PLANE_URL=https://your-control-plane.example.com
 export CONVEYOR_DESKTOP_AGENT_TOKEN=...
 export CONVEYOR_DESKTOP_NODE_ID=macbook-payton
 export CONVEYOR_DESKTOP_NODE_NAME="Payton MacBook"
-.venv/bin/python desktop_agent.py
+.venv/bin/python -m conveyor.entrypoints.desktop_agent
 ```
 
 > [!IMPORTANT]
 > The local agent `CONVEYOR_DESKTOP_NODE_ID` must match the VPS `CONVEYOR_DESKTOP_NODE_ID` (default is `macbook-payton`). Mismatched node IDs will be rejected by the server with HTTP 400. This mismatch check prevents situations where the agent is running but the `/nodes` panel shows the expected MacBook as offline.
 >
-> P5.2 adds local read-only screenshot observe via `desktop_agent.py --observe-once` when `capture-screen-helper` is configured. Cursor/keyboard controls and Gemini Computer Use are not implemented.
+> P5.2 adds local read-only screenshot observe via `conveyor/entrypoints/desktop_agent.py --observe-once` when `capture-screen-helper` is configured. Cursor/keyboard controls and Gemini Computer Use are not implemented.
 
 Chat query routing:
 * `/nodes` or `MacBook 在线吗` will report the online/offline status, last seen time, and agent state.
@@ -224,7 +224,7 @@ Chat query routing:
 * `/desktop_screenshot_status` and `/screenshot_status` show helper/agent status and latest local metadata only (they do **not** capture a screenshot).
 * `/deploy_verify` reports P5.2 deployment readiness (git SHA, helper config, latest metadata; no capture).
 * Screenshot observe phrases route to `desktop.screenshot.status` (status only in chat; no remote capture).
-* Local capture on Mac: `python desktop_agent.py --observe-once`
+* Local capture on Mac: `python -m conveyor.entrypoints.desktop_agent --observe-once`
 * `CONVEYOR_DESKTOP_SCREENSHOT_HELPER` must be an absolute path.
 * Remote `POST /desktop/observe/request` returns not implemented in P5.2.
 * P5.2.1 supports local observe + metadata status; it does **not** support remote trigger, upload, preview, visual analysis, or Computer Use control.

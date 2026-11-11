@@ -22,7 +22,7 @@ from conveyor.agents import agent_supervisor as ags
 from conveyor.agents import goal_notify
 from conveyor.agents import supervisor_goals as goals
 from conveyor.agents import supervisor_service as svc
-from config import Settings
+from conveyor.core.config import Settings
 
 OUTCOME = "把构建时间压到 30 秒以内，并且保证所有测试通过"
 HAN_RE = re.compile(r"[\u4e00-\u9fff]")

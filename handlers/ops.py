@@ -21,8 +21,8 @@ import socket
 from typing import Literal
 
 from channel.types import InboundMessage, OutboundPort
-from config import Settings
-from redaction import redact_text, truncate
+from conveyor.core.config import Settings
+from conveyor.core.redaction import redact_text, truncate
 from runner import CodexRunner
 
 logger = logging.getLogger(__name__)

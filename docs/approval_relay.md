@@ -1,6 +1,6 @@
 # Cross-Channel Approval Relay (Roadmap P2-2 "Telegram/飞书/Web 三端同步")
 
-The Cross-Channel Approval Relay enables a personal-assistant-style "approve from wherever I am" workflow across Conveyor's separate processes (`web_console.py`, `bot.py`, and `feishu_bot.py`).
+The Cross-Channel Approval Relay enables a personal-assistant-style "approve from wherever I am" workflow across Conveyor's separate processes (`conveyor/entrypoints/web_console.py`, `conveyor/entrypoints/bot.py`, and `conveyor/entrypoints/feishu_bot.py`).
 
 Every pending dangerous tool action is synchronized across all configured surfaces. The first decision wins everywhere, the action still executes in the origin process owning the tool context, and the other channels are updated to display the final outcome.
 
@@ -24,7 +24,7 @@ When disabled, zero DB files are created, no background consumer threads/tasks r
 ```text
 +-------------------+       +--------------------+       +--------------------+
 |    Web Console    |       |    Telegram Bot    |       |     Feishu Bot     |
-| (web_console.py)  |       |      (bot.py)      |       |  (feishu_bot.py)   |
+| (conveyor/entrypoints/web_console.py)  |       |      (conveyor/entrypoints/bot.py)      |       |  (conveyor/entrypoints/feishu_bot.py)   |
 +---------+---------+       +---------+----------+       +---------+----------+
           |                           |                            |
           |  publish / decide / claim |  publish / decide / claim  |

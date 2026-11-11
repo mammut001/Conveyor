@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from runner.file_lock import file_lock
 
 _lock = threading.Lock()

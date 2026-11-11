@@ -20,8 +20,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from config import Settings, load_settings
-from redaction import redact_text, safe_json, truncate
+from conveyor.core.config import Settings, load_settings
+from conveyor.core.redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 _DEDUP_TIMESTAMP_PREFIX_RE = re.compile(r"^\s*\[[^\]]*\]\s*")
 

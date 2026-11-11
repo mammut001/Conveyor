@@ -43,7 +43,7 @@ authorization prompts (or reliably offer TCC grants) for unsigned apps.
    ```bash
    bash scripts/setup-desktop-agent.sh
    ```
-   (Creates `.desktop-agent.env`, `run-desktop-agent.sh`, and installs the
+   (Creates `.desktop-agent.env`, uses `scripts/run-desktop-agent.sh`, and installs the
    ssh-tunnel LaunchAgent.)
 
 2. Build & install the app:
@@ -151,4 +151,4 @@ CONVEYOR_SSH_HOST=vps-oracle CONVEYOR_LOCAL_PORT=8766 bash scripts/install-launc
   can't get this grant.
 - **Duplicate agents after relaunch** — `AgentSupervisor.start()` pkills
   pre-existing desktop-agent poller orphans first; if you see
-  duplicates, kill them: `pkill -f "desktop_agent.py --poll-observe"`.
+  duplicates, kill them: `pkill -f "conveyor.entrypoints.desktop_agent --poll-observe"`.

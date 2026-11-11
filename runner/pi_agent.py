@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from conveyor.agents.agent_events import emit_event
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 from runner.core import CodexRunner
 from runner.operators import run as _run_ops
 from runner.types import DESTRUCTIVE_CONFIRM_TAG, Job, JobMode, ProgressCallback  # tag re-exported

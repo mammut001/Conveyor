@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 import uuid
 
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.desktop.desktop_computer_requests import (
     action_enforces_app_allowlist,
     check_app_allowlist_blocklist,

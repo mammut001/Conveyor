@@ -63,7 +63,7 @@ def _mk_settings(**over) -> "Settings":
     exercise the hands-free path (the loop requires active direct mode on
     every iteration). Override either flag to test gating.
     """
-    from config import Settings
+    from conveyor.core.config import Settings
 
     root = Path(tempfile.mkdtemp(prefix="conv_computer_"))
     kwargs = dict(
@@ -105,7 +105,7 @@ def _mk_settings(**over) -> "Settings":
 
 
 def _test_config_defaults_disabled() -> None:
-    from config import _load_codex_fields
+    from conveyor.core.config import _load_codex_fields
 
     fields = _load_codex_fields("/dev/null")
     checks = {

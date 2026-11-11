@@ -25,11 +25,11 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from channel.types import InboundMessage
-from config import load_runtime_settings
+from conveyor.core.config import load_runtime_settings
 from handlers.job_queue import get_job_queue
 from handlers.jobs import submit_codex_job
-from logging_setup import configure_logging
-from redaction import redact_text
+from conveyor.core.logging_setup import configure_logging
+from conveyor.core.redaction import redact_text
 from runner import CodexRunner, JobMode, create_runtime_runner
 from conveyor.agents.agents import AgentError
 from conveyor.desktop.live_screen import LiveScreen, LiveScreenError
@@ -38,7 +38,7 @@ from conveyor.core.transcript_store import session_identity
 
 logger = logging.getLogger("conveyor.web")
 MAX_BODY_BYTES = 65_536
-STATIC_ROOT = Path(__file__).resolve().parent / "web" / "dist"
+STATIC_ROOT = Path(__file__).resolve().parents[2] / "web" / "dist"
 
 # 409 answers for features that are switched off in the configuration, by
 # their machine-readable ``code``. Keep the ``error`` texts as they are: the
@@ -483,7 +483,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         """Settings when long-term memory is on; otherwise answer 409 and return None."""
         settings = getattr(self.server.control, "settings", None)
         if settings is None:
-            from config import load_runtime_settings
+            from conveyor.core.config import load_runtime_settings
             settings = load_runtime_settings()
         if not (getattr(settings, "long_term_memory_enabled", False) or getattr(settings, "memory_v2_enabled", False)):
             self._feature_off("memory_disabled")
@@ -502,7 +502,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         from conveyor.agents import agent_memory
         settings = getattr(self.server.control, "settings", None)
         if settings is None:
-            from config import load_runtime_settings
+            from conveyor.core.config import load_runtime_settings
             settings = load_runtime_settings()
         if not agent_memory.enabled(settings):
             self._json(HTTPStatus.CONFLICT, {"error": agent_memory.MESSAGES["disabled"],
@@ -544,7 +544,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         """Settings when skills library is on; otherwise answer 409 and return None."""
         settings = getattr(self.server.control, "settings", None)
         if settings is None:
-            from config import load_runtime_settings
+            from conveyor.core.config import load_runtime_settings
             settings = load_runtime_settings()
         if not getattr(settings, "skills_enabled", False):
             self._feature_off("skills_disabled")
@@ -555,7 +555,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         """Settings when MCP connectors are on; otherwise answer 409 and return None."""
         settings = getattr(self.server.control, "settings", None)
         if settings is None:
-            from config import load_runtime_settings
+            from conveyor.core.config import load_runtime_settings
             settings = load_runtime_settings()
         if not getattr(settings, "mcp_enabled", False):
             self._feature_off("mcp_disabled")
@@ -674,7 +674,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif path == "/api/approval-inbox":
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
-                    from config import load_runtime_settings
+                    from conveyor.core.config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "approval_inbox_enabled", False):
                     self._feature_off("approval_inbox_disabled")
@@ -697,7 +697,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif path == "/api/memory/sessions/search":
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
-                    from config import load_runtime_settings
+                    from conveyor.core.config import load_runtime_settings
                     settings = load_runtime_settings()
                 raw_q = (query.get("q") or [""])[0].strip()
                 if not raw_q:
@@ -797,7 +797,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif parts[:2] == ["api", "workers"]:
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
-                    from config import load_runtime_settings
+                    from conveyor.core.config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "workers_enabled", False):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -840,7 +840,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif path == "/api/routines" or path.startswith("/api/routines"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
-                    from config import load_runtime_settings
+                    from conveyor.core.config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "routines_enabled", False):
                     self._feature_off("routines_disabled")
@@ -850,7 +850,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif path == "/api/inbox" or path.startswith("/api/inbox"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
-                    from config import load_runtime_settings
+                    from conveyor.core.config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "routines_enabled", False):
                     self._feature_off("routines_disabled")
@@ -872,7 +872,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if sup_svc.is_supervisor_session_id(session_id):
                     settings = getattr(self.server.control, "settings", None)
                     if settings is None:
-                        from config import load_runtime_settings
+                        from conveyor.core.config import load_runtime_settings
                         try:
                             settings = load_runtime_settings()
                         except Exception:
@@ -1346,7 +1346,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             if parsed.path.startswith("/api/routines") or parsed.path.startswith("/api/inbox"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
-                    from config import load_runtime_settings
+                    from conveyor.core.config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "routines_enabled", False):
                     self._feature_off("routines_disabled")
@@ -1459,7 +1459,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if is_sup_session:
                     sup_settings = getattr(self.server.control, "settings", None)
                     if sup_settings is None:
-                        from config import load_runtime_settings
+                        from conveyor.core.config import load_runtime_settings
                         try:
                             sup_settings = load_runtime_settings()
                         except Exception:
@@ -1486,7 +1486,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
 
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
-                    from config import load_runtime_settings
+                    from conveyor.core.config import load_runtime_settings
                     settings = load_runtime_settings()
 
                 from handlers.chat import chat_enabled
@@ -1518,7 +1518,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if sup_svc.is_supervisor_session_id(requested_session_id):
                     sup_settings = getattr(self.server.control, "settings", None)
                     if sup_settings is None:
-                        from config import load_runtime_settings
+                        from conveyor.core.config import load_runtime_settings
                         try:
                             sup_settings = load_runtime_settings()
                         except Exception:
@@ -1547,7 +1547,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 )
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
-                    from config import load_runtime_settings
+                    from conveyor.core.config import load_runtime_settings
                     settings = load_runtime_settings()
                 outbound = WebOutbound(
                     settings, durable_session_id,
@@ -1616,7 +1616,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         return
                     settings = getattr(self.server.control, "settings", None)
                     if settings is None:
-                        from config import load_runtime_settings
+                        from conveyor.core.config import load_runtime_settings
                         settings = load_runtime_settings()
                     if is_approve:
                         from conveyor.browser.browser_g3_kill import refusal
@@ -1628,7 +1628,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         # client says what it showed, refuse if the action changed.
                         expected_arg = body.get("expected_arg") if isinstance(body, dict) else None
                         if expected_arg is not None:
-                            from redaction import redact_text as _redact
+                            from conveyor.core.redaction import redact_text as _redact
                             if expected_arg not in (pending.arg, _redact(pending.arg)):
                                 self._json(HTTPStatus.CONFLICT, {"error": "approval changed, reload"})
                                 return
@@ -1662,7 +1662,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 is_approve = (parts[3] == "approve")
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
-                    from config import load_runtime_settings
+                    from conveyor.core.config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "approval_inbox_enabled", False):
                     self._feature_off("approval_inbox_disabled")
@@ -1693,7 +1693,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         expected_arg = body.get("expected_arg") if isinstance(body, dict) else None
                         # Optimistic check against what the operator saw. The list shows the
                         # redacted arg, so the redacted form of the current arg also matches.
-                        from redaction import redact_text as _redact
+                        from conveyor.core.redaction import redact_text as _redact
                         if expected_arg is not None and expected_arg not in (pending.arg, _redact(pending.arg)):
                             self._json(HTTPStatus.CONFLICT, {"error": "draft changed, reload"})
                             return
@@ -1815,7 +1815,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 # Ask the desktop supervisor to open the agent's browser. The
                 # console itself never starts desktop programs.
                 from conveyor.agents import agents
-                from agent_desktops import request_browser
+                from conveyor.entrypoints.agent_desktops import request_browser
                 agent_id = str(body.get("agent") or "")
                 settings = getattr(self.server.control, "settings", None)
                 agent = agents.AgentStore(settings).get(agent_id) if agents.desktops_enabled(settings) else None
@@ -1845,7 +1845,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif parts[:2] == ["api", "workers"]:
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
-                    from config import load_runtime_settings
+                    from conveyor.core.config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "workers_enabled", False):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -2183,7 +2183,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             if parsed.path.startswith("/api/routines"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
-                    from config import load_runtime_settings
+                    from conveyor.core.config import load_runtime_settings
                     settings = load_runtime_settings()
                 if not getattr(settings, "routines_enabled", False):
                     self._feature_off("routines_disabled")
@@ -2348,7 +2348,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
     def _manifest(self) -> None:
         candidate = (STATIC_ROOT / "manifest.webmanifest").resolve()
         if not candidate.is_file():
-            candidate = (Path(__file__).resolve().parent / "web" / "public" / "manifest.webmanifest").resolve()
+            candidate = (Path(__file__).resolve().parents[2] / "web" / "public" / "manifest.webmanifest").resolve()
         if not candidate.is_file():
             self._json(HTTPStatus.NOT_FOUND, {"error": "manifest not found"})
             return
@@ -2363,7 +2363,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         if not candidate.is_file() and relative == "sw.js":
-            candidate = (Path(__file__).resolve().parent / "web" / "public" / "sw.js").resolve()
+            candidate = (Path(__file__).resolve().parents[2] / "web" / "public" / "sw.js").resolve()
             if not candidate.is_file():
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return

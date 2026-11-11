@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 from conveyor.agents.agents import AgentStore, chat_id_for
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.chat import chat_key, history, remember
 from handlers.dispatch import dispatch
 from handlers.intent import COMPUTER_STOP_TEXTS

@@ -14,7 +14,7 @@ from typing import Any
 
 from conveyor.agents.agent_events import emit_event, get_event_store
 from handlers.job_queue import JobQueue
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 from conveyor.core.runtime_control import COMMAND_CANCEL, get_runtime_control
 from conveyor.core.transcript_store import get_transcript_store, session_identity
 from conveyor.core.refinement_store import RefinementStore
@@ -782,7 +782,7 @@ class WebControl:
 
     def _agent_view(self, agent: dict[str, Any], sessions: dict[str, dict[str, Any]], waiting: set[str]) -> dict[str, Any]:
         """An agent plus what its row in the list shows: preview and status."""
-        from redaction import redact_text
+        from conveyor.core.redaction import redact_text
 
         session_id = agent["session_id"]
         session = sessions.get(session_id) or {}

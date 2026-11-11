@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 def _make_settings(**overrides):
     """Create test Settings with sensible defaults."""
-    from config import Settings
+    from conveyor.core.config import Settings
     
     defaults = {
         "telegram_bot_token": "test-token",

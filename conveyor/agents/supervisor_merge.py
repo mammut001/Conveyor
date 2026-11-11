@@ -44,7 +44,7 @@ from urllib.parse import quote
 from conveyor.agents import agent_supervisor as ags
 from conveyor.agents import supervisor_diff as diff_mod
 from conveyor.agents import supervisor_service as svc
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 log = logging.getLogger("conveyor.supervisor_merge")
 

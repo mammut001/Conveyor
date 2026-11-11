@@ -13,11 +13,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from config import Settings, load_runtime_settings
+from conveyor.core.config import Settings, load_runtime_settings
 from conveyor.desktop.desktop_screenshot import capture_screenshot_once
 from conveyor.desktop.desktop_cua import build_driver
 
-from logging_setup import configure_logging
+from conveyor.core.logging_setup import configure_logging
 
 configure_logging(
     service_name="desktop_agent",

@@ -131,6 +131,10 @@ jobs:
   web:
     name: Web
     runs-on: ubuntu-latest
+    # Match web/package-lock.json; browser/system dependencies are preinstalled.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+      options: --ipc=host
     timeout-minutes: 10
     defaults:
       run:
@@ -158,9 +162,6 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Install Chromium for browser tests
-        run: npx playwright install --with-deps chromium
-
       - name: Run Web Workbench browser E2E
         run: npm run test:e2e
 
@@ -173,6 +174,10 @@ jobs:
   real-browser:
     name: Local fixture Chromium (required)
     runs-on: ubuntu-latest
+    # Keep the Python package and bundled Chromium build in sync.
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.65.0-noble
+      options: --ipc=host
     timeout-minutes: 10
     env:
       CONVEYOR_REAL_BROWSER: "1"
@@ -181,16 +186,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
+      # Use the image's Python: host toolcache builds may link different OpenSSL versions.
+      - name: Verify image Python TLS support
+        run: /usr/bin/python3 -c "import ssl; print(ssl.OPENSSL_VERSION)"
 
       - name: Install Python dependencies and Playwright
-        run: python -m pip install -r requirements.txt "playwright>=1.48,<2" pytest pytest-timeout
-
-      - name: Install real Chromium and OS dependencies
-        run: python -m playwright install --with-deps chromium
+        run: /usr/bin/python3 -m pip install -r requirements.txt "playwright==1.65.0" pytest pytest-timeout
 
       - name: Run real Chromium fixture integration tests (no skips)
-        run: python -m pytest tests/test_workflow_browser_playwright.py::LocalFixturePlaywrightTests tests/test_workflow_browser_guards.py tests/test_workflow_browser_external.py tests/test_workflow_browser_g2.py tests/test_web_browser_approvals.py tests/test_browser_agent_interact.py tests/test_workflow_browser_g3.py tests/test_browser_g2_g3_hardening.py tests/test_browser_auth_sessions.py tests/test_browser_autofill_login.py tests/test_browser_g5_rollout.py -q -v --timeout=20 --timeout-method=thread
+        run: /usr/bin/python3 -m pytest tests/test_workflow_browser_playwright.py::LocalFixturePlaywrightTests tests/test_workflow_browser_guards.py tests/test_workflow_browser_external.py tests/test_workflow_browser_g2.py tests/test_web_browser_approvals.py tests/test_browser_agent_interact.py tests/test_workflow_browser_g3.py tests/test_browser_g2_g3_hardening.py tests/test_browser_auth_sessions.py tests/test_browser_autofill_login.py tests/test_browser_g5_rollout.py -q -v --timeout=20 --timeout-method=thread

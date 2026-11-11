@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 
-from config import Settings
+from conveyor.core.config import Settings
 
 
 class CodexRunner:

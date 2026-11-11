@@ -3,7 +3,7 @@
 Public surface keeps the existing CodexRunner API and additionally exposes the
 provider-neutral AgentBackend boundary and opt-in provider factory.
 """
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 from runner.types import Job, JobMode, JobState, JobRecord, ProgressCallback
 from runner.core import CodexRunner
 from runner.backend import AgentBackend, CodexBackend, backend_name

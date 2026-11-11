@@ -20,7 +20,7 @@ TOKEN = "t" * 40
 
 
 def _settings(root: Path, **overrides):
-    from config import Settings
+    from conveyor.core.config import Settings
 
     base = Settings(
         telegram_bot_token="test-token", telegram_allowed_user_id=1, codex_workspace_root=root,
@@ -178,7 +178,7 @@ class RoutineTests(Case):
 class HttpTests(Case):
     def setUp(self) -> None:
         super().setUp()
-        from web_console import WebConsoleHandler, WebConsoleServer
+        from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
         from conveyor.web.web_control import WebControl
 
         conn = sqlite3.connect(str(self.root / "state" / "job_queue.sqlite3"))
@@ -345,7 +345,7 @@ class AgentNotesFlagTests(_NotesCase):
 class AgentNotesEnvTests(unittest.TestCase):
     def test_env_values(self) -> None:
         import os
-        from config import load_runtime_settings
+        from conveyor.core.config import load_runtime_settings
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             env = root / "settings.env"
@@ -739,7 +739,7 @@ class AgentNotesToolLoopTests(_NotesCase):
 class AgentNotesHttpTests(_NotesCase):
     def setUp(self) -> None:
         super().setUp()
-        from web_console import WebConsoleHandler, WebConsoleServer
+        from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
         from conveyor.web.web_control import WebControl
 
         (self.root / "state").mkdir(parents=True, exist_ok=True)

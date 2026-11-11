@@ -16,12 +16,12 @@ from http import HTTPStatus
 from typing import Any
 from urllib.parse import urlparse
 
-from config import load_runtime_settings
+from conveyor.core.config import load_runtime_settings
 from handlers.job_queue import get_job_queue
-from logging_setup import configure_logging
-from redaction import redact_text
+from conveyor.core.logging_setup import configure_logging
+from conveyor.core.redaction import redact_text
 from runner import CodexRunner, create_runtime_runner
-from web_console import (
+from conveyor.entrypoints.web_console import (
     WebConsoleHandler,
     WebConsoleServer,
     start_extra_listeners,

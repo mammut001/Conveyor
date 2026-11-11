@@ -14,9 +14,9 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 if TYPE_CHECKING:
     pass

@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import load_settings
+from conveyor.core.config import load_settings
 from runner import CodexRunner
 from scripts.harness_common import CheckResult, print_results
 from scripts.job_metadata import job_sort_time

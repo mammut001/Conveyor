@@ -23,7 +23,7 @@ import httpx
 from channel.types import InboundMessage
 from handlers.job_queue import JobQueue
 from runner.chat_client import ChatError, owner_chat_error_text
-from web_console import WebConsoleHandler, WebConsoleServer, WebOutbound
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer, WebOutbound
 from conveyor.web.web_control import WebControl
 
 TOKEN = "test-token-0123456789-abcdefghijklmnopqrstuvwxyz"

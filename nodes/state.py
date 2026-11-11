@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from config import Settings
+from conveyor.core.config import Settings
 from nodes.types import (
     DESKTOP_DIRECT_CAPABILITIES,
     DESKTOP_STUB_CAPABILITIES,
@@ -109,7 +109,7 @@ def register_desktop_node(
         host_info = args[3] if len(args) > 3 else kwargs.pop("host_info")
         now = args[4] if len(args) > 4 else kwargs.get("now", None)
     else:
-        from config import load_settings
+        from conveyor.core.config import load_settings
         settings = load_settings()
         node_id = settings_or_node_id
         display_name = args[0] if len(args) > 0 else kwargs.pop("display_name")
@@ -170,7 +170,7 @@ def record_heartbeat(
         last_action = args[2] if len(args) > 2 else kwargs.get("last_action", None)
         now = args[3] if len(args) > 3 else kwargs.get("now", None)
     else:
-        from config import load_settings
+        from conveyor.core.config import load_settings
         settings = load_settings()
         node_id = settings_or_node_id
         agent_state = args[0] if len(args) > 0 else kwargs.pop("agent_state")
@@ -234,7 +234,7 @@ def get_desktop_runtime(
         settings = settings_or_node_id
         target_node_id = node_id
     else:
-        from config import load_settings
+        from conveyor.core.config import load_settings
         settings = load_settings()
         target_node_id = settings_or_node_id
 
@@ -261,7 +261,7 @@ def is_desktop_online(
             now = args[1] if len(args) > 1 else kwargs.get("now", None)
             ttl_seconds = args[2] if len(args) > 2 else kwargs.get("ttl_seconds", None)
         else:
-            from config import load_settings
+            from conveyor.core.config import load_settings
             settings = load_settings()
             node_id = settings_or_node_id
             now = args[0] if len(args) > 0 else kwargs.get("now", None)

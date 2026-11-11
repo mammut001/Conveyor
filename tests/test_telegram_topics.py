@@ -14,7 +14,7 @@ from agent_coordination import agent_channel_routing as routing
 from conveyor.agents import agent_context as ac
 from conveyor.agents.agents import AgentStore
 from channel.telegram import TelegramChatOutbound, inbound_from_update, split_chat_thread
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.long_term_memory import allowed_for
 from telegram.error import BadRequest
 from conveyor.channels import telegram_topics
@@ -109,7 +109,7 @@ class TelegramTopicsTests(unittest.IsolatedAsyncioTestCase):
         """Pending actions in a bound topic live under <chat>:topic:<tid>; the
         confirm button must resolve to that same scope, not the bare chat."""
         with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_ALLOWED_USER_ID": "1001"}):
-            import bot
+            from conveyor.entrypoints import bot
         telegram_topics.bind_topic(self.settings, chat_id=-100998877, thread_id=42,
                                    operator="1001", agent_id=self.finance["id"])
         update = self._fake_update("", thread_id=42)
@@ -120,22 +120,22 @@ class TelegramTopicsTests(unittest.IsolatedAsyncioTestCase):
         async def fake_execute(inbound, port, settings, token):
             seen["chat_id"], seen["token"] = inbound.chat_id, token
 
-        with patch("bot.settings", self.settings), patch("bot._guard", AsyncMock(return_value=True)), \
-                patch("bot.execute_confirmed", fake_execute), patch("bot.make_outbound", lambda u: None):
+        with patch("conveyor.entrypoints.bot.settings", self.settings), patch("conveyor.entrypoints.bot._guard", AsyncMock(return_value=True)), \
+                patch("conveyor.entrypoints.bot.execute_confirmed", fake_execute), patch("conveyor.entrypoints.bot.make_outbound", lambda u: None):
             await bot.tool_callback(update, SimpleNamespace())
         self.assertEqual(seen, {"chat_id": "-100998877:topic:42", "token": "tok123"})
 
     async def test_topics_bind_ignores_a_reply_thread_outside_a_forum_topic(self) -> None:
         with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_ALLOWED_USER_ID": "1001"}):
-            import bot
+            from conveyor.entrypoints import bot
         update = self._fake_update("/topics bind Finance", is_forum=False, is_topic_message=False, thread_id=55)
         replies = []
 
         async def fake_reply(_update, text, **_k):
             replies.append(text)
 
-        with patch("bot.settings", self.settings), patch("bot._guard", AsyncMock(return_value=True)), \
-                patch("bot._reply", fake_reply), patch("conveyor.channels.telegram_topics.bind_topic") as bind:
+        with patch("conveyor.entrypoints.bot.settings", self.settings), patch("conveyor.entrypoints.bot._guard", AsyncMock(return_value=True)), \
+                patch("conveyor.entrypoints.bot._reply", fake_reply), patch("conveyor.channels.telegram_topics.bind_topic") as bind:
             await bot.topics_cmd(update, SimpleNamespace(args=["bind", "Finance"]))
         bind.assert_not_called()
         self.assertTrue(replies and "话题" in replies[-1])

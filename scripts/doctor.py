@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import load_settings
+from conveyor.core.config import load_settings
 from scripts.harness_common import (
     CheckResult,
     attempt_completed,

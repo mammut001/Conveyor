@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from personal_tools.base import ToolResult
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 logger = logging.getLogger(__name__)
 
@@ -369,7 +369,7 @@ def set_enabled(settings: Any, slug: str, enabled: bool) -> dict[str, Any]:
 def mark_used(settings_or_slug: Any, slug: str = "") -> dict[str, Any] | None:
     """Increment use_count and set last_used_at for a skill."""
     if isinstance(settings_or_slug, str) and not slug:
-        from config import load_runtime_settings
+        from conveyor.core.config import load_runtime_settings
         settings = load_runtime_settings()
         s = settings_or_slug.strip().lower()
     else:

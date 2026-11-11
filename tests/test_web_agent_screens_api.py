@@ -15,8 +15,8 @@ from conveyor.agents import agent_context as ac
 from conveyor.agents import agent_mailbox as mailbox
 from conveyor.agents.agents import AgentStore, WEB_OPERATOR, chat_id_for
 from handlers.job_queue import JobQueue
-from config import Settings
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.core.config import Settings
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.web.web_control import WebControl
 
 

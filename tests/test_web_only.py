@@ -11,9 +11,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from config import Settings, load_runtime_settings, load_settings
+from conveyor.core.config import Settings, load_runtime_settings, load_settings
 from scripts.telegram_api import send_message
-from web_console import MAX_BODY_BYTES, WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import MAX_BODY_BYTES, WebConsoleHandler, WebConsoleServer
 
 
 TOKEN = "test-token-0123456789-abcdefghijklmnopqrstuvwxyz"
@@ -147,7 +147,7 @@ class WebOnlyTests(unittest.TestCase):
         self.assertNotEqual(resp1.getheader("Connection", "").lower(), "close")
 
         # 2. Authorized request on the SAME connection (body bytes must have been drained)
-        with patch("web_console.submit_codex_job", fake_submit):
+        with patch("conveyor.entrypoints.web_console.submit_codex_job", fake_submit):
             body2 = json.dumps({"prompt": "authorized task", "session_id": "web-a"}).encode("utf-8")
             conn.request(
                 "POST",

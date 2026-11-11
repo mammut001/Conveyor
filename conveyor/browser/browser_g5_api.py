@@ -13,7 +13,7 @@ from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDe
 
 
 def _settings(handler):
-    from config import load_runtime_settings
+    from conveyor.core.config import load_runtime_settings
     return getattr(handler.server.control, "settings", None) or load_runtime_settings()
 
 

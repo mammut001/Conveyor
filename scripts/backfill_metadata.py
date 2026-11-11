@@ -10,8 +10,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import Settings, load_settings
-from redaction import redact_text, truncate
+from conveyor.core.config import Settings, load_settings
+from conveyor.core.redaction import redact_text, truncate
 from scripts.harness_common import latest_attempt_file, latest_final_file
 
 

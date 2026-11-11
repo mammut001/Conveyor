@@ -39,7 +39,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.desktop.desktop_computer_requests import _HARD_BLOCKED_KEYWORDS, _LOGIN_PASSWORD_KEYWORDS
 from conveyor.desktop.desktop_screenshot import resolve_screenshot_dir
 

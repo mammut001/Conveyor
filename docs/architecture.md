@@ -7,7 +7,7 @@
 > **适用版本**: 通道解耦 P0+P1、agent 工具层、实时 Telegram 烟测、Telegram live smoke
 
 > **当前桌面状态**: P5.0 的 desktop stub 描述是历史记录。当前实现是 P5.6/P5.6.2
-> 的 Mac-local Cua direct loop：`desktop_agent_server.py` 由
+> 的 Mac-local Cua direct loop：`conveyor/entrypoints/desktop_agent_server.py` 由
 > `conveyor-desktop-agent.service` 托管，动作通过 `conveyor/desktop/desktop_computer_loop.py`
 > 和本地 `cua-driver` 执行。详见 `docs/desktop_security.md` 与
 > `docs/desktop_capabilities.md`。
@@ -29,7 +29,7 @@ Telegram                            Feishu                 Web browser
    │                                  │
    │ Update                           │ WebSocket
    ▼                                  ▼
- bot.py                          feishu_bot.py
+ conveyor/entrypoints/bot.py                          conveyor/entrypoints/feishu_bot.py
  _TelegramOutbound               FeishuOutbound
    │                                  │
    └──────────┬───────────────────────┴──── REST + SSE ───────┐
@@ -77,7 +77,7 @@ Telegram                            Feishu                 Web browser
 | `runner/` | `config`, `redaction`, `scripts/*` | `telegram`, `lark_oapi`, `handlers` |
 | `handlers/` | `runner`, `channel.types`, `redaction` | `telegram`, `lark_oapi` |
 | `channel/*.py` | 对应 SDK + `handlers` + `channel.types` | 业务命令逻辑 |
-| `bot.py` / `feishu_bot.py` | channel adapter + `handlers.dispatch` | 直接调 `runner`（除 wire-up） |
+| `conveyor/entrypoints/bot.py` / `conveyor/entrypoints/feishu_bot.py` | channel adapter + `handlers.dispatch` | 直接调 `runner`（除 wire-up） |
 
 ---
 
@@ -136,9 +136,9 @@ class OutboundPort(Protocol):
 
 加新命令 = 在 `COMMAND_TABLE` 加一行 + 写 handler；两侧 channel 同步。
 
-Telegram 路由：`bot.py` 为历史命令注册了显式 `CommandHandler`，之后挂一个
+Telegram 路由：`conveyor/entrypoints/bot.py` 为历史命令注册了显式 `CommandHandler`，之后挂一个
 generic `MessageHandler(filters.COMMAND, …)` fallback —— `COMMAND_TABLE`
-里新加的斜杠命令不需要在 `bot.py` 单独接线就能到达；显式注册的仍然优先。
+里新加的斜杠命令不需要在 `conveyor/entrypoints/bot.py` 单独接线就能到达；显式注册的仍然优先。
 
 ---
 
@@ -232,14 +232,14 @@ Conveyor 在 transport 之上增加了 **结构化 tool registry** 和 **轻量 
 - 文本确认须用明确短语（`确认执行`、`confirm`、`execute` 等）；`好` / `ok` / `是` 等日常回复**不会**触发 pending 操作
 - **确认绑定**：`execute_confirmed` / `cancel_pending` / 文本 fallback 均校验 `operator_id + chat_id + channel`
 - 取消仍较宽松：`取消`、`算了`、`no` 等
-- 确认回调：`bot.py` 的 `CallbackQueryHandler(pattern=r"^tool:")`
+- 确认回调：`conveyor/entrypoints/bot.py` 的 `CallbackQueryHandler(pattern=r"^tool:")`
 - `service_restart` 仅允许白名单单元：`conveyor-telegram-bot`、`conveyor-feishu-bot`、`conveyor-maintain.timer`
 - **审计**：`handlers/tools/audit.py` → `codex_memory_root/audit/tools.log`（requested/confirmed/cancelled/executed/rejected）；`arg` 与结果预览都过 `redact_text` + `truncate`；写入失败不阻断用户流程
 - **自然语言 restart 防误触发**：`route_intent` 检测到 restart 模式但 `_extract_service_arg` 拿不到具体目标时，返回 `kind="llm"` 并附 `route.question`，由 Codex 反问目标，而不是隐式 default 到 `conveyor-telegram-bot`
 
 ### Legacy ops fast path
 
-Slash 命令 `/load` `/vps` `/htop` `/ps` 等在 `COMMAND_TABLE` 注册。Telegram 侧通过 `bot.py` 的 generic `filters.COMMAND` fallback 确保新命令可达（无需为每条命令单独注册 `CommandHandler`）。自然语言 ops 意图由 `route_intent()` 统一路由到 tool registry（内部复用 `handlers/ops.py` 快照函数）。
+Slash 命令 `/load` `/vps` `/htop` `/ps` 等在 `COMMAND_TABLE` 注册。Telegram 侧通过 `conveyor/entrypoints/bot.py` 的 generic `filters.COMMAND` fallback 确保新命令可达（无需为每条命令单独注册 `CommandHandler`）。自然语言 ops 意图由 `route_intent()` 统一路由到 tool registry（内部复用 `handlers/ops.py` 快照函数）。
 
 - **htop 意图保守**：仅在有运行/查看语境时匹配；编码/文档类提及 htop 走 LLM
 - **`/ps` 安全**：默认 comm 模式；`/ps full` 仅提示风险；`/ps full confirm` 才输出 args（仍 redact）
@@ -960,7 +960,7 @@ make smoke
 `scripts/telegram_live_smoke.py` **不**在 `make smoke` 里 —— 它是手动 live 脚本，需要真 Telegram 凭据 + Telethon。
 
 P2.1 已完成：两个 channel adapter 各自落在 `channel/telegram.py` 和
-`channel/feishu.py`，`bot.py` / `feishu_bot.py` 只剩 entrypoint 与
+`channel/feishu.py`，`conveyor/entrypoints/bot.py` / `conveyor/entrypoints/feishu_bot.py` 只剩 entrypoint 与
 业务 command/onboarding 编排；遗留的 `_start_job` / `_typing_loop`
 （绕过 `TelegramOutbound` 的死代码）已移除，所有 job 执行走
 `handlers.dispatch` → `handlers.jobs`。Auth 检查统一用
@@ -1006,7 +1006,7 @@ P2.1 已完成：两个 channel adapter 各自落在 `channel/telegram.py` 和
   `inbound_from_event`
 - 配套 smoke：`channel_telegram_smoke.py` / `channel_feishu_smoke.py`
   / `import_boundary_smoke.py`（AST 静态守护层规则）
-- `bot.py` / `feishu_bot.py` 现在只剩 entrypoint + command/onboarding
+- `conveyor/entrypoints/bot.py` / `conveyor/entrypoints/feishu_bot.py` 现在只剩 entrypoint + command/onboarding
   编排；adapter 体积从 100+ 行各压到入口里只剩几行 `make_outbound` / `send_text`
 
 ### P2.2 飞书 progress 卡片 / throttle（已完成）
@@ -1022,7 +1022,7 @@ P2.1 已完成：两个 channel adapter 各自落在 `channel/telegram.py` 和
 
 - 纯 profile 辅助函数（`operator_profile_exists`、`save_operator_profile`、
   `profile_text`）搬到 `handlers/onboarding.py`（不引入 Telegram SDK）。
-- Telegram 专属 ConversationHandler 步骤留在 `bot.py`（需要
+- Telegram 专属 ConversationHandler 步骤留在 `conveyor/entrypoints/bot.py`（需要
   Update / CallbackQuery 类型）。
 - 导入边界：`handlers/onboarding.py` 通过 `import_boundary_smoke.py`。
 
@@ -1146,7 +1146,7 @@ desktop_agent → 本地 cua-driver → 真实桌面操作`。后端用 `trycua/
   `arm_direct_mode` / `is_direct_mode_active`（enabled 且
   always_direct 或 arm 未过期）、`contains_blocked_keyword` /
   `is_action_allowed` / `normalize_action` / `redact_computer_action`。
-- **控制面**：`desktop_agent_server.py` 新增
+- **控制面**：`conveyor/entrypoints/desktop_agent_server.py` 新增
   `/desktop/computer/task/step/claim|complete|fail` 与
   `/desktop/computer/task/pending`、`/desktop/computer/status`
   （Bearer + `hmac.compare_digest`，`127.0.0.1`）。
@@ -1154,7 +1154,7 @@ desktop_agent → 本地 cua-driver → 真实桌面操作`。后端用 `trycua/
   使用配置命令定位本地 `cua-driver` binary，并通过
   `cua-driver call <tool> <json>` 执行；`FakeCuaTransport` 仅测试，不保留
   明文文本）。`/computer_status` 还会读取 `permissions status --json`
-  的 metadata-only 权限状态；`desktop_agent.py --poll-computer` 轮询
+  的 metadata-only 权限状态；`conveyor/entrypoints/desktop_agent.py --poll-computer` 轮询
   control plane，claim 待执行步骤 → `build_driver` 执行 → 回写结果。
 - **VPS 侧循环**：`conveyor/desktop/desktop_computer_planner.py`（`CodexPlanner` 驱动
   `codex exec --json` 严格单步 JSON 动作；`ScriptedPlanner` 用于 smoke）
@@ -1207,7 +1207,7 @@ P5.6.1 对直连 Computer Use 的安全性和可调试性进行了加固：
 | 2.2 | 2026-06-11 | 加自动 VPS 部署（GitHub Actions + deploy_vps.sh） |
 | 2.3 | 2026-06-11 | 部署加固（flock/smoke/回滚/.deploy-status.json）；加 `/deploy_status` 命令 |
 | 2.5 | 2026-06-11 | P2.2 飞书卡片进度（interactive card + `update_card`）；P2.3 onboarding 抽离（`handlers/onboarding.py` 纯辅助函数）；P2.5 审计日志轮转（1 MB 大小轮转，3 个文件） |
-| 2.4 | 2026-06-11 | bot.py 清理（移除死代码 `_start_job`/`_typing_loop`，auth 统一用 `is_allowed`）；P2.4 session 摘要（`handlers/session.py`、`/context`、`/forget`、prompt 注入） |
+| 2.4 | 2026-06-11 | conveyor/entrypoints/bot.py 清理（移除死代码 `_start_job`/`_typing_loop`，auth 统一用 `is_allowed`）；P2.4 session 摘要（`handlers/session.py`、`/context`、`/forget`、prompt 注入） |
 | 1.0 | 2026-06-09 | 合并原 `001` + `003`；改名 Conveyor |
 | 0.9 | 2026-06-09 | 原 `003-channel-decoupling.md`（P0+P1 设计稿 + 落地） |
 | 0.1 | 2026-06-09 | 原 `001-hermes-learning-and-chat-mode.md`（Hermes 对照 + chat-first） |

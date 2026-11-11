@@ -188,7 +188,7 @@ def _test_exec_nodes_status_text() -> None:
     import asyncio
     import tempfile
 
-    from config import Settings
+    from conveyor.core.config import Settings
     from handlers.tools.executors import exec_nodes_status
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -222,7 +222,7 @@ def _test_exec_computer_status_stub() -> None:
     import asyncio
     import tempfile
 
-    from config import Settings
+    from conveyor.core.config import Settings
     from handlers.tools.executors import exec_computer_status
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -486,7 +486,7 @@ def _test_action_allowlist_includes_node_actions() -> None:
 
 def _test_settings_carries_node_fields() -> None:
     """Settings loads the new fields from _load_codex_fields."""
-    from config import _load_codex_fields
+    from conveyor.core.config import _load_codex_fields
 
     fields = _load_codex_fields("/dev/null")
     for key in (
@@ -509,7 +509,7 @@ def _test_settings_carries_node_fields() -> None:
 
 
 def _test_sensitive_fields_includes_agent_token() -> None:
-    from config import SENSITIVE_FIELDS
+    from conveyor.core.config import SENSITIVE_FIELDS
 
     if "conveyor_desktop_agent_token" not in SENSITIVE_FIELDS:
         _fail("sensitive_fields_includes_agent_token", f"set={SENSITIVE_FIELDS}")

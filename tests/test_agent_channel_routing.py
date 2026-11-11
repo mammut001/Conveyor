@@ -18,7 +18,7 @@ from conveyor.agents import agent_context as ac
 from conveyor.agents import main_router
 from conveyor.agents.agents import AgentStore, session_id_for
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.core.transcript_store import get_transcript_store
 
 

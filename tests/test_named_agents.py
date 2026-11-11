@@ -27,7 +27,7 @@ from conveyor.automation import routines
 
 
 def settings_for(root):
-    from config import Settings
+    from conveyor.core.config import Settings
     return replace(Settings(
         telegram_bot_token="test-token",
         telegram_allowed_user_id=1,

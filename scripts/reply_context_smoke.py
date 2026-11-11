@@ -37,7 +37,7 @@ from channel.feishu import (  # noqa: E402
 from channel.mentions import mentions, strip_mention  # noqa: E402
 from channel.telegram import inbound_from_update  # noqa: E402
 from channel.types import InboundMessage, ReplyContext  # noqa: E402
-from config import load_settings  # noqa: E402
+from conveyor.core.config import load_settings  # noqa: E402
 from handlers.context import (  # noqa: E402
     build_context_prompt,
     detect_context_intent,

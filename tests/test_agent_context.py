@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 from conveyor.agents import agent_context as ac
 from conveyor.agents.agents import AgentStore, chat_id_for
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.chat import chat_key
 from handlers.chat_tools import build_tool_schemas
 from handlers.tools.runner import run_tool
@@ -252,7 +252,7 @@ class AgentContextTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(search.call_count, 1)
 
     def test_web_memory_admin_defaults_to_authenticated_owner(self):
-        from web_console import WebConsoleHandler
+        from conveyor.entrypoints.web_console import WebConsoleHandler
 
         class Handler:
             def _json(self, code, value):

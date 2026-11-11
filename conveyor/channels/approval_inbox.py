@@ -18,7 +18,7 @@ from handlers.tools.confirm import (
     list_pending,
     replace_pending_arg,
 )
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 logger = logging.getLogger("approval_inbox")
 

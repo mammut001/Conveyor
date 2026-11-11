@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 log = logging.getLogger(__name__)
 PROFILE_BYTES = 2048

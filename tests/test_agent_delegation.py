@@ -20,7 +20,7 @@ from agent_coordination import agent_delegation_worker as worker
 from conveyor.agents import agent_mailbox as mailbox
 from conveyor.agents.agents import AgentStore, chat_id_for
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.chat_tools import build_tool_schemas, _get_tool_spec
 from handlers.tools.runner import run_tool, _requires_confirmation
 from runner.chat_client import ChatConfig

@@ -54,9 +54,9 @@ os.environ["CODEX_BIN"] = "codex"
 os.environ["USER_TIMEZONE"] = "UTC"
 
 from channel import InboundMessage
-from config import load_settings
+from conveyor.core.config import load_settings
 from handlers import dispatch
-from redaction import truncate
+from conveyor.core.redaction import truncate
 from runner import JobMode
 from scripts.harness_common import CheckResult, print_results
 

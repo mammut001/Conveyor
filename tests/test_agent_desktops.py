@@ -9,16 +9,16 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-import agent_desktops
+from conveyor.entrypoints import agent_desktops
 from conveyor.agents import agents
-from agent_desktops import Supervisor
+from conveyor.entrypoints.agent_desktops import Supervisor
 from conveyor.agents.agents import AgentStore
 from conveyor.desktop.human_takeover import HumanTakeoverStore, takeover_blocks_automation
 from conveyor.desktop.live_screen import LiveScreen
 
 
 def _settings(root: Path, **overrides):
-    from config import Settings
+    from conveyor.core.config import Settings
 
     base = Settings(
         telegram_bot_token="test-token",
@@ -270,7 +270,7 @@ class ScreenRoutingTests(Case):
     def _server(self):
         import asyncio
         from types import SimpleNamespace
-        from web_console import WebConsoleHandler, WebConsoleServer
+        from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 
         loop = asyncio.new_event_loop()
         self.addCleanup(loop.close)

@@ -14,7 +14,7 @@ import json
 import logging
 from pathlib import Path
 
-from config import OPERATOR_PROFILE_FIELDS, Settings
+from conveyor.core.config import OPERATOR_PROFILE_FIELDS, Settings
 
 logger = logging.getLogger("conveyor.onboarding")
 

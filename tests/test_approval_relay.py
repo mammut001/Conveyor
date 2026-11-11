@@ -26,7 +26,7 @@ from handlers.tools.confirm import (
     get_pending,
 )
 from handlers.job_queue import JobQueue
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.web.web_control import WebControl
 
 
@@ -433,7 +433,7 @@ class TestApprovalRelayBotCallbacks(unittest.TestCase):
             "TELEGRAM_BOT_TOKEN": "test_bot_token",
             "TELEGRAM_ALLOWED_USER_ID": "12345",
         }):
-            import bot
+            from conveyor.entrypoints import bot
         action = create_pending("notes.add", "note", "op", "chat", "web")
         approval_relay.publish(self.settings, action, summary="Note", danger="write", source="chat")
 
@@ -451,7 +451,7 @@ class TestApprovalRelayBotCallbacks(unittest.TestCase):
             callback_query=query_auth,
         )
 
-        with patch("bot.settings", self.settings):
+        with patch("conveyor.entrypoints.bot.settings", self.settings):
             asyncio.run(bot.relay_callback(update_auth, MagicMock()))
             query_auth.answer.assert_called_once()
             row = approval_relay.get_relay_row(self.settings, action.token)
@@ -475,7 +475,7 @@ class TestApprovalRelayBotCallbacks(unittest.TestCase):
             callback_query=query_unauth,
         )
 
-        with patch("bot.settings", self.settings):
+        with patch("conveyor.entrypoints.bot.settings", self.settings):
             asyncio.run(bot.relay_callback(update_unauth, MagicMock()))
             query_unauth.answer.assert_called_with("Unauthorized.", show_alert=True)
             row2 = approval_relay.get_relay_row(self.settings, action2.token)
@@ -487,7 +487,7 @@ class TestApprovalRelayBotCallbacks(unittest.TestCase):
             "LARK_APP_SECRET": "sec_test",
             "LARK_ALLOWED_OPEN_ID": "ou_test_user",
         }):
-            import feishu_bot
+            from conveyor.entrypoints import feishu_bot
         action = create_pending("notes.add", "feishu test", "op", "chat", "web")
         approval_relay.publish(self.settings, action, summary="FS Note", danger="write", source="chat")
 
@@ -500,8 +500,8 @@ class TestApprovalRelayBotCallbacks(unittest.TestCase):
         }
 
         mock_port = MockOutbound()
-        with patch("feishu_bot.settings", self.settings), \
-             patch("feishu_bot.FeishuOutbound", return_value=mock_port):
+        with patch("conveyor.entrypoints.feishu_bot.settings", self.settings), \
+             patch("conveyor.entrypoints.feishu_bot.FeishuOutbound", return_value=mock_port):
             asyncio.run(feishu_bot._handle_card_action(fake_msg))
             row = approval_relay.get_relay_row(self.settings, action.token)
             self.assertEqual(row["status"], "approved")

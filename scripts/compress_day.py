@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 from runner import CodexRunner
 
 STATE_FILENAME = "last_compress_date.txt"

@@ -187,7 +187,7 @@ class VoiceWebTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from handlers.job_queue import JobQueue
-        from web_console import WebConsoleHandler, WebConsoleServer
+        from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
         from conveyor.web.web_control import WebControl
         cls.tmp = tempfile.TemporaryDirectory()
         root = Path(cls.tmp.name)

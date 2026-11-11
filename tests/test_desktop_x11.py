@@ -38,7 +38,7 @@ PNG = bytes.fromhex(
 
 
 def _settings(root: Path, **overrides):
-    from config import Settings
+    from conveyor.core.config import Settings
 
     base = Settings(
         telegram_bot_token="test-token",
@@ -586,7 +586,7 @@ class LoopTests(Case):
 
         async def scenario():
             with mock.patch("conveyor.desktop.desktop_linux_browser.LinuxBrowserController.ensure", ensure), \
-                    mock.patch("agent_desktops.request_browser", side_effect=AssertionError("supervisor")):
+                    mock.patch("conveyor.entrypoints.agent_desktops.request_browser", side_effect=AssertionError("supervisor")):
                 failed = await backend.execute_step(
                     self.settings, task["task_id"], ensure_step,
                     {"action": "observe", "ensure_browser": True},
@@ -614,7 +614,7 @@ class LoopTests(Case):
 
         async def retry():
             with mock.patch("conveyor.desktop.desktop_linux_browser.LinuxBrowserController.ensure", ensure), \
-                    mock.patch("agent_desktops.request_browser", side_effect=AssertionError("supervisor")):
+                    mock.patch("conveyor.entrypoints.agent_desktops.request_browser", side_effect=AssertionError("supervisor")):
                 return await backend.execute_step(
                     self.settings, task["task_id"], again,
                     {"action": "observe", "ensure_browser": True},
@@ -650,7 +650,7 @@ class LoopTests(Case):
         )["step_id"]
 
         async def after():
-            with mock.patch("agent_desktops.request_browser", side_effect=AssertionError("supervisor")):
+            with mock.patch("conveyor.entrypoints.agent_desktops.request_browser", side_effect=AssertionError("supervisor")):
                 return await backend.execute_step(
                     self.settings, task["task_id"], resumed, {"action": "observe"},
                 )

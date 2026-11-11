@@ -14,10 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import load_settings
-from logging_setup import configure_logging
+from conveyor.core.config import load_settings
+from conveyor.core.logging_setup import configure_logging
 from personal_tools.store import PersonalToolsStore
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 logger = logging.getLogger("scheduler_tick")
 

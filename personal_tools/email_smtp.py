@@ -12,9 +12,9 @@ import smtplib
 from email.mime.text import MIMEText
 from email.utils import formatdate
 
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 logger = logging.getLogger(__name__)
 

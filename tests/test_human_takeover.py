@@ -13,7 +13,7 @@ from conveyor.desktop.human_takeover import HumanTakeoverStore, takeover_blocks_
 
 
 def _computer_settings(root: Path):
-    from config import Settings
+    from conveyor.core.config import Settings
 
     return Settings(
         telegram_bot_token="test-token",

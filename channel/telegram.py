@@ -20,7 +20,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
 from channel.mentions import mentions, strip_mention
 from channel.types import Attachment, InboundMessage, OutboundPort, ReplyContext
-from redaction import truncate
+from conveyor.core.redaction import truncate
 
 logger = logging.getLogger("conveyor.channel.telegram")
 

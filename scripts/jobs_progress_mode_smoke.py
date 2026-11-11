@@ -39,7 +39,7 @@ TMP_DIR = tempfile.mkdtemp()
 os.environ["CODEX_MEMORY_ROOT"] = TMP_DIR
 
 from channel import InboundMessage  # noqa: E402
-from config import (  # noqa: E402
+from conveyor.core.config import (  # noqa: E402
     DEFAULT_PROGRESS_MODE,
     VALID_PROGRESS_MODES,
     _progress_mode_env,

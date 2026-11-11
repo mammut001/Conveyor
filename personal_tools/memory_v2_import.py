@@ -140,7 +140,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--include-conversations", action="store_true")
     args = parser.parse_args()
-    from config import load_settings
+    from conveyor.core.config import load_settings
     result = import_existing(load_settings(args.env), dry_run=args.dry_run,
                              include_conversations=args.include_conversations)
     print(json.dumps(result, sort_keys=True))

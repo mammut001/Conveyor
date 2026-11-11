@@ -310,8 +310,8 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="reconcile once and exit")
     args = parser.parse_args()
 
-    from config import load_runtime_settings
-    from logging_setup import configure_logging
+    from conveyor.core.config import load_runtime_settings
+    from conveyor.core.logging_setup import configure_logging
 
     configure_logging(service_name="agent_desktops")
     settings = load_runtime_settings()

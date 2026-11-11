@@ -54,8 +54,8 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("systemctl enable conveyor-handoff.service", installer)
         self.assertIn("systemctl restart conveyor-handoff.service", installer)
         self.assertIn("handoff) echo conveyor-handoff.service", cli)
-        self.assertIn("handoff_sidecar.py", unit)
-        self.assertNotIn("web_console.py", unit)
+        self.assertIn("-m conveyor.entrypoints.handoff_sidecar", unit)
+        self.assertNotIn("-m conveyor.entrypoints.web_console", unit)
 
     def test_configurator_honors_conveyor_dir_and_preserves_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

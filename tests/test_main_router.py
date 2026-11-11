@@ -18,7 +18,7 @@ from conveyor.agents import main_router as router
 from conveyor.agents import main_router_results as results
 from conveyor.agents.agents import AgentStore, chat_id_for, WEB_OPERATOR
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.tools.confirm import create_pending
 from handlers.tools.runner import execute_confirmed
 from conveyor.core.transcript_store import get_transcript_store, session_identity

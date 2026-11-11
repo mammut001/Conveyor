@@ -14,12 +14,12 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from channel.types import InboundMessage, OutboundPort
-from config import Settings
+from conveyor.core.config import Settings
 import handlers.tools.executors  # register builtin tools into TOOL_REGISTRY
 from handlers.tools.registry import TOOL_REGISTRY, DangerLevel
 from handlers.tools.runner import _request_confirmation, run_tool
 from personal_tools.registry import PERSONAL_TOOL_REGISTRY, register_personal_tools
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 from runner.chat_client import ChatConfig, ChatError, complete_chat
 
 logger = logging.getLogger(__name__)
@@ -132,7 +132,7 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
         if not enabled():
             return False
     if name == "agents.parallel":
-        from config import is_subagents_enabled
+        from conveyor.core.config import is_subagents_enabled
         from handlers.subagents import is_in_subagent
         if not is_subagents_enabled(settings) or is_in_subagent():
             return False
@@ -301,7 +301,7 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
                 operator_id=operator_id)]
         schemas.extend(mcp_schemas)
 
-    from config import is_subagents_enabled
+    from conveyor.core.config import is_subagents_enabled
     if settings and is_subagents_enabled(settings):
         from handlers.subagents import (
             PARALLEL_TOOL_DESCRIPTION,

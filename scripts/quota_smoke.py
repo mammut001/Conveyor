@@ -11,7 +11,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.jobs import handle_codex_job, check_rate_limit, JOB_SUBMISSION_TIMESTAMPS
 from handlers.job_queue import reset_job_queue, get_job_queue
 from channel.types import InboundMessage

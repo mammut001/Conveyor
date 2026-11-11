@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 from channel.types import InboundMessage, OutboundPort
-from config import load_settings
+from conveyor.core.config import load_settings
 from handlers import chat, chat_memory, session
 from handlers.session import append_turn, build_context_prompt, get_recent_turns
 from runner.types import Job, JobMode, JobState

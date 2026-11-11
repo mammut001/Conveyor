@@ -17,7 +17,7 @@ from scripts.apply_policy_smoke import test_apply_policy, test_apply_policy_hard
 
 
 def test_exception_traceback_redaction() -> CheckResult:
-    from redaction import SecretRedactingFilter
+    from conveyor.core.redaction import SecretRedactingFilter
     
     # Create a log record with exception info carrying a secret key
     logger = logging.getLogger("test_redact_exc")
@@ -62,7 +62,7 @@ def test_exception_traceback_redaction() -> CheckResult:
 
 def test_non_str_arg_and_bare_token_redaction() -> CheckResult:
     import re
-    from redaction import SecretRedactingFilter
+    from conveyor.core.redaction import SecretRedactingFilter
 
     logger = logging.getLogger("test_redact_non_str")
 

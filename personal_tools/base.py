@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.tools.registry import DangerLevel
 
 __all__ = [

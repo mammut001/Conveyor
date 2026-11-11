@@ -20,7 +20,7 @@ from typing import Any
 from uuid import uuid4
 
 from handlers.tools.registry import DangerLevel, ToolSpec
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 from runner.chat_client import complete_chat, config_from_settings
 
 log = logging.getLogger("subagents")

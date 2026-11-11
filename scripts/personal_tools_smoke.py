@@ -30,7 +30,7 @@ os.environ.setdefault("USER_TIMEZONE", "UTC")
 
 import personal_tools  # noqa: F401 — register tools
 from channel import InboundMessage
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 from handlers.commands import run_command
 from handlers.tools.audit import audit_log_path
 from handlers.tools.confirm import clear_all_pending, get_pending_for_context

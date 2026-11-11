@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.tools.registry import DangerLevel
 from personal_tools.base import PersonalToolSpec, ToolResult
 from conveyor.automation import overnight_chat

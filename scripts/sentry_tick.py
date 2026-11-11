@@ -18,8 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import load_settings
-from logging_setup import configure_logging
+from conveyor.core.config import load_settings
+from conveyor.core.logging_setup import configure_logging
 from personal_tools.sentry import (
     deliver_sentry_alerts,
     run_sentry_patrol,

@@ -31,7 +31,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import Settings
+from conveyor.core.config import Settings
 from scripts import compress_day as _compress_day_mod
 from scripts.compress_day import compress_if_needed
 from scripts.harness_common import CheckResult, print_results

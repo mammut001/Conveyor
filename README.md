@@ -276,7 +276,7 @@ sudo conveyor update  # Pull updates with automatic rollback on smoke failure
 3. **Verify and run**:
    ```bash
    make smoke
-   .venv/bin/python bot.py
+   .venv/bin/python -m conveyor.entrypoints.bot
    ```
 
 ---

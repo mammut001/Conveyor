@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from config import Settings
+from conveyor.core.config import Settings
 from runner.cli_backend import CLI_CONFIGS, CliBackend
 from runner.pooled import create_worker_backend
 from runner.types import Job, JobMode

@@ -31,7 +31,7 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("CONVEYOR_AGENT_SUPERVISOR_ENABLED", "true")
 
 from conveyor.agents import agent_supervisor as ags
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.agents.agent_supervisor import (
     AGY_READONLY_DENY_RULES,
     AntigravityExecutor,
@@ -1079,7 +1079,7 @@ class Round2CanonicalLocksSqliteAndRecoveryTests(unittest.TestCase):
             import sys, time
             sys.path.insert(0, {str(ROOT)!r})
             from pathlib import Path
-            from config import Settings
+            from conveyor.core.config import Settings
             from conveyor.agents.agent_supervisor import SupervisorLockError, acquire_worktree_lock
             s = Settings(
                 telegram_bot_token="", telegram_allowed_user_id=0,

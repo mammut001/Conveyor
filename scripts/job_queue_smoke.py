@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 TMP_DIR = tempfile.mkdtemp()
 os.environ["CODEX_MEMORY_ROOT"] = TMP_DIR
 
-from config import load_settings  # noqa: E402
+from conveyor.core.config import load_settings  # noqa: E402
 from handlers import dispatch  # noqa: E402
 from handlers.job_queue import JobQueue, QueuedJob, QueueJobState, get_job_queue, reset_job_queue  # noqa: E402
 from channel.types import InboundMessage  # noqa: E402

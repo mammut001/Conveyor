@@ -38,7 +38,7 @@ os.environ.setdefault("CODEX_TASK_ROOT", "/tmp/codex-smoke-task")
 os.environ.setdefault("CODEX_BIN", "codex")
 os.environ.setdefault("USER_TIMEZONE", "UTC")
 
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -311,7 +311,7 @@ async def _test_no_network_calls():
 
 async def _test_outputs_redacted():
     """Verify project outputs are redacted."""
-    from redaction import redact_text
+    from conveyor.core.redaction import redact_text
 
     text = "project token=secret123 password=mypass"
     redacted = redact_text(text)

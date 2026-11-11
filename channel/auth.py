@@ -5,7 +5,7 @@ Feishu:   operator_id is the open_id ("ou_xxx").
 """
 from __future__ import annotations
 
-from config import Settings
+from conveyor.core.config import Settings
 from channel.types import ChannelName, InboundMessage
 
 

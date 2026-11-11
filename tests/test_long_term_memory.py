@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from channel.types import InboundMessage
-from config import Settings
+from conveyor.core.config import Settings
 from handlers import chat
 from handlers.chat_tools import build_tool_schemas, run_tool_loop
 from handlers.dispatch import dispatch
@@ -74,7 +74,7 @@ class LongTermMemoryStoreTests(unittest.TestCase):
         field = Settings.__dataclass_fields__["long_term_memory_enabled"]
         self.assertFalse(field.default)
         root = Path(__file__).resolve().parents[1]
-        self.assertIn('CONVEYOR_LONG_TERM_MEMORY", "false"', (root / "config.py").read_text())
+        self.assertIn('CONVEYOR_LONG_TERM_MEMORY", "false"', (root / "conveyor/core/config.py").read_text())
 
     def test_remember_forget_and_restart(self) -> None:
         row = ltm.remember_fact(self.settings, self.op, "I prefer dark mode.")
@@ -481,7 +481,7 @@ class MemoryWebApiTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         import threading
         from types import SimpleNamespace
-        from web_console import WebConsoleHandler, WebConsoleServer
+        from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 
         cls.tmp = tempfile.TemporaryDirectory()
         cls.settings = _settings(Path(cls.tmp.name))
@@ -659,7 +659,7 @@ class GroupChatBoundaryTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(ltm.allowed_for(opted_in, msg))
 
     def test_env_flag_default_false(self) -> None:
-        from config import load_settings
+        from conveyor.core.config import load_settings
         env = {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_ALLOWED_USER_ID": "1",
                "CODEX_WORKSPACE_ROOT": self.tmp.name}
         with patch.dict(os.environ, env, clear=False):

@@ -16,8 +16,8 @@ import time
 from pathlib import Path
 
 from channel.types import InboundMessage
-from config import Settings
-from redaction import redact_text, truncate
+from conveyor.core.config import Settings
+from conveyor.core.redaction import redact_text, truncate
 
 logger = logging.getLogger(__name__)
 

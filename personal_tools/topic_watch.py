@@ -12,11 +12,11 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
 from personal_tools.store import PersonalToolsStore, TopicWatchRow
 from personal_tools.web_search import search_web, SearchResult
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 logger = logging.getLogger(__name__)
 

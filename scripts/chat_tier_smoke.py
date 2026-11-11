@@ -32,7 +32,7 @@ sys.path.insert(0, str(REPO))
 
 import handlers  # noqa: E402,F401  (registers handlers.dispatch)
 from channel.types import Attachment, InboundMessage, ReplyContext  # noqa: E402
-from config import load_settings  # noqa: E402
+from conveyor.core.config import load_settings  # noqa: E402
 from handlers import chat  # noqa: E402
 from runner.chat_client import ChatConfig, ChatError, stream_chat  # noqa: E402
 from runner.types import JobMode  # noqa: E402

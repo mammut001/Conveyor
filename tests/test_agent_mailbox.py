@@ -14,7 +14,7 @@ from unittest.mock import patch
 from conveyor.agents import agent_context as ac
 from conveyor.agents import agent_mailbox as mailbox
 from conveyor.agents.agents import AgentStore, chat_id_for
-from config import Settings
+from conveyor.core.config import Settings
 
 
 def _settings(root):

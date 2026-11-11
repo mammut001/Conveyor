@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from conveyor.web import console_secrets
 from conveyor.core import subprocess_env
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 
 
 class TestSubprocessIsolation(unittest.TestCase):

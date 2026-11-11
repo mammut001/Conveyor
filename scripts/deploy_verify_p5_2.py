@@ -84,7 +84,7 @@ def _check_desktop_screenshot_import() -> None:
 
 
 def _settings(helper: str | None, screenshot_dir: Path):
-    from config import load_settings
+    from conveyor.core.config import load_settings
 
     os.environ["CONVEYOR_DESKTOP_SCREENSHOT_HELPER"] = helper or ""
     os.environ["CONVEYOR_DESKTOP_SCREENSHOT_DIR"] = str(screenshot_dir)

@@ -21,7 +21,7 @@ except ImportError:
     sys.modules["httpx"] = types.ModuleType("httpx")
 
 from conveyor.core import transcript_store
-from config import Settings
+from conveyor.core.config import Settings
 from handlers import chat
 from handlers.chat_tools import build_tool_schemas
 from handlers.tools.registry import DangerLevel
@@ -397,7 +397,7 @@ class SessionSearchToolAndApiTests(unittest.TestCase):
         self.assertEqual(loop_res.text, "Found your past meeting notes.")
 
     def test_http_api_session_search_route(self) -> None:
-        from web_console import WebConsoleHandler, WebConsoleServer
+        from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
         from conveyor.web.web_control import WebControl
 
         sid = session_identity("web", "api-chat", "web-console")

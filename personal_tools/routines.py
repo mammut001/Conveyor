@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from config import Settings
+from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
 from conveyor.automation import routines
 

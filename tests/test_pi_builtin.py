@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from conveyor.core import provider_config
 from conveyor.agents import workers
-from config import Settings
+from conveyor.core.config import Settings
 from runner import pi_agent
 from runner.pi_agent import PiBackend, build_pi_models_json, resolve_pi_bin, sanitize_pi_provider_id
 from runner.types import Job, JobMode, JobState

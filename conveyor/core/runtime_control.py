@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 COMMAND_CANCEL = "cancel"
 _COMMAND_KINDS = {COMMAND_CANCEL}

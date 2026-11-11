@@ -48,7 +48,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import Settings
+from conveyor.core.config import Settings
 from runner import CodexRunner
 from scripts.harness_common import CheckResult, print_results
 
@@ -73,7 +73,7 @@ def _class_def(tree: ast.Module, name: str) -> ast.ClassDef | None:
 
 
 def _parse_runner() -> ast.Module:
-    if RUNNER_PY.stat().st_size < 5000:
+    if RUNNER_CORE_PY.is_file():
         core_tree = ast.parse(RUNNER_CORE_PY.read_text(encoding="utf-8"))
         memo_tree = ast.parse(RUNNER_MEMO_PY.read_text(encoding="utf-8"))
         cls = _class_def(core_tree, "CodexRunner")

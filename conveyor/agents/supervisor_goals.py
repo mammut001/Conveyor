@@ -43,7 +43,7 @@ from conveyor.agents import supervisor_diff as diff_mod
 from conveyor.agents import supervisor_service as svc
 from conveyor.agents.goal_notify import NOTIFY_STATES as GOAL_NOTIFY_STATES
 from conveyor.agents.goal_notify import notify_goal_change
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 log = logging.getLogger("conveyor.supervisor_goals")
 

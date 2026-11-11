@@ -8,4 +8,4 @@ session_env="$(python3 "$(dirname "$(readlink -f "$0")")/desktop_session_env.py"
 eval "$session_env"
 
 cd /opt/conveyor
-exec /opt/conveyor/.venv/bin/python /opt/conveyor/desktop_chat_window.py
+exec /opt/conveyor/.venv/bin/python -m conveyor.entrypoints.desktop_chat_window

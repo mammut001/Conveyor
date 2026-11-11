@@ -27,4 +27,4 @@ if ! cua-driver status >/dev/null 2>&1; then
 fi
 
 cd /opt/conveyor
-exec /opt/conveyor/.venv/bin/python /opt/conveyor/desktop_agent.py --poll-computer
+exec /opt/conveyor/.venv/bin/python -m conveyor.entrypoints.desktop_agent --poll-computer

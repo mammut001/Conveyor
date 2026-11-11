@@ -132,7 +132,7 @@ def main() -> None:
     gi.require_version("GdkPixbuf", "2.0")
     from gi.repository import GdkPixbuf, GLib, Gtk
 
-    from config import load_runtime_settings
+    from conveyor.core.config import load_runtime_settings
     from dotenv import load_dotenv
 
     load_dotenv("/etc/default/conveyor", override=False)

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from personal_tools.base import ToolResult
 from personal_tools.github_tools import _github_request
 from personal_tools.store import PersonalToolsStore
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 _REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}\Z)[A-Za-z0-9_.-]+\Z")
 

@@ -42,12 +42,12 @@ CONVEYOR_ROOT = Path(__file__).resolve().parents[1]
 if str(CONVEYOR_ROOT) not in sys.path:
     sys.path.insert(0, str(CONVEYOR_ROOT))
 
-from config import Settings  # noqa: E402
+from conveyor.core.config import Settings  # noqa: E402
 from conveyor.agents import agent_supervisor as ags  # noqa: E402
 from conveyor.agents import supervisor_goals as goals  # noqa: E402
 from conveyor.agents import supervisor_service as svc  # noqa: E402
 from conveyor.agents import supervisor_validation as sval  # noqa: E402
-from redaction import redact_obj, redact_text  # noqa: E402
+from conveyor.core.redaction import redact_obj, redact_text  # noqa: E402
 
 log = logging.getLogger("goal_live")
 

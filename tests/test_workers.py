@@ -19,11 +19,11 @@ from unittest.mock import MagicMock, patch
 from conveyor.core import provider_config
 from conveyor.agents import workers
 from conveyor.agents import workers_login
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.job_queue import JobQueue
 from runner.pooled import PooledRunner
 from runner.types import JobMode, JobState
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.web.web_control import WebControl
 
 
@@ -1782,7 +1782,7 @@ class RuntimeRunnerPoolDefaultsTests(unittest.TestCase):
                 f"TELEGRAM_BOT_TOKEN=tok\nTELEGRAM_ALLOWED_USER_ID=123\n"
                 f"CODEX_WORKSPACE_ROOT={raw}/ws\nCODEX_TASK_ROOT={raw}/tasks\nCODEX_MEMORY_ROOT={raw}/mem\n"
             )
-            from config import load_settings
+            from conveyor.core.config import load_settings
 
             # Unset env vars default to True
             with patch.dict(os.environ, {}, clear=True):

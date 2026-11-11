@@ -23,7 +23,7 @@ import time
 from typing import Any
 
 from channel.types import InboundMessage
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 logger = logging.getLogger("conveyor.telegram_topics")
 

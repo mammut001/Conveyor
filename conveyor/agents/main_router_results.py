@@ -103,7 +103,7 @@ def deliver(settings, task, text):
             return False
         route = dict(row)
     from conveyor.core.transcript_store import get_transcript_store, session_identity
-    from redaction import redact_text
+    from conveyor.core.redaction import redact_text
     from html import escape
     session = session_identity(route["origin_channel"], route["origin_chat"],
                                route["origin_operator"])
@@ -132,7 +132,7 @@ def deliver(settings, task, text):
     if (route["origin_channel"] in ("telegram", "feishu")
             and not agent_result_outbox.configured(settings)):
         from agent_coordination import agent_channel_results
-        from redaction import redact_text
+        from conveyor.core.redaction import redact_text
         agent_channel_results.enqueue(
             settings, task_id=task["id"], channel=route["origin_channel"],
             operator=route["origin_operator"], chat_id=route["origin_chat"],

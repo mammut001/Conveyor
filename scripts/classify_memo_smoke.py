@@ -27,7 +27,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import Settings
+from conveyor.core.config import Settings
 from runner import CodexRunner
 from scripts.harness_common import CheckResult, print_results
 
@@ -69,7 +69,7 @@ def _parse_runner() -> ast.Module:
     runner.py is the old monolith (2005 lines), parse it directly
     for back-compat. The shim test is the common path post-refactor.
     """
-    if RUNNER_PY.stat().st_size < 5000:
+    if RUNNER_CORE_PY.is_file():
         # Post-refactor: build the synthetic view
         core_tree = ast.parse(RUNNER_CORE_PY.read_text(encoding="utf-8"))
         memo_tree = ast.parse(RUNNER_MEMO_PY.read_text(encoding="utf-8"))

@@ -9,9 +9,9 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
-from config import Settings, SENSITIVE_FIELDS
+from conveyor.core.config import Settings, SENSITIVE_FIELDS
 from personal_tools.base import ToolResult
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 if TYPE_CHECKING:
     pass

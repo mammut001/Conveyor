@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.desktop.desktop_computer_loop import (
     FakeComputerBackend,
     HttpComputerBackend,

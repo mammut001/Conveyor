@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.job_queue import JobQueue
 from conveyor.agents.supervisor_service import (
     DISCUSSION_KINDS,
@@ -34,7 +34,7 @@ from conveyor.agents.supervisor_service import (
     register_repository,
 )
 from conveyor.core.transcript_store import get_transcript_store
-from web_console import WebConsoleHandler, WebConsoleServer
+from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 from conveyor.web.web_control import WebControl
 
 

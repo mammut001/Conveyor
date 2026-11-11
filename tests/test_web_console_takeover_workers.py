@@ -7,7 +7,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-import web_console_takeover
+from conveyor.entrypoints import web_console_takeover
 
 
 class TakeoverAgentWorkersTests(unittest.TestCase):
@@ -53,18 +53,18 @@ class TakeoverAgentWorkersTests(unittest.TestCase):
         try:
             with (
                 mock.patch.dict(os.environ, flags),
-                mock.patch("sys.argv", ["web_console_takeover.py"]),
-                mock.patch("web_console_takeover.load_runtime_settings", return_value=settings),
-                mock.patch("web_console_takeover.validate_web_config"),
-                mock.patch("web_console_takeover.configure_logging"),
-                mock.patch("web_console_takeover.CodexRunner"),
-                mock.patch("web_console_takeover.get_job_queue"),
-                mock.patch("web_console_takeover.WebControl"),
-                mock.patch("web_console_takeover.WebTakeover"),
-                mock.patch("web_console_takeover.TakeoverWebConsoleServer") as server_factory,
-                mock.patch("web_console_takeover.threading.Thread"),
-                mock.patch("web_console_takeover.start_extra_listeners"),
-                mock.patch("web_console_takeover.asyncio.new_event_loop", side_effect=new_loop),
+                mock.patch("sys.argv", ["conveyor/entrypoints/web_console_takeover.py"]),
+                mock.patch("conveyor.entrypoints.web_console_takeover.load_runtime_settings", return_value=settings),
+                mock.patch("conveyor.entrypoints.web_console_takeover.validate_web_config"),
+                mock.patch("conveyor.entrypoints.web_console_takeover.configure_logging"),
+                mock.patch("conveyor.entrypoints.web_console_takeover.CodexRunner"),
+                mock.patch("conveyor.entrypoints.web_console_takeover.get_job_queue"),
+                mock.patch("conveyor.entrypoints.web_console_takeover.WebControl"),
+                mock.patch("conveyor.entrypoints.web_console_takeover.WebTakeover"),
+                mock.patch("conveyor.entrypoints.web_console_takeover.TakeoverWebConsoleServer") as server_factory,
+                mock.patch("conveyor.entrypoints.web_console_takeover.threading.Thread"),
+                mock.patch("conveyor.entrypoints.web_console_takeover.start_extra_listeners"),
+                mock.patch("conveyor.entrypoints.web_console_takeover.asyncio.new_event_loop", side_effect=new_loop),
                 mock.patch("conveyor.automation.routines.start_routines_worker", return_value=None),
                 mock.patch("conveyor.channels.approval_relay.start_relay_worker", return_value=None),
                 mock.patch("conveyor.agents.agent_context.enabled", return_value=enabled),

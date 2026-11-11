@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 from runner.core import CodexRunner
 from runner.types import Job, JobMode, ProgressCallback
 

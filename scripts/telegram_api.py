@@ -4,8 +4,8 @@ import json
 import urllib.parse
 import urllib.request
 
-from config import Settings
-from redaction import truncate
+from conveyor.core.config import Settings
+from conveyor.core.redaction import truncate
 
 
 def send_message(settings: Settings, text: str, chat_id: int | None = None) -> None:

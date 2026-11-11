@@ -38,7 +38,7 @@ JPEG_B = _jpeg(1024, 768, b"frame-b")
 
 
 def _settings(root: Path, **overrides):
-    from config import Settings
+    from conveyor.core.config import Settings
 
     base = Settings(
         telegram_bot_token="test-token",
@@ -375,7 +375,7 @@ class StoreExtendTests(unittest.TestCase):
 class HttpTests(LiveScreenCase):
     def setUp(self) -> None:
         super().setUp()
-        from web_console import WebConsoleHandler, WebConsoleServer
+        from conveyor.entrypoints.web_console import WebConsoleHandler, WebConsoleServer
 
         self.loop = asyncio.new_event_loop()
         loop_thread = threading.Thread(target=self.loop.run_forever, daemon=True)

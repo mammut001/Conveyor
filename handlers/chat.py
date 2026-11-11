@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Literal
 from channel.types import InboundMessage, OutboundPort, ReplyContext
 
 if TYPE_CHECKING:
-    from config import Settings
+    from conveyor.core.config import Settings
     from runner import CodexRunner
 
 logger = logging.getLogger(__name__)
@@ -427,7 +427,7 @@ def system_prompt(
     operator_id: str = "", memory_query: str = "", memory_allowed: bool = True, active_skill: str = "",
     agent_name: str = "", agent_instructions: str = "", agent_notes: str = "",
 ) -> str:
-    from config import load_operator_profile
+    from conveyor.core.config import load_operator_profile
 
     # Group chats (or memory flag off): no durable memory in the prompt at all.
     memory_on = bool(getattr(settings, "long_term_memory_enabled", False) or getattr(settings, "memory_v2_enabled", False)) and memory_allowed
@@ -740,7 +740,7 @@ def _extract_skill_invocation(text: str) -> tuple[str, str, str, str] | None:
 
 def _provider_error_text(exc: Exception) -> str:
     """Text for a non-ChatError provider failure, redacted like a ChatError."""
-    from redaction import redact_text
+    from conveyor.core.redaction import redact_text
 
     return redact_text(str(exc).strip())[:200] or type(exc).__name__
 

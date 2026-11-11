@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import Settings, load_settings
+from conveyor.core.config import Settings, load_settings
 from personal_tools.store import PersonalToolsStore
 from personal_tools.topic_watch import (
     compute_digest,

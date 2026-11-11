@@ -24,8 +24,8 @@ from zoneinfo import ZoneInfo
 
 DAILY_WORKTREE_FORMAT = "%Y-%m-%d"
 from runner.types import Job, JobMode
-from config import Settings, load_settings
-from redaction import redact_text, safe_json, truncate
+from conveyor.core.config import Settings, load_settings
+from conveyor.core.redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 def _tool_registry_text(self, job: Job) -> str:
     sandbox = getattr(job, "sandbox", None) or getattr(getattr(job, "mode", None), "sandbox", None) or JobMode.RUN.sandbox
@@ -89,7 +89,7 @@ def _operator_profile_text(self) -> str:
     # settings.operator_* fields (env / startup defaults)
     # are the fallback when operator.json is missing or a
     # field is unset in the JSON.
-    from config import load_operator_profile as _load_op_live
+    from conveyor.core.config import load_operator_profile as _load_op_live
     live = _load_op_live(self.settings.codex_memory_root)
     name = live.get("operator_name") or self.settings.operator_name or "(anonymous)"
     language = live.get("operator_language") or self.settings.operator_language

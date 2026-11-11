@@ -18,7 +18,7 @@ from runner import CodexRunner
 
 
 def _settings(root: Path, **overrides):
-    from config import Settings
+    from conveyor.core.config import Settings
 
     base = Settings(
         telegram_bot_token="test-token", telegram_allowed_user_id=1, codex_workspace_root=root,

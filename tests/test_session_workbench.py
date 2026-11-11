@@ -154,7 +154,7 @@ class SessionWorkbenchTests(unittest.TestCase):
         self.assertEqual(sessions[0]["job_count"], 1)
 
     def test_task_run_request_and_reply_are_kept_in_its_session(self):
-        from web_console import WebOutbound
+        from conveyor.entrypoints.web_console import WebOutbound
         task_session = session_identity("web", "task-only", "alice")
         self.insert_job_in("task-2", "web", "task-only", "2099-01-02T00:00:00+00:00")
         port = WebOutbound(self.settings, task_session, is_codex=True, prompt="改代码：加一行说明")

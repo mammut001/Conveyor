@@ -40,7 +40,7 @@ from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from channel.types import InboundMessage, OutboundPort
-from redaction import truncate, redact_text
+from conveyor.core.redaction import truncate, redact_text
 from runner import CodexRunner, JobMode, JobState
 
 if TYPE_CHECKING:
@@ -612,7 +612,7 @@ class RecoveredOutboundPort:
                 return None
         elif self.channel == "feishu":
             try:
-                from feishu_bot import _get_channel
+                from conveyor.entrypoints.feishu_bot import _get_channel
                 feishu_channel = _get_channel()
                 if feishu_channel:
                     from channel.feishu import FeishuOutbound
@@ -630,7 +630,7 @@ class RecoveredOutboundPort:
     async def send_card(self, msg: InboundMessage, card: dict, *, reply_to: str | None = None) -> str | None:
         if self.channel == "feishu":
             try:
-                from feishu_bot import _get_channel
+                from conveyor.entrypoints.feishu_bot import _get_channel
                 feishu_channel = _get_channel()
                 if feishu_channel:
                     from channel.feishu import FeishuOutbound

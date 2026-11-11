@@ -7,7 +7,7 @@ import time
 from agent_coordination import agent_channel_routing as routing
 from conveyor.agents import agent_conversations as conversations
 from conveyor.agents.agents import AgentStore
-from redaction import redact_text, truncate
+from conveyor.core.redaction import redact_text, truncate
 
 PAGE_SIZE = 8
 TTL = 15 * 60

@@ -28,7 +28,7 @@ os.environ.setdefault("CONVEYOR_AGENT_SUPERVISOR_ENABLED", "true")
 
 from conveyor.agents import agent_supervisor as ags
 from conveyor.agents.agent_supervisor import PiExecutor, RoleConfig
-from config import Settings
+from conveyor.core.config import Settings
 from conveyor.agents.supervisor_service import _UI_EXPOSED_EXECUTORS
 
 ANALYST = RoleConfig(name="analyst", executor="pi", tools=["read"], location="worktree")

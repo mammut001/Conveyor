@@ -10,7 +10,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import load_settings
+from conveyor.core.config import load_settings
 from scripts.doctor import check_disk, check_latest_job, check_runtime_dirs, check_workspace
 from scripts.harness_common import CheckResult, check_provider_models, check_systemd_active, latest_final_file, latest_job_dir
 from scripts.job_audit import run_job_audit

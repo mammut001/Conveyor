@@ -23,8 +23,8 @@ from zoneinfo import ZoneInfo
 # Module-level constants (also on CodexRunner class shell)
 
 MEMORY_FILENAME = "MEMORY.md"
-from config import Settings, load_settings
-from redaction import redact_text, safe_json, truncate
+from conveyor.core.config import Settings, load_settings
+from conveyor.core.redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 async def clean_old_jobs(self, keep: int = 20) -> str:
     # Per-job log dirs only. Daily worktrees are shared across jobs, so

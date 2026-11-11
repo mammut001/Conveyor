@@ -11,7 +11,7 @@ import re
 import time
 from typing import Any
 
-from config import Settings
+from conveyor.core.config import Settings
 from handlers.tools.registry import DangerLevel
 from mcp_client.client import execute_call_tool, execute_list_tools, MCPClientError
 from mcp_client.config import (
@@ -22,7 +22,7 @@ from mcp_client.config import (
     save_disabled_servers,
 )
 from mcp_client.types import CachedServerState, MCPToolSpec, ServerConfig
-from redaction import redact_text
+from conveyor.core.redaction import redact_text
 
 logger = logging.getLogger("conveyor.mcp.manager")
 
