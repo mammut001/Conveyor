@@ -1269,6 +1269,7 @@ test('mock fixture: the 目标 tab shows no English goal/iteration words', async
   await expect(pane).toBeVisible()
   await expect(page.getByRole('tab', { name: '目标' })).toHaveAttribute('aria-selected', 'true')
 
+  await expect(pane).toContainText('第 2 轮')
   const visibleText = await pane.innerText()
   expect(visibleText).not.toMatch(/goal/i)
   expect(visibleText).not.toMatch(/iteration/i)
