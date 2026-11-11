@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from human_takeover import HumanTakeoverStore, takeover_blocks_automation
+from conveyor.desktop.human_takeover import HumanTakeoverStore, takeover_blocks_automation
 
 
 def _computer_settings(root: Path):
@@ -114,14 +114,14 @@ class HumanTakeoverStoreTests(unittest.TestCase):
         self.assertIsNone(self.store.cancel(created["id"]))
 
     def test_takeover_blocks_claims_and_discards_queued_actions(self) -> None:
-        from desktop_computer_requests import (
+        from conveyor.desktop.desktop_computer_requests import (
             cancel_pending_computer_steps,
             claim_computer_step,
             create_computer_step,
             create_computer_task,
             get_computer_task,
         )
-        from desktop_observe_requests import (
+        from conveyor.desktop.desktop_observe_requests import (
             cancel_pending_observe_requests,
             claim_observe_request,
             save_observe_requests,
@@ -156,8 +156,8 @@ class HumanTakeoverStoreTests(unittest.TestCase):
         self.store.complete(takeover["id"])
 
     def test_resume_forces_fresh_observe_before_planner(self) -> None:
-        from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-        from desktop_computer_planner import ScriptedPlanner
+        from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+        from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
 
         settings = _computer_settings(Path(self.temp.name))
         store = HumanTakeoverStore(settings)

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-import event_triggers
+from conveyor.automation import event_triggers
 from personal_tools.base import ToolResult
 
 

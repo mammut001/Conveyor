@@ -16,6 +16,8 @@ Turn your phone into a remote dev workstation. Write code, fix CI, inspect diffs
 
 </div>
 
+[Repository layout](docs/repository-layout.md)
+
 > **Architecture note (2026-11):** The README below describes an older Codex-based path and UI; it does not establish the executor or deployment currently in use. See the [architecture overview](docs/architecture-overview.md) and [roadmap](docs/roadmap.md) for the distinction between code and intended direction. The screenshots show the local legacy UI, not a running Supervisor interface.
 
 

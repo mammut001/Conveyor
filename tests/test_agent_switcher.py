@@ -6,10 +6,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import agent_switcher as ui
-import agent_conversations as conversations
+from conveyor.agents import agent_switcher as ui
+from conveyor.agents import agent_conversations as conversations
 from agent_coordination import agent_channel_routing as routing
-from agents import AgentStore
+from conveyor.agents.agents import AgentStore
 from channel.types import InboundMessage
 from channel.feishu_cards import parse_action, extract_card_action
 from tests.test_agent_channel_routing import settings_for
@@ -92,7 +92,7 @@ class SwitcherTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('已失效或已处理',self.port.text)
         await ui.show(self.settings,self.tg,self.port,'agents')
         token=self.port.token('Writer')
-        with patch('agent_switcher.time.time',return_value=10**12):
+        with patch('conveyor.agents.agent_switcher.time.time',return_value=10**12):
             await ui.handle(self.settings,self.tg,self.port,token)
         self.assertIsNone(routing.bound(self.settings,'telegram','1'))
 

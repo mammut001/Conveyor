@@ -11,10 +11,10 @@ from pathlib import Path
 from unittest import mock
 
 from config import Settings
-from desktop_computer_loop import run_computer_loop
-from desktop_computer_planner import ScriptedPlanner
-from desktop_cua import LocalCuaTransport
-from desktop_linux_browser import LinuxBrowserController
+from conveyor.desktop.desktop_computer_loop import run_computer_loop
+from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
+from conveyor.desktop.desktop_cua import LocalCuaTransport
+from conveyor.desktop.desktop_linux_browser import LinuxBrowserController
 
 
 def _settings(root: Path) -> Settings:
@@ -93,7 +93,7 @@ class LinuxBrowserTest(unittest.TestCase):
         controller = LinuxBrowserController()
         controller._run = _scripted_run(script)
         self._process = mock.patch(
-            "desktop_linux_browser.linux_process_app", return_value=process,
+            "conveyor.desktop.desktop_linux_browser.linux_process_app", return_value=process,
         )
         self._process.start()
         self.addCleanup(self._process.stop)
@@ -110,8 +110,8 @@ class LinuxBrowserTest(unittest.TestCase):
             self.assertIsNot(controller.env, os.environ)
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen")
     def test_existing_browser_is_verified_and_not_relaunched(self, popen, _which):
         observed = []
         controller = self._controller({
@@ -142,8 +142,8 @@ class LinuxBrowserTest(unittest.TestCase):
         )
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen")
     def test_focus_failure_does_not_launch_duplicate(self, popen, _which):
         controller = self._controller({
             "getdisplaygeometry": "100 100",
@@ -158,8 +158,8 @@ class LinuxBrowserTest(unittest.TestCase):
         popen.assert_not_called()
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen")
     def test_spoofed_class_is_not_focused_or_launched(self, popen, _which):
         controller = self._controller({
             "getdisplaygeometry": "100 100",
@@ -183,8 +183,8 @@ class LinuxBrowserTest(unittest.TestCase):
         self.assertFalse(any(cmd[1] == "windowactivate" for cmd in calls))
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen")
     def test_helper_and_dialog_are_not_browser_targets(self, popen, _which):
         helper = _xprop_window(instance="Firefox", klass="firefox_firefox", include_state=False, include_type=False)
         dialog = _xprop_window(
@@ -216,11 +216,11 @@ class LinuxBrowserTest(unittest.TestCase):
         popen.assert_not_called()
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen")
     def test_snap_navigator_window_is_focused_helper_and_dialog_are_not(self, popen, _which):
         """Empirical Snap strings from a normal Firefox window on the VPS."""
-        from desktop_linux_browser import wm_class_matches, xprop_browser_target
+        from conveyor.desktop.desktop_linux_browser import wm_class_matches, xprop_browser_target
 
         real = (
             'WM_CLASS(STRING) = "Navigator", "firefox_firefox"\n'
@@ -266,8 +266,8 @@ class LinuxBrowserTest(unittest.TestCase):
         popen.assert_not_called()
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen")
     def test_minimized_snap_firefox_is_mapped(self, popen, _which):
         controller = self._controller({
             "getdisplaygeometry": "100 100",
@@ -292,10 +292,10 @@ class LinuxBrowserTest(unittest.TestCase):
         popen.assert_not_called()
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
-    @mock.patch("desktop_linux_browser._trusted_browser_binary", return_value="/usr/bin/firefox")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
-    @mock.patch("desktop_linux_browser.time.sleep")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("conveyor.desktop.desktop_linux_browser._trusted_browser_binary", return_value="/usr/bin/firefox")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.time.sleep")
     def test_launch_loop_uses_real_focus_after_delayed_mapping(self, sleeper, popen, _binary, _which):
         searches = {"n": 0}
 
@@ -320,8 +320,8 @@ class LinuxBrowserTest(unittest.TestCase):
         controller = LinuxBrowserController()
         controller._run = run
         home = Path(tempfile.mkdtemp())
-        with mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox"), \
-                mock.patch("desktop_linux_browser.Path.home", return_value=home):
+        with mock.patch("conveyor.desktop.desktop_linux_browser.linux_process_app", return_value="Firefox"), \
+                mock.patch("conveyor.desktop.desktop_linux_browser.Path.home", return_value=home):
             result = controller.ensure("Firefox", timeout=5)
         self.assertEqual(result, {"ok": True, "name": "Firefox", "pid": 55, "window_id": 500})
         command = popen.call_args.args[0]
@@ -334,8 +334,8 @@ class LinuxBrowserTest(unittest.TestCase):
         sleeper.assert_called()
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99", "XAUTHORITY": "/no/such/xauth"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen")
     def test_unreachable_display_does_not_launch(self, popen, _which):
         controller = LinuxBrowserController()
         controller._run = mock.Mock(side_effect=AssertionError("xdotool"))
@@ -343,8 +343,8 @@ class LinuxBrowserTest(unittest.TestCase):
         popen.assert_not_called()
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen")
     def test_allowlist_and_blocklist_fail_closed(self, popen, _which):
         controller = LinuxBrowserController()
         controller._run = mock.Mock(side_effect=AssertionError("focused a blocked browser"))
@@ -362,8 +362,8 @@ class LinuxBrowserTest(unittest.TestCase):
         controller._run.assert_not_called()
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen")
     def test_generic_browser_allow_can_select_chrome_when_firefox_is_blocked(self, popen, _which):
         controller = LinuxBrowserController()
         searches: list[tuple] = []
@@ -390,8 +390,8 @@ class LinuxBrowserTest(unittest.TestCase):
         self.assertTrue(any("Chrome" in " ".join(call) for call in searches))
         popen.assert_not_called()
 
-    @mock.patch("desktop_cua.sys.platform", "linux")
-    @mock.patch("desktop_linux_browser.LinuxBrowserController.ensure")
+    @mock.patch("conveyor.desktop.desktop_cua.sys.platform", "linux")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.LinuxBrowserController.ensure")
     def test_cua_uses_x11_mapping_not_driver_exact_name(self, ensure):
         ensure.return_value = {"ok": True, "pid": 777, "name": "Firefox", "window_id": 42}
         with tempfile.TemporaryDirectory() as temp:
@@ -403,8 +403,8 @@ class LinuxBrowserTest(unittest.TestCase):
             self.assertEqual(action["window_id"], 42)
             driver._call_tool.assert_not_called()
 
-    @mock.patch("desktop_cua.sys.platform", "linux")
-    @mock.patch("desktop_linux_browser.LinuxBrowserController.ensure")
+    @mock.patch("conveyor.desktop.desktop_cua.sys.platform", "linux")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.LinuxBrowserController.ensure")
     def test_contradictory_pid_is_not_retargeted(self, ensure):
         ensure.return_value = {"ok": False, "error": "target_identity_conflict"}
         with tempfile.TemporaryDirectory() as temp:
@@ -415,8 +415,8 @@ class LinuxBrowserTest(unittest.TestCase):
             self.assertEqual(ensure.call_args.kwargs["expected_window"], 2)
             self.assertEqual(action["pid"], 1)
 
-    @mock.patch("desktop_cua.sys.platform", "linux")
-    @mock.patch("desktop_linux_browser.LinuxBrowserController.ensure")
+    @mock.patch("conveyor.desktop.desktop_cua.sys.platform", "linux")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.LinuxBrowserController.ensure")
     def test_model_ensure_browser_string_does_not_launch(self, ensure):
         with tempfile.TemporaryDirectory() as temp:
             driver = LocalCuaTransport("cua-driver mcp", settings=_settings(Path(temp)))
@@ -424,8 +424,8 @@ class LinuxBrowserTest(unittest.TestCase):
             self.assertIsNone(driver._prepare_target_app(action))
             ensure.assert_not_called()
 
-    @mock.patch("desktop_cua.sys.platform", "linux")
-    @mock.patch("desktop_linux_browser.LinuxBrowserController.keyboard_target_ready", return_value=False)
+    @mock.patch("conveyor.desktop.desktop_cua.sys.platform", "linux")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.LinuxBrowserController.keyboard_target_ready", return_value=False)
     def test_linux_type_refuses_when_focus_moved(self, _ready):
         with tempfile.TemporaryDirectory() as temp:
             driver = LocalCuaTransport("cua-driver mcp", settings=_settings(Path(temp)))
@@ -434,8 +434,8 @@ class LinuxBrowserTest(unittest.TestCase):
             self.assertEqual(result["error"], "keyboard_target_not_foreground")
             driver._call_tool.assert_not_called()
 
-    @mock.patch("desktop_cua.sys.platform", "darwin")
-    @mock.patch("desktop_linux_browser.LinuxBrowserController.keyboard_target_ready",
+    @mock.patch("conveyor.desktop.desktop_cua.sys.platform", "darwin")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.LinuxBrowserController.keyboard_target_ready",
                 side_effect=AssertionError("mac checks x11 focus"))
     def test_mac_type_keeps_background_pid_delivery(self, _ready):
         with tempfile.TemporaryDirectory() as temp:
@@ -445,8 +445,8 @@ class LinuxBrowserTest(unittest.TestCase):
             self.assertTrue(result["result_ok"])
             self.assertEqual(driver._call_tool.call_args.args[0], "type_text")
 
-    @mock.patch("desktop_cua.sys.platform", "linux")
-    @mock.patch("desktop_linux_browser.LinuxBrowserController.ensure")
+    @mock.patch("conveyor.desktop.desktop_cua.sys.platform", "linux")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.LinuxBrowserController.ensure")
     def test_cua_preflight_respects_controller_refusal(self, ensure):
         ensure.return_value = {"ok": False, "error": "browser_binary_missing"}
         with tempfile.TemporaryDirectory() as temp:
@@ -568,7 +568,7 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("hello", str(result))
 
     async def test_loading_title_is_not_a_stall_or_a_finished_page(self):
-        import desktop_computer_loop as loop
+        from conveyor.desktop import desktop_computer_loop as loop
 
         clock = {"now": 0.0}
 
@@ -709,8 +709,8 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["blocked_reason"], "repeated_action_failure")
 
     async def test_takeover_discards_the_old_plan_and_observes_first(self):
-        from desktop_computer_requests import create_computer_task
-        from human_takeover import HumanTakeoverStore
+        from conveyor.desktop.desktop_computer_requests import create_computer_task
+        from conveyor.desktop.human_takeover import HumanTakeoverStore
 
         with tempfile.TemporaryDirectory() as temp:
             settings = _settings(Path(temp))
@@ -749,7 +749,7 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["status"], "done")
 
     async def test_browser_submit_settles_before_done_and_skips_non_browser(self):
-        import desktop_computer_loop as loop
+        from conveyor.desktop import desktop_computer_loop as loop
 
         clock = {"now": 5000.0}
 
@@ -880,7 +880,7 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
 
 class IdentityTest(unittest.TestCase):
     def test_process_names_are_exact_and_truncation_is_bounded(self):
-        from desktop_linux_browser import app_from_process_names
+        from conveyor.desktop.desktop_linux_browser import app_from_process_names
 
         self.assertEqual(app_from_process_names("firefox", "firefox"), "Firefox")
         self.assertEqual(app_from_process_names(None, "google-chrome-s"), "Google Chrome")
@@ -890,34 +890,34 @@ class IdentityTest(unittest.TestCase):
         self.assertEqual(app_from_process_names(None, "chrome"), "Google Chrome")
 
     def test_spoofed_exe_is_not_a_browser_and_terminals_map(self):
-        from desktop_linux_browser import linux_process_app
+        from conveyor.desktop.desktop_linux_browser import linux_process_app
 
         spoof = Path(tempfile.mkdtemp()) / "firefox"
         spoof.write_text("#!/bin/sh\n", encoding="utf-8")
         spoof.chmod(0o755)
-        with mock.patch("desktop_linux_browser._proc_exe", return_value=str(spoof)), \
-                mock.patch("desktop_linux_browser._proc_comm", return_value="firefox"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser._proc_exe", return_value=str(spoof)), \
+                mock.patch("conveyor.desktop.desktop_linux_browser._proc_comm", return_value="firefox"):
             self.assertEqual(linux_process_app(9), "Unknown")
-        with mock.patch("desktop_linux_browser._proc_exe", return_value="/usr/bin/gnome-terminal"), \
-                mock.patch("desktop_linux_browser._proc_comm", return_value="gnome-terminal"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser._proc_exe", return_value="/usr/bin/gnome-terminal"), \
+                mock.patch("conveyor.desktop.desktop_linux_browser._proc_comm", return_value="gnome-terminal"):
             self.assertEqual(linux_process_app(9), "Terminal")
-        with mock.patch("desktop_linux_browser._proc_exe", return_value=None), \
-                mock.patch("desktop_linux_browser._proc_comm", return_value="firefox"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser._proc_exe", return_value=None), \
+                mock.patch("conveyor.desktop.desktop_linux_browser._proc_comm", return_value="firefox"):
             self.assertEqual(linux_process_app(9), "Unknown")
-        with mock.patch("desktop_linux_browser._proc_exe", return_value="/tmp/firefox"), \
-                mock.patch("desktop_linux_browser._proc_comm", return_value="firefox"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser._proc_exe", return_value="/tmp/firefox"), \
+                mock.patch("conveyor.desktop.desktop_linux_browser._proc_comm", return_value="firefox"):
             self.assertEqual(linux_process_app(9), "Unknown")
-        with mock.patch("desktop_linux_browser._proc_exe", return_value="/usr/bin/gedit"), \
-                mock.patch("desktop_linux_browser._proc_comm", return_value="gedit"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser._proc_exe", return_value="/usr/bin/gedit"), \
+                mock.patch("conveyor.desktop.desktop_linux_browser._proc_comm", return_value="gedit"):
             self.assertEqual(linux_process_app(9), "gedit")
-        with mock.patch("desktop_linux_browser._proc_exe", return_value="/usr/bin/firefox"), \
-                mock.patch("desktop_linux_browser._path_is_trusted", return_value=True), \
-                mock.patch("desktop_linux_browser._proc_comm", return_value="bash"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser._proc_exe", return_value="/usr/bin/firefox"), \
+                mock.patch("conveyor.desktop.desktop_linux_browser._path_is_trusted", return_value=True), \
+                mock.patch("conveyor.desktop.desktop_linux_browser._proc_comm", return_value="bash"):
             self.assertEqual(linux_process_app(9), "Firefox")
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":99"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen")
     def test_spoofed_exe_and_class_never_focus_or_launch(self, popen, _which):
         spoof = Path(tempfile.mkdtemp()) / "firefox"
         spoof.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -940,15 +940,15 @@ class IdentityTest(unittest.TestCase):
             return real(*argv)
 
         controller._run = run
-        with mock.patch("desktop_linux_browser._proc_exe", return_value=str(spoof)), \
-                mock.patch("desktop_linux_browser._proc_comm", return_value="firefox"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser._proc_exe", return_value=str(spoof)), \
+                mock.patch("conveyor.desktop.desktop_linux_browser._proc_comm", return_value="firefox"):
             result = controller.ensure("Firefox")
         self.assertEqual(result["error"], "browser_activate_failed")
         popen.assert_not_called()
         self.assertFalse(any(cmd[1] == "windowactivate" for cmd in calls))
 
     def test_untrusted_path_is_not_a_browser_binary(self):
-        from desktop_linux_browser import _path_is_trusted
+        from conveyor.desktop.desktop_linux_browser import _path_is_trusted
 
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "firefox"
@@ -957,12 +957,12 @@ class IdentityTest(unittest.TestCase):
             self.assertFalse(_path_is_trusted(str(path)))
 
     @mock.patch.dict(os.environ, {"DISPLAY": ":98"})
-    @mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
-    @mock.patch("desktop_linux_browser._trusted_browser_binary", return_value="/usr/bin/firefox")
-    @mock.patch("desktop_linux_browser.subprocess.Popen")
-    @mock.patch("desktop_linux_browser.time.sleep")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool")
+    @mock.patch("conveyor.desktop.desktop_linux_browser._trusted_browser_binary", return_value="/usr/bin/firefox")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen")
+    @mock.patch("conveyor.desktop.desktop_linux_browser.time.sleep")
     def test_profiles_are_per_display_and_snap_aware(self, _sleep, popen, _binary, _which):
-        from desktop_linux_browser import _is_snap_firefox
+        from conveyor.desktop.desktop_linux_browser import _is_snap_firefox
 
         wrapper = Path(tempfile.mkdtemp()) / "firefox"
         wrapper.write_text("#!/bin/sh\nexec /snap/bin/firefox \"$@\"\n", encoding="utf-8")
@@ -970,8 +970,8 @@ class IdentityTest(unittest.TestCase):
         controller = LinuxBrowserController()
         controller._run = _scripted_run({"getdisplaygeometry": "10 10", "search": ""})
         home = Path(tempfile.mkdtemp())
-        with mock.patch("desktop_linux_browser._trusted_browser_binary", return_value=str(wrapper)), \
-                mock.patch("desktop_linux_browser.Path.home", return_value=home):
+        with mock.patch("conveyor.desktop.desktop_linux_browser._trusted_browser_binary", return_value=str(wrapper)), \
+                mock.patch("conveyor.desktop.desktop_linux_browser.Path.home", return_value=home):
             controller.ensure("Firefox", timeout=1)
         profile = popen.call_args.args[0][3]
         self.assertIn("/snap/firefox/common/", profile)
@@ -982,7 +982,7 @@ class IdentityTest(unittest.TestCase):
         import os as os_mod
         import stat as stat_mod
 
-        from desktop_linux_browser import _is_snap_firefox, _profile_dir
+        from conveyor.desktop.desktop_linux_browser import _is_snap_firefox, _profile_dir
 
         root = Path(tempfile.mkdtemp())
         usr_snap = root / "usr" / "bin" / "snap"
@@ -1007,12 +1007,12 @@ class IdentityTest(unittest.TestCase):
                 return os_mod.stat_result((stat_mod.S_IFREG | 0o755, 0, 0, 1, 0, 0, 4096, 0, 0, 0))
             return real_stat(path, *args, **kwargs)
 
-        with mock.patch("desktop_linux_browser.os.path.realpath", side_effect=realpath), \
-                mock.patch("desktop_linux_browser.os.stat", side_effect=stat):
+        with mock.patch("conveyor.desktop.desktop_linux_browser.os.path.realpath", side_effect=realpath), \
+                mock.patch("conveyor.desktop.desktop_linux_browser.os.stat", side_effect=stat):
             self.assertTrue(_is_snap_firefox("/snap/bin/firefox"))
             self.assertEqual(os_mod.path.realpath("/snap/bin/firefox"), "/usr/bin/snap")
             home = Path(tempfile.mkdtemp())
-            with mock.patch("desktop_linux_browser.Path.home", return_value=home), \
+            with mock.patch("conveyor.desktop.desktop_linux_browser.Path.home", return_value=home), \
                     mock.patch.dict(os.environ, {"DISPLAY": ":98"}):
                 profile = _profile_dir("Firefox", "/snap/bin/firefox")
             self.assertEqual(
@@ -1020,7 +1020,7 @@ class IdentityTest(unittest.TestCase):
                 home / "snap" / "firefox" / "common" / "conveyor-_98",
             )
             untrusted = os_mod.stat_result((stat_mod.S_IFREG | 0o755, 0, 0, 1, 1000, 1000, 4096, 0, 0, 0))
-            with mock.patch("desktop_linux_browser.os.stat", return_value=untrusted):
+            with mock.patch("conveyor.desktop.desktop_linux_browser.os.stat", return_value=untrusted):
                 self.assertFalse(_is_snap_firefox("/snap/bin/firefox"))
         self.assertFalse(_is_snap_firefox("/usr/bin/snap"))
 
@@ -1028,8 +1028,8 @@ class IdentityTest(unittest.TestCase):
 class TransportTimeoutTest(unittest.IsolatedAsyncioTestCase):
     async def test_pending_step_times_out_and_cancel_is_reported(self):
         from dataclasses import replace
-        from desktop_computer_loop import ComputerBackendError, HttpComputerBackend
-        from desktop_computer_requests import (
+        from conveyor.desktop.desktop_computer_loop import ComputerBackendError, HttpComputerBackend
+        from conveyor.desktop.desktop_computer_requests import (
             cancel_pending_computer_step,
             create_computer_step,
             create_computer_task,
@@ -1061,7 +1061,7 @@ class BrowserBoundaryTest(unittest.TestCase):
     def test_linux_nonbrowser_targets_never_reach_the_installed_app_launcher(self):
         with tempfile.TemporaryDirectory() as temp:
             transport = LocalCuaTransport("cua-driver", settings=_settings(Path(temp)))
-            with mock.patch("desktop_cua.sys.platform", "linux"), \
+            with mock.patch("conveyor.desktop.desktop_cua.sys.platform", "linux"), \
                     mock.patch.object(transport, "_call_tool", side_effect=AssertionError("arbitrary launch")):
                 for target in ("gedit", "Terminal", "Launcher", "Safari", "/tmp/firefox"):
                     self.assertEqual(transport._prepare_target_app({
@@ -1072,7 +1072,7 @@ class BrowserBoundaryTest(unittest.TestCase):
                 }))
 
     def test_completion_requires_the_requested_browser_and_preserves_safari(self):
-        import desktop_computer_loop as loop
+        from conveyor.desktop import desktop_computer_loop as loop
 
         for requested in ("Firefox", "Chrome", "Safari"):
             for active in ("Firefox", "Google Chrome", "Safari"):
@@ -1088,7 +1088,7 @@ class BrowserBoundaryTest(unittest.TestCase):
                 self.assertEqual(reason is None, matches, (requested, active, reason))
 
     def test_explicit_observed_pid_keeps_its_window_binding(self):
-        from desktop_computer_loop import _with_observed_target
+        from conveyor.desktop.desktop_computer_loop import _with_observed_target
 
         observed = {"pid": 42, "window_id": 7}
         self.assertEqual(_with_observed_target({"action": "type", "pid": 42}, observed)["window_id"], 7)
@@ -1120,7 +1120,7 @@ if __name__ == "__main__":
 
 class BrowserSubmissionTest(unittest.IsolatedAsyncioTestCase):
     async def test_old_loaded_page_cannot_finish_after_url_edit_until_enter(self):
-        import desktop_computer_loop as loop
+        from conveyor.desktop import desktop_computer_loop as loop
         clock = {"now": 100.0}
         async def sleep(seconds):
             clock["now"] += seconds
@@ -1154,7 +1154,7 @@ class BrowserSubmissionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["summary"], "new page verified")
 
     def test_submission_is_window_bound_and_draft_goals_are_exempt(self):
-        from desktop_computer_loop import _BrowserSubmission
+        from conveyor.desktop.desktop_computer_loop import _BrowserSubmission
         frame = {"active_app": "Firefox", "pid": 4, "window_id": 8}
         gate = _BrowserSubmission("Open https://example.org in Firefox")
         gate.note_success({"action": "type", "text": "https://example.org"}, frame)
@@ -1185,7 +1185,7 @@ class BrowserSubmissionTest(unittest.IsolatedAsyncioTestCase):
 
 class LateNavigationTest(unittest.IsolatedAsyncioTestCase):
     async def test_slow_page_can_settle_after_first_deadline_without_more_input(self):
-        import desktop_computer_loop as loop
+        from conveyor.desktop import desktop_computer_loop as loop
         clock = {"now": 100.0}
         async def sleep(seconds):
             clock["now"] += seconds
@@ -1220,7 +1220,7 @@ class LateNavigationTest(unittest.IsolatedAsyncioTestCase):
 
 class DynamicPageReadinessTest(unittest.IsolatedAsyncioTestCase):
     async def test_changing_loaded_frames_wait_full_budget_but_do_not_fail(self):
-        import desktop_computer_loop as loop
+        from conveyor.desktop import desktop_computer_loop as loop
         clock = {"now": 100.0}
         async def sleep(seconds): clock["now"] += seconds
         calls = []
@@ -1251,7 +1251,7 @@ class DynamicPageReadinessTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls.count("hotkey"), 1)
 
     def test_dynamic_readiness_rejects_loading_missing_images_and_changed_focus(self):
-        import desktop_computer_loop as loop
+        from conveyor.desktop import desktop_computer_loop as loop
         ready = {"screenshot_id": "fresh", "sha256": "a", "active_app": "Firefox",
                  "pid": 4, "window_id": 8, "browser_page_state": "loaded"}
         for bad in (dict(ready, browser_page_state="loading"),
@@ -1271,7 +1271,7 @@ class DynamicPageReadinessTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(gate.loaded_after_deadline(106.0))
 
     def test_cua_driver_socket_extraction_and_invocation(self):
-        from desktop_cua import (
+        from conveyor.desktop.desktop_cua import (
             _extract_driver_socket,
             LocalCuaTransport,
             probe_cua_driver,

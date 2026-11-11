@@ -6,8 +6,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 import handoff_sidecar
-from human_takeover import HumanTakeoverStore, takeover_blocks_automation
-from web_takeover import (
+from conveyor.desktop.human_takeover import HumanTakeoverStore, takeover_blocks_automation
+from conveyor.desktop.web_takeover import (
     WebTakeover,
     allow_transport,
     read_close_request,
@@ -37,11 +37,11 @@ class WebTakeoverTests(unittest.TestCase):
                 return False
 
             with (
-                mock.patch("web_takeover.cancel_pending_computer_steps"),
-                mock.patch("web_takeover.cancel_pending_observe_requests"),
-                mock.patch("web_takeover.has_claimed_computer_steps", claimed),
-                mock.patch("web_takeover.has_claimed_observe_requests", side_effect=observe_claimed),
-                mock.patch("web_takeover.time.sleep"),
+                mock.patch("conveyor.desktop.web_takeover.cancel_pending_computer_steps"),
+                mock.patch("conveyor.desktop.web_takeover.cancel_pending_observe_requests"),
+                mock.patch("conveyor.desktop.web_takeover.has_claimed_computer_steps", claimed),
+                mock.patch("conveyor.desktop.web_takeover.has_claimed_observe_requests", side_effect=observe_claimed),
+                mock.patch("conveyor.desktop.web_takeover.time.sleep"),
             ):
                 status = web.start({"reason": "operator_requested", "ttl_seconds": 300})
 

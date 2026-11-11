@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import agents
-from agents import AgentStore
+from conveyor.agents import agents
+from conveyor.agents.agents import AgentStore
 from config import load_settings
 from runner import CodexRunner
 from runner.types import Job, JobMode

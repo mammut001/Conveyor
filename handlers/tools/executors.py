@@ -258,7 +258,7 @@ async def _observe_tool_stub(_settings: Settings, _arg: str) -> str:
 async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
     """Read-only desktop screenshot observe status (P5.2)."""
     import time
-    from desktop_screenshot import (
+    from conveyor.desktop.desktop_screenshot import (
         helper_configuration_error,
         latest_screenshot_metadata,
         resolve_helper_path,
@@ -267,7 +267,7 @@ async def exec_desktop_screenshot_status(settings: Settings, _arg: str) -> str:
     from nodes.registry import list_nodes
     from nodes.types import NodeStatus, NodeType
 
-    from desktop_observe_requests import list_recent_observe_requests
+    from conveyor.desktop.desktop_observe_requests import list_recent_observe_requests
 
     disclaimer = [
         "This command does not capture a screenshot or upload.",
@@ -363,7 +363,7 @@ def _format_loop_result(settings: Settings, result: dict) -> str:
     
     is_failure = (status != "done") or (summary == "max_steps reached")
     if is_failure:
-        from desktop_computer_requests import get_computer_task
+        from conveyor.desktop.desktop_computer_requests import get_computer_task
         task = get_computer_task(settings, task_id) or {}
         trajectory = task.get("trajectory", []) or []
         
@@ -404,7 +404,7 @@ def _format_loop_result(settings: Settings, result: dict) -> str:
         lines.append(f"摘要: {summary}")
     if result.get("blocked_reason"):
         lines.append(f"停止原因: {result.get('blocked_reason')}")
-    from desktop_computer_requests import safe_screenshot_id
+    from conveyor.desktop.desktop_computer_requests import safe_screenshot_id
 
     shot = safe_screenshot_id(result.get("screenshot_id"))
     if shot:
@@ -413,7 +413,7 @@ def _format_loop_result(settings: Settings, result: dict) -> str:
 
 
 def _computer_app_capability(settings: Settings, app: str) -> str:
-    from desktop_computer_requests import check_app_allowlist_blocklist
+    from conveyor.desktop.desktop_computer_requests import check_app_allowlist_blocklist
 
     name = (app or "").strip()
     if not name:
@@ -435,7 +435,7 @@ def _computer_app_capability(settings: Settings, app: str) -> str:
 
 async def exec_computer_status(settings: Settings, _arg: str) -> str:
     """P5.6 Computer Use status: enabled flag, direct-mode source, Cua probe."""
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         arm_remaining_seconds,
         direct_mode_source,
         get_active_task,
@@ -443,7 +443,7 @@ async def exec_computer_status(settings: Settings, _arg: str) -> str:
         _parse_iso,
         _utc_now,
     )
-    from desktop_cua import probe_cua_driver
+    from conveyor.desktop.desktop_cua import probe_cua_driver
     from nodes.state import get_desktop_runtime, is_desktop_online
     import time
 
@@ -550,12 +550,12 @@ async def exec_computer_status(settings: Settings, _arg: str) -> str:
 
 async def exec_computer_observe(settings: Settings, arg: str) -> str:
     """Trigger one desktop observation (screenshot/state metadata)."""
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         contains_blocked_keyword,
         is_direct_mode_active,
     )
-    from desktop_computer_planner import ScriptedPlanner
-    from desktop_computer_loop import build_backend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_loop import build_backend, run_computer_loop
 
     if not settings.conveyor_computer_use_enabled:
         return "⚠️ Computer Use 未启用 (CONVEYOR_COMPUTER_USE_ENABLED=false)。"
@@ -572,7 +572,7 @@ async def exec_computer_observe(settings: Settings, arg: str) -> str:
     if not result.get("ok"):
         return _format_loop_result(settings, result)
     # Surface the last observation metadata from the trajectory.
-    from desktop_computer_requests import get_computer_task
+    from conveyor.desktop.desktop_computer_requests import get_computer_task
     task = get_computer_task(settings, result["task_id"]) or {}
     last = None
     for entry in task.get("trajectory", []):
@@ -589,7 +589,7 @@ async def exec_computer_observe(settings: Settings, arg: str) -> str:
 
 async def exec_computer_action(settings: Settings, arg: str) -> str:
     """Execute a single desktop action from a JSON action payload."""
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         append_trajectory,
         contains_blocked_keyword,
         create_computer_step,
@@ -600,7 +600,7 @@ async def exec_computer_action(settings: Settings, arg: str) -> str:
         redact_computer_action,
         set_task_status,
     )
-    from desktop_computer_loop import build_backend
+    from conveyor.desktop.desktop_computer_loop import build_backend
 
     if not settings.conveyor_computer_use_enabled:
         return "⚠️ Computer Use 未启用 (CONVEYOR_COMPUTER_USE_ENABLED=false)。"
@@ -647,7 +647,7 @@ async def exec_computer_action(settings: Settings, arg: str) -> str:
 
 def _computer_task_preflight(settings: Settings, arg: str) -> tuple[str | None, str | None]:
     """Validate a task before it is placed in the persistent task store."""
-    from desktop_computer_requests import contains_blocked_keyword, is_direct_mode_active
+    from conveyor.desktop.desktop_computer_requests import contains_blocked_keyword, is_direct_mode_active
 
     if not settings.conveyor_computer_use_enabled:
         return None, "⚠️ Computer Use 未启用 (CONVEYOR_COMPUTER_USE_ENABLED=false)。"
@@ -674,7 +674,7 @@ def prepare_computer_task(
     idempotency_key: str = "",
 ) -> dict:
     """Create a running task record before sending the chat acknowledgement."""
-    from desktop_computer_requests import create_computer_task
+    from conveyor.desktop.desktop_computer_requests import create_computer_task
 
     goal, error = _computer_task_preflight(settings, arg)
     if error:
@@ -704,7 +704,7 @@ def prepare_computer_retry(
     idempotency_key: str = "",
 ) -> dict:
     """Prepare a fresh linked attempt; never replay prior actions."""
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         get_computer_task,
         list_recent_computer_tasks,
         retry_computer_task,
@@ -749,9 +749,9 @@ async def exec_computer_task_for_chat(
 
 async def exec_computer_task(settings: Settings, arg: str, *, task_id: str | None = None) -> str:
     """Run the Codex action loop to complete a desktop goal (hands-free)."""
-    from desktop_computer_planner import CodexPlanner
-    from desktop_computer_loop import build_backend, run_computer_loop
-    from desktop_computer_requests import load_computer_session, set_task_status
+    from conveyor.desktop.desktop_computer_planner import CodexPlanner
+    from conveyor.desktop.desktop_computer_loop import build_backend, run_computer_loop
+    from conveyor.desktop.desktop_computer_requests import load_computer_session, set_task_status
     from handlers.intent import is_desktop_followup
 
     goal, error = _computer_task_preflight(settings, arg)
@@ -767,8 +767,8 @@ async def exec_computer_task(settings: Settings, arg: str, *, task_id: str | Non
         if not prepared.get("ok"):
             return str(prepared.get("message") or prepared.get("error") or "任务创建失败")
         task_id = prepared.get("task_id")
-    from desktop_computer_loop import ComputerBackendError
-    from desktop_x11 import X11ComputerBackend
+    from conveyor.desktop.desktop_computer_loop import ComputerBackendError
+    from conveyor.desktop.desktop_x11 import X11ComputerBackend
     try:
         backend = build_backend(settings, task_id)
     except ComputerBackendError as exc:
@@ -801,7 +801,7 @@ def _remember_desktop_session(
     previous: dict | None,
 ) -> None:
     """Keep the Codex thread for the next short click. A blocked task drops it."""
-    from desktop_computer_requests import clear_computer_session, save_computer_session
+    from conveyor.desktop.desktop_computer_requests import clear_computer_session, save_computer_session
     from handlers.intent import is_desktop_followup
 
     status = str(result.get("status") or "")
@@ -839,7 +839,7 @@ async def exec_computer_retry(settings: Settings, arg: str) -> str:
 
 async def exec_computer_stop(settings: Settings, _arg: str) -> str:
     """Immediately cancel the active Computer Use task."""
-    from desktop_computer_requests import cancel_computer_task, get_active_task
+    from conveyor.desktop.desktop_computer_requests import cancel_computer_task, get_active_task
 
     if not settings.conveyor_computer_use_enabled:
         return "Computer Use 未启用。"
@@ -877,7 +877,7 @@ async def exec_pi_destructive_task(
     start_options: dict = {}
     if channel and chat_id:
         try:
-            from agents import instructions_for_chat, profile_block, workspace_for_chat
+            from conveyor.agents.agents import instructions_for_chat, profile_block, workspace_for_chat
             from channel.types import InboundMessage
             from handlers.session import build_context_prompt
             ws = workspace_for_chat(settings, channel, chat_id)

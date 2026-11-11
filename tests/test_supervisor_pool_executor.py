@@ -14,11 +14,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import agent_supervisor as ags
-import agent_supervisor_pool as pool
-import workers
-from agent_supervisor import ExecutionResult, RoleConfig
-from supervisor_service import _UI_EXPOSED_EXECUTORS
+from conveyor.agents import agent_supervisor as ags
+from conveyor.agents import agent_supervisor_pool as pool
+from conveyor.agents import workers
+from conveyor.agents.agent_supervisor import ExecutionResult, RoleConfig
+from conveyor.agents.supervisor_service import _UI_EXPOSED_EXECUTORS
 
 ANALYST = RoleConfig(name="analyst", executor="pool", tools=["read"])
 IMPLEMENTER = RoleConfig(name="implementer", executor="pool", tools=["read", "write"])
@@ -146,7 +146,7 @@ class PoolExecutorTests(unittest.TestCase):
         self.workers = [_worker("claude-code"), _worker("agy")]
         self.results = {"claude": _result(False, error=QUOTA_ERROR)}
         identities = [{"sha": "before"}, {"sha": "after"}]
-        with patch("agent_supervisor.target_identity", side_effect=identities):
+        with patch("conveyor.agents.agent_supervisor.target_identity", side_effect=identities):
             result = self._run(role=IMPLEMENTER)
 
         self.assertFalse(result.success)
@@ -161,7 +161,7 @@ class PoolExecutorTests(unittest.TestCase):
             "claude": _result(False, error=QUOTA_ERROR),
             "antigravity": _result(True, output="ok"),
         }
-        with patch("agent_supervisor.target_identity", return_value={"sha": "same"}):
+        with patch("conveyor.agents.agent_supervisor.target_identity", return_value={"sha": "same"}):
             result = self._run(role=IMPLEMENTER)
         self.assertTrue(result.success)
         self.assertEqual(self.calls, ["claude", "antigravity"])
@@ -295,14 +295,14 @@ class PoolExecutorTests(unittest.TestCase):
     def test_pi_write_role_does_not_rotate_after_edits(self) -> None:
         self.workers = [_worker("pi"), _worker("agy")]
         self.results = {"pi": _result(False, error=QUOTA_ERROR)}
-        with patch("agent_supervisor.target_identity", side_effect=[{"sha": "a"}, {"sha": "b"}]):
+        with patch("conveyor.agents.agent_supervisor.target_identity", side_effect=[{"sha": "a"}, {"sha": "b"}]):
             write_res = self._run(role=IMPLEMENTER)
         self.assertFalse(write_res.success)
         self.assertEqual(self.calls, ["pi"])
         self.assertNotIn("pi", workers.load_workers_state(self.settings)["cooling"])
 
     def test_cancel_delegates_to_cancel_execution(self) -> None:
-        with patch("agent_supervisor.cancel_execution", return_value=True) as cancel:
+        with patch("conveyor.agents.agent_supervisor.cancel_execution", return_value=True) as cancel:
             ok = asyncio.run(self._executor().cancel("ex-9"))
         self.assertTrue(ok)
         cancel.assert_called_once_with(self.settings, "ex-9")

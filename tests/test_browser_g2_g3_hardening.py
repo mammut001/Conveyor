@@ -12,11 +12,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from browser_g3_form_policy import sensitive_form
-from browser_g3_kill import active, refusal
+from conveyor.browser.browser_g3_form_policy import sensitive_form
+from conveyor.browser.browser_g3_kill import active, refusal
 from handlers.tools.confirm import clear_all_pending, create_pending
-from workflow_browser_g3_store import save, review, advance, state, claim, list_reconciliation, _conn
-from workflow_browser_external_identity import ExternalPolicyDenied
+from conveyor.browser.workflow_browser_g3_store import save, review, advance, state, claim, list_reconciliation, _conn
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied
 
 
 class HardeningTests(unittest.TestCase):
@@ -38,7 +38,7 @@ class HardeningTests(unittest.TestCase):
                     preview=preview, screenshot=b"\x89PNG small test")
 
     def test_missing_and_expired_preview_never_show_bare_tool(self):
-        import approval_inbox
+        from conveyor.channels import approval_inbox
         for expired in (False, True):
             token, digest = self.sample()
             if expired:
@@ -73,7 +73,7 @@ class HardeningTests(unittest.TestCase):
             claim(self.settings, token, "operator", hash_value)
         self.assertEqual(len(list_reconciliation(self.settings)), 1)
         self.assertIn(token, list_reconciliation(self.settings)[0]["token"])
-        from browser_g3_reconciliation import inbox_items
+        from conveyor.browser.browser_g3_reconciliation import inbox_items
         items = inbox_items(self.settings)
         self.assertEqual(items[0]["kind"], "reconciliation")
         self.assertIn("NEVER retry", items[0]["summary"])
@@ -91,10 +91,10 @@ class HardeningTests(unittest.TestCase):
             conn.execute("""UPDATE browser_g3_submits
                 SET state='dispatched',dispatch_owner='123456789-other'
                 WHERE token=?""", (token,))
-        with patch("workflow_browser_g3_recovery.os.kill", return_value=None) as probe:
+        with patch("conveyor.browser.workflow_browser_g3_recovery.os.kill", return_value=None) as probe:
             self.assertEqual(state(self.settings, token), "dispatched")
             probe.assert_called()
-        with patch("workflow_browser_g3_recovery.os.kill", side_effect=ProcessLookupError):
+        with patch("conveyor.browser.workflow_browser_g3_recovery.os.kill", side_effect=ProcessLookupError):
             self.assertEqual(state(self.settings, token), "needs_reconciliation")
 
     def test_form_classifier_ignores_unrelated_footer(self):
@@ -167,20 +167,20 @@ class HardeningTests(unittest.TestCase):
             self.assertIn("unsafe",refusal(self.settings,"browser.read_webpage"))
 
     def test_telegram_screenshot_requires_explicit_opt_in(self):
-        from browser_g3_telegram import send_preview
+        from conveyor.browser.browser_g3_telegram import send_preview
         # The transport opt-in is independent of SQLite, token expiry, and
         # environment flags set by other test jobs.
         token, digest = "a" * 32, "b" * 64
         arg = json.dumps({"token": token, "hash": digest})
         preview = {"hash": digest, "screenshot": b"\x89PNG small test"}
         with patch.dict(os.environ, {"CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT": "0"}, clear=True), \
-             patch("browser_g3_telegram.review", return_value=preview) as review_preview, \
+             patch("conveyor.browser.browser_g3_telegram.review", return_value=preview) as review_preview, \
              patch("urllib.request.urlopen") as urlopen:
             self.assertFalse(send_preview(self.settings, "123", arg))
             review_preview.assert_not_called()
             urlopen.assert_not_called()
         with patch.dict(os.environ, {"CONVEYOR_BROWSER_G3_TELEGRAM_SCREENSHOT": "1"}, clear=True), \
-             patch("browser_g3_telegram.review", return_value=preview) as review_preview, \
+             patch("conveyor.browser.browser_g3_telegram.review", return_value=preview) as review_preview, \
              patch("urllib.request.urlopen", return_value=io.BytesIO(b'{"ok":true}')) as urlopen:
             self.assertTrue(send_preview(self.settings, "123", arg))
             review_preview.assert_called_once_with(self.settings, token)
@@ -196,7 +196,7 @@ class RenderedLinkTextTests(unittest.IsolatedAsyncioTestCase):
         except ImportError:
             if required: self.fail("Chromium required")
             self.skipTest("Playwright not installed")
-        from workflow_browser_g2 import LINKS_JS
+        from conveyor.browser.workflow_browser_g2 import LINKS_JS
         async with async_playwright() as pw:
             browser=await pw.chromium.launch(headless=True)
             try:

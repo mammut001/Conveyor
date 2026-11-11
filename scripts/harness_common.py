@@ -48,7 +48,7 @@ def check_systemd_active(service_name: str) -> CheckResult:
 def _codex_provider_config() -> tuple[str, dict, str | None]:
     """Return (provider_id, provider_table, model) from the Codex CLI config."""
     # provider_config's parser instead of tomllib: the VPS runs Python 3.10.
-    from provider_config import _parse_simple_config
+    from conveyor.core.provider_config import _parse_simple_config
 
     config_path = Path.home() / ".codex" / "config.toml"
     try:
@@ -212,7 +212,7 @@ def check_pi_backend(settings: Settings) -> list[CheckResult]:
     else:
         stored = ""
         try:
-            from console_secrets import path_for, read_secret
+            from conveyor.web.console_secrets import path_for, read_secret
 
             secrets_path = getattr(settings, "secrets_file", None)
             if secrets_path is None and getattr(settings, "codex_memory_root", None) is not None:

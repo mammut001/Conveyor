@@ -42,8 +42,8 @@ os.environ["CONVEYOR_AGENT_SUPERVISOR_ENABLED"] = "true"
 # Coordinator uses the chat tier; "off" keeps it unavailable (no network).
 os.environ["CONVEYOR_CHAT_MODE"] = "off"
 
-import workers  # noqa: E402
-import agent_supervisor as ags  # noqa: E402
+from conveyor.agents import workers  # noqa: E402
+from conveyor.agents import agent_supervisor as ags  # noqa: E402
 from config import Settings  # noqa: E402
 
 POOL_ROLES = ("analyst", "implementer", "reviewer")

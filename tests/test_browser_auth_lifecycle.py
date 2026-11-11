@@ -11,8 +11,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from browser_auth_owner import owner_alive, process_starttime, release
-from browser_auth_sessions import AuthSession, AuthSessionManager
+from conveyor.browser.browser_auth_owner import owner_alive, process_starttime, release
+from conveyor.browser.browser_auth_sessions import AuthSession, AuthSessionManager
 
 
 FLAGS = {
@@ -123,13 +123,13 @@ class G4CloseOwnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(s.directory.exists())
 
     async def test_named_timeout_identifies_stalled_step(self):
-        from browser_auth_timeout import wait_for_step
+        from conveyor.browser.browser_auth_timeout import wait_for_step
         with self.assertRaisesRegex(asyncio.TimeoutError, "g4_timeout:context.route"):
             await wait_for_step(asyncio.Event().wait(), 0.01, "context.route")
 
     async def test_login_timeout_revokes_session_and_returns_safe_status(self):
-        from browser_login_credentials import put
-        from browser_auth_sessions import manager_for
+        from conveyor.browser.browser_login_credentials import put
+        from conveyor.browser.browser_auth_sessions import manager_for
         from personal_tools.browser_login import login
 
         origin = "http://127.0.0.1:8765"

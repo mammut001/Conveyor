@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import AsyncMock,Mock
-from overnight_pipeline import OvernightPipeline
+from conveyor.automation.overnight_pipeline import OvernightPipeline
 
 
 class RetryTests(unittest.IsolatedAsyncioTestCase):

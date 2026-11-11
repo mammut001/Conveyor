@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch
-from overnight_checks import PreviewChecks, Scenario
+from conveyor.automation.overnight_checks import PreviewChecks, Scenario
 
 
 class PreviewCheckTests(unittest.IsolatedAsyncioTestCase):

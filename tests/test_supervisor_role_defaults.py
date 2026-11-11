@@ -21,9 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import agent_supervisor as ags
-import agent_supervisor_pool as pool
-import supervisor_service as svc
+from conveyor.agents import agent_supervisor as ags
+from conveyor.agents import agent_supervisor_pool as pool
+from conveyor.agents import supervisor_service as svc
 
 WORKTREE_ROLES = ("analyst", "implementer", "reviewer")
 

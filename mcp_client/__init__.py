@@ -29,7 +29,7 @@ async def run_mcp_tool(
 ) -> str:
     """Execute an MCP tool."""
     if getattr(settings, "outbound_allowlist", ""):
-        from outbound_draft_cards import is_outbound, _parse
+        from conveyor.channels.outbound_draft_cards import is_outbound, _parse
         if is_outbound(settings, tool_name):
             try:
                 _parse(settings, tool_name, arg)

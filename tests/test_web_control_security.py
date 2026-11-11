@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from handlers.job_queue import JobQueue
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 
 class WebControlSecurityTests(unittest.TestCase):
@@ -30,7 +30,7 @@ class WebControlSecurityTests(unittest.TestCase):
                 "request_id": "obs_test", "status": "pending",
                 "created_at": "2026-01-01T00:00:00Z",
             }}
-            with patch("desktop_observe_requests.create_observe_request", return_value=response) as create:
+            with patch("conveyor.desktop.desktop_observe_requests.create_observe_request", return_value=response) as create:
                 result = control.request_host_screen()
 
             self.assertEqual(result["request"]["request_id"], "obs_test")
@@ -52,12 +52,12 @@ class WebControlSecurityTests(unittest.TestCase):
              "result": {"thumbnail_path": "/private/host.png", "node_id": "mac-node"}},
         ]
         with (
-            patch("desktop_computer_requests.get_active_task", return_value=None),
-            patch("desktop_computer_requests.arm_remaining_seconds", return_value=0),
-            patch("desktop_computer_requests.is_direct_mode_active", return_value=False),
-            patch("desktop_observe_requests.list_recent_observe_requests", return_value=[host_request]),
-            patch("desktop_upload_requests.list_recent_upload_requests", side_effect=[uploads, uploads]),
-            patch("desktop_upload_requests.ensure_upload_request_for_observe"),
+            patch("conveyor.desktop.desktop_computer_requests.get_active_task", return_value=None),
+            patch("conveyor.desktop.desktop_computer_requests.arm_remaining_seconds", return_value=0),
+            patch("conveyor.desktop.desktop_computer_requests.is_direct_mode_active", return_value=False),
+            patch("conveyor.desktop.desktop_observe_requests.list_recent_observe_requests", return_value=[host_request]),
+            patch("conveyor.desktop.desktop_upload_requests.list_recent_upload_requests", side_effect=[uploads, uploads]),
+            patch("conveyor.desktop.desktop_upload_requests.ensure_upload_request_for_observe"),
         ):
             status = control.computer_status()
 

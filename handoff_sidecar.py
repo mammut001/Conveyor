@@ -25,9 +25,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from config import load_runtime_settings
-from human_takeover import HumanTakeoverStore
+from conveyor.desktop.human_takeover import HumanTakeoverStore
 from logging_setup import configure_logging
-from web_takeover import (
+from conveyor.desktop.web_takeover import (
     clear_close_request,
     clear_transport_gate,
     read_close_request,

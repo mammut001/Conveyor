@@ -11,12 +11,12 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-import agents
-import desktop_x11
-from agents import AgentStore
-from desktop_computer_loop import ComputerBackendError, HttpComputerBackend, build_backend, run_computer_loop
-from desktop_computer_planner import CodexPlanner
-from desktop_computer_requests import (
+from conveyor.agents import agents
+from conveyor.desktop import desktop_x11
+from conveyor.agents.agents import AgentStore
+from conveyor.desktop.desktop_computer_loop import ComputerBackendError, HttpComputerBackend, build_backend, run_computer_loop
+from conveyor.desktop.desktop_computer_planner import CodexPlanner
+from conveyor.desktop.desktop_computer_requests import (
     cancel_pending_computer_steps,
     claim_computer_step,
     create_computer_step,
@@ -27,8 +27,8 @@ from desktop_computer_requests import (
     task_scope,
     x11_node_id,
 )
-from desktop_x11 import X11ComputerBackend, X11Desktop, X11Error, hotkey_argument
-from human_takeover import HumanTakeoverStore
+from conveyor.desktop.desktop_x11 import X11ComputerBackend, X11Desktop, X11Error, hotkey_argument
+from conveyor.desktop.human_takeover import HumanTakeoverStore
 
 # 1x1 PNG, enough for the screenshot bookkeeping to read real dimensions.
 PNG = bytes.fromhex(
@@ -148,7 +148,7 @@ class Case(unittest.TestCase):
             mock.patch.object(desktop_x11.subprocess, "run", self.x.run),
             mock.patch.object(desktop_x11.shutil, "which", lambda name: f"/usr/bin/{name}"),
             # The fake display has no /proc entry. Legitimate steps target Firefox.
-            mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox"),
+            mock.patch("conveyor.desktop.desktop_linux_browser.linux_process_app", return_value="Firefox"),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -286,15 +286,15 @@ class DesktopTests(Case):
             hotkey_argument([])
 
     def test_observe_stores_a_screenshot_the_planner_can_open(self) -> None:
-        from desktop_computer_planner import planner_screenshot_path
+        from conveyor.desktop.desktop_computer_planner import planner_screenshot_path
 
-        with mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser.linux_process_app", return_value="Firefox"):
             result = self.desktop().execute({"action": "observe"})
         self.assertTrue(result["result_ok"], result)
         self.assertEqual((result["width"], result["height"], result["active_app"]), (1, 1, "Firefox"))
         self.assertNotIn("window_title", result)
         self.assertEqual((result["window_id"], result["pid"], result["browser_page_state"]), (12345, 4242, "loaded"))
-        from desktop_computer_requests import validate_computer_result
+        from conveyor.desktop.desktop_computer_requests import validate_computer_result
         cleaned = validate_computer_result(result)
         self.assertIsNotNone(cleaned)
         self.assertEqual(cleaned["browser_page_state"], "loaded")
@@ -376,8 +376,8 @@ class LoopTests(Case):
             seen.append({"name": name, "env": dict(controller.env), "kwargs": kwargs})
             return {"ok": True, "name": "Firefox", "pid": 4242, "window_id": 12345}
 
-        with mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox"), \
-                mock.patch("desktop_linux_browser.LinuxBrowserController.ensure", ensure):
+        with mock.patch("conveyor.desktop.desktop_linux_browser.linux_process_app", return_value="Firefox"), \
+                mock.patch("conveyor.desktop.desktop_linux_browser.LinuxBrowserController.ensure", ensure):
             result = self.run_loop([
                 {"action": "observe"},
                 {"action": "done", "summary": "opened"},
@@ -389,7 +389,7 @@ class LoopTests(Case):
         self.assertGreaterEqual(self.x.imports, 1)
 
     def test_unknown_target_is_not_launched(self) -> None:
-        with mock.patch("desktop_linux_browser.subprocess.Popen") as popen:
+        with mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen") as popen:
             result = self.desktop().execute({"action": "observe", "target_app": "Launcher", "url": "http://evil.example"})
         self.assertEqual(result["error"], "target_app_not_found")
         popen.assert_not_called()
@@ -401,7 +401,7 @@ class LoopTests(Case):
             self.assertEqual(kwargs["expected_window"], 888)
             return {"ok": False, "error": "target_identity_conflict"}
 
-        with mock.patch("desktop_linux_browser.LinuxBrowserController.ensure", ensure):
+        with mock.patch("conveyor.desktop.desktop_linux_browser.LinuxBrowserController.ensure", ensure):
             result = self.desktop().execute({
                 "action": "observe", "ensure_browser": True, "target_app": "Firefox",
                 "pid": 999, "window_id": 888, "url": "http://127.0.0.1/secret",
@@ -411,7 +411,7 @@ class LoopTests(Case):
         self.assertEqual(self.x.imports, 0)
 
     def test_minimized_browser_is_reused_and_launcher_gets_no_url(self) -> None:
-        from desktop_linux_browser import LinuxBrowserController
+        from conveyor.desktop.desktop_linux_browser import LinuxBrowserController
 
         scripted = {
             "getdisplaygeometry": "100 100",
@@ -447,10 +447,10 @@ class LoopTests(Case):
         auth.write_text("cookie", encoding="utf-8")
         desktop.env["XAUTHORITY"] = str(auth)
         controller_env = dict(desktop.env)
-        with mock.patch("desktop_linux_browser.subprocess.run", run), \
-                mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox"), \
-                mock.patch("desktop_linux_browser.subprocess.Popen") as popen, \
-                mock.patch("desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.run", run), \
+                mock.patch("conveyor.desktop.desktop_linux_browser.linux_process_app", return_value="Firefox"), \
+                mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen") as popen, \
+                mock.patch("conveyor.desktop.desktop_linux_browser.shutil.which", return_value="/usr/bin/xdotool"):
             focused = LinuxBrowserController(controller_env).ensure("Firefox")
             self.assertEqual(focused["window_id"], 77)
             popen.assert_not_called()
@@ -463,11 +463,11 @@ class LoopTests(Case):
     def test_snap_class_alone_is_not_a_browser(self) -> None:
         self.x.active_title = "spoof"
         desktop = self.desktop()
-        with mock.patch("desktop_linux_browser.linux_process_app", return_value="Unknown"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser.linux_process_app", return_value="Unknown"):
             self.assertIsNone(desktop.active_app())
-        with mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser.linux_process_app", return_value="Firefox"):
             self.assertEqual(desktop.active_app(), "Firefox")
-        with mock.patch("desktop_linux_browser.linux_process_app", return_value="gedit"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser.linux_process_app", return_value="gedit"):
             self.assertEqual(desktop.active_app(), "gedit")
 
     def test_blocked_browser_policy_does_not_request_one(self) -> None:
@@ -514,13 +514,13 @@ class LoopTests(Case):
         aliases = ("gnome-terminal", "konsole", "xterm", "kgx", "kitty", "wezterm", "foot")
 
         def named_terminal(_pid: int) -> str:
-            from desktop_linux_browser import _proc_exe, _terminal_name
+            from conveyor.desktop.desktop_linux_browser import _proc_exe, _terminal_name
 
             return _terminal_name(os.path.basename(_proc_exe(_pid) or "")) or "Unknown"
 
         for alias in aliases:
-            with mock.patch("desktop_linux_browser._proc_exe", return_value=f"/usr/bin/{alias}"), \
-                    mock.patch("desktop_linux_browser.linux_process_app", side_effect=named_terminal):
+            with mock.patch("conveyor.desktop.desktop_linux_browser._proc_exe", return_value=f"/usr/bin/{alias}"), \
+                    mock.patch("conveyor.desktop.desktop_linux_browser.linux_process_app", side_effect=named_terminal):
                 result = desktop.execute({"action": "type", "text": alias})
                 self.assertEqual(result["error"], "blocked_app:Terminal", alias)
                 result = desktop.execute({"action": "hotkey", "keys": ["enter"]})
@@ -531,7 +531,7 @@ class LoopTests(Case):
 
         restricted = replace(self.settings, conveyor_computer_allowed_apps=("Firefox",))
         desktop.settings = restricted
-        with mock.patch("desktop_linux_browser.linux_process_app", return_value="gedit"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser.linux_process_app", return_value="gedit"):
             for action in (
                 {"action": "type", "text": "hi"},
                 {"action": "click", "x": 10, "y": 10},
@@ -541,7 +541,7 @@ class LoopTests(Case):
                 self.assertEqual(result["error"], "app_not_in_allowlist:gedit", action)
         self.assertEqual(self.x.xdotool, [])
 
-        with mock.patch("desktop_linux_browser.linux_process_app", return_value="Unknown"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser.linux_process_app", return_value="Unknown"):
             for action in (
                 {"action": "type", "text": "ls"},
                 {"action": "hotkey", "keys": ["ctrl", "l"]},
@@ -550,7 +550,7 @@ class LoopTests(Case):
                 self.assertEqual(result["error"], "app_identity_unresolved", action)
         self.assertEqual(self.x.xdotool, [])
 
-        with mock.patch("desktop_linux_browser.linux_process_app", return_value="Firefox"):
+        with mock.patch("conveyor.desktop.desktop_linux_browser.linux_process_app", return_value="Firefox"):
             typed = desktop.execute({"action": "type", "text": "ok"})
         self.assertTrue(typed["result_ok"], typed)
         self.assertEqual(self.x.xdotool[-1][:1], ["type"])
@@ -585,7 +585,7 @@ class LoopTests(Case):
             return {"ok": False, "error": "browser_window_not_mapped"}
 
         async def scenario():
-            with mock.patch("desktop_linux_browser.LinuxBrowserController.ensure", ensure), \
+            with mock.patch("conveyor.desktop.desktop_linux_browser.LinuxBrowserController.ensure", ensure), \
                     mock.patch("agent_desktops.request_browser", side_effect=AssertionError("supervisor")):
                 failed = await backend.execute_step(
                     self.settings, task["task_id"], ensure_step,
@@ -613,7 +613,7 @@ class LoopTests(Case):
         )["step_id"]
 
         async def retry():
-            with mock.patch("desktop_linux_browser.LinuxBrowserController.ensure", ensure), \
+            with mock.patch("conveyor.desktop.desktop_linux_browser.LinuxBrowserController.ensure", ensure), \
                     mock.patch("agent_desktops.request_browser", side_effect=AssertionError("supervisor")):
                 return await backend.execute_step(
                     self.settings, task["task_id"], again,

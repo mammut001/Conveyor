@@ -12,9 +12,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import overnight_repair
-from overnight_process import command as real_command
-from overnight_repair import PiRepair
+from conveyor.automation import overnight_repair
+from conveyor.automation.overnight_process import command as real_command
+from conveyor.automation.overnight_repair import PiRepair
 
 
 def git(*args, cwd):

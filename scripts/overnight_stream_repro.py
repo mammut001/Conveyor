@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0,str(Path.cwd()))
-from web_chat import WebChatPort
+from conveyor.web.web_chat import WebChatPort
 
 
 async def main():

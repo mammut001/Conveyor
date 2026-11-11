@@ -16,6 +16,8 @@
 
 </div>
 
+[仓库目录说明](docs/repository-layout.md)
+
 > **架构说明（2026-11）**：下方 README 包含旧版 Codex 路径与界面描述，不能代表当前使用的执行器或部署。请以 [架构总览](docs/architecture-overview.md) 和 [路线图](docs/roadmap.md) 中区分的代码现状与目标为准。截图为本地旧界面，并非新版 Supervisor 的运行证明。
 
 

@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import Mock,AsyncMock,patch
 from tempfile import TemporaryDirectory
-from overnight_delivery import PreviewDelivery, verified_merge_commit
-from overnight_github import GitHubDelivery
+from conveyor.automation.overnight_delivery import PreviewDelivery, verified_merge_commit
+from conveyor.automation.overnight_github import GitHubDelivery
 
 
 class DeliveryTests(unittest.IsolatedAsyncioTestCase):

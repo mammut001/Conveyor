@@ -12,11 +12,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import approval_relay
+from conveyor.channels import approval_relay
 from channel.types import InboundMessage
 from handlers.tools.confirm import clear_all_pending, create_pending, get_pending
 from handlers.tools.runner import execute_confirmed
-from refinement_store import RefinementStore, stable_session_id
+from conveyor.core.refinement_store import RefinementStore, stable_session_id
 from runner.operators.jobs import apply_job
 from runner.types import Job, JobMode
 from runner.worktree import _copy_validated_untracked_files, _create_worktree, _git, _job_worktree_path, _remove_worktree, _validate_reuse_worktree
@@ -139,7 +139,7 @@ class AtomicApplyTests(unittest.TestCase):
 
     def test_finalization_failure_rolls_back_both_file_types(self):
         self._write_patch()
-        from refinement_store import RefinementMutation
+        from conveyor.core.refinement_store import RefinementMutation
 
         original_close = RefinementMutation.close
 
@@ -244,7 +244,7 @@ class RelayFailClosedTests(unittest.TestCase):
     def test_database_io_failure_refuses_execution_and_can_retry(self):
         pending = create_pending("notes.add", "hello", "op", "chat", "telegram")
         self.assertTrue(approval_relay.publish(self.settings, pending, summary="note"))
-        with patch("approval_relay._connect", side_effect=OSError("database unavailable")):
+        with patch("conveyor.channels.approval_relay._connect", side_effect=OSError("database unavailable")):
             with patch("handlers.tools.runner.run_tool", new_callable=AsyncMock) as execute:
                 asyncio.run(execute_confirmed(self.msg, self.port, self.settings, pending.token))
                 execute.assert_not_awaited()

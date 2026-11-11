@@ -16,21 +16,21 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import provider_config
-import workers
-import workers_login
+from conveyor.core import provider_config
+from conveyor.agents import workers
+from conveyor.agents import workers_login
 from config import Settings
 from handlers.job_queue import JobQueue
 from runner.pooled import PooledRunner
 from runner.types import JobMode, JobState
 from web_console import WebConsoleHandler, WebConsoleServer
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 
 def setUpModule() -> None:
     # Never let usage refresh reach a real provider from these tests.
     global _usage_patcher
-    _usage_patcher = patch("worker_usage.fetch_usage", return_value=None)
+    _usage_patcher = patch("conveyor.agents.worker_usage.fetch_usage", return_value=None)
     _usage_patcher.start()
 
 
@@ -476,7 +476,7 @@ class WorkerUnitTests(unittest.TestCase):
             }
 
             # Pi needs some key source (here the legacy DEEPSEEK_API_KEY) to be eligible.
-            with patch("workers.detect_all_workers", return_value=fake_detections), \
+            with patch("conveyor.agents.workers.detect_all_workers", return_value=fake_detections), \
                  patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-test-deepseek"}):
                 # Default order: codex is picked first
                 picked = workers.pick_worker(settings)
@@ -696,7 +696,7 @@ class WorkersLoginUnitTests(unittest.TestCase):
 
             with patch("pty.openpty", return_value=(master_fd, slave_fd)), \
                  patch("subprocess.Popen", return_value=mock_proc), \
-                 patch("workers.detect_worker", return_value={"installed": True, "version": "1.0", "path": "/bin/agy", "auth": "ok"}):
+                 patch("conveyor.agents.workers.detect_worker", return_value={"installed": True, "version": "1.0", "path": "/bin/agy", "auth": "ok"}):
 
                 start_res = workers_login.start_login_session(settings, "agy")
                 session_id = start_res["session"]
@@ -744,7 +744,7 @@ class WorkersLoginUnitTests(unittest.TestCase):
 
             with patch("pty.openpty", return_value=(master_fd, slave_fd)), \
                  patch("subprocess.Popen", return_value=mock_proc), \
-                 patch("workers.detect_worker", return_value={"installed": True, "version": "1.0", "path": "/bin/agy", "auth": "needs_login"}):
+                 patch("conveyor.agents.workers.detect_worker", return_value={"installed": True, "version": "1.0", "path": "/bin/agy", "auth": "needs_login"}):
 
                 start_res = workers_login.start_login_session(settings, "agy")
                 session_id = start_res["session"]
@@ -797,7 +797,7 @@ class WorkersLoginUnitTests(unittest.TestCase):
 
             with patch("pty.openpty", return_value=(master_fd, slave_fd)), \
                  patch("subprocess.Popen", return_value=mock_proc), \
-                 patch("workers.detect_worker", return_value={"installed": True, "version": "1.0", "path": "/bin/agy", "auth": "ok"}):
+                 patch("conveyor.agents.workers.detect_worker", return_value={"installed": True, "version": "1.0", "path": "/bin/agy", "auth": "ok"}):
 
                 start_res = workers_login.start_login_session(settings, "agy")
                 session_id = start_res["session"]
@@ -826,7 +826,7 @@ class WorkersLoginUnitTests(unittest.TestCase):
 
             with patch("pty.openpty", return_value=(master_fd, slave_fd)), \
                  patch("subprocess.Popen", return_value=mock_proc), \
-                 patch("workers.detect_worker", return_value={"installed": True, "version": "1.0", "path": "/bin/agy", "auth": "needs_login"}):
+                 patch("conveyor.agents.workers.detect_worker", return_value={"installed": True, "version": "1.0", "path": "/bin/agy", "auth": "needs_login"}):
 
                 start_res = workers_login.start_login_session(settings, "agy")
                 session_id = start_res["session"]
@@ -936,7 +936,7 @@ class PooledRunnerTests(unittest.TestCase):
             def fake_factory(wid, _s):
                 return backends[wid]
 
-            with patch("workers.detect_all_workers", return_value=fake_detections):
+            with patch("conveyor.agents.workers.detect_all_workers", return_value=fake_detections):
                 runner = PooledRunner(settings, backend_factory=fake_factory)
 
                 async def run():
@@ -972,7 +972,7 @@ class PooledRunnerTests(unittest.TestCase):
             def fake_factory(wid, _s):
                 return backends[wid]
 
-            with patch("workers.detect_all_workers", return_value=fake_detections):
+            with patch("conveyor.agents.workers.detect_all_workers", return_value=fake_detections):
                 runner = PooledRunner(settings, backend_factory=fake_factory)
 
                 async def run():
@@ -1008,7 +1008,7 @@ class PooledRunnerTests(unittest.TestCase):
             def fake_factory(wid, _s):
                 return backends[wid]
 
-            with patch("workers.detect_all_workers", return_value=fake_detections):
+            with patch("conveyor.agents.workers.detect_all_workers", return_value=fake_detections):
                 runner = PooledRunner(settings, backend_factory=fake_factory)
 
                 async def run():
@@ -1065,7 +1065,7 @@ class PooledRunnerTests(unittest.TestCase):
             def fake_factory(wid, _s):
                 return backends[wid]
 
-            with patch("workers.detect_all_workers", return_value=fake_detections):
+            with patch("conveyor.agents.workers.detect_all_workers", return_value=fake_detections):
                 runner = PooledRunner(settings, backend_factory=fake_factory)
                 port = FakePort()
                 msg = _make_msg("fix bug")
@@ -1115,7 +1115,7 @@ class PooledRunnerTests(unittest.TestCase):
             def fake_factory(wid, _s):
                 return backends[wid]
 
-            with patch("workers.detect_all_workers", return_value=fake_detections):
+            with patch("conveyor.agents.workers.detect_all_workers", return_value=fake_detections):
                 runner = PooledRunner(settings, backend_factory=fake_factory)
                 port = FakePort()
                 msg = _make_msg("build app")
@@ -1179,7 +1179,7 @@ def _mock_api_detect_worker(worker_def: dict[str, Any]) -> dict[str, Any]:
 class WebConsoleApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._detect_patcher = patch("workers.detect_worker", side_effect=_mock_api_detect_worker)
+        cls._detect_patcher = patch("conveyor.agents.workers.detect_worker", side_effect=_mock_api_detect_worker)
         cls._detect_patcher.start()
         workers.clear_detection_cache()
 
@@ -1460,7 +1460,7 @@ class WebConsoleApiTests(unittest.TestCase):
             seen["auth"] = req.get_header("Authorization")
             return FakeResponse(b'{"data": [{"id": "deepseek-chat"}, {"id": "deepseek-reasoner"}]}')
 
-        with patch("provider_config.urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("conveyor.core.provider_config.urllib.request.urlopen", side_effect=fake_urlopen):
             status, body = self.request("POST", "/api/config/provider/models", {
                 "base_url": "https://api.deepseek.com/v1/",
                 "env_key": "DEEPSEEK_API_KEY",
@@ -1473,7 +1473,7 @@ class WebConsoleApiTests(unittest.TestCase):
         self.assertNotIn("sk-draft-key-1234", json.dumps(body))
 
         # plain http to a remote host is refused, no upstream call
-        with patch("provider_config.urllib.request.urlopen", side_effect=AssertionError("must not call")):
+        with patch("conveyor.core.provider_config.urllib.request.urlopen", side_effect=AssertionError("must not call")):
             status, body = self.request("POST", "/api/config/provider/models", {"base_url": "http://example.com/v1", "api_key": "typed-key-9999"})
         self.assertEqual(status, 502)
         self.assertEqual(body["code"], "models_fetch_failed")
@@ -1483,7 +1483,7 @@ class WebConsoleApiTests(unittest.TestCase):
         self.assertIn("服务地址", body["error"])
 
     def test_provider_models_stored_key_only_goes_to_saved_provider(self) -> None:
-        import provider_config
+        from conveyor.core import provider_config
         calls: list[Any] = []
 
         class FakeResponse:
@@ -1509,7 +1509,7 @@ class WebConsoleApiTests(unittest.TestCase):
             env_file = Path(raw) / ".env"
             env_file.write_text("DS_API_KEY=stored-secret-key\n")
             with patch.dict(os.environ, {"CONVEYOR_ENV_FILE": str(env_file)}), \
-                 patch("provider_config.urllib.request.urlopen", side_effect=fake_urlopen):
+                 patch("conveyor.core.provider_config.urllib.request.urlopen", side_effect=fake_urlopen):
                 # same URL (case/trailing slash/default port differ) + blank key -> stored key
                 for url in ("https://api.example.com/v1", "https://API.Example.com:443/v1/"):
                     calls.clear()
@@ -1536,7 +1536,7 @@ class WebConsoleApiTests(unittest.TestCase):
                 self.assertEqual(calls, [("https://evil.example.org/v1/models", "Bearer typed-key-9999")])
 
     def test_provider_models_api_key_required_is_400(self) -> None:
-        with patch("provider_config.urllib.request.urlopen", side_effect=AssertionError("no request")):
+        with patch("conveyor.core.provider_config.urllib.request.urlopen", side_effect=AssertionError("no request")):
             status, body = self.request("POST", "/api/config/provider/models", {
                 "base_url": "https://never-saved.example.net/v1", "env_key": "NEVER_SAVED_KEY"})
         self.assertEqual(status, 400)
@@ -1552,7 +1552,7 @@ class WebConsoleApiTests(unittest.TestCase):
                 req.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"error":"invalid key sk-LEAK-SECRET"}')
             )
 
-        with patch("provider_config.urllib.request.urlopen", side_effect=failing):
+        with patch("conveyor.core.provider_config.urllib.request.urlopen", side_effect=failing):
             status, body = self.request("POST", "/api/config/provider/models", {
                 "base_url": "https://api.example.com/v1", "api_key": "sk-draft-key-1234",
             })
@@ -1565,7 +1565,7 @@ class WebConsoleApiTests(unittest.TestCase):
         def broken(req, timeout=None):
             raise OSError("ReadTimeout: secret internal detail sk-LEAK")
 
-        with patch("provider_config.urllib.request.urlopen", side_effect=broken):
+        with patch("conveyor.core.provider_config.urllib.request.urlopen", side_effect=broken):
             status, body = self.request("POST", "/api/config/provider/models", {"base_url": "https://api.example.com/v1", "api_key": "typed-key-9999"})
         self.assertEqual(status, 502)
         self.assertNotIn("LEAK", json.dumps(body))
@@ -1574,8 +1574,8 @@ class WebConsoleApiTests(unittest.TestCase):
     def test_worker_models_fetch_error_hides_stderr(self) -> None:
         workers.clear_models_cache()
         proc = MagicMock(returncode=2, stdout="", stderr="Traceback ... token=sk-LEAK-STDERR")
-        with patch("workers.shutil.which", return_value="/usr/local/bin/cmd"), \
-             patch("workers.subprocess.run", return_value=proc):
+        with patch("conveyor.agents.workers.shutil.which", return_value="/usr/local/bin/cmd"), \
+             patch("conveyor.agents.workers.subprocess.run", return_value=proc):
             status, body = self.request("GET", "/api/workers/cmd/models")
         workers.clear_models_cache()
         self.assertEqual(status, 502)

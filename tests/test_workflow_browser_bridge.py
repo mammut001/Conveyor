@@ -8,9 +8,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from workflow_browser_bridge import FixtureBrowser, execute_fixture_plan
-from workflow_browser_contract import InvalidBrowserPlan, parse_plan
-from workflow_browser_journal import BrowserAttemptJournal, JournalConflict
+from conveyor.browser.workflow_browser_bridge import FixtureBrowser, execute_fixture_plan
+from conveyor.browser.workflow_browser_contract import InvalidBrowserPlan, parse_plan
+from conveyor.browser.workflow_browser_journal import BrowserAttemptJournal, JournalConflict
 
 
 def sample_plan():

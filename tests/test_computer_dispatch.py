@@ -16,10 +16,10 @@ from unittest.mock import AsyncMock, patch
 from channel.types import InboundMessage
 from config import Settings
 from handlers.dispatch import dispatch
-from desktop_computer_requests import save_computer_session
+from conveyor.desktop.desktop_computer_requests import save_computer_session
 from handlers.intent import computer_chat_budget_seconds, computer_chat_route, route_intent
 
-_loop_mod = importlib.import_module("desktop_computer_loop")
+_loop_mod = importlib.import_module("conveyor.desktop.desktop_computer_loop")
 
 _SAFE = "在电脑上打开文件管理器"
 _BLOCKED = "在电脑上打开文件管理器 password"

@@ -3,9 +3,9 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from overnight_guard import check_guard,LeaseLost,LeaseGuard,bind_guard
-from overnight_store import OvernightStore
-from overnight_worker import execute_claim
+from conveyor.automation.overnight_guard import check_guard,LeaseLost,LeaseGuard,bind_guard
+from conveyor.automation.overnight_store import OvernightStore
+from conveyor.automation.overnight_worker import execute_claim
 
 
 class GuardTests(unittest.IsolatedAsyncioTestCase):

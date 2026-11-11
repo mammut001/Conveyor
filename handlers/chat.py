@@ -64,7 +64,7 @@ async def _executor_can_run(settings: "Settings | None") -> bool:
     if settings is None:
         return False
     try:
-        import workers
+        from conveyor.agents import workers
 
         payload = await workers.async_get_workers_payload(settings)
     except Exception:
@@ -298,7 +298,7 @@ _last: dict[str, LastRequest] = {}
 
 
 def chat_key(msg: InboundMessage, settings: "Settings | None" = None) -> str:
-    import agent_context
+    from conveyor.agents import agent_context
     if settings is not None and agent_context.enabled(settings):
         return agent_context.history_key(
             settings, msg.channel, msg.chat_id, msg.operator_id)
@@ -431,7 +431,7 @@ def system_prompt(
 
     # Group chats (or memory flag off): no durable memory in the prompt at all.
     memory_on = bool(getattr(settings, "long_term_memory_enabled", False) or getattr(settings, "memory_v2_enabled", False)) and memory_allowed
-    import agent_memory
+    from conveyor.agents import agent_memory
     notes_on = agent_memory.enabled(settings) and memory_allowed
 
     try:
@@ -815,8 +815,8 @@ async def ask_chat(
     can_search = not evidence and getattr(settings, "web_search_backend", "disabled") != "disabled" and not use_tools
     past = history(key, settings.chat_history_turns, settings=settings)
     if not past:
-        import agent_context
-        import agent_conversations
+        from conveyor.agents import agent_context
+        from conveyor.agents import agent_conversations
         if agent_context.enabled(settings):
             ctx = agent_context.for_request(settings, msg.channel, msg.chat_id, msg.operator_id)
             conversation = agent_conversations.current(settings, msg.channel, msg.chat_id,
@@ -836,7 +836,7 @@ async def ask_chat(
     from personal_tools.long_term_memory import allowed_for as _memory_allowed_for
     memory_allowed = _memory_allowed_for(settings, msg)
 
-    from agents import instructions_for_chat
+    from conveyor.agents.agents import instructions_for_chat
     agent_name, agent_instructions = instructions_for_chat(settings, msg.channel, msg.chat_id)
     from personal_tools.long_term_memory import owner_for_chat as _owner_for_chat
     _memory_owner = _owner_for_chat(settings, msg.operator_id, msg.channel, msg.chat_id)
@@ -845,7 +845,7 @@ async def ask_chat(
     # turn (no short-term history yet) and frozen for the turns after it.
     agent_notes_block = ""
     if memory_allowed:
-        import agent_memory
+        from conveyor.agents import agent_memory
         if agent_memory.enabled(settings):
             agent_notes_block = agent_memory.session_snapshot(settings, key, new_session=not past)
 
@@ -1118,14 +1118,14 @@ async def handle_chat_clear(
 ) -> None:
     """``/chat_clear``: reset conversation history for this chat."""
     reset(chat_key(msg, settings), settings=settings)
-    import agent_context
-    import agent_conversations
+    from conveyor.agents import agent_context
+    from conveyor.agents import agent_conversations
     if agent_context.enabled(settings):
         ctx = agent_context.for_request(settings, msg.channel, msg.chat_id, msg.operator_id)
         conversation = agent_conversations.current(settings, msg.channel, msg.chat_id,
                                                    msg.operator_id, ctx.agent_id)
         if conversation:
-            from transcript_store import get_transcript_store
+            from conveyor.core.transcript_store import get_transcript_store
             from handlers.session import clear_session
             clear_session(settings, msg)
             get_transcript_store(settings).append(

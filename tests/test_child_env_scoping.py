@@ -161,7 +161,7 @@ class ChildEnvScopingTests(unittest.TestCase):
             settings = _make_settings(Path(temp), child_env_scope_provider_keys=True)
             runner = CodexRunner(settings)
 
-            with patch("provider_config.get_provider_config", side_effect=RuntimeError("disk unreadable")):
+            with patch("conveyor.core.provider_config.get_provider_config", side_effect=RuntimeError("disk unreadable")):
                 with self.assertLogs("conveyor.worktree", level="WARNING") as cm:
                     keys = runner._provider_credential_keys()
 
@@ -182,7 +182,7 @@ class NodeCaBundlePassthroughTests(unittest.TestCase):
         self.assertEqual(env.get("NODE_EXTRA_CA_CERTS"), "/etc/ca.pem")
 
     def test_isolated_child_env_keeps_node_extra_ca_certs(self) -> None:
-        from subprocess_env import build_child_env
+        from conveyor.core.subprocess_env import build_child_env
         env = build_child_env({"PATH": "/bin", "NODE_EXTRA_CA_CERTS": "/etc/ca.pem", "STRAY_API_KEY": "x"})
         self.assertEqual(env.get("NODE_EXTRA_CA_CERTS"), "/etc/ca.pem")
         self.assertNotIn("STRAY_API_KEY", env)

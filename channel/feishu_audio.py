@@ -21,7 +21,7 @@ from channel.feishu_ffmpeg_policy import opus_to_ogg_command
 from channel.auth import is_allowed
 from channel.types import InboundMessage
 from handlers.context import is_addressed_to_bot
-from voice_transcription import (
+from conveyor.channels.voice_transcription import (
     VoiceError, enabled as stt_enabled, max_bytes, max_seconds,
     temporary_audio, transcribe_async,
 )

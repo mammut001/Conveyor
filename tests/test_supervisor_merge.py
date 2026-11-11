@@ -31,10 +31,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import agent_supervisor as ags
-import supervisor_goals as goals
-import supervisor_merge as merge_mod
-import supervisor_service as svc
+from conveyor.agents import agent_supervisor as ags
+from conveyor.agents import supervisor_goals as goals
+from conveyor.agents import supervisor_merge as merge_mod
+from conveyor.agents import supervisor_service as svc
 from config import Settings
 
 _ENV_KEYS_TO_CLEAR = (
@@ -755,7 +755,7 @@ class MergeGitHardeningTests(_MergeFixture):
 
 class MergeHttpTests(_MergeFixture):
     def _get(self, path: str, settings: Any = None) -> tuple[int, dict[str, Any]]:
-        from web_supervisor_api import handle_get
+        from conveyor.web.web_supervisor_api import handle_get
 
         handler = _FakeHandler(settings or self.settings)
         handle_get(handler, path, path.strip("/").split("/"), {})
@@ -763,7 +763,7 @@ class MergeHttpTests(_MergeFixture):
         return handler.response
 
     def _post(self, path: str, body: dict[str, Any], settings: Any = None) -> tuple[int, dict[str, Any]]:
-        from web_supervisor_api import handle_post
+        from conveyor.web.web_supervisor_api import handle_post
 
         handler = _FakeHandler(settings or self.settings)
         handle_post(handler, path, path.strip("/").split("/"), body)

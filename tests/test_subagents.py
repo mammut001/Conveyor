@@ -48,7 +48,7 @@ from handlers.tools.confirm import get_pending_for_context
 from handlers.tools.registry import DangerLevel, get_tool
 from handlers.tools.runner import run_tool
 from runner.chat_client import ChatConfig
-from web_chat import WebChatPort
+from conveyor.web.web_chat import WebChatPort
 
 
 @dataclass
@@ -568,7 +568,7 @@ class TestSubagentsSuite(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(subagent_events[-1]["title"], "Web subagent")
 
         # Verify no transcript entry was added by subagent progress
-        from transcript_store import get_transcript_store
+        from conveyor.core.transcript_store import get_transcript_store
         transcript = get_transcript_store(self.settings).get_session(session_id)
         # Should be None since WebChatPort only persists final turns, not subagent progress
         self.assertIsNone(transcript)
@@ -612,7 +612,7 @@ class TestSubagentsSuite(unittest.IsolatedAsyncioTestCase):
 
     def test_features_subagents_system_status(self) -> None:
         from unittest.mock import MagicMock
-        from web_control import WebControl
+        from conveyor.web.web_control import WebControl
 
         def _queue() -> MagicMock:
             # WebControl opens sqlite at queue._db_path(); a bare MagicMock would

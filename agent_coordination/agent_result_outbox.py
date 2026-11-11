@@ -14,8 +14,8 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
-import agent_context
-import agent_security
+from conveyor.agents import agent_context
+from conveyor.agents import agent_security
 
 log = logging.getLogger("agent_result_outbox")
 MAX_ATTEMPTS = 5
@@ -204,8 +204,8 @@ async def consume_once(settings, channel, send):
     row = _claim(settings, channel)
     if row is None:
         return None
-    import egress_taint
-    import agents
+    from conveyor.browser import egress_taint
+    from conveyor.agents import agents
     try:
         if agent_security.killed(settings):
             # Pause without consuming retry budget; keep a resumable lease.

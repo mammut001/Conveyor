@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-import goal_loop
-from goal_loop import (
+from conveyor.agents import goal_loop
+from conveyor.agents.goal_loop import (
     CheckResult, GoalEngine, GoalState, GoalStore, IterationResult,
     build_prompt, handle_goal_command, parse_goal_command, parse_verdict,
 )
@@ -480,7 +480,7 @@ class WebChatRouteTests(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import AsyncMock, patch
         from channel.types import InboundMessage
         from tests.test_pi_backend import _make_settings
-        from web_chat import WebChatPort, run_web_chat
+        from conveyor.web.web_chat import WebChatPort, run_web_chat
         with tempfile.TemporaryDirectory() as root:
             settings = _make_settings(Path(root))
             events = queue.Queue()

@@ -26,7 +26,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from config import Settings  # noqa: E402
-from desktop_cua import _driver_binary, build_driver, probe_cua_driver  # noqa: E402
+from conveyor.desktop.desktop_cua import _driver_binary, build_driver, probe_cua_driver  # noqa: E402
 
 
 def _settings(cmd: str) -> Settings:

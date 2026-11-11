@@ -9,11 +9,11 @@ import os
 import sqlite3
 from pathlib import Path
 
-import agent_context
+from conveyor.agents import agent_context
 
 
 def enabled(settings):
-    from agent_security import killed
+    from conveyor.agents.agent_security import killed
     return bool(not killed(settings) and agent_context.enabled(settings) and
         os.environ.get("CONVEYOR_AGENT_CHANNEL_ROUTING", "").lower()
         in ("1", "true", "yes", "on"))
@@ -71,7 +71,7 @@ def bound(settings, channel, chat_id):
         db.close()
     if row is None:
         return None
-    import agents
+    from conveyor.agents import agents
     agent = agents.AgentStore(settings).get(row["agent_id"])
     return agent["id"] if agent and not agent["archived"] else None
 
@@ -79,7 +79,7 @@ def bound(settings, channel, chat_id):
 def bind(settings, msg, requested):
     if not authorized(settings, msg):
         raise PermissionError("private owner chat required")
-    from agents import AgentStore
+    from conveyor.agents.agents import AgentStore
     store = AgentStore(settings)
     name = str(requested or "").strip()
     if not name:
@@ -110,10 +110,10 @@ def bind(settings, msg, requested):
                     (msg.channel, msg.chat_id, msg.operator_id, agent["id"]))
     finally:
         db.close()
-    import agent_security
+    from conveyor.agents import agent_security
     agent_security.audit(settings, operator=msg.operator_id,
         event="bind", agent_id=agent["id"], reason="owner_selected")
-    import agent_conversations
+    from conveyor.agents import agent_conversations
     agent_conversations.ensure_entry(settings, msg)
     return agent
 
@@ -131,13 +131,13 @@ def _command_parts(msg):
 
 def conversation_card(settings, msg):
     """Describe the actual binding without reading any conversation contents."""
-    import agents
+    from conveyor.agents import agents
     selected = bound(settings, msg.channel, msg.chat_id)
     info = agents.AgentStore(settings).get(selected or "default")
     name = info["name"] if info else "Conveyor"
     entrance = "Telegram" if msg.channel == "telegram" else "飞书"
     lines = [f"[{name}] 当前助手", f"入口：{entrance} 私聊"]
-    import agent_conversations
+    from conveyor.agents import agent_conversations
     conversation = agent_conversations.summary(settings, msg)
     local = (conversation["origin_channel"] == msg.channel
              and conversation["origin_chat_id"] == msg.chat_id)
@@ -162,7 +162,7 @@ async def maybe_command(settings, msg, port):
     if not authorized(settings, msg):
         return True  # silent group/non-owner refusal, no binding
     word, argument = _command_parts(msg)
-    import agent_switcher
+    from conveyor.agents import agent_switcher
     if agent_switcher.available(msg, port) and (word == "/agents" or not argument.strip()):
         await agent_switcher.show(settings, msg, port, "agents" if word == "/agents" else "home")
         return True
@@ -170,7 +170,7 @@ async def maybe_command(settings, msg, port):
         await port.reply(msg, conversation_card(settings, msg))
         return True
     if word == "/agents":
-        import agents
+        from conveyor.agents import agents
         from redaction import truncate
         items = [a for a in agents.AgentStore(settings).list() if not a["archived"]]
         selected_id = bound(settings, msg.channel, msg.chat_id) or "default"
@@ -189,8 +189,8 @@ async def maybe_command(settings, msg, port):
     try:
         selected = bind(settings, msg, argument)
     except (ValueError, PermissionError) as exc:
-        import agent_security
-        import agents
+        from conveyor.agents import agent_security
+        from conveyor.agents import agents
         requested = argument.strip().casefold()
         candidates = [item["id"] for item in agents.AgentStore(settings).list()
                       if item["id"] == requested or item["name"].casefold() == requested]
@@ -244,7 +244,7 @@ def label_port(settings, msg, port):
         return port
     selected = bound(settings, msg.channel, msg.chat_id)
     if selected:
-        import agents
+        from conveyor.agents import agents
         info = agents.AgentStore(settings).get(selected)
         if info:
             return LabeledPort(port, info["name"])

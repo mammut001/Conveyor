@@ -31,7 +31,7 @@ def screenshot_id_from_reply(text: str) -> str | None:
 
 def local_screenshot_file(settings: Any, screenshot_id: str) -> Path | None:
     """PNG for this id inside the screenshot directory, or None."""
-    from desktop_screenshot import resolve_screenshot_dir
+    from conveyor.desktop.desktop_screenshot import resolve_screenshot_dir
 
     found = screenshot_id_from_reply(f"截图: {screenshot_id}")
     if not found or found != screenshot_id:

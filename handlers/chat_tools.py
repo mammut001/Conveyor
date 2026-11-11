@@ -38,25 +38,25 @@ def func_to_tool_name(func_name: str) -> str:
 
 
 def _get_tool_spec(name: str, settings: Settings | None = None) -> Any | None:
-    from agent_security import killed
+    from conveyor.agents.agent_security import killed
     if killed(settings) and (name.startswith("agent.") or name == "main.route_delegate"):
         return None
     if name == "main.route_delegate":
-        from main_router import spec
+        from conveyor.agents.main_router import spec
         return spec(settings)
     if name == "agent.delegate":
         from agent_coordination.agent_delegation import spec
         return spec(settings)
     if name in ("agent.inbox", "agent.reply"):
-        from agent_messaging_v2 import spec
+        from conveyor.agents.agent_messaging_v2 import spec
         return spec(settings, name)
     if name == "agent.message":
-        import named_agents
-        import agent_messaging_v2
+        from conveyor.agents import named_agents
+        from conveyor.agents import agent_messaging_v2
         return (agent_messaging_v2.spec(settings, name) if agent_messaging_v2.enabled(settings)
                 else named_agents.message_spec() if named_agents.enabled(settings) else None)
     if name.startswith("subagent."):
-        import subagents
+        from conveyor.agents import subagents
         return subagents.specs(settings).get(name)
     if name == "agents.parallel":
         from handlers.subagents import get_subagent_tool_spec
@@ -110,21 +110,21 @@ def web_search_configured(settings: Any) -> bool:
 
 def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bool = True) -> bool:
     """Single policy used for both schema exposure and execution."""
-    from agent_security import killed
+    from conveyor.agents.agent_security import killed
     if killed(settings) and (name.startswith("agent.") or name == "main.route_delegate"):
         return False
     if spec is None or name.startswith("desktop."):
         return False
     if name == "browser.login":
-        from browser_login_credentials import enabled as login_enabled
+        from conveyor.browser.browser_login_credentials import enabled as login_enabled
         if not login_enabled():
             return False
     if name == "browser.prepare_submit":
-        from workflow_browser_g3 import enabled as g3_enabled
+        from conveyor.browser.workflow_browser_g3 import enabled as g3_enabled
         if not g3_enabled():
             return False
     if name == "browser.browse_site":
-        from workflow_browser_g2 import enabled as g2_enabled
+        from conveyor.browser.workflow_browser_g2 import enabled as g2_enabled
         if not g2_enabled():
             return False
     if name == "browser.read_webpage":
@@ -145,7 +145,7 @@ def is_exposed(name: str, spec: Any, settings: Any = None, *, memory_allowed: bo
         return False
     if name == "memory.note":
         # Agent notes have their own flag (default: follows the memory flags).
-        import agent_memory
+        from conveyor.agents import agent_memory
         return agent_memory.enabled(settings) and spec.danger == DangerLevel.WRITE_SAFE
     if name.startswith("routine.") and not getattr(settings, "routines_enabled", False):
         return False
@@ -176,11 +176,11 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
     WRITE_SAFE, or WRITE. Excludes DESTRUCTIVE tools, desktop.* tools, and
     network-reaching READ tools unless allowlisted.
     """
-    import agent_context
+    from conveyor.agents import agent_context
     if agent_context.enabled(settings):
         try:
             actor = agent_context.for_request(settings, channel, chat_id, operator_id)
-            from agent_security import killed
+            from conveyor.agents.agent_security import killed
             if killed(settings) and actor.agent_id != "default":
                 return []
         except agent_context.AgentContextDenied:
@@ -195,11 +195,11 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
         candidates.append((name, spec))
     for name, spec in TOOL_REGISTRY.items():
         candidates.append((name, spec))
-    import named_agents
-    from agent_security import killed
+    from conveyor.agents import named_agents
+    from conveyor.agents.agent_security import killed
     if not killed(settings) and named_agents.enabled(settings):
         candidates.append(("agent.message", _get_tool_spec("agent.message", settings)))
-    import agent_messaging_v2
+    from conveyor.agents import agent_messaging_v2
     if agent_messaging_v2.enabled(settings):
         for name in ("agent.inbox", "agent.reply"):
             candidates.append((name, agent_messaging_v2.spec(settings, name)))
@@ -329,7 +329,7 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
                 })
 
     if settings is not None:
-        import subagents
+        from conveyor.agents import subagents
         extra = subagents.schemas(settings)
         if named_agents.enabled(settings):
             extra = [s for s in extra if named_agents.tool_allowed(
@@ -405,7 +405,7 @@ async def _run_memory_note(msg, settings, messages: list[dict], arg: str,
         requested = {}
     if "action" not in requested and isinstance(requested.get("arg"), str):
         # A model that ignored the schema and sent {"arg": "..."}.
-        import agent_memory
+        from conveyor.agents import agent_memory
         try:
             requested = agent_memory.parse_tool_arg(requested["arg"])
         except agent_memory.AgentMemoryError:
@@ -456,7 +456,7 @@ async def run_tool_loop(
     # already carries untrusted content. The per-session counter is durable, so
     # a restart keeps the cadence instead of resetting it.
     if schemas:
-        import agent_memory
+        from conveyor.agents import agent_memory
         if agent_memory.enabled(settings):
             every = agent_memory.nudge_every(settings)
             if every > 0 and str(getattr(msg, "chat_type", "")) != "group":
@@ -555,7 +555,7 @@ async def run_tool_loop(
 
             spec = _get_tool_spec(real_tool_name, settings)
             if (not is_exposed(real_tool_name, spec, settings, memory_allowed=memory_allowed)
-                    or not __import__("named_agents").tool_allowed(
+                    or not __import__("conveyor.agents.named_agents", fromlist=["*"]).tool_allowed(
                         settings, msg.channel, msg.chat_id, real_tool_name,
                         operator_id=msg.operator_id)):
                 messages.append({
@@ -603,7 +603,7 @@ async def run_tool_loop(
                     })
                     continue
                 arg = screened.arg
-            import egress_taint
+            from conveyor.browser import egress_taint
             if (danger in (DangerLevel.WRITE_SAFE, DangerLevel.WRITE, DangerLevel.DESTRUCTIVE)
                     or egress_taint.requires_approval(settings, real_tool_name,
                         operator_id=msg.operator_id, channel=msg.channel, chat_id=msg.chat_id)):
@@ -639,7 +639,7 @@ async def run_tool_loop(
                 tools_called.append(real_tool_name)
                 await _tool_progress(port, msg, placeholder, f"🧩 正在读取：{spec.summary}…")
                 if real_tool_name.startswith("subagent."):
-                    import subagents
+                    from conveyor.agents import subagents
                     raw_res = await subagents.dispatch(settings, real_tool_name, arg,
                                                        msg=msg, port=port, config=config)
                 elif real_tool_name == "agents.parallel":

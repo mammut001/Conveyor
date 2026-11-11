@@ -11,9 +11,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import agent_context as ac
-import agent_mailbox as mailbox
-from agents import AgentStore, chat_id_for
+from conveyor.agents import agent_context as ac
+from conveyor.agents import agent_mailbox as mailbox
+from conveyor.agents.agents import AgentStore, chat_id_for
 from config import Settings
 
 
@@ -254,7 +254,7 @@ class MailboxTests(unittest.TestCase):
 
     def test_taint_on_delivery_without_execution(self):
         first = self._send()
-        with patch("egress_taint.mark_read") as mark:
+        with patch("conveyor.browser.egress_taint.mark_read") as mark:
             with ac.bind(self.ctx_b):
                 leased = mailbox.lease(self.settings, recipient=self.ctx_b,
                                        worker_id="w", now=1001)

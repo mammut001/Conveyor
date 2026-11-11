@@ -12,13 +12,13 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from durable_workflows import WorkflowStore
-from workflow_browser_bridge import (
+from conveyor.automation.durable_workflows import WorkflowStore
+from conveyor.browser.workflow_browser_bridge import (
     FixtureBrowser, execute_workflow_browser_plan,
 )
-from workflow_browser_contract import parse_plan
-from workflow_browser_journal import BrowserAttemptJournal, JournalConflict
-from workflow_browser_playwright import (
+from conveyor.browser.workflow_browser_contract import parse_plan
+from conveyor.browser.workflow_browser_journal import BrowserAttemptJournal, JournalConflict
+from conveyor.browser.workflow_browser_playwright import (
     BrowserPolicyError, FIXTURE_ROOT, LocalPlaywrightBrowser,
     assert_safe_fixture_markup, validate_fixture_origin,
 )
@@ -169,7 +169,7 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_denial_journal_failure_from_exception_requires_reconciliation(self):
         self.transition("begin", "start-browser001")
         browser = FixtureBrowser()
-        from workflow_browser_playwright import BrowserPolicyError
+        from conveyor.browser.workflow_browser_playwright import BrowserPolicyError
         browser.apply = lambda _op: (_ for _ in ()).throw(BrowserPolicyError("origin_denied"))
         with patch.object(self.journal, "record_denial", side_effect=OSError("audit db failed")):
             result = self.execute(browser)

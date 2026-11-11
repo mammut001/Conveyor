@@ -8,8 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
-import agent_context as ac
-from agents import AgentStore, chat_id_for
+from conveyor.agents import agent_context as ac
+from conveyor.agents.agents import AgentStore, chat_id_for
 from channel.types import InboundMessage
 from config import Settings
 from handlers.chat import chat_key
@@ -107,7 +107,7 @@ class AgentContextTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(execute.await_args.kwargs["prompt"], "reviewer task")
 
     def test_fail_closed_missing_invalid_or_archived_identity(self):
-        from named_agents import tool_allowed
+        from conveyor.agents.named_agents import tool_allowed
         for channel, chat_id, operator_id in (
             ("", self.a_chat, "web-console"),
             ("web", "", "web-console"),
@@ -273,7 +273,7 @@ class AgentContextTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"CONVEYOR_AGENT_CONTEXT": "0"}):
             msg = self.msg(self.a_chat)
             self.assertEqual(chat_key(msg, self.settings), f"web:{self.a_chat}")
-            self.assertTrue(__import__("named_agents").tool_allowed(
+            self.assertTrue(__import__("conveyor.agents.named_agents", fromlist=["*"]).tool_allowed(
                 self.settings, "", "", "notes.search"))
 
 

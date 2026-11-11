@@ -23,8 +23,8 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("CONVEYOR_AGENT_SUPERVISOR_ENABLED", "true")
 
 from config import Settings
-import agent_supervisor as ags
-from agent_supervisor import (
+from conveyor.agents import agent_supervisor as ags
+from conveyor.agents.agent_supervisor import (
     CommandCodeExecutor,
     ReviewEnvelopeError,
     RoleConfig,

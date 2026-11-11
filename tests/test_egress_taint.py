@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-import egress_taint
+from conveyor.browser import egress_taint
 from channel.types import InboundMessage
 from handlers.tools.confirm import clear_all_pending, get_pending_for_context
 from handlers.tools.runner import _invoke_tool, run_tool

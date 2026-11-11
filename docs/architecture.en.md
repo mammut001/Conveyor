@@ -7,7 +7,7 @@
 > **Current desktop status**: The P5.0 desktop-stub text below is historical.
 > The current implementation is the P5.6/P5.6.2 Mac-local Cua direct loop:
 > `desktop_agent_server.py` is managed by `conveyor-desktop-agent.service`,
-> while `desktop_computer_loop.py` drives the local `cua-driver`. See
+> while `conveyor/desktop/desktop_computer_loop.py` drives the local `cua-driver`. See
 > `docs/desktop_security.md` and `docs/desktop_capabilities.md` for current behavior.
 
 ---
@@ -1335,7 +1335,7 @@ speaks the Cua protocol.
   `nodes/registry.py` adds `computer_use_active(settings)` as the kill
   switch predicate. `is_stub_environment()` is **not** flipped to
   `False` (the project-level stub master switch stays intact).
-- **Request store**: `desktop_computer_requests.py` at
+- **Request store**: `conveyor/desktop/desktop_computer_requests.py` at
   `CODEX_MEMORY_ROOT/state/desktop_computer_requests.json`, reusing the
   observe/upload pattern (cross-process file lock + atomic
   `.tmp`+`os.replace` write). Supports task/step
@@ -1347,16 +1347,16 @@ speaks the Cua protocol.
   `/desktop/computer/task/step/claim|complete|fail`,
   `/desktop/computer/task/pending`, `/desktop/computer/status`
   (Bearer + `hmac.compare_digest`, bound to `127.0.0.1`).
-- **Mac agent**: `desktop_cua.py` `CuaDriver` (`LocalCuaTransport`
+- **Mac agent**: `conveyor/desktop/desktop_cua.py` `CuaDriver` (`LocalCuaTransport`
   locates the configured local `cua-driver` binary and executes through
   `cua-driver call <tool> <json>`; `FakeCuaTransport` for tests, never
   retains plaintext). `/computer_status` also reads the metadata-only
   `permissions status --json` state; `desktop_agent.py --poll-computer`
   polls the control plane, claims a pending step, runs `build_driver`,
   reports the result back.
-- **VPS loop**: `desktop_computer_planner.py` (`CodexPlanner` drives
+- **VPS loop**: `conveyor/desktop/desktop_computer_planner.py` (`CodexPlanner` drives
   `codex exec --json` with a strict one-action-at-a-time JSON schema;
-  `ScriptedPlanner` for smoke) + `desktop_computer_loop.py`
+  `ScriptedPlanner` for smoke) + `conveyor/desktop/desktop_computer_loop.py`
   (`HttpComputerBackend` only polls the store for completion;
   `FakeComputerBackend` runs `FakeCuaTransport` in-process;
   `run_computer_loop` enforces the action allow-list, blocked-keyword
@@ -1406,7 +1406,7 @@ P5.6.1 hardens the computer-use implementation for safer and more debuggable han
 |---|---|---|
 | **3.2** | **2026-07-08** | **P5.6.1 Direct Computer Use Security Hardening & Optimizations.** Supports AX-first click preference and logs `click_method`; detects `active_app` with allowlist/blocklist app checks; writes structured JSONL trajectory logs and step execution duration (`duration_ms`); outputs concise failure reports; intercepts natural language stop commands on Telegram; adds 6 smoke test cases. See `docs/desktop_security.md §7.5`. |
 | **3.0** | **2026-07-01** | **P5.0 execution nodes (VPS + desktop stub). Adds `nodes/` package, `nodes.status` + `computer.status` deterministic tools, `/nodes` / `/node_status` / `/computer_status` commands, Feishu `node_status_card` / `computer_status_card`, natural-language routing for desktop / Computer Use phrases that previously fell through to Codex, and the `docs/desktop_agent_protocol.md` / `docs/desktop_security.md` design stubs. No real desktop control is implemented in this task; the desktop node is offline regardless of configuration. See section § P5.0 above.** |
-| **3.1** | **2026-07-08** | **P5.6 Direct Computer Use Mode (cua backend, off by default).** NL → `computer.task` → Codex one-action-at-a-time JSON → Mac `desktop_agent` executes real desktop actions via the local `cua-driver`; the VPS only polls a file store, Cua never crosses the network. Adds config flags, capability gating (`CAP_COMPUTER_USE_DIRECT`), request store, control-plane endpoints, `desktop_cua.py`, tools and commands (`/computer_arm` `/computer_task` `/computer_stop` …), NL routing, and a hard safety envelope (action allow-list, blocked-keyword guard, redaction, caps, kill switch). See § P5.6 and `docs/desktop_security.md §7`. |
+| **3.1** | **2026-07-08** | **P5.6 Direct Computer Use Mode (cua backend, off by default).** NL → `computer.task` → Codex one-action-at-a-time JSON → Mac `desktop_agent` executes real desktop actions via the local `cua-driver`; the VPS only polls a file store, Cua never crosses the network. Adds config flags, capability gating (`CAP_COMPUTER_USE_DIRECT`), request store, control-plane endpoints, `conveyor/desktop/desktop_cua.py`, tools and commands (`/computer_arm` `/computer_task` `/computer_stop` …), NL routing, and a hard safety envelope (action allow-list, blocked-keyword guard, redaction, caps, kill switch). See § P5.6 and `docs/desktop_security.md §7`. |
 | 2.1 | 2026-06-11 | Added `CONVEYOR_PROGRESS_MODE` (verbose/compact/quiet); compact mode fixes the Feishu progress chain; section 6.7 + harness + backlog updated. |
 | 2.2 | 2026-06-11 | Added auto VPS deploy (GitHub Actions + deploy_vps.sh). |
 | 2.3 | 2026-06-11 | Deploy hardening (flock/smoke/rollback/.deploy-status.json); added `/deploy_status` command. |

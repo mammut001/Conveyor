@@ -14,8 +14,8 @@ import urllib.parse
 import urllib.request
 
 from config import Settings, load_runtime_settings
-from desktop_screenshot import capture_screenshot_once
-from desktop_cua import build_driver
+from conveyor.desktop.desktop_screenshot import capture_screenshot_once
+from conveyor.desktop.desktop_cua import build_driver
 
 from logging_setup import configure_logging
 
@@ -234,7 +234,7 @@ def generate_thumbnail(
         cmd = ["sips", "-Z", str(dim), str(source_path), "--out", str(dest_path)]
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, check=False,
-                                 env=__import__("subprocess_env").utility_env())
+                                 env=__import__("conveyor.core.subprocess_env", fromlist=["*"]).utility_env())
             if res.returncode == 0 and dest_path.is_file():
                 size = dest_path.stat().st_size
                 if size <= max_bytes:
@@ -257,7 +257,7 @@ def resolve_local_screenshot_source(
     import json
     import hashlib
     from pathlib import Path
-    from desktop_screenshot import resolve_screenshot_dir
+    from conveyor.desktop.desktop_screenshot import resolve_screenshot_dir
 
     if not screenshot_id or not isinstance(screenshot_id, str):
         return None
@@ -407,7 +407,7 @@ def poll_upload_once(settings: Settings) -> None:
             logger.info("upload fail report failed: %s", exc)
         return
 
-    from desktop_screenshot import resolve_screenshot_dir
+    from conveyor.desktop.desktop_screenshot import resolve_screenshot_dir
     screenshot_dir = resolve_screenshot_dir(settings)
 
     thumb_path = screenshot_dir / f"thumb_{upload_id}.png"
@@ -459,7 +459,7 @@ def poll_upload_once(settings: Settings) -> None:
     try:
         import subprocess
         res = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(thumb_path)], capture_output=True, text=True, check=False,
-                             env=__import__("subprocess_env").utility_env())
+                             env=__import__("conveyor.core.subprocess_env", fromlist=["*"]).utility_env())
         if res.returncode == 0:
             for line in res.stdout.splitlines():
                 if "pixelWidth:" in line:

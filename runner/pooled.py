@@ -73,7 +73,7 @@ class PooledRunner(CodexRunner):
             self._active_backend.last_job = value
 
     async def validate(self) -> None:
-        from workers import async_pick_worker
+        from conveyor.agents.workers import async_pick_worker
         worker = await async_pick_worker(self.settings)
         if not worker:
             raise RuntimeError("No eligible worker available in worker pool")
@@ -88,7 +88,7 @@ class PooledRunner(CodexRunner):
         on_progress: ProgressCallback,
         **kwargs: Any,
     ) -> Any:
-        from workers import async_pick_worker, classify_failure, mark_cooling
+        from conveyor.agents.workers import async_pick_worker, classify_failure, mark_cooling
 
         worker = await async_pick_worker(self.settings, mode=mode)
         if not worker:
@@ -146,7 +146,7 @@ class PooledRunner(CodexRunner):
                 raise
 
     async def handle_job_failure(self, job: Any) -> tuple[str, int] | None:
-        from workers import classify_failure, mark_cooling
+        from conveyor.agents.workers import classify_failure, mark_cooling
 
         error_text = f"{getattr(job, 'error', '') or ''} {getattr(job, 'last_event', '') or ''}".strip()
         failure = classify_failure(error_text)
@@ -163,7 +163,7 @@ class PooledRunner(CodexRunner):
         return None
 
     async def peek_next_worker(self) -> dict[str, Any] | None:
-        from workers import async_pick_worker
+        from conveyor.agents.workers import async_pick_worker
         return await async_pick_worker(self.settings)
 
     async def has_job_changes(self, job: Any) -> bool:

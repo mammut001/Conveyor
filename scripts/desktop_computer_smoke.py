@@ -139,7 +139,7 @@ def _test_config_defaults_disabled() -> None:
 
 
 def _test_missing_driver_graceful() -> None:
-    from desktop_cua import build_driver, probe_cua_driver
+    from conveyor.desktop.desktop_cua import build_driver, probe_cua_driver
 
     probe = probe_cua_driver("definitely-not-a-cua-binary-xyz")
     if probe.get("available") is not False:
@@ -164,7 +164,7 @@ def _test_missing_driver_graceful() -> None:
 def _test_local_cli_transport_maps_cua_tools() -> None:
     import json
 
-    from desktop_cua import build_driver
+    from conveyor.desktop.desktop_cua import build_driver
 
     root = Path(tempfile.mkdtemp(prefix="conv_fake_cua_cli_"))
     log_path = root / "calls.jsonl"
@@ -232,7 +232,7 @@ def _test_local_cli_transport_maps_cua_tools() -> None:
 def _test_local_cli_transport_desktop_state_fallback() -> None:
     import json
 
-    from desktop_cua import build_driver
+    from conveyor.desktop.desktop_cua import build_driver
 
     root = Path(tempfile.mkdtemp(prefix="conv_fake_cua_desktop_"))
     log_path = root / "calls.jsonl"
@@ -287,7 +287,7 @@ def _test_local_cli_transport_desktop_state_fallback() -> None:
 
 
 def _test_arm_ttl_enables_direct() -> None:
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         arm_direct_mode,
         disarm_direct_mode,
         is_direct_mode_active,
@@ -308,7 +308,7 @@ def _test_arm_ttl_enables_direct() -> None:
 def _test_expired_arm_blocks() -> None:
     from datetime import datetime as _dt
 
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         arm_direct_mode,
         is_direct_mode_active,
     )
@@ -327,7 +327,7 @@ def _test_expired_arm_blocks() -> None:
 
 
 def _test_always_direct_bypass() -> None:
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         arm_direct_mode,
         direct_mode_source,
         disarm_direct_mode,
@@ -369,7 +369,7 @@ def _test_always_direct_bypass() -> None:
 
 
 def _test_action_schema_allowlist() -> None:
-    from desktop_computer_requests import is_action_allowed
+    from conveyor.desktop.desktop_computer_requests import is_action_allowed
 
     settings = _mk_settings(
         conveyor_computer_allowed_actions=("observe", "click"),
@@ -389,9 +389,9 @@ def _test_action_schema_allowlist() -> None:
 def _test_blocked_keyword_stops_task() -> None:
     import asyncio
 
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
-    from desktop_computer_requests import get_computer_task
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_requests import get_computer_task
 
     settings = _mk_settings(
         conveyor_computer_blocked_keywords=("password",),
@@ -420,7 +420,7 @@ def _test_blocked_keyword_stops_task() -> None:
 
 
 def _test_hard_blocked_keywords_cannot_be_removed() -> None:
-    from desktop_computer_requests import contains_blocked_keyword
+    from conveyor.desktop.desktop_computer_requests import contains_blocked_keyword
 
     settings = _mk_settings(conveyor_computer_blocked_keywords=("password",))
     for phrase, expected in (
@@ -441,7 +441,7 @@ def _test_hard_blocked_keywords_cannot_be_removed() -> None:
 
 
 def _test_login_passwords_can_be_allowed() -> None:
-    from desktop_computer_requests import contains_blocked_keyword
+    from conveyor.desktop.desktop_computer_requests import contains_blocked_keyword
 
     # Case 1: allow_login_passwords=True unblocks password/passcode/密码 but still protects payment
     settings_allow = _mk_settings(conveyor_computer_allow_login_passwords=True)
@@ -476,8 +476,8 @@ def _test_login_passwords_can_be_allowed() -> None:
 def _test_max_steps_stops_task() -> None:
     import asyncio
 
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
 
     settings = _mk_settings()
     planner = ScriptedPlanner([
@@ -507,8 +507,8 @@ def _test_max_steps_stops_task() -> None:
 def _test_stop_check_cancels() -> None:
     import asyncio
 
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
 
     settings = _mk_settings()
     planner = ScriptedPlanner([
@@ -534,9 +534,9 @@ def _test_stop_check_cancels() -> None:
 def _test_fake_backend_run_and_redaction() -> None:
     import asyncio
 
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
-    from desktop_computer_requests import get_computer_task
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_requests import get_computer_task
 
     settings = _mk_settings()
     planner = ScriptedPlanner([
@@ -583,7 +583,7 @@ def _test_fake_backend_run_and_redaction() -> None:
 
 
 def _test_claim_action_redaction_boundary() -> None:
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         create_computer_step,
         create_computer_task,
         get_computer_task,
@@ -630,7 +630,7 @@ def _test_claim_action_redaction_boundary() -> None:
 
 def _test_ax_tokens_do_not_persist_in_redacted_data() -> None:
     import json
-    from desktop_computer_requests import redact_computer_action, _clean_element_hints
+    from conveyor.desktop.desktop_computer_requests import redact_computer_action, _clean_element_hints
 
     action = {
         "action": "click", "pid": 2011, "window_id": 15064,
@@ -651,7 +651,7 @@ def _test_ax_tokens_do_not_persist_in_redacted_data() -> None:
 
 
 def _is_fake(backend) -> bool:
-    from desktop_cua import FakeCuaTransport
+    from conveyor.desktop.desktop_cua import FakeCuaTransport
 
     return isinstance(backend.driver.transport, FakeCuaTransport)
 
@@ -662,7 +662,7 @@ def _is_fake(backend) -> bool:
 def _test_stop_command_cancels_active() -> None:
     import asyncio
 
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         cancel_computer_task,
         create_computer_task,
         get_active_task,
@@ -694,7 +694,7 @@ def _test_stop_command_cancels_active() -> None:
 def _test_stale_task_expiry_clears_active() -> None:
     from datetime import datetime, timedelta, timezone
 
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         create_computer_step,
         create_computer_task,
         expire_old_computer,
@@ -727,9 +727,9 @@ def _test_stale_task_expiry_clears_active() -> None:
 def _test_stop_race_preserves_operator_stop() -> None:
     import asyncio
 
-    from desktop_computer_loop import ComputerBackendError, run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
-    from desktop_computer_requests import cancel_computer_task, get_computer_task
+    from conveyor.desktop.desktop_computer_loop import ComputerBackendError, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_requests import cancel_computer_task, get_computer_task
 
     class CancellingBackend:
         async def execute_step(self, settings, task_id, step_id, action):
@@ -751,9 +751,9 @@ def _test_stop_race_preserves_operator_stop() -> None:
 def _test_precreated_stopped_task_does_not_report_not_running() -> None:
     import asyncio
 
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_requests import (
         cancel_computer_task,
         create_computer_task,
         get_computer_task,
@@ -785,7 +785,7 @@ def _test_computer_task_ack_starts_background() -> None:
     import asyncio
 
     from channel import InboundMessage
-    from desktop_computer_requests import arm_direct_mode, get_active_task, set_task_status
+    from conveyor.desktop.desktop_computer_requests import arm_direct_mode, get_active_task, set_task_status
     import handlers.commands as command_handlers
     import handlers.tools.executors as executors
 
@@ -844,7 +844,7 @@ def _test_background_preflight_failure_converges_task() -> None:
     import asyncio
     from dataclasses import replace
 
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         arm_direct_mode,
         get_active_task,
         get_computer_task,
@@ -877,7 +877,7 @@ def _test_background_preflight_failure_converges_task() -> None:
 
 
 def _test_task_idempotency_and_single_active() -> None:
-    from desktop_computer_requests import create_computer_task, get_computer_task
+    from conveyor.desktop.desktop_computer_requests import create_computer_task, get_computer_task
 
     settings = _mk_settings()
     first = create_computer_task(
@@ -907,7 +907,7 @@ def _test_task_idempotency_and_single_active() -> None:
 
 
 def _test_retry_creates_fresh_linked_attempt() -> None:
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         append_trajectory,
         create_computer_task,
         retry_computer_task,
@@ -1001,8 +1001,8 @@ def _test_cua_status_fields() -> None:
 def _test_trajectory_jsonl_writing_and_redaction() -> None:
     import asyncio
     import json
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
     
     settings = _mk_settings()
     planner = ScriptedPlanner([
@@ -1043,8 +1043,8 @@ def _test_trajectory_jsonl_writing_and_redaction() -> None:
 
 def _test_failure_report_concise() -> None:
     import asyncio
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
     from handlers.tools.executors import _format_loop_result
     
     settings = _mk_settings()
@@ -1077,7 +1077,7 @@ def _test_failure_report_concise() -> None:
 
 def _test_ax_click_preference_and_fallback() -> None:
     import asyncio
-    from desktop_cua import build_driver
+    from conveyor.desktop.desktop_cua import build_driver
     
     settings = _mk_settings()
     driver = build_driver(settings, fake=True)
@@ -1099,8 +1099,8 @@ def _test_ax_click_preference_and_fallback() -> None:
 
 def _test_app_allowlist_and_blocklist() -> None:
     import asyncio
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
     
     settings = _mk_settings(
         conveyor_computer_blocked_apps=("Keychain Access", "System Settings", "Terminal")
@@ -1142,7 +1142,7 @@ def _test_app_allowlist_and_blocklist() -> None:
 
 def _test_ax_target_app_allowlist_not_frontmost() -> None:
     """AX click with pid uses target app for allowlist, not frontmost."""
-    from desktop_cua import build_driver
+    from conveyor.desktop.desktop_cua import build_driver
 
     settings = _mk_settings(
         conveyor_computer_allowed_apps=("Calculator",),
@@ -1200,7 +1200,7 @@ def _test_ax_target_app_allowlist_not_frontmost() -> None:
 def _test_target_app_activation_metadata() -> None:
     """Mac resolves a running app; Linux refuses generic app discovery."""
     from unittest import mock
-    from desktop_cua import LocalCuaTransport
+    from conveyor.desktop.desktop_cua import LocalCuaTransport
 
     settings = _mk_settings()
     transport = LocalCuaTransport("cua-driver mcp", settings=settings)
@@ -1218,7 +1218,7 @@ def _test_target_app_activation_metadata() -> None:
 
     transport._call_tool = fake_call
     action = {"action": "observe", "target_app": "Calculator"}
-    with mock.patch("desktop_cua.sys.platform", "darwin"):
+    with mock.patch("conveyor.desktop.desktop_cua.sys.platform", "darwin"):
         err = transport._prepare_target_app(action)
     if err or action.get("pid") != 4242:
         _fail("target_app_activation_metadata", f"err={err}, action={action}")
@@ -1227,7 +1227,7 @@ def _test_target_app_activation_metadata() -> None:
         _fail("target_app_activation_metadata", f"calls={calls}")
         return
     calls.clear()
-    with mock.patch("desktop_cua.sys.platform", "linux"):
+    with mock.patch("conveyor.desktop.desktop_cua.sys.platform", "linux"):
         refused = transport._prepare_target_app({"action": "observe", "target_app": "Calculator"})
     if refused != "target_app_not_found" or calls:
         _fail("target_app_activation_metadata", f"Linux boundary: error={refused}, calls={calls}")
@@ -1239,13 +1239,13 @@ def _test_simple_digit_goal_deterministic_path() -> None:
     """Single-digit goals: observe → Clear → digit once → done (no thrash)."""
     import asyncio
 
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import (
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import (
         ScriptedPlanner,
         extract_single_digit_click_goal,
         maybe_simple_digit_action,
     )
-    from desktop_computer_requests import get_computer_task
+    from conveyor.desktop.desktop_computer_requests import get_computer_task
 
     goal = "在当前 Calculator 窗口里点击数字 1，然后完成"
     if extract_single_digit_click_goal(goal) != "1":
@@ -1347,9 +1347,9 @@ def _test_observe_only_goal_never_mutates() -> None:
     """Explicit read-only goals must execute observe -> done without Codex."""
     import asyncio
 
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import is_observe_only_goal
-    from desktop_computer_requests import get_computer_task
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import is_observe_only_goal
+    from conveyor.desktop.desktop_computer_requests import get_computer_task
 
     class MutatingPlanner:
         def __init__(self):
@@ -1393,7 +1393,7 @@ def _test_observe_only_goal_never_mutates() -> None:
 
 def _test_xy_click_blocked_when_app_allowlist_set() -> None:
     """Bare x/y click must fail under app allowlist (no target app proof)."""
-    from desktop_cua import build_driver
+    from conveyor.desktop.desktop_cua import build_driver
 
     settings = _mk_settings(
         conveyor_computer_allowed_apps=("Calculator",),
@@ -1425,15 +1425,15 @@ def _test_xy_click_blocked_when_app_allowlist_set() -> None:
 
 def _test_observe_injects_ax_hints_for_planner() -> None:
     """Observe must return pid/window_id/element_hints so planner can AX-click."""
-    from desktop_computer_planner import CodexPlanner
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_planner import CodexPlanner
+    from conveyor.desktop.desktop_computer_requests import (
         claim_computer_step,
         complete_computer_step,
         create_computer_step,
         create_computer_task,
         validate_computer_result,
     )
-    from desktop_cua import build_driver
+    from conveyor.desktop.desktop_cua import build_driver
 
     settings = _mk_settings(
         conveyor_computer_allowed_apps=("Calculator",),
@@ -1495,9 +1495,9 @@ def _test_observe_skips_allowlist_under_restricted_apps() -> None:
     """Bare observe must work when frontmost is not in allowlist (NL task path)."""
     import asyncio
 
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
-    from desktop_cua import build_driver
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_cua import build_driver
 
     settings = _mk_settings(
         conveyor_computer_allowed_apps=("Calculator",),
@@ -1591,7 +1591,7 @@ def _test_stop_fast_path() -> None:
 
 def _test_result_allows_active_app_click_method() -> None:
     """Successful Cua results with active_app/click_method are accepted."""
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         claim_computer_step,
         complete_computer_step,
         create_computer_step,
@@ -1641,9 +1641,9 @@ def _test_trajectory_records_click_metadata() -> None:
     """Loop logs safe Cua click metadata for /computer_log consumers."""
     import asyncio
 
-    from desktop_computer_loop import run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
-    from desktop_computer_requests import complete_computer_step, get_computer_task
+    from conveyor.desktop.desktop_computer_loop import run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_requests import complete_computer_step, get_computer_task
 
     class MetadataBackend:
         def __init__(self, settings):
@@ -1694,7 +1694,7 @@ def _test_trajectory_records_click_metadata() -> None:
 
 
 def _test_result_rejects_unknown_fields() -> None:
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         claim_computer_step,
         complete_computer_step,
         create_computer_step,
@@ -1732,7 +1732,7 @@ def _test_result_rejects_unknown_fields() -> None:
 def _test_direct_enabled_false_blocks_arm_task_action() -> None:
     import asyncio
 
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         arm_direct_mode,
         disarm_direct_mode,
         is_direct_mode_active,
@@ -1773,7 +1773,7 @@ def _test_direct_enabled_false_blocks_arm_task_action() -> None:
 
 
 def _test_direct_enabled_true_plus_arm() -> None:
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         arm_direct_mode,
         disarm_direct_mode,
         is_direct_mode_active,
@@ -1799,7 +1799,7 @@ def _test_direct_enabled_true_plus_arm() -> None:
 
 
 def _test_always_direct_requires_direct_enabled() -> None:
-    from desktop_computer_requests import (
+    from conveyor.desktop.desktop_computer_requests import (
         disarm_direct_mode,
         is_direct_mode_active,
     )
@@ -1831,7 +1831,7 @@ def _test_command_table_computer_observe_action() -> None:
 
 
 def _test_planner_ax_first_prompt() -> None:
-    from desktop_computer_planner import CodexPlanner
+    from conveyor.desktop.desktop_computer_planner import CodexPlanner
 
     settings = _mk_settings()
     planner = CodexPlanner(settings)
@@ -1869,7 +1869,7 @@ def _test_planner_ax_first_prompt() -> None:
 
 def _test_planner_cancellation_reaps_process() -> None:
     """Cancelling CodexPlanner also terminates and reaps its child process."""
-    from desktop_computer_planner import CodexPlanner
+    from conveyor.desktop.desktop_computer_planner import CodexPlanner
 
     class FakeStdin:
         def write(self, data):
@@ -1904,7 +1904,7 @@ def _test_planner_cancellation_reaps_process() -> None:
             return self.returncode
 
     async def run():
-        import desktop_computer_planner as planner_mod
+        from conveyor.desktop import desktop_computer_planner as planner_mod
 
         proc = FakeProc()
 
@@ -1940,8 +1940,8 @@ def _test_trajectory_permissions_and_redaction() -> None:
     import json
     import stat as statmod
 
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
 
     settings = _mk_settings()
     secret_text = "super-secret-token-xyz"

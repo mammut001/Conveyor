@@ -24,7 +24,7 @@ import asyncio
 
 from channel.types import InboundMessage
 from config import load_settings
-from desktop_observe_requests import (
+from conveyor.desktop.desktop_observe_requests import (
     claim_observe_request,
     complete_observe_request,
     create_observe_request,
@@ -47,7 +47,7 @@ def run_concurrent_create(temp_dir: str, index: int) -> None:
     os.environ["CODEX_MEMORY_ROOT"] = temp_dir
     os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
     from config import load_settings
-    from desktop_observe_requests import create_observe_request
+    from conveyor.desktop.desktop_observe_requests import create_observe_request
     from scripts.desktop_observe_request_smoke import _msg
     settings = load_settings()
     msg = _msg(f"request-{index}")
@@ -58,7 +58,7 @@ def run_claim_worker(temp_dir: str, request_id: str, results_dir: str, worker_id
     os.environ["CODEX_MEMORY_ROOT"] = temp_dir
     os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
     from config import load_settings
-    from desktop_observe_requests import claim_observe_request
+    from conveyor.desktop.desktop_observe_requests import claim_observe_request
     settings = load_settings()
     res = claim_observe_request(settings, request_id, "macbook-payton")
     res_path = Path(results_dir) / f"claim_{worker_id}.json"
@@ -69,7 +69,7 @@ def run_complete_worker(temp_dir: str, request_id: str, result_val: dict, result
     os.environ["CODEX_MEMORY_ROOT"] = temp_dir
     os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
     from config import load_settings
-    from desktop_observe_requests import complete_observe_request
+    from conveyor.desktop.desktop_observe_requests import complete_observe_request
     settings = load_settings()
     res = complete_observe_request(settings, request_id, "macbook-payton", result_val)
     (Path(results_dir) / "complete_result.json").write_text(json.dumps(res))
@@ -79,7 +79,7 @@ def run_fail_worker(temp_dir: str, request_id: str, results_dir: str) -> None:
     os.environ["CODEX_MEMORY_ROOT"] = temp_dir
     os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
     from config import load_settings
-    from desktop_observe_requests import fail_observe_request
+    from conveyor.desktop.desktop_observe_requests import fail_observe_request
     settings = load_settings()
     res = fail_observe_request(settings, request_id, "macbook-payton", "error_code", "error message")
     (Path(results_dir) / "fail_result.json").write_text(json.dumps(res))
@@ -89,7 +89,7 @@ def run_cancel_worker(temp_dir: str, request_id: str, results_dir: str) -> None:
     os.environ["CODEX_MEMORY_ROOT"] = temp_dir
     os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
     from config import load_settings
-    from desktop_observe_requests import cancel_observe_request
+    from conveyor.desktop.desktop_observe_requests import cancel_observe_request
     settings = load_settings()
     res = cancel_observe_request(settings, request_id)
     (Path(results_dir) / "cancel_result.json").write_text(json.dumps(res))
@@ -99,7 +99,7 @@ def run_claim_worker_t5(temp_dir: str, request_id: str, results_dir: str) -> Non
     os.environ["CODEX_MEMORY_ROOT"] = temp_dir
     os.environ["CONVEYOR_DESKTOP_NODE_ENABLED"] = "true"
     from config import load_settings
-    from desktop_observe_requests import claim_observe_request
+    from conveyor.desktop.desktop_observe_requests import claim_observe_request
     settings = load_settings()
     res = claim_observe_request(settings, request_id, "macbook-payton")
     (Path(results_dir) / "claim_result.json").write_text(json.dumps(res))
@@ -215,7 +215,7 @@ def _test_expired_cannot_claim() -> None:
         request_id = created["request"]["request_id"]
         store = load_observe_requests(settings)
         store[request_id]["expires_at"] = "2020-01-01T00:00:00Z"
-        from desktop_observe_requests import save_observe_requests
+        from conveyor.desktop.desktop_observe_requests import save_observe_requests
         save_observe_requests(settings, store)
         claim = claim_observe_request(settings, request_id, "macbook-payton")
         if claim.get("ok"):
@@ -385,7 +385,7 @@ def main() -> int:
 def _test_lock_path_exists() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings(tmp)
-        from desktop_observe_requests import observe_requests_lock_path
+        from conveyor.desktop.desktop_observe_requests import observe_requests_lock_path
         lock_p = observe_requests_lock_path(settings)
         expected = Path(tmp) / "state" / "desktop_observe_requests.lock"
         if lock_p.resolve() != expected.resolve():
@@ -422,7 +422,7 @@ def _test_concurrent_create() -> None:
             _fail("concurrent_create", f"expected 5 requests, got {len(store)}: {store}")
             return
             
-        from desktop_observe_requests import save_observe_requests
+        from conveyor.desktop.desktop_observe_requests import save_observe_requests
         try:
             save_observe_requests(settings, store)
         except Exception as exc:
@@ -680,7 +680,7 @@ def test_p543_auto_thumbnail_flags_and_routing():
     claim_observe_request(settings, obs_id, "macbook-payton")
     complete_observe_request(settings, obs_id, "macbook-payton", _fake_result())
     # reload after complete to get updated status for ensure
-    from desktop_observe_requests import get_observe_request
+    from conveyor.desktop.desktop_observe_requests import get_observe_request
     rec = get_observe_request(settings, obs_id) or rec
 
     msg2 = _msg("meta-only")
@@ -689,7 +689,7 @@ def test_p543_auto_thumbnail_flags_and_routing():
     assert res2["request"].get("auto_upload_thumbnail") is False
     print("✓ 3. metadata-only creation has auto=false")
 
-    from desktop_upload_requests import ensure_upload_request_for_observe, list_recent_upload_requests
+    from conveyor.desktop.desktop_upload_requests import ensure_upload_request_for_observe, list_recent_upload_requests
     e = ensure_upload_request_for_observe(settings, rec, created_by_channel="telegram", created_by_chat_id="c1")
     assert e.get("ok"), f"ensure failed: {e}"
     upl_id = e["request"]["upload_id"]
@@ -726,7 +726,7 @@ def test_p543_auto_thumbnail_flags_and_routing():
     assert "desktop.observe.request" in cap_route.tools
     print("✓ 11. status-only do not trigger capture")
 
-    from desktop_observe_requests import RESULT_FORBIDDEN_FIELDS
+    from conveyor.desktop.desktop_observe_requests import RESULT_FORBIDDEN_FIELDS
     assert "png_bytes" in RESULT_FORBIDDEN_FIELDS and "ocr" in RESULT_FORBIDDEN_FIELDS
     print("✓ 12/13. forbidden fields protect against full/OCR")
 

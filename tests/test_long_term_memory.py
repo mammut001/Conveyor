@@ -751,7 +751,7 @@ class MemoryUiReachableTests(unittest.TestCase):
     def test_system_status_reports_memory_feature(self) -> None:
         import time
         from types import SimpleNamespace
-        from web_control import WebControl
+        from conveyor.web.web_control import WebControl
         with tempfile.TemporaryDirectory() as tmp:
             for flag in (True, False):
                 fake = SimpleNamespace(

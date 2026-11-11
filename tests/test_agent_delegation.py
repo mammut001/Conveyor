@@ -13,12 +13,12 @@ import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
-import agent_context as ac
+from conveyor.agents import agent_context as ac
 from agent_coordination import agent_delegation as delegation
 from agent_coordination import agent_delegation_queue as queue
 from agent_coordination import agent_delegation_worker as worker
-import agent_mailbox as mailbox
-from agents import AgentStore, chat_id_for
+from conveyor.agents import agent_mailbox as mailbox
+from conveyor.agents.agents import AgentStore, chat_id_for
 from channel.types import InboundMessage
 from config import Settings
 from handlers.chat_tools import build_tool_schemas, _get_tool_spec
@@ -123,7 +123,7 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
             ).fetchone()[0]
             self.assertIn("'task','result'", schema)
         # The next (non-migrating) transaction must enforce foreign keys.
-        import agent_mailbox_db
+        from conveyor.agents import agent_mailbox_db
         with agent_mailbox_db.transaction(self.settings) as conn:
             self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
 
@@ -155,7 +155,7 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
             operator_id="web-console", approved=False), "human approval required")
 
     async def test_real_confirmed_tool_enqueues_once_and_egress_is_outbound(self):
-        import egress_taint
+        from conveyor.browser import egress_taint
         from handlers.tools.confirm import create_pending
         from handlers.tools.runner import execute_confirmed
         from unittest.mock import patch
@@ -174,7 +174,7 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
         port = Port()
         pending = create_pending("agent.delegate", data, msg.operator_id,
                                  msg.chat_id, msg.channel)
-        with patch("approval_relay.claim_local", return_value="ok"):
+        with patch("conveyor.channels.approval_relay.claim_local", return_value="ok"):
             self.assertTrue(await execute_confirmed(
                 msg, port, self.settings, pending.token))
         self.assertIn("agent task queued:", port.replies[-1])
@@ -278,7 +278,7 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len([x for x in self.rows() if x["kind"] == "result"]), 1)
         # A simulated crash after sending the reply cannot duplicate it.
         with ac.bind(self.target):
-            from agent_mailbox_db import transaction
+            from conveyor.agents.agent_mailbox_db import transaction
             with transaction(self.settings) as db:
                 db.execute("UPDATE agent_mailbox SET status='leased',"
                            "lease_owner='recovered',lease_expires_at=?,attempts=attempts+1"
@@ -346,7 +346,7 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
         with patch("agent_coordination.agent_delegation_turn.execute", side_effect=running_child), \
              patch("handlers.tools.executors.exec_computer_stop",
                    new_callable=AsyncMock, return_value="stopped"), \
-             patch("job_lanes.runner_for_chat", side_effect=lambda runner, *a: runner), \
+             patch("conveyor.core.job_lanes.runner_for_chat", side_effect=lambda runner, *a: runner), \
              patch.object(importlib.import_module("handlers.dispatch"), "try_resolve_confirmation",
                    new_callable=AsyncMock, return_value=False), \
              patch.object(importlib.import_module("handlers.dispatch"), "run_command",
@@ -391,7 +391,7 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
                 await self._check_cross_channel_stop(channel, operator, "/cancel")
 
     async def test_foreign_keys_on_for_new_and_normal_delegation_transactions(self):
-        import agent_mailbox_db as mailbox_db
+        from conveyor.agents import agent_mailbox_db as mailbox_db
         with mailbox_db.transaction(self.settings) as conn:
             self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
             self.assertIn("'task','result'", conn.execute(

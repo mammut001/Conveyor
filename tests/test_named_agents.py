@@ -14,16 +14,16 @@ from unittest.mock import AsyncMock, patch
 from channel.types import InboundMessage
 from handlers.tools.confirm import create_pending, get_pending
 from handlers.tools.runner import execute_confirmed
-import egress_taint
+from conveyor.browser import egress_taint
 
-from agents import AgentStore, chat_id_for, session_id_for, instructions_for_chat
+from conveyor.agents.agents import AgentStore, chat_id_for, session_id_for, instructions_for_chat
 from handlers.chat_tools import build_tool_schemas
 from handlers.tools.runner import run_tool
 from personal_tools.long_term_memory import owner_for_chat, memory_remember, memory_search
 from personal_tools.routines import routine_list, routine_pause
-from transcript_store import get_transcript_store
-import named_agents
-import routines
+from conveyor.core.transcript_store import get_transcript_store
+from conveyor.agents import named_agents
+from conveyor.automation import routines
 
 
 def settings_for(root):
@@ -182,7 +182,7 @@ class NamedAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_agent_message_respects_private_egress_taint(self):
         import json
         arg = json.dumps({"to": self.b["id"], "text": "Sensitive facts should not leak"})
-        with patch("egress_taint.enabled", return_value=True):
+        with patch("conveyor.browser.egress_taint.enabled", return_value=True):
             egress_taint.mark_read(
                 self.settings, "notes.search", operator_id="web-console",
                 channel="web", chat_id=self.a_chat)

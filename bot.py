@@ -34,7 +34,7 @@ from handlers.tools.runner import cancel_pending, execute_confirmed, parse_tool_
 from logging_setup import configure_logging
 from runner import CodexRunner, create_runtime_runner
 from agent_coordination.agent_result_poller_lifecycle import AgentResultPollingApplication, configure_telegram_poller
-from telegram_navigation import callback_action, legacy_action, navigation_screen
+from conveyor.channels.telegram_navigation import callback_action, legacy_action, navigation_screen
 
 
 configure_logging(
@@ -63,7 +63,7 @@ DATE_ARG_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # ---- Channel-agnostic handler shims ---------------------------------------
 
 def _inbound(update: Update, text: str | None = None) -> InboundMessage:
-    import telegram_topics
+    from conveyor.channels import telegram_topics
     return telegram_topics.contextualize_inbound(
         settings, inbound_from_update(update, text=text)
     )
@@ -149,7 +149,7 @@ async def goal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/goal <objective> | status | stop — unattended iterate-and-verify loop (goal_loop)."""
     if not await _guard(update):
         return
-    import goal_loop
+    from conveyor.agents import goal_loop
     message = update.effective_message
     command = goal_loop.parse_goal_command(message.text if message else "")
     if command is None:
@@ -163,7 +163,7 @@ async def goal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _telegram_goal_driver(inbound: InboundMessage, bot):
-    import goal_loop
+    from conveyor.agents import goal_loop
     from channel.telegram import TelegramChatOutbound
 
     def port_factory(_prompt: str):
@@ -176,7 +176,7 @@ def _telegram_goal_driver(inbound: InboundMessage, bot):
 
 
 def _resume_telegram_goals(application: Application) -> None:
-    import goal_loop
+    from conveyor.agents import goal_loop
 
     def driver_for(state):
         ctx = state.ctx or {}
@@ -546,7 +546,7 @@ async def relay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.answer("Approval relay is disabled.", show_alert=True)
         return
 
-    import approval_relay
+    from conveyor.channels import approval_relay
     data = query.data or ""
     parts = data.split(":")
     if len(parts) != 3 or parts[0] != "relay" or parts[1] not in ("approve", "reject"):
@@ -605,7 +605,7 @@ async def agent_switcher_callback(update: Update, context: ContextTypes.DEFAULT_
     if query is None:
         return
     await query.answer()
-    import agent_switcher
+    from conveyor.agents import agent_switcher
     await agent_switcher.handle(settings, _inbound(update), make_outbound(update), query.data)
 
 
@@ -651,7 +651,7 @@ async def _show_navigation(update: Update, action: str, *, edit: bool = False) -
 async def topics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _guard(update):
         return
-    import telegram_topics
+    from conveyor.channels import telegram_topics
     chat = update.effective_chat
     user = update.effective_user
     msg = update.effective_message
@@ -726,7 +726,7 @@ async def navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from voice_telegram import handle_voice
+    from conveyor.channels.voice_telegram import handle_voice
     await handle_voice(update, context, settings=settings, dispatch_text=_dispatch_text)
 
 
@@ -744,7 +744,7 @@ async def text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if menu_action:
         from agent_coordination import agent_channel_routing
         if agent_channel_routing.authorized(settings, inbound):
-            import agent_switcher
+            from conveyor.agents import agent_switcher
             await agent_switcher.show(settings, inbound, make_outbound(update),
                                       "topics" if menu_action == "sessions" else "agents")
             return
@@ -952,7 +952,7 @@ async def post_init(application: Application) -> None:
     )
     if getattr(settings, "approval_relay_enabled", False):
         try:
-            import approval_relay
+            from conveyor.channels import approval_relay
             from channel.telegram import TelegramChatOutbound
 
             def make_tg_port(chat_id: str):

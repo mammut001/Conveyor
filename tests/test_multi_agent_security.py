@@ -11,15 +11,15 @@ import time
 import unittest
 from unittest.mock import patch
 
-import agent_context as ac
-import agent_mailbox as mailbox
+from conveyor.agents import agent_context as ac
+from conveyor.agents import agent_mailbox as mailbox
 from agent_coordination import agent_delegation as delegation
 from agent_coordination import agent_delegation_worker as worker
 from agent_coordination import agent_channel_routing as channel
-import agent_security as security
-import main_router
-import web_agent_screens as screens
-from agents import AgentStore, WEB_OPERATOR, chat_id_for
+from conveyor.agents import agent_security as security
+from conveyor.agents import main_router
+from conveyor.web import web_agent_screens as screens
+from conveyor.agents.agents import AgentStore, WEB_OPERATOR, chat_id_for
 from config import Settings
 from channel.types import InboundMessage
 from handlers.chat_tools import build_tool_schemas, _get_tool_spec
@@ -82,8 +82,8 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(security.audit_for_agent(self.cfg,self.b["id"],WEB_OPERATOR))
 
     async def test_legacy_transcript_send_uses_shared_rate_and_kill(self):
-        import named_agents
-        from transcript_store import get_transcript_store
+        from conveyor.agents import named_agents
+        from conveyor.core.transcript_store import get_transcript_store
         payload=json.dumps({"to":self.b["id"],"text":"Untrusted ping"})
         source_chat=chat_id_for(self.a["id"])
         with patch.dict(os.environ, {"CONVEYOR_AGENT_MAILBOX":"0",

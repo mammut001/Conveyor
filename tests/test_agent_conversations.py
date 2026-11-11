@@ -8,15 +8,15 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import agent_context as context
+from conveyor.agents import agent_context as context
 from agent_coordination import agent_channel_routing as routing
-import agent_conversations as conversations
-from agents import AgentStore, chat_id_for, session_id_for
+from conveyor.agents import agent_conversations as conversations
+from conveyor.agents.agents import AgentStore, chat_id_for, session_id_for
 from channel.types import InboundMessage
 from config import Settings
 from handlers import chat
 from handlers.session import append_turn, get_recent_turns, session_path
-from transcript_store import get_transcript_store
+from conveyor.core.transcript_store import get_transcript_store
 
 
 class ConversationTests(unittest.IsolatedAsyncioTestCase):
@@ -225,8 +225,8 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
 
     def test_workbench_resolves_the_conversation_scoped_refinement_chain(self):
         from handlers.job_queue import JobQueue
-        from refinement_store import RefinementStore
-        from web_control import WebControl
+        from conveyor.core.refinement_store import RefinementStore
+        from conveyor.web.web_control import WebControl
         target=conversations.summary(self.settings,self.tg)
         msg=InboundMessage(channel='web',operator_id='web-console',
             chat_id=target['transport_chat_id'],message_id=None,text='')

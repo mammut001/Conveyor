@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from provider_config import (
+from conveyor.core.provider_config import (
     get_provider_config,
     get_saved_provider_credentials,
     refresh_provider_env,

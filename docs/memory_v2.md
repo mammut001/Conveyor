@@ -123,7 +123,7 @@ enabled, existing legacy API/search/schema behavior is retained; PUT needs v2.
   `untrusted`（这一轮对话里已经出现过工具结果、引用消息、网页证据、图片或 webhook
   内容时写的）。来源由服务端判断，模型无法自称 `owner`；`untrusted` 的写入不能改动或
   删除主人写的笔记。所有来源的笔记都只作为数据注入。
-- Python 接口（`agent_memory.py`）：`list_notes`、`add_note`、`replace_note`、
+- Python 接口（`conveyor/agents/agent_memory.py`）：`list_notes`、`add_note`、`replace_note`、
   `remove_note`、`snapshot_text`，出错抛 `AgentMemoryError(code, message_zh)`。
 
 ### 聊天工具 memory.note
@@ -197,7 +197,7 @@ low-trust text. No operation removes or modifies original sources.
 
 ## 搜索过去的对话
 
-`transcript_store.py` 在 `job_queue.sqlite3` 中为过去的会话消息提供全文检索：
+`conveyor/core/transcript_store.py` 在 `job_queue.sqlite3` 中为过去的会话消息提供全文检索：
 
 - **索引与同步**：使用 SQLite FTS5 虚拟表 `session_messages_fts (content, session_id UNINDEXED, message_id UNINDEXED)`，通过 `session_messages` 上的 `AFTER INSERT`、`AFTER DELETE`、`AFTER UPDATE` 触发器自动同步；首次初始化时以分批（chunked）且幂等的方式回填既有消息行。所有连接均启用 `PRAGMA secure_delete = ON`，调用 `delete_session()` 时同步清除索引并执行 FTS `optimize` 擦除残留块。
 - **中文与回退（LIKE）**：由于 FTS5 默认 `unicode61` 分词器不会切分中文词语，包含中日韩（CJK）字符的查询以及 SQLite 未编译 FTS5 的环境会自动回退到 `LIKE` 子串与二元分词匹配。

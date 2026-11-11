@@ -9,9 +9,9 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-import agents
-import job_lanes
-from agents import AgentStore
+from conveyor.agents import agents
+from conveyor.core import job_lanes
+from conveyor.agents.agents import AgentStore
 from channel.types import InboundMessage
 from handlers.job_queue import JobQueue, QueueJobState
 from runner import CodexRunner

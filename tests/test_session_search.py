@@ -20,7 +20,7 @@ try:
 except ImportError:
     sys.modules["httpx"] = types.ModuleType("httpx")
 
-import transcript_store
+from conveyor.core import transcript_store
 from config import Settings
 from handlers import chat
 from handlers.chat_tools import build_tool_schemas
@@ -32,7 +32,7 @@ from personal_tools.registry import (
     register_personal_tools,
     requires_personal_confirmation,
 )
-from transcript_store import TranscriptStore, get_transcript_store, session_identity
+from conveyor.core.transcript_store import TranscriptStore, get_transcript_store, session_identity
 
 TOKEN = "s" * 40
 
@@ -398,7 +398,7 @@ class SessionSearchToolAndApiTests(unittest.TestCase):
 
     def test_http_api_session_search_route(self) -> None:
         from web_console import WebConsoleHandler, WebConsoleServer
-        from web_control import WebControl
+        from conveyor.web.web_control import WebControl
 
         sid = session_identity("web", "api-chat", "web-console")
         self.store.append_turn(

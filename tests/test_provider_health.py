@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from provider_health import ProviderHealthStore, classify_provider_error
+from conveyor.core.provider_health import ProviderHealthStore, classify_provider_error
 from runner.provider_guard import guarded_run_codex_attempt
 
 

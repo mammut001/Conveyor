@@ -267,10 +267,10 @@ class Settings:
 
     def __post_init__(self) -> None:
         if self.env_isolation:
-            from subprocess_env import log_startup_check
+            from conveyor.core.subprocess_env import log_startup_check
             log_startup_check(self)
         if self.background_subagents_enabled and self.chat_tools_enabled:
-            import subagents
+            from conveyor.agents import subagents
             subagents.reconcile(self)
 
     web_mobile_ui: bool = False

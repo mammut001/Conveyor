@@ -24,7 +24,7 @@ from channel.types import InboundMessage
 from handlers.job_queue import JobQueue
 from runner.chat_client import ChatError, owner_chat_error_text
 from web_console import WebConsoleHandler, WebConsoleServer, WebOutbound
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 TOKEN = "test-token-0123456789-abcdefghijklmnopqrstuvwxyz"
 PROMPT = "请用一句话说明这台电脑现在是否正常。"
@@ -173,7 +173,7 @@ class TaskProviderFailureTests(unittest.TestCase):
         port.persist_request(msg)
         port.note_provider_failure(msg, "连不上模型服务，请检查「设置 → 模型设置」里的接口地址，或稍后再试。")
 
-        from transcript_store import get_transcript_store
+        from conveyor.core.transcript_store import get_transcript_store
         detail = get_transcript_store(self.settings).get_session("web:web-console:port-failure")
         self.assertEqual([m["role"] for m in detail["messages"]], ["user", "assistant"])
         self.assertEqual(detail["messages"][0]["content"], PROMPT)

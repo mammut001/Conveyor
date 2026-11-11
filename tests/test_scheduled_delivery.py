@@ -108,7 +108,7 @@ class PastReminderTest(unittest.TestCase):
 class RoutineDstTest(unittest.TestCase):
     def test_fall_back_fires_a_fixed_time_job_once(self) -> None:
         from datetime import datetime, timezone
-        from routines import next_fire
+        from conveyor.automation.routines import next_fire
         first = next_fire("30 1 * * *", datetime(2026, 11, 1, 5, 0, tzinfo=timezone.utc), "America/Toronto")
         second = next_fire("30 1 * * *", first, "America/Toronto")
         self.assertEqual(first, datetime(2026, 11, 1, 5, 30, tzinfo=timezone.utc))
@@ -116,13 +116,13 @@ class RoutineDstTest(unittest.TestCase):
 
     def test_spring_forward_runs_a_job_in_the_missing_hour_after_the_jump(self) -> None:
         from datetime import datetime, timezone
-        from routines import next_fire
+        from conveyor.automation.routines import next_fire
         got = next_fire("30 2 * * *", datetime(2026, 3, 8, 5, 0, tzinfo=timezone.utc), "America/Toronto")
         self.assertEqual(got, datetime(2026, 3, 8, 7, 0, tzinfo=timezone.utc))  # 03:00 EDT, not the next day
 
     def test_hourly_jobs_keep_running_through_the_repeated_hour(self) -> None:
         from datetime import datetime, timezone
-        from routines import next_fire
+        from conveyor.automation.routines import next_fire
         t, fires = datetime(2026, 11, 1, 4, 0, tzinfo=timezone.utc), []
         for _ in range(3):
             t = next_fire("0 * * * *", t, "America/Toronto"); fires.append(t.hour)

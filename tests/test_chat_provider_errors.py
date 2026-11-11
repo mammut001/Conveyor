@@ -79,10 +79,10 @@ class ChatTierFailureTests(unittest.TestCase):
                 patch("runner.chat_client.stream_chat", new=failing_stream), \
                 patch.object(chat_handlers, "history", return_value=[]), \
                 patch.object(chat_handlers, "remember"), \
-                patch("agent_context.enabled", return_value=False), \
+                patch("conveyor.agents.agent_context.enabled", return_value=False), \
                 patch("personal_tools.long_term_memory.allowed_for", return_value=False), \
                 patch("personal_tools.long_term_memory.owner_for_chat", return_value=None), \
-                patch("agents.instructions_for_chat", return_value=("", "")):
+                patch("conveyor.agents.agents.instructions_for_chat", return_value=("", "")):
             outcome, checked = asyncio.run(chat_handlers.ask_chat(_msg(), port, settings, question="报错测试一下"))
         self.assertEqual(outcome, "error")
         self.assertIn("500", checked.body)
@@ -125,7 +125,7 @@ class ChatTierFailureTests(unittest.TestCase):
 
 class WebChatProviderErrorTests(unittest.TestCase):
     def test_run_web_chat_emits_failure_bubble_with_raw_detail_and_no_job(self):
-        import web_chat
+        from conveyor.web import web_chat
         from handlers.chat import Checked
 
         events: list[tuple[str, dict]] = []
@@ -138,14 +138,14 @@ class WebChatProviderErrorTests(unittest.TestCase):
         handle_codex_job = AsyncMock()
         with patch("handlers.chat.ask_chat", new=AsyncMock(return_value=("error", checked))), \
                 patch("handlers.jobs.handle_codex_job", new=handle_codex_job), \
-                patch("main_router.maybe_route", new=AsyncMock(return_value=False)), \
+                patch("conveyor.agents.main_router.maybe_route", new=AsyncMock(return_value=False)), \
                 patch("handlers.intent.computer_chat_route", return_value=None), \
                 patch("handlers.chat.routes_to_agent", return_value=False), \
                 patch("handlers.chat.readonly_host_tool", return_value=None), \
                 patch("handlers.tools.runner.try_resolve_confirmation", new=AsyncMock(return_value=False)), \
-                patch("overnight_chat.route", return_value=None), \
+                patch("conveyor.automation.overnight_chat.route", return_value=None), \
                 patch("handlers.intent.project_progress_route", return_value=None), \
-                patch("goal_loop.parse_goal_command", return_value=None):
+                patch("conveyor.agents.goal_loop.parse_goal_command", return_value=None):
             asyncio.run(web_chat.run_web_chat(_msg(), port, SimpleNamespace(), runner, "报错测试一下"))
 
         handle_codex_job.assert_not_awaited()

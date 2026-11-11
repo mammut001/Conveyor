@@ -515,7 +515,7 @@ def desktop_followup_route(settings: object, text: str) -> RouteResult | None:
         return None
     if settings is None or not hasattr(settings, "codex_memory_root"):
         return None
-    from desktop_computer_requests import contains_blocked_keyword, load_computer_session
+    from conveyor.desktop.desktop_computer_requests import contains_blocked_keyword, load_computer_session
 
     body = (text or "").strip()
     if detect_ops_intent(body) is not None:

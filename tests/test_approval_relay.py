@@ -16,8 +16,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import approval_inbox
-import approval_relay
+from conveyor.channels import approval_inbox
+from conveyor.channels import approval_relay
 from channel.types import InboundMessage, OutboundPort
 from handlers.tools.confirm import (
     PendingToolAction,
@@ -27,7 +27,7 @@ from handlers.tools.confirm import (
 )
 from handlers.job_queue import JobQueue
 from web_console import WebConsoleHandler, WebConsoleServer
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 
 class MockOutbound(OutboundPort):

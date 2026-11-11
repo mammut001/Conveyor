@@ -5,7 +5,7 @@ import tempfile
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import subagents
+from conveyor.agents import subagents
 
 
 def main() -> None:

@@ -29,20 +29,20 @@ sys.path.insert(0, str(REPO_ROOT))
 os.environ.setdefault("CONVEYOR_ENV_FILE", str(REPO_ROOT / ".env"))
 
 from config import load_settings
-from desktop_computer_requests import (
+from conveyor.desktop.desktop_computer_requests import (
     cancel_pending_computer_steps,
     claim_computer_step,
     create_computer_step,
     create_computer_task,
     get_computer_task,
 )
-from desktop_observe_requests import (
+from conveyor.desktop.desktop_observe_requests import (
     cancel_pending_observe_requests,
     claim_observe_request,
     save_observe_requests,
 )
-from desktop_screenshot import resolve_screenshot_dir
-from human_takeover import HumanTakeoverStore, takeover_blocks_automation
+from conveyor.desktop.desktop_screenshot import resolve_screenshot_dir
+from conveyor.desktop.human_takeover import HumanTakeoverStore, takeover_blocks_automation
 
 
 def ts() -> str:
@@ -428,8 +428,8 @@ def main() -> int:
     print(f"[{ts()}] Operator harmless GUI action (xdotool mousemove 500 500): rc={rc_xdo}")
 
     # 3. In background, start a computer-loop task that should pause while takeover is open
-    from desktop_computer_loop import FakeComputerBackend, run_computer_loop
-    from desktop_computer_planner import ScriptedPlanner
+    from conveyor.desktop.desktop_computer_loop import FakeComputerBackend, run_computer_loop
+    from conveyor.desktop.desktop_computer_planner import ScriptedPlanner
 
     class PostHandoffRecorderBackend:
         def __init__(self) -> None:

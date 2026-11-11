@@ -10,10 +10,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-import agent_context as ac
-import agent_mailbox as mailbox
-import web_agent_screens as screens
-from agents import AgentStore, WEB_OPERATOR, chat_id_for
+from conveyor.agents import agent_context as ac
+from conveyor.agents import agent_mailbox as mailbox
+from conveyor.web import web_agent_screens as screens
+from conveyor.agents.agents import AgentStore, WEB_OPERATOR, chat_id_for
 from config import Settings
 
 
@@ -98,7 +98,7 @@ class AgentScreenTests(unittest.TestCase):
         self.assertEqual({x["status"] for x in tasks}, {"queued"})
         self.assertNotIn("body", tasks[0])
         self.assertTrue(screens.cancel_task(self.settings, self.b["id"], first["id"]))
-        import agent_security
+        from conveyor.agents import agent_security
         count_before = len([row for row in agent_security.audit_for_agent(
             self.settings, self.b["id"], WEB_OPERATOR)
             if row["reason"] == "task_cancelled"])

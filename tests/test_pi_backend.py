@@ -23,7 +23,7 @@ from runner.pi_agent import (
 from runner.operators import run as run_ops
 from runner.providers import create_agent_backend, create_runtime_runner
 from runner.types import Job, JobMode, JobState
-from web_chat import WebChatPort, run_web_chat
+from conveyor.web.web_chat import WebChatPort, run_web_chat
 
 
 def _base_env(**extra: str) -> dict[str, str]:

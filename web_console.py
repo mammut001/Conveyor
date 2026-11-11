@@ -31,10 +31,10 @@ from handlers.jobs import submit_codex_job
 from logging_setup import configure_logging
 from redaction import redact_text
 from runner import CodexRunner, JobMode, create_runtime_runner
-from agents import AgentError
-from live_screen import LiveScreen, LiveScreenError
-from web_control import WebControl
-from transcript_store import session_identity
+from conveyor.agents.agents import AgentError
+from conveyor.desktop.live_screen import LiveScreen, LiveScreenError
+from conveyor.web.web_control import WebControl
+from conveyor.core.transcript_store import session_identity
 
 logger = logging.getLogger("conveyor.web")
 MAX_BODY_BYTES = 65_536
@@ -101,7 +101,7 @@ class WebOutbound:
         if not user_text.strip():
             return
         try:
-            from transcript_store import get_transcript_store
+            from conveyor.core.transcript_store import get_transcript_store
             get_transcript_store(self.settings).append(
                 self.durable_session_id, "user", user_text, kind="chat",
                 channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id,
@@ -124,7 +124,7 @@ class WebOutbound:
             return
         self._delivered_final = True
         try:
-            from transcript_store import get_transcript_store
+            from conveyor.core.transcript_store import get_transcript_store
             get_transcript_store(self.settings).append(
                 self.durable_session_id, "assistant", text, kind="error",
                 channel=msg.channel, operator_id=msg.operator_id, source_chat_id=msg.chat_id,
@@ -136,7 +136,7 @@ class WebOutbound:
         """Keep a finished task run's request and final answer in the session transcript."""
         if not self.settings or not self.durable_session_id:
             return
-        from transcript_store import get_transcript_store
+        from conveyor.core.transcript_store import get_transcript_store
         store = get_transcript_store(self.settings)
         if self._user_persisted:
             # The request was stored when it was accepted; only the answer is new.
@@ -174,7 +174,7 @@ class WebOutbound:
             clean = text[:-2].strip() if text.endswith(" ▍") else text
             if self.settings:
                 try:
-                    from agent_events import emit_event
+                    from conveyor.agents.agent_events import emit_event
                     emit_event(
                         self.settings,
                         "assistant.delta",
@@ -201,7 +201,7 @@ class WebOutbound:
         self._delivered_final = True
         user_text = self.prompt or msg.text
         try:
-            from transcript_store import get_transcript_store
+            from conveyor.core.transcript_store import get_transcript_store
             store = get_transcript_store(self.settings)
             if self._user_persisted:
                 store.append(
@@ -221,7 +221,7 @@ class WebOutbound:
         except Exception:
             logger.exception("Failed to persist web turn to TranscriptStore")
         try:
-            from agent_events import emit_event
+            from conveyor.agents.agent_events import emit_event
             emit_event(
                 self.settings,
                 "assistant.completed",
@@ -258,13 +258,13 @@ class WebConsoleServer(ThreadingHTTPServer):
         if (__import__("os").environ.get("CONVEYOR_BROWSER_AUTH_SESSIONS") == "1"
                 and getattr(control, "settings", None) is not None
                 and getattr(control.settings, "codex_memory_root", None)):
-            from browser_auth_sessions import manager_for
+            from conveyor.browser.browser_auth_sessions import manager_for
             manager_for(control.settings)
 
     def workflow_store(self) -> Any:
         with self._workflow_store_lock:
             if self._workflow_store is None:
-                from durable_workflows import WorkflowStore
+                from conveyor.automation.durable_workflows import WorkflowStore
                 self._workflow_store = WorkflowStore(self.control.settings)
             return self._workflow_store
 
@@ -275,7 +275,7 @@ class WebConsoleServer(ThreadingHTTPServer):
         An agent with its own desktop gets that display and its own takeover
         scope. Every other agent, and no agent at all, is the host's desktop.
         """
-        import agents
+        from conveyor.agents import agents
 
         settings = getattr(self.control, "settings", None)
         if not agent_id or not agents.enabled(settings):
@@ -307,7 +307,7 @@ class WebConsoleServer(ThreadingHTTPServer):
 
     def server_close(self) -> None:
         try:
-            import supervisor_service
+            from conveyor.agents import supervisor_service
             supervisor_service.stop_server_worker(self)
         except Exception:
             logger.debug("Supervisor worker stop during server_close failed", exc_info=True)
@@ -458,7 +458,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
 
         No agent, or the default one, is the operator's own store.
         """
-        import agents
+        from conveyor.agents import agents
         from personal_tools import long_term_memory as ltm
 
         # Omitted selection is the authenticated console's default agent.
@@ -473,7 +473,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
 
     def _agents_on(self) -> bool:
         """True when agents are enabled; otherwise answer 409."""
-        import agents
+        from conveyor.agents import agents
         if agents.enabled(getattr(self.server.control, "settings", None)):
             return True
         self._feature_off("agents_disabled")
@@ -499,7 +499,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         """
         if parts[:3] != ["api", "memory", "notes"] or len(parts) > 4:
             return False
-        import agent_memory
+        from conveyor.agents import agent_memory
         settings = getattr(self.server.control, "settings", None)
         if settings is None:
             from config import load_runtime_settings
@@ -572,56 +572,56 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self._manifest()
             return
         if path == "/sw.js":
-            from web_push import enabled as pwa_enabled
+            from conveyor.web.web_push import enabled as pwa_enabled
             if not pwa_enabled(getattr(self.server.control, "settings", None)):
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
         if self._is_api_path(path) and not self._require_auth():
             return
         if path == "/api/agent-conversations":
-            from web_agent_conversations_api import get
+            from conveyor.web.web_agent_conversations_api import get
             get(self, parse_qs(parsed.query))
             return
         if path.startswith("/api/agent-screens"):
-            import web_agent_screens_api
+            from conveyor.web import web_agent_screens_api
             if web_agent_screens_api.get(self, path, parse_qs(parsed.query)):
                 return
         if path == "/api/push/config":
-            from web_push import api_get
+            from conveyor.web.web_push import api_get
             api_get(self)
             return
         if path == "/api/subagents":
-            import subagents_api
+            from conveyor.agents import subagents_api
             if subagents_api.get(self, path):
                 return
         if path == "/api/egress":
-            from egress_proxy import status
+            from conveyor.browser.egress_proxy import status
             self._json(HTTPStatus.OK, status(getattr(self.server.control, "settings", None)))
             return
         if path == "/api/secrets":
-            from web_secrets_api import dispatch
+            from conveyor.web.web_secrets_api import dispatch
             if dispatch(self, "GET", path):
                 return
         if path == "/api/hooks" or path.startswith("/api/hooks/"):
-            import event_triggers
+            from conveyor.automation import event_triggers
             if event_triggers.api_get(self, path):
                 return
         query = parse_qs(parsed.query)
         parts = self._segments(path)
         try:
             if path.startswith("/api/browser/"):
-                import browser_g5_api
+                from conveyor.browser import browser_g5_api
                 if browser_g5_api.get(self, path):
                     return
                 if __import__("os").environ.get("CONVEYOR_BROWSER_AUTH_SESSIONS") == "1":
-                    import browser_auth_api
+                    from conveyor.browser import browser_auth_api
                     if browser_auth_api.get(self, path):
                         return
                 if __import__("os").environ.get("CONVEYOR_BROWSER_AUTOFILL_LOGIN") == "1":
-                    import browser_login_api
+                    from conveyor.browser import browser_login_api
                     if browser_login_api.get(self, path):
                         return
-                import browser_approvals_admin
+                from conveyor.browser import browser_approvals_admin
                 if browser_approvals_admin.get(self, path, query):
                     return
             if path == "/api/workflows" or (len(parts) == 3 and parts[:2] == ["api", "workflows"]):
@@ -629,7 +629,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if not getattr(settings, "workflows_enabled", False):
                     self._json(HTTPStatus.CONFLICT, {"error": "workflows are disabled"})
                     return
-                from durable_workflows import WorkflowNotFound
+                from conveyor.automation.durable_workflows import WorkflowNotFound
                 store = self.server.workflow_store()
                 if path == "/api/workflows":
                     self._json(HTTPStatus.OK, {"items": store.list()})
@@ -643,7 +643,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif path == "/api/config/provider":
                 self._json(HTTPStatus.OK, self.server.control.provider_config())
             elif path == "/api/config/provider/models":
-                from provider_config import fetch_provider_models, ProviderModelsError
+                from conveyor.core.provider_config import fetch_provider_models, ProviderModelsError
                 try:
                     models = fetch_provider_models(self.server.control.settings)
                     self._json(HTTPStatus.OK, {"models": models})
@@ -679,7 +679,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if not getattr(settings, "approval_inbox_enabled", False):
                     self._feature_off("approval_inbox_disabled")
                     return
-                import approval_inbox
+                from conveyor.channels import approval_inbox
                 items = approval_inbox.list_items(settings, self.server.control)
                 counts = {
                     "total": len(items),
@@ -720,7 +720,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         return
                 channel = (query.get("channel") or [""])[0].strip() or None
                 include_archived = (query.get("include_archived") or [""])[0].strip().lower() in ("1", "true", "yes")
-                from transcript_store import get_transcript_store
+                from conveyor.core.transcript_store import get_transcript_store
                 results = get_transcript_store(settings).search(
                     raw_q,
                     limit=limit,
@@ -802,7 +802,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if not getattr(settings, "workers_enabled", False):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                     return
-                import workers
+                from conveyor.agents import workers
                 if len(parts) == 2:
                     payload = workers.get_workers_payload(settings)
                     self._json(HTTPStatus.OK, payload)
@@ -828,7 +828,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     if catalog_worker is None:
                         self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
                         return
-                    import workers_login
+                    from conveyor.agents import workers_login
                     try:
                         session_info = workers_login.get_login_session(settings, worker_id, session_id)
                         self._json(HTTPStatus.OK, session_info)
@@ -845,7 +845,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if not getattr(settings, "routines_enabled", False):
                     self._feature_off("routines_disabled")
                     return
-                import routines
+                from conveyor.automation import routines
                 self._json(HTTPStatus.OK, {"routines": routines.list_routines(settings)})
             elif path == "/api/inbox" or path.startswith("/api/inbox"):
                 settings = getattr(self.server.control, "settings", None)
@@ -856,7 +856,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._feature_off("routines_disabled")
                     return
                 limit = int((query.get("limit") or ["50"])[0])
-                import routines
+                from conveyor.automation import routines
                 items, unread = routines.list_inbox(settings, limit=limit)
                 self._json(HTTPStatus.OK, {"items": items, "unread": unread})
             elif path == "/api/takeover/status":
@@ -868,7 +868,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if not session_id:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "session_id is required"})
                     return
-                import supervisor_service as sup_svc
+                from conveyor.agents import supervisor_service as sup_svc
                 if sup_svc.is_supervisor_session_id(session_id):
                     settings = getattr(self.server.control, "settings", None)
                     if settings is None:
@@ -891,7 +891,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         })
                         return
                     session_id = binding["session_id"]
-                from web_chat import build_history
+                from conveyor.web.web_chat import build_history
                 # Unknown (e.g. brand-new, not yet persisted) sessions are simply empty.
                 session = self.server.control.get_session(session_id)
                 self._json(HTTPStatus.OK, {
@@ -905,7 +905,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif path == "/api/teammate/status":
                 self._json(HTTPStatus.OK, self.server.control.teammate_status())
             elif path == "/api/supervisor" or path.startswith("/api/supervisor/"):
-                import web_supervisor_api
+                from conveyor.web import web_supervisor_api
                 web_supervisor_api.handle_get(self, path, parts, query)
             elif path == "/api/agents":
                 self._json(HTTPStatus.OK, self.server.control.list_agents())
@@ -997,7 +997,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if settings is None:
             settings = load_runtime_settings()
 
-        import routines
+        from conveyor.automation import routines
 
         # 1. Flag off or unknown hook_id -> 404 {"error": "not found"} (drain body).
         webhooks_on = bool(getattr(settings, "webhooks_enabled", False))
@@ -1143,7 +1143,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
 
         # Webhook receiver: POST /hooks/<hook_id> (handled before /api/ auth check)
         if len(parts) == 2 and parts[0] == "hooks":
-            import event_triggers
+            from conveyor.automation import event_triggers
             if event_triggers.enabled(getattr(self.server.control, "settings", None)):
                 event_triggers.receive(self, parts[1])
             else:
@@ -1154,7 +1154,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/agents/kill":
-            import agent_security_controls
+            from conveyor.agents import agent_security_controls
             if not agent_security_controls.available(self.server.control.settings):
                 self._drain_body()
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -1167,18 +1167,18 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/agent-conversations/new":
             body = self._body()
             if body is not None:
-                from web_agent_conversations_api import post
+                from conveyor.web.web_agent_conversations_api import post
                 post(self, body)
             return
         if parsed.path == "/api/agent-screens/cancel":
             body = self._body()
             if body is not None:
-                import web_agent_screens_api
+                from conveyor.web import web_agent_screens_api
                 web_agent_screens_api.post(self, parsed.path, body)
             return
 
         if parsed.path == "/api/hooks" or parsed.path.startswith("/api/hooks/"):
-            import event_triggers
+            from conveyor.automation import event_triggers
             if event_triggers.api_post(self, parsed.path):
                 return
 
@@ -1188,41 +1188,41 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/chat/voice":
-            from voice_web import handle_voice_post
+            from conveyor.channels.voice_web import handle_voice_post
             handle_voice_post(self)
             return
         body = self._body()
         if body is None:
             return
         if parsed.path == "/api/push/subscribe":
-            from web_push import api_post
+            from conveyor.web.web_push import api_post
             api_post(self, body)
             return
         if parts[:2] == ["api", "subagents"]:
-            import subagents_api
+            from conveyor.agents import subagents_api
             if subagents_api.post(self, parts):
                 return
         if parsed.path == "/api/secrets":
-            from web_secrets_api import dispatch
+            from conveyor.web.web_secrets_api import dispatch
             if dispatch(self, "POST", parsed.path, body):
                 return
         try:
-            import browser_g5_api
+            from conveyor.browser import browser_g5_api
             if browser_g5_api.post(self, parsed.path, body):
                 return
             if (parsed.path == "/api/browser/auth-sessions" or
                     parsed.path.startswith("/api/browser/auth-sessions/")):
                 if __import__("os").environ.get("CONVEYOR_BROWSER_AUTH_SESSIONS") == "1":
-                    import browser_auth_api
+                    from conveyor.browser import browser_auth_api
                     if browser_auth_api.post(self, parsed.path, body):
                         return
             if (parsed.path == "/api/browser/logins" and
                     __import__("os").environ.get("CONVEYOR_BROWSER_AUTOFILL_LOGIN") == "1"):
-                import browser_login_api
+                from conveyor.browser import browser_login_api
                 if browser_login_api.post(self, parsed.path, body):
                     return
             if parsed.path == "/api/browser/kill":
-                import browser_approvals_admin
+                from conveyor.browser import browser_approvals_admin
                 if browser_approvals_admin.post(self, parsed.path, body):
                     return
             if parsed.path == "/api/workflows" or (
@@ -1232,7 +1232,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if not getattr(settings, "workflows_enabled", False):
                     self._json(HTTPStatus.CONFLICT, {"error": "workflows are disabled"})
                     return
-                from durable_workflows import WorkflowConflict, WorkflowNotFound
+                from conveyor.automation.durable_workflows import WorkflowConflict, WorkflowNotFound
                 store = self.server.workflow_store()
                 try:
                     if parsed.path == "/api/workflows":
@@ -1352,7 +1352,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._feature_off("routines_disabled")
                     return
 
-                import routines
+                from conveyor.automation import routines
                 if parsed.path == "/api/routines":
                     name = body.get("name")
                     schedule = body.get("schedule") or body.get("schedule_cron")
@@ -1362,7 +1362,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     try:
                         # Created for an agent: the check is that agent's and
                         # reports into its conversation.
-                        import agents
+                        from conveyor.agents import agents
                         owner = str(body.get("agent") or "")
                         origin_chat_id = ""
                         if owner and owner != agents.DEFAULT_AGENT_ID and agents.enabled(settings):
@@ -1454,7 +1454,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "message must be 1-8000 characters"})
                     return
                 requested_session_id = str(body.get("session_id") or "")
-                import supervisor_service as sup_svc
+                from conveyor.agents import supervisor_service as sup_svc
                 is_sup_session = sup_svc.is_supervisor_session_id(requested_session_id)
                 if is_sup_session:
                     sup_settings = getattr(self.server.control, "settings", None)
@@ -1470,7 +1470,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                             "code": "agent_supervisor_disabled",
                         })
                         return
-                from web_chat import WEB_CHAT_PREFIX, resolve_or_create_session
+                from conveyor.web.web_chat import WEB_CHAT_PREFIX, resolve_or_create_session
                 session_info = resolve_or_create_session(
                     self.server.control, requested_session_id, new_prefix=WEB_CHAT_PREFIX,
                 )
@@ -1495,9 +1495,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         self._feature_off("chat_disabled")
                         return
                 else:
-                    from overnight_chat import route as nightly_route
+                    from conveyor.automation.overnight_chat import route as nightly_route
                     nightly_control = os.getenv('CONVEYOR_NIGHTLY_CONTROL') == '1' and nightly_route(message) is not None
-                    import goal_loop
+                    from conveyor.agents import goal_loop
                     if not chat_enabled(settings) and not nightly_control and not goal_loop.is_goal_command(message):
                         self._feature_off("chat_disabled")
                         return
@@ -1514,7 +1514,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "prompt must be 1-8000 characters"})
                     return
                 requested_session_id = str(body.get("session_id") or "")
-                import supervisor_service as sup_svc
+                from conveyor.agents import supervisor_service as sup_svc
                 if sup_svc.is_supervisor_session_id(requested_session_id):
                     sup_settings = getattr(self.server.control, "settings", None)
                     if sup_settings is None:
@@ -1534,7 +1534,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         "code": "supervisor_session_read_only",
                     })
                     return
-                from web_chat import resolve_or_create_session
+                from conveyor.web.web_chat import resolve_or_create_session
                 session_info = resolve_or_create_session(self.server.control, requested_session_id)
                 if not session_info:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid session_id"})
@@ -1574,7 +1574,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     "session_id": durable_session_id,
                 })
             elif parsed.path == "/api/config/provider/models":
-                from provider_config import fetch_provider_models, ProviderModelsError, ApiKeyRequiredError
+                from conveyor.core.provider_config import fetch_provider_models, ProviderModelsError, ApiKeyRequiredError
                 draft = body if isinstance(body, dict) else {}
                 try:
                     models = fetch_provider_models(self.server.control.settings, draft=draft)
@@ -1605,7 +1605,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 approval_id = parts[2]
                 is_approve = (parts[3] == "approve")
                 from handlers.tools.confirm import get_pending
-                import outbound_draft_cards as cards
+                from conveyor.channels import outbound_draft_cards as cards
                 if getattr(self.server.control, "settings", None) is not None and cards.is_draft_token(self.server.control.settings, approval_id):
                     self._json(HTTPStatus.CONFLICT, {"error": "Use outbound draft Send / Deny endpoint"})
                     return
@@ -1619,7 +1619,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         from config import load_runtime_settings
                         settings = load_runtime_settings()
                     if is_approve:
-                        from browser_g3_kill import refusal
+                        from conveyor.browser.browser_g3_kill import refusal
                         reason = refusal(settings, pending.tool_name)
                         if reason:
                             self._json(HTTPStatus.CONFLICT, {"error": reason})
@@ -1632,7 +1632,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                             if expected_arg not in (pending.arg, _redact(pending.arg)):
                                 self._json(HTTPStatus.CONFLICT, {"error": "approval changed, reload"})
                                 return
-                    from web_chat import decide_tool_approval
+                    from conveyor.web.web_chat import decide_tool_approval
                     result = self._await(decide_tool_approval(pending, is_approve, settings), timeout=120)
                     self._json(HTTPStatus.OK, result)
                     return
@@ -1643,7 +1643,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if not (getattr(settings, "approval_inbox_enabled", False) and getattr(settings, "draft_cards_enabled", False)):
                     self._json(HTTPStatus.CONFLICT, {"error": "Draft cards disabled"})
                     return
-                import outbound_draft_cards as cards
+                from conveyor.channels import outbound_draft_cards as cards
                 try:
                     outcome = self._await(cards.submit(
                         settings, parts[2], expected_hash=body.get("expected_hash", ""),
@@ -1669,7 +1669,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     return
 
                 from handlers.tools.confirm import get_pending
-                import outbound_draft_cards as cards
+                from conveyor.channels import outbound_draft_cards as cards
                 if getattr(self.server.control, "settings", None) is not None and cards.is_draft_token(self.server.control.settings, approval_id):
                     self._json(HTTPStatus.CONFLICT, {"error": "Use outbound draft Send / Deny endpoint"})
                     return
@@ -1679,13 +1679,13 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                         return
                     if is_approve:
-                        from browser_g3_kill import refusal
+                        from conveyor.browser.browser_g3_kill import refusal
                         reason = refusal(settings, pending.tool_name)
                         if reason:
                             self._json(HTTPStatus.CONFLICT, {"error": reason})
                             return
                         if pending.tool_name == "browser.g3_dispatch":
-                            from browser_g3_approval_gate import matches as g3_matches
+                            from conveyor.browser.browser_g3_approval_gate import matches as g3_matches
                             if not g3_matches(settings, pending.arg, body.get("expected_hash")):
                                 self._json(HTTPStatus.CONFLICT, {"error": "G3 preview hash expired or changed; reload"})
                                 return
@@ -1698,7 +1698,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                             self._json(HTTPStatus.CONFLICT, {"error": "draft changed, reload"})
                             return
                         if draft is not None:
-                            import approval_inbox
+                            from conveyor.channels import approval_inbox
                             try:
                                 pending = approval_inbox.edit_pending(settings, approval_id, draft)
                             except KeyError:
@@ -1707,7 +1707,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                             except (ValueError, PermissionError) as exc:
                                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                                 return
-                        from web_chat import decide_tool_approval
+                        from conveyor.web.web_chat import decide_tool_approval
                         result = self._await(decide_tool_approval(pending, True, settings), timeout=120)
                         if result.get("status") == "expired":
                             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -1715,7 +1715,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         self._json(HTTPStatus.OK, result)
                         return
                     else:
-                        from web_chat import decide_tool_approval
+                        from conveyor.web.web_chat import decide_tool_approval
                         result = self._await(decide_tool_approval(pending, False, settings), timeout=120)
                         if result.get("status") == "expired":
                             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -1725,17 +1725,17 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
 
                 # Not a pending tool action; check if it is a relay approval
                 if getattr(settings, "approval_relay_enabled", False):
-                    import approval_relay
+                    from conveyor.channels import approval_relay
                     relay_row = approval_relay.get_relay_row(settings, approval_id)
                     if relay_row is not None:
                         if is_approve:
-                            from browser_g3_kill import refusal
+                            from conveyor.browser.browser_g3_kill import refusal
                             reason = refusal(settings, relay_row.get("tool_name") or "")
                             if reason:
                                 self._json(HTTPStatus.CONFLICT, {"error": reason})
                                 return
                         if is_approve and relay_row.get("tool_name") == "browser.g3_dispatch":
-                            from browser_g3_approval_gate import matches as g3_matches
+                            from conveyor.browser.browser_g3_approval_gate import matches as g3_matches
                             if not g3_matches(settings, relay_row.get("arg_preview") or "",
                                               body.get("expected_hash")):
                                 self._json(HTTPStatus.CONFLICT, {"error": "G3 preview hash expired or changed; reload"})
@@ -1814,7 +1814,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/screen/launch":
                 # Ask the desktop supervisor to open the agent's browser. The
                 # console itself never starts desktop programs.
-                import agents
+                from conveyor.agents import agents
                 from agent_desktops import request_browser
                 agent_id = str(body.get("agent") or "")
                 settings = getattr(self.server.control, "settings", None)
@@ -1850,7 +1850,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 if not getattr(settings, "workers_enabled", False):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                     return
-                import workers
+                from conveyor.agents import workers
                 if len(parts) == 3 and parts[2] == "detect":
                     payload = workers.get_workers_payload(settings, force_detect=True)
                     self._json(HTTPStatus.OK, payload)
@@ -1945,7 +1945,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     if catalog_worker is None:
                         self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
                         return
-                    import workers_login
+                    from conveyor.agents import workers_login
                     try:
                         session_info = workers_login.start_login_session(settings, worker_id)
                         self._json(HTTPStatus.OK, session_info)
@@ -1960,7 +1960,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
                         return
                     code = body.get("code") if isinstance(body, dict) else None
-                    import workers_login
+                    from conveyor.agents import workers_login
                     try:
                         session_info = workers_login.send_login_code(settings, worker_id, session_id, code)
                         self._json(HTTPStatus.OK, session_info)
@@ -1987,7 +1987,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     if catalog_worker is None:
                         self._json(HTTPStatus.BAD_REQUEST, {"error": f"unknown worker '{worker_id}'", "code": "unknown_worker"})
                         return
-                    import workers_login
+                    from conveyor.agents import workers_login
                     try:
                         session_info = workers_login.cancel_login_session(settings, worker_id, session_id)
                         self._json(HTTPStatus.OK, session_info)
@@ -1997,7 +1997,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
             elif parsed.path == "/api/supervisor" or parsed.path.startswith("/api/supervisor/"):
-                import web_supervisor_api
+                from conveyor.web import web_supervisor_api
                 web_supervisor_api.handle_post(self, parsed.path, parts, body)
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -2110,27 +2110,27 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         if parsed.path == "/api/push/subscribe":
-            from web_push import api_delete
+            from conveyor.web.web_push import api_delete
             api_delete(self)
             return
         self._drain_body()
         parts = self._segments(parsed.path)
         try:
             if parsed.path.startswith("/api/secrets/"):
-                from web_secrets_api import dispatch
+                from conveyor.web.web_secrets_api import dispatch
                 if dispatch(self, "DELETE", parsed.path):
                     return
             if parsed.path.startswith("/api/hooks/"):
-                import event_triggers
+                from conveyor.automation import event_triggers
                 if event_triggers.api_delete(self, parsed.path):
                     return
             if (parsed.path == "/api/browser/logins" and
                     __import__("os").environ.get("CONVEYOR_BROWSER_AUTOFILL_LOGIN") == "1"):
-                import browser_login_api
+                from conveyor.browser import browser_login_api
                 if browser_login_api.delete(self, parsed.path, urlparse(self.path).query):
                     return
             if parsed.path.startswith("/api/browser/"):
-                import browser_approvals_admin
+                from conveyor.browser import browser_approvals_admin
                 if browser_approvals_admin.delete(self, parsed.path):
                     return
             if len(parts) == 3 and parts[:2] == ["api", "agents"]:
@@ -2197,7 +2197,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid routine id"})
                         return
                     routine_id = int(routine_id_str)
-                    import routines
+                    from conveyor.automation import routines
                     ok = routines.delete_hook(settings, routine_id)
                     self._json(HTTPStatus.OK if ok else HTTPStatus.NOT_FOUND, {"ok": True} if ok else {"error": "hook not found"})
                     return
@@ -2207,7 +2207,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                         self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid routine id"})
                         return
                     routine_id = int(routine_id_str)
-                    import routines
+                    from conveyor.automation import routines
                     ok = routines.delete_routine(settings, routine_id)
                     self._json(HTTPStatus.OK if ok else HTTPStatus.NOT_FOUND, {"ok": ok})
                     return
@@ -2265,7 +2265,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         heard: str | None = None,
     ) -> None:
         import queue
-        from web_chat import WebChatPort, run_web_chat
+        from conveyor.web.web_chat import WebChatPort, run_web_chat
 
         event_queue: queue.Queue = queue.Queue()
         port = WebChatPort(event_queue, settings, durable_session_id, prompt=prompt)
@@ -2555,25 +2555,25 @@ def main() -> None:
     logger.info("Conveyor Web Console listening on http://%s:%d", settings.conveyor_web_host, settings.conveyor_web_port)
     start_extra_listeners(server, settings)
 
-    import routines
+    from conveyor.automation import routines
     routines.start_routines_worker(loop, settings, runner)
     if getattr(settings, "memory_v2_enabled", False):
         from personal_tools.memory_v2 import start_purge_worker
         start_purge_worker(loop, settings)
-    import approval_relay
+    from conveyor.channels import approval_relay
     relay_consumer = approval_relay.start_relay_worker(loop, settings, channel="web")
     from agent_coordination.agent_delegation_worker import start as start_delegation
     delegation_worker = start_delegation(loop, settings)
-    import agent_security
+    from conveyor.agents import agent_security
     agent_retention_worker = agent_security.start(loop, settings)
-    import worker_usage
+    from conveyor.agents import worker_usage
     usage_refresh = worker_usage.start_background_refresh(loop, settings)
-    import supervisor_service
+    from conveyor.agents import supervisor_service
     if supervisor_service.is_enabled(settings):
         loop.call_soon(lambda: supervisor_service.ensure_server_worker(server, settings, wake=True))
     def _resume_goals() -> None:
         try:
-            from web_chat import resume_goal_loops
+            from conveyor.web.web_chat import resume_goal_loops
             count = resume_goal_loops(settings, runner)
             if count:
                 logger.info("resumed %d /goal run(s)", count)

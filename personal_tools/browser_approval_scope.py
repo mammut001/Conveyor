@@ -9,8 +9,8 @@ import json
 import time
 
 from personal_tools.browser_read import _connect, _operator_key, _requested_url
-from workflow_browser_external_identity import ExternalPolicyDenied, canonical_url
-from workflow_browser_g2 import FIELD_RE
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied, canonical_url
+from conveyor.browser.workflow_browser_g2 import FIELD_RE
 
 ACTION_TTL = 24 * 3600
 QUERY_TTL = 3600

@@ -13,7 +13,7 @@ from unittest.mock import patch
 from urllib.parse import quote
 
 from web_console import WebConsoleHandler, WebConsoleServer
-from console_secrets import path_for
+from conveyor.web.console_secrets import path_for
 
 TOKEN = "login-api-test-token-long-long-long"
 

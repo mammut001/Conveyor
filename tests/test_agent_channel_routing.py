@@ -14,12 +14,12 @@ from unittest.mock import AsyncMock, patch
 
 from agent_coordination import agent_channel_routing as routing
 from agent_coordination import agent_channel_results as outbox
-import agent_context as ac
-import main_router
-from agents import AgentStore, session_id_for
+from conveyor.agents import agent_context as ac
+from conveyor.agents import main_router
+from conveyor.agents.agents import AgentStore, session_id_for
 from channel.types import InboundMessage
 from config import Settings
-from transcript_store import get_transcript_store
+from conveyor.core.transcript_store import get_transcript_store
 
 
 def settings_for(root):
@@ -77,7 +77,7 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def command(self,msg):
         port=Port()
         from handlers.dispatch import dispatch
-        with (patch("job_lanes.runner_for_chat",side_effect=lambda runner,*a:runner),
+        with (patch("conveyor.core.job_lanes.runner_for_chat",side_effect=lambda runner,*a:runner),
               patch.object(importlib.import_module("handlers.dispatch"), "try_resolve_confirmation",
                     new_callable=AsyncMock,return_value=False)):
             await dispatch(msg,port,self.settings,object())
@@ -106,11 +106,11 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mirrored_history_preserves_channel_provenance(self):
         from handlers.session import append_turn
-        from web_chat import build_history
+        from conveyor.web.web_chat import build_history
         for channel in ("telegram", "feishu"):
             msg = self.msg("来源测试", channel)
             routing.bind(self.settings, msg, "Finance")
-            import agent_conversations as conversations
+            from conveyor.agents import agent_conversations as conversations
             web = next(row for row in conversations.list_for_entry(self.settings, msg)
                        if row["origin_channel"] == "web")
             conversations.select(self.settings, msg, web["id"])
@@ -141,7 +141,7 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
                 ctx=ac.resolve(self.settings,channel,msg.chat_id,msg.operator_id)
                 self.assertEqual(ctx.agent_id,self.finance["id"])
                 self.assertEqual(ctx.memory_owner,"agent:"+self.finance["id"])
-                import agent_conversations as conversations
+                from conveyor.agents import agent_conversations as conversations
                 local = ac.history_key(self.settings,channel,msg.chat_id,msg.operator_id)
                 web_key = "agent:"+self.finance["id"]+":"+session_id_for(self.finance["id"])
                 self.assertNotEqual(local, web_key)
@@ -213,7 +213,7 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
             channel="telegram",operator="1",chat_id="1",text="[Finance] untrusted result"))
         self.assertFalse(outbox.enqueue(self.settings,task_id="a"*32,
             channel="telegram",operator="1",chat_id="1",text="[Finance] untrusted result"))
-        with patch("egress_taint.requires_approval",return_value=False):
+        with patch("conveyor.browser.egress_taint.requires_approval",return_value=False):
             self.assertEqual(await outbox.consume_once(self.settings,"telegram",sender),1)
             self.assertEqual(await outbox.consume_once(self.settings,"telegram",sender),0)
         sender.assert_awaited_once_with("1","[Finance] untrusted result")
@@ -224,7 +224,7 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
         failing=AsyncMock(side_effect=TimeoutError())
         self.assertTrue(outbox.enqueue(self.settings,task_id="b"*32,
             channel="telegram",operator="1",chat_id="1",text="failed send"))
-        with patch("egress_taint.requires_approval",return_value=False):
+        with patch("conveyor.browser.egress_taint.requires_approval",return_value=False):
             self.assertEqual(await outbox.consume_once(self.settings,"telegram",failing),0)
             self.assertEqual(await outbox.consume_once(self.settings,"telegram",failing),0)
         failing.assert_awaited_once()
@@ -233,7 +233,7 @@ class ChannelRoutingTests(unittest.IsolatedAsyncioTestCase):
         sender=AsyncMock()
         outbox.enqueue(self.settings,task_id="c"*32,channel="feishu",
                        operator="ou_owner",chat_id="oc_private",text="private")
-        with patch("egress_taint.requires_approval",return_value=True):
+        with patch("conveyor.browser.egress_taint.requires_approval",return_value=True):
             self.assertEqual(await outbox.consume_once(self.settings,"feishu",sender),0)
         sender.assert_not_awaited()
         with outbox._db(self.settings) as db:

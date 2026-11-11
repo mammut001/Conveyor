@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from desktop_linux_browser import LinuxBrowserController
+from conveyor.desktop.desktop_linux_browser import LinuxBrowserController
 
 
 def _tools() -> bool:
@@ -70,7 +70,7 @@ class IsolatedX11BrowserTest(unittest.TestCase):
     def test_private_display_answers_and_a_blocked_browser_is_not_started(self) -> None:
         controller = LinuxBrowserController()
         self.assertIsNone(controller._display_error())
-        with mock.patch("desktop_linux_browser.subprocess.Popen") as popen:
+        with mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen") as popen:
             result = controller.ensure("Firefox", blocked_apps=("Firefox",))
         self.assertEqual(result["error"], "browser_disallowed")
         popen.assert_not_called()
@@ -78,7 +78,7 @@ class IsolatedX11BrowserTest(unittest.TestCase):
     def test_bad_xauthority_is_unreachable_before_launch(self) -> None:
         os.environ["XAUTHORITY"] = str(Path("/tmp") / "conveyor-missing-xauth")
         controller = LinuxBrowserController()
-        with mock.patch("desktop_linux_browser.subprocess.Popen") as popen:
+        with mock.patch("conveyor.desktop.desktop_linux_browser.subprocess.Popen") as popen:
             result = controller.ensure("Firefox")
         self.assertEqual(result["error"], "browser_display_unreachable")
         popen.assert_not_called()

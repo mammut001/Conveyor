@@ -18,10 +18,10 @@ from handlers.tools.confirm import clear_all_pending, get_pending_for_context
 from handlers.tools.runner import _request_confirmation
 from personal_tools.browser_read import _connect, _db, _operator_key
 from personal_tools.browser_approval_scope import status
-from web_chat import decide_tool_approval
+from conveyor.web.web_chat import decide_tool_approval
 from web_console import WebConsoleHandler, WebConsoleServer
-from workflow_browser_egress import EgressAudit
-from workflow_browser_external import UntrustedPageText
+from conveyor.browser.workflow_browser_egress import EgressAudit
+from conveyor.browser.workflow_browser_external import UntrustedPageText
 
 TOKEN = "test-browser-control-auth-abcdefghijklmnop"
 URL = "https://approved.example.org/start"
@@ -92,7 +92,7 @@ class BrowserManagementTests(unittest.TestCase):
         self.flags=patch.dict(os.environ, FLAGS)
         self.flags.start()
         self.addCleanup(self.flags.stop)
-        from browser_approvals_admin import set_kill
+        from conveyor.browser.browser_approvals_admin import set_kill
         set_kill(self.settings,False)
         with _connect(self.settings) as conn:
             conn.execute("DELETE FROM browser_agent_grants")
@@ -213,10 +213,10 @@ class BrowserManagementTests(unittest.TestCase):
 
     def test_inflight_g2_path_revalidation_fails_after_revoke(self):
         from personal_tools.browser_approval_scope import grant_confirmed, path_is_live
-        from browser_approvals_admin import approvals, revoke
-        from workflow_browser_external_approvals import ApprovalLedger
-        from workflow_browser_g2 import G2Browser
-        from workflow_browser_external_identity import ExternalPolicyDenied
+        from conveyor.browser.browser_approvals_admin import approvals, revoke
+        from conveyor.browser.workflow_browser_external_approvals import ApprovalLedger
+        from conveyor.browser.workflow_browser_g2 import G2Browser
+        from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied
         grant_confirmed(self.settings,"operator-x",URL,[])
         key = _operator_key("operator-x")
         with _connect(self.settings) as conn:
@@ -270,7 +270,7 @@ class G2PendingConfirmationTests(unittest.IsolatedAsyncioTestCase):
                                         "browser.browse_site",self.arg)
             pending=get_pending_for_context("operator","session","web")
             self.assertIsNotNone(pending)
-            import approval_inbox
+            from conveyor.channels import approval_inbox
             items=approval_inbox.list_items(self.settings,FakeControl(self.settings))
             scope=next(x for x in items if x["id"]==pending.token)["summary"]
             self.assertIn("/search",scope)

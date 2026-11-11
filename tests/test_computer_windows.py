@@ -9,13 +9,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from config import Settings
-from desktop_computer_loop import (
+from conveyor.desktop.desktop_computer_loop import (
     FakeComputerBackend,
     HttpComputerBackend,
     run_computer_loop,
 )
-from desktop_computer_planner import CodexPlanner, ScriptedPlanner
-from desktop_computer_requests import (
+from conveyor.desktop.desktop_computer_planner import CodexPlanner, ScriptedPlanner
+from conveyor.desktop.desktop_computer_requests import (
     claim_computer_step,
     create_computer_step,
     create_computer_task,
@@ -23,7 +23,7 @@ from desktop_computer_requests import (
     get_computer_task,
     validate_computer_result,
 )
-from desktop_cua import LocalCuaTransport, _token_under_point, _window_local_point, summarize_windows
+from conveyor.desktop.desktop_cua import LocalCuaTransport, _token_under_point, _window_local_point, summarize_windows
 
 
 def _settings(root: Path, **over: Any) -> Settings:
@@ -463,7 +463,7 @@ class WindowListTest(unittest.TestCase):
             return {"ok": False, "error": "unexpected_tool"}
 
         transport._call_tool = fake_call  # type: ignore[method-assign]
-        with patch("desktop_cua.sys.platform", "darwin"):
+        with patch("conveyor.desktop.desktop_cua.sys.platform", "darwin"):
             error = transport._prepare_target_app({"action": "observe", "target_app": "Calculator"})
         self.assertIsNone(error)
         self.assertEqual(calls, ["list_apps", "launch_app", "bring_to_front"])
@@ -517,7 +517,7 @@ class WindowListTest(unittest.TestCase):
             for stdout in ("", "   ", "private broken response", '{"partial":', "null", "[]", "true", "42", '"text"'):
                 with self.subTest(stdout=stdout):
                     proc = subprocess.CompletedProcess([], 0, stdout, "")
-                    with patch("desktop_cua.subprocess.run", return_value=proc):
+                    with patch("conveyor.desktop.desktop_cua.subprocess.run", return_value=proc):
                         result = transport._call_tool("click", {"x": 1, "y": 2})
                     self.assertEqual(result, {"ok": False, "error": "driver_invalid_response"})
 
@@ -527,7 +527,7 @@ class WindowListTest(unittest.TestCase):
             for stdout, data in (("{}", {}), ('{"clicked": true}', {"clicked": True})):
                 with self.subTest(stdout=stdout):
                     proc = subprocess.CompletedProcess([], 0, stdout, "")
-                    with patch("desktop_cua.subprocess.run", return_value=proc):
+                    with patch("conveyor.desktop.desktop_cua.subprocess.run", return_value=proc):
                         result = transport._call_tool("click", {"x": 1, "y": 2})
                     self.assertEqual(result, {"ok": True, "data": data})
 
@@ -540,7 +540,7 @@ class WindowListTest(unittest.TestCase):
             stdout = '{"code": "screenshot_context_missing", "pid": 1, "window_id": 2}'
             stderr = ""
 
-        with patch("desktop_cua.subprocess.run", return_value=Proc()):
+        with patch("conveyor.desktop.desktop_cua.subprocess.run", return_value=Proc()):
             result = transport._call_tool("click", {"x": 1, "y": 2})
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "driver_exit_1:screenshot_context_missing")
@@ -554,7 +554,7 @@ class WindowListTest(unittest.TestCase):
             stdout = '{"refusal": {"code": "invalid_arguments", "message": "click: unknown argument element_index"}, "status": "refused"}'
             stderr = ""
 
-        with patch("desktop_cua.subprocess.run", return_value=Proc()):
+        with patch("conveyor.desktop.desktop_cua.subprocess.run", return_value=Proc()):
             result = transport._call_tool("click", {"element_index": 23})
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "driver_exit_1:invalid_arguments")
@@ -693,7 +693,7 @@ class FailedStepContinuesTest(unittest.IsolatedAsyncioTestCase):
     async def test_takeover_during_planning_discards_the_planned_action(self) -> None:
         """A takeover that opens and closes while the model plans must not let
         the pre-takeover action run on the screen the human left."""
-        from human_takeover import HumanTakeoverStore
+        from conveyor.desktop.human_takeover import HumanTakeoverStore
 
         class TakeoverWhilePlanning:
             def __init__(self, settings) -> None:
@@ -840,7 +840,7 @@ def _windows() -> list[dict]:
 
 class BlockedKeywordsPolicyTest(unittest.TestCase):
     def test_default_blocks_password_and_financial(self) -> None:
-        from desktop_computer_requests import contains_blocked_keyword
+        from conveyor.desktop.desktop_computer_requests import contains_blocked_keyword
         settings = _settings(Path(tempfile.mkdtemp()))
         self.assertEqual(contains_blocked_keyword(settings, "enter password to login"), "password")
         self.assertEqual(contains_blocked_keyword(settings, "open bank account"), "bank")
@@ -850,7 +850,7 @@ class BlockedKeywordsPolicyTest(unittest.TestCase):
         self.assertEqual(contains_blocked_keyword(settings, "网银付款"), "付款")
 
     def test_allow_login_passwords_unblocks_login_but_guards_payment(self) -> None:
-        from desktop_computer_requests import contains_blocked_keyword
+        from conveyor.desktop.desktop_computer_requests import contains_blocked_keyword
         temp = Path(tempfile.mkdtemp())
         settings = _settings(temp, conveyor_computer_allow_login_passwords=True)
         # Login passwords allowed
@@ -866,7 +866,7 @@ class BlockedKeywordsPolicyTest(unittest.TestCase):
         self.assertEqual(contains_blocked_keyword(settings, "delete account"), "delete account")
 
     def test_custom_blocked_keywords_omitting_password_allows_login(self) -> None:
-        from desktop_computer_requests import contains_blocked_keyword
+        from conveyor.desktop.desktop_computer_requests import contains_blocked_keyword
         temp = Path(tempfile.mkdtemp())
         settings = _settings(
             temp,
@@ -911,7 +911,7 @@ class DirectModeDisarmTest(unittest.IsolatedAsyncioTestCase):
                 {"action": "type", "text": "never typed"},
                 {"action": "done", "summary": "never reached"},
             ])
-            with patch("desktop_computer_loop.is_direct_mode_active", side_effect=direct_mode):
+            with patch("conveyor.desktop.desktop_computer_loop.is_direct_mode_active", side_effect=direct_mode):
                 result = await run_computer_loop(
                     settings,
                     "在电脑上打开文件管理器",

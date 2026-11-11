@@ -4,7 +4,7 @@ import stat
 import tempfile
 import unittest
 from unittest.mock import patch
-from overnight_build import build_frontend
+from conveyor.automation.overnight_build import build_frontend
 
 
 class BuildTests(unittest.TestCase):
@@ -20,7 +20,7 @@ class BuildTests(unittest.TestCase):
                 return ''
             previous=os.umask(0o077)
             try:
-                with patch('overnight_build.command',side_effect=fake_command):
+                with patch('conveyor.automation.overnight_build.command',side_effect=fake_command):
                     build_frontend(root)
             finally:
                 os.umask(previous)

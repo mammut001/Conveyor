@@ -10,7 +10,7 @@ import time
 import unittest
 from unittest import mock
 
-import outbound_draft_cards as cards
+from conveyor.channels import outbound_draft_cards as cards
 
 
 def settings(root, **kw):

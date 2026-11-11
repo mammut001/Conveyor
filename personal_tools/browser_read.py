@@ -16,9 +16,9 @@ import sqlite3
 import time
 
 from personal_tools.base import ToolResult
-from workflow_browser_egress import EgressAudit, private_database_path
-from workflow_browser_external_approvals import ApprovalLedger
-from workflow_browser_external_identity import ExternalPolicyDenied, canonical_url
+from conveyor.browser.workflow_browser_egress import EgressAudit, private_database_path
+from conveyor.browser.workflow_browser_external_approvals import ApprovalLedger
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied, canonical_url
 
 TOOL_NAME = "browser.read_webpage"
 GRANT_SECONDS = 24 * 60 * 60
@@ -99,7 +99,7 @@ async def _read_granted(settings, url: str, operator_id: str) -> str:
         ).fetchone()
     if row is None or row[0] <= time.time():
         return "awaiting approval"
-    from workflow_browser_external import ExternalReadOnlyBrowser
+    from conveyor.browser.workflow_browser_external import ExternalReadOnlyBrowser
     ledger = ApprovalLedger(_db(settings))
     audit = EgressAudit(ledger.path)
     task = "agent_" + secrets.token_hex(16)

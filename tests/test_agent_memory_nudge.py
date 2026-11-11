@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-import agent_memory
+from conveyor.agents import agent_memory
 
 
 def _settings(root: Path, **overrides):

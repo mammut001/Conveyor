@@ -30,9 +30,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import agent_supervisor as ags  # noqa: E402
-import supervisor_goals as goals  # noqa: E402
-import supervisor_validation as sval  # noqa: E402
+from conveyor.agents import agent_supervisor as ags  # noqa: E402
+from conveyor.agents import supervisor_goals as goals  # noqa: E402
+from conveyor.agents import supervisor_validation as sval  # noqa: E402
 from scripts import goal_live  # noqa: E402
 
 _ENV_KEYS = (

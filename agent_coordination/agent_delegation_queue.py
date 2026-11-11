@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import time
 from uuid import uuid4
-import agent_context as ac
+from conveyor.agents import agent_context as ac
 
-import agent_mailbox_db as db
+from conveyor.agents import agent_mailbox_db as db
 
 MAX_CONCURRENT_PER_OPERATOR = 2
 
@@ -58,7 +58,7 @@ def cancel_operator(settings, operator):
                lease_expires_at=NULL WHERE operator=? AND kind='task'
                AND status IN ('queued','failed','leased')""", (operator,))
         if found:
-            import agent_security
+            from conveyor.agents import agent_security
             agent_security.audit_tx(
                 conn, operator=operator, event="cancel",
                 agent_id="default", reason="operator_stop")
@@ -96,7 +96,7 @@ def complete(settings, target, record, worker_id, body):
                WHERE from_agent=? AND to_agent=? AND idempotency_key=?""",
             (row["to_agent"], row["from_agent"], key)).fetchone()
         if prior is None:
-            import agent_security
+            from conveyor.agents import agent_security
             agent_security.check_capacity(
                 conn, operator=row["operator"], to_agent=row["from_agent"])
             conn.execute(

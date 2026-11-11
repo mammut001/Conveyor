@@ -10,11 +10,11 @@ from pathlib import Path
 from unittest import mock
 
 import agent_desktops
-import agents
+from conveyor.agents import agents
 from agent_desktops import Supervisor
-from agents import AgentStore
-from human_takeover import HumanTakeoverStore, takeover_blocks_automation
-from live_screen import LiveScreen
+from conveyor.agents.agents import AgentStore
+from conveyor.desktop.human_takeover import HumanTakeoverStore, takeover_blocks_automation
+from conveyor.desktop.live_screen import LiveScreen
 
 
 def _settings(root: Path, **overrides):

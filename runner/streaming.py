@@ -177,7 +177,7 @@ async def _read_jsonl_stdout(
                 event_obj = None
             if isinstance(event_obj, dict) and getattr(job, "external_id", None):
                 try:
-                    from agent_events import emit_codex_event
+                    from conveyor.agents.agent_events import emit_codex_event
                     emit_codex_event(
                         self.settings,
                         str(job.external_id),

@@ -95,7 +95,7 @@ class CliBackend(CodexRunner):
         if self.cli_model:
             return self.cli_model
         try:
-            import workers
+            from conveyor.agents import workers
             state = workers.load_workers_state(self.settings)
             chosen = (state.get("models") or {}).get(self.config.worker_id)
             if chosen:
@@ -126,7 +126,7 @@ class CliBackend(CodexRunner):
             )
 
     async def _run_codex_attempt(self, job: Job, on_progress: ProgressCallback) -> None:
-        from workers import mode_eligibility
+        from conveyor.agents.workers import mode_eligibility
         allowed, reason = mode_eligibility(self.settings, self.config.worker_id, job.mode)
         if not allowed:
             # Defence in depth: the pool already skips ineligible workers.

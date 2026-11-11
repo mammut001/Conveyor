@@ -112,8 +112,8 @@ async def consume_once(settings, channel, send):
         return 0
     try:
         # Exfiltration policy wins over convenience, even for completed tasks.
-        import egress_taint
-        import agents
+        from conveyor.browser import egress_taint
+        from conveyor.agents import agents
         if (egress_taint.requires_approval(
                 settings, "agent.reply", operator_id=row["operator"],
                 channel=channel, chat_id=row["chat_id"])
@@ -136,7 +136,7 @@ async def consume_once(settings, channel, send):
 
 async def run(settings, channel, send):
     from agent_coordination import agent_result_outbox
-    import agent_security
+    from conveyor.agents import agent_security
     last_purge = 0.0
     while routing.enabled(settings) or agent_result_outbox.configured(settings):
         try:

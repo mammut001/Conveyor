@@ -145,7 +145,7 @@ class QueueSafetyTests(unittest.TestCase):
                     executed.append((msg.chat_id, prompt))
 
                 with patch("handlers.job_queue.get_job_queue", return_value=queue), \
-                        patch("agent_context.enabled", return_value=False), \
+                        patch("conveyor.agents.agent_context.enabled", return_value=False), \
                         patch.object(jobs, "_start_queued_job_callback", new=fake_callback), \
                         patch.object(jobs, "_execute_codex_job", new=fake_execute):
                     ok, _text, mine = await jobs.submit_codex_job(

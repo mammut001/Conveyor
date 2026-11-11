@@ -22,7 +22,7 @@ import asyncio
 from unittest import mock
 
 from config import Settings
-from desktop_screenshot import (
+from conveyor.desktop.desktop_screenshot import (
     capture_screenshot_once,
     latest_screenshot_metadata,
     list_screenshot_metadata,
@@ -269,7 +269,7 @@ def _test_subprocess_uses_list_args_no_shell() -> None:
         helper = tmp_path / "fake_helper.py"
         _make_fake_helper(helper, "success")
         settings = _settings(str(helper), tmp_path / "shots")
-        with mock.patch("desktop_screenshot.subprocess.run") as run_mock:
+        with mock.patch("conveyor.desktop.desktop_screenshot.subprocess.run") as run_mock:
             run_mock.return_value = mock.Mock(stdout='{"ok": false, "error": "stopped"}', stderr="")
             capture_screenshot_once(settings)
             if not run_mock.called:
@@ -351,7 +351,7 @@ def _test_status_shows_truncated_sha_and_no_capture() -> None:
         (tmp_path / "shots").mkdir(parents=True, exist_ok=True)
         (tmp_path / "shots" / "status-shot.json").write_text(json.dumps(meta), encoding="utf-8")
 
-        with mock.patch("desktop_screenshot.capture_screenshot_once") as capture_mock:
+        with mock.patch("conveyor.desktop.desktop_screenshot.capture_screenshot_once") as capture_mock:
             text = asyncio.run(exec_desktop_screenshot_status(settings, ""))
             capture_mock.assert_not_called()
         if "abcd1234efgh" not in text or "..." not in text:

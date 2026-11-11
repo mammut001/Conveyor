@@ -9,7 +9,7 @@ import sqlite3
 
 
 def ensure(conn: sqlite3.Connection) -> None:
-    import agent_mailbox_db
+    from conveyor.agents import agent_mailbox_db
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_mailbox'"
     ).fetchone()

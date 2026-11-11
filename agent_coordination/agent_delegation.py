@@ -11,8 +11,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from types import SimpleNamespace
 
-import agent_context as ac
-import agent_mailbox as mailbox
+from conveyor.agents import agent_context as ac
+from conveyor.agents import agent_mailbox as mailbox
 
 
 NAME = "agent.delegate"
@@ -125,7 +125,7 @@ def enqueue(settings, arg, *, channel, chat_id, operator_id, approved):
         return f"agent task queued: {row['id']}"
     except (mailbox.MailboxDenied, mailbox.MailboxConflict,
             ac.AgentContextDenied, ValueError, TypeError, KeyError) as exc:
-        import agent_security
+        from conveyor.agents import agent_security
         agent_security.audit(settings, operator=operator_id, event="deny",
             agent_id=agent_security.target_id(arg),
             reason=agent_security.denial_code(exc))
@@ -134,7 +134,7 @@ def enqueue(settings, arg, *, channel, chat_id, operator_id, approved):
 
 def resolve_child(settings, row):
     """Fresh, server-authoritative capability intersection for a lease."""
-    import agents
+    from conveyor.agents import agents
     if row.get("kind") != "task" or row.get("depth") != 0:
         raise mailbox.MailboxDenied("invalid delegation depth/kind")
     if row.get("operator") != agents.WEB_OPERATOR:

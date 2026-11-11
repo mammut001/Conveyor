@@ -41,15 +41,15 @@ os.environ.setdefault("CODEX_MEMORY_ROOT", "/tmp/dummy_codex_mem")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "dummy_token")
 os.environ.setdefault("TELEGRAM_ALLOWED_USER_ID", "12345")
 
-import agent_context as ac
+from conveyor.agents import agent_context as ac
 from agent_coordination import agent_delegation as delegation
 from agent_coordination import agent_delegation_queue as queue
 from agent_coordination import agent_result_outbox as outbox
 from agent_coordination import agent_telegram_presentation as tg_pres
 import config
 from config import Settings
-import main_router as router
-from agents import AgentStore, chat_id_for, WEB_OPERATOR
+from conveyor.agents import main_router as router
+from conveyor.agents.agents import AgentStore, chat_id_for, WEB_OPERATOR
 from channel.types import InboundMessage, OutboundPort
 from handlers.tools.confirm import create_pending, get_pending
 from handlers.tools.runner import _request_confirmation, execute_confirmed
@@ -668,7 +668,7 @@ class TelegramPresentationTests(unittest.IsolatedAsyncioTestCase):
         task_id = "00000000000000000000000000000015"
         self._create_task_in_db(task_id, status="queued")
 
-        import agent_security
+        from conveyor.agents import agent_security
         agent_security.set_kill(self.settings, enabled=True, operator="12345", source="telegram")
 
         # Under emergency kill switch, feature_enabled fails closed immediately

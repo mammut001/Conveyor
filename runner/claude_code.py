@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agent_events import emit_event
+from conveyor.agents.agent_events import emit_event
 from redaction import redact_text, truncate
 from runner.attachments import attachments_root, prompt_images
 from runner.core import CodexRunner

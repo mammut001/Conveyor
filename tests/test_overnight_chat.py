@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch,Mock
-from overnight_chat import route,invoke
+from conveyor.automation.overnight_chat import route,invoke
 
 
 class ChatTests(unittest.IsolatedAsyncioTestCase):
@@ -10,13 +10,13 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(route('修改夜间任务按钮'))
 
     async def test_unauthorized_channel_never_reaches_control(self):
-        with patch.dict('os.environ',{'CONVEYOR_NIGHTLY_CONTROL':'1'}),patch('overnight_chat.client') as client:
+        with patch.dict('os.environ',{'CONVEYOR_NIGHTLY_CONTROL':'1'}),patch('conveyor.automation.overnight_chat.client') as client:
             result=await invoke('start','test',operator_id='other',channel='web')
         self.assertFalse(result.ok);client.assert_not_called()
 
     async def test_start_returns_trackable_id(self):
         run={'id':'a'*32,'state':'running','objective':'检查聊天','tasks':[]}
-        with patch.dict('os.environ',{'CONVEYOR_NIGHTLY_CONTROL':'1'}),patch('overnight_chat.client',return_value=run) as client:
+        with patch.dict('os.environ',{'CONVEYOR_NIGHTLY_CONTROL':'1'}),patch('conveyor.automation.overnight_chat.client',return_value=run) as client:
             result=await invoke('start','检查聊天',operator_id='web-console',channel='web')
         self.assertTrue(result.ok)
         self.assertIn('/nightly_status '+'a'*32,result.text)
@@ -29,7 +29,7 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import AsyncMock
         from tests.test_pi_backend import _make_settings
         from channel.types import InboundMessage
-        from web_chat import WebChatPort,run_web_chat
+        from conveyor.web.web_chat import WebChatPort,run_web_chat
         ident='a'*32
         for text,request in [('/nightly_start 检查聊天',{'action':'start','objective':'检查聊天'}),
                              ('/nightly_status '+ident,{'action':'status','run_id':ident}),
@@ -39,7 +39,7 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
                 msg=InboundMessage(channel='web',operator_id='web-console',chat_id='nightly-ui',message_id='m1',text=text)
                 port=WebChatPort(events,settings,'web:web-console:nightly-ui',prompt=text)
                 result={'id':ident,'state':'running','objective':'检查聊天','tasks':[]}
-                with patch.dict('os.environ',{'CONVEYOR_NIGHTLY_CONTROL':'1'}),patch('overnight_chat.client',return_value=result) as client,patch('handlers.jobs.handle_codex_job',new_callable=AsyncMock) as job:
+                with patch.dict('os.environ',{'CONVEYOR_NIGHTLY_CONTROL':'1'}),patch('conveyor.automation.overnight_chat.client',return_value=result) as client,patch('handlers.jobs.handle_codex_job',new_callable=AsyncMock) as job:
                     await run_web_chat(msg,port,settings,SimpleNamespace(name='pi'),text)
                 client.assert_called_once_with(request)
                 job.assert_not_awaited()

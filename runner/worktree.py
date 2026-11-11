@@ -47,7 +47,7 @@ def _resolve_git_dir(repo_root: Path, value: str) -> Path:
 def _known_workspace_roots(self) -> set[Path]:
     """Repositories this installation works in: the configured workspace and
     each agent's project folder."""
-    import agents
+    from conveyor.agents import agents
 
     return {self.settings.codex_workspace_root.resolve()} | agents.workspace_roots(self.settings)
 
@@ -168,7 +168,7 @@ def _persist_refinement_binding(self, job: Job, event_kind: str) -> None:
             # observability only and should not invalidate a safe binding.
             pass
         try:
-            from agent_events import emit_event
+            from conveyor.agents.agent_events import emit_event
             emit_event(
                 self.settings,
                 event_kind,
@@ -187,7 +187,7 @@ def _persist_refinement_binding(self, job: Job, event_kind: str) -> None:
 
 async def _create_worktree(self, job: Job) -> Path:
     import logging
-    from refinement_store import RefinementStore
+    from conveyor.core.refinement_store import RefinementStore
 
     logger = logging.getLogger("conveyor.worktree")
     resolution_error = str(getattr(job, "refinement_resolution_error", "") or "")
@@ -438,7 +438,7 @@ async def _git(self, args: list[str], cwd: Path, check: bool = True) -> str:
         cwd=cwd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=__import__("subprocess_env").utility_env(self.settings),
+        env=__import__("conveyor.core.subprocess_env", fromlist=["*"]).utility_env(self.settings),
     )
     stdout, stderr = await process.communicate()
     out = stdout.decode("utf-8", errors="replace")
@@ -461,7 +461,7 @@ async def reconcile_orphans(
     ttl_seconds: int = 24 * 3600,
 ) -> dict:
     import logging
-    from refinement_store import RefinementStore
+    from conveyor.core.refinement_store import RefinementStore
 
     logger = logging.getLogger("conveyor.worktree")
 
@@ -550,7 +550,7 @@ async def reconcile_orphans(
                 removed.append(str(child))
                 logger.info("Removed orphan worktree: %s", child)
                 try:
-                    from agent_events import emit_event
+                    from conveyor.agents.agent_events import emit_event
                     emit_event(
                         self.settings,
                         "worktree.orphan_reconciled",

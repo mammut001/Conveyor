@@ -104,7 +104,7 @@ invalidated (`effective_acceptance` returns None) and re-verification is require
 ## Runtime responsibilities (Conveyor)
 
 Persistent state, task locks, execution processes and recovery are handled by
-the Conveyor runtime (`agent_supervisor.py`):
+the Conveyor runtime (`conveyor/agents/agent_supervisor.py`):
 
 - Prevent duplicate dispatch and conflicting writes on the same worktree.
 - Timeout, cancel and process-exit detection.

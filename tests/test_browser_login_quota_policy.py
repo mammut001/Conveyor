@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from browser_login_quota_policy import admission_reason
+from conveyor.browser.browser_login_quota_policy import admission_reason
 
 
 class LoginQuotaPolicyTests(unittest.TestCase):

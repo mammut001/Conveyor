@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agent_events import emit_event
+from conveyor.agents.agent_events import emit_event
 from redaction import redact_text, truncate
 from runner.core import CodexRunner
 from runner.operators import run as _run_ops
@@ -156,7 +156,7 @@ def read_pi_console_secret(settings: Any, key: str) -> str:
     logs or returns anything but the value; failures are silent.
     """
     try:
-        from console_secrets import path_for, read_secret
+        from conveyor.web.console_secrets import path_for, read_secret
         secrets_path = getattr(settings, "secrets_file", None)
         if secrets_path is None and getattr(settings, "codex_memory_root", None) is not None:
             secrets_path = path_for(settings)
@@ -185,7 +185,7 @@ def pi_saved_provider(settings: Any) -> dict[str, str] | None:
     """Saved 模型设置 provider to bridge into Pi, unless explicit config exists."""
     if pi_explicit_provider_config(settings):
         return None
-    from provider_config import get_saved_provider
+    from conveyor.core.provider_config import get_saved_provider
     saved = get_saved_provider(settings)
     if saved is None or not _ENV_KEY_RE.fullmatch(saved.get("env_key", "")):
         return None
@@ -416,7 +416,7 @@ class PiBackend(CodexRunner):
             bridged = False
             if dir_ready:
                 try:
-                    from provider_config import _atomic_write
+                    from conveyor.core.provider_config import _atomic_write
                     _atomic_write(pi_dir / "models.json", selection.models_json, 0o600)
                     bridged = True
                 except OSError:

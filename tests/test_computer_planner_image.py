@@ -10,14 +10,14 @@ from pathlib import Path
 from unittest import mock
 
 from config import Settings
-from desktop_computer_loop import run_computer_loop
-from desktop_computer_planner import (
+from conveyor.desktop.desktop_computer_loop import run_computer_loop
+from conveyor.desktop.desktop_computer_planner import (
     CodexPlanner,
     followup_click_labels,
     maybe_followup_label_action,
     maybe_simple_digit_action,
 )
-from desktop_screenshot import resolve_screenshot_dir
+from conveyor.desktop.desktop_screenshot import resolve_screenshot_dir
 
 
 def _settings(root: Path) -> Settings:
@@ -157,7 +157,7 @@ class PlannerImageTest(unittest.IsolatedAsyncioTestCase):
             png_path.write_bytes(_tiny_png())
             planner = CodexPlanner(settings)
             with mock.patch(
-                "desktop_computer_planner.asyncio.create_subprocess_exec",
+                "conveyor.desktop.desktop_computer_planner.asyncio.create_subprocess_exec",
                 fake_exec,
             ):
                 action = await planner.next_action(
@@ -192,7 +192,7 @@ class PlannerImageTest(unittest.IsolatedAsyncioTestCase):
             settings = _settings(Path(tmp))
             planner = CodexPlanner(settings)
             with mock.patch(
-                "desktop_computer_planner.asyncio.create_subprocess_exec",
+                "conveyor.desktop.desktop_computer_planner.asyncio.create_subprocess_exec",
                 fake_exec,
             ):
                 action = await planner.next_action(
@@ -245,7 +245,7 @@ class PlannerImageTest(unittest.IsolatedAsyncioTestCase):
             png_path.write_bytes(_tiny_png())
             planner = CodexPlanner(settings)
             with mock.patch(
-                "desktop_computer_planner.asyncio.create_subprocess_exec",
+                "conveyor.desktop.desktop_computer_planner.asyncio.create_subprocess_exec",
                 fake_exec,
             ):
                 result = await run_computer_loop(
@@ -292,7 +292,7 @@ class PlannerImageTest(unittest.IsolatedAsyncioTestCase):
             planner = CodexPlanner(settings)
             observation = {"screenshot_id": shot_id, "width": 1, "height": 1}
             with mock.patch(
-                "desktop_computer_planner.asyncio.create_subprocess_exec",
+                "conveyor.desktop.desktop_computer_planner.asyncio.create_subprocess_exec",
                 fake_exec,
             ):
                 first = await planner.next_action(
@@ -347,7 +347,7 @@ class PlannerImageTest(unittest.IsolatedAsyncioTestCase):
             settings = _settings(Path(tmp))
             planner = CodexPlanner(settings)
             with mock.patch(
-                "desktop_computer_planner.asyncio.create_subprocess_exec",
+                "conveyor.desktop.desktop_computer_planner.asyncio.create_subprocess_exec",
                 fake_exec,
             ):
                 await planner.next_action(

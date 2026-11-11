@@ -10,8 +10,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import provider_config
-import workers
+from conveyor.core import provider_config
+from conveyor.agents import workers
 from config import Settings
 from runner import pi_agent
 from runner.pi_agent import PiBackend, build_pi_models_json, resolve_pi_bin, sanitize_pi_provider_id
@@ -209,7 +209,7 @@ class PiProviderBridgeTests(unittest.TestCase):
 
 class PiCatalogTests(unittest.TestCase):
     def setUp(self) -> None:
-        patcher = patch("worker_usage.fetch_usage", return_value=None)
+        patcher = patch("conveyor.agents.worker_usage.fetch_usage", return_value=None)
         patcher.start()
         self.addCleanup(patcher.stop)
 

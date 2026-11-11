@@ -27,9 +27,9 @@ from personal_tools.registry import (
     execute_personal_tool,
     register_personal_tools,
 )
-import routines
+from conveyor.automation import routines
 from web_console import WebConsoleHandler, WebConsoleServer
-from web_control import WebControl
+from conveyor.web.web_control import WebControl
 
 TOKEN = "test-token-0123456789-abcdefghijklmnopqrstuvwxyz"
 
@@ -251,7 +251,7 @@ class TestRoutinesStore(unittest.TestCase):
         conn.close()
 
         runner = MagicMock()
-        with patch("routines.run_single_routine", new=AsyncMock(return_value={"id": 1, "status": "ok"})) as mock_run:
+        with patch("conveyor.automation.routines.run_single_routine", new=AsyncMock(return_value={"id": 1, "status": "ok"})) as mock_run:
             async def _run():
                 res1, res2 = await asyncio.gather(
                     routines.run_due_routines(self.settings, runner, now=now),
@@ -431,7 +431,7 @@ class TestRoutineRunner(unittest.TestCase):
         )
 
     def test_agent_conversation_post_wording(self):
-        from transcript_store import get_transcript_store
+        from conveyor.core.transcript_store import get_transcript_store
 
         agent = {"id": "a1", "session_id": "web:web-console:agent-a1"}
         cases = [
@@ -851,7 +851,7 @@ class TestReviewFixes(unittest.TestCase):
     def test_routine_run_tool_only_queues_for_web_console(self):
         from unittest import mock
         r = routines.create_routine(self.settings, "q", "0 3 * * *", "p")
-        with mock.patch("routines.run_single_routine") as run_single:
+        with mock.patch("conveyor.automation.routines.run_single_routine") as run_single:
             res = asyncio.run(execute_personal_tool(
                 self.settings, "routine.run", str(r["id"]),
                 operator_id="u", channel="telegram", chat_id="1",
@@ -1246,7 +1246,7 @@ class TestRoutineWebhooksApi(unittest.TestCase):
 
     def setUp(self):
         clear_all_pending()
-        self.mock_run_patcher = patch("routines.run_single_routine", new_callable=AsyncMock)
+        self.mock_run_patcher = patch("conveyor.automation.routines.run_single_routine", new_callable=AsyncMock)
         self.mock_run = self.mock_run_patcher.start()
         self.mock_run.return_value = {"id": 1, "status": "ok"}
         self.settings.routines_enabled = True

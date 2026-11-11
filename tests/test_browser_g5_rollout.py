@@ -11,12 +11,12 @@ import time
 import unittest
 from unittest.mock import patch
 
-import browser_g5_rollout as g5
-import browser_g5_api
-from workflow_browser_external_identity import ExternalPolicyDenied
-from workflow_browser_external import ExternalReadOnlyBrowser
-from workflow_browser_external_approvals import ApprovalLedger
-from workflow_browser_egress import EgressAudit
+from conveyor.browser import browser_g5_rollout as g5
+from conveyor.browser import browser_g5_api
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied
+from conveyor.browser.workflow_browser_external import ExternalReadOnlyBrowser
+from conveyor.browser.workflow_browser_external_approvals import ApprovalLedger
+from conveyor.browser.workflow_browser_egress import EgressAudit
 
 
 ORIGIN = "https://approved.example.org"
@@ -67,7 +67,7 @@ class G5Tests(unittest.TestCase):
                 object(), "/api/browser/g5/revoke", {"origin": ORIGIN}))
 
     def test_g5_always_disables_g3_submit_without_live_ack(self):
-        from workflow_browser_g3 import enabled as g3_enabled
+        from conveyor.browser.workflow_browser_g3 import enabled as g3_enabled
         flags = {
             "CONVEYOR_REAL_BROWSER": "1",
             "CONVEYOR_BROWSER_EXTERNAL_READONLY": "1",
@@ -106,7 +106,7 @@ class G5Tests(unittest.TestCase):
             self.manifest.chmod(0o600)
             return original_fstat(fd)
 
-        with patch("browser_g5_rollout.os.fstat", side_effect=replace_path_after_open):
+        with patch("conveyor.browser.browser_g5_rollout.os.fstat", side_effect=replace_path_after_open):
             self.assertEqual(g5._manifest()["origin"], ORIGIN)
 
     def test_flag_alone_never_promotes_and_signed_manifest_required(self):
@@ -117,7 +117,7 @@ class G5Tests(unittest.TestCase):
                 g5.check(self.root, ORIGIN, "read")
             self.sign()
             with patch("importlib.metadata.version", return_value="1.58.0"), \
-                 patch("browser_g5_rollout._chromium_revision", return_value="pinned-build-123"):
+                 patch("conveyor.browser.browser_g5_rollout._chromium_revision", return_value="pinned-build-123"):
                 g5.check(self.root, ORIGIN, "read")
                 g5.check(self.root, ORIGIN, "auth")
                 with self.assertRaisesRegex(ExternalPolicyDenied, "g5_action_not_certified"):
@@ -177,7 +177,7 @@ class G5Tests(unittest.TestCase):
             with self.subTest(url=url), self.assertRaises(ExternalPolicyDenied):
                 g5.revoke(self.root, url)
         g5.revoke(self.root, ORIGIN)
-        with patch("browser_g5_rollout.sqlite3.connect", side_effect=OSError("storage down")):
+        with patch("conveyor.browser.browser_g5_rollout.sqlite3.connect", side_effect=OSError("storage down")):
             with self.assertRaisesRegex(ExternalPolicyDenied, "g5_state_unavailable"):
                 g5.check(self.root, ORIGIN, "read")
 
@@ -217,7 +217,7 @@ class G5Tests(unittest.TestCase):
             _await=lambda coro, timeout: asyncio.run(coro),
             _json=lambda code, body: replies.append((code, body)),
         )
-        with patch("browser_auth_sessions.manager_for", return_value=manager):
+        with patch("conveyor.browser.browser_auth_sessions.manager_for", return_value=manager):
             self.assertTrue(browser_g5_api.post(
                 handler, "/api/browser/g5/revoke", {"origin": ORIGIN}))
         self.assertEqual(replies[-1][0], 200)

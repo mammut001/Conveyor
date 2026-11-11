@@ -3,8 +3,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock,patch
-from overnight_probes import SourceProbes
-from overnight_process import CommandFailure
+from conveyor.automation.overnight_probes import SourceProbes
+from conveyor.automation.overnight_process import CommandFailure
 
 
 class ProbeTests(unittest.IsolatedAsyncioTestCase):
@@ -15,7 +15,7 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
             yield Path('/fixture')
         probe={'name':'stream whitespace','reproduction':'expected exact delta whitespace','argv':['python','-c','immutable probe']}
         probes=SourceProbes(SimpleNamespace(detached=detached),[probe])
-        with patch('overnight_probes.command',new_callable=AsyncMock,side_effect=CommandFailure('failed')) as process:
+        with patch('conveyor.automation.overnight_probes.command',new_callable=AsyncMock,side_effect=CommandFailure('failed')) as process:
             findings=await probes.discover({'revision':'a'*40})
         self.assertEqual(process.await_count,2)
         self.assertEqual(findings[0]['scenario'],probe['name'])
@@ -26,5 +26,5 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         async def detached(revision):
             yield Path('/fixture')
         probes=SourceProbes(SimpleNamespace(detached=detached),[{'name':'x','reproduction':'x','argv':['python']}])
-        with patch('overnight_probes.command',new_callable=AsyncMock,side_effect=[CommandFailure('transient'),'ok']):
+        with patch('conveyor.automation.overnight_probes.command',new_callable=AsyncMock,side_effect=[CommandFailure('transient'),'ok']):
             self.assertEqual(await probes.discover({'revision':'a'*40}),[])

@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from overnight_process import command, child_environment, CommandFailure
+from conveyor.automation.overnight_process import command, child_environment, CommandFailure
 
 
 class ProcessTests(unittest.IsolatedAsyncioTestCase):

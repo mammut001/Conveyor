@@ -3,14 +3,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock,patch,AsyncMock
 from contextlib import asynccontextmanager
-from overnight_repair import PiRepair
+from conveyor.automation.overnight_repair import PiRepair
 
 
 class RepairTests(unittest.IsolatedAsyncioTestCase):
     async def test_existing_pr_resumes_without_rerunning_agent(self):
         github=Mock();github._json.return_value=[{'number':34,'headRefOid':'a'*40}]
         adapter=PiRepair(SimpleNamespace(repo=Path('/unused')),github)
-        with patch('overnight_repair.command',new_callable=AsyncMock) as process:
+        with patch('conveyor.automation.overnight_repair.command',new_callable=AsyncMock) as process:
             self.assertEqual(await adapter({'issue':{'number':12}}),{'pr':34,'head':'a'*40})
             process.assert_not_awaited()
 
@@ -28,7 +28,7 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
             if argv[:4]==['git','diff','--cached','--name-only']:
                 return '.github/workflows/ci.yml\n'
             return ''
-        with patch('overnight_repair.command',side_effect=process):
+        with patch('conveyor.automation.overnight_repair.command',side_effect=process):
             with self.assertRaises(ValueError):
                 await PiRepair(workspaces,github)({'issue':{'number':12},'finding':{'scenario':'fixture'}})
         self.assertFalse(any('push' in argv for argv in commands))
@@ -48,7 +48,7 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
             if argv[:2]==['git','show']:
                 return 'Fix preview issue #12'
             return 'a'*40
-        with patch('overnight_repair.command',side_effect=process):
+        with patch('conveyor.automation.overnight_repair.command',side_effect=process):
             result=await adapter({'issue':{'number':12}})
         self.assertEqual(result,{'pr':42,'head':'b'*40})
         adapter._publish.assert_awaited_once()
@@ -62,7 +62,7 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
     async def test_publication_pushes_saved_sha_not_checkout_head(self):
         github=Mock(repo='owner/repo');github.command.return_value='https://github.com/owner/repo/pull/42'
         adapter=PiRepair(SimpleNamespace(repo=Path('/fixture')),github)
-        with patch('overnight_repair.command',new_callable=AsyncMock) as process:
+        with patch('conveyor.automation.overnight_repair.command',new_callable=AsyncMock) as process:
             result=await adapter._publish(Path('/fixture'),'codex/repair',12,'a'*40,'b'*40)
         self.assertEqual(process.await_args.args[0][-1],'b'*40+':refs/heads/codex/repair')
         self.assertEqual(result['head'],'b'*40)

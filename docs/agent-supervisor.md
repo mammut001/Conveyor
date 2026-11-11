@@ -101,7 +101,7 @@ AGY read roles use a session-scoped permission deny profile; these tool permissi
 
 ## 执行者池 / pool executor
 
-`pool` is a Supervisor executor that chooses a worker from the 执行者 pool (`workers.py`) for each role call. It does not run an agent of its own. It hands the call to the matching Supervisor adapter, so that adapter's read-only and sandbox rules still apply.
+`pool` is a Supervisor executor that chooses a worker from the 执行者 pool (`conveyor/agents/workers.py`) for each role call. It does not run an agent of its own. It hands the call to the matching Supervisor adapter, so that adapter's read-only and sandbox rules still apply.
 
 ### Selecting it
 
@@ -127,7 +127,7 @@ AGY read roles use a session-scoped permission deny profile; these tool permissi
 - Each attempt is a separate execution record with its own executor and model. The web console shows a switch note between a failed attempt and the next one.
 - CLI workers (`claude-code`, `agy`, `cmd`) run with their own saved model (`/api/workers/<id>/model`). Pi resolves its provider and model via `resolve_pi_provider` (`CONVEYOR_PI_*` > saved 模型设置 > Pi default), so a pool worker model is never passed to Pi. The Supervisor role model is never passed to pool workers.
 - Cooling is shared with the chat pool (`runner/pooled.py`). If every candidate hits a quota, the error starts with "执行者池里的执行者额度都用完了：".
-- Usage readers live in `worker_usage.py`. Antigravity usage needs a running local Antigravity language server; without one, the pool relies on quota errors alone. See also the [worker pool notes](workers.md).
+- Usage readers live in `conveyor/agents/worker_usage.py`. Antigravity usage needs a running local Antigravity language server; without one, the pool relies on quota errors alone. See also the [worker pool notes](workers.md).
 - `scripts/supervisor_pool_smoke.py` runs the real flow with fake `claude`, `agy` and `pi` binaries and stubbed detection.
 
 ## Host Validation Commands (`CONVEYOR_AGENT_SUPERVISOR_VALIDATION_COMMANDS_JSON`)
@@ -226,7 +226,7 @@ python3 scripts/seed_antigravity_supervisor_skill.py --state-dir /tmp/isolated-s
 
 ## Web API, 202 Dispatch & Cancellation UI
 
-Supervisor actions are accessible over authenticated HTTP endpoints. Dispatch wakes a server-owned worker (`SupervisorWorkerManager` in `supervisor_service.py`). The worker claims queued tasks and runs `run_supervisor_flow`, at most 2 flows at a time:
+Supervisor actions are accessible over authenticated HTTP endpoints. Dispatch wakes a server-owned worker (`SupervisorWorkerManager` in `conveyor/agents/supervisor_service.py`). The worker claims queued tasks and runs `run_supervisor_flow`, at most 2 flows at a time:
 
 - `POST /api/supervisor/tasks`: Creates a task in `pending_dispatch`.
 - `POST /api/supervisor/tasks/<id>/dispatch`: Claims the task, acquires worktree lock, and enqueues supervisor execution. Returns `202 Accepted`:
@@ -247,7 +247,7 @@ Supervisor actions are accessible over authenticated HTTP endpoints. Dispatch wa
 
 Owners need to see WHAT changed, so both tasks and goals expose the candidate diff
 (`base_sha` → current worktree content: committed + staged + unstaged, plus untracked text files) as
-JSON. Implemented in `supervisor_diff.py`, dispatched from `web_supervisor_api.py` with the same auth,
+JSON. Implemented in `conveyor/agents/supervisor_diff.py`, dispatched from `conveyor/web/web_supervisor_api.py` with the same auth,
 feature flag and `SupervisorServiceError` shape as every other supervisor route.
 
 - `GET /api/supervisor/tasks/<id>/diff`:
@@ -383,7 +383,7 @@ operator stops it, or a decision is needed from the operator.
   explicit operator reply buys **exactly one** extra iteration; anything beyond that is refused with
   `409 goal_iterations_exhausted`.
 
-### Telling the owner (goal_notify.py)
+### Telling the owner (conveyor/agents/goal_notify.py)
 
 A goal that stops needing the agent is useless if nobody notices it, so every transition into
 `waiting_user` / `achieved` / `exhausted` / `failed` calls `goal_notify.notify_goal_change` (from
@@ -446,7 +446,7 @@ answer was the web console. Four commands in the shared `COMMAND_TABLE`
 ## 合并到主分支
 
 A finished goal leaves its changes in a *managed Supervisor worktree* (branch e.g. `goal-calc`); the owner's
-working tree stays untouched until they say so. `supervisor_merge.py` is that explicit, owner-triggered merge
+working tree stays untouched until they say so. `conveyor/agents/supervisor_merge.py` is that explicit, owner-triggered merge
 back into the repository's default branch in the **main checkout**, with the same auth, feature flag and
 `SupervisorServiceError` JSON shape as every other supervisor route.
 
@@ -517,7 +517,7 @@ Rules (all enforced in code, each failure is a blocker with a Chinese message):
 
 ## 项目笔记
 
-Per-repository Hermes-style working notes (`agent_memory.py`, scope `repo:<repo_id>`) give Supervisor roles durable facts about a repository across tasks and goals without requiring manual confirmation.
+Per-repository Hermes-style working notes (`conveyor/agents/agent_memory.py`, scope `repo:<repo_id>`) give Supervisor roles durable facts about a repository across tasks and goals without requiring manual confirmation.
 
 ### Storage & Bounds
 

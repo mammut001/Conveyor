@@ -8,16 +8,16 @@ default and runs without Playwright installed.
 
 ## Capabilities and hard limits
 
-- `workflow_browser_contract.py` continues to accept **only** the immutable
+- `conveyor/browser/workflow_browser_contract.py` continues to accept **only** the immutable
   `visitor600_mock` action plan: `open`, `click`, `fill`,
   `assert_field` and `assert_text`; no raw URLs, selectors, JavaScript,
   uploads, payments, final submit, credentials or free-form instructions.
   Synthetic fields are exactly `purpose` and `funding` with bounded ASCII
   values; the only click control is the navigation-only `next` link.
-- `workflow_browser_bridge.py` provides `execute_fixture_plan` (mock-only)
+- `conveyor/browser/workflow_browser_bridge.py` provides `execute_fixture_plan` (mock-only)
   and `execute_workflow_browser_plan` (explicitly bound to a running
   WorkflowStore browser step). No automatic workflow `begin` or human approval.
-- `workflow_browser_playwright.py` adds `LocalPlaywrightBrowser`, with the
+- `conveyor/browser/workflow_browser_playwright.py` adds `LocalPlaywrightBrowser`, with the
   same `page`, `apply`, `readback` and `field_matches` port as the mock.
   It can be constructed **only with `CONVEYOR_REAL_BROWSER=1`**;
   the flag is also checked before each action. Importing the repo or running

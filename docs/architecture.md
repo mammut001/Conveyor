@@ -8,7 +8,7 @@
 
 > **当前桌面状态**: P5.0 的 desktop stub 描述是历史记录。当前实现是 P5.6/P5.6.2
 > 的 Mac-local Cua direct loop：`desktop_agent_server.py` 由
-> `conveyor-desktop-agent.service` 托管，动作通过 `desktop_computer_loop.py`
+> `conveyor-desktop-agent.service` 托管，动作通过 `conveyor/desktop/desktop_computer_loop.py`
 > 和本地 `cua-driver` 执行。详见 `docs/desktop_security.md` 与
 > `docs/desktop_capabilities.md`。
 
@@ -1139,7 +1139,7 @@ desktop_agent → 本地 cua-driver → 真实桌面操作`。后端用 `trycua/
   `DESKTOP_DIRECT_CAPABILITIES`；`nodes/registry.py` 的
   `computer_use_active(settings)` 作为总开关谓词。仍**不**把
   `is_stub_environment()` 翻成 `False`（保持项目级 stub 总闸不变）。
-- **请求存储**：`desktop_computer_requests.py`，文件位于
+- **请求存储**：`conveyor/desktop/desktop_computer_requests.py`，文件位于
   `CODEX_MEMORY_ROOT/state/desktop_computer_requests.json`，沿用
   observe/upload 的「跨进程文件锁 + `.tmp`+`os.replace` 原子写」。
   支持任务 / 步骤的 claim-complete-fail-cancel、TTL 过期、
@@ -1150,15 +1150,15 @@ desktop_agent → 本地 cua-driver → 真实桌面操作`。后端用 `trycua/
   `/desktop/computer/task/step/claim|complete|fail` 与
   `/desktop/computer/task/pending`、`/desktop/computer/status`
   （Bearer + `hmac.compare_digest`，`127.0.0.1`）。
-- **Mac agent**：`desktop_cua.py` 的 `CuaDriver`（`LocalCuaTransport`
+- **Mac agent**：`conveyor/desktop/desktop_cua.py` 的 `CuaDriver`（`LocalCuaTransport`
   使用配置命令定位本地 `cua-driver` binary，并通过
   `cua-driver call <tool> <json>` 执行；`FakeCuaTransport` 仅测试，不保留
   明文文本）。`/computer_status` 还会读取 `permissions status --json`
   的 metadata-only 权限状态；`desktop_agent.py --poll-computer` 轮询
   control plane，claim 待执行步骤 → `build_driver` 执行 → 回写结果。
-- **VPS 侧循环**：`desktop_computer_planner.py`（`CodexPlanner` 驱动
+- **VPS 侧循环**：`conveyor/desktop/desktop_computer_planner.py`（`CodexPlanner` 驱动
   `codex exec --json` 严格单步 JSON 动作；`ScriptedPlanner` 用于 smoke）
-  + `desktop_computer_loop.py`（`HttpComputerBackend` 仅轮询存储等
+  + `conveyor/desktop/desktop_computer_loop.py`（`HttpComputerBackend` 仅轮询存储等
   完成；`FakeComputerBackend` 进程内跑 `FakeCuaTransport`；
   `run_computer_loop` 强制动作白名单、拦截词、max_steps/max_seconds、
   `/computer_stop` 取消、脱敏轨迹）。每个已执行动作后会自动追加一次
@@ -1201,7 +1201,7 @@ P5.6.1 对直连 Computer Use 的安全性和可调试性进行了加固：
 |------|------|------|
 | **3.2** | **2026-07-08** | **P5.6.1 直连 Computer Use 安全加固与优化。** 支持 AX 优先点击并记录 click_method；增加 active_app 探测与 allowed/blocked_apps 限定；将轨迹持久化为 JSONL 并统计步耗时 (duration_ms)；精简报错输出；Telegram 增加 `"停下"`/`"别动"` 等 NL 快速停止路径；新增 6 个 smoke 覆盖。详见 `docs/desktop_security.md §7.5`。 |
 | **3.0** | **2026-07-01** | **P5.0 执行节点（VPS + desktop stub）。新增 `nodes/` 包、`nodes.status` + `computer.status` 确定性工具、`/nodes` / `/node_status` / `/computer_status` 命令、飞书 `node_status_card` / `computer_status_card`、把过去会穿透到 Codex 的桌面 / Computer Use 自然语言拦截到 stub，以及 `docs/desktop_agent_protocol.md` / `docs/desktop_security.md` 两份设计稿。**本任务没有真实桌面控制能力**，desktop 节点无论怎么配置都是 offline。详见上文 P5.0 节。 |
-| **3.1** | **2026-07-08** | **P5.6 直连 Computer Use 模式（cua 后端，默认关闭）。** NL → `computer.task` → Codex 单步 JSON 动作 → Mac `desktop_agent` 经本地 `cua-driver` 执行真实桌面操作；VPS 仅轮询文件存储，Cua 永不跨网络。新增配置开关、能力门控（`CAP_COMPUTER_USE_DIRECT`）、请求存储、控制面端点、`desktop_cua.py`、工具与命令（`/computer_arm` `/computer_task` `/computer_stop` 等）、NL 路由，以及硬性安全边界（动作白名单、拦截词、脱敏、上限、紧急停止）。详见上文 P5.6 节与 `docs/desktop_security.md §7`。 |
+| **3.1** | **2026-07-08** | **P5.6 直连 Computer Use 模式（cua 后端，默认关闭）。** NL → `computer.task` → Codex 单步 JSON 动作 → Mac `desktop_agent` 经本地 `cua-driver` 执行真实桌面操作；VPS 仅轮询文件存储，Cua 永不跨网络。新增配置开关、能力门控（`CAP_COMPUTER_USE_DIRECT`）、请求存储、控制面端点、`conveyor/desktop/desktop_cua.py`、工具与命令（`/computer_arm` `/computer_task` `/computer_stop` 等）、NL 路由，以及硬性安全边界（动作白名单、拦截词、脱敏、上限、紧急停止）。详见上文 P5.6 节与 `docs/desktop_security.md §7`。 |
 | 2.0 | 2026-06-11 | 加 agent 工具层、Telegram live smoke、backlog；中英同步 |
 | 2.1 | 2026-06-11 | 加 `CONVEYOR_PROGRESS_MODE`（verbose/compact/quiet）；compact 修 Feishu progress 链；同步 6.7 节、harness、backlog |
 | 2.2 | 2026-06-11 | 加自动 VPS 部署（GitHub Actions + deploy_vps.sh） |

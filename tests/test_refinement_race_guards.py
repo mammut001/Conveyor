@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from channel.types import InboundMessage
 from handlers.job_queue import JobQueue
-from refinement_store import RefinementStore, stable_session_id
+from conveyor.core.refinement_store import RefinementStore, stable_session_id
 from runner.operators.jobs import apply_job, discard_job
 from runner.types import Job, JobMode
 from runner.worktree import (
@@ -140,7 +140,7 @@ class RefinementRaceGuardTests(unittest.TestCase):
         (path / "README.md").write_text("base\nrefined\n", encoding="utf-8")
 
         with patch(
-            "refinement_store.RefinementStore.active_for_worktree",
+            "conveyor.core.refinement_store.RefinementStore.active_for_worktree",
             side_effect=RuntimeError("control DB unavailable"),
         ):
             apply_result = asyncio.run(self.runner.apply_job("q-apply", path))

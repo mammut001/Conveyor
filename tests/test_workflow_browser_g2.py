@@ -11,11 +11,11 @@ import time
 import unittest
 from unittest.mock import patch
 
-from workflow_browser_egress import EgressAudit
-from workflow_browser_external import ExternalReadOnlyBrowser
-from workflow_browser_external_approvals import ApprovalLedger
-from workflow_browser_external_identity import ExternalPolicyDenied
-from workflow_browser_g2 import G2Browser, validate_actions
+from conveyor.browser.workflow_browser_egress import EgressAudit
+from conveyor.browser.workflow_browser_external import ExternalReadOnlyBrowser
+from conveyor.browser.workflow_browser_external_approvals import ApprovalLedger
+from conveyor.browser.workflow_browser_external_identity import ExternalPolicyDenied
+from conveyor.browser.workflow_browser_g2 import G2Browser, validate_actions
 
 HOST = "approved.fixture.test"
 PAGES = {
@@ -120,7 +120,7 @@ class G2ChromiumTests(unittest.IsolatedAsyncioTestCase):
             safe_paths=("/safe","/second","/search","/swap","/overlay",
                         "/realm","/password","/postform",
                         "/hidden-opacity","/tiny","/clipped"))
-        pinned = patch("workflow_browser_external.resolve_public_ipv4",
+        pinned = patch("conveyor.browser.workflow_browser_external.resolve_public_ipv4",
                        return_value="127.0.0.1")
         pinned.start()
         self.addCleanup(pinned.stop)

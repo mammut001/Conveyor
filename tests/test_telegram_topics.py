@@ -11,13 +11,13 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from agent_coordination import agent_channel_routing as routing
-import agent_context as ac
-from agents import AgentStore
+from conveyor.agents import agent_context as ac
+from conveyor.agents.agents import AgentStore
 from channel.telegram import TelegramChatOutbound, inbound_from_update, split_chat_thread
 from config import Settings
 from personal_tools.long_term_memory import allowed_for
 from telegram.error import BadRequest
-import telegram_topics
+from conveyor.channels import telegram_topics
 
 
 def _settings(root: Path) -> Settings:
@@ -135,7 +135,7 @@ class TelegramTopicsTests(unittest.IsolatedAsyncioTestCase):
             replies.append(text)
 
         with patch("bot.settings", self.settings), patch("bot._guard", AsyncMock(return_value=True)), \
-                patch("bot._reply", fake_reply), patch("telegram_topics.bind_topic") as bind:
+                patch("bot._reply", fake_reply), patch("conveyor.channels.telegram_topics.bind_topic") as bind:
             await bot.topics_cmd(update, SimpleNamespace(args=["bind", "Finance"]))
         bind.assert_not_called()
         self.assertTrue(replies and "话题" in replies[-1])
