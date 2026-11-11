@@ -113,7 +113,7 @@ def complete(settings, target, record, worker_id, body):
             (row["id"],))
         # Same BEGIN IMMEDIATE transaction as result INSERT + task ACK:
         # after a crash, a committed result always has its notification.
-        import agent_result_outbox
+        from agent_coordination import agent_result_outbox
         result = conn.execute(
             """SELECT id FROM agent_mailbox WHERE from_agent=? AND to_agent=?
                AND idempotency_key=?""",

@@ -69,7 +69,7 @@ class TakeoverAgentWorkersTests(unittest.TestCase):
                 mock.patch("approval_relay.start_relay_worker", return_value=None),
                 mock.patch("agent_context.enabled", return_value=enabled),
                 mock.patch("agent_mailbox.enabled", return_value=enabled),
-                mock.patch("agent_delegation_worker.Worker.run", new=delegation_poll),
+                mock.patch("agent_coordination.agent_delegation_worker.Worker.run", new=delegation_poll),
                 mock.patch("agent_security.retention_worker", new=retention_poll),
             ):
                 web_console_takeover.main()

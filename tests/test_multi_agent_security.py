@@ -13,9 +13,9 @@ from unittest.mock import patch
 
 import agent_context as ac
 import agent_mailbox as mailbox
-import agent_delegation as delegation
-import agent_delegation_worker as worker
-import agent_channel_routing as channel
+from agent_coordination import agent_delegation as delegation
+from agent_coordination import agent_delegation_worker as worker
+from agent_coordination import agent_channel_routing as channel
 import agent_security as security
 import main_router
 import web_agent_screens as screens
@@ -181,7 +181,7 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_worker_runtime_hot_kill_cancels_lease_without_stopping_poller(self):
         self.send("live-kill",kind="task")
-        import agent_delegation_queue as q
+        from agent_coordination import agent_delegation_queue as q
         target=self.ctx(self.b)
         with ac.bind(target):
             record,wid=q.claim(self.cfg,target)

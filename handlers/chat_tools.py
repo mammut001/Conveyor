@@ -45,7 +45,7 @@ def _get_tool_spec(name: str, settings: Settings | None = None) -> Any | None:
         from main_router import spec
         return spec(settings)
     if name == "agent.delegate":
-        from agent_delegation import spec
+        from agent_coordination.agent_delegation import spec
         return spec(settings)
     if name in ("agent.inbox", "agent.reply"):
         from agent_messaging_v2 import spec
@@ -203,7 +203,7 @@ def build_tool_schemas(settings: Settings | None = None, *, memory_allowed: bool
     if agent_messaging_v2.enabled(settings):
         for name in ("agent.inbox", "agent.reply"):
             candidates.append((name, agent_messaging_v2.spec(settings, name)))
-    import agent_delegation
+    from agent_coordination import agent_delegation
     if agent_delegation.enabled(settings):
         candidates.append(("agent.delegate", agent_delegation.spec(settings)))
 

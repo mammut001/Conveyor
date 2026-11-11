@@ -71,3 +71,6 @@ web/playwright-report/
 
 # Stray sqlite files from tests that pass a mock as a db path
 <MagicMock*
+
+# macOS Finder metadata
+.DS_Store

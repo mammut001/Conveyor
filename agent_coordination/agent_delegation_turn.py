@@ -8,12 +8,12 @@ import logging
 import time
 
 import agent_context as ac
-import agent_delegation
+from agent_coordination import agent_delegation
 import agent_mailbox
 from redaction import redact_text
 from runner.chat_client import complete_chat, config_from_settings
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("agent_delegation_turn")
 MAX_STEPS = 3
 MAX_TOKENS = 1200
 MAX_DURATION = 80

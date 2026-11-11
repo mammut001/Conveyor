@@ -12,8 +12,8 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import agent_context as ac
-import agent_delegation_queue as queue
-import agent_delegation_worker as worker
+from agent_coordination import agent_delegation_queue as queue
+from agent_coordination import agent_delegation_worker as worker
 import main_router as router
 import main_router_results as results
 from agents import AgentStore, chat_id_for, WEB_OPERATOR

@@ -14,8 +14,8 @@ from unittest.mock import patch
 
 import agent_context as ac
 import agent_mailbox as mailbox
-import agent_delegation_queue as q
-import agent_delegation_worker as worker
+from agent_coordination import agent_delegation_queue as q
+from agent_coordination import agent_delegation_worker as worker
 import agent_security as security
 import main_router
 from agents import AgentStore, WEB_OPERATOR, chat_id_for
@@ -79,7 +79,7 @@ class SecurityFollowups(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(q.complete(settings, target, task, lease, "done"))
                     resumed.set()
             return 1
-        with patch("agent_delegation_worker.poll_once", side_effect=process):
+        with patch("agent_coordination.agent_delegation_worker.poll_once", side_effect=process):
             poller = asyncio.create_task(worker.Worker(self.cfg).run())
             try:
                 await asyncio.sleep(.65)

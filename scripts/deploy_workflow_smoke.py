@@ -50,6 +50,24 @@ def _test_deploy_script_exists() -> CheckResult:
     return CheckResult(name, DEPLOY_SH.exists(), f"path={DEPLOY_SH}")
 
 
+def _test_deploy_agent_coordination_files() -> CheckResult:
+    """A partial sync must not mix old and new worker-module instances."""
+    name = "deploy (rsync): includes agent coordination dependants"
+    required = {
+        "agent_coordination", "agent_conversations.py", "agent_mailbox.py",
+        "agent_mailbox_db.py", "agent_security_controls.py", "agent_switcher.py",
+        "agents.py", "main_router.py", "main_router_results.py", "web_agent_screens.py",
+    }
+    content = DEPLOY_SH.read_text(encoding="utf-8")
+    try:
+        paths = content.split("for sub in \\\n", 1)[1].split("; do", 1)[0]
+    except IndexError:
+        return CheckResult(name, False, "rsync allowlist not found")
+    included = set(paths.replace("\\", " ").split())
+    missing = sorted(required - included)
+    return CheckResult(name, not missing, f"missing={missing}" if missing else "all present")
+
+
 def _test_workflow_references_secrets() -> CheckResult:
     name = "workflow: references required secrets (VPS_HOST, VPS_USER, VPS_SSH_KEY)"
     try:
@@ -327,6 +345,7 @@ CHECKS = [
     _test_workflow_exists,
     _test_deploy_vps_script_exists,
     _test_deploy_script_exists,
+    _test_deploy_agent_coordination_files,
     _test_workflow_references_secrets,
     _test_workflow_no_hardcoded_host,
     _test_workflow_passes_github_metadata,

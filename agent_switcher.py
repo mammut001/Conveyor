@@ -4,7 +4,7 @@ from __future__ import annotations
 import secrets
 import time
 
-import agent_channel_routing as routing
+from agent_coordination import agent_channel_routing as routing
 import agent_conversations as conversations
 from agents import AgentStore
 from redaction import redact_text, truncate

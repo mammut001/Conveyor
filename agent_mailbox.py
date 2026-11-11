@@ -90,7 +90,7 @@ def send(settings, *, sender: agent_context.AgentContext, to_agent: str,
     actor = _require(settings, sender)
     _target(settings, actor, to_agent)
     timestamp = _now(now)
-    import agent_delegation
+    from agent_coordination import agent_delegation
     valid_kinds = (_KINDS | {"task", "result"}) if agent_delegation.enabled(settings) else _KINDS
     if not isinstance(kind, str) or kind not in valid_kinds or not isinstance(body, str) or not body.strip():
         raise MailboxDenied("invalid message type or body")

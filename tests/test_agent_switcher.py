@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import agent_switcher as ui
 import agent_conversations as conversations
-import agent_channel_routing as routing
+from agent_coordination import agent_channel_routing as routing
 from agents import AgentStore
 from channel.types import InboundMessage
 from channel.feishu_cards import parse_action, extract_card_action
