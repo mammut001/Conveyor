@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
-import { CHANNEL_LABELS, ChatRequestError, describeChatError, formatDayTime, formatRelativeTime } from './chatFormat'
+import { CHANNEL_LABELS, ChatRequestError, describeChatError, describeNewConversationError, formatDayTime, formatRelativeTime } from './chatFormat'
 
 export type Conversation = {
   id: string; title: string; origin_channel: string; session_id: string
@@ -141,7 +141,8 @@ export function ConversationPicker({ token, agentId, defaultSession, selected, b
       })
       onSelect(row.session_id); setTitle(''); setShowCreate(false)
     } catch (reason) {
-      setError({ message: '新会话没有创建成功，可以重试', detail: describeChatError(reason).detail })
+      const human = describeNewConversationError(reason)
+      setError({ message: human.message, detail: human.detail })
     } finally { setCreating(false) }
   }
 

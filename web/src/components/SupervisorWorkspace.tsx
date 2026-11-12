@@ -1,5 +1,15 @@
 import { Fragment, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatPanel, type TaskSuggestion } from './ChatPanel'
+import {
+  NARROW_DISCUSSION_HINT,
+  RETRY_LOCKED_NOTE,
+  RETRY_MISSING_NOTE,
+  RETRY_READY_NOTE,
+  WIDE_DISCUSSION_HINT,
+  applyTaskSuggestion,
+  handoffNotice,
+  prepareRetryDraft,
+} from './taskDraftHandoff'
 import { ChangedFileList } from './TaskParts'
 import SupervisorChecks from './SupervisorChecks'
 import ProjectNotesCard from './ProjectNotes'
@@ -172,6 +182,7 @@ type WorktreeDraft = {
   acceptanceCriteria: string
   preparedSessionId?: string
   fromSuggestion?: boolean
+  handoffMode?: 'review' | 'read_only' | 'retry'
   roleOverrides?: Partial<RoleOverrides>
 }
 
@@ -557,9 +568,12 @@ function SupervisorRepoSidebar({
   onToggleRepo,
   onSelectWorktree,
   onRegisterRepo,
+  onCreateProject,
   onCreateWorktree,
   registerBusy,
   registerError,
+  createProjectBusy,
+  createProjectError,
   createWorktreeBusyRepoId,
   createWorktreeError,
   openCreateForRepoId,
@@ -575,9 +589,12 @@ function SupervisorRepoSidebar({
   onToggleRepo: (repoId: string) => void
   onSelectWorktree: (repoId: string, worktreeId: string) => void
   onRegisterRepo: (path: string, name?: string) => Promise<boolean>
+  onCreateProject: (name: string) => Promise<boolean>
   onCreateWorktree: (repoId: string, branch?: string, baseRef?: string) => Promise<boolean>
   registerBusy: boolean
   registerError: string
+  createProjectBusy: boolean
+  createProjectError: string
   createWorktreeBusyRepoId: string
   createWorktreeError: string
   openCreateForRepoId: string
@@ -585,6 +602,8 @@ function SupervisorRepoSidebar({
   mobileCloseButton?: React.ReactNode
 }) {
   const [registerOpen, setRegisterOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [projectName, setProjectName] = useState('')
   const [repoPath, setRepoPath] = useState('')
   const [repoName, setRepoName] = useState('')
   const [newBranch, setNewBranch] = useState('')
@@ -599,6 +618,17 @@ function SupervisorRepoSidebar({
       || (repo.worktrees || []).some(wt => wt.branch.toLowerCase().includes(q) || wt.path.toLowerCase().includes(q)),
     )
   }, [repositories, searchQuery])
+
+  const submitCreateProject = async (event: FormEvent) => {
+    event.preventDefault()
+    const name = projectName.trim()
+    if (!name || createProjectBusy) return
+    const ok = await onCreateProject(name)
+    if (ok) {
+      setProjectName('')
+      setCreateOpen(false)
+    }
+  }
 
   const submitRegister = async (event: FormEvent) => {
     event.preventDefault()
@@ -630,9 +660,24 @@ function SupervisorRepoSidebar({
           <button
             type="button"
             className="agent-new-btn sup-register-toggle"
+            aria-expanded={createOpen}
+            aria-label="新建项目"
+            onClick={() => {
+              setCreateOpen(prev => !prev)
+              setRegisterOpen(false)
+            }}
+          >
+            <span aria-hidden="true">+</span> 新建项目
+          </button>
+          <button
+            type="button"
+            className="agent-new-btn sup-register-toggle"
             aria-expanded={registerOpen}
             aria-label="注册仓库"
-            onClick={() => setRegisterOpen(prev => !prev)}
+            onClick={() => {
+              setRegisterOpen(prev => !prev)
+              setCreateOpen(false)
+            }}
           >
             <span aria-hidden="true">+</span> 注册仓库
           </button>
@@ -649,6 +694,38 @@ function SupervisorRepoSidebar({
           onChange={e => onSearchChange(e.target.value)}
         />
       </div>
+
+      {createOpen && (
+        <form className="sup-inline-form" aria-label="新建项目表单" onSubmit={e => void submitCreateProject(e)}>
+          <p className="sup-form-help">
+            只需要一个名称。Conveyor 会在服务器托管的位置新建一个空的 Git 仓库，并准备一份可写的独立工作目录。不用填写服务器上的文件夹路径。
+          </p>
+          <div className="sup-form-field">
+            <label htmlFor="sup-project-name-input">项目名称</label>
+            <input
+              id="sup-project-name-input"
+              type="text"
+              required
+              maxLength={64}
+              placeholder="运维门户"
+              value={projectName}
+              onChange={e => setProjectName(e.target.value)}
+              disabled={createProjectBusy}
+            />
+          </div>
+          {createProjectError && (
+            <p className="sup-inline-error" role="alert">{createProjectError}</p>
+          )}
+          <div className="sup-form-actions">
+            <button type="button" className="shell-button" onClick={() => setCreateOpen(false)} disabled={createProjectBusy}>
+              取消
+            </button>
+            <button type="submit" className="shell-button primary" disabled={!projectName.trim() || createProjectBusy}>
+              {createProjectBusy ? '正在创建…' : '创建项目'}
+            </button>
+          </div>
+        </form>
+      )}
 
       {registerOpen && (
         <form className="sup-inline-form" aria-label="注册仓库表单" onSubmit={e => void submitRegister(e)}>
@@ -810,7 +887,7 @@ function SupervisorRepoSidebar({
         {!filteredRepos.length && (
           <div className="sup-empty-tree">
             {repositories.length === 0
-              ? '还没有登记仓库，点上面的「+ 注册仓库」把本地 Git 仓库的路径加进来。'
+              ? '还没有项目。点上面的「新建项目」创建一个空仓库，或点「注册仓库」登记已有的 Git 路径。'
               : '没有匹配的仓库或分支。'}
           </div>
         )}
@@ -1622,6 +1699,9 @@ export function SupervisorWorkspace({
   const [openCreateForRepoId, setOpenCreateForRepoId] = useState('')
   const [createWorktreeBusyRepoId, setCreateWorktreeBusyRepoId] = useState('')
   const [createWorktreeError, setCreateWorktreeError] = useState('')
+  const [createProjectBusy, setCreateProjectBusy] = useState(false)
+  const [createProjectError, setCreateProjectError] = useState('')
+  const [retryPrepNote, setRetryPrepNote] = useState('')
 
   // Per-context isolated drafts and data snapshots
   const [draftsByContext, setDraftsByContext] = useState<Record<string, WorktreeDraft>>({})
@@ -1872,6 +1952,7 @@ export function SupervisorWorkspace({
     contextAbortRef.current?.abort()
     setDispatchError('')
     setDeployError('')
+    setRetryPrepNote('')
     setMergeOpen(false)
     setHasActiveGoalInWorktree(false)
     setGoalDraft(null)
@@ -1918,6 +1999,44 @@ export function SupervisorWorkspace({
       return false
     } finally {
       setRegisterBusy(false)
+    }
+  }, [apiCall, selectWorktreeContext])
+
+  const handleCreateProject = useCallback(async (name: string): Promise<boolean> => {
+    setCreateProjectBusy(true)
+    setCreateProjectError('')
+    try {
+      const created = await apiCall<{ repository: SupervisorRepo; worktree: SupervisorWorktree }>(
+        '/api/supervisor/projects',
+        {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+          body: JSON.stringify({ name }),
+        },
+      )
+      const repo = created.repository
+      const wt = created.worktree
+      setRepositories(prev => {
+        const exists = prev.some(r => r.id === repo.id)
+        const merged = exists ? prev.map(r => (r.id === repo.id ? repo : r)) : [...prev, repo]
+        if (!wt) return merged
+        return merged.map(item => {
+          if (item.id !== repo.id) return item
+          const wts = item.worktrees || []
+          if (wts.some(row => row.id === wt.id)) return item
+          return { ...item, worktrees: [...wts, wt] }
+        })
+      })
+      if (wt && wt.managed && !wt.is_main) {
+        selectWorktreeContext(repo.id, wt.id)
+        window.setTimeout(() => goalInputRef.current?.focus(), 50)
+      }
+      return true
+    } catch (err) {
+      setCreateProjectError(err instanceof Error ? err.message : '新建项目失败')
+      return false
+    } finally {
+      setCreateProjectBusy(false)
     }
   }, [apiCall, selectWorktreeContext])
 
@@ -2228,7 +2347,8 @@ export function SupervisorWorkspace({
       // Clear pending record & goal draft on successful dispatch
       savePendingDispatch(contextKey, null)
       setPendingByContext(prev => ({ ...prev, [contextKey]: null }))
-      updateCurrentDraft({ goal: '', acceptanceCriteria: '', fromSuggestion: false, preparedSessionId: undefined })
+      updateCurrentDraft({ goal: '', acceptanceCriteria: '', fromSuggestion: false, preparedSessionId: undefined, handoffMode: undefined })
+      setRetryPrepNote('')
 
       setDataByContext(prev => {
         const cur = prev[contextKey]
@@ -2395,11 +2515,15 @@ export function SupervisorWorkspace({
 
   // Task suggestion from ChatPanel fills reviewable goal without auto-dispatching
   const handlePrepareTask = useCallback((suggestion: TaskSuggestion) => {
+    const applied = applyTaskSuggestion(suggestion)
     updateCurrentDraft({
-      goal: suggestion.prompt,
-      preparedSessionId: suggestion.session_id,
-      fromSuggestion: true,
+      goal: applied.goal,
+      acceptanceCriteria: applied.acceptanceCriteria,
+      preparedSessionId: applied.preparedSessionId,
+      fromSuggestion: applied.fromSuggestion,
+      handoffMode: applied.handoffMode,
     })
+    setRetryPrepNote('')
     if (narrowViewport) {
       subTabTouchedRef.current = true
       setSubTab('workspace')
@@ -2408,6 +2532,30 @@ export function SupervisorWorkspace({
       goalInputRef.current?.focus()
     }, 50)
   }, [narrowViewport, updateCurrentDraft])
+
+  const handleRetryPreparation = useCallback(() => {
+    if (!selectedTask) return
+    const criteria = selectedTask.metadata?.acceptance_criteria
+    const result = prepareRetryDraft({
+      goal: selectedTask.goal,
+      acceptanceCriteria: typeof criteria === 'string' ? criteria : '',
+      locked: isLockedWorktree,
+    })
+    if (!result.ok) {
+      setRetryPrepNote(result.reason === 'locked' ? RETRY_LOCKED_NOTE : RETRY_MISSING_NOTE)
+      return
+    }
+    updateCurrentDraft({
+      goal: result.goal,
+      acceptanceCriteria: result.acceptanceCriteria,
+      fromSuggestion: false,
+      handoffMode: 'retry',
+    })
+    setRetryPrepNote(RETRY_READY_NOTE)
+    window.setTimeout(() => {
+      goalInputRef.current?.focus()
+    }, 50)
+  }, [isLockedWorktree, selectedTask, updateCurrentDraft])
 
   // 讨论 uses the coordinator chat model. The owner sees one plain Chinese line; the raw
   // executor code and model id stay in the 技术详情 disclosure (QA N29).
@@ -2436,9 +2584,12 @@ export function SupervisorWorkspace({
           onToggleRepo={toggleRepo}
           onSelectWorktree={selectWorktreeContext}
           onRegisterRepo={handleRegisterRepo}
+          onCreateProject={handleCreateProject}
           onCreateWorktree={handleCreateWorktree}
           registerBusy={registerBusy}
           registerError={registerError}
+          createProjectBusy={createProjectBusy}
+          createProjectError={createProjectError}
           createWorktreeBusyRepoId={createWorktreeBusyRepoId}
           createWorktreeError={createWorktreeError}
           openCreateForRepoId={openCreateForRepoId}
@@ -2475,6 +2626,9 @@ export function SupervisorWorkspace({
             <p>
               「项目」把你电脑上的 Git <strong>仓库</strong>（就是项目文件夹）登记进来，再为它建出一个或多个<strong>工作目录</strong>。
               每个工作目录是项目的一份独立副本，改动不会碰到主分支，确认后再合并。
+            </p>
+            <p>
+              也可以只写一个名称，点「新建项目」。Conveyor 会在服务器托管的位置创建一个空的 Git 仓库，并准备一份可写的独立工作目录。不用填写服务器上的文件夹路径。
             </p>
             <p>
               要真的动手改代码，还需要一个<strong>可用的执行者</strong>（已经装好并登录）。
@@ -2580,7 +2734,9 @@ export function SupervisorWorkspace({
             <div className="brand-mark">C</div>
             <h3>{initialLoading ? '正在加载仓库与工作目录…' : '选择或创建一个工作目录'}</h3>
             <p>
-              在左侧选择仓库并进入一个工作目录，就可以在这里讨论方案、派发任务，并查看结果与部署状态。
+              {narrowViewport
+                ? '打开「仓库」列表，选择一个工作目录，或先点「新建项目」。之后可以在「讨论」里梳理方案，在「任务与结果」里派发任务并查看结果。'
+                : '在左侧选择仓库并进入一个工作目录，或先点「新建项目」。之后就可以在这里讨论方案、派发任务，并查看结果与部署状态。'}
             </p>
           </div>
         ) : subTab === 'deploy' ? (
@@ -2659,7 +2815,7 @@ export function SupervisorWorkspace({
 
                 {currentDraft.fromSuggestion && (
                   <div className="sup-suggestion-notice" role="status">
-                    已从右侧对话填入建议目标，请检查或修改后点击「开始执行」。
+                    {handoffNotice(currentDraft.handoffMode, narrowViewport)}
                   </div>
                 )}
 
@@ -2800,6 +2956,22 @@ export function SupervisorWorkspace({
                     </div>
                   )}
 
+                  {(selectedTask.state === 'failed' || selectedTask.state === 'error') && (
+                    <div className="sup-retry-prep">
+                      <button
+                        type="button"
+                        className="shell-button"
+                        disabled={isLockedWorktree}
+                        onClick={handleRetryPreparation}
+                      >
+                        重新准备
+                      </button>
+                      <p className="sup-draft-hint" role="status">
+                        {isLockedWorktree ? RETRY_LOCKED_NOTE : (retryPrepNote || '用原来的目标和验收标准重新填入草稿，不会自动开始执行。')}
+                      </p>
+                    </div>
+                  )}
+
                   {changesReady && taskSummary && (
                     <div className="sup-task-summary">
                       <h5>这一轮的结果</h5>
@@ -2897,13 +3069,16 @@ export function SupervisorWorkspace({
                     onMakeGoal={handleMakeGoal}
                     makeGoalDisabledReason={hasActiveGoalInWorktree ? '这个工作目录已经有进行中的目标' : ''}
                     discussionOnly
+                    discussionHandoffHint={narrowViewport ? NARROW_DISCUSSION_HINT : WIDE_DISCUSSION_HINT}
                   />
                 </div>
               ) : (
                 <div className="sup-chat-unbound" role="status">
                   <strong>当前工作目录尚未绑定对话会话</strong>
                   <p>
-                    后端还没有为这个工作目录分配对话会话。为避免伪造虚构会话，此处不显示模拟聊天；你仍可在左侧直接填写「当前任务目标」并点击「开始执行」。
+                    {narrowViewport
+                      ? '后端还没有为这个工作目录分配对话会话。为避免伪造虚构会话，此处不显示模拟聊天；你仍可在「任务与结果」填写「当前任务目标」并点击「开始执行」。'
+                      : '后端还没有为这个工作目录分配对话会话。为避免伪造虚构会话，此处不显示模拟聊天；你仍可在左侧直接填写「当前任务目标」并点击「开始执行」。'}
                   </p>
                 </div>
               )}

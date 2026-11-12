@@ -1,0 +1,174 @@
+{
+  "apply": [
+    {
+      "name": "structured draft fills goal and criteria and does not dispatch",
+      "suggestion": {
+        "prompt": "保留门户转发的原始 Host",
+        "goal": "保留门户转发的原始 Host",
+        "acceptance_criteria": "新会话请求的 Host 与 Origin 主机名一致",
+        "session_id": "web:web-console:supwt-draft",
+        "source": "structured_draft",
+        "execution_authorized": false,
+        "context": "维护计划正文"
+      },
+      "expect": {
+        "goal": "保留门户转发的原始 Host",
+        "acceptanceCriteria": "新会话请求的 Host 与 Origin 主机名一致",
+        "preparedSessionId": "web:web-console:supwt-draft",
+        "fromSuggestion": true,
+        "handoffMode": "read_only"
+      },
+      "button": "整理成任务草稿",
+      "notice": {
+        "narrow": false,
+        "text": "这次讨论没有把原来的请求当成可以执行的授权。请在「任务与结果」里检查并修改目标和验收标准。讨论本身不会开始任务。"
+      }
+    },
+    {
+      "name": "read-only suggestion does not copy the prohibition",
+      "suggestion": {
+        "prompt": "先不要执行、不要改代码",
+        "goal": "先不要执行、不要改代码",
+        "acceptance_criteria": "",
+        "session_id": "web:web-console:supwt-ro",
+        "source": "read_only_fallback",
+        "execution_authorized": false,
+        "context": "可以以后再做的维护计划：保留浏览器原来的 Host。"
+      },
+      "expect": {
+        "goal": "可以以后再做的维护计划：保留浏览器原来的 Host。",
+        "acceptanceCriteria": "",
+        "handoffMode": "read_only",
+        "fromSuggestion": true
+      },
+      "button": "整理成任务草稿"
+    },
+    {
+      "name": "read-only fallback uses context when the goal is empty",
+      "suggestion": {
+        "prompt": "",
+        "goal": "",
+        "acceptance_criteria": "",
+        "session_id": "web:web-console:supwt-ctx",
+        "source": "read_only_fallback",
+        "execution_authorized": false,
+        "context": "讨论里已经写好的维护步骤。"
+      },
+      "expect": {
+        "goal": "讨论里已经写好的维护步骤。",
+        "acceptanceCriteria": "",
+        "handoffMode": "read_only",
+        "fromSuggestion": true
+      },
+      "button": "整理成任务草稿"
+    },
+    {
+      "name": "legacy prompt-only suggestion fills the goal",
+      "suggestion": {
+        "prompt": "为 Code 工作台实现仓库搜索与只读分支保护",
+        "session_id": "web:web-console:supwt-e2e"
+      },
+      "expect": {
+        "goal": "为 Code 工作台实现仓库搜索与只读分支保护",
+        "acceptanceCriteria": "",
+        "handoffMode": "review",
+        "fromSuggestion": true,
+        "preparedSessionId": "web:web-console:supwt-e2e"
+      },
+      "button": "准备执行任务 →",
+      "notice": {
+        "narrow": false,
+        "text": "已从右侧对话填入建议目标，请检查或修改后点击「开始执行」。"
+      }
+    },
+    {
+      "name": "narrow review notice names the tabs",
+      "suggestion": {
+        "prompt": "补上仓库搜索",
+        "goal": "补上仓库搜索",
+        "acceptance_criteria": "搜索框能筛到仓库名",
+        "session_id": "web:web-console:supwt-narrow",
+        "source": "structured_draft",
+        "execution_authorized": true
+      },
+      "expect": {
+        "goal": "补上仓库搜索",
+        "acceptanceCriteria": "搜索框能筛到仓库名",
+        "handoffMode": "review",
+        "fromSuggestion": true
+      },
+      "button": "准备执行任务 →",
+      "notice": {
+        "narrow": true,
+        "text": "已从「讨论」填入建议目标，请在「任务与结果」检查或修改后点击「开始执行」。"
+      }
+    }
+  ],
+  "retry": [
+    {
+      "name": "retry copies the original goal and criteria",
+      "input": {
+        "goal": "保留门户转发的原始 Host",
+        "acceptanceCriteria": "Host 与 Origin 主机名一致",
+        "locked": false
+      },
+      "expect": {
+        "ok": true,
+        "goal": "保留门户转发的原始 Host",
+        "acceptanceCriteria": "Host 与 Origin 主机名一致"
+      }
+    },
+    {
+      "name": "locked worktree does not change the draft",
+      "input": {
+        "goal": "保留门户转发的原始 Host",
+        "acceptanceCriteria": "Host 与 Origin 主机名一致",
+        "locked": true
+      },
+      "expect": {
+        "ok": false,
+        "reason": "locked"
+      }
+    },
+    {
+      "name": "missing goal does not invent one",
+      "input": {
+        "goal": "   ",
+        "acceptanceCriteria": "仍有标准",
+        "locked": false
+      },
+      "expect": {
+        "ok": false,
+        "reason": "missing_goal"
+      }
+    }
+  ],
+  "newConversation": [
+    {
+      "name": "403 explains the proxy host mismatch",
+      "status": 403,
+      "message": "origin or request denied",
+      "includes": [
+        "站点校验"
+      ],
+      "excludes": [
+        "CONVEYOR_WEB_TOKEN",
+        "/opt/conveyor/.env",
+        "portal-test-token",
+        "访问令牌",
+        "截图",
+        "Host"
+      ],
+      "detailIncludes": [
+        "origin or request denied",
+        "HTTP 403"
+      ]
+    },
+    {
+      "name": "other failures stay generic",
+      "status": 500,
+      "message": "internal error",
+      "messageEquals": "新会话没有创建成功，可以重试"
+    }
+  ]
+}

@@ -64,6 +64,8 @@
 .sup-sidebar-header-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
 }
 
@@ -326,6 +328,13 @@
   color: #344054;
   font-size: 12px;
   font-weight: 500;
+}
+
+.sup-form-help {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .sup-form-field input,
@@ -635,6 +644,14 @@
   color: #6b7280;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.sup-retry-prep {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .sup-banner {
