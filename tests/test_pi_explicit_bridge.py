@@ -235,6 +235,7 @@ class ExplicitStepfunBridgeTests(unittest.TestCase):
     def test_underscore_provider_id_matches_argv_json_and_saved_record(self) -> None:
         url = "https://my-provider.example/v1"
         saved_url = "https://saved-provider.example/v1"
+        secret = "pi-bridge-sentinel-9f3c2a"
         with tempfile.TemporaryDirectory() as raw:
             tmp = Path(raw)
             settings = _make_settings(tmp)
@@ -242,7 +243,7 @@ class ExplicitStepfunBridgeTests(unittest.TestCase):
             object.__setattr__(settings, "pi_model", "model-test")
             with patch.dict(
                 os.environ,
-                _clean_env(tmp, CONVEYOR_PI_BASE_URL=url, MY_PROVIDER_API_KEY="test"),
+                _clean_env(tmp, CONVEYOR_PI_BASE_URL=url, MY_PROVIDER_API_KEY=secret),
                 clear=True,
             ):
                 selection = resolve_pi_provider(settings, model_fallback="", chat_model=False)
@@ -253,23 +254,24 @@ class ExplicitStepfunBridgeTests(unittest.TestCase):
             self.assertEqual(selection.provider, "my-provider")
             self.assertEqual(selection.model, "model-test")
             self.assertEqual(selection.api_key_env, "MY_PROVIDER_API_KEY")
-            self.assertEqual(selection.api_key, "test")
+            self.assertEqual(selection.api_key, secret)
             data = json.loads(selection.models_json or "")
             self.assertEqual(set(data["providers"]), {"my-provider"})
             self.assertEqual(data["providers"]["my-provider"]["baseUrl"], url)
             self.assertEqual(data["providers"]["my-provider"]["apiKey"], "$MY_PROVIDER_API_KEY")
             self.assertEqual(argv[argv.index("--provider") + 1], "my-provider")
             self.assertEqual(argv[argv.index("--model") + 1], "model-test")
-            self.assertEqual(child.get("MY_PROVIDER_API_KEY"), "test")
+            self.assertEqual(child.get("MY_PROVIDER_API_KEY"), secret)
             self.assertNotIn("DEEPSEEK_API_KEY", child)
-            self.assertNotIn("test", json.dumps(data))
+            self.assertNotIn(secret, json.dumps(data))
+            self.assertNotIn(secret, json.dumps(argv))
 
         with tempfile.TemporaryDirectory() as raw:
             tmp = Path(raw)
             settings = _make_settings(tmp)
             object.__setattr__(settings, "pi_provider", "my_provider")
             object.__setattr__(settings, "pi_model", "model-test")
-            with patch.dict(os.environ, _clean_env(tmp, MY_PROVIDER_API_KEY="test"), clear=True):
+            with patch.dict(os.environ, _clean_env(tmp, MY_PROVIDER_API_KEY=secret), clear=True):
                 _save_provider(
                     settings,
                     provider_id="my_provider",
@@ -278,7 +280,7 @@ class ExplicitStepfunBridgeTests(unittest.TestCase):
                     base_url=saved_url,
                     wire_api="chat",
                     env_key="MY_PROVIDER_API_KEY",
-                    api_key="test",
+                    api_key=secret,
                 )
                 selection = resolve_pi_provider(settings, model_fallback="", chat_model=False)
             self.assertFalse(selection.config_error, selection.config_error)
@@ -289,7 +291,7 @@ class ExplicitStepfunBridgeTests(unittest.TestCase):
             self.assertEqual(data["providers"]["my-provider"]["baseUrl"], saved_url)
             self.assertEqual(data["providers"]["my-provider"]["models"][0]["id"], "model-test")
             self.assertNotIn("saved-model", selection.models_json or "")
-            self.assertNotIn("test", selection.models_json or "")
+            self.assertNotIn(secret, selection.models_json or "")
 
     def test_unrepresentable_provider_id_is_not_ready(self) -> None:
         from runner.pi_agent import sanitize_pi_provider_id
