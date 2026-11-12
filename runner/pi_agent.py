@@ -7,6 +7,7 @@ with DeepSeek (or configured provider).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -15,6 +16,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from conveyor.agents.agent_events import emit_event
 from conveyor.core.redaction import redact_text, truncate
@@ -91,18 +93,75 @@ def sanitize_pi_provider_id(raw: str) -> str:
     return cleaned[:40] or "conveyor"
 
 
+# Providers the vendored Pi 1.5.0 binary already knows. stepfun and minimax are
+# not in that set: without a generated models.json Pi reports Unknown provider.
+# Names here keep the historical no-bridge path when no endpoint is configured.
+PI_BUILTIN_PROVIDERS = frozenset({
+    "amazon-bedrock",
+    "anthropic",
+    "azure-openai",
+    "cerebras",
+    "deepseek",
+    "github-copilot",
+    "google",
+    "google-vertex",
+    "groq",
+    "huggingface",
+    "mistral",
+    "openai",
+    "openrouter",
+    "xai",
+    "zai",
+})
+
+
+class PiProviderConfigError(RuntimeError):
+    """Local Pi provider configuration cannot be launched. No network call."""
+
+
+def pi_wire_api_name(wire_api: str, *, default: str = "openai-completions") -> str:
+    """Map a Conveyor wire_api token to Pi's models.json ``api`` value."""
+    raw = str(wire_api or "").strip().lower().replace("_", "-")
+    if not raw:
+        return default
+    if raw in {"responses", "openai-responses", "response"}:
+        return "openai-responses"
+    if raw in {"chat", "openai-completions", "completions", "chat-completions"}:
+        return "openai-completions"
+    if raw.startswith("openai-"):
+        return raw
+    raise PiProviderConfigError(
+        "CONVEYOR_PI_WIRE_API 无法识别。请使用 chat（openai-completions）或 responses（openai-responses）。"
+    )
+
+
+def _pi_env_ref(env_key: str) -> str:
+    """models.json apiKey reference. Always ``$NAME``, never the secret."""
+    name = str(env_key or "").strip()
+    if name.startswith("$"):
+        name = name[1:]
+    if not _ENV_KEY_RE.fullmatch(name):
+        raise PiProviderConfigError(
+            f"Pi 密钥环境变量名 {env_key!r} 不合法。请使用类似 STEPFUN_API_KEY 的名称，不要写入密钥本身。"
+        )
+    return "$" + name
+
+
 def build_pi_models_json(saved: dict[str, str]) -> dict[str, Any]:
-    """models.json for Pi from the saved 模型设置 provider. Never contains the key."""
-    api = "openai-responses" if saved.get("wire_api") == "responses" else "openai-completions"
-    model = saved["model"]
+    """models.json for Pi. Never contains the key; apiKey is ``$ENV_NAME`` for Pi 1.5.0."""
+    model = str(saved.get("model") or "").strip()
+    env_name = str(saved.get("env_key") or "")
+    if env_name.startswith("$"):
+        env_name = env_name[1:]
+    provider: dict[str, Any] = {
+        "baseUrl": str(saved.get("base_url") or "").strip(),
+        "api": pi_wire_api_name(str(saved.get("wire_api") or "")),
+        "apiKey": _pi_env_ref(env_name),
+        "models": [{"id": model, "name": model}] if model else [],
+    }
     return {
         "providers": {
-            sanitize_pi_provider_id(saved["provider_id"]): {
-                "baseUrl": saved["base_url"],
-                "api": api,
-                "apiKey": "$" + saved["env_key"],
-                "models": [{"id": model, "name": model}],
-            }
+            sanitize_pi_provider_id(saved["provider_id"]): provider,
         }
     }
 
@@ -122,6 +181,8 @@ class PiProviderSelection:
     api_key_env: str               # env var name carrying the single key
     api_key: str                   # resolved key value ("" when none)
     models_json: str | None        # models.json content to bridge, or None
+    bridge_required: bool = False  # custom/explicit endpoint must be written
+    config_error: str = ""         # actionable local error; empty when launchable
 
 
 def pi_provider_id(settings: Any) -> str:
@@ -192,6 +253,146 @@ def pi_saved_provider(settings: Any) -> dict[str, str] | None:
     return saved
 
 
+def _provider_ids_match(left: str, right: str) -> bool:
+    a = sanitize_pi_provider_id(left)
+    b = sanitize_pi_provider_id(right)
+    return bool(a) and a == b and a != "conveyor"
+
+
+def _valid_base_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc) and not parsed.username and not parsed.password
+
+
+def _explicit_pi_base_url(settings: Any) -> str:
+    return str(
+        os.getenv("CONVEYOR_PI_BASE_URL")
+        or getattr(settings, "pi_base_url", "")
+        or getattr(settings, "conveyor_pi_base_url", "")
+        or ""
+    ).strip().rstrip("/")
+
+
+def _explicit_wire_override(settings: Any) -> str:
+    return str(
+        os.getenv("CONVEYOR_PI_WIRE_API")
+        or os.getenv("PI_WIRE_API")
+        or getattr(settings, "pi_wire_api", "")
+        or ""
+    ).strip()
+
+
+def _saved_provider_record(settings: Any) -> dict[str, str] | None:
+    """Saved 模型设置 metadata for the active provider, even when the key is absent.
+
+    Unlike ``get_saved_provider`` this does not hide the endpoint when the key
+    is missing, and it never contacts the provider. The key is included only
+    when it is already in the environment or the provider env file.
+    """
+    try:
+        from conveyor.core.provider_config import (
+            _parse_simple_config,
+            _read_env_value,
+            config_path,
+            env_path,
+        )
+        path = config_path(settings)
+        if not path.exists():
+            return None
+        top, providers = _parse_simple_config(path.read_text(encoding="utf-8", errors="replace"))
+        provider_id = str(top.get("model_provider") or "").strip()
+        provider = providers.get(provider_id, {})
+        base_url = str(provider.get("base_url") or "").strip().rstrip("/")
+        if not provider_id or not base_url:
+            return None
+        env_key = str(provider.get("env_key") or "").strip()
+        secret = ""
+        if _ENV_KEY_RE.fullmatch(env_key):
+            secret = str(os.getenv(env_key) or _read_env_value(env_path(), env_key) or "").strip()
+        else:
+            env_key = ""
+        return {
+            "provider_id": provider_id,
+            "provider_name": str(provider.get("name") or provider_id),
+            "base_url": base_url,
+            "model": str(top.get("model") or "").strip(),
+            "wire_api": str(provider.get("wire_api") or "responses").strip().lower(),
+            "env_key": env_key,
+            "api_key": secret,
+        }
+    except Exception:
+        return None
+
+
+def _matching_chat_endpoint(settings: Any, provider: str) -> tuple[str, str] | None:
+    """Explicit chat base URL only when its host is this provider.
+
+    The implicit MiniMax default is not a match. Wire API for this bridge is
+    always openai-completions. A different saved provider is never consulted.
+    """
+    raw = str(
+        os.getenv("CONVEYOR_CHAT_BASE_URL")
+        or getattr(settings, "chat_base_url", "")
+        or getattr(settings, "conveyor_chat_base_url", "")
+        or ""
+    ).strip().rstrip("/")
+    if not raw or not _valid_base_url(raw):
+        return None
+    host = (urlparse(raw).hostname or "").lower().replace("-", "").replace(".", "")
+    token = sanitize_pi_provider_id(provider).replace("-", "")
+    aliases = {token}
+    if token == "minimax":
+        aliases.add("minimaxi")
+    if not token or not any(alias and alias in host for alias in aliases):
+        return None
+    key = str(
+        os.getenv("CONVEYOR_CHAT_API_KEY")
+        or getattr(settings, "chat_api_key", "")
+        or ""
+    ).strip()
+    return raw, key
+
+
+def _dump_models_json(provider_id: str, base_url: str, model: str, wire_api: str, env_key: str) -> str:
+    return json.dumps(
+        build_pi_models_json({
+            "provider_id": provider_id,
+            "base_url": base_url,
+            "model": model,
+            "wire_api": wire_api,
+            "env_key": env_key,
+        }),
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n"
+
+
+def _selection_from_saved(saved: dict[str, str], settings: Any) -> PiProviderSelection:
+    wire = _explicit_wire_override(settings) or saved.get("wire_api") or "chat"
+    try:
+        models_json = _dump_models_json(
+            saved["provider_id"], saved["base_url"], saved.get("model") or "", wire, saved["env_key"],
+        )
+    except PiProviderConfigError as exc:
+        return PiProviderSelection(
+            provider=sanitize_pi_provider_id(saved["provider_id"]),
+            model=saved.get("model") or "",
+            api_key_env=saved.get("env_key") or "",
+            api_key=saved.get("api_key") or "",
+            models_json=None,
+            bridge_required=True,
+            config_error=str(exc),
+        )
+    return PiProviderSelection(
+        provider=sanitize_pi_provider_id(saved["provider_id"]),
+        model=saved.get("model") or "",
+        api_key_env=saved["env_key"],
+        api_key=saved.get("api_key") or "",
+        models_json=models_json,
+        bridge_required=True,
+    )
+
+
 def resolve_pi_provider(
     settings: Any,
     *,
@@ -203,29 +404,85 @@ def resolve_pi_provider(
     """Resolve provider/model/credential for a Pi child run.
 
     Precedence: explicit CONVEYOR_PI_* / settings.pi_* > saved 模型设置 provider
-    (bridged via ``models_json``) > Pi default. The worker keeps the historical
-    ``deepseek-v4-flash`` fallback and chat-tier model adoption; the Supervisor
-    passes ``model_fallback=""`` and ``chat_model=False`` so ``--model`` is
-    omitted unless a model is explicitly configured. ``allow_saved=False``
-    forces the selected/default provider (used when a saved bridge cannot be
-    written). Only the single chosen provider key is ever resolved.
+    > Pi default. An explicit provider still gets a generated models.json when
+    its endpoint is known (``CONVEYOR_PI_BASE_URL``, then the saved provider
+    with the same id, then an explicit chat base URL whose host matches). A
+    different saved provider is never used. Built-in providers keep the legacy
+    no-bridge path when no endpoint is configured. The Supervisor passes
+    ``model_fallback=""`` and ``chat_model=False`` so the chat model is not
+    adopted. Only the chosen provider key is resolved. No network call.
     """
     env = os.environ if base_env is None else base_env
-    saved = pi_saved_provider(settings) if allow_saved else None
-    if saved is not None:
-        return PiProviderSelection(
-            provider=sanitize_pi_provider_id(saved["provider_id"]),
-            model=saved["model"],
-            api_key_env=saved["env_key"],
-            api_key=saved["api_key"],
-            models_json=json.dumps(build_pi_models_json(saved), ensure_ascii=False, indent=2) + "\n",
-        )
+    explicit = pi_explicit_provider_config(settings)
+    if allow_saved and not explicit:
+        saved = pi_saved_provider(settings)
+        if saved is not None:
+            return _selection_from_saved(saved, settings)
+
     provider = pi_provider_id(settings)
-    raw_model = pi_model_raw(settings, default_model=model_fallback, chat_model=chat_model)
-    # An empty raw model means nothing is configured: omit --model and let Pi
-    # pick its own default (normalize would otherwise force deepseek-v4-flash).
-    model = normalize_pi_model(provider, raw_model) if raw_model else ""
-    api_key_env = pi_api_key_env(provider)
+    matched = None
+    if allow_saved:
+        record = _saved_provider_record(settings)
+        if record is not None and _provider_ids_match(record["provider_id"], provider):
+            matched = record
+
+    explicit_model = str(os.getenv("CONVEYOR_PI_MODEL") or getattr(settings, "pi_model", "") or "").strip()
+    if explicit_model:
+        model = normalize_pi_model(provider, explicit_model)
+    elif matched and matched.get("model"):
+        model = matched["model"]
+    else:
+        raw_model = pi_model_raw(settings, default_model=model_fallback, chat_model=chat_model)
+        # pi_model_raw repeats the explicit model; blank means omit --model.
+        if explicit_model:
+            raw_model = explicit_model
+        elif not chat_model:
+            raw_model = model_fallback
+        model = normalize_pi_model(provider, raw_model) if raw_model else ""
+
+    override = (os.getenv(_PI_API_KEY_ENV_OVERRIDE) or "").strip()
+    if _VALID_ENV_NAME.fullmatch(override):
+        api_key_env = override
+    elif matched and _ENV_KEY_RE.fullmatch(matched.get("env_key", "")):
+        api_key_env = matched["env_key"]
+    else:
+        api_key_env = pi_api_key_env(provider)
+
+    chat_match = _matching_chat_endpoint(settings, provider)
+    base_url = _explicit_pi_base_url(settings)
+    source = ""
+    config_error = ""
+    if base_url:
+        if not _valid_base_url(base_url):
+            config_error = (
+                "CONVEYOR_PI_BASE_URL 不是合法的 http(s) 地址。"
+                "请填写该提供商自己的接口，不要留空，也不会改用别的服务商。"
+            )
+        else:
+            source = "explicit"
+    elif matched and matched.get("base_url"):
+        if not _valid_base_url(matched["base_url"]):
+            config_error = (
+                f"模型设置里提供商 {provider} 的接口地址不合法。"
+                "请改正该服务商的 base_url，不会改用别的服务商。"
+            )
+        else:
+            base_url = matched["base_url"]
+            source = "saved"
+    elif chat_match is not None:
+        base_url = chat_match[0]
+        source = "chat"
+
+    wire_override = _explicit_wire_override(settings)
+    if config_error:
+        wire_token = wire_override or "chat"
+    elif wire_override:
+        wire_token = wire_override
+    elif source == "saved" and matched is not None:
+        wire_token = matched.get("wire_api") or "responses"
+    else:
+        wire_token = "chat"
+
     value = str(env.get(api_key_env) or os.getenv(api_key_env) or "").strip()
     if not value and provider == "deepseek":
         value = str(
@@ -233,15 +490,148 @@ def resolve_pi_provider(
             or getattr(settings, "chat_api_key", None)
             or ""
         ).strip()
+    if not value and source == "chat" and chat_match is not None:
+        value = chat_match[1]
+    if not value and matched and matched.get("api_key"):
+        value = matched["api_key"]
     if not value:
         value = read_pi_console_secret(settings, api_key_env)
+
+    builtin = provider in PI_BUILTIN_PROVIDERS
+    needs_bridge = bool(source) or (not builtin and (explicit or provider != "deepseek"))
+    models_json: str | None = None
+    if not config_error and needs_bridge:
+        if not source:
+            config_error = (
+                f"Pi 不认识提供商 {provider}，而且没有可用的接口地址。"
+                "请设置 CONVEYOR_PI_BASE_URL，或在「模型设置」里保存同名服务商。"
+                "不会使用另一个服务商的地址或密钥，也不会向服务商发起探测。"
+            )
+        elif not model:
+            config_error = (
+                f"Pi 提供商 {provider} 使用自定义接口，但没有模型名。"
+                "请设置 CONVEYOR_PI_MODEL。未填写时不会改用对话模型。"
+            )
+        else:
+            try:
+                models_json = _dump_models_json(provider, base_url, model, wire_token, api_key_env)
+            except PiProviderConfigError as exc:
+                config_error = str(exc)
+        if needs_bridge and not config_error and not value:
+            config_error = (
+                f"Pi 提供商 {provider} 缺少密钥环境变量 {api_key_env}。"
+                "请配置该变量或在同名模型设置里保存密钥。"
+                "此检查只看本地配置，没有验证远程登录。"
+            )
     return PiProviderSelection(
         provider=provider,
         model=model,
         api_key_env=api_key_env,
         api_key=value,
-        models_json=None,
+        models_json=models_json,
+        bridge_required=needs_bridge,
+        config_error=config_error,
     )
+
+
+def pi_coding_agent_dir(settings: Any, models_json: str) -> Path:
+    """Deterministic config directory for one non-secret selection.
+
+    The digest covers the generated models.json (provider, endpoint, wire api,
+    model, ``$ENV`` name). Key values are not part of the path.
+    """
+    root = getattr(settings, "codex_task_root", None)
+    if root is None or not str(root).strip():
+        raise PiProviderConfigError("没有任务目录（codex_task_root），无法写入 Pi 的 models.json。")
+    digest = hashlib.sha256(models_json.encode("utf-8")).hexdigest()[:20]
+    return Path(root) / "pi-agent" / digest
+
+
+def write_pi_provider_config(settings: Any, models_json: str) -> Path:
+    """Write a fresh models.json. Replaces a stale plain env name at this path."""
+    directory = pi_coding_agent_dir(settings, models_json)
+    directory.mkdir(parents=True, exist_ok=True)
+    from conveyor.core.provider_config import _atomic_write
+    _atomic_write(directory / "models.json", models_json, 0o600)
+    return directory
+
+
+def prepare_pi_child_env(env: dict[str, str], settings: Any, selection: PiProviderSelection) -> PiProviderSelection:
+    """Point ``env`` at one freshly written config and inject only the chosen key.
+
+    A required bridge that cannot be written raises. Callers must not fall
+    back to another provider. Built-ins without a bridge do not keep a stale
+    ``PI_CODING_AGENT_DIR``.
+    """
+    if selection.config_error:
+        raise PiProviderConfigError(selection.config_error)
+    if selection.bridge_required:
+        if not selection.models_json:
+            raise PiProviderConfigError(
+                f"Pi 提供商 {selection.provider} 需要 models.json，但没有生成配置。"
+                "已停止，避免使用过期或别的提供商。"
+            )
+        try:
+            directory = write_pi_provider_config(settings, selection.models_json)
+        except PiProviderConfigError:
+            raise
+        except OSError as exc:
+            raise PiProviderConfigError(
+                f"无法写入 Pi 提供商 {selection.provider} 的 models.json（{exc}）。"
+                "已停止，避免使用过期配置或改跑别的提供商。"
+            ) from exc
+        env["PI_CODING_AGENT_DIR"] = str(directory)
+    else:
+        env.pop("PI_CODING_AGENT_DIR", None)
+    if selection.api_key:
+        env[selection.api_key_env] = selection.api_key
+    for other_key in set(PI_PROVIDER_KEY_ENV.values()) - {selection.api_key_env}:
+        env.pop(other_key, None)
+    env["PI_OFFLINE"] = "1"
+    env["PI_TELEMETRY"] = "0"
+    return selection
+
+
+def describe_pi_provider(
+    settings: Any,
+    *,
+    model_fallback: str = "deepseek-v4-flash",
+    chat_model: bool = True,
+) -> dict[str, Any]:
+    """Local readiness for the Pi worker. Does not call the provider."""
+    explicit = pi_explicit_provider_config(settings)
+    selection = resolve_pi_provider(
+        settings, model_fallback=model_fallback, chat_model=chat_model,
+    )
+    record = _saved_provider_record(settings)
+    provider_name = None
+    model: str | None = None
+    if record is not None and _provider_ids_match(record["provider_id"], selection.provider):
+        provider_name = record.get("provider_name") or None
+        model = selection.model or record.get("model") or None
+    elif not explicit and selection.bridge_required and selection.models_json:
+        provider_name = selection.provider
+        model = selection.model or None
+    configured = not selection.config_error and bool(selection.api_key) and (
+        not selection.bridge_required or bool(selection.models_json)
+    )
+    hint = ""
+    if not configured:
+        if selection.config_error:
+            hint = selection.config_error
+        elif not selection.api_key and (explicit or selection.bridge_required):
+            hint = (
+                f"Pi 提供商 {selection.provider} 缺少密钥环境变量 {selection.api_key_env}。"
+                "此检查只看本地配置，没有验证远程登录。"
+            )
+    return {
+        "configured": configured,
+        "explicit": explicit,
+        "provider_name": provider_name,
+        "model": model,
+        "hint": hint,
+        "provider": selection.provider,
+    }
 
 
 @dataclass(frozen=True)
@@ -401,40 +791,16 @@ class PiBackend(CodexRunner):
         from runner.operators.run import job_child_env
         env = job_child_env(self, job)
         selection = resolve_pi_provider(self.settings, base_env=env)
-        pi_dir = Path(self.settings.codex_task_root) / "pi-agent"
-        dir_ready = False
         try:
-            pi_dir.mkdir(parents=True, exist_ok=True)
-            env["PI_CODING_AGENT_DIR"] = str(pi_dir)
-            dir_ready = True
-        except OSError:
-            pass
-
-        if selection.models_json is not None:
-            # Saved 模型设置 provider: bridge it via models.json so Pi knows the
-            # provider's baseUrl/api, and hand only that provider's key.
-            bridged = False
-            if dir_ready:
-                try:
-                    from conveyor.core.provider_config import _atomic_write
-                    _atomic_write(pi_dir / "models.json", selection.models_json, 0o600)
-                    bridged = True
-                except OSError:
-                    bridged = False
-            if not bridged:
-                # Could not write models.json: fall back to the selected/default
-                # provider, exactly as before the resolver refactor.
-                selection = resolve_pi_provider(self.settings, base_env=env, allow_saved=False)
+            # Fresh models.json for this selection (explicit custom providers included).
+            # A required bridge that cannot be written fails here; do not switch provider.
+            selection = prepare_pi_child_env(env, self.settings, selection)
+        except PiProviderConfigError as exc:
+            job.error = str(exc)
+            job.return_code = 1
+            return
 
         command = self._pi_command(job, selection.provider, selection.model)
-        chosen_key = selection.api_key_env
-        if selection.api_key:
-            env[chosen_key] = selection.api_key
-        # The child must hold exactly the chosen provider's key, never another's.
-        for other_key in set(PI_PROVIDER_KEY_ENV.values()) - {chosen_key}:
-            env.pop(other_key, None)
-        env["PI_OFFLINE"] = "1"
-        env["PI_TELEMETRY"] = "0"
 
         try:
             Path("/srv/conveyor/downloads").mkdir(parents=True, exist_ok=True)

@@ -139,8 +139,8 @@ class PiProviderBridgeTests(unittest.TestCase):
         self.assertEqual(job.return_code, 0, job.error)
         return json.loads(dump.read_text(encoding="utf-8"))
 
-    def _models_json(self, settings: Settings) -> tuple[Path, dict]:
-        path = Path(settings.codex_task_root) / "pi-agent" / "models.json"
+    def _models_from_env(self, seen: dict) -> tuple[Path, dict]:
+        path = Path(seen["env"]["PI_CODING_AGENT_DIR"]) / "models.json"
         return path, json.loads(path.read_text(encoding="utf-8"))
 
     def _bridge_case(self, wire_api: str, expected_api: str) -> None:
@@ -150,7 +150,7 @@ class PiProviderBridgeTests(unittest.TestCase):
             with patch.dict(os.environ, _clean_env(tmp)):
                 _save_provider(settings, wire_api=wire_api)
             seen = self._run(tmp, settings)
-            path, data = self._models_json(settings)
+            path, data = self._models_from_env(seen)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
             self.assertNotIn(SECRET, path.read_text(encoding="utf-8"))
             provider = data["providers"]["step-fun"]
@@ -187,6 +187,7 @@ class PiProviderBridgeTests(unittest.TestCase):
             self.assertEqual(argv[argv.index("--provider") + 1], "deepseek")
             self.assertEqual(argv[argv.index("--model") + 1], "deepseek-v4-flash")
             self.assertEqual(seen["env"]["DEEPSEEK_API_KEY"], "sk-test-deepseek")
+            self.assertNotIn("PI_CODING_AGENT_DIR", seen["env"])
             self.assertFalse((Path(settings.codex_task_root) / "pi-agent" / "models.json").exists())
 
     def test_no_saved_provider_keeps_legacy_path(self) -> None:

@@ -147,7 +147,7 @@ class PiExecutorArgvTests(unittest.TestCase):
             argv = _argv_for(self.settings, role)
             self.assertIn("--no-context-files", argv, role.name)
 
-    def test_argv_falls_back_when_models_json_write_fails(self) -> None:
+    def test_argv_fails_when_models_json_write_fails(self) -> None:
         from conveyor.core import provider_config
         env_file = self.tmp / "provider.env"
         payload = {
@@ -158,16 +158,15 @@ class PiExecutorArgvTests(unittest.TestCase):
         with patch.dict(os.environ, _clean_env(CONVEYOR_ENV_FILE=str(env_file)), clear=True):
             provider_config.save_provider_config(self.settings, payload)
             with patch("conveyor.core.provider_config._atomic_write", side_effect=OSError("disk full")):
-                argv = PiExecutor(self.settings)._argv(REVIEWER, "/tmp")
-        # Saved provider requires models.json; when writing fails, argv must not
-        # reference the unavailable saved provider.
-        self.assertNotIn("step-fun", argv)
-        self.assertNotIn("--provider", argv)
-        self.assertNotIn("--model", argv)
+                with self.assertRaises(RuntimeError) as ctx:
+                    PiExecutor(self.settings)._argv(REVIEWER, "/tmp")
+        self.assertIn("models.json", str(ctx.exception))
+        self.assertNotIn("saved-value", str(ctx.exception))
 
     def test_never_passes_api_key(self) -> None:
         argv = _argv_for(self.settings, IMPLEMENTER, CONVEYOR_PI_PROVIDER="stepfun",
-                         CONVEYOR_PI_MODEL="step-x", STEPFUN_API_KEY="test-value")
+                         CONVEYOR_PI_MODEL="step-x", STEPFUN_API_KEY="test-value",
+                         CONVEYOR_PI_BASE_URL="https://api.stepfun.example/v1")
         self.assertNotIn("--api-key", argv)
         self.assertNotIn("test-value", argv)
 
@@ -178,7 +177,8 @@ class PiExecutorArgvTests(unittest.TestCase):
         self.assertNotIn("--provider", argv)
         # Explicit model -> --model present with that value.
         argv = _argv_for(self.settings, ANALYST, CONVEYOR_PI_PROVIDER="stepfun",
-                         CONVEYOR_PI_MODEL="step-x")
+                         CONVEYOR_PI_MODEL="step-x", STEPFUN_API_KEY="sk-test-step",
+                         CONVEYOR_PI_BASE_URL="https://api.stepfun.example/v1")
         self.assertIn("--model", argv)
         self.assertEqual(argv[argv.index("--model") + 1], "step-x")
         self.assertEqual(argv[argv.index("--provider") + 1], "stepfun")
@@ -192,7 +192,8 @@ class PiExecutorArgvTests(unittest.TestCase):
         self.assertFalse(has_provider and not has_model)
         # Both present once a model is configured.
         argv = _argv_for(self.settings, IMPLEMENTER, CONVEYOR_PI_PROVIDER="stepfun",
-                         CONVEYOR_PI_MODEL="step-x")
+                         CONVEYOR_PI_MODEL="step-x", STEPFUN_API_KEY="sk-test-step",
+                         CONVEYOR_PI_BASE_URL="https://api.stepfun.example/v1")
         self.assertIn("--provider", argv)
         self.assertIn("--model", argv)
 
@@ -204,7 +205,8 @@ class PiExecutorArgvTests(unittest.TestCase):
 
     def test_sanitized_argv_leaks_neither_prompt_nor_secret(self) -> None:
         argv = _argv_for(self.settings, ANALYST, CONVEYOR_PI_PROVIDER="stepfun",
-                         CONVEYOR_PI_MODEL="step-x")
+                         CONVEYOR_PI_MODEL="step-x", STEPFUN_API_KEY="sk-test-step",
+                         CONVEYOR_PI_BASE_URL="https://api.stepfun.example/v1")
         sanitized = ags._sanitize_argv_for_evidence(argv, prompt="SUPER-SECRET-PROMPT")
         self.assertNotIn("--api-key", sanitized)
         self.assertNotIn("SUPER-SECRET-PROMPT", sanitized)
@@ -292,9 +294,9 @@ class PiExecutorAvailableTests(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
         fake = _write_fake_pi(tmp / "pi")
         settings = _make_settings(tmp)
-        with patch.dict(os.environ, {"CONVEYOR_PI_BIN": str(fake)}, clear=True):
+        with patch.dict(os.environ, {"CONVEYOR_PI_BIN": str(fake), "DEEPSEEK_API_KEY": "sk-test-deepseek"}, clear=True):
             ex = PiExecutor(settings)
-        ok, reason = ex.available()
+            ok, reason = ex.available()
         self.assertTrue(ok, reason)
         self.assertEqual(reason, "ok")
 
@@ -309,6 +311,7 @@ class PiChildEnvTests(unittest.TestCase):
         env = _clean_env(
             CONVEYOR_PI_PROVIDER="stepfun",
             CONVEYOR_PI_MODEL="step-x",
+            CONVEYOR_PI_BASE_URL="https://api.stepfun.example/v1",
             STEPFUN_API_KEY="test-value",
             DEEPSEEK_API_KEY="other-deepseek",
             OPENAI_API_KEY="other-openai",
@@ -336,14 +339,15 @@ class PiChildEnvTests(unittest.TestCase):
         self.assertEqual(child.get("STEPFUN_API_KEY"), "saved-value")
         self.assertNotIn("DEEPSEEK_API_KEY", child)
         self.assertNotIn("OPENAI_API_KEY", child)
-        models = Path(self.settings.codex_task_root) / "pi-agent" / "models.json"
+        models = Path(child["PI_CODING_AGENT_DIR"]) / "models.json"
         self.assertTrue(models.is_file())
         self.assertEqual(child.get("PI_CODING_AGENT_DIR"), str(models.parent))
+        self.assertNotEqual(models.parent, Path(self.settings.codex_task_root) / "pi-agent")
         # models.json references the key by name, never the raw value.
         self.assertNotIn("saved-value", models.read_text(encoding="utf-8"))
         self.assertIn("$STEPFUN_API_KEY", models.read_text(encoding="utf-8"))
 
-    def test_saved_provider_models_json_oserror_falls_back_cleanly(self) -> None:
+    def test_saved_provider_models_json_oserror_does_not_switch_provider(self) -> None:
         from conveyor.core import provider_config
         env_file = self.tmp / "provider.env"
         payload = {
@@ -358,14 +362,14 @@ class PiChildEnvTests(unittest.TestCase):
         ):
             provider_config.save_provider_config(self.settings, payload)
             with patch("conveyor.core.provider_config._atomic_write", side_effect=OSError("read-only fs")):
-                child = ags._child_env(self.settings, executors="pi")
-                argv = PiExecutor(self.settings)._argv(ANALYST, "/tmp")
-        self.assertNotIn("PI_CODING_AGENT_DIR", child)
-        self.assertNotIn("STEPFUN_API_KEY", child)
-        self.assertEqual(child.get("DEEPSEEK_API_KEY"), "ds-fallback")
-        self.assertNotIn("step-fun", argv)
-        self.assertNotIn("--provider", argv)
-        self.assertNotIn("--model", argv)
+                with self.assertRaises(RuntimeError) as env_ctx:
+                    ags._child_env(self.settings, executors="pi")
+                with self.assertRaises(RuntimeError) as argv_ctx:
+                    PiExecutor(self.settings)._argv(ANALYST, "/tmp")
+        self.assertIn("models.json", str(env_ctx.exception))
+        self.assertIn("models.json", str(argv_ctx.exception))
+        self.assertNotIn("saved-value", str(env_ctx.exception))
+        self.assertNotIn("ds-fallback", str(env_ctx.exception))
 
 
 class PiExecutorEndToEndTests(unittest.TestCase):
