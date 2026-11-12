@@ -24,6 +24,10 @@ logger = logging.getLogger("transcript_store")
 _MAX_CONTENT = 16_000
 _ALLOWED_ROLES = {"user", "assistant", "system", "tool"}
 _MAX_METADATA_TEXT = 2_000
+# Only top-level task_suggestion requirement fields. Other metadata stays at 2000.
+_MAX_TASK_SUGGESTION_FIELD = 8_000
+_MAX_TASK_SUGGESTION_CONTEXT = 1_800
+_TASK_SUGGESTION_LONG_FIELDS = frozenset({"goal", "acceptance_criteria", "prompt"})
 _BACKFILL_CHUNK_SIZE = 200
 _SNIPPET_MAX_CHARS = 200
 _FTS5_AVAILABLE: bool = True
@@ -108,16 +112,26 @@ def session_identity(channel: str, chat_id: str, operator_id: str) -> str:
     return f"{channel}:{operator_id}:{chat_id}"
 
 
-def _safe_metadata(value: Any, *, depth: int = 0) -> Any:
+def _safe_metadata(value: Any, *, depth: int = 0, kind: str | None = None) -> Any:
     if depth >= 3:
         return "[TRUNCATED]"
     if isinstance(value, dict):
         result: dict[str, Any] = {}
+        # Top-level task_suggestion strings only. Nested values stay on the generic cap.
+        scoped = kind if depth == 0 and kind == "task_suggestion" else None
         for key, item in list(value.items())[:32]:
             name = str(key)[:128]
             lowered = name.lower()
             if is_sensitive_key(name) or "reasoning" in lowered or "thinking" in lowered:
                 result[name] = "[REDACTED]"
+            elif scoped and isinstance(item, str):
+                if name in _TASK_SUGGESTION_LONG_FIELDS:
+                    limit = _MAX_TASK_SUGGESTION_FIELD
+                elif name == "context":
+                    limit = _MAX_TASK_SUGGESTION_CONTEXT
+                else:
+                    limit = _MAX_METADATA_TEXT
+                result[name] = truncate(redact_text(item), limit)
             else:
                 result[name] = _safe_metadata(item, depth=depth + 1)
         return result
@@ -398,7 +412,7 @@ class TranscriptStore:
             created_at=_utc_now(),
             job_id=job_id,
             kind=kind,
-            metadata=_safe_metadata(provenance),
+            metadata=_safe_metadata(provenance, kind=kind),
         )
         conn = self._connect()
         try:

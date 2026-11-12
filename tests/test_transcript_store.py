@@ -172,6 +172,130 @@ class TranscriptStoreTests(unittest.TestCase):
         ex_count = self.store.count_messages(sid, exclude_kinds=("tool_approval", "tool_result", "status"))
         self.assertEqual(ex_count, 3)
 
+    def test_task_suggestion_requirements_survive_history_refresh(self) -> None:
+        from conveyor.web.web_chat import build_history
+
+        goal = ("实现项目旅程修复。" * 280) + "LAST-GOAL-CONSTRAINT"
+        criteria = ("验收必须覆盖刷新后的历史。" * 180) + "LAST-CRITERIA-CONSTRAINT"
+        prompt = ("legacy prompt " * 200) + "LAST-PROMPT-CONSTRAINT"
+        # Between the 1800 context bound and the generic 2000 cap, so a
+        # forgotten context bound would keep the tail.
+        context = ("讨论上下文。" * 310) + "CONTEXT-TAIL-PAST-BOUND"
+        secret = "sk-" + ("a" * 24)
+        goal_with_secret = (
+            f"目标包含 {secret} 然后继续。" + ("补充约束。" * 500) + "LAST-SECRET-GOAL"
+        )
+        over_goal = ("Z" * 8200) + "OVER-GOAL-TAIL"
+        extra = "E" * 2500 + "EXTRA-FIELD-TAIL"
+        nested_goal = ("N" * 2500) + "NESTED-TAIL"
+        self.assertGreater(len(goal), 2000)
+        self.assertLess(len(goal), 8000)
+        self.assertGreater(len(criteria), 2000)
+        self.assertGreater(len(prompt), 2000)
+        self.assertGreater(len(context), 1800)
+        self.assertLess(len(context), 2000)
+        self.assertGreater(len(goal_with_secret), 2000)
+
+        sid = "sup-draft-persist"
+        wide = {f"field{i}": "v" for i in range(33)}
+        self.store.append(
+            sid,
+            "assistant",
+            "draft reply",
+            kind="task_suggestion",
+            metadata={
+                "prompt": prompt,
+                "goal": goal,
+                "acceptance_criteria": criteria,
+                "source": "discussion",
+                "context": context,
+                "execution_authorized": False,
+                "note": extra,
+                "api_key": "should-not-leak-" + secret,
+                "nested": {"goal": nested_goal},
+                "goals": [goal],
+                **wide,
+            },
+        )
+        rows = self.store.recent_messages(sid)
+        self.assertEqual(len(rows), 1)
+        stored = rows[0]["metadata"]
+        history = build_history({"id": sid, "messages": rows})
+        suggestion = history[0]["task_suggestion"]
+        self.assertEqual(suggestion["goal"], goal)
+        self.assertEqual(suggestion["acceptance_criteria"], criteria)
+        self.assertEqual(suggestion["prompt"], prompt)
+        self.assertIn("LAST-GOAL-CONSTRAINT", suggestion["goal"])
+        self.assertIn("LAST-CRITERIA-CONSTRAINT", suggestion["acceptance_criteria"])
+        self.assertIn("LAST-PROMPT-CONSTRAINT", suggestion["prompt"])
+        self.assertEqual(suggestion["execution_authorized"], False)
+        self.assertLessEqual(len(suggestion["context"]), 1800)
+        self.assertNotIn("CONTEXT-TAIL-PAST-BOUND", suggestion["context"])
+        self.assertLessEqual(len(stored["note"]), 2000)
+        self.assertNotIn("EXTRA-FIELD-TAIL", stored["note"])
+        self.assertEqual(stored["api_key"], "[REDACTED]")
+        self.assertNotIn(secret, str(stored["api_key"]))
+        self.assertNotIn("NESTED-TAIL", stored["nested"]["goal"])
+        self.assertLessEqual(len(stored["nested"]["goal"]), 2000)
+        self.assertNotIn("LAST-GOAL-CONSTRAINT", stored["goals"][0])
+        self.assertLessEqual(len(stored["goals"][0]), 2000)
+        self.assertEqual(len(stored), 32)
+        self.assertNotIn("field32", stored)
+        self.assertIn("goal", stored)
+
+        self.store.append(
+            sid,
+            "assistant",
+            "secret draft",
+            kind="task_suggestion",
+            metadata={
+                "prompt": "p",
+                "goal": goal_with_secret,
+                "acceptance_criteria": criteria,
+            },
+        )
+        secret_row = next(
+            m for m in self.store.recent_messages(sid) if m["content"] == "secret draft"
+        )
+        secret_history = build_history({"id": sid, "messages": [secret_row]})
+        stored_goal = secret_history[0]["task_suggestion"]["goal"]
+        stored_criteria = secret_history[0]["task_suggestion"]["acceptance_criteria"]
+        self.assertNotIn(secret, stored_goal)
+        self.assertNotIn(secret, str(secret_row["metadata"]))
+        self.assertIn("[REDACTED]", stored_goal)
+        self.assertIn("LAST-SECRET-GOAL", stored_goal)
+        self.assertEqual(stored_criteria, criteria)
+
+        self.store.append(
+            sid,
+            "assistant",
+            "overlong draft",
+            kind="task_suggestion",
+            metadata={"prompt": "p", "goal": over_goal, "acceptance_criteria": "done"},
+        )
+        over_row = next(
+            m for m in self.store.recent_messages(sid) if m["content"] == "overlong draft"
+        )
+        over_goal_stored = build_history({"id": sid, "messages": [over_row]})[0]["task_suggestion"]["goal"]
+        self.assertLessEqual(len(over_goal_stored), 8000)
+        self.assertNotIn("OVER-GOAL-TAIL", over_goal_stored)
+
+        generic = "G" * 2500 + "GENERIC-TAIL"
+        self.store.append(sid, "user", "note", kind="chat", metadata={"note": generic, "goal": goal})
+        generic_meta = next(
+            m for m in self.store.recent_messages(sid) if m["content"] == "note"
+        )["metadata"]
+        self.assertLessEqual(len(generic_meta["note"]), 2000)
+        self.assertNotIn("GENERIC-TAIL", generic_meta["note"])
+        self.assertLessEqual(len(generic_meta["goal"]), 2000)
+        self.assertNotIn("LAST-GOAL-CONSTRAINT", generic_meta["goal"])
+        self.store.append(sid, "user", "plain", metadata={"note": generic})
+        plain_meta = next(
+            m for m in self.store.recent_messages(sid) if m["content"] == "plain"
+        )["metadata"]
+        self.assertLessEqual(len(plain_meta["note"]), 2000)
+        self.assertNotIn("GENERIC-TAIL", plain_meta["note"])
+
 
 if __name__ == "__main__":
     unittest.main()
