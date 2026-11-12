@@ -88,31 +88,99 @@ def resolve_pi_bin(settings: Any) -> str:
     return "pi"
 
 
+_PI_PROVIDER_ID_MAX = 40
+
+
 def sanitize_pi_provider_id(raw: str) -> str:
+    """Canonical Pi provider id, or "" when the id cannot be represented.
+
+    Separators, including underscores, become hyphens. The result is lowercase
+    and at most 40 characters. Symbol-only and longer ids are refused: nothing
+    is truncated, and no substitute id is invented.
+    """
     cleaned = re.sub(r"[^a-z0-9-]+", "-", str(raw or "").strip().lower()).strip("-")
-    return cleaned[:40] or "conveyor"
+    if not cleaned or len(cleaned) > _PI_PROVIDER_ID_MAX:
+        return ""
+    return cleaned
 
 
-# Providers the vendored Pi 1.5.0 binary already knows. stepfun and minimax are
-# not in that set: without a generated models.json Pi reports Unknown provider.
-# Names here keep the historical no-bridge path when no endpoint is configured.
-PI_BUILTIN_PROVIDERS = frozenset({
+def _unrepresentable_provider_error(raw: str) -> str:
+    return (
+        f"Pi 提供商 ID {raw!r} 不能写成 Pi 的提供商名。"
+        "请使用 1 到 40 位字母、数字和连字符；下划线会写成连字符。"
+        "过长的名称不会被截断，也不会改用别的提供商。"
+    )
+
+
+# MODELS keys from the pinned vendored Pi 1.5.0 catalog
+# vendor/pi/node_modules/@earendil-works/pi-ai/dist/models.generated.js.
+# stepfun is not in that catalog. minimax, minimax-cn, azure, and kimi-coding are.
+# A provider in this set keeps Pi's built-in endpoint when none is configured.
+PI_BUILTIN_PROVIDER_SNAPSHOT = frozenset({
     "amazon-bedrock",
+    "ant-ling",
     "anthropic",
-    "azure-openai",
+    "azure",
+    "baseten",
     "cerebras",
+    "cloudflare-ai-gateway",
+    "cloudflare-workers-ai",
     "deepseek",
+    "fireworks",
     "github-copilot",
     "google",
     "google-vertex",
     "groq",
     "huggingface",
+    "kimi-coding",
+    "meta",
+    "minimax",
+    "minimax-cn",
     "mistral",
+    "moonshotai",
+    "moonshotai-cn",
+    "nvidia",
     "openai",
+    "openai-codex",
+    "opencode",
+    "opencode-go",
     "openrouter",
+    "qwen-token-plan",
+    "qwen-token-plan-cn",
+    "qwen-token-plan-individual",
+    "radius",
+    "together",
+    "typesafe",
+    "vercel-ai-gateway",
     "xai",
+    "xiaomi",
+    "xiaomi-token-plan-ams",
+    "xiaomi-token-plan-cn",
+    "xiaomi-token-plan-sgp",
     "zai",
+    "zai-coding-cn",
 })
+PI_BUILTIN_PROVIDERS = PI_BUILTIN_PROVIDER_SNAPSHOT
+
+# Registrable domains that identify a provider. A chat base URL matches only
+# when its host is exactly one of these or a subdomain of one. No endpoint is
+# invented, and a provider missing from this map never matches by name.
+_CANONICAL_PROVIDER_DOMAINS = {
+    "stepfun": ("stepfun.com", "stepfun.ai"),
+}
+
+# Conveyor wire_api tokens this bridge can put in models.json ``api``.
+_PI_WIRE_API_ALIASES = {
+    "responses": "openai-responses",
+    "openai-responses": "openai-responses",
+    "response": "openai-responses",
+    "chat": "openai-completions",
+    "openai-completions": "openai-completions",
+    "completions": "openai-completions",
+    "chat-completions": "openai-completions",
+}
+_EMPTY_PI_MODELS_JSON = '{"providers": {}}\n'
+_ISOLATED_PI_DIR_NAME = "isolated"
 
 
 class PiProviderConfigError(RuntimeError):
@@ -120,16 +188,18 @@ class PiProviderConfigError(RuntimeError):
 
 
 def pi_wire_api_name(wire_api: str, *, default: str = "openai-completions") -> str:
-    """Map a Conveyor wire_api token to Pi's models.json ``api`` value."""
+    """Map a Conveyor wire_api token to Pi's models.json ``api`` value.
+
+    Only openai-completions and openai-responses (and their current aliases)
+    are ready. Any other token, including ``openai-bogus``, is a configuration
+    error. The saved operator value is not rewritten.
+    """
     raw = str(wire_api or "").strip().lower().replace("_", "-")
     if not raw:
         return default
-    if raw in {"responses", "openai-responses", "response"}:
-        return "openai-responses"
-    if raw in {"chat", "openai-completions", "completions", "chat-completions"}:
-        return "openai-completions"
-    if raw.startswith("openai-"):
-        return raw
+    mapped = _PI_WIRE_API_ALIASES.get(raw)
+    if mapped:
+        return mapped
     raise PiProviderConfigError(
         "CONVEYOR_PI_WIRE_API 无法识别。请使用 chat（openai-completions）或 responses（openai-responses）。"
     )
@@ -159,9 +229,12 @@ def build_pi_models_json(saved: dict[str, str]) -> dict[str, Any]:
         "apiKey": _pi_env_ref(env_name),
         "models": [{"id": model, "name": model}] if model else [],
     }
+    provider_id = sanitize_pi_provider_id(saved["provider_id"])
+    if not provider_id:
+        raise PiProviderConfigError(_unrepresentable_provider_error(str(saved.get("provider_id") or "")))
     return {
         "providers": {
-            sanitize_pi_provider_id(saved["provider_id"]): provider,
+            provider_id: provider,
         }
     }
 
@@ -324,11 +397,25 @@ def _saved_provider_record(settings: Any) -> dict[str, str] | None:
         return None
 
 
-def _matching_chat_endpoint(settings: Any, provider: str) -> tuple[str, str] | None:
-    """Explicit chat base URL only when its host is this provider.
+def _host_is_canonical_provider(provider: str, hostname: str) -> bool:
+    """True when ``hostname`` is the provider's domain or a subdomain of it."""
+    host = str(hostname or "").strip().lower().rstrip(".")
+    domains = _CANONICAL_PROVIDER_DOMAINS.get(sanitize_pi_provider_id(provider))
+    if not host or not domains or any(sep in host for sep in ("/", "\\", " ", "@")):
+        return False
+    return any(host == domain or host.endswith("." + domain) for domain in domains)
 
-    The implicit MiniMax default is not a match. Wire API for this bridge is
-    always openai-completions. A different saved provider is never consulted.
+
+def _matching_chat_endpoint(settings: Any, provider: str) -> tuple[str, str] | None:
+    """Chat base URL only when its host is that provider's canonical domain.
+
+    Matching is a DNS-label boundary (``api.stepfun.com``, ``api.stepfun.ai``).
+    A provider name inside an unrelated host (``notstepfun.example``,
+    ``evil-stepfun.example``) is not a match, and a provider with no canonical
+    domain never matches a host substring. Otherwise the caller must use
+    ``CONVEYOR_PI_BASE_URL`` or saved metadata for the same provider. No
+    endpoint is invented. Wire API for this chat bridge stays openai-completions
+    unless the operator set an explicit wire override.
     """
     raw = str(
         os.getenv("CONVEYOR_CHAT_BASE_URL")
@@ -338,12 +425,7 @@ def _matching_chat_endpoint(settings: Any, provider: str) -> tuple[str, str] | N
     ).strip().rstrip("/")
     if not raw or not _valid_base_url(raw):
         return None
-    host = (urlparse(raw).hostname or "").lower().replace("-", "").replace(".", "")
-    token = sanitize_pi_provider_id(provider).replace("-", "")
-    aliases = {token}
-    if token == "minimax":
-        aliases.add("minimaxi")
-    if not token or not any(alias and alias in host for alias in aliases):
+    if not _host_is_canonical_provider(provider, urlparse(raw).hostname or ""):
         return None
     key = str(
         os.getenv("CONVEYOR_CHAT_API_KEY")
@@ -406,9 +488,10 @@ def resolve_pi_provider(
     Precedence: explicit CONVEYOR_PI_* / settings.pi_* > saved 模型设置 provider
     > Pi default. An explicit provider still gets a generated models.json when
     its endpoint is known (``CONVEYOR_PI_BASE_URL``, then the saved provider
-    with the same id, then an explicit chat base URL whose host matches). A
-    different saved provider is never used. Built-in providers keep the legacy
-    no-bridge path when no endpoint is configured. The Supervisor passes
+    with the same id, then an explicit chat base URL whose host is that
+    provider's canonical domain). A different saved provider is never used.
+    Built-in providers keep Pi's own endpoint when no endpoint is configured.
+    The Supervisor passes
     ``model_fallback=""`` and ``chat_model=False`` so the chat model is not
     adopted. Only the chosen provider key is resolved. No network call.
     """
@@ -419,7 +502,21 @@ def resolve_pi_provider(
         if saved is not None:
             return _selection_from_saved(saved, settings)
 
-    provider = pi_provider_id(settings)
+    raw_provider = pi_provider_id(settings)
+    provider = sanitize_pi_provider_id(raw_provider)
+    if not provider:
+        explicit_model = str(
+            os.getenv("CONVEYOR_PI_MODEL") or getattr(settings, "pi_model", "") or ""
+        ).strip()
+        return PiProviderSelection(
+            provider="",
+            model=explicit_model,
+            api_key_env="",
+            api_key="",
+            models_json=None,
+            bridge_required=True,
+            config_error=_unrepresentable_provider_error(raw_provider),
+        )
     matched = None
     if allow_saved:
         record = _saved_provider_record(settings)
@@ -556,12 +653,45 @@ def write_pi_provider_config(settings: Any, models_json: str) -> Path:
     return directory
 
 
-def prepare_pi_child_env(env: dict[str, str], settings: Any, selection: PiProviderSelection) -> PiProviderSelection:
-    """Point ``env`` at one freshly written config and inject only the chosen key.
+def pi_isolated_agent_dir(settings: Any) -> Path:
+    """Private config directory for a built-in run that has no custom bridge.
 
-    A required bridge that cannot be written raises. Callers must not fall
-    back to another provider. Built-ins without a bridge do not keep a stale
-    ``PI_CODING_AGENT_DIR``.
+    This is not the legacy ``pi-agent/models.json`` path and not ``~/.pi/agent``.
+    """
+    root = getattr(settings, "codex_task_root", None)
+    if root is None or not str(root).strip():
+        raise PiProviderConfigError(
+            "没有任务目录（codex_task_root），无法建立 Pi 的隔离配置。"
+            "已停止，不会改用本机 ~/.pi/agent。"
+        )
+    return Path(root) / "pi-agent" / _ISOLATED_PI_DIR_NAME
+
+
+def write_pi_isolated_config(settings: Any) -> Path:
+    """Clean private Pi config: empty providers, no auth.json or settings.json.
+
+    Pi 1.5.0 loads auth, settings, and models.json from ``PI_CODING_AGENT_DIR``
+    and otherwise from ``~/.pi/agent``. An empty ``providers`` object adds no
+    custom endpoint, so built-in catalog providers stay on their own endpoints.
+    """
+    directory = pi_isolated_agent_dir(settings)
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in ("auth.json", "settings.json"):
+        path = directory / name
+        if path.exists() or path.is_symlink():
+            path.unlink()
+    from conveyor.core.provider_config import _atomic_write
+    _atomic_write(directory / "models.json", _EMPTY_PI_MODELS_JSON, 0o600)
+    return directory
+
+
+def prepare_pi_child_env(env: dict[str, str], settings: Any, selection: PiProviderSelection) -> PiProviderSelection:
+    """Point ``env`` at one private config dir and inject only the chosen key.
+
+    Every run sets ``PI_CODING_AGENT_DIR``, including built-in providers with
+    no bridge. A bridge that cannot be written, or an isolation directory that
+    cannot be written, raises. Callers must not fall back to ``~/.pi/agent``,
+    a stale ``pi-agent/models.json``, or another provider.
     """
     if selection.config_error:
         raise PiProviderConfigError(selection.config_error)
@@ -580,9 +710,18 @@ def prepare_pi_child_env(env: dict[str, str], settings: Any, selection: PiProvid
                 f"无法写入 Pi 提供商 {selection.provider} 的 models.json（{exc}）。"
                 "已停止，避免使用过期配置或改跑别的提供商。"
             ) from exc
-        env["PI_CODING_AGENT_DIR"] = str(directory)
     else:
-        env.pop("PI_CODING_AGENT_DIR", None)
+        try:
+            directory = write_pi_isolated_config(settings)
+        except PiProviderConfigError:
+            raise
+        except OSError as exc:
+            raise PiProviderConfigError(
+                "无法写入 Pi 的隔离配置目录，已停止。"
+                "不会改用本机 ~/.pi/agent，也不会加载已有的 pi-agent 配置。"
+                f"（{exc}）"
+            ) from exc
+    env["PI_CODING_AGENT_DIR"] = str(directory)
     if selection.api_key:
         env[selection.api_key_env] = selection.api_key
     for other_key in set(PI_PROVIDER_KEY_ENV.values()) - {selection.api_key_env}:

@@ -3550,10 +3550,11 @@ def _child_env(settings: Any, *, executors: str) -> dict[str, str]:
 def _apply_pi_child_env(env: dict[str, str], settings: Any, selection: Any) -> Any:
     """Give a Pi child exactly its one provider key and the matching models.json.
 
-    Explicit custom providers and saved 模型设置 providers share
-    ``prepare_pi_child_env``: one deterministic directory per non-secret
-    selection, ``apiKey`` stored as ``$ENV``, and no fallback to a different
-    provider when the bridge cannot be written.
+    Explicit custom providers, saved 模型设置 providers, and built-in providers
+    share ``prepare_pi_child_env``. A bridge uses one deterministic directory
+    per non-secret selection and stores ``apiKey`` as ``$ENV``. A built-in run
+    with no endpoint uses a private empty config. Neither falls back to
+    ``~/.pi/agent`` or another provider when that directory cannot be written.
     """
     from runner.pi_agent import prepare_pi_child_env
     return prepare_pi_child_env(env, settings, selection)

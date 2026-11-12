@@ -19,6 +19,7 @@ from runner.pi_agent import (
     PiProviderConfigError,
     describe_pi_provider,
     pi_coding_agent_dir,
+    pi_wire_api_name,
     prepare_pi_child_env,
     resolve_pi_provider,
 )
@@ -231,6 +232,159 @@ class ExplicitStepfunBridgeTests(unittest.TestCase):
                     self.assertNotIn(SECRET, child["PI_CODING_AGENT_DIR"])
             self.assertNotEqual(dirs[0], dirs[1])
 
+    def test_underscore_provider_id_matches_argv_json_and_saved_record(self) -> None:
+        url = "https://my-provider.example/v1"
+        saved_url = "https://saved-provider.example/v1"
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            object.__setattr__(settings, "pi_provider", "my_provider")
+            object.__setattr__(settings, "pi_model", "model-test")
+            with patch.dict(
+                os.environ,
+                _clean_env(tmp, CONVEYOR_PI_BASE_URL=url, MY_PROVIDER_API_KEY="test"),
+                clear=True,
+            ):
+                selection = resolve_pi_provider(settings, model_fallback="", chat_model=False)
+                child = {"DEEPSEEK_API_KEY": "sk-other"}
+                prepare_pi_child_env(child, settings, selection)
+                argv = PiExecutor(settings)._argv(ANALYST, "/tmp")
+            self.assertFalse(selection.config_error, selection.config_error)
+            self.assertEqual(selection.provider, "my-provider")
+            self.assertEqual(selection.model, "model-test")
+            self.assertEqual(selection.api_key_env, "MY_PROVIDER_API_KEY")
+            self.assertEqual(selection.api_key, "test")
+            data = json.loads(selection.models_json or "")
+            self.assertEqual(set(data["providers"]), {"my-provider"})
+            self.assertEqual(data["providers"]["my-provider"]["baseUrl"], url)
+            self.assertEqual(data["providers"]["my-provider"]["apiKey"], "$MY_PROVIDER_API_KEY")
+            self.assertEqual(argv[argv.index("--provider") + 1], "my-provider")
+            self.assertEqual(argv[argv.index("--model") + 1], "model-test")
+            self.assertEqual(child.get("MY_PROVIDER_API_KEY"), "test")
+            self.assertNotIn("DEEPSEEK_API_KEY", child)
+            self.assertNotIn("test", json.dumps(data))
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            object.__setattr__(settings, "pi_provider", "my_provider")
+            object.__setattr__(settings, "pi_model", "model-test")
+            with patch.dict(os.environ, _clean_env(tmp, MY_PROVIDER_API_KEY="test"), clear=True):
+                _save_provider(
+                    settings,
+                    provider_id="my_provider",
+                    provider_name="My Provider",
+                    model="saved-model",
+                    base_url=saved_url,
+                    wire_api="chat",
+                    env_key="MY_PROVIDER_API_KEY",
+                    api_key="test",
+                )
+                selection = resolve_pi_provider(settings, model_fallback="", chat_model=False)
+            self.assertFalse(selection.config_error, selection.config_error)
+            self.assertEqual(selection.provider, "my-provider")
+            self.assertEqual(selection.model, "model-test")
+            self.assertEqual(selection.api_key_env, "MY_PROVIDER_API_KEY")
+            data = json.loads(selection.models_json or "")
+            self.assertEqual(data["providers"]["my-provider"]["baseUrl"], saved_url)
+            self.assertEqual(data["providers"]["my-provider"]["models"][0]["id"], "model-test")
+            self.assertNotIn("saved-model", selection.models_json or "")
+            self.assertNotIn("test", selection.models_json or "")
+
+    def test_unrepresentable_provider_id_is_not_ready(self) -> None:
+        from runner.pi_agent import sanitize_pi_provider_id
+        self.assertEqual(sanitize_pi_provider_id("a" * 40 + "b"), "")
+        self.assertEqual(sanitize_pi_provider_id("a" * 40 + "c"), "")
+        for raw in ("***", "a" * 41, "----"):
+            with self.subTest(raw=raw):
+                with tempfile.TemporaryDirectory() as tmp_raw:
+                    tmp = Path(tmp_raw)
+                    settings = _make_settings(tmp)
+                    object.__setattr__(settings, "pi_provider", raw)
+                    object.__setattr__(settings, "pi_model", "model-test")
+                    with patch.dict(
+                        os.environ,
+                        _clean_env(tmp, CONVEYOR_PI_BASE_URL="https://my-provider.example/v1", MY_PROVIDER_API_KEY="test"),
+                        clear=True,
+                    ):
+                        selection = resolve_pi_provider(settings, model_fallback="", chat_model=False)
+                        status = describe_pi_provider(settings, model_fallback="", chat_model=False)
+                        with self.assertRaises(PiProviderConfigError):
+                            prepare_pi_child_env({}, settings, selection)
+                    self.assertTrue(selection.config_error)
+                    self.assertIsNone(selection.models_json)
+                    self.assertNotEqual(selection.provider, "conveyor")
+                    self.assertNotIn("conveyor", selection.config_error)
+                    self.assertIn("不会被截断", selection.config_error)
+                    self.assertFalse(status["configured"])
+                    self.assertIn("不会被截断", status["hint"])
+
+    def test_chat_host_matches_only_canonical_stepfun_domains(self) -> None:
+        positives = (
+            "https://api.stepfun.com/step_plan/v1",
+            "https://api.stepfun.ai/v1",
+        )
+        rejected = (
+            "https://notstepfun.example/v1",
+            "https://evil-stepfun.example/v1",
+            "https://stepfun.example/v1",
+            "https://api.stepfun.com.evil.example/v1",
+        )
+        for url in positives:
+            with self.subTest(url=url):
+                self._assert_chat_bridge(url, bridged=True)
+        for url in rejected:
+            with self.subTest(url=url):
+                self._assert_chat_bridge(url, bridged=False)
+
+    def test_generic_provider_does_not_match_host_substring(self) -> None:
+        for url in ("https://acme.example/v1", "https://evil-acme.example/v1", "https://notacme.example/v1"):
+            with self.subTest(url=url):
+                self._assert_chat_bridge(url, bridged=False, provider="acme", key_env="ACME_API_KEY")
+
+    def _assert_chat_bridge(self, url: str, *, bridged: bool, provider: str = "stepfun", key_env: str = "STEPFUN_API_KEY") -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            with patch.dict(
+                os.environ,
+                _clean_env(
+                    tmp,
+                    CONVEYOR_PI_PROVIDER=provider,
+                    CONVEYOR_PI_MODEL="step-5-preview",
+                    CONVEYOR_CHAT_BASE_URL=url,
+                    CONVEYOR_CHAT_API_KEY=SECRET,
+                ),
+                clear=True,
+            ):
+                os.environ[key_env] = SECRET
+                selection = resolve_pi_provider(settings, model_fallback="", chat_model=False)
+                child: dict[str, str] = {}
+                if bridged:
+                    prepare_pi_child_env(child, settings, selection)
+                else:
+                    with self.assertRaises(PiProviderConfigError):
+                        prepare_pi_child_env(child, settings, selection)
+            if bridged:
+                self.assertFalse(selection.config_error, selection.config_error)
+                data = json.loads(selection.models_json or "")
+                self.assertEqual(data["providers"][provider]["baseUrl"], url)
+                self.assertEqual(data["providers"][provider]["api"], "openai-completions")
+                self.assertEqual(data["providers"][provider]["apiKey"], "$" + key_env)
+                self.assertNotIn(SECRET, selection.models_json or "")
+            else:
+                self.assertTrue(selection.config_error)
+                self.assertIsNone(selection.models_json)
+                self.assertNotIn(url, selection.config_error)
+                root = Path(settings.codex_task_root) / "pi-agent"
+                blob = ""
+                if root.exists():
+                    blob = "\n".join(
+                        path.read_text(encoding="utf-8") for path in root.rglob("models.json")
+                    )
+                self.assertNotIn(url, blob)
+                self.assertNotIn(SECRET, blob)
+
 
 class PiReadinessTests(unittest.TestCase):
     def _pi(self, settings, env: dict[str, str]):
@@ -278,6 +432,67 @@ class PiReadinessTests(unittest.TestCase):
             self.assertEqual(pi["auth"], "ok")
             self.assertEqual(pi["provider"]["provider_name"], "StepFun")
             self.assertEqual(pi["provider"]["model"], "step-3")
+
+    def test_unknown_wire_api_is_not_ready(self) -> None:
+        self.assertEqual(pi_wire_api_name("openai-completions"), "openai-completions")
+        self.assertEqual(pi_wire_api_name("openai-responses"), "openai-responses")
+        self.assertEqual(pi_wire_api_name("responses"), "openai-responses")
+        with self.assertRaises(PiProviderConfigError):
+            pi_wire_api_name("openai-bogus")
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            env = _clean_env(
+                tmp,
+                CONVEYOR_PI_PROVIDER="stepfun",
+                CONVEYOR_PI_MODEL="step-5-preview",
+                CONVEYOR_PI_BASE_URL=STEP_URL,
+                CONVEYOR_PI_WIRE_API="openai-bogus",
+                STEPFUN_API_KEY=SECRET,
+            )
+            pi = self._pi(settings, env)
+            self.assertEqual(pi["auth"], "needs_login")
+            self.assertFalse(pi["provider"]["configured"])
+            self.assertIn("无法识别", pi["auth_hint"])
+            self.assertNotIn(SECRET, json.dumps(pi))
+            with patch.dict(os.environ, env, clear=True):
+                status = describe_pi_provider(settings, model_fallback="", chat_model=False)
+            self.assertFalse(status["configured"])
+            self.assertIn("无法识别", status["hint"])
+            env["CONVEYOR_PI_WIRE_API"] = "responses"
+            pi = self._pi(settings, env)
+            self.assertEqual(pi["auth"], "ok")
+            with patch.dict(os.environ, env, clear=True):
+                selection = resolve_pi_provider(settings, model_fallback="", chat_model=False)
+            data = json.loads(selection.models_json or "")
+            self.assertEqual(data["providers"]["stepfun"]["api"], "openai-responses")
+
+    def test_minimax_without_endpoint_is_configured_builtin(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            object.__setattr__(settings, "chat_api_key", None)
+            env = _clean_env(
+                tmp,
+                CONVEYOR_PI_PROVIDER="minimax",
+                CONVEYOR_PI_MODEL="MiniMax-M2",
+                MINIMAX_API_KEY=SECRET,
+            )
+            pi = self._pi(settings, env)
+            self.assertEqual(pi["auth"], "ok")
+            self.assertTrue(pi["provider"]["configured"])
+            self.assertNotIn("接口", pi.get("auth_hint") or "")
+            with patch.dict(os.environ, env, clear=True):
+                selection = resolve_pi_provider(settings, model_fallback="", chat_model=False)
+                child: dict[str, str] = {}
+                prepare_pi_child_env(child, settings, selection)
+            self.assertFalse(selection.bridge_required)
+            self.assertIsNone(selection.models_json)
+            self.assertEqual(selection.provider, "minimax")
+            models = json.loads((Path(child["PI_CODING_AGENT_DIR"]) / "models.json").read_text(encoding="utf-8"))
+            self.assertEqual(models, {"providers": {}})
+            self.assertEqual(child.get("MINIMAX_API_KEY"), SECRET)
+            self.assertNotIn(SECRET, json.dumps(models))
 
     def test_executor_available_requires_local_config_not_remote_auth(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -328,6 +543,45 @@ class SupervisorPiAgreementTests(unittest.TestCase):
             self.assertNotIn("OPENAI_API_KEY", child)
             self.assertNotIn("DEEPSEEK_API_KEY", child)
             self.assertNotIn(SECRET, models.read_text(encoding="utf-8"))
+
+    def test_builtin_minimax_supervisor_uses_private_empty_config(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            home = tmp / "home"
+            (home / ".pi" / "agent").mkdir(parents=True)
+            (home / ".pi" / "agent" / "auth.json").write_text('{"poison":"global"}', encoding="utf-8")
+            legacy = Path(settings.codex_task_root) / "pi-agent"
+            legacy.mkdir(parents=True)
+            (legacy / "models.json").write_text(
+                '{"providers":{"stepfun":{"baseUrl":"https://stale.example/v1"}}}',
+                encoding="utf-8",
+            )
+            env = _sup_env(
+                CONVEYOR_PI_BIN="/bin/echo",
+                CONVEYOR_PI_PROVIDER="minimax",
+                CONVEYOR_PI_MODEL="MiniMax-M2",
+                MINIMAX_API_KEY=SECRET,
+                HOME=str(home),
+                PI_CODING_AGENT_DIR=str(legacy),
+                DEEPSEEK_API_KEY="sk-deepseek-other",
+            )
+            with patch.dict(os.environ, env, clear=True):
+                argv = PiExecutor(settings)._argv(ANALYST, "/tmp")
+                child = ags._child_env(settings, executors="pi")
+                ok, reason = PiExecutor(settings).available()
+            self.assertTrue(ok, reason)
+            self.assertEqual(argv[argv.index("--provider") + 1], "minimax")
+            self.assertEqual(argv[argv.index("--model") + 1], "MiniMax-M2")
+            agent_dir = Path(child["PI_CODING_AGENT_DIR"]).resolve()
+            self.assertEqual(agent_dir, (legacy / "isolated").resolve())
+            self.assertNotIn(home.resolve(), (agent_dir, *agent_dir.parents))
+            data = json.loads((agent_dir / "models.json").read_text(encoding="utf-8"))
+            self.assertEqual(data, {"providers": {}})
+            self.assertEqual(child.get("MINIMAX_API_KEY"), SECRET)
+            self.assertNotIn("DEEPSEEK_API_KEY", child)
+            self.assertNotIn(SECRET, json.dumps(data))
+            self.assertIn("https://stale.example/v1", (legacy / "models.json").read_text(encoding="utf-8"))
 
     def test_bridge_write_failure_does_not_launch_another_provider(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
