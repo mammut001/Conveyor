@@ -786,7 +786,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
               <>
                 <h2>{agentName ? `与 ${agentName} 讨论当前目录方案` : '讨论当前工作目录方案'}</h2>
                 <p>此处仅用于需求梳理、方案讨论与任务拆解，不会直接执行命令或修改代码。</p>
-                <p>{discussionHandoffHint || '确认方案后，可填入左侧「当前任务目标」并点击「开始执行」。'}</p>
+                <p>{discussionHandoffHint || '确认方案后，可在「任务与结果」检查「当前任务目标」，再点击「开始执行」。'}</p>
               </>
             ) : (
               <>
