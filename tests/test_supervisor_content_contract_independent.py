@@ -240,6 +240,21 @@ class TestParseReviewVerdictContract(unittest.TestCase):
         )
         self.assertIs(verdict["passed"], True)
 
+    def test_valid_fenced_verdict_tolerates_braces_in_surrounding_prose(self) -> None:
+        """Reviewer markdown often cites AC tokens like #contact or {width: 100%} outside the fence."""
+        payload = self._valid_passing_payload()
+        fenced_text = (
+            "AC1: `href=\"#contact\"` matches `id=\"contact\"`. "
+            "CSS uses {width: 100%}.\n"
+            f"```json\n{json.dumps(payload)}\n```\n"
+        )
+        verdict = parse_review_verdict(
+            fenced_text,
+            expected_sha=self.EXPECTED_SHA,
+            expected_fingerprint=self.EXPECTED_FINGERPRINT,
+        )
+        self.assertIs(verdict["passed"], True)
+
     def test_valid_failing_verdict_with_issues_parsed_as_failed_not_coerced_true(self) -> None:
         """Valid FAIL with issues should parse as failed, not be coerced true."""
         payload = {

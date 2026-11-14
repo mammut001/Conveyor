@@ -5587,8 +5587,10 @@ def parse_review_verdict(text: str, *,
         if len(matches) != 1:
             raise ReviewEnvelopeError("malformed or ambiguous fenced review verdict")
         match = matches[0]
-        outside = stripped[:match.start()] + "\n" + stripped[match.end():]
-        if "```" in outside or "{" in outside or "}" in outside:
+        outside = (stripped[: match.start()] + stripped[match.end() :]).strip()
+        # Allow benign reviewer prose outside the fence; reject only extra code fences
+        # (multiple fenced blocks remain ambiguous and are caught by len(matches) != 1).
+        if "```" in outside:
             raise ReviewEnvelopeError("ambiguous content outside fenced review verdict")
         inner = match.group(1).strip()
         if not (inner.startswith("{") and inner.endswith("}")):
