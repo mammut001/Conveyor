@@ -1,6 +1,7 @@
 """/run and /fix reach Pi (no sandbox): destructive ones must ask first."""
 from __future__ import annotations
 
+import importlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,10 @@ from unittest.mock import AsyncMock, patch
 from handlers.dispatch import dispatch
 from tests.test_computer_dispatch import FakePort, _msg, _settings
 
+# handlers/__init__.py re-exports dispatch, so handlers.dispatch is the function.
+# Patch the module object. A string path looks up the function and fails on 3.9/3.10.
+_dispatch_mod = importlib.import_module("handlers.dispatch")
+
 
 class PiRunGateTest(unittest.IsolatedAsyncioTestCase):
     async def _dispatch(self, text: str, runner_name: str):
@@ -18,7 +23,7 @@ class PiRunGateTest(unittest.IsolatedAsyncioTestCase):
             runner = SimpleNamespace(name=runner_name)
             confirm, job = AsyncMock(), AsyncMock()
             with patch("handlers.tools.runner._request_confirmation", confirm), \
-                    patch("handlers.dispatch.handle_codex_job", job), \
+                    patch.object(_dispatch_mod, "handle_codex_job", job), \
                     patch("conveyor.core.job_lanes.runner_for_chat", lambda r, *a, **k: r):
                 await dispatch(_msg(text), FakePort(), settings, runner)
             return confirm, job
@@ -45,7 +50,7 @@ class PiRunGateTest(unittest.IsolatedAsyncioTestCase):
                           attachments=(Attachment(kind="image", ref="f1"),))
             confirm, ctx = AsyncMock(), AsyncMock()
             with patch("handlers.tools.runner._request_confirmation", confirm), \
-                    patch("handlers.dispatch.handle_context_job", ctx), \
+                    patch.object(_dispatch_mod, "handle_context_job", ctx), \
                     patch("conveyor.core.job_lanes.runner_for_chat", lambda r, *a, **k: r):
                 await dispatch(msg, FakePort(), settings, SimpleNamespace(name="pi"))
             self.assertEqual(confirm.await_count, 1)

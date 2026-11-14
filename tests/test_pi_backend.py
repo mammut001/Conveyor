@@ -465,6 +465,7 @@ class PiBackendTests(unittest.TestCase):
                 _base_env(
                     CONVEYOR_PI_PROVIDER="stepfun",
                     CONVEYOR_PI_MODEL="step-5-preview",
+                    CONVEYOR_PI_BASE_URL="https://api.stepfun.com/step_plan/v1",
                     STEPFUN_API_KEY="sk-stepfun-test",
                 ),
                 clear=True,
@@ -501,6 +502,7 @@ class PiBackendTests(unittest.TestCase):
                 os.environ,
                 _base_env(
                     CONVEYOR_PI_PROVIDER="stepfun",
+                    CONVEYOR_PI_BASE_URL="https://api.stepfun.com/step_plan/v1",
                     STEPFUN_API_KEY="sk-stepfun-isolated",
                 ),
                 clear=True,

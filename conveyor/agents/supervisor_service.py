@@ -18,10 +18,14 @@ import json
 import logging
 import os
 import re
+import shutil
 import socket
 import sqlite3
+import stat
 import subprocess
+import tempfile
 import threading
+import unicodedata
 from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
@@ -41,6 +45,7 @@ SUPERVISOR_DURABLE_PREFIX = f"{WEB_CHANNEL}:{WEB_OPERATOR_ID}:{SUPERVISOR_CHAT_P
 
 MAX_PATH_CHARS = 1024
 MAX_NAME_CHARS = 120
+MAX_PROJECT_NAME_CHARS = 64
 MAX_BRANCH_CHARS = 100
 MAX_REF_CHARS = 100
 MAX_GOAL_CHARS = 8000
@@ -51,6 +56,8 @@ MAX_MODEL_CHARS = 120
 MAX_EXEC_OUTPUT_PREVIEW_CHARS = 4000
 
 _ID_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_PROJECT_NAME_RE = re.compile(r"^(?![-.])(?!.*\.\.)[\w][\w ._-]{0,63}$")
+_PROJECT_CREATE_MARKER = ".conveyor-project-create"
 _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,119}$")
 _FORBIDDEN_REF_SUBSTRINGS = ("..", "@{", "\\", "\x00", "\r", "\n", "\t", " ")
 _UI_EXPOSED_EXECUTORS: tuple[tuple[str, str], ...] = (
@@ -957,6 +964,387 @@ def create_managed_worktree(
         HTTPStatus.INTERNAL_SERVER_ERROR,
         "工作目录已经建好，但读取不到它的信息",
     )
+
+
+# ---------------------------------------------------------------------------
+# Server-managed empty projects (no caller-chosen filesystem path)
+# ---------------------------------------------------------------------------
+
+def _validate_project_name(name: Any) -> str:
+    """One display name and one directory segment. Never a path or a git option."""
+    if not isinstance(name, str):
+        raise SupervisorServiceError(
+            HTTPStatus.BAD_REQUEST,
+            "项目名称需要是文字",
+            code="invalid_name",
+        )
+    clean = unicodedata.normalize("NFC", name.strip())
+    if not clean:
+        raise SupervisorServiceError(
+            HTTPStatus.BAD_REQUEST,
+            "请填写项目名称",
+            code="invalid_name",
+        )
+    if len(clean) > MAX_PROJECT_NAME_CHARS:
+        raise SupervisorServiceError(
+            HTTPStatus.BAD_REQUEST,
+            f"项目名称最长 {MAX_PROJECT_NAME_CHARS} 个字符",
+            code="invalid_name",
+        )
+    if any(ch in clean for ch in ("\x00", "\r", "\n", "\t", "/", "\\")) or clean != Path(clean).name:
+        raise SupervisorServiceError(
+            HTTPStatus.BAD_REQUEST,
+            "项目名称不能包含路径或换行",
+            code="invalid_name",
+        )
+    if not _PROJECT_NAME_RE.fullmatch(clean):
+        raise SupervisorServiceError(
+            HTTPStatus.BAD_REQUEST,
+            "项目名称只能使用字母、数字、中文、空格和 . _ -，并且不能以 - 或 . 开头",
+            code="invalid_name",
+        )
+    return clean
+
+
+def _path_occupied(path: Path) -> bool:
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _ensure_projects_root(settings: Any) -> Path:
+    """Return ``<codex_task_root>/projects`` without following a symlink there."""
+    task_root_raw = getattr(settings, "codex_task_root", "") or ""
+    if not task_root_raw:
+        raise SupervisorServiceError(
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            "还没有配置任务目录",
+            code="projects_root_unsafe",
+        )
+    task_root = Path(_canonical_internal_path(str(task_root_raw)))
+    if not task_root.is_dir():
+        raise SupervisorServiceError(
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            "任务目录不存在",
+            code="projects_root_unsafe",
+        )
+    projects = task_root / "projects"
+    for _ in range(2):
+        if not _path_occupied(projects):
+            try:
+                os.mkdir(projects, 0o755)
+            except FileExistsError:
+                continue
+        try:
+            st = os.lstat(projects)
+        except OSError as exc:
+            raise SupervisorServiceError(
+                HTTPStatus.CONFLICT,
+                "托管项目的位置不可用，没有写入任何内容",
+                code="projects_root_unsafe",
+            ) from exc
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+            raise SupervisorServiceError(
+                HTTPStatus.CONFLICT,
+                "托管项目的位置不是一个普通文件夹，已停止，没有跟着链接写入",
+                code="projects_root_unsafe",
+            )
+        real_projects = os.path.realpath(projects)
+        real_root = os.path.realpath(task_root)
+        if os.path.dirname(real_projects) != real_root or os.path.basename(real_projects) != "projects":
+            raise SupervisorServiceError(
+                HTTPStatus.CONFLICT,
+                "托管项目的位置跳出了任务目录，已停止，没有写入",
+                code="projects_root_unsafe",
+            )
+        return projects
+    raise SupervisorServiceError(
+        HTTPStatus.CONFLICT,
+        "托管项目的位置不可用，没有写入任何内容",
+        code="projects_root_unsafe",
+    )
+
+
+def _project_git_env(settings: Any) -> dict[str, str]:
+    """Child env that cannot see or write the operator's global git config.
+
+    ``utility_env`` is already the sanitized environment. An empty result does
+    not fall back to the process environment, so provider credentials are not
+    copied into a brand-new local repository. ``PATH`` is kept so ``git``
+    itself can be found.
+    """
+    base = utility_env(settings)
+    if isinstance(base, dict):
+        env = {str(key): str(value) for key, value in base.items() if isinstance(key, str)}
+    else:
+        env = {}
+    for key in ("PATH", "GIT_EXEC_PATH"):
+        if key not in env:
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
+    for key in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+        "GIT_LITERAL_PATHSPECS",
+        "GIT_CONFIG",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_TEMPLATE_DIR",
+    ):
+        env.pop(key, None)
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    env["GIT_PAGER"] = "cat"
+    env["GIT_EDITOR"] = "true"
+    env["GIT_AUTHOR_NAME"] = "Conveyor"
+    env["GIT_AUTHOR_EMAIL"] = "conveyor@localhost"
+    env["GIT_COMMITTER_NAME"] = "Conveyor"
+    env["GIT_COMMITTER_EMAIL"] = "conveyor@localhost"
+    return env
+
+
+def _run_project_git(
+    settings: Any,
+    argv: list[str],
+    *,
+    timeout: float = 20.0,
+) -> subprocess.CompletedProcess[str]:
+    if not argv or argv[0] != "git" or any(not isinstance(part, str) for part in argv):
+        raise SupervisorServiceError(
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            "Git 命令不正确",
+            code="git_unavailable",
+        )
+    try:
+        return subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=_project_git_env(settings),
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SupervisorServiceError(
+            HTTPStatus.BAD_REQUEST,
+            "Git 命令超时了，可以再试一次",
+            code="git_timeout",
+        ) from exc
+    except OSError as exc:
+        raise SupervisorServiceError(
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            f"Git 运行失败：{exc}",
+            code="git_unavailable",
+        ) from exc
+
+
+def _git_or_raise(settings: Any, argv: list[str]) -> None:
+    proc = _run_project_git(settings, argv)
+    if proc.returncode != 0:
+        detail = redact_text((proc.stderr or proc.stdout or "git failed").strip())
+        raise SupervisorServiceError(
+            HTTPStatus.BAD_REQUEST,
+            f"新建项目的 Git 仓库没有完成：{truncate(detail, 280)}",
+            code="project_create_failed",
+        )
+
+
+def _same_owned_dir(dest: Path, projects: Path, identity: tuple[int, int]) -> bool:
+    try:
+        parent_st = os.lstat(projects)
+        dest_st = os.lstat(dest)
+    except OSError:
+        return False
+    if stat.S_ISLNK(parent_st.st_mode) or not stat.S_ISDIR(parent_st.st_mode):
+        return False
+    if stat.S_ISLNK(dest_st.st_mode) or not stat.S_ISDIR(dest_st.st_mode):
+        return False
+    if (dest_st.st_dev, dest_st.st_ino) != identity:
+        return False
+    if dest.parent != projects:
+        return False
+    try:
+        real_parent = os.path.realpath(projects)
+        real_dest = os.path.realpath(dest)
+    except OSError:
+        return False
+    return os.path.dirname(real_dest) == real_parent and os.path.basename(real_dest) == dest.name
+
+
+def _project_create_marker_text(identity: tuple[int, int]) -> str:
+    return f"{identity[0]}:{identity[1]}\n"
+
+
+def _discard_new_project_dir(dest: Path, projects: Path, identity: tuple[int, int]) -> bool:
+    """Remove a directory this call created. Never touches a different inode or a symlink."""
+    marker = dest / _PROJECT_CREATE_MARKER
+    try:
+        if not marker.is_file() or marker.read_text(encoding="utf-8") != _project_create_marker_text(identity):
+            return False
+    except OSError:
+        return False
+    if not _same_owned_dir(dest, projects, identity):
+        return False
+    try:
+        fd = os.open(dest, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False
+    try:
+        info = os.fstat(fd)
+    finally:
+        os.close(fd)
+    if (info.st_dev, info.st_ino) != identity:
+        return False
+    try:
+        shutil.rmtree(dest)
+    except OSError:
+        log.warning("left incomplete new project directory in place")
+        return False
+    return True
+
+
+def _project_path_registered(settings: Any, dest: Path) -> bool:
+    """True when this path is already a registered repository, or when we cannot be sure."""
+    try:
+        canon = os.path.realpath(dest)
+    except OSError:
+        return True
+    try:
+        conn = _connect(settings)
+    except Exception:
+        return True
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM supervisor_repositories WHERE canonical_path = ?",
+            (canon,),
+        ).fetchone()
+    except Exception:
+        return True
+    finally:
+        conn.close()
+    return row is not None
+
+
+def _init_empty_git_repository(settings: Any, dest: Path) -> None:
+    """``git init -b main`` plus one empty commit. No global config, hooks, or clone."""
+    template = tempfile.mkdtemp(prefix="conveyor-empty-git-template-")
+    try:
+        _git_or_raise(
+            settings,
+            [
+                "git",
+                "--no-pager",
+                "-c", "core.hooksPath=/dev/null",
+                "-c", "core.fsmonitor=false",
+                "-c", "core.attributesFile=/dev/null",
+                "-c", "init.defaultBranch=main",
+                "-c", f"safe.directory={dest}",
+                "init",
+                "-b", "main",
+                "--template", template,
+                "--",
+                str(dest),
+            ],
+        )
+        _git_or_raise(
+            settings,
+            [
+                "git",
+                "--no-pager",
+                "-C", str(dest),
+                "-c", "core.hooksPath=/dev/null",
+                "-c", "core.fsmonitor=false",
+                "-c", "core.attributesFile=/dev/null",
+                "-c", "commit.gpgsign=false",
+                "-c", "tag.gpgsign=false",
+                "-c", "user.name=Conveyor",
+                "-c", "user.email=conveyor@localhost",
+                "-c", "core.editor=true",
+                "-c", f"safe.directory={dest}",
+                "commit",
+                "--allow-empty",
+                "-m", "Initial commit",
+            ],
+        )
+    finally:
+        shutil.rmtree(template, ignore_errors=True)
+
+
+def create_managed_project(settings: Any, *, name: Any) -> dict[str, Any]:
+    """Create a new empty Git repository under the server-managed projects root.
+
+    Registers it and adds one isolated writable worktree. Does not dispatch a task,
+    does not clone, and does not modify an existing directory.
+    """
+    require_enabled(settings)
+    project_name = _validate_project_name(name)
+    projects = _ensure_projects_root(settings)
+    dest = projects / project_name
+    if dest.parent != projects or dest.name != project_name:
+        raise SupervisorServiceError(
+            HTTPStatus.BAD_REQUEST,
+            "项目名称不能包含路径",
+            code="invalid_name",
+        )
+    if _path_occupied(dest):
+        raise SupervisorServiceError(
+            HTTPStatus.CONFLICT,
+            "已经有同名项目，没有改动原来的文件",
+            code="project_exists",
+        )
+
+    created_identity: tuple[int, int] | None = None
+    try:
+        try:
+            os.mkdir(dest, 0o755)
+        except FileExistsError as exc:
+            raise SupervisorServiceError(
+                HTTPStatus.CONFLICT,
+                "已经有同名项目，没有改动原来的文件",
+                code="project_exists",
+            ) from exc
+        st = os.lstat(dest)
+        created_identity = (st.st_dev, st.st_ino)
+        if not _same_owned_dir(dest, projects, created_identity):
+            raise SupervisorServiceError(
+                HTTPStatus.CONFLICT,
+                "新建项目的位置不安全，已停止，没有改动原来的文件",
+                code="projects_root_unsafe",
+            )
+        (dest / _PROJECT_CREATE_MARKER).write_text(
+            _project_create_marker_text(created_identity), encoding="utf-8",
+        )
+        _init_empty_git_repository(settings, dest)
+        repo, created = register_repository(settings, path=str(dest), name=project_name)
+        if not created:
+            raise SupervisorServiceError(
+                HTTPStatus.CONFLICT,
+                "这个位置已经登记过，没有改动原来的仓库",
+                code="project_exists",
+            )
+        worktree = create_managed_worktree(settings, str(repo["id"]))
+    except Exception:
+        if created_identity is not None and not _project_path_registered(settings, dest):
+            _discard_new_project_dir(dest, projects, created_identity)
+        raise
+
+    refreshed = _format_repository(settings, _get_repo_row(settings, str(repo["id"])))
+    return {"repository": refreshed, "worktree": worktree, "created": True}
 
 
 # ---------------------------------------------------------------------------

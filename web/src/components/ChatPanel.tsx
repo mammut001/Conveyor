@@ -3,6 +3,7 @@ import { FormattedText } from './FormattedText';
 import { VoiceRecorder } from './VoiceRecorder';
 import { CopyButton } from './CopyButton';
 import { buildGoalDraft } from './chatGoalDraft';
+import { prepareButtonLabel, type TaskSuggestion } from './taskDraftHandoff';
 import { useMediaQuery } from '../ux/shellNav';
 import {
   CHANNEL_LABELS, ChatRequestError, STREAM_INTERRUPTED, describeApproval, describeChatError, formatChatTime, formatFullTime,
@@ -18,7 +19,7 @@ export type SubagentProgress = {
   tools: string[];
 };
 
-export type TaskSuggestion = { prompt: string; session_id: string };
+export type { TaskSuggestion };
 
 export type ChatMessage = {
   id: string;
@@ -80,6 +81,8 @@ export type ChatPanelProps = {
   /** When true, this conversation is a worktree-scoped planning/discussion surface
    *  that prepares task goals rather than directly running commands or nightly jobs. */
   discussionOnly?: boolean;
+  /** Second welcome sentence. Wide layout may name the left goal field; narrow layout names the tabs. */
+  discussionHandoffHint?: string;
   /** 「项目」讨论专用：每条回复下面出现「设为目标」，把草稿（老板最后的要求 + 这条回复）交出去。
    *  主「对话」页不传，就不会出现这个按钮。 */
   onMakeGoal?: (draft: string) => void;
@@ -184,7 +187,7 @@ function approvalLabel(status: string): string {
     : '已处理';
 }
 
-export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, discussionOnly = false, onMakeGoal, makeGoalDisabledReason = '' }: ChatPanelProps) {
+export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, discussionOnly = false, discussionHandoffHint = '', onMakeGoal, makeGoalDisabledReason = '' }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Reading a restored conversation must not flash the welcome state first.
@@ -782,7 +785,8 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
             {discussionOnly ? (
               <>
                 <h2>{agentName ? `与 ${agentName} 讨论当前目录方案` : '讨论当前工作目录方案'}</h2>
-                <p>此处仅用于需求梳理、方案讨论与任务拆解，不会直接执行命令或修改代码。确认方案后，可填入左侧「当前任务目标」并点击「开始执行」。</p>
+                <p>此处仅用于需求梳理、方案讨论与任务拆解，不会直接执行命令或修改代码。</p>
+                <p>{discussionHandoffHint || '确认方案后，可在「任务与结果」检查「当前任务目标」，再点击「开始执行」。'}</p>
               </>
             ) : (
               <>
@@ -958,7 +962,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                   <div className="action-row" style={{ marginTop: 10 }}>
                     <button type="button" className="primary" disabled={busy}
                       onClick={() => onPrepareTask(message.taskSuggestion!)}>
-                      准备执行任务 →
+                      {prepareButtonLabel(message.taskSuggestion)}
                     </button>
                   </div>
                 )}

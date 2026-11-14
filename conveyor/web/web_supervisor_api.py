@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from http import HTTPStatus
 from typing import Any
+from urllib.parse import urlparse
 
 from conveyor.agents import supervisor_service as svc
 from conveyor.agents import supervisor_goals as goals_mod
@@ -117,6 +118,111 @@ def handle_get(
         return True
 
 
+def _header_value(headers: Any, name: str) -> str:
+    if headers is None:
+        return ""
+    try:
+        value = headers.get(name)
+    except Exception:
+        return ""
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _host_authority(host: str) -> tuple[str, int | None] | None:
+    """``(hostname, port)`` from a Host header. IPv6 must be bracketed. None if malformed."""
+    raw = host.strip()
+    if not raw or any(ch in raw for ch in "\r\n\x00 \t"):
+        return None
+    try:
+        if raw.startswith("["):
+            end = raw.find("]")
+            if end <= 1:
+                return None
+            name = raw[1:end]
+            rest = raw[end + 1:]
+            if not name:
+                return None
+            if rest == "":
+                return name.casefold(), None
+            if not rest.startswith(":"):
+                return None
+            port = int(rest[1:])
+        elif raw.count(":") > 1:
+            return None
+        elif ":" in raw:
+            name, port_text = raw.rsplit(":", 1)
+            if not name:
+                return None
+            port = int(port_text)
+        else:
+            return raw.casefold(), None
+    except (TypeError, ValueError):
+        return None
+    if not 1 <= port <= 65535:
+        return None
+    return name.casefold(), port
+
+
+def _origin_authority(origin: str) -> tuple[str, int] | None:
+    """``(hostname, port)`` from an Origin. Missing ports use 80 or 443. None if malformed."""
+    try:
+        parsed = urlparse(origin.strip())
+        if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+            return None
+        hostname = parsed.hostname
+        if not hostname:
+            return None
+        port = parsed.port
+    except (TypeError, ValueError):
+        return None
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    if not 1 <= port <= 65535:
+        return None
+    return hostname.casefold(), port
+
+
+def project_create_block_reason(headers: Any) -> str | None:
+    """Block a cross-site create. None means this POST may create a project.
+
+    Requires JSON and ``X-Requested-With: XMLHttpRequest``. ``Sec-Fetch-Site``
+    of ``cross-site`` or ``same-site`` is rejected. A present Origin must match
+    the Host authority, including port and IPv6. ``X-Forwarded-Host`` is ignored.
+    Origin may be absent for a non-browser client that still sends the two
+    required headers. Malformed values return a reason instead of raising.
+    """
+    try:
+        content_type = _header_value(headers, "Content-Type").lower()
+        if "application/json" not in content_type:
+            return "content_type"
+        if _header_value(headers, "X-Requested-With") != "XMLHttpRequest":
+            return "x_requested_with"
+        fetch_site = _header_value(headers, "Sec-Fetch-Site").lower()
+        if fetch_site in {"cross-site", "same-site"}:
+            return "sec_fetch_site"
+        origin = _header_value(headers, "Origin")
+        if not origin:
+            return None
+        host_auth = _host_authority(_header_value(headers, "Host"))
+        origin_auth = _origin_authority(origin)
+        if host_auth is None or origin_auth is None:
+            return "origin"
+        host_name, host_port = host_auth
+        origin_name, origin_port = origin_auth
+        if host_name != origin_name:
+            return "origin"
+        if host_port is None:
+            if origin_port not in {80, 443}:
+                return "origin"
+        elif host_port != origin_port:
+            return "origin"
+        return None
+    except Exception:
+        return "origin"
+
+
 def handle_post(
     handler: Any,
     path: str,
@@ -130,6 +236,18 @@ def handle_post(
     settings = _resolve_settings(handler)
     try:
         svc.require_enabled(settings)
+
+        if path == "/api/supervisor/projects":
+            blocked = project_create_block_reason(getattr(handler, "headers", None))
+            if blocked is not None:
+                handler._json(
+                    HTTPStatus.FORBIDDEN,
+                    {"error": "请求未通过站点校验", "code": "origin_or_request_denied"},
+                )
+                return True
+            created_project = svc.create_managed_project(settings, name=body.get("name"))
+            handler._json(HTTPStatus.CREATED, created_project)
+            return True
 
         if path == "/api/supervisor/repositories":
             repo, created = svc.register_repository(

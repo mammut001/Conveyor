@@ -450,36 +450,25 @@ def reset_quota(settings: Any, worker_id: str) -> None:
 
 
 def _pi_provider_info(settings: Any) -> dict[str, Any]:
-    """Saved 模型设置 provider as seen by the built-in Pi (no secrets)."""
-    explicit = any(
-        str(value or "").strip()
-        for value in (
-            os.getenv("CONVEYOR_PI_PROVIDER"),
-            os.getenv("CONVEYOR_PI_MODEL"),
-            getattr(settings, "pi_provider", ""),
-            getattr(settings, "pi_model", ""),
-        )
-    )
-    # Inputs the legacy PiBackend path already uses (DeepSeek key / chat-tier key).
-    legacy_key = any(
-        str(value or "").strip()
-        for value in (
-            os.getenv("DEEPSEEK_API_KEY"),
-            os.getenv("CONVEYOR_CHAT_API_KEY"),
-            getattr(settings, "chat_api_key", None),
-        )
-    )
-    saved = None
+    """Local Pi readiness (no secrets, no provider network call)."""
     try:
-        from conveyor.core.provider_config import get_saved_provider
-        saved = get_saved_provider(settings)
+        from runner.pi_agent import describe_pi_provider
+        status = describe_pi_provider(settings)
     except Exception as exc:
         logger.debug("pi provider lookup failed: %s", type(exc).__name__)
+        return {
+            "configured": False,
+            "explicit": False,
+            "provider_name": None,
+            "model": None,
+            "config_hint": "",
+        }
     return {
-        "configured": bool(saved) or explicit or legacy_key,
-        "explicit": explicit,
-        "provider_name": saved["provider_name"] if saved else None,
-        "model": saved["model"] if saved else None,
+        "configured": bool(status.get("configured")),
+        "explicit": bool(status.get("explicit")),
+        "provider_name": status.get("provider_name"),
+        "model": status.get("model"),
+        "config_hint": status.get("hint") or "",
     }
 
 
@@ -523,7 +512,7 @@ def _assemble_workers_payload(
             provider_info = _pi_provider_info(settings)
             auth = "ok" if provider_info["configured"] else "needs_login"
             if not provider_info["configured"]:
-                auth_hint = PI_NEEDS_PROVIDER_HINT
+                auth_hint = provider_info.get("config_hint") or PI_NEEDS_PROVIDER_HINT
 
         priority = order_index.get(wid, len(order))
         usage = worker_usage.get_usage(wid)

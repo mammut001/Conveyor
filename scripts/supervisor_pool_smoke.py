@@ -186,6 +186,8 @@ def main() -> int:
     os.environ["CONVEYOR_PI_BIN"] = str(pi_bin)
     os.environ["CONVEYOR_PI_PROVIDER"] = "deepseek"
     os.environ["CONVEYOR_PI_MODEL"] = "deepseek-chat"
+    from runner.pi_agent import pi_api_key_env
+    os.environ.setdefault(pi_api_key_env("deepseek"), "smoke-fake-key")
 
     # Detection would otherwise resolve real binaries from PATH (and run them).
     original_detect = workers.detect_all_workers

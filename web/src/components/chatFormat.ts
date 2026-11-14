@@ -121,6 +121,19 @@ export function describeChatError(error: unknown, options: DescribeOptions = {})
   return { message: fallback, detail, retryable: true }
 }
 
+const NEW_CONVERSATION_DENIED = '新会话请求未通过站点校验，请检查当前访问地址或入口代理设置。'
+
+/** Copy for the new-conversation button. A 403 stays in the technical detail. */
+export function describeNewConversationError(error: unknown): HumanError {
+  const human = describeChatError(error, { fallback: '新会话没有创建成功，可以重试' })
+  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  const status = error instanceof ChatRequestError ? error.status : undefined
+  if (status === 403 || /origin or request denied/i.test(raw)) {
+    return { message: NEW_CONVERSATION_DENIED, detail: human.detail, retryable: false }
+  }
+  return { message: '新会话没有创建成功，可以重试', detail: human.detail, retryable: human.retryable }
+}
+
 /** A "reply" that is really the backend's own exception or HTTP failure text. */
 export function looksLikeRawError(text: string): boolean {
   const value = (text || '').trim()

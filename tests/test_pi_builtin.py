@@ -14,7 +14,14 @@ from conveyor.core import provider_config
 from conveyor.agents import workers
 from conveyor.core.config import Settings
 from runner import pi_agent
-from runner.pi_agent import PiBackend, build_pi_models_json, resolve_pi_bin, sanitize_pi_provider_id
+from runner.pi_agent import (
+    PI_BUILTIN_PROVIDERS,
+    PI_BUILTIN_PROVIDER_SNAPSHOT,
+    PiBackend,
+    build_pi_models_json,
+    resolve_pi_bin,
+    sanitize_pi_provider_id,
+)
 from runner.types import Job, JobMode, JobState
 
 SECRET = "sk-test-secret-1234567890"
@@ -108,7 +115,10 @@ class PiBinaryResolutionTests(unittest.TestCase):
 
     def test_sanitize_provider_id(self) -> None:
         self.assertEqual(sanitize_pi_provider_id("Step_Fun.AI"), "step-fun-ai")
-        self.assertEqual(sanitize_pi_provider_id("***"), "conveyor")
+        self.assertEqual(sanitize_pi_provider_id("my_provider"), "my-provider")
+        self.assertEqual(sanitize_pi_provider_id("***"), "")
+        self.assertEqual(sanitize_pi_provider_id("a" * 41), "")
+        self.assertEqual(sanitize_pi_provider_id("a" * 40), "a" * 40)
 
 
 class PiProviderBridgeTests(unittest.TestCase):
@@ -139,8 +149,8 @@ class PiProviderBridgeTests(unittest.TestCase):
         self.assertEqual(job.return_code, 0, job.error)
         return json.loads(dump.read_text(encoding="utf-8"))
 
-    def _models_json(self, settings: Settings) -> tuple[Path, dict]:
-        path = Path(settings.codex_task_root) / "pi-agent" / "models.json"
+    def _models_from_env(self, seen: dict) -> tuple[Path, dict]:
+        path = Path(seen["env"]["PI_CODING_AGENT_DIR"]) / "models.json"
         return path, json.loads(path.read_text(encoding="utf-8"))
 
     def _bridge_case(self, wire_api: str, expected_api: str) -> None:
@@ -150,7 +160,7 @@ class PiProviderBridgeTests(unittest.TestCase):
             with patch.dict(os.environ, _clean_env(tmp)):
                 _save_provider(settings, wire_api=wire_api)
             seen = self._run(tmp, settings)
-            path, data = self._models_json(settings)
+            path, data = self._models_from_env(seen)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
             self.assertNotIn(SECRET, path.read_text(encoding="utf-8"))
             provider = data["providers"]["step-fun"]
@@ -187,6 +197,11 @@ class PiProviderBridgeTests(unittest.TestCase):
             self.assertEqual(argv[argv.index("--provider") + 1], "deepseek")
             self.assertEqual(argv[argv.index("--model") + 1], "deepseek-v4-flash")
             self.assertEqual(seen["env"]["DEEPSEEK_API_KEY"], "sk-test-deepseek")
+            agent_dir = Path(seen["env"]["PI_CODING_AGENT_DIR"])
+            self.assertEqual(agent_dir, Path(settings.codex_task_root) / "pi-agent" / "isolated")
+            models = json.loads((agent_dir / "models.json").read_text(encoding="utf-8"))
+            self.assertEqual(models, {"providers": {}})
+            self.assertNotIn(SECRET, (agent_dir / "models.json").read_text(encoding="utf-8"))
             self.assertFalse((Path(settings.codex_task_root) / "pi-agent" / "models.json").exists())
 
     def test_no_saved_provider_keeps_legacy_path(self) -> None:
@@ -196,7 +211,94 @@ class PiProviderBridgeTests(unittest.TestCase):
             seen = self._run(tmp, settings, {"DEEPSEEK_API_KEY": "sk-test-deepseek"})
             argv = seen["argv"]
             self.assertEqual(argv[argv.index("--provider") + 1], "deepseek")
+            agent_dir = Path(seen["env"]["PI_CODING_AGENT_DIR"])
+            self.assertEqual(agent_dir.name, "isolated")
+            self.assertEqual(
+                json.loads((agent_dir / "models.json").read_text(encoding="utf-8")),
+                {"providers": {}},
+            )
             self.assertFalse((Path(settings.codex_task_root) / "pi-agent" / "models.json").exists())
+
+    def test_minimax_builtin_ignores_global_and_legacy_config(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            home = tmp / "home"
+            global_agent = home / ".pi" / "agent"
+            global_agent.mkdir(parents=True)
+            poison = "global-auth-poison"
+            legacy_url = "https://stale.example/v1"
+            (global_agent / "auth.json").write_text('{"poison":"%s"}' % poison, encoding="utf-8")
+            (global_agent / "settings.json").write_text('{"poison":"%s"}' % poison, encoding="utf-8")
+            (global_agent / "models.json").write_text(
+                '{"providers":{"openai":{"baseUrl":"https://global.example/v1"}}}',
+                encoding="utf-8",
+            )
+            legacy = Path(settings.codex_task_root) / "pi-agent"
+            legacy.mkdir(parents=True)
+            (legacy / "models.json").write_text(
+                '{"providers":{"stepfun":{"apiKey":"STEPFUN_API_KEY","baseUrl":"%s"}}}' % legacy_url,
+                encoding="utf-8",
+            )
+            (legacy / "auth.json").write_text('{"poison":"legacy-auth"}', encoding="utf-8")
+            seen = self._run(
+                tmp, settings,
+                {
+                    "HOME": str(home),
+                    "PI_CODING_AGENT_DIR": str(legacy),
+                    "CONVEYOR_PI_PROVIDER": "minimax",
+                    "CONVEYOR_PI_MODEL": "MiniMax-M2",
+                    "MINIMAX_API_KEY": "sk-minimax-test",
+                },
+            )
+            argv = seen["argv"]
+            self.assertEqual(argv[argv.index("--provider") + 1], "minimax")
+            self.assertEqual(argv[argv.index("--model") + 1], "MiniMax-M2")
+            self.assertEqual(seen["env"]["MINIMAX_API_KEY"], "sk-minimax-test")
+            agent_dir = Path(seen["env"]["PI_CODING_AGENT_DIR"]).resolve()
+            self.assertEqual(agent_dir, (legacy / "isolated").resolve())
+            self.assertNotIn(home.resolve(), (agent_dir, *agent_dir.parents))
+            text = (agent_dir / "models.json").read_text(encoding="utf-8")
+            self.assertEqual(json.loads(text), {"providers": {}})
+            self.assertNotIn(poison, text)
+            self.assertNotIn(legacy_url, text)
+            self.assertNotIn("STEPFUN_API_KEY", text)
+            self.assertFalse((agent_dir / "auth.json").exists())
+            self.assertFalse((agent_dir / "settings.json").exists())
+            self.assertIn(legacy_url, (legacy / "models.json").read_text(encoding="utf-8"))
+            self.assertNotIn("sk-minimax-test", text)
+            self.assertNotIn("--api-key", argv)
+
+    def test_builtin_isolation_failure_does_not_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            home = tmp / "home"
+            (home / ".pi" / "agent").mkdir(parents=True)
+            backend = PiBackend(settings)
+            backend.pi_bin = "definitely-not-a-real-pi-binary"
+            job = Job(
+                "job-isolate", JobMode.RUN, "hello", "unused", state=JobState.RUNNING,
+                worktree_path=settings.codex_workspace_root,
+                log_path=settings.codex_task_root / "job.log",
+                final_message_path=settings.codex_task_root / "final.txt",
+            )
+            with patch.dict(os.environ, _clean_env(
+                tmp,
+                HOME=str(home),
+                CONVEYOR_PI_PROVIDER="minimax",
+                CONVEYOR_PI_MODEL="MiniMax-M2",
+                MINIMAX_API_KEY="sk-minimax-test",
+            ), clear=True):
+                with patch("conveyor.core.provider_config._atomic_write", side_effect=OSError("disk full")):
+                    async def on_progress(_text: str) -> None:
+                        return None
+                    asyncio.run(backend._run_codex_attempt(job, on_progress))
+            self.assertEqual(job.return_code, 1)
+            self.assertIn("隔离", job.error or "")
+            self.assertIn("~/.pi/agent", job.error or "")
+            self.assertIsNone(job.process)
+            self.assertNotIn("sk-minimax-test", job.error or "")
 
     def test_models_json_builder_never_contains_key(self) -> None:
         data = build_pi_models_json({
@@ -250,6 +352,29 @@ class PiCatalogTests(unittest.TestCase):
             self.assertTrue(pi["models_supported"])
             self.assertTrue(pi["runnable"])
             self.assertEqual(pi["label"], "Pi（内置）")
+
+    def test_builtin_ids_match_pinned_pi_150_catalog(self) -> None:
+        import re
+        catalog = (
+            Path(__file__).resolve().parents[1]
+            / "vendor" / "pi" / "node_modules" / "@earendil-works" / "pi-ai"
+            / "dist" / "models.generated.js"
+        )
+        self.assertTrue(catalog.is_file(), str(catalog))
+        text = catalog.read_text(encoding="utf-8")
+        start = text.find("export const MODELS")
+        end = text.find("export const IMAGE_MODELS", start + 1)
+        self.assertGreaterEqual(start, 0)
+        self.assertGreater(end, start)
+        keys = frozenset(re.findall(r'"([a-z0-9-]+)"\s*:', text[start:end]))
+        self.assertEqual(PI_BUILTIN_PROVIDERS, keys)
+        self.assertEqual(PI_BUILTIN_PROVIDERS, PI_BUILTIN_PROVIDER_SNAPSHOT)
+        self.assertIn("minimax", PI_BUILTIN_PROVIDERS)
+        self.assertIn("minimax-cn", PI_BUILTIN_PROVIDERS)
+        self.assertIn("kimi-coding", PI_BUILTIN_PROVIDERS)
+        self.assertIn("azure", PI_BUILTIN_PROVIDERS)
+        self.assertNotIn("azure-openai", PI_BUILTIN_PROVIDERS)
+        self.assertNotIn("stepfun", PI_BUILTIN_PROVIDERS)
 
     def test_auth_ok_with_saved_provider(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

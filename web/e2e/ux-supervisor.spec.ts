@@ -1241,8 +1241,8 @@ test('N6: with no usable role executor the 项目 page gives one guidance line t
 
   const guidance = page.locator('.sup-role-guidance')
   await expect(guidance).toHaveCount(1)
-  await expect(guidance).toContainText('项目需要 Claude Code、Antigravity 或 Command Code 至少一个已安装并登录')
-  await expect(guidance).toContainText('Pi 只用于对话和任务')
+  await expect(guidance).toContainText('至少一个已就绪的执行者')
+  await expect(guidance).not.toContainText('Pi 只用于对话和任务')
   await expect(guidance).not.toContainText('Supervisor')
   await page.screenshot({ path: 'test-results/r5a/n6-project-no-executor.png' })
   // The 执行者 page is off in this fixture, so there is no link to a page that would be empty.

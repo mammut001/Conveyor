@@ -43,6 +43,14 @@ jobs:
       - name: Install dependencies
         run: .venv/bin/python -m pip install -r requirements.txt
 
+      - name: Set up Node.js for bundled Pi
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install bundled Pi (vendor/pi)
+        run: bash scripts/install_pi.sh
+
       - name: Compile Python
         run: .venv/bin/python -m compileall -q .
 

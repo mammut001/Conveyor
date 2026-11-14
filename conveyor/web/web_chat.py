@@ -291,6 +291,40 @@ from conveyor.agents.agent_context import scoped_inbound
 from conveyor.agents.agent_conversations import scoped as scoped_conversation
 
 
+def _supervisor_task_suggestion(prompt: str, assistant_text: str, session_id: str) -> dict[str, Any] | None:
+    from conveyor.agents.supervisor_task_draft import build_supervisor_task_suggestion
+
+    return build_supervisor_task_suggestion(prompt, assistant_text, session_id)
+
+
+def _emit_prepared_suggestion(port: WebChatPort, msg: InboundMessage, text: str, suggestion: dict[str, Any]) -> None:
+    from conveyor.agents.supervisor_task_draft import suggestion_metadata
+
+    port.emit("message", {"text": text, "task_suggestion": suggestion})
+    port._persist_turn(msg, text, kind="task_suggestion", metadata=suggestion_metadata(suggestion))
+
+
+def _emit_supervisor_task_suggestion(
+    port: WebChatPort,
+    msg: InboundMessage,
+    text: str,
+    prompt: str,
+    assistant_text: str,
+) -> None:
+    """Attach a reviewable draft. Fall back to the operator's words only when that is not a refusal to execute."""
+    suggestion = _supervisor_task_suggestion(prompt, assistant_text, port.durable_session_id)
+    if suggestion is None:
+        suggestion = {
+            "prompt": prompt,
+            "goal": prompt,
+            "acceptance_criteria": "",
+            "session_id": port.durable_session_id,
+            "source": "operator_request",
+            "execution_authorized": True,
+        }
+    _emit_prepared_suggestion(port, msg, text, suggestion)
+
+
 async def _run_supervisor_chat(
     msg: InboundMessage,
     port: WebChatPort,
@@ -309,7 +343,6 @@ async def _run_supervisor_chat(
         deep_hint,
         finalize,
         history,
-        host_edit_imperative,
         remember,
         visible_partial,
     )
@@ -343,10 +376,17 @@ async def _run_supervisor_chat(
         "Rules:\n"
         "1. This chat is strictly READ-ONLY discussion for the bound repository and worktree above.\n"
         "2. You cannot edit files, run commands, or start execution jobs from chat. "
-        "Code execution only begins when the operator explicitly reviews the Goal on the left panel and clicks 「开始执行」.\n"
+        "Code execution only begins after the operator reviews the goal in the 「任务与结果」 view and clicks 「开始执行」.\n"
         "3. Never pretend to have modified files, created commits, or run tests.\n"
         "4. Help the operator clarify requirements, scope, edge cases, and concrete acceptance criteria for this branch/worktree.\n"
-        "5. Do not output [[SEARCH: ...]] tokens. End answers with [[CONFIDENCE: high|medium|low]]."
+        "5. Do not output [[SEARCH: ...]] tokens. End answers with [[CONFIDENCE: high|medium|low]].\n"
+        "6. When you have a concrete plan the operator could later run, end the reply with one fenced block and no other keys:\n"
+        "```conveyor-task\n"
+        "{\"goal\":\"<imperative goal for a later run>\",\"acceptance_criteria\":\"<checkable criteria>\"}\n"
+        "```\n"
+        "The goal must describe the change itself. If the operator said not to execute or not to change code yet, "
+        "still put the future plan in that block and do not treat their message as permission to start. "
+        "Do not mention a left panel; the views are named 「讨论」 and 「任务与结果」."
     )
 
     key = chat_key(msg, settings)
@@ -367,7 +407,9 @@ async def _run_supervisor_chat(
             buf_parts.append(piece)
             now = time.monotonic()
             if now - last_emit >= 0.06:
-                partial = visible_partial("".join(buf_parts))
+                from conveyor.agents.supervisor_task_draft import strip_task_draft_fence
+
+                partial = strip_task_draft_fence(visible_partial("".join(buf_parts)))
                 if partial:
                     port.emit("delta", {"text": partial})
                     last_emit = now
@@ -383,7 +425,7 @@ async def _run_supervisor_chat(
 
     raw = "".join(buf_parts).strip()
     if not raw:
-        port.emit("error", {"error": "对话模型未返回内容，请稍后重试或直接在左侧填写任务目标。"})
+        port.emit("error", {"error": "对话模型未返回内容，请稍后重试或直接在「任务与结果」填写任务目标。"})
         port.emit("done", {"outcome": "unavailable"})
         return
 
@@ -391,24 +433,23 @@ async def _run_supervisor_chat(
     if checked.escalate or not checked.body.strip():
         msg_text = (
             f"当前对话绑定在仓库 `{binding['repo_name']}` 分支 `{binding['branch']}`，仅用于只读需求讨论，不会自动修改代码。"
-            "你可以将下方整理好的需求填入左侧「当前任务目标」，确认后点击「开始执行」。"
+            "你可以将整理好的需求填入「任务与结果」里的「当前任务目标」，确认后点击「开始执行」。"
         )
-        suggestion = {"prompt": prompt, "session_id": port.durable_session_id}
-        port.emit("message", {"text": msg_text, "task_suggestion": suggestion})
-        port._persist_turn(msg, msg_text, kind="task_suggestion", metadata={"prompt": prompt})
+        _emit_supervisor_task_suggestion(port, msg, msg_text, prompt, checked.body or "")
         port.emit("done", {"outcome": "escalate"})
         return
 
     deep = await deep_hint(msg.channel, settings) if checked.confidence == "low" else ""
     final_text = redact_text(finalize(checked, time_sensitive_unverified=False, deep=deep))
-    remember(key, prompt, checked.body, turns_limit, settings=settings)
+    from conveyor.agents.supervisor_task_draft import strip_task_draft_fence
 
-    if host_edit_imperative(prompt):
-        suggestion = {"prompt": prompt, "session_id": port.durable_session_id}
-        port.emit("message", {"text": final_text, "task_suggestion": suggestion})
-        port._persist_turn(msg, final_text, kind="task_suggestion", metadata={"prompt": prompt})
+    remember(key, prompt, strip_task_draft_fence(checked.body), turns_limit, settings=settings)
+    visible = strip_task_draft_fence(final_text)
+    suggestion = _supervisor_task_suggestion(prompt, final_text, port.durable_session_id)
+    if suggestion is not None:
+        _emit_prepared_suggestion(port, msg, visible, suggestion)
     else:
-        await port.reply(msg, final_text)
+        await port.reply(msg, visible)
     port.emit("done", {"outcome": "answered"})
 
 
@@ -660,9 +701,11 @@ def build_history(session: dict[str, Any] | None) -> list[dict[str, Any]]:
             item["origin_channel"] = meta["origin_channel"]
         text = item["text"]
         if m.get("kind") == "task_suggestion" and isinstance(meta.get("prompt"), str):
-            item["task_suggestion"] = {
-                "prompt": meta["prompt"], "session_id": str((session or {}).get("id") or ""),
-            }
+            from conveyor.agents.supervisor_task_draft import task_suggestion_from_metadata
+
+            item["task_suggestion"] = task_suggestion_from_metadata(
+                meta, str((session or {}).get("id") or ""),
+            )
         if m.get("kind") == "tool_approval" and meta.get("approval_id"):
             token = str(meta["approval_id"])
             pending = get_pending(token)
