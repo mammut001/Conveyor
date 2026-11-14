@@ -164,7 +164,7 @@ export default function SupervisorChecks({
   const summaryHint = source === 'env' ? '点开可以查看' : '点开可以勾选每一轮要跑的命令'
 
   return (
-    <details className="sup-checks">
+    <details id="sup-auto-checks" className="sup-checks">
       <summary className="sup-checks-summary">
         <span className="sup-checks-chevron" aria-hidden="true">▸</span>
         <span>{summaryText}</span>

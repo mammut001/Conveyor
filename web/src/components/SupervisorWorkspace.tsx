@@ -289,6 +289,7 @@ const SUP_STAGE_LABELS: Record<string, string> = {
   vps_verify: '校验版本',
   service_switch: '切换服务',
   health_check: '健康检查',
+  needs_validation: '待配置自动检查',
 }
 
 export function supStateLabel(state?: string | null): string {
@@ -481,6 +482,27 @@ export function isAttentionTask(task: SupervisorTask): boolean {
     ['failed', 'blocked', 'waiting_user', 'waiting_for_user', 'waiting_for_human', 'needs_attention', 'interrupted'].includes(key)
     || Boolean(task.error && String(task.error).trim())
   )
+}
+
+/** 监督者在仓库里还没勾选自动检查时，任务会停在 needs_validation。 */
+export function taskNeedsValidationSetup(
+  task: SupervisorTask | null | undefined,
+  detail?: SupervisorTaskDetail | null,
+): boolean {
+  if (!task) return false
+  const stage = (detail?.stage ?? task.stage ?? '').trim().toLowerCase()
+  if (stage === 'needs_validation') return true
+  const state = (task.state || '').trim().toLowerCase()
+  if (!['waiting_user', 'waiting_for_user', 'waiting_for_human'].includes(state)) return false
+  const validationStatus = String(detail?.metadata?.validation_status ?? task.metadata?.validation_status ?? '').trim().toLowerCase()
+  return validationStatus === 'needs_validation'
+}
+
+function focusAutoChecksCard(): void {
+  const el = document.getElementById('sup-auto-checks')
+  if (!(el instanceof HTMLDetailsElement)) return
+  el.open = true
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
 export function isTaskInWorktreeContext(
@@ -3022,6 +3044,20 @@ export function SupervisorWorkspace({
                     executions={selectedTaskDetail?.executions || []}
                     roles={selectedTaskDetail?.metadata?.roles ?? selectedTask.metadata?.roles}
                   />
+
+                  {taskNeedsValidationSetup(selectedTask, selectedTaskDetail) && (
+                    <div className="sup-banner sup-banner--warning" role="status">
+                      <div className="sup-banner-text">
+                        <strong>代码已改完，还缺自动验收</strong>
+                        <span>
+                          请在本页上方展开「自动检查」，勾选至少一项并保存，然后回到这里点击表单里的「重试派发」继续跑验收。
+                        </span>
+                      </div>
+                      <button type="button" className="shell-button" onClick={focusAutoChecksCard}>
+                        去配置自动检查
+                      </button>
+                    </div>
+                  )}
 
                   {selectedTask.error && (
                     <div className="sup-banner sup-banner--error" role="alert">
