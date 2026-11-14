@@ -309,7 +309,7 @@ test('N20: 项目 explains 仓库 / 工作目录 / 执行者 while there is no r
   await expect(intro).toContainText('每个工作目录是项目的一份独立副本，改动不会碰到主分支，确认后再合并。')
   await expect(intro).toContainText('可用的执行者')
   await expect(intro.getByRole('button', { name: '去执行者页' })).toBeVisible()
-  await expect(page.locator('.sup-empty-tree')).toContainText('还没有登记仓库')
+  await expect(page.locator('.sup-empty-tree')).toContainText('还没有项目')
 
   // Dismissible, and it stays away for the rest of this page.
   await intro.getByRole('button', { name: '关闭说明' }).click()

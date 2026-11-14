@@ -190,7 +190,9 @@ class CapabilityAutoSelectionTests(unittest.TestCase):
         for name, entry in roles.items():
             self.assertTrue(entry["auto_selected"], name)
             self.assertEqual(entry["executor"], "pi")
-            self.assertTrue(entry["available"], name)
+            # Binary is present but no provider/key is configured in this fixture.
+            self.assertFalse(entry["available"], name)
+            self.assertTrue(entry.get("reason"), name)
 
     def test_capabilities_do_not_claim_auto_for_explicit_roles(self) -> None:
         with _NoExecutors(self.root), patch.dict(

@@ -877,7 +877,14 @@ def _executor_is_available(settings: Any, name: str, cache: dict[str, bool]) -> 
     """Cheap, network-free availability probe with a per-call cache."""
     if name not in cache:
         try:
-            cache[name] = bool(get_executor(settings, name).available()[0])
+            # Auto-pick Pi when the CLI is installed locally; provider/key
+            # readiness is reported separately so the UI does not claim "ready"
+            # while still showing pi as the default executor on fresh installs.
+            if name == "pi":
+                exe = get_executor(settings, name)
+                cache[name] = bool(_executable_exists(exe.binary))
+            else:
+                cache[name] = bool(get_executor(settings, name).available()[0])
         except Exception:
             cache[name] = False
     return cache[name]
