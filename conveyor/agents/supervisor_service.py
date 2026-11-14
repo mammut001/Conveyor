@@ -57,6 +57,7 @@ MAX_EXEC_OUTPUT_PREVIEW_CHARS = 4000
 
 _ID_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _PROJECT_NAME_RE = re.compile(r"^(?![-.])(?!.*\.\.)[\w][\w ._-]{0,63}$")
+_PROJECT_CREATE_MARKER = ".conveyor-project-create"
 _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,119}$")
 _FORBIDDEN_REF_SUBSTRINGS = ("..", "@{", "\\", "\x00", "\r", "\n", "\t", " ")
 _UI_EXPOSED_EXECUTORS: tuple[tuple[str, str], ...] = (
@@ -1185,8 +1186,18 @@ def _same_owned_dir(dest: Path, projects: Path, identity: tuple[int, int]) -> bo
     return os.path.dirname(real_dest) == real_parent and os.path.basename(real_dest) == dest.name
 
 
+def _project_create_marker_text(identity: tuple[int, int]) -> str:
+    return f"{identity[0]}:{identity[1]}\n"
+
+
 def _discard_new_project_dir(dest: Path, projects: Path, identity: tuple[int, int]) -> bool:
     """Remove a directory this call created. Never touches a different inode or a symlink."""
+    marker = dest / _PROJECT_CREATE_MARKER
+    try:
+        if not marker.is_file() or marker.read_text(encoding="utf-8") != _project_create_marker_text(identity):
+            return False
+    except OSError:
+        return False
     if not _same_owned_dir(dest, projects, identity):
         return False
     try:
@@ -1315,6 +1326,9 @@ def create_managed_project(settings: Any, *, name: Any) -> dict[str, Any]:
                 "新建项目的位置不安全，已停止，没有改动原来的文件",
                 code="projects_root_unsafe",
             )
+        (dest / _PROJECT_CREATE_MARKER).write_text(
+            _project_create_marker_text(created_identity), encoding="utf-8",
+        )
         _init_empty_git_repository(settings, dest)
         repo, created = register_repository(settings, path=str(dest), name=project_name)
         if not created:

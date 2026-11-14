@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -257,6 +258,11 @@ class ManagedProjectTests(unittest.TestCase):
 
     def test_inode_swap_during_failure_is_not_deleted(self) -> None:
         def _swap(settings, dest: Path) -> None:
+            for child in dest.iterdir():
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
             os.rmdir(dest)
             dest.mkdir()
             (dest / "KEEP").write_text("survivor", encoding="utf-8")
