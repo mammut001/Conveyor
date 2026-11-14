@@ -663,8 +663,14 @@ def _sync_repo_worktrees(
 
         active_task = active_map.get(wt_path)
         active_task_id = str(active_task["id"]) if active_task else None
+        active_task_state = str(active_task.get("state") or "").strip().lower() if active_task else ""
         has_runtime_lock = bool(active_task_id) or ags.has_active_task_for_worktree(settings, wt_path)
-        is_locked = bool(gw["git_locked"] or has_runtime_lock)
+        # ``waiting_user`` (e.g. needs_validation) still owns the worktree for redispatch, but the
+        # owner must be able to configure checks and dispatch again — do not show as inflight-locked.
+        if active_task_state in ("waiting_user", "waiting_for_user", "waiting_for_human"):
+            is_locked = bool(gw["git_locked"])
+        else:
+            is_locked = bool(gw["git_locked"] or has_runtime_lock)
 
         results.append({
             "id": wt_id,
@@ -676,6 +682,7 @@ def _sync_repo_worktrees(
             "managed": is_managed,
             "locked": is_locked,
             "active_task_id": active_task_id,
+            "active_task_state": active_task_state or None,
             "chat_session_id": chat_sid,
         })
 

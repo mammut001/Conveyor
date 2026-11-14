@@ -63,6 +63,7 @@ export type SupervisorWorktree = {
   managed: boolean
   locked: boolean
   active_task_id?: string
+  active_task_state?: string | null
   chat_session_id?: string
 }
 
@@ -427,15 +428,20 @@ export function isTerminalTaskState(state?: string | null): boolean {
   return ['completed', 'succeeded', 'failed', 'cancelled', 'interrupted'].includes(key)
 }
 
-/** Task states that hold a worktree lock on the API (see agent_supervisor.has_active_task_for_worktree). */
-const WORKTREE_LOCKING_TASK_STATES = new Set([
-  'pending_dispatch',
+/** Task states that block starting a *new* task while one is in flight (not waiting for owner). */
+const WORKTREE_INFLIGHT_TASK_STATES = new Set([
   'queued',
   'dispatching',
   'analyzing',
   'implementing',
   'reviewing',
   'repair_pending',
+])
+
+/** Task states that hold a worktree lock on the API (see agent_supervisor.has_active_task_for_worktree). */
+const WORKTREE_LOCKING_TASK_STATES = new Set([
+  'pending_dispatch',
+  ...WORKTREE_INFLIGHT_TASK_STATES,
   'waiting_user',
   'waiting_for_user',
   'waiting_for_human',
@@ -626,6 +632,10 @@ export function MachineIcon({ kind }: { kind: 'laptop' | 'network' | 'server' })
 function worktreeBadgeInfo(wt: SupervisorWorktree): { label: string; tone: 'readonly' | 'locked' | 'ready' } {
   if (wt.is_main) return { label: '主分支（只看）', tone: 'readonly' }
   if (!wt.managed) return { label: '未托管（只看）', tone: 'readonly' }
+  const activeState = (wt.active_task_state || '').trim().toLowerCase()
+  if (activeState === 'waiting_user' || activeState === 'waiting_for_user' || activeState === 'waiting_for_human') {
+    return { label: '等待确认', tone: 'ready' }
+  }
   if (wt.locked || wt.active_task_id) return { label: '执行中 · 已锁定', tone: 'locked' }
   return { label: '可以开始', tone: 'ready' }
 }
@@ -2345,15 +2355,15 @@ export function SupervisorWorkspace({
   }, [capabilities, effectiveRoles])
 
   const isReadOnlyWorktree = Boolean(selectedWorktree && (selectedWorktree.is_main || !selectedWorktree.managed))
-  const hasRunningTaskInWorktree = useMemo(
+  const hasInflightTaskInWorktree = useMemo(
     () =>
       currentSnapshot.tasks.some(t => {
         const st = (t.state || '').trim().toLowerCase()
-        return !isTerminalTaskState(st) && st !== 'created' && st !== 'pending_dispatch'
+        return WORKTREE_INFLIGHT_TASK_STATES.has(st)
       }),
     [currentSnapshot.tasks],
   )
-  const isLockedWorktree = Boolean(selectedWorktree && (selectedWorktree.locked || hasRunningTaskInWorktree))
+  const isLockedWorktree = Boolean(selectedWorktree && (selectedWorktree.locked || hasInflightTaskInWorktree))
   // 「合并到主分支」入口：只给受托管的工作目录（主分支 / 未托管目录不能作为合并来源），
   // 这一轮已经跑完、而且没有任务或目标在跑的时候才出现。
   const latestTask = currentSnapshot.tasks[0] || null
@@ -2519,6 +2529,82 @@ export function SupervisorWorkspace({
       setCancelBusyTaskId('')
     }
   }, [apiCall, cancelBusyTaskId, contextKey])
+
+  const handleContinueWaitingTask = useCallback(async () => {
+    if (!selectedTask || dispatchBusy || unavailableRoleReasons.length > 0) return
+    const st = (selectedTask.state || '').trim().toLowerCase()
+    if (st !== 'waiting_user' && st !== 'waiting_for_user' && st !== 'waiting_for_human') return
+
+    const rolesPayload: Record<SupervisorRoleKey, { executor: string; model?: string }> = {
+      analyst: {
+        executor: effectiveRoles.analyst.executor,
+        ...(effectiveRoles.analyst.model.trim() ? { model: effectiveRoles.analyst.model.trim() } : {}),
+      },
+      implementer: {
+        executor: effectiveRoles.implementer.executor,
+        ...(effectiveRoles.implementer.model.trim() ? { model: effectiveRoles.implementer.model.trim() } : {}),
+      },
+      reviewer: {
+        executor: effectiveRoles.reviewer.executor,
+        ...(effectiveRoles.reviewer.model.trim() ? { model: effectiveRoles.reviewer.model.trim() } : {}),
+      },
+    }
+
+    setDispatchBusy(true)
+    setDispatchError('')
+    try {
+      const criteria = typeof selectedTask.metadata?.acceptance_criteria === 'string'
+        ? selectedTask.metadata.acceptance_criteria.trim()
+        : ''
+      const dispatched = await apiCall<SupervisorTask>(
+        `/api/supervisor/tasks/${encodeURIComponent(selectedTask.id)}/dispatch`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            ...(criteria ? { acceptance_criteria: criteria } : {}),
+            roles: rolesPayload,
+          }),
+        },
+      )
+      if (contextKey) {
+        setDataByContext(prev => {
+          const cur = prev[contextKey]
+          const prevTasks = cur?.tasks || []
+          const updatedTasks = prevTasks.map(t => (t.id === dispatched.id ? { ...t, ...dispatched } : t))
+          return {
+            ...prev,
+            [contextKey]: {
+              tasks: updatedTasks,
+              selectedTaskId: dispatched.id,
+              taskDetail: dispatched,
+              deployments: cur?.deployments || [],
+              loaded: true,
+              error: '',
+            },
+          }
+        })
+      }
+      if (selectedRepo && selectedWorktree) {
+        void loadContextData(selectedRepo, selectedWorktree, false)
+        void refreshRepositories()
+      }
+    } catch (err) {
+      setDispatchError(err instanceof Error ? err.message : '继续验收失败，请稍后再试')
+    } finally {
+      setDispatchBusy(false)
+    }
+  }, [
+    apiCall,
+    contextKey,
+    dispatchBusy,
+    effectiveRoles,
+    loadContextData,
+    refreshRepositories,
+    selectedRepo,
+    selectedTask,
+    selectedWorktree,
+    unavailableRoleReasons.length,
+  ])
 
   const handleStartDeploy = useCallback(async () => {
     if (!contextKey || !selectedTask || deployBusy) return
@@ -3050,12 +3136,22 @@ export function SupervisorWorkspace({
                       <div className="sup-banner-text">
                         <strong>代码已改完，还缺自动验收</strong>
                         <span>
-                          请在本页上方展开「自动检查」，勾选至少一项并保存，然后回到这里点击表单里的「重试派发」继续跑验收。
+                          先展开「自动检查」勾选并保存，再点「继续跑验收」重新派发这一轮（同一任务，不会新建）。
                         </span>
                       </div>
-                      <button type="button" className="shell-button" onClick={focusAutoChecksCard}>
-                        去配置自动检查
-                      </button>
+                      <div className="sup-banner-actions">
+                        <button type="button" className="shell-button" onClick={focusAutoChecksCard}>
+                          去配置自动检查
+                        </button>
+                        <button
+                          type="button"
+                          className="shell-button primary"
+                          disabled={dispatchBusy || unavailableRoleReasons.length > 0}
+                          onClick={() => void handleContinueWaitingTask()}
+                        >
+                          {dispatchBusy ? '正在派发…' : '继续跑验收'}
+                        </button>
+                      </div>
                     </div>
                   )}
 
