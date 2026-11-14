@@ -996,11 +996,25 @@ export default function App() {
   // events. Viewing turn 1 must not make an already-applied chain look active.
   const activeRefinement = sessionDetail?.active_refinement || selectedSession?.active_refinement || null
   const refinementTurn = activeRefinement?.turn_count || 0
+  const runsNewestFirst = useMemo(() => {
+    const runs = sessionDetail?.runs || []
+    const at = (value?: string) => Date.parse(value || '') || 0
+    return [...runs].sort((a, b) => at(b.created_at) - at(a.created_at))
+  }, [sessionDetail?.runs])
+
   const runsAutoExpandKey = useMemo(() => {
     if (sessionDetailError) return `err:${selectedSessionId}`
     if (activeRefinement) return `refinement:${selectedSessionId}:${activeRefinement.chain_id}:${activeRefinement.turn_count}`
-    const attentionRuns = (sessionDetail?.runs || []).filter(r => ['failed', 'interrupted', 'waiting_for_human', 'waiting_user'].includes(r.state))
-    if (attentionRuns.length > 0) {
+    const runs = sessionDetail?.runs || []
+    const at = (value?: string) => Date.parse(value || '') || 0
+    const attentionRuns = runs.filter(r => ['failed', 'interrupted', 'waiting_for_human', 'waiting_user'].includes(r.state))
+    const latest = runs.reduce<(typeof runs)[number] | null>(
+      (best, r) => (!best || at(r.created_at) > at(best.created_at) ? r : best),
+      null,
+    )
+    // Do not pop open the run list for old failures when a newer run already finished OK.
+    const staleFailuresOnly = attentionRuns.length > 0 && latest?.state === 'completed'
+    if (attentionRuns.length > 0 && !staleFailuresOnly) {
       return `action:${selectedSessionId}:${attentionRuns.map(r => `${r.id}:${r.state}`).join(',')}`
     }
     if (selectedJob && ['failed', 'interrupted', 'waiting_for_human', 'waiting_user'].includes(selectedJob.state)) {
@@ -1891,7 +1905,7 @@ export default function App() {
             {sessionDetailError
               ? <p className="screen-request-status failed" role="alert">暂时读不到这个会话的运行记录，正在自动重试…</p>
               : <>
-                {(sessionDetail?.runs || []).map(run => (
+                {runsNewestFirst.map(run => (
                   <button key={run.id} type="button"
                     className={`session-run ${run.id === selectedJobId ? 'selected' : ''}`}
                     aria-pressed={run.id === selectedJobId}
