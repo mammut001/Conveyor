@@ -1007,15 +1007,13 @@ export default function App() {
     if (activeRefinement) return `refinement:${selectedSessionId}:${activeRefinement.chain_id}:${activeRefinement.turn_count}`
     const runs = sessionDetail?.runs || []
     const at = (value?: string) => Date.parse(value || '') || 0
-    const attentionRuns = runs.filter(r => ['failed', 'interrupted', 'waiting_for_human', 'waiting_user'].includes(r.state))
     const latest = runs.reduce<(typeof runs)[number] | null>(
       (best, r) => (!best || at(r.created_at) > at(best.created_at) ? r : best),
       null,
     )
-    // Do not pop open the run list for old failures when a newer run already finished OK.
-    const staleFailuresOnly = attentionRuns.length > 0 && latest?.state === 'completed'
-    if (attentionRuns.length > 0 && !staleFailuresOnly) {
-      return `action:${selectedSessionId}:${attentionRuns.map(r => `${r.id}:${r.state}`).join(',')}`
+    // Only auto-expand when the newest run itself needs attention (ignore older failures in the list).
+    if (latest && ['failed', 'interrupted', 'waiting_for_human', 'waiting_user'].includes(latest.state)) {
+      return `action:${selectedSessionId}:${latest.id}:${latest.state}`
     }
     if (selectedJob && ['failed', 'interrupted', 'waiting_for_human', 'waiting_user'].includes(selectedJob.state)) {
       return `action:${selectedSessionId}:${selectedJob.id}:${selectedJob.state}`
