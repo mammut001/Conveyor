@@ -780,13 +780,48 @@ class WebControl:
 
     # ---- agents -----------------------------------------------------------
 
+    def _agent_last_message(self, agent: dict[str, Any]) -> dict[str, Any] | None:
+        """Newest stored turn across this agent's main session and web topic sessions."""
+        from conveyor.agents import agent_conversations as conversations
+        from conveyor.agents import agents
+
+        store = get_transcript_store(self.settings)
+        session_ids = [agent["session_id"]]
+        if conversations.enabled(self.settings):
+            from channel.types import InboundMessage
+
+            msg = InboundMessage(
+                channel=agents.WEB_CHANNEL,
+                operator_id=agents.WEB_OPERATOR,
+                chat_id=agents.chat_id_for(agent["id"]),
+                message_id=None,
+                text="",
+                chat_type="p2p",
+            )
+            try:
+                for row in conversations.list_for_entry(self.settings, msg):
+                    session_ids.append(conversations.transcript_id(row))
+            except (PermissionError, ValueError):
+                pass
+        best: dict[str, Any] | None = None
+        best_at = ""
+        for session_id in dict.fromkeys(session_ids):
+            last = store.last_message(session_id)
+            if not last:
+                continue
+            at = str(last.get("created_at") or "")
+            if at >= best_at:
+                best_at = at
+                best = last
+        return best
+
     def _agent_view(self, agent: dict[str, Any], sessions: dict[str, dict[str, Any]], waiting: set[str]) -> dict[str, Any]:
         """An agent plus what its row in the list shows: preview and status."""
         from conveyor.core.redaction import redact_text
 
         session_id = agent["session_id"]
         session = sessions.get(session_id) or {}
-        last = get_transcript_store(self.settings).last_message(session_id)
+        last = self._agent_last_message(agent) or get_transcript_store(self.settings).last_message(session_id)
         latest_job = session.get("latest_job") or {}
         if session_id in waiting:
             status = "waiting"
