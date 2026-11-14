@@ -1071,6 +1071,16 @@ export default function App() {
     const at = (value?: string) => Date.parse(value || '') || 0
     return [...(sessionDetail?.runs || []), ...(sessionDetail?.jobs || [])].some(run => run.id !== selectedJob.id && at(run.created_at) > at(selectedJob.created_at))
   }, [explicitRunId, selectedJob, sessionDetail])
+  // Default to the newest run so an old failed selection does not dominate the Details panel.
+  useEffect(() => {
+    if (explicitRunId || !sessionDetail?.runs?.length || !staleTerminalRun || !selectedJob) return
+    const at = (value?: string) => Date.parse(value || '') || 0
+    const newest = sessionDetail.runs.reduce<(typeof sessionDetail.runs)[number]>(
+      (best, r) => (!best || at(r.created_at) > at(best.created_at) ? r : best),
+      sessionDetail.runs[0],
+    )
+    if (newest.id !== selectedJob.id) setSelectedJobId(newest.id)
+  }, [explicitRunId, selectedJob, sessionDetail, staleTerminalRun])
   const promptAlreadyInTranscript = useMemo(() => {
     if (!selectedJob) return true
     return transcript.some(m =>
