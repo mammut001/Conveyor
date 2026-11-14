@@ -302,6 +302,7 @@ const SUP_EXECUTOR_LABELS: Record<string, string> = {
   'command-code': 'Command Code',
   codex: 'Codex CLI',
   pool: '执行者池',
+  pi: 'Pi（内置）',
   // The coordinator is the chat model itself: 讨论 never spawns a CLI (QA N29).
   chat: '内置对话模型',
 }
@@ -3019,7 +3020,7 @@ export function SupervisorWorkspace({
 
                   <SupervisorTaskExecutors
                     executions={selectedTaskDetail?.executions || []}
-                    roles={selectedTask.metadata?.roles}
+                    roles={selectedTaskDetail?.metadata?.roles ?? selectedTask.metadata?.roles}
                   />
 
                   {selectedTask.error && (
