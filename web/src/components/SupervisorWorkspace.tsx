@@ -941,9 +941,13 @@ export function SupervisorRoleBar({
     <div className="sup-roles-panel" aria-label="谁来干活">
       {noRoleExecutorReady && (
         <p className="sup-role-guidance" role="status">
-          项目需要 Claude Code、Antigravity 或 Command Code 至少一个已安装并登录。
+          {executors.some(exec => exec.name === 'pi')
+            ? '内置 Pi 可以承担分析、改代码和检查，但需要先在「模型设置」里配置服务商密钥；配置完成前无法「开始执行」。'
+            : '项目需要至少一个已就绪的执行者（执行者池、Pi、Claude Code、Antigravity 或 Command Code）。'}
           {onOpenWorkers && <> <button type="button" className="sup-role-guidance-link" onClick={onOpenWorkers}>去执行者页</button></>}
-          Pi 只用于对话和任务。
+          {executors.find(exec => exec.name === 'pi' && !exec.available)?.reason && (
+            <> {executors.find(exec => exec.name === 'pi')!.reason}</>
+          )}
         </p>
       )}
       <div className="sup-roles-grid">
