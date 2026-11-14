@@ -312,6 +312,37 @@ export function supExecutorLabel(name?: string | null): string {
   return SUP_EXECUTOR_LABELS[raw.toLowerCase()] || raw
 }
 
+/** Owner picked pool; progress line shows resolved worker without hiding pool intent. */
+export function supResolvedRoleExecutorLabel(
+  configured?: string | null,
+  actual?: string | null,
+): string {
+  const configuredKey = (configured || '').trim().toLowerCase()
+  const actualLabel = supExecutorLabel(actual)
+  const actualKey = (actual || '').trim().toLowerCase()
+  if (configuredKey === 'pool') {
+    if (actualKey && actualKey !== 'pool') return `执行者池（${actualLabel}）`
+    return '执行者池'
+  }
+  return actualLabel
+}
+
+function supTaskRoleExecutors(
+  roles: SupervisorTask['metadata'] extends { roles?: infer R } ? R : unknown,
+): Partial<Record<SupervisorRoleKey, string>> {
+  if (!roles || typeof roles !== 'object') return {}
+  const out: Partial<Record<SupervisorRoleKey, string>> = {}
+  for (const key of ROLE_META.map(m => m.key)) {
+    const row = (roles as Record<string, unknown>)[key]
+    if (typeof row === 'string') out[key] = row
+    else if (row && typeof row === 'object' && 'executor' in row) {
+      const exec = (row as { executor?: string }).executor
+      if (exec) out[key] = exec
+    }
+  }
+  return out
+}
+
 /**
  * The coordinator (讨论) is the chat model itself. The owner reads one plain Chinese line;
  * an executor we have no Chinese name for still reads 内置对话模型, and the raw code plus
@@ -1225,9 +1256,16 @@ function onlyObjects<T>(items: T[] | undefined | null): T[] {
 
 // Always-visible summary under the task progress: which worker ran each role (latest attempt wins)
 // plus any executor switch notes. The full execution list stays in 技术细节.
-function SupervisorTaskExecutors({ executions }: { executions: SupervisorExecution[] }) {
+function SupervisorTaskExecutors({
+  executions,
+  roles,
+}: {
+  executions: SupervisorExecution[]
+  roles?: SupervisorTask['metadata'] extends { roles?: infer R } ? R : unknown
+}) {
   const rows = onlyObjects(executions)
   if (rows.length === 0) return null
+  const configuredByRole = supTaskRoleExecutors(roles)
   const latestByRole = new Map<SupervisorRoleKey, SupervisorExecution>()
   for (const ex of rows) {
     const key = ROLE_META.find(m => m.key === ex.role)?.key
@@ -1243,7 +1281,13 @@ function SupervisorTaskExecutors({ executions }: { executions: SupervisorExecuti
           {roleParts.map((m, idx) => (
             <Fragment key={m.key}>
               {idx > 0 && <span aria-hidden="true"> · </span>}
-              <span>{SUP_ROLE_SHORT_LABELS[m.key]}：{supExecutorLabel(latestByRole.get(m.key)?.executor)}</span>
+              <span>
+                {SUP_ROLE_SHORT_LABELS[m.key]}：
+                {supResolvedRoleExecutorLabel(
+                  configuredByRole[m.key],
+                  latestByRole.get(m.key)?.executor,
+                )}
+              </span>
             </Fragment>
           ))}
         </p>
@@ -2973,7 +3017,10 @@ export function SupervisorWorkspace({
                     </div>
                   </div>
 
-                  <SupervisorTaskExecutors executions={selectedTaskDetail?.executions || []} />
+                  <SupervisorTaskExecutors
+                    executions={selectedTaskDetail?.executions || []}
+                    roles={selectedTask.metadata?.roles}
+                  />
 
                   {selectedTask.error && (
                     <div className="sup-banner sup-banner--error" role="alert">
