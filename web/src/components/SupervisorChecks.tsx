@@ -115,7 +115,9 @@ export default function SupervisorChecks({
     ? '自动检查：服务器已配置'
     : selectedCount > 0
       ? `自动检查：${selectedCount} 项`
-      : '自动检查：未设置'
+      : source === 'repo'
+        ? '自动检查：已配置'
+        : '自动检查：未设置'
 
   const lastSummaryRef = useRef<SupervisorChecksSummary | null>(null)
   useEffect(() => {

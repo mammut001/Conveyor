@@ -394,6 +394,24 @@ export function isTerminalTaskState(state?: string | null): boolean {
   return ['completed', 'succeeded', 'failed', 'cancelled', 'interrupted'].includes(key)
 }
 
+/** Task states that hold a worktree lock on the API (see agent_supervisor.has_active_task_for_worktree). */
+const WORKTREE_LOCKING_TASK_STATES = new Set([
+  'pending_dispatch',
+  'queued',
+  'dispatching',
+  'analyzing',
+  'implementing',
+  'reviewing',
+  'repair_pending',
+  'waiting_user',
+  'waiting_for_user',
+  'waiting_for_human',
+])
+
+export function taskStateLocksWorktree(state?: string | null): boolean {
+  return WORKTREE_LOCKING_TASK_STATES.has((state || '').trim().toLowerCase())
+}
+
 /** 这些状态才显示「改动」：这一轮已经跑完（成或败）或在等你确认，改动不会再有变化。 */
 const DIFF_VISIBLE_STATES = [
   'completed', 'succeeded', 'ok', 'passed',
@@ -1907,6 +1925,14 @@ export function SupervisorWorkspace({
           },
         }
       })
+
+      // Sidebar worktree badges come from GET /repositories; unlock state can lag until poll refresh.
+      if (isPoll && (worktree.locked || worktree.active_task_id)) {
+        const hasLockingTask = scopedTasks.some(t => taskStateLocksWorktree(t.state))
+        if (!hasLockingTask) {
+          void refreshRepositories()
+        }
+      }
     } catch (err) {
       if (controller.signal.aborted || gen !== contextGenRef.current || activeContextKeyRef.current !== targetKey) return
       const msg = err instanceof Error ? err.message : '读取工作目录任务失败'
@@ -1924,7 +1950,7 @@ export function SupervisorWorkspace({
     } finally {
       if (isPoll) pollInFlightRef.current = false
     }
-  }, [apiCall, token])
+  }, [apiCall, refreshRepositories, token])
 
   useEffect(() => {
     if (!active) return
